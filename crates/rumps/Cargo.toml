@@ -1,0 +1,18 @@
+[package]
+name = "rumps"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+either = { workspace = true }
+itertools = { workspace = true }
+nom = { version = "7.1" }
+nom_locate = { version = "4.2" }
+nom-supreme = { version = "0.8" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[lints.clippy]
+obfuscated_if_else = "allow"
+type_complexity = "allow"
+use_self = "deny"

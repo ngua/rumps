@@ -1,0 +1,15 @@
+[workspace]
+members = [
+  # all crates in a `./crates` folder will be added to the workspace
+  "crates/*",
+]
+resolver = "2"
+
+[workspace.dependencies]
+either = "1.13"
+itertools = "*"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["fs"] }
+tokio-util = "0.7.9"
