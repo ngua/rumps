@@ -6,9 +6,11 @@ edition = "2021"
 [dependencies]
 either = { workspace = true }
 itertools = { workspace = true }
+miette = { version = "7.2", features = ["fancy"] }
 nom = { version = "7.1" }
 nom_locate = { version = "4.2" }
 nom-supreme = { version = "0.8" }
+ordered-float = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

@@ -1,0 +1,9 @@
+unstable_features = true
+edition = "2021"
+max_width = 80
+# force_multiline_blocks = true
+combine_control_expr = false
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"
+use_field_init_shorthand = true
+merge_derives = false

@@ -8,6 +8,8 @@ resolver = "2"
 [workspace.dependencies]
 either = "1.13"
 itertools = "*"
+miette = "7.2"
+ordered-float = { version = "4.2", features = ["serde", "rand"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
