@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 
 use nom::branch::alt;
-use nom::bytes::complete::escaped;
-use nom::character::complete::{self, digit1, none_of};
+use nom::character::complete::{self, digit1};
 use nom::combinator::{cut, map, opt, recognize};
 use nom::error::context;
 use nom::sequence::{delimited, pair, tuple};
@@ -98,23 +97,6 @@ impl<'a> Parse<'a> for char {
     }
 }
 
-impl<'a> Parse<'a> for Cow<'a, str> {
-    // FIXME Needs to be way more sophisticated
-    fn parse(input: Span<'a>) -> ParsedResult<'a, Self> {
-        let esc = escaped(none_of("\\\""), '\\', complete::char('\"'));
-        let or_empty = alt((esc, tag::complete::tag("")));
-        context(
-            "string literal",
-            delimited(
-                complete::char('\"'),
-                map(or_empty, |s: Span| Cow::from(s.to_string())),
-                complete::char('\"'),
-            ),
-        )
-        .parse(input)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,8 +114,8 @@ mod tests {
     fn scalarp() {
         let scalar = parse::<Scalar<f64>>;
 
-        let expected = Scalar::String(Cow::from("rumps is rumps"));
-        let parsed = scalar(r#""rumps is rumps""#).unwrap();
+        let expected = Scalar::String(Cow::from("한글 rumps is rumps\n"));
+        let parsed = scalar(r#""한글 rumps is rumps\n""#).unwrap();
         assert_eq!(expected, parsed);
 
         let expected = Scalar::Bool(true);

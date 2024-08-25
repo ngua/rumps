@@ -12,6 +12,7 @@ use crate::error::{FormattedError, ParseError};
 use crate::value::Ident;
 
 mod command;
+mod string;
 mod value;
 
 pub fn parse<'a, T>(input: &'a str) -> Result<T, FormattedError<'a>>
