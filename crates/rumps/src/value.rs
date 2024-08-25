@@ -20,7 +20,7 @@ pub struct Global<T>(pub(crate) T);
 pub struct Indices<'a> {
     #[serde(borrow)]
     pub(crate) ident: Ident<'a>,
-    pub(crate) path: Vec<Scalar<'a, OrderedFloat<f32>>>,
+    pub(crate) path: Vec<Scalar<'a, OrderedFloat<f64>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

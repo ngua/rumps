@@ -2,11 +2,11 @@ use std::borrow::Cow;
 
 use nom::branch::alt;
 use nom::bytes::complete::{escaped, take_while1};
-use nom::character::complete::{self, none_of, space0};
-use nom::combinator::{cut, map};
+use nom::character::complete::{self, digit1, none_of, space0};
+use nom::combinator::{cut, map, opt, recognize};
 use nom::error::context;
 use nom::multi::separated_list0;
-use nom::sequence::{delimited, preceded, terminated};
+use nom::sequence::{delimited, pair, preceded, terminated, tuple};
 use nom::{IResult, Parser as _};
 use nom_locate::LocatedSpan;
 use nom_supreme::error::ErrorTree;
@@ -40,8 +40,8 @@ where
 {
     fn parse(input: Span<'a>) -> ParsedResult<'a, Self> {
         alt((
-            map(i64::parse, Self::Int),
             map(F::parse, Self::Float),
+            map(i64::parse, Self::Int),
             map(char::parse, Self::Char),
             map(bool::parse, Self::Bool),
             map(Cow::parse, Self::String),
@@ -89,15 +89,39 @@ impl<'a> Parse<'a> for i64 {
     }
 }
 
-impl<'a> Parse<'a> for f32 {
+impl<'a> Parse<'a> for f64 {
     fn parse(input: Span<'a>) -> ParsedResult<'a, Self> {
-        nom::number::complete::float.parse(input)
+        context("float literal", |input| {
+            let (rest, fstr): (_, Span) = recognize(tuple((
+                opt(alt((complete::char('+'), complete::char('-')))),
+                alt((
+                    map(
+                        tuple((digit1, pair(complete::char('.'), opt(digit1)))),
+                        |_| (),
+                    ),
+                    map(tuple((complete::char('.'), digit1)), |_| ()),
+                )),
+                opt(tuple((
+                    alt((complete::char('e'), complete::char('E'))),
+                    opt(alt((complete::char('+'), complete::char('-')))),
+                    cut(digit1),
+                ))),
+            )))
+            .parse(input)?;
+
+            // Should be safe to unwrap, since the span was just parsed as a
+            // float
+            let f = fstr.parse::<f64>().unwrap();
+
+            Ok((rest, f))
+        })
+        .parse(input)
     }
 }
 
-impl<'a> Parse<'a> for OrderedFloat<f32> {
+impl<'a> Parse<'a> for OrderedFloat<f64> {
     fn parse(input: Span<'a>) -> ParsedResult<'a, Self> {
-        map(nom::number::complete::float, Self::from).parse(input)
+        map(f64::parse, Self::from).parse(input)
     }
 }
 
@@ -158,7 +182,7 @@ mod tests {
 
     #[test]
     fn scalarp() {
-        let scalar = parse::<Scalar<f32>>;
+        let scalar = parse::<Scalar<f64>>;
 
         let expected = Scalar::String(Cow::from("rumps is rumps"));
         let parsed = scalar(r#""rumps is rumps""#).unwrap();
@@ -172,8 +196,12 @@ mod tests {
         let parsed = scalar("'r'").unwrap();
         assert_eq!(expected, parsed);
 
-        let expected = Scalar::Int(1);
-        let parsed = scalar("1").unwrap();
+        let expected = Scalar::Int(1120);
+        let parsed = scalar("1120").unwrap();
+        assert_eq!(expected, parsed);
+
+        let expected = Scalar::Float(1.12345);
+        let parsed = scalar("1.12345").unwrap();
         assert_eq!(expected, parsed);
     }
 
@@ -182,18 +210,33 @@ mod tests {
         let expected = Indices {
             ident: Ident(Cow::from("rumps")),
             path: vec![
-                Scalar::String(Cow::from("f")),
+                Scalar::String(Cow::from("foo")),
                 Scalar::String(Cow::from("g")),
+                Scalar::Int(100),
             ],
         };
 
-        let parsed = parse(r#"rumps("f", "g")"#).unwrap();
+        let parsed = parse(r#"rumps("foo", "g", 100)"#).unwrap();
         assert_eq!(expected, parsed);
 
-        let parsed = parse(r#"rumps("f" , "g")"#).unwrap();
+        let parsed = parse(r#"rumps("foo" , "g" , 100)"#).unwrap();
         assert_eq!(expected, parsed);
 
-        let parsed = parse(r#"rumps("f","g")"#).unwrap();
+        let parsed = parse(r#"rumps("foo","g",100)"#).unwrap();
+        assert_eq!(expected, parsed);
+
+        let expected = Indices {
+            ident: Ident(Cow::from("rumps")),
+            path: vec![Scalar::Int(100), Scalar::Int(200), Scalar::Int(300)],
+        };
+
+        let parsed = parse(r#"rumps(100, 200, 300)"#).unwrap();
+        assert_eq!(expected, parsed);
+
+        let parsed = parse(r#"rumps(100 , 200 , 300)"#).unwrap();
+        assert_eq!(expected, parsed);
+
+        let parsed = parse(r#"rumps(100,200,300)"#).unwrap();
         assert_eq!(expected, parsed);
     }
 }
