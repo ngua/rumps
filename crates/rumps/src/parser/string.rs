@@ -22,9 +22,9 @@ impl<'a> Parse<'a> for Cow<'a, str> {
 impl<'a> Parse<'a> for String {
     fn parse(input: Span<'a>) -> ParsedResult<'a, Self> {
         let strp =
-            fold_many0(Fragment::parse, String::new, |mut string, fragment| {
+            fold_many0(Fragment::parse, Self::new, |mut string, fragment| {
                 match fragment {
-                    Fragment::Literal(s) => string.push_str(&s),
+                    Fragment::Literal(s) => string.push_str(s),
                     Fragment::CharEsc(c) => string.push(c),
                     Fragment::WsEsc => {}
                 }

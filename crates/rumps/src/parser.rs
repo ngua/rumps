@@ -9,11 +9,11 @@ use nom_supreme::error::ErrorTree;
 use nom_supreme::final_parser::final_parser;
 
 use crate::error::{FormattedError, ParseError};
-use crate::value::Ident;
+use crate::expr::Ident;
 
 mod command;
 mod string;
-mod value;
+mod expr;
 
 pub fn parse<'a, T>(input: &'a str) -> Result<T, FormattedError<'a>>
 where
