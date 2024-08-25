@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -12,19 +11,6 @@ pub enum Scalar<'a, F> {
     Bool(bool),
     String(Cow<'a, str>),
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Global<T>(pub(crate) T);
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Indices<'a> {
-    #[serde(borrow)]
-    pub(crate) ident: Ident<'a>,
-    pub(crate) path: Vec<Scalar<'a, OrderedFloat<f64>>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Command {}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Ident<'a>(pub(crate) Cow<'a, str>);
