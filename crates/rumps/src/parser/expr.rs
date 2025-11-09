@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use nom::branch::alt;
-use nom::character::complete::{self, digit1, space0};
+use nom::character::complete::{self, digit1, multispace0, space0};
 use nom::combinator::{cut, map, opt, recognize, value};
 use nom::error::context;
 use nom::multi::separated_list0;
@@ -19,7 +19,13 @@ impl<'a> Parse<'a> for Expr<'a> {
             "expression",
             alt((
                 map(Value::parse, Self::Value),
-                map(Value::parse, Self::Value),
+                map(
+                    preceded(
+                        terminated(Value::parse, multispace0),
+                        |_| todo!(),
+                    ),
+                    |(lhs, op, rhs)| Self::BinOp(lhs, op, rhs),
+                ),
             )),
         )
         .parse(input)
