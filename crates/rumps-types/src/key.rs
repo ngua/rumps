@@ -2,7 +2,8 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use ordered_float::OrderedFloat;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A MUMPS variable name, either Global (persistent) or Local (ephemeral).
 ///
@@ -98,6 +99,132 @@ impl fmt::Display for Name {
     }
 }
 
+/// A single subscript in a MUMPS key path.
+///
+/// Subscripts define a path through the hierarchical tree structure and
+/// follow an extended MUMPS collation order:
+///
+/// 1. Booleans: `false` < `true`
+/// 2. Numbers: in numeric order (e.g., -10 < 0 < 1.5 < 10 < 100)
+/// 3. Strings: in lexicographic order (e.g., "1" < "10" < "ABC")
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::Subscript;
+///
+/// let bool_sub = Subscript::from(false);
+/// let num_sub = Subscript::from(123);
+/// let str_sub = Subscript::from("NAME");
+///
+/// // Extended MUMPS collation: booleans < numbers < strings
+/// assert!(bool_sub < num_sub);
+/// assert!(num_sub < str_sub);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Subscript {
+    /// A boolean subscript (false < true).
+    Boolean(bool),
+    /// A numeric subscript (integers and floats in numeric order).
+    Number(OrderedFloat<f64>),
+    /// A string subscript (lexicographic order).
+    String(String),
+}
+
+impl Subscript {
+    /// Returns `true` if this is a boolean subscript.
+    pub fn is_boolean(&self) -> bool {
+        matches!(self, Self::Boolean(_))
+    }
+
+    /// Returns `true` if this is a numeric subscript.
+    pub fn is_number(&self) -> bool {
+        matches!(self, Self::Number(_))
+    }
+
+    /// Returns `true` if this is a string subscript.
+    pub fn is_string(&self) -> bool {
+        matches!(self, Self::String(_))
+    }
+
+    /// Converts the subscript to a string representation.
+    pub fn as_display_string(&self) -> String {
+        match self {
+            Self::Boolean(b) => b.to_string(),
+            Self::Number(n) => n.to_string(),
+            Self::String(s) => s.clone(),
+        }
+    }
+}
+
+impl PartialOrd for Subscript {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Subscript {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        use Subscript::*;
+
+        match (self, other) {
+            // Same variant comparisons
+            (Boolean(a), Boolean(b)) => a.cmp(b),
+            (Number(a), Number(b)) => a.cmp(b),
+            (String(a), String(b)) => a.cmp(b),
+
+            // Cross-variant comparisons: Boolean < Number < String
+            (Boolean(_), Number(_)) => Ordering::Less,
+            (Boolean(_), String(_)) => Ordering::Less,
+            (Number(_), Boolean(_)) => Ordering::Greater,
+            (Number(_), String(_)) => Ordering::Less,
+            (String(_), Boolean(_)) => Ordering::Greater,
+            (String(_), Number(_)) => Ordering::Greater,
+        }
+    }
+}
+
+impl fmt::Display for Subscript {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Boolean(b) => write!(f, "{}", b),
+            Self::Number(n) => write!(f, "{}", n),
+            Self::String(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+impl From<bool> for Subscript {
+    fn from(b: bool) -> Self {
+        Self::Boolean(b)
+    }
+}
+
+impl From<i64> for Subscript {
+    fn from(n: i64) -> Self {
+        Self::Number(OrderedFloat(n as f64))
+    }
+}
+
+impl From<f64> for Subscript {
+    fn from(n: f64) -> Self {
+        Self::Number(OrderedFloat(n))
+    }
+}
+
+impl From<String> for Subscript {
+    fn from(s: String) -> Self {
+        Self::String(s)
+    }
+}
+
+impl From<&str> for Subscript {
+    fn from(s: &str) -> Self {
+        Self::String(s.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +292,7 @@ mod tests {
 
     #[test]
     fn test_serialization() {
+        // Test that Global serializes as plain string (no enum tag)
         let global = Name::Global("PATIENT".to_string());
         let serialized = bincode::serialize(&global).unwrap();
 
@@ -184,6 +312,135 @@ mod tests {
 
         // Deserializing always produces Global variant
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(local, deserialized);
+        assert_eq!(deserialized, Name::Global("TEMP".to_string()));
+        assert_ne!(deserialized, local);
+    }
+
+    // Subscript tests
+
+    #[test]
+    fn test_subscript_boolean_ordering() {
+        let f = Subscript::from(false);
+        let t = Subscript::from(true);
+
+        assert!(f < t);
+        assert_eq!(f, Subscript::from(false));
+    }
+
+    #[test]
+    fn test_subscript_number_ordering() {
+        let n1 = Subscript::from(-10);
+        let n2 = Subscript::from(0);
+        let n3 = Subscript::from(1.5);
+        let n4 = Subscript::from(10);
+        let n5 = Subscript::from(100);
+
+        // Numeric ordering
+        assert!(n1 < n2);
+        assert!(n2 < n3);
+        assert!(n3 < n4);
+        assert!(n4 < n5);
+    }
+
+    #[test]
+    fn test_subscript_string_ordering() {
+        let s1 = Subscript::from("1");
+        let s2 = Subscript::from("10");
+        let s3 = Subscript::from("ABC");
+        let s4 = Subscript::from("NAME");
+
+        // Lexicographic ordering (note: "1" < "10" as strings)
+        assert!(s1 < s2);
+        assert!(s2 < s3);
+        assert!(s3 < s4);
+    }
+
+    #[test]
+    fn test_subscript_cross_type_ordering() {
+        let bool_false = Subscript::from(false);
+        let bool_true = Subscript::from(true);
+        let num_neg = Subscript::from(-10);
+        let num_zero = Subscript::from(0);
+        let num_pos = Subscript::from(100);
+        let str_num = Subscript::from("1");
+        let str_alpha = Subscript::from("ABC");
+
+        // Boolean < Number < String
+        assert!(bool_false < bool_true);
+        assert!(bool_true < num_neg);
+        assert!(num_neg < num_zero);
+        assert!(num_zero < num_pos);
+        assert!(num_pos < str_num);
+        assert!(str_num < str_alpha);
+    }
+
+    #[test]
+    fn test_subscript_mumps_collation() {
+        // This test verifies the MUMPS collation where numeric subscripts
+        // are ordered numerically, not lexicographically
+        let num_1 = Subscript::from(1);
+        let num_10 = Subscript::from(10);
+        let num_100 = Subscript::from(100);
+        let str_1 = Subscript::from("1");
+        let str_10 = Subscript::from("10");
+        let str_100 = Subscript::from("100");
+
+        // Numeric ordering: 1 < 10 < 100
+        assert!(num_1 < num_10);
+        assert!(num_10 < num_100);
+
+        // String (lexicographic) ordering: "1" < "10" < "100"
+        assert!(str_1 < str_10);
+        assert!(str_10 < str_100);
+
+        // All numbers come before all strings
+        assert!(num_100 < str_1);
+    }
+
+    #[test]
+    fn test_subscript_display() {
+        assert_eq!(Subscript::from(false).to_string(), "false");
+        assert_eq!(Subscript::from(true).to_string(), "true");
+        assert_eq!(Subscript::from(123).to_string(), "123");
+        assert_eq!(Subscript::from(1.5).to_string(), "1.5");
+        assert_eq!(Subscript::from("NAME").to_string(), "NAME");
+    }
+
+    #[test]
+    fn test_subscript_type_checks() {
+        let bool_sub = Subscript::from(false);
+        let num_sub = Subscript::from(123);
+        let str_sub = Subscript::from("ABC");
+
+        assert!(bool_sub.is_boolean());
+        assert!(!bool_sub.is_number());
+        assert!(!bool_sub.is_string());
+
+        assert!(!num_sub.is_boolean());
+        assert!(num_sub.is_number());
+        assert!(!num_sub.is_string());
+
+        assert!(!str_sub.is_boolean());
+        assert!(!str_sub.is_number());
+        assert!(str_sub.is_string());
+    }
+
+    #[test]
+    fn test_subscript_serialization() {
+        // Test each variant round-trips correctly
+        let bool_sub = Subscript::from(true);
+        let serialized = bincode::serialize(&bool_sub).unwrap();
+        let deserialized: Subscript = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(bool_sub, deserialized);
+
+        let num_sub = Subscript::from(123.45);
+        let serialized = bincode::serialize(&num_sub).unwrap();
+        let deserialized: Subscript = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(num_sub, deserialized);
+
+        let str_sub = Subscript::from("TEST");
+        let serialized = bincode::serialize(&str_sub).unwrap();
+        let deserialized: Subscript = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(str_sub, deserialized);
     }
 }
