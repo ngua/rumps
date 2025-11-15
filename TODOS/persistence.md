@@ -5,8 +5,10 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
 ## Core Principles
 
 - **Unified Data Model**: In-memory and on-disk structures must be equivalent and synchronized
-- **MUMPS Semantics**: Both globals (`^NAME`) and locals (`NAME`) are sparse multi-dimensional arrays with lexicographically ordered string keys
+- **MUMPS Semantics**: Both globals (`^NAME`) and locals (`NAME`) are sparse multi-dimensional arrays with extended collation ordering
 - **Two Namespaces**: Globals are persistent (written to disk), locals are ephemeral (memory-only)
+- **Explicit Transactions**: ALL writes to globals must occur within transactions (unlike MUMPS `LOCK`, RUMPS requires explicit transaction blocks)
+- **Write-Ahead Logging (WAL)**: All transactional changes logged before commit for crash recovery and durability
 - **Type Sharing**: Common types in `rumps-types` for use across storage and query layers
 - **Idiomatic Rust**: Follow project lints and formatting rules
 
@@ -32,9 +34,10 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
 - [ ] Define `Key` type (sequence of subscripts representing path: e.g., `["123", "NAME"]`)
 - [ ] Define `Value` enum with variants: `String`, `Integer(i64)`, `Double(f64)`, `Boolean(bool)`
 - [ ] Implement `Serialize`/`Deserialize` for `Value` using serde
-- [ ] Add `Ord` and lexicographic ordering for `Key` and `Subscript`
-- [ ] Add comprehensive unit tests for key ordering (verify lex order)
+- [ ] Add `Ord` and extended MUMPS collation ordering for `Key` and `Subscript`
+- [ ] Add comprehensive unit tests for key ordering (verify extended MUMPS collation)
 - [ ] Add unit tests for `Name` enum (both Global and Local variants)
+- [ ] Define transaction-related types: `TransactionId`, `TransactionState` enum
 
 ### 1.3 Node Structure (rumps-types)
 - [ ] Define `NodeData` struct containing:
@@ -142,13 +145,43 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
 
 ---
 
-## Phase 4: Disk Persistence
+## Phase 4: Disk Persistence with WAL
 
 **Note**: Only `Name::Global` entries are persisted to disk. `Name::Local` entries remain in memory only and are not serialized.
 
-**Design Note**: While the implementation in this phase will be synchronous, design data structures with async/concurrency in mind (e.g., avoid patterns that would be difficult to wrap with locks later). Phase 5 will add async operations with concurrent reads and exclusive writes.
+**Design Note**: While the implementation in this phase will be synchronous, design data structures with async/concurrency in mind (e.g., avoid patterns that would be difficult to wrap with locks later). Phase 5 will add async transactions with WAL integration.
 
-### 4.1 Page-Based Storage
+### 4.1 Write-Ahead Log (WAL)
+- [ ] Create `crates/rumps-storage/src/wal.rs` module
+- [ ] Define WAL record types:
+  - Transaction begin/commit/abort records
+  - SET operation records (name, key, old value, new value)
+  - KILL operation records (name, key, subtree metadata)
+  - Checkpoint records
+- [ ] Define WAL file format:
+  - Record header (type, length, transaction ID, checksum)
+  - Serialized operation data
+  - Transaction boundaries
+- [ ] Implement `WalWriter`:
+  - Append records to WAL file
+  - Flush/fsync on transaction commit (configurable sync policy)
+  - Handle WAL file rotation when size exceeds threshold
+- [ ] Implement `WalReader`:
+  - Read WAL records sequentially
+  - Verify checksums
+  - Parse records by type
+- [ ] Add WAL recovery logic:
+  - Replay uncommitted transactions on startup
+  - Handle partial writes (incomplete records)
+  - Rebuild state from last checkpoint + WAL replay
+- [ ] Implement WAL checkpointing:
+  - Periodically flush dirty pages to disk
+  - Write checkpoint record to WAL
+  - Truncate old WAL entries before checkpoint
+- [ ] Add tests for WAL write/read round-trip
+- [ ] Add tests for crash recovery scenarios
+
+### 4.2 Page-Based Storage
 - [ ] Define `PAGE_SIZE` constant (e.g., 4096 bytes)
 - [ ] Create `crates/rumps-storage/src/page.rs` module
 - [ ] Define `PageId` type (u64 offset into file)
@@ -161,19 +194,31 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
   - Allocate new pages on demand
   - Reclaim pages on node deletion
 
-### 4.2 Storage Engine
+### 4.3 Storage Engine with WAL Integration
 - [ ] Create `crates/rumps-storage/src/engine.rs` module
 - [ ] Define `StorageEngine` struct:
   - File handle for data file
   - Page cache
   - Page allocator
+  - WAL writer/reader
   - Root page ID for each global (only `Name::Global` variants)
-- [ ] Implement `StorageEngine::open(path: &Path) -> Result<Self>`
+- [ ] Implement `StorageEngine::open(path: &Path) -> Result<Self>`:
+  - Open data file
+  - Initialize page cache and allocator
+  - Open WAL file
+  - Run WAL recovery if needed
 - [ ] Implement `StorageEngine::create(path: &Path) -> Result<Self>`
-- [ ] Implement `StorageEngine::write_page(page_id: PageId, data: &[u8])`
+- [ ] Implement `StorageEngine::write_page(page_id: PageId, data: &[u8])`:
+  - Write to page cache (mark dirty)
+  - DO NOT immediately flush (handled by checkpointing)
 - [ ] Implement `StorageEngine::read_page(page_id: PageId) -> Result<Vec<u8>>`
+- [ ] Add WAL-aware methods:
+  - `begin_transaction() -> TransactionId`
+  - `log_operation(txn_id, operation)` - append to WAL
+  - `commit_transaction(txn_id)` - write commit record, fsync WAL
+  - `abort_transaction(txn_id)` - write abort record
 
-### 4.3 Global Management
+### 4.4 Global Management
 - [ ] Define `GlobalRegistry` struct:
   - Map from global name strings to root `PageId` (only persists `Name::Global`)
   - Store in header page (page 0)
@@ -183,77 +228,104 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
 - [ ] Add tests for multi-global persistence
 - [ ] Add tests verifying Local variables are NOT persisted
 
-### 4.4 Persistence Integration
-- [ ] Integrate `BTree` with `StorageEngine`:
+### 4.5 Persistence Integration with WAL
+- [ ] Integrate `BTree` with `StorageEngine` and WAL:
   - Load nodes from disk on access (only for `Name::Global`)
-  - Write modified nodes back to disk (only for `Name::Global`)
   - Keep `Name::Local` entirely in memory
   - Lazy loading of child nodes
+  - Modified nodes logged to WAL (not immediately written to disk)
 - [ ] Implement `PersistedBTree` wrapper:
   - Holds reference to `StorageEngine`
   - Implements same MUMPS operations as `BTree`
   - Manages node loading/storing transparently
   - Filters out `Name::Local` from persistence operations
-- [ ] Add `flush()` method to persist all dirty pages (only `Name::Global`)
-- [ ] Add `close()` method to clean up resources
-
-### 4.5 Crash Recovery
-- [ ] Implement write-ahead logging (WAL) or journal:
-  - Log changes before applying to tree
-  - Replay log on recovery
-- [ ] Add `StorageEngine::recover()` method
-- [ ] Add tests for crash simulation (interrupted writes)
-- [ ] Add tests for recovery correctness
+  - All writes go through WAL first
+- [ ] Add checkpoint/flush logic:
+  - `checkpoint()` method to flush dirty pages (only `Name::Global`)
+  - Periodic background checkpointing
+  - Write checkpoint record to WAL
+- [ ] Add `close()` method to clean up resources (flush + close WAL)
 
 ---
 
-## Phase 5: Public API
+## Phase 5: Transaction-Based Public API
 
-**Concurrency Model**: The public API will be async and support concurrent reads with exclusive writes using `tokio::sync::RwLock`.
+**Transaction Model**: ALL writes to globals must occur within explicit transactions. Locals can be modified freely outside transactions.
 
-### 5.1 Async Database Handle
+**Concurrency Model**: The public API will be async with snapshot isolation for reads and exclusive locks for transaction commits.
+
+### 5.1 Transaction Infrastructure
 - [ ] Add `tokio` dependency to `rumps-storage/Cargo.toml`
+- [ ] Create `crates/rumps-storage/src/transaction.rs` module
+- [ ] Define `Transaction` struct:
+  - Transaction ID
+  - Reference to `Database` (via `Arc`)
+  - Buffered writes (in-memory staging for transaction)
+  - Snapshot of database state at transaction start
+  - Transaction state (Active, Committed, Aborted)
+- [ ] Implement transaction lifecycle methods:
+  - `begin()` - create transaction, get snapshot
+  - `commit() -> Result<()>` - validate, write to WAL, apply changes
+  - `rollback()` - discard buffered writes
+- [ ] Add MUMPS operations on `Transaction`:
+  - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>`
+  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`
+  - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>`
+  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>`
+  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>`
+- [ ] Enforce transaction rules:
+  - Writes to `Name::Global` MUST be in transaction (return error otherwise)
+  - `Name::Local` modifications work outside transactions
+  - GET/DATA/ORDER can work with or without transactions
+
+### 5.2 Async Database Handle
 - [ ] Create `crates/rumps-storage/src/database.rs` module
 - [ ] Define `Database` struct as main entry point:
-  - Wraps `StorageEngine` with `Arc<RwLock<_>>` for concurrent access
+  - Wraps `StorageEngine` with `Arc<Mutex<_>>` for exclusive write access during commits
   - Manages multiple globals and locals
   - Separate storage for `Name::Global` (persistent) and `Name::Local` (ephemeral)
-  - Uses `RwLock` to allow concurrent reads, exclusive writes
+  - Transaction manager
 - [ ] Implement `Database::open(path: &Path) -> Result<Self>` (sync, returns async-compatible handle)
 - [ ] Implement `Database::create(path: &Path) -> Result<Self>` (sync, returns async-compatible handle)
-- [ ] Implement async high-level MUMPS operations:
-  - `async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()>` (write lock)
-  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` (read lock)
-  - `async fn kill(&self, name: &Name, key: &Key) -> Result<()>` (write lock)
-  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` (read lock)
-  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` (read lock)
-  - `async fn query(&self, name: &Name, key: &Key) -> Result<Option<Key>>` (read lock)
-
-### 5.2 Variable Handle (Optional)
-- [ ] Consider adding `Variable` struct for ergonomic API:
-  - Reference to `Database` (via `Arc`)
-  - `Name` (Global or Local)
-  - Provides scoped operations without passing name repeatedly
-- [ ] If implemented, add async convenience methods:
-  - `async fn exists(&self, key: &Key) -> Result<bool>`
-  - `async fn iter(&self) -> Result<VariableIterator>` (async stream for traversal)
+- [ ] Implement transaction API:
+  - `async fn transaction<F, R>(&self, f: F) -> Result<R>` where `F: FnOnce(&mut Transaction) -> Future<Result<R>>`
+  - Auto-commit on Ok, auto-rollback on Err
+  - Example usage:
+    ```rust
+    db.transaction(|txn| async move {
+        let name = txn.get(&Name::Global("PATIENT".into()), &key).await?;
+        txn.set(&Name::Global("PATIENT".into()), &key, new_value).await?;
+        Ok(())
+    }).await?;
+    ```
+- [ ] Add read-only operations (no transaction required):
+  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` (snapshot read)
+  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` (snapshot read)
+  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` (snapshot read)
+- [ ] Add local variable operations (no transaction required):
+  - `async fn set_local(&self, name: &Name, key: &Key, value: Value) -> Result<()>`
+  - Must verify `name.is_local()`, return error if global
 
 ### 5.3 API Documentation
 - [ ] Add rustdoc comments to all public types
-- [ ] Add usage examples in doc comments (with async/await)
+- [ ] Add usage examples in doc comments (with async/await and transactions)
 - [ ] Create `examples/basic_usage.rs` demonstrating:
   - Opening database
-  - Using async operations with `tokio::main`
-  - Setting values on globals (`^PATIENT(123)="John"`)
-  - Setting values on locals (`TEMP(1)="value"`)
+  - Using transactions with `db.transaction()` closure
+  - Setting values on globals within transaction
+  - Setting values on locals (no transaction needed)
   - Getting values from both namespaces
-  - Iterating over keys
-  - Killing subtrees
+  - Transaction rollback on error
   - Demonstrating that locals don't persist across database reopens
-- [ ] Create `examples/concurrent_access.rs` demonstrating:
-  - Multiple concurrent readers accessing same data
-  - Concurrent reads while writes are happening
-  - Using `tokio::spawn` for parallel operations
+- [ ] Create `examples/transaction_examples.rs` demonstrating:
+  - Simple transaction with multiple writes
+  - Read-modify-write pattern in transaction
+  - Transaction rollback (error handling)
+  - Snapshot isolation (concurrent reads don't see uncommitted writes)
+- [ ] Create `examples/concurrent_transactions.rs` demonstrating:
+  - Multiple concurrent transactions
+  - Conflict resolution at commit time
+  - Using `tokio::spawn` for parallel transactions
 
 ---
 
@@ -278,15 +350,26 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
   - Very large values
   - Deep nesting (many subscript levels)
 
-### 6.2b Concurrency Tests
+### 6.2b Transaction Tests
+- [ ] Create `crates/rumps-storage/tests/transaction_tests.rs`
+- [ ] Test transaction commit writes to WAL and applies changes
+- [ ] Test transaction rollback discards all changes
+- [ ] Test that writes outside transaction to globals return error
+- [ ] Test that writes to locals work outside transactions
+- [ ] Test snapshot isolation (reads see consistent state)
+- [ ] Test transaction conflict detection (if applicable)
+- [ ] Test WAL recovery replays committed transactions correctly
+- [ ] Test WAL recovery ignores aborted transactions
+
+### 6.2c Concurrency Tests
 - [ ] Create `crates/rumps-storage/tests/concurrency_tests.rs`
-- [ ] Test concurrent reads from multiple tasks (should succeed)
-- [ ] Test concurrent writes to different keys (should be serialized)
-- [ ] Test concurrent writes to same key (should be serialized, last write wins)
-- [ ] Test read-write concurrency (reads should see consistent state)
-- [ ] Test many readers with occasional writer (verify no deadlocks)
-- [ ] Stress test: spawn 100+ tasks doing random operations
-- [ ] Test that iterators work correctly under concurrent modifications
+- [ ] Test concurrent transactions (multiple writers)
+- [ ] Test concurrent reads during active transactions (snapshot isolation)
+- [ ] Test transaction serialization at commit time
+- [ ] Test many concurrent read-only transactions
+- [ ] Test mixed read/write transactions
+- [ ] Stress test: spawn 100+ concurrent transactions
+- [ ] Test no deadlocks with many concurrent transactions
 
 ### 6.3 Property-Based Testing
 - [ ] Add `proptest` or `quickcheck` dependency
@@ -340,13 +423,15 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
 
 These are not part of the current plan but should be kept in mind:
 
-- **Transactions**: ACID guarantees for multi-operation workflows (multi-key transactions)
-- **Advanced Concurrency**: Lock-free data structures, optimistic concurrency control (current plan uses RwLock)
+- **Advanced Concurrency**: Lock-free data structures, optimistic concurrency control (current plan uses Mutex for commit serialization)
+- **Multi-Version Concurrency Control (MVCC)**: Full MVCC for better read concurrency (current plan uses snapshot isolation)
+- **Savepoints**: Nested transactions with partial rollback
 - **Compression**: Compress nodes/pages to save disk space
 - **Encryption**: Optional encryption at rest
 - **Query Language**: Parser and evaluator for MUMPS commands (rewrite old parser)
 - **Networking**: Client-server protocol for remote access
 - **Replication**: Multi-node deployment with data replication
+- **Distributed Transactions**: Two-phase commit for multi-node transactions
 
 ---
 
@@ -354,15 +439,23 @@ These are not part of the current plan but should be kept in mind:
 
 **Status**: In Progress
 **Current Phase**: Phase 1.2 (Core Type Definitions)
-**Completed Checkboxes**: 8 / ~140
+**Completed Checkboxes**: 8 / ~160
 
-**Recent Changes**:
+**Recent Changes** (2025-11-15):
+- **Transaction Model**: Added explicit transaction requirement for all global writes
+- **Write-Ahead Log (WAL)**: Restructured Phase 4 to make WAL the foundation of persistence
+- **Public API**: Rewrote Phase 5 for transaction-based API with `db.transaction()` closure pattern
+- **Concurrency**: Changed from RwLock to transaction-level isolation with snapshot reads
+- **Type System**: Added transaction-related types (TransactionId, TransactionState)
+- **Testing**: Added comprehensive transaction and WAL recovery tests
+
+**Previous Changes** (2025-11-11):
 - Updated to support both `Name::Global` and `Name::Local` variables
 - Only `Name::Global` entries are persisted to disk
 - Both namespaces support the same MUMPS operations (SET, GET, KILL, DATA, ORDER)
-- Public API will be async with concurrent reads and exclusive writes (using `tokio::sync::RwLock`)
+- Extended MUMPS collation order: Boolean < Number < String
 - Added comprehensive concurrency testing suite
 
 ---
 
-Last Updated: 2025-11-11
+Last Updated: 2025-11-15
