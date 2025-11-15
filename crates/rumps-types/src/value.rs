@@ -440,27 +440,25 @@ mod encoding {
         where
             E: de::Error,
         {
-            if v.is_empty() {
-                Err(E::custom("empty value bytes"))
-            } else {
-                let tag_byte = v[0];
+            let tag_byte = *v.get(0)
+                .ok_or_else(|| E::custom("empty value bytes"))?;
 
-                if tag_byte == Tag::False as u8 {
-                    Ok(Value::Boolean(false))
-                } else if tag_byte == Tag::True as u8 {
-                    Ok(Value::Boolean(true))
-                } else if Tag::is_small_pos(tag_byte) {
-                    Ok(Value::Integer((tag_byte - Tag::SmallPosStart as u8) as i64))
-                } else if Tag::is_small_neg(tag_byte) {
-                    let offset = tag_byte - Tag::SmallNegStart as u8;
+            match tag_byte {
+                tag if tag == Tag::False as u8 => Ok(Value::Boolean(false)),
+                tag if tag == Tag::True as u8 => Ok(Value::Boolean(true)),
+                tag if Tag::is_small_pos(tag) => {
+                    Ok(Value::Integer((tag - Tag::SmallPosStart as u8) as i64))
+                }
+                tag if Tag::is_small_neg(tag) => {
+                    let offset = tag - Tag::SmallNegStart as u8;
                     Ok(Value::Integer(-1 - offset as i64))
-                } else if tag_byte == Tag::LargeInt as u8 {
-                    let (value, _) =
-                        read_leb128_signed(&v[1..]).map_err(|e| {
-                            E::custom(format!("invalid LEB128: {}", e))
-                        })?;
+                }
+                tag if tag == Tag::LargeInt as u8 => {
+                    let (value, _) = read_leb128_signed(&v[1..])
+                        .map_err(|e| E::custom(format!("invalid LEB128: {}", e)))?;
                     Ok(Value::Integer(value))
-                } else if tag_byte == Tag::Double as u8 {
+                }
+                tag if tag == Tag::Double as u8 => {
                     if v.len() < 9 {
                         Err(E::custom("double requires 9 bytes"))
                     } else {
@@ -469,27 +467,21 @@ mod encoding {
                         let d = f64::from_le_bytes(bytes);
                         Ok(Value::Double(OrderedFloat(d)))
                     }
-                } else if tag_byte == Tag::String as u8 {
-                    let (len, offset) =
-                        read_varint(&v[1..]).map_err(|e| {
-                            E::custom(format!("invalid varint: {}", e))
-                        })?;
+                }
+                tag if tag == Tag::String as u8 => {
+                    let (len, offset) = read_varint(&v[1..])
+                        .map_err(|e| E::custom(format!("invalid varint: {}", e)))?;
                     let start = 1 + offset;
                     let end = start + len;
                     if end > v.len() {
                         Err(E::custom("string extends beyond buffer"))
                     } else {
-                        let s = str::from_utf8(&v[start..end]).map_err(
-                            |e| E::custom(format!("invalid UTF-8: {}", e)),
-                        )?;
+                        let s = str::from_utf8(&v[start..end])
+                            .map_err(|e| E::custom(format!("invalid UTF-8: {}", e)))?;
                         Ok(Value::String(s.to_string()))
                     }
-                } else {
-                    Err(E::custom(format!(
-                        "unknown value tag: 0x{:02x}",
-                        tag_byte
-                    )))
                 }
+                tag => Err(E::custom(format!("unknown value tag: 0x{:02x}", tag))),
             }
         }
 

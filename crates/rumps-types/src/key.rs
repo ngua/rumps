@@ -567,24 +567,25 @@ mod tests {
 
     #[test]
     fn test_name_hash() {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use std::collections::HashMap;
 
         let global1 = Name::Global("PATIENT".to_string());
         let global2 = Name::Global("PATIENT".to_string());
         let local = Name::Local("PATIENT".to_string());
 
-        let hash_value = |name: &Name| -> u64 {
-            let mut hasher = DefaultHasher::new();
-            name.hash(&mut hasher);
-            hasher.finish()
-        };
+        // Test that Name can be used as HashMap key
+        let map = HashMap::from([
+            (global1.clone(), "value1"),
+            (local.clone(), "value2"),
+        ]);
 
-        // Same values should hash identically
-        assert_eq!(hash_value(&global1), hash_value(&global2));
+        // Same values should map to the same key
+        assert_eq!(map.get(&global2), Some(&"value1"));
+        assert_eq!(map.get(&local), Some(&"value2"));
 
-        // Different variants with same string should hash differently
-        assert_ne!(hash_value(&global1), hash_value(&local));
+        // Different variants with same string should be different keys
+        assert_eq!(map.len(), 2);
+        assert_ne!(map.get(&global1), map.get(&local));
     }
 
     #[test]
