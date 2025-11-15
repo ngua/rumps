@@ -166,6 +166,7 @@ impl PartialOrd for Subscript {
 impl Ord for Subscript {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
+
         use Subscript::*;
 
         match (self, other) {
@@ -222,6 +223,157 @@ impl From<String> for Subscript {
 impl From<&str> for Subscript {
     fn from(s: &str) -> Self {
         Self::String(s.to_string())
+    }
+}
+
+/// A key representing a path through the MUMPS tree structure.
+///
+/// A `Key` is a sequence of subscripts that define a hierarchical path,
+/// like `^PATIENT(123, "NAME")` which would be represented as
+/// `Key::from(vec![123.into(), "NAME".into()])`.
+///
+/// Keys are ordered lexicographically by their subscripts using the
+/// extended MUMPS collation order.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::{Key, Subscript};
+///
+/// // Create a key with multiple subscripts
+/// let key = Key::from(vec![
+///     Subscript::from(123),
+///     Subscript::from("NAME"),
+/// ]);
+///
+/// assert_eq!(key.len(), 2);
+/// assert_eq!(key.get(0), Some(&Subscript::from(123)));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Key(Vec<Subscript>);
+
+impl Key {
+    /// Creates an empty key with no subscripts.
+    #[inline]
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Creates a key with the given capacity.
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    /// Returns the number of subscripts in this key.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` if the key has no subscripts.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Returns a reference to the subscript at the given index.
+    #[inline]
+    pub fn get(&self, index: usize) -> Option<&Subscript> {
+        self.0.get(index)
+    }
+
+    /// Returns an iterator over the subscripts.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &Subscript> {
+        self.0.iter()
+    }
+
+    /// Adds a subscript to the end of this key.
+    #[inline]
+    pub fn push(&mut self, subscript: Subscript) {
+        self.0.push(subscript);
+    }
+
+    /// Removes and returns the last subscript, or None if empty.
+    #[inline]
+    pub fn pop(&mut self) -> Option<Subscript> {
+        self.0.pop()
+    }
+
+    /// Returns the subscripts as a slice.
+    #[inline]
+    pub fn as_slice(&self) -> &[Subscript] {
+        &self.0
+    }
+}
+
+impl Default for Key {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PartialOrd for Key {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Key {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Lexicographic ordering on the sequence of subscripts
+        self.0.cmp(&other.0)
+    }
+}
+
+impl fmt::Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(")?;
+        self.0.iter().enumerate().try_for_each(|(i, sub)| {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", sub)
+        })?;
+        write!(f, ")")
+    }
+}
+
+impl From<Vec<Subscript>> for Key {
+    fn from(subscripts: Vec<Subscript>) -> Self {
+        Self(subscripts)
+    }
+}
+
+impl From<Key> for Vec<Subscript> {
+    fn from(key: Key) -> Self {
+        key.0
+    }
+}
+
+impl FromIterator<Subscript> for Key {
+    fn from_iter<T: IntoIterator<Item = Subscript>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl IntoIterator for Key {
+    type Item = Subscript;
+    type IntoIter = std::vec::IntoIter<Subscript>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Key {
+    type Item = &'a Subscript;
+    type IntoIter = std::slice::Iter<'a, Subscript>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
     }
 }
 
@@ -430,17 +582,149 @@ mod tests {
         // Test each variant round-trips correctly
         let bool_sub = Subscript::from(true);
         let serialized = bincode::serialize(&bool_sub).unwrap();
-        let deserialized: Subscript = bincode::deserialize(&serialized).unwrap();
+        let deserialized: Subscript =
+            bincode::deserialize(&serialized).unwrap();
         assert_eq!(bool_sub, deserialized);
 
         let num_sub = Subscript::from(123.45);
         let serialized = bincode::serialize(&num_sub).unwrap();
-        let deserialized: Subscript = bincode::deserialize(&serialized).unwrap();
+        let deserialized: Subscript =
+            bincode::deserialize(&serialized).unwrap();
         assert_eq!(num_sub, deserialized);
 
         let str_sub = Subscript::from("TEST");
         let serialized = bincode::serialize(&str_sub).unwrap();
-        let deserialized: Subscript = bincode::deserialize(&serialized).unwrap();
+        let deserialized: Subscript =
+            bincode::deserialize(&serialized).unwrap();
         assert_eq!(str_sub, deserialized);
+    }
+
+    // Key tests
+
+    #[test]
+    fn test_key_creation() {
+        let key = Key::new();
+        assert!(key.is_empty());
+        assert_eq!(key.len(), 0);
+
+        let key =
+            Key::from(vec![Subscript::from(123), Subscript::from("NAME")]);
+        assert!(!key.is_empty());
+        assert_eq!(key.len(), 2);
+    }
+
+    #[test]
+    fn test_key_push_pop() {
+        let mut key = Key::new();
+        key.push(Subscript::from(123));
+        key.push(Subscript::from("NAME"));
+
+        assert_eq!(key.len(), 2);
+        assert_eq!(key.get(0), Some(&Subscript::from(123)));
+        assert_eq!(key.get(1), Some(&Subscript::from("NAME")));
+
+        assert_eq!(key.pop(), Some(Subscript::from("NAME")));
+        assert_eq!(key.len(), 1);
+    }
+
+    #[test]
+    fn test_key_ordering() {
+        // Lexicographic ordering on subscript sequences
+        let key1 = Key::from(vec![Subscript::from(1)]);
+        let key2 = Key::from(vec![Subscript::from(10)]);
+        let key3 = Key::from(vec![Subscript::from(10), Subscript::from("A")]);
+        let key4 = Key::from(vec![Subscript::from(10), Subscript::from("B")]);
+
+        assert!(key1 < key2);
+        assert!(key2 < key3);
+        assert!(key3 < key4);
+
+        // Shorter keys come before longer keys with same prefix
+        let short_key = Key::from(vec![Subscript::from(1)]);
+        let long_key = Key::from(vec![Subscript::from(1), Subscript::from(2)]);
+        assert!(short_key < long_key);
+    }
+
+    #[test]
+    fn test_key_extended_collation_ordering() {
+        // Test that extended MUMPS collation carries through to keys
+        let key_bool = Key::from(vec![Subscript::from(false)]);
+        let key_num = Key::from(vec![Subscript::from(10)]);
+        let key_str = Key::from(vec![Subscript::from("ABC")]);
+
+        assert!(key_bool < key_num);
+        assert!(key_num < key_str);
+
+        // Multi-level keys
+        let key1 = Key::from(vec![Subscript::from(10), Subscript::from(true)]);
+        let key2 = Key::from(vec![Subscript::from(10), Subscript::from(5)]);
+        let key3 = Key::from(vec![Subscript::from(10), Subscript::from("A")]);
+
+        assert!(key1 < key2);
+        assert!(key2 < key3);
+    }
+
+    #[test]
+    fn test_key_display() {
+        let empty_key = Key::new();
+        assert_eq!(empty_key.to_string(), "()");
+
+        let single_key = Key::from(vec![Subscript::from(123)]);
+        assert_eq!(single_key.to_string(), "(123)");
+
+        let multi_key =
+            Key::from(vec![Subscript::from(123), Subscript::from("NAME")]);
+        assert_eq!(multi_key.to_string(), "(123, NAME)");
+    }
+
+    #[test]
+    fn test_key_iteration() {
+        let key = Key::from(vec![
+            Subscript::from(1),
+            Subscript::from(2),
+            Subscript::from(3),
+        ]);
+
+        let collected: Vec<_> = key.iter().cloned().collect();
+        assert_eq!(
+            collected,
+            vec![Subscript::from(1), Subscript::from(2), Subscript::from(3)]
+        );
+
+        // Test IntoIterator for &Key
+        let count = (&key).into_iter().count();
+        assert_eq!(count, 3);
+
+        // Test IntoIterator for Key
+        let key_copy = key.clone();
+        let count = key_copy.into_iter().count();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_key_from_iterator() {
+        let subscripts =
+            vec![Subscript::from(1), Subscript::from(2), Subscript::from(3)];
+        let key: Key = subscripts.into_iter().collect();
+        assert_eq!(key.len(), 3);
+    }
+
+    #[test]
+    fn test_key_serialization() {
+        let key = Key::from(vec![
+            Subscript::from(123),
+            Subscript::from("NAME"),
+            Subscript::from(true),
+        ]);
+
+        let serialized = bincode::serialize(&key).unwrap();
+        let deserialized: Key = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(key, deserialized);
+
+        // Test empty key
+        let empty_key = Key::new();
+        let serialized = bincode::serialize(&empty_key).unwrap();
+        let deserialized: Key = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(empty_key, deserialized);
     }
 }
