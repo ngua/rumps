@@ -19,17 +19,13 @@ use serde::{Deserialize, Serialize};
 /// let local = Name::Local("TEMP".to_string());
 /// assert_eq!(local.to_string(), "TEMP");
 /// ```
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize
-)]
+///
+/// # Serialization
+///
+/// `Name` serializes directly as a string without enum tags. Since only
+/// `Name::Global` entries are persisted to disk, deserialization always
+/// produces a `Name::Global` variant.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Name {
     /// A global variable (persistent, stored on disk).
     /// Example: `^PATIENT`
@@ -38,6 +34,28 @@ pub enum Name {
     /// A local variable (ephemeral, memory-only).
     /// Example: `PATIENT`
     Local(String),
+}
+
+impl Serialize for Name {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Serialize just the inner string, without enum tag
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for Name {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Deserialize as string, always create Global variant
+        // (since only globals are persisted)
+        let name = String::deserialize(deserializer)?;
+        Ok(Self::Global(name))
+    }
 }
 
 impl Name {
@@ -149,11 +167,22 @@ mod tests {
     fn test_serialization() {
         let global = Name::Global("PATIENT".to_string());
         let serialized = bincode::serialize(&global).unwrap();
+
+        // Should be same as serializing the string directly
+        let string_serialized = bincode::serialize("PATIENT").unwrap();
+        assert_eq!(serialized, string_serialized);
+
+        // Round-trip should work
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
         assert_eq!(global, deserialized);
 
+        // Test that Local also serializes as plain string
         let local = Name::Local("TEMP".to_string());
         let serialized = bincode::serialize(&local).unwrap();
+        let string_serialized = bincode::serialize("TEMP").unwrap();
+        assert_eq!(serialized, string_serialized);
+
+        // Deserializing always produces Global variant
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
         assert_eq!(local, deserialized);
     }
