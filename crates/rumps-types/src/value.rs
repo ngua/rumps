@@ -338,23 +338,51 @@ impl From<&str> for Value {
 /// The scheme achieves 85-95% space reduction for typical workloads compared
 /// to naive fixed-width encoding, while maintaining fast encode/decode performance.
 mod encoding {
-    use super::*;
-    use serde::{
-        de::{self, Visitor},
-        Deserialize, Deserializer, Serialize, Serializer,
-    };
     use std::{fmt, io, iter, str};
 
-    // Tag constants for the compact serialization format
-    const TAG_FALSE: u8 = 0x00;
-    const TAG_TRUE: u8 = 0x01;
-    const TAG_SMALL_POS_START: u8 = 0x02;
-    const TAG_SMALL_POS_END: u8 = 0x81;
-    const TAG_SMALL_NEG_START: u8 = 0x82;
-    const TAG_SMALL_NEG_END: u8 = 0xF1;
-    const TAG_LARGE_INT: u8 = 0xF2;
-    const TAG_DOUBLE: u8 = 0xF3;
-    const TAG_STRING: u8 = 0xF4;
+    use serde::de::{self, Visitor};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::*;
+
+    /// Tags for the compact serialization format.
+    ///
+    /// Each value type has a specific tag or range of tags that identifies
+    /// it during deserialization. Small integer values are embedded directly
+    /// in the tag byte for space efficiency.
+    #[repr(u8)]
+    enum Tag {
+        /// Boolean false value
+        False = 0x00,
+        /// Boolean true value
+        True = 0x01,
+        /// Start of range for small positive integers (0-127)
+        SmallPosStart = 0x02,
+        /// End of range for small positive integers
+        SmallPosEnd = 0x81,
+        /// Start of range for small negative integers (-1 to -112)
+        SmallNegStart = 0x82,
+        /// End of range for small negative integers
+        SmallNegEnd = 0xF1,
+        /// Marker for large integers (followed by LEB128 encoding)
+        LargeInt = 0xF2,
+        /// Marker for doubles (followed by 8 bytes IEEE-754)
+        Double = 0xF3,
+        /// Marker for strings (followed by varint length + UTF-8)
+        String = 0xF4,
+    }
+
+    impl Tag {
+        /// Check if a byte value falls in the small positive integer range
+        fn is_small_pos(byte: u8) -> bool {
+            byte >= Self::SmallPosStart as u8 && byte <= Self::SmallPosEnd as u8
+        }
+
+        /// Check if a byte value falls in the small negative integer range
+        fn is_small_neg(byte: u8) -> bool {
+            byte >= Self::SmallNegStart as u8 && byte <= Self::SmallNegEnd as u8
+        }
+    }
 
     impl Serialize for Value {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -363,30 +391,31 @@ mod encoding {
         {
             // Build the full byte representation
             let bytes = match self {
-                Self::Boolean(false) => vec![TAG_FALSE],
-                Self::Boolean(true) => vec![TAG_TRUE],
+                Self::Boolean(false) => vec![Tag::False as u8],
+                Self::Boolean(true) => vec![Tag::True as u8],
                 Self::Integer(i) if *i >= 0 && *i <= 127 => {
-                    vec![TAG_SMALL_POS_START + *i as u8]
+                    vec![Tag::SmallPosStart as u8 + *i as u8]
                 }
                 Self::Integer(i) if *i >= -112 && *i < 0 => {
-                    vec![TAG_SMALL_NEG_START + ((-1 - *i) as u8)]
+                    vec![Tag::SmallNegStart as u8 + ((-1 - *i) as u8)]
                 }
                 Self::Integer(i) => {
                     let mut bytes = Vec::with_capacity(10);
-                    bytes.push(TAG_LARGE_INT);
+                    bytes.push(Tag::LargeInt as u8);
                     write_leb128_signed(&mut bytes, *i);
                     bytes
                 }
                 Self::Double(d) => {
                     let mut bytes = Vec::with_capacity(9);
-                    bytes.push(TAG_DOUBLE);
+                    bytes.push(Tag::Double as u8);
                     bytes.extend_from_slice(&d.into_inner().to_le_bytes());
                     bytes
                 }
                 Self::String(s) => {
                     let len = s.len();
-                    let mut bytes = Vec::with_capacity(1 + varint_size(len) + len);
-                    bytes.push(TAG_STRING);
+                    let mut bytes =
+                        Vec::with_capacity(1 + varint_size(len) + len);
+                    bytes.push(Tag::String as u8);
                     write_varint(&mut bytes, len);
                     bytes.extend_from_slice(s.as_bytes());
                     bytes
@@ -414,23 +443,24 @@ mod encoding {
             if v.is_empty() {
                 Err(E::custom("empty value bytes"))
             } else {
-                let tag = v[0];
-                match tag {
-                TAG_FALSE => Ok(Value::Boolean(false)),
-                TAG_TRUE => Ok(Value::Boolean(true)),
-                TAG_SMALL_POS_START..=TAG_SMALL_POS_END => {
-                    Ok(Value::Integer((tag - TAG_SMALL_POS_START) as i64))
-                }
-                TAG_SMALL_NEG_START..=TAG_SMALL_NEG_END => {
-                    let offset = tag - TAG_SMALL_NEG_START;
+                let tag_byte = v[0];
+
+                if tag_byte == Tag::False as u8 {
+                    Ok(Value::Boolean(false))
+                } else if tag_byte == Tag::True as u8 {
+                    Ok(Value::Boolean(true))
+                } else if Tag::is_small_pos(tag_byte) {
+                    Ok(Value::Integer((tag_byte - Tag::SmallPosStart as u8) as i64))
+                } else if Tag::is_small_neg(tag_byte) {
+                    let offset = tag_byte - Tag::SmallNegStart as u8;
                     Ok(Value::Integer(-1 - offset as i64))
-                }
-                TAG_LARGE_INT => {
-                    let (value, _) = read_leb128_signed(&v[1..])
-                        .map_err(|e| E::custom(format!("invalid LEB128: {}", e)))?;
+                } else if tag_byte == Tag::LargeInt as u8 {
+                    let (value, _) =
+                        read_leb128_signed(&v[1..]).map_err(|e| {
+                            E::custom(format!("invalid LEB128: {}", e))
+                        })?;
                     Ok(Value::Integer(value))
-                }
-                TAG_DOUBLE => {
+                } else if tag_byte == Tag::Double as u8 {
                     if v.len() < 9 {
                         Err(E::custom("double requires 9 bytes"))
                     } else {
@@ -439,21 +469,26 @@ mod encoding {
                         let d = f64::from_le_bytes(bytes);
                         Ok(Value::Double(OrderedFloat(d)))
                     }
-                }
-                TAG_STRING => {
-                    let (len, offset) = read_varint(&v[1..])
-                        .map_err(|e| E::custom(format!("invalid varint: {}", e)))?;
+                } else if tag_byte == Tag::String as u8 {
+                    let (len, offset) =
+                        read_varint(&v[1..]).map_err(|e| {
+                            E::custom(format!("invalid varint: {}", e))
+                        })?;
                     let start = 1 + offset;
                     let end = start + len;
                     if end > v.len() {
                         Err(E::custom("string extends beyond buffer"))
                     } else {
-                        let s = str::from_utf8(&v[start..end])
-                            .map_err(|e| E::custom(format!("invalid UTF-8: {}", e)))?;
+                        let s = str::from_utf8(&v[start..end]).map_err(
+                            |e| E::custom(format!("invalid UTF-8: {}", e)),
+                        )?;
                         Ok(Value::String(s.to_string()))
                     }
-                }
-                _ => Err(E::custom(format!("unknown value tag: 0x{:02x}", tag))),
+                } else {
+                    Err(E::custom(format!(
+                        "unknown value tag: 0x{:02x}",
+                        tag_byte
+                    )))
                 }
             }
         }
@@ -484,17 +519,18 @@ mod encoding {
     #[inline]
     pub(crate) fn write_varint(buf: &mut Vec<u8>, value: usize) {
         // Generate varint bytes functionally using successors
-        let bytes: Vec<u8> = iter::successors(Some(value), |&v| (v > 0).then(|| v >> 7))
-            .enumerate()
-            .take_while(|(i, v)| *i == 0 || *v > 0)
-            .map(|(_, v)| {
-                let mut byte = (v & 0x7F) as u8;
-                if v >> 7 != 0 {
-                    byte |= 0x80;
-                }
-                byte
-            })
-            .collect();
+        let bytes: Vec<u8> =
+            iter::successors(Some(value), |&v| (v > 0).then_some(v >> 7))
+                .enumerate()
+                .take_while(|(i, v)| *i == 0 || *v > 0)
+                .map(|(_, v)| {
+                    let mut byte = (v & 0x7F) as u8;
+                    if v >> 7 != 0 {
+                        byte |= 0x80;
+                    }
+                    byte
+                })
+                .collect();
 
         buf.extend(bytes);
     }
@@ -523,14 +559,16 @@ mod encoding {
             })
             .find_map(|result| result.ok())
             .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::UnexpectedEof, "incomplete varint")
+                io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "incomplete varint",
+                )
             })
     }
 
     #[inline]
     pub(crate) fn varint_size(value: usize) -> usize {
-        iter::successors(Some(value), |&v| (v >= 128).then(|| v >> 7))
-            .count()
+        iter::successors(Some(value), |&v| (v >= 128).then_some(v >> 7)).count()
     }
 
     #[inline]
@@ -538,14 +576,16 @@ mod encoding {
         let bytes: Vec<u8> = iter::successors(Some(value), |&v| {
             let byte = (v & 0x7F) as u8;
             let shifted = v >> 7;
-            let done = (shifted == 0 && byte & 0x40 == 0) || (shifted == -1 && byte & 0x40 != 0);
+            let done = (shifted == 0 && byte & 0x40 == 0)
+                || (shifted == -1 && byte & 0x40 != 0);
             (!done).then_some(shifted)
         })
         .zip(iter::repeat(()))
         .map(|(v, _)| {
             let byte = (v & 0x7F) as u8;
             let shifted = v >> 7;
-            let done = (shifted == 0 && byte & 0x40 == 0) || (shifted == -1 && byte & 0x40 != 0);
+            let done = (shifted == 0 && byte & 0x40 == 0)
+                || (shifted == -1 && byte & 0x40 != 0);
             if done {
                 byte
             } else {
@@ -558,7 +598,9 @@ mod encoding {
     }
 
     #[inline]
-    pub(crate) fn read_leb128_signed(buf: &[u8]) -> Result<(i64, usize), io::Error> {
+    pub(crate) fn read_leb128_signed(
+        buf: &[u8],
+    ) -> Result<(i64, usize), io::Error> {
         buf.iter()
             .enumerate()
             .scan((0i64, 0usize), |(value, shift), (offset, &byte)| {
@@ -586,7 +628,10 @@ mod encoding {
             })
             .find_map(|result| result.ok())
             .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::UnexpectedEof, "incomplete LEB128")
+                io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "incomplete LEB128",
+                )
             })
     }
 }
@@ -767,7 +812,8 @@ mod tests {
 
         test_values.iter().for_each(|value| {
             let serialized = bincode::serialize(value).unwrap();
-            let deserialized: Value = bincode::deserialize(&serialized).unwrap();
+            let deserialized: Value =
+                bincode::deserialize(&serialized).unwrap();
             assert_eq!(
                 value, &deserialized,
                 "Failed to round-trip: {:?}",
@@ -783,7 +829,10 @@ mod tests {
         // so actual sizes are 8 bytes larger than our compact encoding
 
         // Booleans: 1 byte data + 8 byte bincode overhead = 9 bytes
-        assert_eq!(bincode::serialize(&Value::Boolean(false)).unwrap().len(), 9);
+        assert_eq!(
+            bincode::serialize(&Value::Boolean(false)).unwrap().len(),
+            9
+        );
         assert_eq!(bincode::serialize(&Value::Boolean(true)).unwrap().len(), 9);
 
         // Small positive integers: 1 byte data + 8 byte overhead = 9 bytes
@@ -797,15 +846,38 @@ mod tests {
 
         // Larger integers: (2-3 bytes data) + 8 byte overhead
         assert_eq!(bincode::serialize(&Value::Integer(128)).unwrap().len(), 11); // 3 + 8
-        assert_eq!(bincode::serialize(&Value::Integer(-113)).unwrap().len(), 11); // 3 + 8
+        assert_eq!(
+            bincode::serialize(&Value::Integer(-113)).unwrap().len(),
+            11
+        ); // 3 + 8
 
         // Doubles: 9 bytes data + 8 byte overhead = 17 bytes
-        assert_eq!(bincode::serialize(&Value::Double(OrderedFloat(0.0))).unwrap().len(), 17);
-        assert_eq!(bincode::serialize(&Value::Double(OrderedFloat(3.14))).unwrap().len(), 17);
+        assert_eq!(
+            bincode::serialize(&Value::Double(OrderedFloat(0.0)))
+                .unwrap()
+                .len(),
+            17
+        );
+        assert_eq!(
+            bincode::serialize(&Value::Double(OrderedFloat(3.14)))
+                .unwrap()
+                .len(),
+            17
+        );
 
         // Strings: (tag + varint length + content) + 8 byte overhead
-        assert_eq!(bincode::serialize(&Value::String(String::new())).unwrap().len(), 10); // 2 + 8
-        assert_eq!(bincode::serialize(&Value::String("hello".to_string())).unwrap().len(), 15); // 7 + 8
+        assert_eq!(
+            bincode::serialize(&Value::String(String::new()))
+                .unwrap()
+                .len(),
+            10
+        ); // 2 + 8
+        assert_eq!(
+            bincode::serialize(&Value::String("hello".to_string()))
+                .unwrap()
+                .len(),
+            15
+        ); // 7 + 8
     }
 
     #[test]
@@ -826,7 +898,8 @@ mod tests {
 
         boundary_values.iter().for_each(|value| {
             let serialized = bincode::serialize(value).unwrap();
-            let deserialized: Value = bincode::deserialize(&serialized).unwrap();
+            let deserialized: Value =
+                bincode::deserialize(&serialized).unwrap();
             assert_eq!(value, &deserialized);
         });
     }
@@ -876,11 +949,7 @@ mod tests {
         test_cases.iter().for_each(|(value, expected)| {
             let mut buf = Vec::new();
             encoding::write_leb128_signed(&mut buf, *value);
-            assert_eq!(
-                buf, *expected,
-                "LEB128 encoding for {} failed",
-                value
-            );
+            assert_eq!(buf, *expected, "LEB128 encoding for {} failed", value);
 
             let (decoded, offset) = encoding::read_leb128_signed(&buf).unwrap();
             assert_eq!(decoded, *value);
