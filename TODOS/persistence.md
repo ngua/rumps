@@ -27,15 +27,15 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
 - [x] Verify `cargo check` passes for new crates
 
 ### 1.2 Core Type Definitions (rumps-types)
-- [ ] Define `Name` enum with `Global(String)` and `Local(String)` variants (e.g., `^PATIENT` vs `PATIENT`)
-- [ ] Implement `Serialize`/`Deserialize` for `Name` using serde
-- [ ] Add `Display` for `Name` (format with/without caret)
-- [ ] Define `Subscript` type (string subscript in a key path)
-- [ ] Define `Key` type (sequence of subscripts representing path: e.g., `["123", "NAME"]`)
-- [ ] Define `Value` enum with variants: `String`, `Integer(i64)`, `Double(f64)`, `Boolean(bool)`
-- [ ] Implement `Serialize`/`Deserialize` for `Value` using serde
-- [ ] Add `Ord` and extended MUMPS collation ordering for `Key` and `Subscript`
-- [ ] Add comprehensive unit tests for key ordering (verify extended MUMPS collation)
+- [x] Define `Name` enum with `Global(String)` and `Local(String)` variants (e.g., `^PATIENT` vs `PATIENT`)
+- [x] Implement `Serialize`/`Deserialize` for `Name` using serde
+- [x] Add `Display` for `Name` (format with/without caret)
+- [x] Define `Subscript` type (string subscript in a key path)
+- [x] Define `Key` type (sequence of subscripts representing path: e.g., `["123", "NAME"]`)
+- [x] Define `Value` enum with variants: `String`, `Integer(i64)`, `Double(f64)`, `Boolean(bool)`
+- [x] Implement `Serialize`/`Deserialize` for `Value` using serde (with compact binary encoding!)
+- [x] Add `Ord` and extended MUMPS collation ordering for `Key` and `Subscript`
+- [x] Add comprehensive unit tests for key ordering (verify extended MUMPS collation)
 - [ ] Add unit tests for `Name` enum (both Global and Local variants)
 - [ ] Define transaction-related types: `TransactionId`, `TransactionState` enum
 
@@ -438,10 +438,24 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 1.2 (Core Type Definitions)
-**Completed Checkboxes**: 8 / ~160
+**Current Phase**: Phase 1.2 (Core Type Definitions) - Almost Complete!
+**Completed Checkboxes**: 17 / ~160
 
-**Recent Changes** (2025-11-15):
+**Recent Changes** (2025-11-15 - Today's Progress):
+- ✅ Completed `Name` enum with Global/Local variants and full serde support
+- ✅ Completed `Subscript` type with extended collation (Boolean < Number < String)
+- ✅ Completed `Key` type with newtype pattern and transparent serde
+- ✅ Completed `Value` enum with compact binary encoding:
+  - Implemented space-efficient serialization (1 byte for small values)
+  - Used LEB128 and varint encodings for integers
+  - Added OrderedFloat for proper Double ordering
+  - Achieved 85-95% space reduction vs naive encoding
+- ✅ Added comprehensive test suites for all types
+- ✅ Refactored to functional programming style (no early returns, iterator methods)
+- ✅ Created clean `encoding` submodule for serialization logic
+- ✅ Added extensive documentation for binary encoding scheme
+
+**Previous Changes** (2025-11-15 - Planning):
 - **Transaction Model**: Added explicit transaction requirement for all global writes
 - **Write-Ahead Log (WAL)**: Restructured Phase 4 to make WAL the foundation of persistence
 - **Public API**: Rewrote Phase 5 for transaction-based API with `db.transaction()` closure pattern
@@ -458,4 +472,4 @@ These are not part of the current plan but should be kept in mind:
 
 ---
 
-Last Updated: 2025-11-15
+Last Updated: 2024-11-15

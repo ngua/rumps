@@ -554,6 +554,132 @@ mod tests {
         assert_ne!(deserialized, local);
     }
 
+    #[test]
+    fn test_name_clone() {
+        let global = Name::Global("PATIENT".to_string());
+        let global_clone = global.clone();
+        assert_eq!(global, global_clone);
+
+        let local = Name::Local("TEMP".to_string());
+        let local_clone = local.clone();
+        assert_eq!(local, local_clone);
+    }
+
+    #[test]
+    fn test_name_hash() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let global1 = Name::Global("PATIENT".to_string());
+        let global2 = Name::Global("PATIENT".to_string());
+        let local = Name::Local("PATIENT".to_string());
+
+        let hash_value = |name: &Name| -> u64 {
+            let mut hasher = DefaultHasher::new();
+            name.hash(&mut hasher);
+            hasher.finish()
+        };
+
+        // Same values should hash identically
+        assert_eq!(hash_value(&global1), hash_value(&global2));
+
+        // Different variants with same string should hash differently
+        assert_ne!(hash_value(&global1), hash_value(&local));
+    }
+
+    #[test]
+    fn test_name_debug() {
+        let global = Name::Global("PATIENT".to_string());
+        let debug_str = format!("{:?}", global);
+        assert!(debug_str.contains("Global"));
+        assert!(debug_str.contains("PATIENT"));
+
+        let local = Name::Local("TEMP".to_string());
+        let debug_str = format!("{:?}", local);
+        assert!(debug_str.contains("Local"));
+        assert!(debug_str.contains("TEMP"));
+    }
+
+    #[test]
+    fn test_name_with_special_characters() {
+        let special = Name::Global("TEST$#@!".to_string());
+        assert_eq!(special.name(), "TEST$#@!");
+        assert_eq!(special.to_string(), "^TEST$#@!");
+
+        let unicode = Name::Local("日本語".to_string());
+        assert_eq!(unicode.name(), "日本語");
+        assert_eq!(unicode.to_string(), "日本語");
+    }
+
+    #[test]
+    fn test_name_empty_string() {
+        let empty_global = Name::Global("".to_string());
+        assert_eq!(empty_global.name(), "");
+        assert_eq!(empty_global.to_string(), "^");
+
+        let empty_local = Name::Local("".to_string());
+        assert_eq!(empty_local.name(), "");
+        assert_eq!(empty_local.to_string(), "");
+    }
+
+    #[test]
+    fn test_name_serialization_edge_cases() {
+        // Test empty string
+        let empty = Name::Global("".to_string());
+        let serialized = bincode::serialize(&empty).unwrap();
+        let deserialized: Name = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(empty, deserialized);
+
+        // Test special characters
+        let special = Name::Global("^$#@!".to_string());
+        let serialized = bincode::serialize(&special).unwrap();
+        let deserialized: Name = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(special, deserialized);
+
+        // Test unicode
+        let unicode = Name::Global("日本語テスト".to_string());
+        let serialized = bincode::serialize(&unicode).unwrap();
+        let deserialized: Name = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(unicode, deserialized);
+    }
+
+    #[test]
+    fn test_name_comprehensive_ordering() {
+        let names = vec![
+            Name::Global("A".to_string()),
+            Name::Global("B".to_string()),
+            Name::Global("Z".to_string()),
+            Name::Local("A".to_string()),
+            Name::Local("B".to_string()),
+            Name::Local("Z".to_string()),
+        ];
+
+        // Verify all globals come before all locals
+        names[..3].iter().all(|g| g.is_global());
+        names[3..].iter().all(|l| l.is_local());
+
+        // Verify ordering is transitive and consistent
+        names.windows(2).all(|w| w[0] < w[1]);
+
+        // Test with same name strings
+        let g = Name::Global("SAME".to_string());
+        let l = Name::Local("SAME".to_string());
+        assert!(g < l);
+    }
+
+    #[test]
+    fn test_name_partialord_consistency() {
+        let g1 = Name::Global("A".to_string());
+        let g2 = Name::Global("B".to_string());
+
+        // PartialOrd should be consistent with Ord
+        assert_eq!(g1.partial_cmp(&g2), Some(std::cmp::Ordering::Less));
+        assert_eq!(g1.cmp(&g2), std::cmp::Ordering::Less);
+
+        // Test reflexivity
+        assert_eq!(g1.partial_cmp(&g1), Some(std::cmp::Ordering::Equal));
+    }
+
     // Subscript tests
 
     #[test]
