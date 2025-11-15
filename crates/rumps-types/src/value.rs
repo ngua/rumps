@@ -516,7 +516,6 @@ mod encoding {
 
     // Helper functions for variable-length integer encoding
 
-    #[inline]
     pub(crate) fn write_varint(buf: &mut Vec<u8>, value: usize) {
         // Generate varint bytes functionally using successors
         let bytes: Vec<u8> =
@@ -535,7 +534,6 @@ mod encoding {
         buf.extend(bytes);
     }
 
-    #[inline]
     pub(crate) fn read_varint(buf: &[u8]) -> Result<(usize, usize), io::Error> {
         buf.iter()
             .enumerate()
@@ -566,12 +564,10 @@ mod encoding {
             })
     }
 
-    #[inline]
     pub(crate) fn varint_size(value: usize) -> usize {
         iter::successors(Some(value), |&v| (v >= 128).then_some(v >> 7)).count()
     }
 
-    #[inline]
     pub(crate) fn write_leb128_signed(buf: &mut Vec<u8>, value: i64) {
         let bytes: Vec<u8> = iter::successors(Some(value), |&v| {
             let byte = (v & 0x7F) as u8;
@@ -597,7 +593,6 @@ mod encoding {
         buf.extend(bytes);
     }
 
-    #[inline]
     pub(crate) fn read_leb128_signed(
         buf: &[u8],
     ) -> Result<(i64, usize), io::Error> {
