@@ -88,6 +88,7 @@ dependencies = [
 name = "rumps-types"
 version = "0.0.1"
 dependencies = [
+ "bincode",
  "ordered-float",
  "serde",
  "thiserror",
