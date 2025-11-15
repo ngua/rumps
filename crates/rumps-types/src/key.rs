@@ -1,11 +1,99 @@
-//! Key types for MUMPS variables (globals and locals).
+//! Variable naming and key path types for the RUMPS database.
+//!
+//! # Overview
+//!
+//! RUMPS organizes data in persistent, sparse, multi-dimensional trees backed by
+//! B-tree storage. This module defines the fundamental types for navigating and
+//! addressing data within these trees.
+//!
+//! ## Type Hierarchy
+//!
+//! ```text
+//! Name (^PATIENT or TEMP)
+//!   └─> Key ((123, "NAME"))
+//!         └─> Subscript sequence [Number(123), String("NAME")]
+//! ```
+//!
+//! ## Two Namespaces: Globals and Locals
+//!
+//! RUMPS distinguishes between two types of variables:
+//!
+//! - **Globals** (`^NAME`): Persistent variables stored on disk, prefixed with `^`
+//! - **Locals** (`NAME`): Ephemeral variables kept in memory only, no prefix
+//!
+//! Both support the same hierarchical tree operations (SET, GET, KILL, etc.),
+//! but only globals are written to persistent storage.
+//!
+//! ## Extended Collation Order
+//!
+//! RUMPS extends traditional database collation with a three-tier ordering system
+//! for subscripts, ensuring numeric values sort correctly:
+//!
+//! 1. **Booleans**: `false < true`
+//! 2. **Numbers**: Numeric ordering (e.g., `1 < 10 < 100`, not `"1" < "100" < "10"`)
+//! 3. **Strings**: Lexicographic ordering (e.g., `"A" < "B" < "Z"`)
+//!
+//! This prevents the common pitfall where string-sorted numbers produce incorrect
+//! orderings like `"100" < "2"`.
+//!
+//! ## Keys as Hierarchical Paths
+//!
+//! A [`Key`] represents a path through the tree structure. For example, the RUMPS
+//! expression `^PATIENT(123, "NAME")` maps to:
+//!
+//! ```
+//! use rumps_types::{Name, Key, Subscript};
+//!
+//! let name = Name::Global("PATIENT".to_string());
+//! let key = Key::from(vec![
+//!     Subscript::from(123),
+//!     Subscript::from("NAME"),
+//! ]);
+//! // Represents: ^PATIENT(123, "NAME")
+//! ```
+//!
+//! Keys are ordered lexicographically using the extended collation order,
+//! which ensures predictable tree traversal and efficient range queries.
+//!
+//! ## Storage Mapping
+//!
+//! - **In-memory**: Both globals and locals use the same tree structure
+//! - **On-disk**: Only globals are serialized to persistent B-tree storage
+//! - **Serialization**: Types use `bincode` for compact binary encoding
+//!
+//! ## Example Usage
+//!
+//! ```
+//! use rumps_types::{Name, Key, Subscript};
+//!
+//! // Global variable (persistent)
+//! let global_name = Name::Global("PATIENT".to_string());
+//! assert_eq!(global_name.to_string(), "^PATIENT");
+//!
+//! // Local variable (ephemeral)
+//! let local_name = Name::Local("TEMP".to_string());
+//! assert_eq!(local_name.to_string(), "TEMP");
+//!
+//! // Hierarchical key path
+//! let key = Key::from(vec![
+//!     Subscript::from(123),        // Number
+//!     Subscript::from("ADDRESS"),  // String
+//!     Subscript::from("CITY"),     // String
+//! ]);
+//! assert_eq!(key.to_string(), "(123, ADDRESS, CITY)");
+//!
+//! // Collation ordering ensures numbers sort numerically
+//! let key1 = Key::from(vec![Subscript::from(2)]);
+//! let key100 = Key::from(vec![Subscript::from(100)]);
+//! assert!(key1 < key100);  // NOT "100" < "2" as with strings!
+//! ```
 
-use std::fmt;
+use std::{cmp, fmt};
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// A MUMPS variable name, either Global (persistent) or Local (ephemeral).
+/// A RUMPS variable name, either Global (persistent) or Local (ephemeral).
 ///
 /// # Examples
 ///
@@ -99,10 +187,10 @@ impl fmt::Display for Name {
     }
 }
 
-/// A single subscript in a MUMPS key path.
+/// A single subscript in a RUMPS key path.
 ///
 /// Subscripts define a path through the hierarchical tree structure and
-/// follow an extended MUMPS collation order:
+/// follow an extended RUMPS collation order:
 ///
 /// 1. Booleans: `false` < `true`
 /// 2. Numbers: in numeric order (e.g., -10 < 0 < 1.5 < 10 < 100)
@@ -117,7 +205,7 @@ impl fmt::Display for Name {
 /// let num_sub = Subscript::from(123);
 /// let str_sub = Subscript::from("NAME");
 ///
-/// // Extended MUMPS collation: booleans < numbers < strings
+/// // Extended RUMPS collation: booleans < numbers < strings
 /// assert!(bool_sub < num_sub);
 /// assert!(num_sub < str_sub);
 /// ```
@@ -158,15 +246,13 @@ impl Subscript {
 }
 
 impl PartialOrd for Subscript {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Subscript {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
-
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         use Subscript::*;
 
         match (self, other) {
@@ -176,12 +262,12 @@ impl Ord for Subscript {
             (String(a), String(b)) => a.cmp(b),
 
             // Cross-variant comparisons: Boolean < Number < String
-            (Boolean(_), Number(_)) => Ordering::Less,
-            (Boolean(_), String(_)) => Ordering::Less,
-            (Number(_), Boolean(_)) => Ordering::Greater,
-            (Number(_), String(_)) => Ordering::Less,
-            (String(_), Boolean(_)) => Ordering::Greater,
-            (String(_), Number(_)) => Ordering::Greater,
+            (Boolean(_), Number(_)) => cmp::Ordering::Less,
+            (Boolean(_), String(_)) => cmp::Ordering::Less,
+            (Number(_), Boolean(_)) => cmp::Ordering::Greater,
+            (Number(_), String(_)) => cmp::Ordering::Less,
+            (String(_), Boolean(_)) => cmp::Ordering::Greater,
+            (String(_), Number(_)) => cmp::Ordering::Greater,
         }
     }
 }
@@ -226,14 +312,14 @@ impl From<&str> for Subscript {
     }
 }
 
-/// A key representing a path through the MUMPS tree structure.
+/// A key representing a path through the RUMPS tree structure.
 ///
 /// A `Key` is a sequence of subscripts that define a hierarchical path,
 /// like `^PATIENT(123, "NAME")` which would be represented as
 /// `Key::from(vec![123.into(), "NAME".into()])`.
 ///
 /// Keys are ordered lexicographically by their subscripts using the
-/// extended MUMPS collation order.
+/// extended RUMPS collation order.
 ///
 /// # Examples
 ///
@@ -316,13 +402,13 @@ impl Default for Key {
 }
 
 impl PartialOrd for Key {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Key {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         // Lexicographic ordering on the sequence of subscripts
         self.0.cmp(&other.0)
     }
@@ -528,7 +614,7 @@ mod tests {
 
     #[test]
     fn test_subscript_mumps_collation() {
-        // This test verifies the MUMPS collation where numeric subscripts
+        // This test verifies the RUMPS collation where numeric subscripts
         // are ordered numerically, not lexicographically
         let num_1 = Subscript::from(1);
         let num_10 = Subscript::from(10);
@@ -647,7 +733,7 @@ mod tests {
 
     #[test]
     fn test_key_extended_collation_ordering() {
-        // Test that extended MUMPS collation carries through to keys
+        // Test that extended RUMPS collation carries through to keys
         let key_bool = Key::from(vec![Subscript::from(false)]);
         let key_num = Key::from(vec![Subscript::from(10)]);
         let key_str = Key::from(vec![Subscript::from("ABC")]);
