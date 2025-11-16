@@ -171,17 +171,17 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [x] Define transaction-related types: `TransactionId`, `TransactionState` enum
 
 ### 1.3 Node Structure (rumps-types)
-- [ ] Define `NodeData` struct containing:
+- [x] Define `NodeData` struct containing:
   - Optional value: `Option<Value>`
   - Flag indicating whether descendants exist: `bool`
-- [ ] Define `Node` struct representing a B-tree node:
-  - Keys: `Vec<Subscript>` (sorted)
-  - Children: `Vec<NodeId>` or `Vec<Box<Node>>` (decide approach)
-  - Values: `Vec<NodeData>` (one per key, plus one extra for rightmost child)
+- [x] Define `Node` struct representing a B-tree node:
+  - Keys: `Vec<Key>` (complete paths, sorted)
+  - Children: `Vec<NodeId>` (decided: use NodeId for lazy loading)
+  - Values: `Vec<NodeData>` (one per key)
   - Is leaf: `bool`
-- [ ] Add `NodeId` type (page offset or handle for disk references)
-- [ ] Ensure `Node` and `NodeData` derive `Serialize`/`Deserialize`
-- [ ] Add size calculation methods for nodes (needed for B-tree splitting)
+- [x] Add `NodeId` type (page offset or handle for disk references)
+- [x] Ensure `Node` and `NodeData` have custom `Serialize`/`Deserialize` (compact encoding)
+- [x] Add size calculation methods for nodes (needed for B-tree splitting)
 
 ---
 
@@ -569,8 +569,8 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 1.2 (Core Type Definitions) - Complete! Moving to Phase 1.3
-**Completed Checkboxes**: 19 / ~160
+**Current Phase**: Phase 1 Complete! Ready for Phase 2 (In-Memory B-Tree Implementation)
+**Completed Checkboxes**: 24 / ~160
 
 **Recent Changes** (2025-11-16 - Today's Progress):
 - ✅ Extended `Value` and `Subscript` types with `Char` and `Json` variants
@@ -583,7 +583,13 @@ These are not part of the current plan but should be kept in mind:
   - `TransactionTimestamp`: Logical timestamps for snapshot isolation
   - `IsolationLevel`: Transaction isolation levels (SnapshotIsolation)
   - `TransactionMetadata`: Complete transaction metadata
-- ✅ Added full test coverage for transaction types
+- ✅ Completed node structure module (Phase 1.3):
+  - `NodeId`: Transparent wrapper around u64 for disk page references
+  - `NodeData`: Stores optional value + has_descendants flag with 4-state encoding
+  - `Node`: B-tree node with keys, children, values, and is_leaf flag
+  - Custom compact serialization for both `NodeData` (tag-based) and `Node`
+  - Size calculation methods: `serialized_size()` and `would_fit()` for B-tree splitting
+- ✅ Added full test coverage for all node types (103 tests passing)
 
 **Previous Changes** (2025-11-15):
 - ✅ Completed `Name` enum with Global/Local variants and full serde support
