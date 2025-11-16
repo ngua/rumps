@@ -248,6 +248,82 @@ impl Node {
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
+
+    /// Calculates the serialized size of this node in bytes.
+    ///
+    /// This is useful for determining when a node needs to be split to fit
+    /// within a fixed page size. The calculation accounts for all components:
+    /// is_leaf flag, keys, children, and values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::{Node, NodeData, Key, Value};
+    ///
+    /// let mut node = Node::new_leaf();
+    /// let empty_size = node.serialized_size();
+    ///
+    /// // Add an entry
+    /// node.keys.push(Key::from(vec!["A".into()]));
+    /// node.values.push(NodeData::with_value(Value::Integer(1)));
+    ///
+    /// let with_entry_size = node.serialized_size();
+    /// assert!(with_entry_size > empty_size);
+    /// ```
+    pub fn serialized_size(&self) -> usize {
+        bincode::serialize(self)
+            .map(|bytes| bytes.len())
+            .unwrap_or(0)
+    }
+
+    /// Estimates whether adding a new key-value pair would fit within the given size limit.
+    ///
+    /// This is useful during insertion to determine if the node needs to be split
+    /// before adding a new entry. The estimate accounts for the serialized size
+    /// of the new key and value.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to potentially add
+    /// * `value` - The value data to potentially add
+    /// * `max_size` - The maximum allowed size in bytes (e.g., page size)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::{Node, NodeData, Key, Value};
+    ///
+    /// let node = Node::new_leaf();
+    /// let key = Key::from(vec!["TEST".into()]);
+    /// let value = NodeData::with_value(Value::Integer(42));
+    ///
+    /// // Assume 4KB page size
+    /// if node.would_fit(&key, &value, 4096) {
+    ///     println!("Entry would fit");
+    /// } else {
+    ///     println!("Need to split node first");
+    /// }
+    /// ```
+    pub fn would_fit(
+        &self,
+        key: &Key,
+        value: &NodeData,
+        max_size: usize,
+    ) -> bool {
+        // Calculate current size
+        let current_size = self.serialized_size();
+
+        // Estimate size of the new entry
+        // We add the key and value to temporary vectors and measure
+        bincode::serialize(&vec![key])
+            .and_then(|key_bytes| {
+                bincode::serialize(&vec![value]).map(|value_bytes| {
+                    let entry_size = key_bytes.len() + value_bytes.len();
+                    current_size + entry_size <= max_size
+                })
+            })
+            .unwrap_or(false)
+    }
 }
 
 impl Serialize for Node {
@@ -1037,5 +1113,126 @@ mod tests {
         let bytes = bincode::serialize(&internal).unwrap();
         let deserialized: Node = bincode::deserialize(&bytes).unwrap();
         assert!(!deserialized.is_leaf);
+    }
+
+    // Size Calculation Tests
+
+    #[test]
+    fn test_node_serialized_size_empty() {
+        let leaf = Node::new_leaf();
+        let size = leaf.serialized_size();
+        assert!(size > 0);
+
+        let internal = Node::new_internal();
+        let internal_size = internal.serialized_size();
+        assert!(internal_size > 0);
+    }
+
+    #[test]
+    fn test_node_serialized_size_grows_with_entries() {
+        let mut node = Node::new_leaf();
+        let empty_size = node.serialized_size();
+
+        // Add first entry
+        node.keys.push(Key::from(vec!["A".into()]));
+        node.values.push(NodeData::with_value(Value::Integer(1)));
+        let one_entry_size = node.serialized_size();
+        assert!(one_entry_size > empty_size);
+
+        // Add second entry
+        node.keys.push(Key::from(vec!["B".into()]));
+        node.values.push(NodeData::with_value(Value::Integer(2)));
+        let two_entry_size = node.serialized_size();
+        assert!(two_entry_size > one_entry_size);
+    }
+
+    #[test]
+    fn test_node_serialized_size_matches_actual() {
+        let node = Node {
+            keys: vec![
+                Key::from(vec![123.into(), "NAME".into()]),
+                Key::from(vec![124.into(), "NAME".into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::String("John".into())),
+                NodeData::with_value(Value::String("Jane".into())),
+            ],
+            is_leaf: true,
+        };
+
+        let reported_size = node.serialized_size();
+        let actual_bytes = bincode::serialize(&node).unwrap();
+        assert_eq!(reported_size, actual_bytes.len());
+    }
+
+    #[test]
+    fn test_node_would_fit_empty_node() {
+        let node = Node::new_leaf();
+        let key = Key::from(vec!["TEST".into()]);
+        let value = NodeData::with_value(Value::Integer(42));
+
+        // Should fit in a 4KB page
+        assert!(node.would_fit(&key, &value, 4096));
+
+        // Should not fit in a tiny page
+        assert!(!node.would_fit(&key, &value, 10));
+    }
+
+    #[test]
+    fn test_node_would_fit_with_existing_entries() {
+        let mut node = Node::new_leaf();
+
+        // Add several entries
+        (0..10).for_each(|i| {
+            node.keys.push(Key::from(vec![i.into()]));
+            node.values.push(NodeData::with_value(Value::Integer(i)));
+        });
+
+        let key = Key::from(vec!["NEW".into()]);
+        let value = NodeData::with_value(Value::String("test".into()));
+
+        // Should fit in a large page
+        assert!(node.would_fit(&key, &value, 10000));
+
+        // May not fit in current size (should be at or near limit)
+        let current_size = node.serialized_size();
+        assert!(!node.would_fit(&key, &value, current_size));
+    }
+
+    #[test]
+    fn test_node_would_fit_large_value() {
+        let node = Node::new_leaf();
+        let key = Key::from(vec!["LARGE".into()]);
+        let large_string = "x".repeat(5000);
+        let value = NodeData::with_value(Value::String(large_string));
+
+        // Should not fit in a 4KB page
+        assert!(!node.would_fit(&key, &value, 4096));
+
+        // Should fit in a larger page
+        assert!(node.would_fit(&key, &value, 10000));
+    }
+
+    #[test]
+    fn test_node_serialized_size_internal_with_children() {
+        let internal = Node {
+            keys: vec![
+                Key::from(vec![100.into()]),
+                Key::from(vec![200.into()]),
+            ],
+            children: vec![
+                NodeId::from(1u64),
+                NodeId::from(2u64),
+                NodeId::from(3u64),
+            ],
+            values: vec![NodeData::empty(), NodeData::empty()],
+            is_leaf: false,
+        };
+
+        let size = internal.serialized_size();
+        let bytes = bincode::serialize(&internal).unwrap();
+        assert_eq!(size, bytes.len());
+        assert!(size > 0);
     }
 }
