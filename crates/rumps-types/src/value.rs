@@ -13,6 +13,7 @@
 //! - **Boolean**: `true` or `false`
 //! - **Integer**: 64-bit signed integers (`i64`)
 //! - **Double**: 64-bit floating-point numbers (`f64`)
+//! - **Char**: Single UTF-8 character (`char`)
 //! - **String**: UTF-8 encoded strings
 //! - **Json**: Arbitrary JSON values (`serde_json::Value`)
 //!
@@ -33,10 +34,11 @@
 //! 1. **Booleans**: `false < true`
 //! 2. **Integers**: Numeric order
 //! 3. **Doubles**: Numeric order (using `OrderedFloat` for total ordering)
-//! 4. **Strings**: Lexicographic order
-//! 5. **Json**: Lexicographic order of JSON string representation
+//! 4. **Chars**: Unicode scalar value order
+//! 5. **Strings**: Lexicographic order
+//! 6. **Json**: Lexicographic order of JSON string representation
 //!
-//! Cross-type comparisons follow: Boolean < Integer < Double < String < Json
+//! Cross-type comparisons follow: Boolean < Integer < Double < Char < String < Json
 //!
 //! ## Storage Semantics
 //!
@@ -47,6 +49,7 @@
 //! ^PATIENT(123, "AGE") = Integer(42)
 //! ^PATIENT(123, "ACTIVE") = Boolean(true)
 //! ^PATIENT(123, "TEMP") = Double(98.6)
+//! ^PATIENT(123, "GRADE") = Char('A')
 //! ^PATIENT(123, "METADATA") = Json({"created": "2025-01-01", "tags": ["vip"]})
 //! ```
 //!
@@ -73,7 +76,8 @@
 //! // Values are fully ordered
 //! assert!(Value::Boolean(true) < Value::Integer(0));
 //! assert!(Value::Integer(100) < Value::Double(100.1.into()));
-//! assert!(Value::Double(999.9.into()) < Value::String("A".to_string()));
+//! assert!(Value::Double(999.9.into()) < Value::Char('A'));
+//! assert!(Value::Char('Z') < Value::String("A".to_string()));
 //! ```
 
 use std::{cmp, fmt};
@@ -87,7 +91,7 @@ use serde_json;
 /// strongly typed and maintain their type through serialization and storage.
 ///
 /// Values are fully ordered, enabling sorting and range queries. The ordering
-/// follows: Boolean < Integer < Double < String < Json, with natural ordering within
+/// follows: Boolean < Integer < Double < Char < String < Json, with natural ordering within
 /// each type.
 ///
 /// # Examples
@@ -98,13 +102,15 @@ use serde_json;
 /// let str_val = Value::String("Hello".to_string());
 /// let int_val = Value::Integer(42);
 /// let dbl_val = Value::Double(3.14.into());
+/// let char_val = Value::Char('A');
 /// let bool_val = Value::Boolean(true);
 /// let json_val = Value::Json(serde_json::json!({"key": "value"}));
 ///
 /// // Values are ordered
 /// assert!(bool_val < int_val);
 /// assert!(int_val < dbl_val);
-/// assert!(dbl_val < str_val);
+/// assert!(dbl_val < char_val);
+/// assert!(char_val < str_val);
 /// assert!(str_val < json_val);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +121,8 @@ pub enum Value {
     Integer(i64),
     /// A 64-bit floating-point number (ordered via OrderedFloat).
     Double(OrderedFloat<f64>),
+    /// A single UTF-8 character.
+    Char(char),
     /// A UTF-8 encoded string.
     String(String),
     /// A JSON value (arbitrary nested structure).
@@ -138,6 +146,12 @@ impl Value {
     #[inline]
     pub fn is_double(&self) -> bool {
         matches!(self, Self::Double(_))
+    }
+
+    /// Returns `true` if this value is a char.
+    #[inline]
+    pub fn is_char(&self) -> bool {
+        matches!(self, Self::Char(_))
     }
 
     /// Returns `true` if this value is a string.
@@ -179,6 +193,15 @@ impl Value {
         }
     }
 
+    /// Returns the value as a char, if it is one.
+    #[inline]
+    pub fn as_char(&self) -> Option<char> {
+        match self {
+            Self::Char(c) => Some(*c),
+            _ => None,
+        }
+    }
+
     /// Returns the value as a string reference, if it is one.
     #[inline]
     pub fn as_string(&self) -> Option<&str> {
@@ -206,6 +229,7 @@ impl std::hash::Hash for Value {
             Self::Boolean(b) => b.hash(state),
             Self::Integer(i) => i.hash(state),
             Self::Double(d) => d.hash(state),
+            Self::Char(c) => c.hash(state),
             Self::String(s) => s.hash(state),
             Self::Json(j) => j.to_string().hash(state),
         }
@@ -227,29 +251,40 @@ impl Ord for Value {
             (Boolean(a), Boolean(b)) => a.cmp(b),
             (Integer(a), Integer(b)) => a.cmp(b),
             (Double(a), Double(b)) => a.cmp(b),
+            (Char(a), Char(b)) => a.cmp(b),
             (String(a), String(b)) => a.cmp(b),
             (Json(a), Json(b)) => a.to_string().cmp(&b.to_string()),
 
-            // Cross-variant comparisons: Boolean < Integer < Double < String < Json
+            // Cross-variant comparisons: Boolean < Integer < Double < Char < String < Json
             (Boolean(_), Integer(_)) => cmp::Ordering::Less,
             (Boolean(_), Double(_)) => cmp::Ordering::Less,
+            (Boolean(_), Char(_)) => cmp::Ordering::Less,
             (Boolean(_), String(_)) => cmp::Ordering::Less,
             (Boolean(_), Json(_)) => cmp::Ordering::Less,
             (Integer(_), Boolean(_)) => cmp::Ordering::Greater,
             (Integer(_), Double(_)) => cmp::Ordering::Less,
+            (Integer(_), Char(_)) => cmp::Ordering::Less,
             (Integer(_), String(_)) => cmp::Ordering::Less,
             (Integer(_), Json(_)) => cmp::Ordering::Less,
             (Double(_), Boolean(_)) => cmp::Ordering::Greater,
             (Double(_), Integer(_)) => cmp::Ordering::Greater,
+            (Double(_), Char(_)) => cmp::Ordering::Less,
             (Double(_), String(_)) => cmp::Ordering::Less,
             (Double(_), Json(_)) => cmp::Ordering::Less,
+            (Char(_), Boolean(_)) => cmp::Ordering::Greater,
+            (Char(_), Integer(_)) => cmp::Ordering::Greater,
+            (Char(_), Double(_)) => cmp::Ordering::Greater,
+            (Char(_), String(_)) => cmp::Ordering::Less,
+            (Char(_), Json(_)) => cmp::Ordering::Less,
             (String(_), Boolean(_)) => cmp::Ordering::Greater,
             (String(_), Integer(_)) => cmp::Ordering::Greater,
             (String(_), Double(_)) => cmp::Ordering::Greater,
+            (String(_), Char(_)) => cmp::Ordering::Greater,
             (String(_), Json(_)) => cmp::Ordering::Less,
             (Json(_), Boolean(_)) => cmp::Ordering::Greater,
             (Json(_), Integer(_)) => cmp::Ordering::Greater,
             (Json(_), Double(_)) => cmp::Ordering::Greater,
+            (Json(_), Char(_)) => cmp::Ordering::Greater,
             (Json(_), String(_)) => cmp::Ordering::Greater,
         }
     }
@@ -261,6 +296,7 @@ impl fmt::Display for Value {
             Self::Boolean(b) => write!(f, "{}", b),
             Self::Integer(i) => write!(f, "{}", i),
             Self::Double(d) => write!(f, "{}", d),
+            Self::Char(c) => write!(f, "{}", c),
             Self::String(s) => write!(f, "{}", s),
             Self::Json(j) => write!(f, "{}", j),
         }
@@ -294,6 +330,12 @@ impl From<f64> for Value {
 impl From<OrderedFloat<f64>> for Value {
     fn from(d: OrderedFloat<f64>) -> Self {
         Self::Double(d)
+    }
+}
+
+impl From<char> for Value {
+    fn from(c: char) -> Self {
+        Self::Char(c)
     }
 }
 
@@ -340,6 +382,7 @@ impl From<serde_json::Value> for Value {
 /// | `0xF3`      | Double  | 64-bit float marker (followed by 8 bytes)               |
 /// | `0xF4`      | String  | String marker (followed by varint length + UTF-8 bytes) |
 /// | `0xF5`      | Json    | JSON marker (followed by varint length + JSON string)   |
+/// | `0xF6`      | Char    | Char marker (followed by UTF-8 encoded char bytes)      |
 ///
 /// ## Encoding Details
 ///
@@ -372,6 +415,11 @@ impl From<serde_json::Value> for Value {
 /// - Format: `[0xF5] [varint length] [JSON string bytes...]`
 /// - JSON values are serialized as their compact string representation
 /// - Length is encoded as unsigned varint
+///
+/// ### Chars (2-5 bytes total)
+/// - Format: `[0xF6] [UTF-8 bytes...]`
+/// - UTF-8 encoding: ASCII chars = 2 bytes total, up to 5 bytes for complex chars
+/// - No length prefix needed since char encoding is self-delimiting
 ///
 /// ## Variable-Length Integer Encodings
 ///
@@ -431,6 +479,8 @@ mod encoding {
         String = 0xF4,
         /// Marker for JSON (followed by varint length + JSON string)
         Json = 0xF5,
+        /// Marker for chars (followed by UTF-8 bytes)
+        Char = 0xF6,
     }
 
     impl Tag {
@@ -470,6 +520,14 @@ mod encoding {
                     let mut bytes = Vec::with_capacity(9);
                     bytes.push(Tag::Double as u8);
                     bytes.extend_from_slice(&d.into_inner().to_le_bytes());
+                    bytes
+                }
+                Self::Char(c) => {
+                    let mut buf = [0u8; 4];
+                    let len = c.encode_utf8(&mut buf).len();
+                    let mut bytes = Vec::with_capacity(1 + len);
+                    bytes.push(Tag::Char as u8);
+                    bytes.extend_from_slice(&buf[..len]);
                     bytes
                 }
                 Self::String(s) => {
@@ -565,6 +623,35 @@ mod encoding {
                         let json_val: serde_json::Value = serde_json::from_str(s)
                             .map_err(|e| E::custom(format!("invalid JSON: {}", e)))?;
                         Ok(Value::Json(json_val))
+                    }
+                }
+                tag if tag == Tag::Char as u8 => {
+                    if v.len() < 2 {
+                        Err(E::custom("char requires at least 2 bytes"))
+                    } else {
+                        // UTF-8 chars can be 1-4 bytes, determine the length from the first byte
+                        let char_bytes = &v[1..];
+                        let len = if char_bytes[0] & 0x80 == 0 {
+                            1
+                        } else if char_bytes[0] & 0xe0 == 0xc0 {
+                            2
+                        } else if char_bytes[0] & 0xf0 == 0xe0 {
+                            3
+                        } else if char_bytes[0] & 0xf8 == 0xf0 {
+                            4
+                        } else {
+                            return Err(E::custom("invalid UTF-8 char encoding"));
+                        };
+
+                        if char_bytes.len() < len {
+                            Err(E::custom("char data extends beyond buffer"))
+                        } else {
+                            let s = str::from_utf8(&char_bytes[..len])
+                                .map_err(|e| E::custom(format!("invalid UTF-8: {}", e)))?;
+                            let c = s.chars().next()
+                                .ok_or_else(|| E::custom("empty char data"))?;
+                            Ok(Value::Char(c))
+                        }
                     }
                 }
                 tag => Err(E::custom(format!("unknown value tag: 0x{:02x}", tag))),
@@ -718,12 +805,14 @@ mod tests {
         let bool_val = Value::Boolean(true);
         let int_val = Value::Integer(42);
         let dbl_val = Value::Double(OrderedFloat(3.14));
+        let char_val = Value::Char('A');
         let str_val = Value::String("test".to_string());
         let json_val = Value::Json(serde_json::json!({"key": "value"}));
 
         assert!(bool_val.is_boolean());
         assert!(int_val.is_integer());
         assert!(dbl_val.is_double());
+        assert!(char_val.is_char());
         assert!(str_val.is_string());
         assert!(json_val.is_json());
     }
@@ -734,6 +823,7 @@ mod tests {
         assert!(bool_val.is_boolean());
         assert!(!bool_val.is_integer());
         assert!(!bool_val.is_double());
+        assert!(!bool_val.is_char());
         assert!(!bool_val.is_string());
         assert!(!bool_val.is_json());
 
@@ -741,6 +831,7 @@ mod tests {
         assert!(!int_val.is_boolean());
         assert!(int_val.is_integer());
         assert!(!int_val.is_double());
+        assert!(!int_val.is_char());
         assert!(!int_val.is_string());
         assert!(!int_val.is_json());
 
@@ -748,13 +839,23 @@ mod tests {
         assert!(!dbl_val.is_boolean());
         assert!(!dbl_val.is_integer());
         assert!(dbl_val.is_double());
+        assert!(!dbl_val.is_char());
         assert!(!dbl_val.is_string());
         assert!(!dbl_val.is_json());
+
+        let char_val = Value::Char('X');
+        assert!(!char_val.is_boolean());
+        assert!(!char_val.is_integer());
+        assert!(!char_val.is_double());
+        assert!(char_val.is_char());
+        assert!(!char_val.is_string());
+        assert!(!char_val.is_json());
 
         let str_val = Value::String("test".to_string());
         assert!(!str_val.is_boolean());
         assert!(!str_val.is_integer());
         assert!(!str_val.is_double());
+        assert!(!str_val.is_char());
         assert!(str_val.is_string());
         assert!(!str_val.is_json());
 
@@ -762,6 +863,7 @@ mod tests {
         assert!(!json_val.is_boolean());
         assert!(!json_val.is_integer());
         assert!(!json_val.is_double());
+        assert!(!json_val.is_char());
         assert!(!json_val.is_string());
         assert!(json_val.is_json());
     }
@@ -772,6 +874,7 @@ mod tests {
         assert_eq!(bool_val.as_boolean(), Some(true));
         assert_eq!(bool_val.as_integer(), None);
         assert_eq!(bool_val.as_double(), None);
+        assert_eq!(bool_val.as_char(), None);
         assert_eq!(bool_val.as_string(), None);
         assert_eq!(bool_val.as_json(), None);
 
@@ -779,6 +882,7 @@ mod tests {
         assert_eq!(int_val.as_boolean(), None);
         assert_eq!(int_val.as_integer(), Some(42));
         assert_eq!(int_val.as_double(), None);
+        assert_eq!(int_val.as_char(), None);
         assert_eq!(int_val.as_string(), None);
         assert_eq!(int_val.as_json(), None);
 
@@ -786,13 +890,23 @@ mod tests {
         assert_eq!(dbl_val.as_boolean(), None);
         assert_eq!(dbl_val.as_integer(), None);
         assert_eq!(dbl_val.as_double(), Some(3.14));
+        assert_eq!(dbl_val.as_char(), None);
         assert_eq!(dbl_val.as_string(), None);
         assert_eq!(dbl_val.as_json(), None);
+
+        let char_val = Value::Char('Z');
+        assert_eq!(char_val.as_boolean(), None);
+        assert_eq!(char_val.as_integer(), None);
+        assert_eq!(char_val.as_double(), None);
+        assert_eq!(char_val.as_char(), Some('Z'));
+        assert_eq!(char_val.as_string(), None);
+        assert_eq!(char_val.as_json(), None);
 
         let str_val = Value::String("test".to_string());
         assert_eq!(str_val.as_boolean(), None);
         assert_eq!(str_val.as_integer(), None);
         assert_eq!(str_val.as_double(), None);
+        assert_eq!(str_val.as_char(), None);
         assert_eq!(str_val.as_string(), Some("test"));
         assert_eq!(str_val.as_json(), None);
 
@@ -800,6 +914,7 @@ mod tests {
         assert_eq!(json_val.as_boolean(), None);
         assert_eq!(json_val.as_integer(), None);
         assert_eq!(json_val.as_double(), None);
+        assert_eq!(json_val.as_char(), None);
         assert_eq!(json_val.as_string(), None);
         assert!(json_val.as_json().is_some());
         assert_eq!(json_val.as_json().unwrap()["key"], "value");
@@ -814,6 +929,7 @@ mod tests {
             Value::Double(OrderedFloat(3.14))
                 < Value::Double(OrderedFloat(3.15))
         );
+        assert!(Value::Char('A') < Value::Char('Z'));
         assert!(
             Value::String("a".to_string()) < Value::String("b".to_string())
         );
@@ -823,12 +939,13 @@ mod tests {
                 < Value::Json(serde_json::json!({"b": 1}))
         );
 
-        // Cross-type ordering: Boolean < Integer < Double < String < Json
+        // Cross-type ordering: Boolean < Integer < Double < Char < String < Json
         assert!(Value::Boolean(true) < Value::Integer(0));
         assert!(Value::Integer(100) < Value::Double(OrderedFloat(0.1)));
         assert!(
-            Value::Double(OrderedFloat(999.9)) < Value::String("A".to_string())
+            Value::Double(OrderedFloat(999.9)) < Value::Char('A')
         );
+        assert!(Value::Char('Z') < Value::String("A".to_string()));
         assert!(
             Value::String("zzz".to_string()) < Value::Json(serde_json::json!({}))
         );
@@ -841,6 +958,8 @@ mod tests {
         assert_eq!(Value::Integer(42).to_string(), "42");
         assert_eq!(Value::Integer(-10).to_string(), "-10");
         assert_eq!(Value::Double(OrderedFloat(3.14)).to_string(), "3.14");
+        assert_eq!(Value::Char('A').to_string(), "A");
+        assert_eq!(Value::Char('☺').to_string(), "☺");
         assert_eq!(Value::String("hello".to_string()).to_string(), "hello");
         assert_eq!(
             Value::Json(serde_json::json!({"key": "value"})).to_string(),
@@ -885,6 +1004,15 @@ mod tests {
     }
 
     #[test]
+    fn test_value_from_char() {
+        let v: Value = 'A'.into();
+        assert_eq!(v, Value::Char('A'));
+
+        let v: Value = '😀'.into();
+        assert_eq!(v, Value::Char('😀'));
+    }
+
+    #[test]
     fn test_value_from_string() {
         let v: Value = "test".to_string().into();
         assert_eq!(v, Value::String("test".to_string()));
@@ -922,6 +1050,10 @@ mod tests {
             Value::Double(OrderedFloat(-2.5)),
             Value::Double(OrderedFloat(f64::MAX)),
             Value::Double(OrderedFloat(f64::MIN)),
+            Value::Char('A'),
+            Value::Char('0'),
+            Value::Char('€'),
+            Value::Char('𝄞'), // Musical note - 4-byte UTF-8 char
             Value::String(String::new()),
             Value::String("hello".to_string()),
             Value::String("a".repeat(1000)),
