@@ -32,13 +32,13 @@
 //! This allows reading many entries in a single disk operation rather than
 //! requiring one I/O per hierarchy level as a trie would.
 
-use crate::{Key, Value};
-use serde::{
-    de::{self, Deserializer, Visitor},
-    ser::Serializer,
-    Deserialize, Serialize,
-};
 use std::{fmt, iter};
+
+use serde::de::{self, Deserializer, Visitor};
+use serde::ser::Serializer;
+use serde::{Deserialize, Serialize};
+
+use crate::{Key, Value};
 
 /// Identifier for a node in the B+-tree.
 ///
@@ -82,7 +82,18 @@ use std::{fmt, iter};
 /// assert_eq!(u64::from(node_id), 42);
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub struct NodeId(u64);
 
 impl From<u64> for NodeId {
@@ -236,6 +247,130 @@ impl Node {
     /// ```
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
+    }
+}
+
+impl Serialize for Node {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Serialize in compact format:
+        // 1 byte: is_leaf flag
+        // Then bincode-serialize: keys, children, values
+        let is_leaf_byte = if self.is_leaf { 1u8 } else { 0u8 };
+
+        let mut bytes = vec![is_leaf_byte];
+
+        // Serialize keys
+        bincode::serialize(&self.keys)
+            .map_err(|e| {
+                serde::ser::Error::custom(format!(
+                    "Failed to serialize keys: {}",
+                    e
+                ))
+            })
+            .and_then(|key_bytes| {
+                bytes.extend_from_slice(&key_bytes);
+                // Serialize children
+                bincode::serialize(&self.children).map_err(|e| {
+                    serde::ser::Error::custom(format!(
+                        "Failed to serialize children: {}",
+                        e
+                    ))
+                })
+            })
+            .and_then(|child_bytes| {
+                bytes.extend_from_slice(&child_bytes);
+                // Serialize values
+                bincode::serialize(&self.values).map_err(|e| {
+                    serde::ser::Error::custom(format!(
+                        "Failed to serialize values: {}",
+                        e
+                    ))
+                })
+            })
+            .map(|value_bytes| {
+                bytes.extend_from_slice(&value_bytes);
+                serializer.serialize_bytes(&bytes)
+            })?
+    }
+}
+
+impl<'de> Deserialize<'de> for Node {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct NodeVisitor;
+
+        impl<'de> Visitor<'de> for NodeVisitor {
+            type Value = Node;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a compact-encoded Node")
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                v.first()
+                    .ok_or_else(|| E::custom("empty Node bytes"))
+                    .and_then(|&is_leaf_byte| {
+                        let is_leaf = is_leaf_byte != 0;
+                        let rest = &v[1..];
+
+                        // Deserialize keys
+                        bincode::deserialize::<Vec<Key>>(rest)
+                            .map_err(|e| E::custom(format!("Failed to deserialize keys: {}", e)))
+                            .and_then(|keys| {
+                                // Calculate how many bytes the keys took
+                                bincode::serialize(&keys)
+                                    .map_err(|e| E::custom(format!("Failed to re-serialize keys for offset: {}", e)))
+                                    .and_then(|key_bytes| {
+                                        let keys_len = key_bytes.len();
+                                        let after_keys = &rest[keys_len..];
+
+                                        // Deserialize children
+                                        bincode::deserialize::<Vec<NodeId>>(after_keys)
+                                            .map_err(|e| E::custom(format!("Failed to deserialize children: {}", e)))
+                                            .and_then(|children| {
+                                                // Calculate how many bytes the children took
+                                                bincode::serialize(&children)
+                                                    .map_err(|e| E::custom(format!("Failed to re-serialize children for offset: {}", e)))
+                                                    .and_then(|child_bytes| {
+                                                        let children_len = child_bytes.len();
+                                                        let after_children = &after_keys[children_len..];
+
+                                                        // Deserialize values
+                                                        bincode::deserialize::<Vec<NodeData>>(after_children)
+                                                            .map_err(|e| E::custom(format!("Failed to deserialize values: {}", e)))
+                                                            .map(|values| Node {
+                                                                keys,
+                                                                children,
+                                                                values,
+                                                                is_leaf,
+                                                            })
+                                                    })
+                                            })
+                                    })
+                            })
+                    })
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let bytes =
+                    iter::from_fn(|| seq.next_element::<u8>().transpose())
+                        .collect::<Result<Vec<u8>, _>>()?;
+                self.visit_bytes(&bytes)
+            }
+        }
+
+        deserializer.deserialize_bytes(NodeVisitor)
     }
 }
 
@@ -438,15 +573,23 @@ impl Serialize for NodeData {
             (None, true) => vec![NodeDataTag::Intermediate as u8],
             (Some(value), false) => {
                 let mut bytes = vec![NodeDataTag::Leaf as u8];
-                let value_bytes = bincode::serialize(value)
-                    .map_err(|e| serde::ser::Error::custom(format!("Failed to serialize value: {}", e)))?;
+                let value_bytes = bincode::serialize(value).map_err(|e| {
+                    serde::ser::Error::custom(format!(
+                        "Failed to serialize value: {}",
+                        e
+                    ))
+                })?;
                 bytes.extend_from_slice(&value_bytes);
                 bytes
             }
             (Some(value), true) => {
                 let mut bytes = vec![NodeDataTag::Both as u8];
-                let value_bytes = bincode::serialize(value)
-                    .map_err(|e| serde::ser::Error::custom(format!("Failed to serialize value: {}", e)))?;
+                let value_bytes = bincode::serialize(value).map_err(|e| {
+                    serde::ser::Error::custom(format!(
+                        "Failed to serialize value: {}",
+                        e
+                    ))
+                })?;
                 bytes.extend_from_slice(&value_bytes);
                 bytes
             }
@@ -474,31 +617,52 @@ impl<'de> Deserialize<'de> for NodeData {
                 E: de::Error,
             {
                 let tag_byte = *v
-                    .get(0)
+                    .first()
                     .ok_or_else(|| E::custom("empty NodeData bytes"))?;
 
                 match tag_byte {
-                    tag if tag == NodeDataTag::Empty as u8 => Ok(NodeData::new(None, false)),
-                    tag if tag == NodeDataTag::Intermediate as u8 => Ok(NodeData::new(None, true)),
+                    tag if tag == NodeDataTag::Empty as u8 => {
+                        Ok(NodeData::new(None, false))
+                    }
+                    tag if tag == NodeDataTag::Intermediate as u8 => {
+                        Ok(NodeData::new(None, true))
+                    }
                     tag if tag == NodeDataTag::Leaf as u8 => v
                         .len()
                         .checked_sub(2)
-                        .ok_or_else(|| E::custom("leaf NodeData requires value bytes"))
+                        .ok_or_else(|| {
+                            E::custom("leaf NodeData requires value bytes")
+                        })
                         .and_then(|_| {
                             bincode::deserialize(&v[1..])
-                                .map_err(|e| E::custom(format!("Failed to deserialize value: {}", e)))
+                                .map_err(|e| {
+                                    E::custom(format!(
+                                        "Failed to deserialize value: {}",
+                                        e
+                                    ))
+                                })
                                 .map(|value| NodeData::new(Some(value), false))
                         }),
                     tag if tag == NodeDataTag::Both as u8 => v
                         .len()
                         .checked_sub(2)
-                        .ok_or_else(|| E::custom("both NodeData requires value bytes"))
+                        .ok_or_else(|| {
+                            E::custom("both NodeData requires value bytes")
+                        })
                         .and_then(|_| {
                             bincode::deserialize(&v[1..])
-                                .map_err(|e| E::custom(format!("Failed to deserialize value: {}", e)))
+                                .map_err(|e| {
+                                    E::custom(format!(
+                                        "Failed to deserialize value: {}",
+                                        e
+                                    ))
+                                })
                                 .map(|value| NodeData::new(Some(value), true))
                         }),
-                    tag => Err(E::custom(format!("unknown NodeData tag: 0x{:02x}", tag))),
+                    tag => Err(E::custom(format!(
+                        "unknown NodeData tag: 0x{:02x}",
+                        tag
+                    ))),
                 }
             }
 
@@ -506,8 +670,9 @@ impl<'de> Deserialize<'de> for NodeData {
             where
                 A: de::SeqAccess<'de>,
             {
-                let bytes = iter::from_fn(|| seq.next_element::<u8>().transpose())
-                    .collect::<Result<Vec<u8>, _>>()?;
+                let bytes =
+                    iter::from_fn(|| seq.next_element::<u8>().transpose())
+                        .collect::<Result<Vec<u8>, _>>()?;
                 self.visit_bytes(&bytes)
             }
         }
@@ -597,7 +762,8 @@ mod tests {
         assert!(!NodeData::empty().has_only_descendants());
         assert!(!NodeData::with_value(Value::Integer(1)).has_only_descendants());
         assert!(NodeData::with_descendants().has_only_descendants());
-        assert!(!NodeData::new(Some(Value::Integer(1)), true).has_only_descendants());
+        assert!(!NodeData::new(Some(Value::Integer(1)), true)
+            .has_only_descendants());
     }
 
     // Serialization Tests
@@ -646,7 +812,9 @@ mod tests {
             NodeData::with_value(Value::Double(3.14.into())),
             NodeData::with_value(Value::Char('x')),
             NodeData::with_value(Value::String("hello".into())),
-            NodeData::with_value(Value::Json(serde_json::json!({"key": "value"}))),
+            NodeData::with_value(Value::Json(
+                serde_json::json!({"key": "value"}),
+            )),
             NodeData::new(Some(Value::Integer(99)), true),
         ];
 
@@ -731,5 +899,143 @@ mod tests {
         let bytes = bincode::serialize(&node).unwrap();
         let deserialized: NodeData = bincode::deserialize(&bytes).unwrap();
         assert_eq!(node, deserialized);
+    }
+
+    // Node Tests
+
+    #[test]
+    fn test_node_new_leaf() {
+        let leaf = Node::new_leaf();
+        assert!(leaf.is_leaf);
+        assert!(leaf.keys.is_empty());
+        assert!(leaf.children.is_empty());
+        assert!(leaf.values.is_empty());
+    }
+
+    #[test]
+    fn test_node_new_internal() {
+        let internal = Node::new_internal();
+        assert!(!internal.is_leaf);
+        assert!(internal.keys.is_empty());
+        assert!(internal.children.is_empty());
+        assert!(internal.values.is_empty());
+    }
+
+    #[test]
+    fn test_node_serialization_empty_leaf() {
+        let node = Node::new_leaf();
+        let bytes = bincode::serialize(&node).unwrap();
+        let deserialized: Node = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(node, deserialized);
+    }
+
+    #[test]
+    fn test_node_serialization_empty_internal() {
+        let node = Node::new_internal();
+        let bytes = bincode::serialize(&node).unwrap();
+        let deserialized: Node = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(node, deserialized);
+    }
+
+    #[test]
+    fn test_node_serialization_leaf_with_data() {
+        let node = Node {
+            keys: vec![
+                Key::from(vec![123.into(), "NAME".into()]),
+                Key::from(vec![124.into(), "NAME".into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::String("John".into())),
+                NodeData::with_value(Value::String("Jane".into())),
+            ],
+            is_leaf: true,
+        };
+
+        let bytes = bincode::serialize(&node).unwrap();
+        let deserialized: Node = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(node, deserialized);
+    }
+
+    #[test]
+    fn test_node_serialization_internal_with_children() {
+        let node = Node {
+            keys: vec![
+                Key::from(vec![100.into()]),
+                Key::from(vec![200.into()]),
+            ],
+            children: vec![
+                NodeId::from(1u64),
+                NodeId::from(2u64),
+                NodeId::from(3u64),
+            ],
+            values: vec![NodeData::empty(), NodeData::empty()],
+            is_leaf: false,
+        };
+
+        let bytes = bincode::serialize(&node).unwrap();
+        let deserialized: Node = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(node, deserialized);
+        assert_eq!(deserialized.children.len(), 3);
+        assert_eq!(deserialized.keys.len(), 2);
+    }
+
+    #[test]
+    fn test_node_roundtrip_various_types() {
+        let test_cases = vec![
+            Node::new_leaf(),
+            Node::new_internal(),
+            Node {
+                keys: vec![Key::from(vec!["A".into()])],
+                children: vec![],
+                values: vec![NodeData::with_value(Value::Integer(42))],
+                is_leaf: true,
+            },
+            Node {
+                keys: vec![
+                    Key::from(vec![1.into(), "a".into()]),
+                    Key::from(vec![1.into(), "b".into()]),
+                    Key::from(vec![2.into(), "a".into()]),
+                ],
+                children: vec![],
+                values: vec![
+                    NodeData::with_value(Value::Boolean(true)),
+                    NodeData::with_value(Value::Double(3.14.into())),
+                    NodeData::new(Some(Value::Char('x')), true),
+                ],
+                is_leaf: true,
+            },
+        ];
+
+        test_cases.into_iter().for_each(|original| {
+            let bytes = bincode::serialize(&original).unwrap();
+            let deserialized: Node = bincode::deserialize(&bytes).unwrap();
+            assert_eq!(original, deserialized);
+        });
+    }
+
+    #[test]
+    fn test_node_serialization_preserves_is_leaf() {
+        let leaf = Node {
+            keys: vec![Key::from(vec!["test".into()])],
+            children: vec![],
+            values: vec![NodeData::with_value(Value::Integer(1))],
+            is_leaf: true,
+        };
+
+        let bytes = bincode::serialize(&leaf).unwrap();
+        let deserialized: Node = bincode::deserialize(&bytes).unwrap();
+        assert!(deserialized.is_leaf);
+
+        let internal = Node {
+            keys: vec![Key::from(vec!["test".into()])],
+            children: vec![NodeId::from(1u64), NodeId::from(2u64)],
+            values: vec![NodeData::empty()],
+            is_leaf: false,
+        };
+
+        let bytes = bincode::serialize(&internal).unwrap();
+        let deserialized: Node = bincode::deserialize(&bytes).unwrap();
+        assert!(!deserialized.is_leaf);
     }
 }
