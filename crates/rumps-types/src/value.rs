@@ -555,142 +555,182 @@ mod encoding {
         }
     }
 
-    struct ValueVisitor;
-
-    impl<'de> Visitor<'de> for ValueVisitor {
-        type Value = Value;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a compact-encoded Value")
-        }
-
-        fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            let tag_byte =
-                *v.first().ok_or_else(|| E::custom("empty value bytes"))?;
-
-            match tag_byte {
-                tag if tag == Tag::False as u8 => Ok(Value::Boolean(false)),
-                tag if tag == Tag::True as u8 => Ok(Value::Boolean(true)),
-                tag if Tag::is_small_pos(tag) => {
-                    Ok(Value::Integer((tag - Tag::SmallPosStart as u8) as i64))
-                }
-                tag if Tag::is_small_neg(tag) => {
-                    let offset = tag - Tag::SmallNegStart as u8;
-                    Ok(Value::Integer(-1 - offset as i64))
-                }
-                tag if tag == Tag::LargeInt as u8 => Ok(Value::Integer(
-                    read_leb128_signed(&v[1..]).map(|x| x.0).map_err(|e| {
-                        E::custom(format!("invalid LEB128: {}", e))
-                    })?,
-                )),
-                tag if tag == Tag::Double as u8 => {
-                    if v.len() < 9 {
-                        Err(E::custom("double requires 9 bytes"))
-                    } else {
-                        let mut bytes = [0u8; 8];
-                        bytes.copy_from_slice(&v[1..9]);
-
-                        let d = f64::from_le_bytes(bytes);
-
-                        Ok(Value::Double(OrderedFloat(d)))
-                    }
-                }
-                tag if tag == Tag::String as u8 => {
-                    let (len, offset) = read_varint(&v[1..]).map_err(|e| {
-                        E::custom(format!("invalid varint: {}", e))
-                    })?;
-                    let start = 1 + offset;
-                    let end = start + len;
-
-                    if end > v.len() {
-                        Err(E::custom("string extends beyond buffer"))
-                    } else {
-                        Ok(Value::String(
-                            (str::from_utf8(&v[start..end]).map_err(|e| {
-                                E::custom(format!("invalid UTF-8: {}", e))
-                            })?)
-                            .to_string(),
-                        ))
-                    }
-                }
-                tag if tag == Tag::Json as u8 => {
-                    let (len, offset) = read_varint(&v[1..]).map_err(|e| {
-                        E::custom(format!("invalid varint: {}", e))
-                    })?;
-                    let start = 1 + offset;
-                    let end = start + len;
-                    if end > v.len() {
-                        Err(E::custom("JSON extends beyond buffer"))
-                    } else {
-                        let s =
-                            str::from_utf8(&v[start..end]).map_err(|e| {
-                                E::custom(format!("invalid UTF-8: {}", e))
-                            })?;
-                        let json_val: serde_json::Value =
-                            serde_json::from_str(s).map_err(|e| {
-                                E::custom(format!("invalid JSON: {}", e))
-                            })?;
-                        Ok(Value::Json(json_val))
-                    }
-                }
-                tag if tag == Tag::Char as u8 => {
-                    if v.len() < 2 {
-                        Err(E::custom("char requires at least 2 bytes"))
-                    } else {
-                        // UTF-8 chars can be 1-4 bytes, determine the length from
-                        // the first byte
-                        //
-                        // Already checked the `len` so indexing is fine
-                        let char_bytes = &v[1..];
-
-                        let len = match char_bytes[0] {
-                            x if x & 0x80 == 0 => Ok(1),
-                            x if x & 0xe0 == 0xc0 => Ok(2),
-                            x if x & 0xf0 == 0xe0 => Ok(3),
-                            x if x & 0xf8 == 0xf0 => Ok(4),
-                            _ => Err(E::custom("invalid UTF-8 char encoding")),
-                        }?;
-
-                        if char_bytes.len() < len {
-                            Err(E::custom("char data extends beyond buffer"))
-                        } else {
-                            let s = str::from_utf8(&char_bytes[..len])
-                                .map_err(|e| {
-                                    E::custom(format!("invalid UTF-8: {}", e))
-                                })?;
-                            let c = s
-                                .chars()
-                                .next()
-                                .ok_or_else(|| E::custom("empty char data"))?;
-                            Ok(Value::Char(c))
-                        }
-                    }
-                }
-                tag => {
-                    Err(E::custom(format!("unknown value tag: 0x{:02x}", tag)))
-                }
-            }
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-        where
-            A: de::SeqAccess<'de>,
-        {
-            // Collect bytes functionally using unfold-like pattern
-            let bytes = iter::from_fn(|| seq.next_element::<u8>().transpose())
-                .collect::<Result<Vec<u8>, _>>()?;
-            self.visit_bytes(&bytes)
-        }
-    }
-
     impl<'de> Deserialize<'de> for Value {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
             D: Deserializer<'de>,
         {
+            struct ValueVisitor;
+
+            impl<'de> Visitor<'de> for ValueVisitor {
+                type Value = Value;
+
+                fn expecting(
+                    &self,
+                    formatter: &mut fmt::Formatter,
+                ) -> fmt::Result {
+                    formatter.write_str("a compact-encoded Value")
+                }
+
+                fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+                where
+                    E: de::Error,
+                {
+                    let tag_byte = *v
+                        .first()
+                        .ok_or_else(|| E::custom("empty value bytes"))?;
+
+                    match tag_byte {
+                        tag if tag == Tag::False as u8 => {
+                            Ok(Value::Boolean(false))
+                        }
+                        tag if tag == Tag::True as u8 => {
+                            Ok(Value::Boolean(true))
+                        }
+                        tag if Tag::is_small_pos(tag) => Ok(Value::Integer(
+                            (tag - Tag::SmallPosStart as u8) as i64,
+                        )),
+                        tag if Tag::is_small_neg(tag) => {
+                            let offset = tag - Tag::SmallNegStart as u8;
+                            Ok(Value::Integer(-1 - offset as i64))
+                        }
+                        tag if tag == Tag::LargeInt as u8 => {
+                            Ok(Value::Integer(
+                                read_leb128_signed(&v[1..])
+                                    .map(|x| x.0)
+                                    .map_err(|e| {
+                                        E::custom(format!(
+                                            "invalid LEB128: {}",
+                                            e
+                                        ))
+                                    })?,
+                            ))
+                        }
+                        tag if tag == Tag::Double as u8 => {
+                            if v.len() < 9 {
+                                Err(E::custom("double requires 9 bytes"))
+                            } else {
+                                let mut bytes = [0u8; 8];
+                                bytes.copy_from_slice(&v[1..9]);
+
+                                let d = f64::from_le_bytes(bytes);
+
+                                Ok(Value::Double(OrderedFloat(d)))
+                            }
+                        }
+                        tag if tag == Tag::String as u8 => {
+                            let (len, offset) =
+                                read_varint(&v[1..]).map_err(|e| {
+                                    E::custom(format!("invalid varint: {}", e))
+                                })?;
+                            let start = 1 + offset;
+                            let end = start + len;
+
+                            if end > v.len() {
+                                Err(E::custom("string extends beyond buffer"))
+                            } else {
+                                Ok(Value::String(
+                                    (str::from_utf8(&v[start..end]).map_err(
+                                        |e| {
+                                            E::custom(format!(
+                                                "invalid UTF-8: {}",
+                                                e
+                                            ))
+                                        },
+                                    )?)
+                                    .to_string(),
+                                ))
+                            }
+                        }
+                        tag if tag == Tag::Json as u8 => {
+                            let (len, offset) =
+                                read_varint(&v[1..]).map_err(|e| {
+                                    E::custom(format!("invalid varint: {}", e))
+                                })?;
+                            let start = 1 + offset;
+                            let end = start + len;
+                            if end > v.len() {
+                                Err(E::custom("JSON extends beyond buffer"))
+                            } else {
+                                let s = str::from_utf8(&v[start..end])
+                                    .map_err(|e| {
+                                        E::custom(format!(
+                                            "invalid UTF-8: {}",
+                                            e
+                                        ))
+                                    })?;
+                                let json_val: serde_json::Value =
+                                    serde_json::from_str(s).map_err(|e| {
+                                        E::custom(format!(
+                                            "invalid JSON: {}",
+                                            e
+                                        ))
+                                    })?;
+                                Ok(Value::Json(json_val))
+                            }
+                        }
+                        tag if tag == Tag::Char as u8 => {
+                            if v.len() < 2 {
+                                Err(E::custom("char requires at least 2 bytes"))
+                            } else {
+                                // UTF-8 chars can be 1-4 bytes, determine the length from
+                                // the first byte
+                                //
+                                // Already checked the `len` so indexing is fine
+                                let char_bytes = &v[1..];
+
+                                let len = match char_bytes[0] {
+                                    x if x & 0x80 == 0 => Ok(1),
+                                    x if x & 0xe0 == 0xc0 => Ok(2),
+                                    x if x & 0xf0 == 0xe0 => Ok(3),
+                                    x if x & 0xf8 == 0xf0 => Ok(4),
+                                    _ => Err(E::custom(
+                                        "invalid UTF-8 char encoding",
+                                    )),
+                                }?;
+
+                                if char_bytes.len() < len {
+                                    Err(E::custom(
+                                        "char data extends beyond buffer",
+                                    ))
+                                } else {
+                                    let s = str::from_utf8(&char_bytes[..len])
+                                        .map_err(|e| {
+                                            E::custom(format!(
+                                                "invalid UTF-8: {}",
+                                                e
+                                            ))
+                                        })?;
+                                    let c =
+                                        s.chars().next().ok_or_else(|| {
+                                            E::custom("empty char data")
+                                        })?;
+                                    Ok(Value::Char(c))
+                                }
+                            }
+                        }
+                        tag => Err(E::custom(format!(
+                            "unknown value tag: 0x{:02x}",
+                            tag
+                        ))),
+                    }
+                }
+
+                fn visit_seq<A>(
+                    self,
+                    mut seq: A,
+                ) -> Result<Self::Value, A::Error>
+                where
+                    A: de::SeqAccess<'de>,
+                {
+                    // Collect bytes functionally using unfold-like pattern
+                    let bytes =
+                        iter::from_fn(|| seq.next_element::<u8>().transpose())
+                            .collect::<Result<Vec<u8>, _>>()?;
+                    self.visit_bytes(&bytes)
+                }
+            }
+
             // Since we serialize as bytes, deserialize as bytes
             deserializer.deserialize_bytes(ValueVisitor)
         }
@@ -798,7 +838,8 @@ mod encoding {
                         Some(Ok((*value, offset)))
                     } else {
                         *shift = next_shift;
-                        Some(Err(io::Error::new(io::ErrorKind::Other, ""))) // Continue scanning
+                        // Continue scanning
+                        Some(Err(io::Error::new(io::ErrorKind::Other, "")))
                     }
                 }
             })
