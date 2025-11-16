@@ -36,8 +36,8 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
 - [x] Implement `Serialize`/`Deserialize` for `Value` using serde (with compact binary encoding!)
 - [x] Add `Ord` and extended MUMPS collation ordering for `Key` and `Subscript`
 - [x] Add comprehensive unit tests for key ordering (verify extended MUMPS collation)
-- [ ] Add unit tests for `Name` enum (both Global and Local variants)
-- [ ] Define transaction-related types: `TransactionId`, `TransactionState` enum
+- [x] Add unit tests for `Name` enum (both Global and Local variants)
+- [x] Define transaction-related types: `TransactionId`, `TransactionState` enum
 
 ### 1.3 Node Structure (rumps-types)
 - [ ] Define `NodeData` struct containing:
@@ -438,22 +438,28 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 1.2 (Core Type Definitions) - Almost Complete!
-**Completed Checkboxes**: 17 / ~160
+**Current Phase**: Phase 1.2 (Core Type Definitions) - Complete! Moving to Phase 1.3
+**Completed Checkboxes**: 19 / ~160
 
-**Recent Changes** (2025-11-15 - Today's Progress):
+**Recent Changes** (2025-11-16 - Today's Progress):
+- ✅ Extended `Value` and `Subscript` types with `Char` and `Json` variants
+- ✅ Updated collation order: Boolean < Number < Char < String < Json
+- ✅ Fixed serialization for JSON compatibility with bincode
+- ✅ Added comprehensive tests for all new type variants
+- ✅ Completed transaction types module:
+  - `TransactionId`: Unique transaction identifier
+  - `TransactionState`: Lifecycle states (Active, Committed, Aborted)
+  - `TransactionTimestamp`: Logical timestamps for snapshot isolation
+  - `IsolationLevel`: Transaction isolation levels (SnapshotIsolation)
+  - `TransactionMetadata`: Complete transaction metadata
+- ✅ Added full test coverage for transaction types
+
+**Previous Changes** (2025-11-15):
 - ✅ Completed `Name` enum with Global/Local variants and full serde support
-- ✅ Completed `Subscript` type with extended collation (Boolean < Number < String)
+- ✅ Completed `Subscript` type with extended collation
 - ✅ Completed `Key` type with newtype pattern and transparent serde
-- ✅ Completed `Value` enum with compact binary encoding:
-  - Implemented space-efficient serialization (1 byte for small values)
-  - Used LEB128 and varint encodings for integers
-  - Added OrderedFloat for proper Double ordering
-  - Achieved 85-95% space reduction vs naive encoding
-- ✅ Added comprehensive test suites for all types
+- ✅ Completed `Value` enum with compact binary encoding
 - ✅ Refactored to functional programming style (no early returns, iterator methods)
-- ✅ Created clean `encoding` submodule for serialization logic
-- ✅ Added extensive documentation for binary encoding scheme
 
 **Previous Changes** (2025-11-15 - Planning):
 - **Transaction Model**: Added explicit transaction requirement for all global writes
@@ -472,4 +478,4 @@ These are not part of the current plan but should be kept in mind:
 
 ---
 
-Last Updated: 2024-11-15
+Last Updated: 2025-11-16

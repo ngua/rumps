@@ -9,9 +9,11 @@
 pub use error::*;
 pub use key::*;
 // pub use node::*;  // TODO: Implement node types for B-tree storage
+pub use transaction::*;
 pub use value::*;
 
 mod error;
 mod key;
 // mod node;  // TODO: Implement node types for B-tree storage
+mod transaction;
 mod value;
