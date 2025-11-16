@@ -14,6 +14,137 @@ This document tracks the implementation of Goal 1: Create a MUMPS-style binary t
 
 ---
 
+## Architecture: Query Layer vs Storage Layer
+
+RUMPS separates **logical semantics** (how users interact with data) from **physical storage** (how data is stored on disk). This distinction is crucial to understanding the system architecture.
+
+### Query Layer (Future: rumps-query)
+
+The **query layer** provides MUMPS-style hierarchical data access with trie-like navigation semantics:
+
+```mumps
+; MUMPS code operates on hierarchical paths
+SET ^PATIENT(123,"NAME") = "John Doe"
+SET ^PATIENT(123,"DOB") = "1974-08-09"
+SET ^PATIENT(123,"ADDR") = "123 Main St"
+
+; Tree appears hierarchical to the user:
+^PATIENT
+  └─ 123
+      ├─ "NAME"  = "John Doe"
+      ├─ "DOB"   = "1974-08-09"
+      └─ "ADDR"  = "123 Main St"
+```
+
+**Query operations** like `$ORDER`, `$QUERY`, and `$DATA` navigate this logical tree structure, providing:
+- Hierarchical traversal (parent → child relationships)
+- Subtree operations (KILL removes entire subtrees)
+- Data presence checking (does a node have value? descendants? both?)
+
+### Storage Layer (Current: rumps-storage)
+
+The **storage layer** uses a flat B+-tree for efficient disk persistence. Keys are **complete paths**, not individual subscripts:
+
+```text
+Logical View (Query Layer):        Physical Storage (B+-tree):
+^PATIENT                           ┌─────────────────────────────────┐
+  └─ 123                           │ B+-tree Node (Leaf)             │
+      ├─ "ADDR"                    ├─────────────────────────────────┤
+      ├─ "DOB"                     │ keys: [                         │
+      └─ "NAME"                    │   Key([123, "ADDR"]),           │
+                                   │   Key([123, "DOB"]),            │
+                                   │   Key([123, "NAME"]),           │
+                                   │   Key([124, "NAME"]),           │
+                                   │ ]                               │
+                                   │ values: [                       │
+                                   │   "123 Main St",                │
+                                   │   "1974-08-09",                 │
+                                   │   "John Doe",                   │
+                                   │   "Jane Smith",                 │
+                                   │ ]                               │
+                                   └─────────────────────────────────┘
+```
+
+**Why B+-tree instead of trie?**
+
+1. **Efficient Disk I/O**: Read many key-value pairs in one 4KB page
+2. **Cache Locality**: Keeps related data together (e.g., all patient 123 fields)
+3. **Scalability**: Logarithmic depth regardless of key hierarchy depth
+4. **Sequential Scans**: Fast iteration over sorted key ranges
+
+**Trie would be disastrous:**
+- One disk page per subscript level → `^PATIENT(123,"NAME")` = 3 disk reads minimum
+- Poor cache utilization (separate pages for each node)
+- O(path-depth) I/O complexity instead of O(log n)
+
+### Key Type Mapping
+
+| Concept             | Query Layer View           | Storage Layer Reality           |
+|---------------------|----------------------------|---------------------------------|
+| **Global Root**     | `^PATIENT`                 | Root `NodeId` in B+-tree        |
+| **Subscript Path**  | `(123, "NAME")`            | `Key([123, "NAME"])`            |
+| **Hierarchical Node** | Parent-child relationship | Complete path in sorted order   |
+| **Subtree**         | All descendants under path | Range of keys with common prefix |
+
+### Example: SET Operation Flow
+
+```rust
+// User writes (Query Layer):
+db.set(&Name::Global("PATIENT"), &key![123, "NAME"], "John Doe".into()).await?;
+
+// Storage Layer receives:
+// - Full key: Key([123, "NAME"])
+// - Value: NodeData { value: Some("John Doe"), has_descendants: false }
+// - Inserts into B+-tree at sorted position
+
+// On disk (simplified):
+// [Key([123,"ADDR"]) | Key([123,"DOB"]) | Key([123,"NAME"]) ← inserted here | Key([124,"NAME"])]
+```
+
+### Example: $ORDER (Next Key) Flow
+
+```mumps
+; User query (Query Layer):
+SET next = $ORDER(^PATIENT(123,"DOB"))  ; Returns "NAME"
+```
+
+```rust
+// Storage Layer implements:
+// 1. Find key >= Key([123, "DOB"]) in B+-tree
+// 2. Return next key in sorted order: Key([123, "NAME"])
+// 3. Query layer extracts last subscript: "NAME"
+```
+
+### NodeData: Bridging Both Layers
+
+`NodeData` connects the two layers by tracking whether nodes have descendants:
+
+```rust
+pub struct NodeData {
+    pub value: Option<Value>,        // Actual data (if any)
+    pub has_descendants: bool,        // Does this path have children?
+}
+```
+
+This enables the query layer to provide MUMPS `$DATA` semantics:
+
+| State             | `value`    | `has_descendants` | MUMPS `$DATA` | Example                                       |
+|-------------------|------------|-------------------|---------------|-----------------------------------------------|
+| Empty             | `None`     | `false`           | 0             | Deleted node                                  |
+| Has Value         | `Some(v)`  | `false`           | 1             | `^PATIENT(123,"NAME")="John"` (leaf)          |
+| Has Descendants   | `None`     | `true`            | 10            | `^PATIENT(123)` (no value, but has fields)    |
+| Both              | `Some(v)`  | `true`            | 11            | `^PATIENT(123)="Active"` (plus fields)        |
+
+### Implementation Phases
+
+This plan focuses on the **storage layer** (Phases 1-7). The query layer will be built later and will:
+- Map hierarchical operations to flat B+-tree operations
+- Maintain the `has_descendants` flags during SET/KILL
+- Implement `$ORDER`/`$QUERY` using B+-tree range scans
+- Provide the MUMPS command interpreter
+
+---
+
 ## Phase 1: Project Structure & Type System
 
 ### 1.1 Crate Setup
