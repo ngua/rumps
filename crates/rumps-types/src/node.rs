@@ -1,16 +1,243 @@
 //! Node-related types for the B-tree storage system.
 //!
 //! This module defines the data structures used to represent nodes in the RUMPS
-//! persistent B-tree storage. The primary type is [`NodeData`], which represents
-//! the data stored at a single node in the tree.
+//! persistent B+-tree storage. The primary types are:
+//! - [`NodeId`]: Reference to a node (either on-disk page or in-memory index)
+//! - [`Node`]: B+-tree node structure with complete keys, children, and values
+//! - [`NodeData`]: Data stored at each key in the tree
+//!
+//! # Storage Model
+//!
+//! RUMPS uses a B+-tree for efficient disk-based storage of hierarchical MUMPS data.
+//! While the MUMPS query semantics appear trie-like (hierarchical paths like
+//! `^PATIENT(123,"NAME")`), the physical storage uses a flat B+-tree where:
+//!
+//! - **Keys**: Complete paths stored as `Key` (e.g., `[123, "NAME"]`)
+//! - **Nodes**: Group multiple key-value pairs for efficient disk I/O
+//! - **Pages**: Each node fits in a fixed-size disk page (e.g., 4KB)
+//!
+//! Example node contents:
+//! ```text
+//! Node {
+//!   keys: [
+//!     Key([123, "ADDR"]),
+//!     Key([123, "DOB"]),
+//!     Key([123, "NAME"]),
+//!     Key([124, "NAME"]),
+//!   ],
+//!   values: [ ... corresponding NodeData ... ],
+//! }
+//! ```
+//!
+//! This allows reading many entries in a single disk operation rather than
+//! requiring one I/O per hierarchy level as a trie would.
 
-use crate::Value;
+use crate::{Key, Value};
 use serde::{
     de::{self, Deserializer, Visitor},
     ser::Serializer,
     Deserialize, Serialize,
 };
 use std::{fmt, iter};
+
+/// Identifier for a node in the B+-tree.
+///
+/// `NodeId` serves as an indirect reference to nodes rather than direct ownership
+/// via `Box<Node>`. This design choice enables several critical features:
+///
+/// # Why `NodeId` instead of `Box<Node>`?
+///
+/// 1. **Lazy Loading**: For persistent globals, child nodes can be loaded from disk
+///    only when accessed, rather than loading entire subtrees into memory.
+///
+/// 2. **Scalability**: Large databases can exceed available memory. With `NodeId`,
+///    only the working set of nodes needs to be resident in memory at any time.
+///
+/// 3. **Page Cache Integration**: Each `NodeId` maps to a disk page (for globals)
+///    or in-memory slot (for locals), enabling LRU eviction and cache management.
+///
+/// 4. **Unified Model**: The same `Node` structure works for both:
+///    - **Globals**: `NodeId` → `PageId` (disk page offset)
+///    - **Locals**: `NodeId` → in-memory index in HashMap
+///
+/// 5. **MVCC Support**: Future snapshot isolation can reference different node
+///    versions via `NodeId` without duplicating entire subtrees.
+///
+/// 6. **Compact Serialization**: Serializes as a single `u64` without wrapper overhead
+///    thanks to `#[repr(transparent)]` and serde's transparent serialization.
+///
+/// # Implementation Notes
+///
+/// The storage layer (in `rumps-storage`) will provide a `NodeManager` or similar
+/// abstraction to resolve `NodeId → Node` lookups, handling the distinction between
+/// in-memory and on-disk storage transparently.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::NodeId;
+///
+/// // Create a node ID from a page offset
+/// let node_id = NodeId::from(42u64);
+/// assert_eq!(u64::from(node_id), 42);
+/// ```
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct NodeId(u64);
+
+impl From<u64> for NodeId {
+    fn from(id: u64) -> Self {
+        Self(id)
+    }
+}
+
+impl From<NodeId> for u64 {
+    fn from(id: NodeId) -> Self {
+        id.0
+    }
+}
+
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Node({})", self.0)
+    }
+}
+
+/// A B+-tree node containing keys, child references, and associated data.
+///
+/// This structure represents both internal and leaf nodes in the B+-tree.
+/// Each node stores:
+/// - **Keys**: Complete paths (not single subscripts) that define tree ordering
+/// - **Children**: References to child nodes via `NodeId` (empty for leaf nodes)
+/// - **Values**: Data associated with each key
+///
+/// # B+-tree Invariants
+///
+/// For a node with `n` keys:
+/// - Internal nodes have `n + 1` children (one per key interval, plus rightmost)
+/// - Leaf nodes have no children (empty `children` vector)
+/// - Keys are always sorted in ascending order
+/// - Values has `n` entries (one per key)
+///
+/// # Design Note: Children as `Vec<NodeId>`
+///
+/// Children are stored as `NodeId` references rather than `Box<Node>` to enable
+/// lazy loading and memory-efficient operation on large datasets. See [`NodeId`]
+/// documentation for detailed rationale.
+///
+/// # Serialization
+///
+/// Custom `Serialize` and `Deserialize` implementations will be added for compact
+/// binary encoding optimized for disk storage.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::{Node, NodeData, NodeId, Key, Value};
+///
+/// // Create a leaf node with complete key paths
+/// let leaf = Node {
+///     keys: vec![
+///         Key::from(vec![123.into(), "NAME".into()]),
+///         Key::from(vec![124.into(), "NAME".into()]),
+///     ],
+///     children: vec![],  // Empty for leaf
+///     values: vec![
+///         NodeData::with_value(Value::String("John".into())),
+///         NodeData::with_value(Value::String("Jane".into())),
+///     ],
+///     is_leaf: true,
+/// };
+///
+/// assert!(leaf.is_leaf);
+/// assert_eq!(leaf.keys.len(), 2);
+/// assert_eq!(leaf.values.len(), 2);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Node {
+    /// Complete key paths (sorted) stored in this node
+    pub keys: Vec<Key>,
+    /// References to child nodes (empty for leaf nodes)
+    pub children: Vec<NodeId>,
+    /// Data associated with each key
+    pub values: Vec<NodeData>,
+    /// Whether this is a leaf node (no children)
+    pub is_leaf: bool,
+}
+
+impl Node {
+    /// Creates a new empty leaf node.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::Node;
+    ///
+    /// let leaf = Node::new_leaf();
+    /// assert!(leaf.is_leaf);
+    /// assert!(leaf.keys.is_empty());
+    /// assert!(leaf.children.is_empty());
+    /// ```
+    pub fn new_leaf() -> Self {
+        Self {
+            keys: Vec::new(),
+            children: Vec::new(),
+            values: Vec::new(),
+            is_leaf: true,
+        }
+    }
+
+    /// Creates a new empty internal node.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::Node;
+    ///
+    /// let internal = Node::new_internal();
+    /// assert!(!internal.is_leaf);
+    /// assert!(internal.keys.is_empty());
+    /// ```
+    pub fn new_internal() -> Self {
+        Self {
+            keys: Vec::new(),
+            children: Vec::new(),
+            values: Vec::new(),
+            is_leaf: false,
+        }
+    }
+
+    /// Returns the number of keys in this node.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::{Node, NodeData, Key, Value};
+    ///
+    /// let mut node = Node::new_leaf();
+    /// node.keys.push(Key::from(vec!["A".into()]));
+    /// node.values.push(NodeData::with_value(Value::Integer(1)));
+    ///
+    /// assert_eq!(node.len(), 1);
+    /// ```
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Returns true if this node has no keys.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::Node;
+    ///
+    /// let node = Node::new_leaf();
+    /// assert!(node.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+}
 
 /// Data stored at a node in the RUMPS tree.
 ///
