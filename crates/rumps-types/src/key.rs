@@ -194,7 +194,9 @@ impl fmt::Display for Name {
 ///
 /// 1. Booleans: `false` < `true`
 /// 2. Numbers: in numeric order (e.g., -10 < 0 < 1.5 < 10 < 100)
-/// 3. Strings: in lexicographic order (e.g., "1" < "10" < "ABC")
+/// 3. Chars: single UTF-8 characters (e.g., 'A' < 'B' < 'Z')
+/// 4. Strings: in lexicographic order (e.g., "1" < "10" < "ABC")
+/// 5. JSON: structured data (ordered by JSON string representation)
 ///
 /// # Examples
 ///
@@ -203,20 +205,49 @@ impl fmt::Display for Name {
 ///
 /// let bool_sub = Subscript::from(false);
 /// let num_sub = Subscript::from(123);
+/// let char_sub = Subscript::from('A');
 /// let str_sub = Subscript::from("NAME");
+/// let json_sub = Subscript::Json(serde_json::json!({"key": "value"}));
 ///
-/// // Extended RUMPS collation: booleans < numbers < strings
+/// // Extended RUMPS collation: booleans < numbers < chars < strings < json
 /// assert!(bool_sub < num_sub);
-/// assert!(num_sub < str_sub);
+/// assert!(num_sub < char_sub);
+/// assert!(char_sub < str_sub);
+/// assert!(str_sub < json_sub);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// # Parser Syntax (future)
+///
+/// When RUMPS gets a parser, subscripts will use:
+/// - JSON: single quotes like `'{"active": true}'`
+/// - Char: single quotes with single character like `'A'`
+/// - String: double quotes like `"NAME"`
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subscript {
     /// A boolean subscript (false < true).
     Boolean(bool),
     /// A numeric subscript (integers and floats in numeric order).
     Number(OrderedFloat<f64>),
+    /// A single character subscript.
+    Char(char),
     /// A string subscript (lexicographic order).
     String(String),
+    /// A JSON subscript (arbitrary nested structure).
+    Json(serde_json::Value),
+}
+
+// Manual Hash implementation since serde_json::Value doesn't implement Hash
+impl std::hash::Hash for Subscript {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Boolean(b) => b.hash(state),
+            Self::Number(n) => n.hash(state),
+            Self::Char(c) => c.hash(state),
+            Self::String(s) => s.hash(state),
+            Self::Json(j) => j.to_string().hash(state),
+        }
+    }
 }
 
 impl Subscript {
@@ -230,9 +261,35 @@ impl Subscript {
         matches!(self, Self::Number(_))
     }
 
+    /// Returns `true` if this is a char subscript.
+    pub fn is_char(&self) -> bool {
+        matches!(self, Self::Char(_))
+    }
+
     /// Returns `true` if this is a string subscript.
     pub fn is_string(&self) -> bool {
         matches!(self, Self::String(_))
+    }
+
+    /// Returns `true` if this is a JSON subscript.
+    pub fn is_json(&self) -> bool {
+        matches!(self, Self::Json(_))
+    }
+
+    /// Returns the subscript as a char, if it is one.
+    pub fn as_char(&self) -> Option<char> {
+        match self {
+            Self::Char(c) => Some(*c),
+            _ => None,
+        }
+    }
+
+    /// Returns the subscript as a JSON reference, if it is one.
+    pub fn as_json(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Json(j) => Some(j),
+            _ => None,
+        }
     }
 
     /// Converts the subscript to a string representation.
@@ -240,7 +297,9 @@ impl Subscript {
         match self {
             Self::Boolean(b) => b.to_string(),
             Self::Number(n) => n.to_string(),
+            Self::Char(c) => c.to_string(),
             Self::String(s) => s.clone(),
+            Self::Json(j) => j.to_string(),
         }
     }
 }
@@ -259,15 +318,31 @@ impl Ord for Subscript {
             // Same variant comparisons
             (Boolean(a), Boolean(b)) => a.cmp(b),
             (Number(a), Number(b)) => a.cmp(b),
+            (Char(a), Char(b)) => a.cmp(b),
             (String(a), String(b)) => a.cmp(b),
+            (Json(a), Json(b)) => a.to_string().cmp(&b.to_string()),
 
-            // Cross-variant comparisons: Boolean < Number < String
+            // Cross-variant comparisons: Boolean < Number < Char < String < Json
             (Boolean(_), Number(_)) => cmp::Ordering::Less,
+            (Boolean(_), Char(_)) => cmp::Ordering::Less,
             (Boolean(_), String(_)) => cmp::Ordering::Less,
+            (Boolean(_), Json(_)) => cmp::Ordering::Less,
             (Number(_), Boolean(_)) => cmp::Ordering::Greater,
+            (Number(_), Char(_)) => cmp::Ordering::Less,
             (Number(_), String(_)) => cmp::Ordering::Less,
+            (Number(_), Json(_)) => cmp::Ordering::Less,
+            (Char(_), Boolean(_)) => cmp::Ordering::Greater,
+            (Char(_), Number(_)) => cmp::Ordering::Greater,
+            (Char(_), String(_)) => cmp::Ordering::Less,
+            (Char(_), Json(_)) => cmp::Ordering::Less,
             (String(_), Boolean(_)) => cmp::Ordering::Greater,
             (String(_), Number(_)) => cmp::Ordering::Greater,
+            (String(_), Char(_)) => cmp::Ordering::Greater,
+            (String(_), Json(_)) => cmp::Ordering::Less,
+            (Json(_), Boolean(_)) => cmp::Ordering::Greater,
+            (Json(_), Number(_)) => cmp::Ordering::Greater,
+            (Json(_), Char(_)) => cmp::Ordering::Greater,
+            (Json(_), String(_)) => cmp::Ordering::Greater,
         }
     }
 }
@@ -277,7 +352,9 @@ impl fmt::Display for Subscript {
         match self {
             Self::Boolean(b) => write!(f, "{}", b),
             Self::Number(n) => write!(f, "{}", n),
+            Self::Char(c) => write!(f, "{}", c),
             Self::String(s) => write!(f, "{}", s),
+            Self::Json(j) => write!(f, "{}", j),
         }
     }
 }
@@ -309,6 +386,82 @@ impl From<String> for Subscript {
 impl From<&str> for Subscript {
     fn from(s: &str) -> Self {
         Self::String(s.to_string())
+    }
+}
+
+impl From<char> for Subscript {
+    fn from(c: char) -> Self {
+        Self::Char(c)
+    }
+}
+
+impl From<serde_json::Value> for Subscript {
+    fn from(j: serde_json::Value) -> Self {
+        Self::Json(j)
+    }
+}
+
+// Custom Serialize/Deserialize since we can't derive with serde_json::Value
+impl Serialize for Subscript {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Use a tagged helper enum for serialization
+        // JSON is serialized as a string for binary format compatibility
+        #[derive(Serialize)]
+        enum SubscriptHelper<'a> {
+            Boolean(bool),
+            Number(&'a OrderedFloat<f64>),
+            Char(char),
+            String(&'a str),
+            Json(String), // Store JSON as string for bincode compatibility
+        }
+
+        let helper = match self {
+            Self::Boolean(b) => SubscriptHelper::Boolean(*b),
+            Self::Number(n) => SubscriptHelper::Number(n),
+            Self::Char(c) => SubscriptHelper::Char(*c),
+            Self::String(s) => SubscriptHelper::String(s),
+            Self::Json(j) => SubscriptHelper::Json(j.to_string()),
+        };
+
+        helper.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Subscript {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        // Use a tagged helper enum for deserialization
+        // JSON is deserialized from a string for binary format compatibility
+        #[derive(Deserialize)]
+        enum SubscriptHelper {
+            Boolean(bool),
+            Number(OrderedFloat<f64>),
+            Char(char),
+            String(String),
+            Json(String), // Receive JSON as string for bincode compatibility
+        }
+
+        let helper = SubscriptHelper::deserialize(deserializer)?;
+        Ok(match helper {
+            SubscriptHelper::Boolean(b) => Self::Boolean(b),
+            SubscriptHelper::Number(n) => Self::Number(n),
+            SubscriptHelper::Char(c) => Self::Char(c),
+            SubscriptHelper::String(s) => Self::String(s),
+            SubscriptHelper::Json(json_str) => {
+                let json_val =
+                    serde_json::from_str(&json_str).map_err(|e| {
+                        D::Error::custom(format!("Invalid JSON: {}", e))
+                    })?;
+                Self::Json(json_val)
+            }
+        })
     }
 }
 
@@ -727,16 +880,22 @@ mod tests {
         let num_neg = Subscript::from(-10);
         let num_zero = Subscript::from(0);
         let num_pos = Subscript::from(100);
+        let char_a = Subscript::from('A');
+        let char_z = Subscript::from('Z');
         let str_num = Subscript::from("1");
         let str_alpha = Subscript::from("ABC");
+        let json_val = Subscript::Json(serde_json::json!({"a": 1}));
 
-        // Boolean < Number < String
+        // Boolean < Number < Char < String < Json
         assert!(bool_false < bool_true);
         assert!(bool_true < num_neg);
         assert!(num_neg < num_zero);
         assert!(num_zero < num_pos);
-        assert!(num_pos < str_num);
+        assert!(num_pos < char_a);
+        assert!(char_a < char_z);
+        assert!(char_z < str_num);
         assert!(str_num < str_alpha);
+        assert!(str_alpha < json_val);
     }
 
     #[test]
@@ -768,26 +927,51 @@ mod tests {
         assert_eq!(Subscript::from(true).to_string(), "true");
         assert_eq!(Subscript::from(123).to_string(), "123");
         assert_eq!(Subscript::from(1.5).to_string(), "1.5");
+        assert_eq!(Subscript::from('A').to_string(), "A");
         assert_eq!(Subscript::from("NAME").to_string(), "NAME");
+        assert_eq!(
+            Subscript::Json(serde_json::json!({"a": 1})).to_string(),
+            "{\"a\":1}"
+        );
     }
 
     #[test]
     fn test_subscript_type_checks() {
         let bool_sub = Subscript::from(false);
         let num_sub = Subscript::from(123);
+        let char_sub = Subscript::from('X');
         let str_sub = Subscript::from("ABC");
+        let json_sub = Subscript::Json(serde_json::json!({"a": 1}));
 
         assert!(bool_sub.is_boolean());
         assert!(!bool_sub.is_number());
+        assert!(!bool_sub.is_char());
         assert!(!bool_sub.is_string());
+        assert!(!bool_sub.is_json());
 
         assert!(!num_sub.is_boolean());
         assert!(num_sub.is_number());
+        assert!(!num_sub.is_char());
         assert!(!num_sub.is_string());
+        assert!(!num_sub.is_json());
+
+        assert!(!char_sub.is_boolean());
+        assert!(!char_sub.is_number());
+        assert!(char_sub.is_char());
+        assert!(!char_sub.is_string());
+        assert!(!char_sub.is_json());
 
         assert!(!str_sub.is_boolean());
         assert!(!str_sub.is_number());
+        assert!(!str_sub.is_char());
         assert!(str_sub.is_string());
+        assert!(!str_sub.is_json());
+
+        assert!(!json_sub.is_boolean());
+        assert!(!json_sub.is_number());
+        assert!(!json_sub.is_char());
+        assert!(!json_sub.is_string());
+        assert!(json_sub.is_json());
     }
 
     #[test]
@@ -805,11 +989,23 @@ mod tests {
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(num_sub, deserialized);
 
+        let char_sub = Subscript::from('Z');
+        let serialized = bincode::serialize(&char_sub).unwrap();
+        let deserialized: Subscript =
+            bincode::deserialize(&serialized).unwrap();
+        assert_eq!(char_sub, deserialized);
+
         let str_sub = Subscript::from("TEST");
         let serialized = bincode::serialize(&str_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(str_sub, deserialized);
+
+        let json_sub = Subscript::from(serde_json::json!({"test": 123}));
+        let serialized = bincode::serialize(&json_sub).unwrap();
+        let deserialized: Subscript =
+            bincode::deserialize(&serialized).unwrap();
+        assert_eq!(json_sub, deserialized);
     }
 
     // Key tests

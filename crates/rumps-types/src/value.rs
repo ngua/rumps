@@ -83,7 +83,6 @@
 use std::{cmp, fmt};
 
 use ordered_float::OrderedFloat;
-use serde_json;
 
 /// A scalar value stored in the RUMPS database.
 ///
@@ -569,8 +568,8 @@ mod encoding {
         where
             E: de::Error,
         {
-            let tag_byte = *v.get(0)
-                .ok_or_else(|| E::custom("empty value bytes"))?;
+            let tag_byte =
+                *v.first().ok_or_else(|| E::custom("empty value bytes"))?;
 
             match tag_byte {
                 tag if tag == Tag::False as u8 => Ok(Value::Boolean(false)),
@@ -582,46 +581,58 @@ mod encoding {
                     let offset = tag - Tag::SmallNegStart as u8;
                     Ok(Value::Integer(-1 - offset as i64))
                 }
-                tag if tag == Tag::LargeInt as u8 => {
-                    let (value, _) = read_leb128_signed(&v[1..])
-                        .map_err(|e| E::custom(format!("invalid LEB128: {}", e)))?;
-                    Ok(Value::Integer(value))
-                }
+                tag if tag == Tag::LargeInt as u8 => Ok(Value::Integer(
+                    read_leb128_signed(&v[1..]).map(|x| x.0).map_err(|e| {
+                        E::custom(format!("invalid LEB128: {}", e))
+                    })?,
+                )),
                 tag if tag == Tag::Double as u8 => {
                     if v.len() < 9 {
                         Err(E::custom("double requires 9 bytes"))
                     } else {
                         let mut bytes = [0u8; 8];
                         bytes.copy_from_slice(&v[1..9]);
+
                         let d = f64::from_le_bytes(bytes);
+
                         Ok(Value::Double(OrderedFloat(d)))
                     }
                 }
                 tag if tag == Tag::String as u8 => {
-                    let (len, offset) = read_varint(&v[1..])
-                        .map_err(|e| E::custom(format!("invalid varint: {}", e)))?;
+                    let (len, offset) = read_varint(&v[1..]).map_err(|e| {
+                        E::custom(format!("invalid varint: {}", e))
+                    })?;
                     let start = 1 + offset;
                     let end = start + len;
+
                     if end > v.len() {
                         Err(E::custom("string extends beyond buffer"))
                     } else {
-                        let s = str::from_utf8(&v[start..end])
-                            .map_err(|e| E::custom(format!("invalid UTF-8: {}", e)))?;
-                        Ok(Value::String(s.to_string()))
+                        Ok(Value::String(
+                            (str::from_utf8(&v[start..end]).map_err(|e| {
+                                E::custom(format!("invalid UTF-8: {}", e))
+                            })?)
+                            .to_string(),
+                        ))
                     }
                 }
                 tag if tag == Tag::Json as u8 => {
-                    let (len, offset) = read_varint(&v[1..])
-                        .map_err(|e| E::custom(format!("invalid varint: {}", e)))?;
+                    let (len, offset) = read_varint(&v[1..]).map_err(|e| {
+                        E::custom(format!("invalid varint: {}", e))
+                    })?;
                     let start = 1 + offset;
                     let end = start + len;
                     if end > v.len() {
                         Err(E::custom("JSON extends beyond buffer"))
                     } else {
-                        let s = str::from_utf8(&v[start..end])
-                            .map_err(|e| E::custom(format!("invalid UTF-8: {}", e)))?;
-                        let json_val: serde_json::Value = serde_json::from_str(s)
-                            .map_err(|e| E::custom(format!("invalid JSON: {}", e)))?;
+                        let s =
+                            str::from_utf8(&v[start..end]).map_err(|e| {
+                                E::custom(format!("invalid UTF-8: {}", e))
+                            })?;
+                        let json_val: serde_json::Value =
+                            serde_json::from_str(s).map_err(|e| {
+                                E::custom(format!("invalid JSON: {}", e))
+                            })?;
                         Ok(Value::Json(json_val))
                     }
                 }
@@ -629,32 +640,38 @@ mod encoding {
                     if v.len() < 2 {
                         Err(E::custom("char requires at least 2 bytes"))
                     } else {
-                        // UTF-8 chars can be 1-4 bytes, determine the length from the first byte
+                        // UTF-8 chars can be 1-4 bytes, determine the length from
+                        // the first byte
+                        //
+                        // Already checked the `len` so indexing is fine
                         let char_bytes = &v[1..];
-                        let len = if char_bytes[0] & 0x80 == 0 {
-                            1
-                        } else if char_bytes[0] & 0xe0 == 0xc0 {
-                            2
-                        } else if char_bytes[0] & 0xf0 == 0xe0 {
-                            3
-                        } else if char_bytes[0] & 0xf8 == 0xf0 {
-                            4
-                        } else {
-                            return Err(E::custom("invalid UTF-8 char encoding"));
-                        };
+
+                        let len = match char_bytes[0] {
+                            x if x & 0x80 == 0 => Ok(1),
+                            x if x & 0xe0 == 0xc0 => Ok(2),
+                            x if x & 0xf0 == 0xe0 => Ok(3),
+                            x if x & 0xf8 == 0xf0 => Ok(4),
+                            _ => Err(E::custom("invalid UTF-8 char encoding")),
+                        }?;
 
                         if char_bytes.len() < len {
                             Err(E::custom("char data extends beyond buffer"))
                         } else {
                             let s = str::from_utf8(&char_bytes[..len])
-                                .map_err(|e| E::custom(format!("invalid UTF-8: {}", e)))?;
-                            let c = s.chars().next()
+                                .map_err(|e| {
+                                    E::custom(format!("invalid UTF-8: {}", e))
+                                })?;
+                            let c = s
+                                .chars()
+                                .next()
                                 .ok_or_else(|| E::custom("empty char data"))?;
                             Ok(Value::Char(c))
                         }
                     }
                 }
-                tag => Err(E::custom(format!("unknown value tag: 0x{:02x}", tag))),
+                tag => {
+                    Err(E::custom(format!("unknown value tag: 0x{:02x}", tag)))
+                }
             }
         }
 
@@ -741,8 +758,7 @@ mod encoding {
                 || (shifted == -1 && byte & 0x40 != 0);
             (!done).then_some(shifted)
         })
-        .zip(iter::repeat(()))
-        .map(|(v, _)| {
+        .map(|v| {
             let byte = (v & 0x7F) as u8;
             let shifted = v >> 7;
             let done = (shifted == 0 && byte & 0x40 == 0)
@@ -942,12 +958,11 @@ mod tests {
         // Cross-type ordering: Boolean < Integer < Double < Char < String < Json
         assert!(Value::Boolean(true) < Value::Integer(0));
         assert!(Value::Integer(100) < Value::Double(OrderedFloat(0.1)));
-        assert!(
-            Value::Double(OrderedFloat(999.9)) < Value::Char('A')
-        );
+        assert!(Value::Double(OrderedFloat(999.9)) < Value::Char('A'));
         assert!(Value::Char('Z') < Value::String("A".to_string()));
         assert!(
-            Value::String("zzz".to_string()) < Value::Json(serde_json::json!({}))
+            Value::String("zzz".to_string())
+                < Value::Json(serde_json::json!({}))
         );
     }
 
@@ -1063,7 +1078,9 @@ mod tests {
             Value::Json(serde_json::json!("string")),
             Value::Json(serde_json::json!({"key": "value"})),
             Value::Json(serde_json::json!([1, 2, 3])),
-            Value::Json(serde_json::json!({"nested": {"deep": {"value": 123}}})),
+            Value::Json(
+                serde_json::json!({"nested": {"deep": {"value": 123}}}),
+            ),
         ];
 
         test_values.iter().for_each(|value| {
