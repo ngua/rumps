@@ -8,12 +8,12 @@
 // Re-export commonly used types
 pub use error::*;
 pub use key::*;
-// pub use node::*;  // TODO: Implement node types for B-tree storage
+pub use node::*;
 pub use transaction::*;
 pub use value::*;
 
 mod error;
 mod key;
-// mod node;  // TODO: Implement node types for B-tree storage
+mod node;
 mod transaction;
 mod value;
