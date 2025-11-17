@@ -1,5 +1,5 @@
-use thiserror::Error;
 use rumps_types::NodeId;
+use thiserror::Error;
 
 /// Errors that can occur during B-tree operations.
 #[derive(Debug, Error)]
