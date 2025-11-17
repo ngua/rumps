@@ -718,7 +718,7 @@ tokio-test = "0.4"
 2. **Functional Style**: Follow project coding standards
    - Use iterator methods over explicit loops
    - Prefer exhaustive pattern matching
-   - Avoid early returns when possible
+   - Avoid early returns
 
 3. **Minimum Degree Validation**: Must be >= 2 for valid B-tree properties
 
