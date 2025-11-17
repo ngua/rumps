@@ -767,14 +767,210 @@ pub async fn set(&self,
 ```
 This would make Phase 5 integration smoother without breaking changes.
 
-### Phase 4: Disk Persistence
+### Phase 4: Disk Persistence with AsyncStorageEngine
+
+#### AsyncStorageEngine Design
+
+The `AsyncStorageEngine` will be the abstraction layer between the B-tree and disk storage:
+
+```rust
+/// Trait for async disk storage operations
+#[async_trait]
+pub trait AsyncStorageEngine: Send + Sync {
+    /// Read a node from disk by its ID
+    async fn read_node(&self, id: NodeId) -> Result<Node>;
+
+    /// Write a node to disk
+    async fn write_node(&self, id: NodeId, node: &Node) -> Result<()>;
+
+    /// Allocate a new page on disk
+    async fn allocate_page(&self) -> Result<NodeId>;
+
+    /// Deallocate a page for reuse
+    async fn deallocate_page(&self, id: NodeId) -> Result<()>;
+
+    /// Flush all pending writes to disk
+    async fn flush(&self) -> Result<()>;
+
+    /// Get metadata about storage
+    async fn metadata(&self) -> StorageMetadata;
+}
+
+/// Metadata about the storage engine
+#[derive(Debug, Clone)]
+pub struct StorageMetadata {
+    pub page_size: usize,
+    pub total_pages: usize,
+    pub free_pages: usize,
+    pub dirty_pages: usize,
+}
+
+/// Concrete implementation using files
+pub struct FileStorageEngine {
+    /// Data file handle
+    data_file: Arc<RwLock<tokio::fs::File>>,
+
+    /// WAL for durability
+    wal: Arc<WalWriter>,
+
+    /// Page cache with LRU eviction
+    cache: Arc<PageCache>,
+
+    /// Free page management
+    page_allocator: Arc<PageAllocator>,
+
+    /// Configuration
+    config: StorageConfig,
+}
+
+/// Storage configuration
+#[derive(Debug, Clone)]
+pub struct StorageConfig {
+    pub page_size: usize,        // Default: 4096
+    pub cache_size: usize,       // Max pages in cache
+    pub sync_mode: SyncMode,     // When to fsync
+    pub compression: bool,       // Enable compression
+}
+
+/// When to sync data to disk
+#[derive(Debug, Clone)]
+pub enum SyncMode {
+    /// Sync on every write (slow but safest)
+    Immediate,
+    /// Sync on transaction commit
+    OnCommit,
+    /// Sync periodically
+    Periodic(Duration),
+}
+```
+
+#### Updated BTree Structure
+
+```rust
+pub struct BTree {
+    /// Maps variable names to root nodes
+    roots: RwLock<BTreeMap<Name, NodeId>>,
+
+    /// In-memory node cache (Phase 2-3: all nodes, Phase 4: LRU cache)
+    nodes: RwLock<HashMap<NodeId, Node>>,
+
+    /// Optional storage engine for persistence
+    storage: Option<Arc<dyn AsyncStorageEngine>>,
+
+    /// Node allocator (switches based on storage)
+    allocator: Arc<dyn NodeAllocator>,
+
+    /// Other fields remain the same...
+    min_degree: usize,
+    max_memory_bytes: Option<usize>,
+    stats: RwLock<BTreeStats>,
+}
+
+impl BTree {
+    /// Create disk-backed B-tree
+    pub async fn with_storage(
+        min_degree: usize,
+        storage: Arc<dyn AsyncStorageEngine>
+    ) -> Result<Self> {
+        // Use DiskNodeAllocator that delegates to storage engine
+        let allocator = Arc::new(DiskNodeAllocator::new(storage.clone()));
+
+        Ok(Self {
+            roots: RwLock::new(BTreeMap::new()),
+            nodes: RwLock::new(HashMap::new()),
+            storage: Some(storage),
+            allocator,
+            min_degree,
+            max_memory_bytes: None,
+            stats: RwLock::new(BTreeStats::default()),
+        })
+    }
+
+    /// Load a node (from cache or disk)
+    async fn load_node(&self, id: NodeId) -> Result<Node> {
+        // Check cache first
+        {
+            let nodes = self.nodes.read().await;
+            if let Some(node) = nodes.get(&id) {
+                return Ok(node.clone());
+            }
+        }
+
+        // Load from disk if storage is configured
+        if let Some(storage) = &self.storage {
+            let node = storage.read_node(id).await?;
+
+            // Add to cache
+            let mut nodes = self.nodes.write().await;
+            nodes.insert(id, node.clone());
+
+            // TODO: Implement LRU eviction if cache is full
+
+            Ok(node)
+        } else {
+            Err(StorageError::NodeNotFound(id))
+        }
+    }
+
+    /// Save a node (to cache and optionally disk)
+    async fn save_node(&self, id: NodeId, node: Node) -> Result<()> {
+        // Update cache
+        {
+            let mut nodes = self.nodes.write().await;
+            nodes.insert(id, node.clone());
+        }
+
+        // Write to disk if storage is configured
+        if let Some(storage) = &self.storage {
+            storage.write_node(id, &node).await?;
+        }
+
+        Ok(())
+    }
+}
+```
+
+#### Node Allocator for Disk
+
+```rust
+/// Allocator that uses the storage engine for page management
+pub struct DiskNodeAllocator {
+    storage: Arc<dyn AsyncStorageEngine>,
+}
+
+impl DiskNodeAllocator {
+    pub fn new(storage: Arc<dyn AsyncStorageEngine>) -> Self {
+        Self { storage }
+    }
+}
+
+#[async_trait]
+impl NodeAllocator for DiskNodeAllocator {
+    async fn allocate(&self) -> Result<NodeId> {
+        self.storage.allocate_page().await
+    }
+
+    async fn deallocate(&self, id: NodeId) -> Result<()> {
+        self.storage.deallocate_page(id).await
+    }
+
+    async fn peek_next(&self) -> NodeId {
+        // This might not be available for disk allocator
+        NodeId(0) // Placeholder
+    }
+}
+```
+
+#### Integration Points
+
 Will add disk storage with minimal changes:
-- Add `storage: Option<AsyncStorageEngine>` field
+- Add `storage: Option<Arc<dyn AsyncStorageEngine>>` field
 - `nodes` semantics shift from "complete storage" to "page cache"
-- Add `with_storage(min_degree, path)` constructor
-- Internal methods check cache first, then load from disk if needed
+- Add `with_storage(min_degree, storage)` constructor
+- Internal methods (`load_node`, `save_node`) check cache first, then load from disk if needed
 - **API remains unchanged** thanks to async-first design
 - NodeAllocator trait enables free-list implementation for reusing deleted pages
+- All existing operations (SET, GET, KILL, etc.) work transparently with disk storage
 
 ### Phase 5: Transactions
 Will add ACID transactions with WAL (Write-Ahead Logging):

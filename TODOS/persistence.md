@@ -185,66 +185,87 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 ---
 
-## Phase 2: In-Memory B-Tree Implementation
+## Phase 2: In-Memory B-Tree Implementation (Async-First)
 
 **Note**: The B-tree supports both `Name::Global` and `Name::Local` variables with the same operations. Only `Name::Global` entries will be persisted to disk in Phase 4.
 
+**Design Principle**: All APIs are async from day one to avoid breaking changes when adding disk persistence in Phase 4. Uses `Arc<BTree>` pattern for thread-safe sharing.
+
 ### 2.1 B-Tree Structure (rumps-storage)
+- [ ] Create `crates/rumps-storage/src/error.rs` with `StorageError` enum
 - [ ] Define `BTree` struct with:
-  - Map from `Name` to root node reference (supports both Global and Local)
-  - Order/branching factor (min/max keys per node)
-  - Metadata (height, node count, etc.)
-- [ ] Implement `BTree::new()` constructor
-- [ ] Implement `BTree::find_node()` - navigate tree to find node containing key
-- [ ] Implement `BTree::split_node()` - split full nodes during insertion
-- [ ] Implement `BTree::merge_nodes()` - merge underfull nodes during deletion
+  - `roots: RwLock<BTreeMap<Name, NodeId>>` - ordered variable registry
+  - `nodes: RwLock<HashMap<NodeId, Node>>` - node storage pool
+  - `allocator: Arc<dyn NodeAllocator>` - flexible ID allocation
+  - `min_degree: usize` - B-tree branching factor
+  - `max_memory_bytes: Option<usize>` - optional memory limit
+  - `stats: RwLock<BTreeStats>` - metrics tracking
+  - `storage: Option<Arc<dyn AsyncStorageEngine>>` (Phase 4)
+- [ ] Implement `BTree::new(min_degree) -> Result<Self>` constructor with validation
+- [ ] Implement `BTree::with_config(min_degree, max_memory_bytes) -> Result<Self>`
+- [ ] Implement `async fn find_node(&self, id: NodeId) -> Result<Node>` - navigate tree
+- [ ] Implement `async fn split_node(&self, id: NodeId) -> Result<()>` - split full nodes
+- [ ] Implement `async fn merge_nodes(&self, left: NodeId, right: NodeId) -> Result<()>`
+- [ ] Add `BTreeStats` tracking (splits, merges, memory usage)
+- [ ] Add `NodeAllocator` trait and `IncrementingAllocator` implementation
 
 ### 2.2 MUMPS Operations - SET
-- [ ] Implement `BTree::set(name: &Name, key: &Key, value: Value)`:
+- [ ] Implement `async fn set(&self, name: &Name, key: &Key, value: Value, txn: Option<&TransactionContext>) -> Result<()>`:
+  - Use `load_node()` for cache-aware node access
   - Navigate to appropriate leaf node
   - Insert/update key-value pair
   - Update parent `has_descendants` flags up the path
   - Handle node splits and tree growth
-- [ ] Add tests for SET on empty tree (both Global and Local)
-- [ ] Add tests for SET with existing keys (updates)
-- [ ] Add tests for SET triggering node splits
-- [ ] Add tests for SET on multi-level subscripts (e.g., `["A", "B", "C"]`)
-- [ ] Add tests verifying Global and Local namespaces are separate
+  - Use `save_node()` to persist changes
+  - Update `BTreeStats` (key count, splits)
+- [ ] Add async tests for SET on empty tree (both Global and Local)
+- [ ] Add async tests for SET with existing keys (updates)
+- [ ] Add async tests for SET triggering node splits
+- [ ] Add async tests for SET on multi-level subscripts (e.g., `["A", "B", "C"]`)
+- [ ] Add async tests verifying Global and Local namespaces are separate
+- [ ] Add concurrent SET tests with `Arc<BTree>`
 
 ### 2.3 MUMPS Operations - GET
-- [ ] Implement `BTree::get(name: &Name, key: &Key) -> Option<&Value>`:
+- [ ] Implement `async fn get(&self, name: &Name, key: &Key, txn: Option<&TransactionContext>) -> Result<Option<Value>>`:
+  - Use `load_node()` for cache-aware node access
   - Navigate tree following key path
-  - Return value if exists
-- [ ] Add tests for GET on non-existent keys
-- [ ] Add tests for GET on existing keys
-- [ ] Add tests for GET on partial paths (should return None if no value at that node)
+  - Return cloned value if exists
+- [ ] Add async tests for GET on non-existent keys
+- [ ] Add async tests for GET on existing keys
+- [ ] Add async tests for GET on partial paths (should return None if no value at that node)
+- [ ] Add concurrent GET tests during active writes
 
 ### 2.4 MUMPS Operations - KILL
-- [ ] Implement `BTree::kill(name: &Name, key: &Key)`:
+- [ ] Implement `async fn kill(&self, name: &Name, key: &Key, txn: Option<&TransactionContext>) -> Result<()>`:
+  - Use `load_node()` for cache-aware node access
   - Navigate to node
   - Delete entire subtree rooted at key
   - Update parent `has_descendants` flags
   - Handle node merging and tree shrinking
-- [ ] Add tests for KILL leaf nodes (both Global and Local)
-- [ ] Add tests for KILL intermediate nodes (removes subtree)
-- [ ] Add tests for KILL root
+  - Use `save_node()` to persist changes
+  - Update `BTreeStats` (key count, merges)
+- [ ] Add async tests for KILL leaf nodes (both Global and Local)
+- [ ] Add async tests for KILL intermediate nodes (removes subtree)
+- [ ] Add async tests for KILL root
 - [ ] Verify tree structure remains valid after KILL
 
 ### 2.5 MUMPS Operations - DATA
-- [ ] Implement `BTree::data(name: &Name, key: &Key) -> DataResult`:
+- [ ] Implement `async fn data(&self, name: &Name, key: &Key, txn: Option<&TransactionContext>) -> Result<DataResult>`:
+  - Use `load_node()` for cache-aware node access
   - Return enum: `NoData`, `HasValue`, `HasDescendants`, `Both`
-- [ ] Add tests for all four DATA states
+- [ ] Add async tests for all four DATA states
 - [ ] Verify correct behavior for partial paths
 
 ### 2.6 MUMPS Operations - ORDER (Iterator)
-- [ ] Implement `BTree::order(name: &Name, key: &Key) -> Option<Key>`:
+- [ ] Implement `async fn order(&self, name: &Name, key: &Key, txn: Option<&TransactionContext>) -> Result<Option<Key>>`:
+  - Use `load_node()` for cache-aware node access
   - Find next key in lexicographic order
   - Handle navigating between leaf nodes
-- [ ] Implement `BTreeIterator` for sequential traversal
-- [ ] Add tests for ORDER on empty tree
-- [ ] Add tests for ORDER returning next sibling
-- [ ] Add tests for ORDER wrapping to next parent's child
-- [ ] Add tests for exhaustive iteration over entire tree
+- [ ] Implement `BTreeIterator` with async next() method
+- [ ] Add async tests for ORDER on empty tree
+- [ ] Add async tests for ORDER returning next sibling
+- [ ] Add async tests for ORDER wrapping to next parent's child
+- [ ] Add async tests for exhaustive iteration over entire tree
 
 ---
 
@@ -276,11 +297,11 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 ---
 
-## Phase 4: Disk Persistence with WAL
+## Phase 4: Disk Persistence with AsyncStorageEngine
 
 **Note**: Only `Name::Global` entries are persisted to disk. `Name::Local` entries remain in memory only and are not serialized.
 
-**Design Note**: While the implementation in this phase will be synchronous, design data structures with async/concurrency in mind (e.g., avoid patterns that would be difficult to wrap with locks later). Phase 5 will add async transactions with WAL integration.
+**Design Principle**: All storage operations are async from the start. The `AsyncStorageEngine` trait abstracts disk operations, allowing the B-tree to remain agnostic about storage details.
 
 ### 4.1 Write-Ahead Log (WAL)
 - [ ] Create `crates/rumps-storage/src/wal.rs` module
@@ -325,29 +346,43 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Allocate new pages on demand
   - Reclaim pages on node deletion
 
-### 4.3 Storage Engine with WAL Integration
+### 4.3 AsyncStorageEngine Implementation
 - [ ] Create `crates/rumps-storage/src/engine.rs` module
-- [ ] Define `StorageEngine` struct:
-  - File handle for data file
-  - Page cache
-  - Page allocator
-  - WAL writer/reader
-  - Root page ID for each global (only `Name::Global` variants)
-- [ ] Implement `StorageEngine::open(path: &Path) -> Result<Self>`:
-  - Open data file
+- [ ] Define `AsyncStorageEngine` trait:
+  ```rust
+  #[async_trait]
+  pub trait AsyncStorageEngine: Send + Sync {
+      async fn read_node(&self, id: NodeId) -> Result<Node>;
+      async fn write_node(&self, id: NodeId, node: &Node) -> Result<()>;
+      async fn allocate_page(&self) -> Result<NodeId>;
+      async fn deallocate_page(&self, id: NodeId) -> Result<()>;
+      async fn flush(&self) -> Result<()>;
+      async fn metadata(&self) -> StorageMetadata;
+  }
+  ```
+- [ ] Implement `FileStorageEngine` struct:
+  - `data_file: Arc<RwLock<tokio::fs::File>>` - async file handle
+  - `wal: Arc<WalWriter>` - write-ahead log
+  - `cache: Arc<PageCache>` - LRU page cache
+  - `page_allocator: Arc<PageAllocator>` - free page management
+  - `config: StorageConfig` - configuration (page size, cache size, sync mode)
+- [ ] Implement `FileStorageEngine::open(path: &Path, config: StorageConfig) -> Result<Self>`:
+  - Open data file with async I/O
   - Initialize page cache and allocator
   - Open WAL file
   - Run WAL recovery if needed
-- [ ] Implement `StorageEngine::create(path: &Path) -> Result<Self>`
-- [ ] Implement `StorageEngine::write_page(page_id: PageId, data: &[u8])`:
-  - Write to page cache (mark dirty)
-  - DO NOT immediately flush (handled by checkpointing)
-- [ ] Implement `StorageEngine::read_page(page_id: PageId) -> Result<Vec<u8>>`
+- [ ] Implement `FileStorageEngine::create(path: &Path, config: StorageConfig) -> Result<Self>`
+- [ ] Implement async storage methods:
+  - `async fn read_node(&self, id: NodeId) -> Result<Node>` - read from disk
+  - `async fn write_node(&self, id: NodeId, node: &Node) -> Result<()>` - write to WAL + cache
+  - `async fn allocate_page(&self) -> Result<NodeId>` - get free page
+  - `async fn deallocate_page(&self, id: NodeId) -> Result<()>` - mark page as free
+  - `async fn flush(&self) -> Result<()>` - flush dirty pages to disk
 - [ ] Add WAL-aware methods:
-  - `begin_transaction() -> TransactionId`
-  - `log_operation(txn_id, operation)` - append to WAL
-  - `commit_transaction(txn_id)` - write commit record, fsync WAL
-  - `abort_transaction(txn_id)` - write abort record
+  - `async fn begin_transaction() -> TransactionId`
+  - `async fn log_operation(txn_id, operation)` - append to WAL
+  - `async fn commit_transaction(txn_id)` - write commit record, fsync WAL
+  - `async fn abort_transaction(txn_id)` - write abort record
 
 ### 4.4 Global Management
 - [ ] Define `GlobalRegistry` struct:
@@ -359,23 +394,32 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [ ] Add tests for multi-global persistence
 - [ ] Add tests verifying Local variables are NOT persisted
 
-### 4.5 Persistence Integration with WAL
-- [ ] Integrate `BTree` with `StorageEngine` and WAL:
-  - Load nodes from disk on access (only for `Name::Global`)
-  - Keep `Name::Local` entirely in memory
-  - Lazy loading of child nodes
-  - Modified nodes logged to WAL (not immediately written to disk)
-- [ ] Implement `PersistedBTree` wrapper:
-  - Holds reference to `StorageEngine`
-  - Implements same MUMPS operations as `BTree`
-  - Manages node loading/storing transparently
-  - Filters out `Name::Local` from persistence operations
-  - All writes go through WAL first
+### 4.5 BTree Persistence Integration
+- [ ] Update `BTree` struct to support disk persistence:
+  - Add `storage: Option<Arc<dyn AsyncStorageEngine>>` field
+  - Add `DiskNodeAllocator` that delegates to storage engine
+- [ ] Implement `BTree::with_storage(min_degree, storage) -> Result<Self>`:
+  - Initialize with storage engine
+  - Use `DiskNodeAllocator` instead of `IncrementingAllocator`
+  - Load root nodes from disk for existing database
+- [ ] Update node access methods for cache + disk:
+  - `async fn load_node(&self, id: NodeId) -> Result<Node>`:
+    - Check cache first (`nodes` HashMap)
+    - Load from disk if miss (only for `Name::Global`)
+    - Keep `Name::Local` entirely in memory
+    - Add to cache with LRU eviction
+  - `async fn save_node(&self, id: NodeId, node: Node) -> Result<()>`:
+    - Update cache
+    - Write to WAL + disk (only for `Name::Global`)
+- [ ] Integrate WAL with all write operations:
+  - All modifications logged to WAL first
+  - Writes marked dirty in page cache
+  - Actual disk writes happen on flush/checkpoint
 - [ ] Add checkpoint/flush logic:
-  - `checkpoint()` method to flush dirty pages (only `Name::Global`)
-  - Periodic background checkpointing
+  - `async fn checkpoint(&self) -> Result<()>` - flush dirty pages
+  - Periodic background checkpointing task
   - Write checkpoint record to WAL
-- [ ] Add `close()` method to clean up resources (flush + close WAL)
+- [ ] Add `async fn close(self) -> Result<()>` - flush and close storage
 
 ---
 
@@ -412,12 +456,21 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 ### 5.2 Async Database Handle
 - [ ] Create `crates/rumps-storage/src/database.rs` module
 - [ ] Define `Database` struct as main entry point:
-  - Wraps `StorageEngine` with `Arc<Mutex<_>>` for exclusive write access during commits
-  - Manages multiple globals and locals
-  - Separate storage for `Name::Global` (persistent) and `Name::Local` (ephemeral)
-  - Transaction manager
-- [ ] Implement `Database::open(path: &Path) -> Result<Self>` (sync, returns async-compatible handle)
-- [ ] Implement `Database::create(path: &Path) -> Result<Self>` (sync, returns async-compatible handle)
+  ```rust
+  pub struct Database {
+      btree: Arc<BTree>,
+      transaction_manager: Arc<TransactionManager>,
+  }
+  ```
+  - Uses `Arc<BTree>` for thread-safe sharing
+  - B-tree handles both `Name::Global` (persistent) and `Name::Local` (ephemeral)
+  - Transaction manager coordinates concurrent transactions
+- [ ] Implement `Database::open(path: &Path) -> Result<Self>`:
+  - Create `FileStorageEngine` with config
+  - Initialize `BTree::with_storage(min_degree, storage)`
+  - Wrap in Arc for sharing
+- [ ] Implement `Database::create(path: &Path) -> Result<Self>`
+- [ ] Implement `Database::in_memory() -> Result<Self>` for testing
 - [ ] Implement transaction API:
   - `async fn transaction<F, R>(&self, f: F) -> Result<R>` where `F: FnOnce(&mut Transaction) -> Future<Result<R>>`
   - Auto-commit on Ok, auto-rollback on Err
