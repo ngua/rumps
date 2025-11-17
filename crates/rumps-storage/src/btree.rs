@@ -92,11 +92,11 @@ impl NodeAllocator for IncrementingAllocator {
 /// Variable names are stored in a `BTreeMap` to support ordered iteration,
 /// enabling MUMPS `$ORDER` semantics over variable names themselves.
 ///
-/// ## RwLock<HashMap> for nodes
+/// ## `RwLock<HashMap>` for nodes
 /// Nodes are stored in an async-aware `RwLock<HashMap>` because:
-/// - NodeIds are arbitrary internal references (like page IDs)
-/// - Logical ordering is maintained by the tree structure, not NodeId values
-/// - RwLock enables concurrent reads with exclusive writes
+/// - `NodeId`s are arbitrary internal references (like page IDs)
+/// - Logical ordering is maintained by the tree structure, not `NodeId` values
+/// - `RwLock` enables concurrent reads with exclusive writes
 /// - Async from day one prevents breaking API changes when adding disk I/O
 ///
 /// In Phase 2-3, this is pure in-memory storage. In Phase 4, it becomes
@@ -104,7 +104,7 @@ impl NodeAllocator for IncrementingAllocator {
 ///
 /// # Thread Safety
 ///
-/// The BTree is designed to be shared across threads using `Arc<BTree>`.
+/// The `BTree` is designed to be shared across threads using `Arc<BTree>`.
 /// All operations use interior mutability via `RwLock`, allowing multiple
 /// concurrent readers with exclusive writers.
 ///
@@ -130,8 +130,8 @@ impl NodeAllocator for IncrementingAllocator {
 pub struct BTree {
     /// Maps variable names to root nodes (maintains sorted order).
     ///
-    /// This BTreeMap enables ordered iteration over variable names,
-    /// supporting MUMPS `$ORDER` semantics. Both Global and Local
+    /// This `BTreeMap` enables ordered iteration over variable names,
+    /// supporting MUMPS `$ORDER` semantics. Both `Global` and `Local`
     /// variables are stored in the same map with consistent ordering.
     roots: RwLock<BTreeMap<Name, NodeId>>,
 
@@ -143,9 +143,9 @@ pub struct BTree {
     /// Uses `tokio::sync::RwLock` for async-compatible concurrent access:
     /// - Multiple readers can access simultaneously
     /// - Writers get exclusive access
-    /// - Works seamlessly with async/await
+    /// - Works seamlessly with `async`/`await`
     ///
-    /// NodeIds have no semantic ordering—they're internal references.
+    /// `NodeId`s have no semantic ordering—they're internal references.
     /// The tree's logical ordering is maintained by parent-child links
     /// and sorted keys within each node.
     nodes: RwLock<HashMap<NodeId, Node>>,
@@ -190,20 +190,19 @@ impl BTree {
     /// # });
     /// ```
     pub fn new(min_degree: usize) -> Result<Self> {
-        if min_degree < 2 {
-            return Err(StorageError::InvalidConfiguration(
+        match min_degree >= 2 {
+            true => Ok(Self {
+                roots: RwLock::new(BTreeMap::new()),
+                nodes: RwLock::new(HashMap::new()),
+                allocator: Arc::new(IncrementingAllocator::new()),
+                min_degree,
+                max_memory_bytes: None,
+                stats: RwLock::new(BTreeStats::default()),
+            }),
+            false => Err(StorageError::InvalidConfiguration(
                 "min_degree must be >= 2".to_string(),
-            ));
+            )),
         }
-
-        Ok(Self {
-            roots: RwLock::new(BTreeMap::new()),
-            nodes: RwLock::new(HashMap::new()),
-            allocator: Arc::new(IncrementingAllocator::new()),
-            min_degree,
-            max_memory_bytes: None,
-            stats: RwLock::new(BTreeStats::default()),
-        })
     }
 
     /// Creates a new B-tree with custom configuration.
@@ -433,26 +432,26 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_readers() {
         use tokio::task;
+        use futures::future;
 
         let btree = Arc::new(BTree::new(3).unwrap());
-        let mut handles = vec![];
 
         // Spawn 10 concurrent reader tasks
-        for _ in 0..10 {
-            let btree_clone = Arc::clone(&btree);
-            let handle = task::spawn(async move {
-                for _ in 0..100 {
-                    let _count = btree_clone.node_count().await;
-                    let _stats = btree_clone.stats().await;
-                }
-            });
-            handles.push(handle);
-        }
+        let handles = (0..10)
+            .map(|_| {
+                let btree_clone = Arc::clone(&btree);
+                task::spawn(async move {
+                    future::join_all((0..100).map(|_| async {
+                        let _count = btree_clone.node_count().await;
+                        let _stats = btree_clone.stats().await;
+                    }))
+                    .await;
+                })
+            })
+            .collect::<Vec<_>>();
 
         // Wait for all tasks to complete
-        for handle in handles {
-            handle.await.unwrap();
-        }
+        future::try_join_all(handles).await.unwrap();
     }
 
     #[tokio::test]
