@@ -102,6 +102,36 @@ impl NodeAllocator for IncrementingAllocator {
 /// In Phase 2-3, this is pure in-memory storage. In Phase 4, it becomes
 /// a page cache with lazy loading from disk.
 ///
+/// # Scalability Considerations
+///
+/// ## Root Index Design
+///
+/// The root index (`roots: RwLock<BTreeMap<Name, NodeId>>`) keeps all variable
+/// names in memory. This design assumes the typical MUMPS deployment pattern:
+///
+/// **Typical**: Hundreds of globals, each with millions of child records
+/// - Example: `^PATIENT` with 5 million patient records
+/// - Example: `^ORDER` with 10 million order records
+/// - Root index: ~100-500 variable names (~20 KB in memory)
+///
+/// **Not Typical**: Millions of distinct globals
+/// - This would require gigabytes of memory just for root names
+/// - Would create lock contention on the single `RwLock`
+///
+/// Real-world MUMPS deployments (hospitals, banks, etc.) follow the "hundreds
+/// of globals" pattern, where the data volume comes from deep hierarchical
+/// subscripting within each global, not from proliferating global names.
+///
+/// ## When This Design Breaks Down
+///
+/// If you need millions of distinct globals, you would need:
+/// - Hierarchical root index (disk-backed B-tree of variable names)
+/// - Sharding/partitioning of the namespace
+/// - Lazy loading of root mappings with an LRU cache
+/// - Granular locking (lock striping or optimistic concurrency)
+///
+/// See `.slop/bottlenecks.md` for detailed analysis of scalability limits.
+///
 /// # Thread Safety
 ///
 /// The `BTree` is designed to be shared across threads using `Arc<BTree>`.
@@ -190,18 +220,19 @@ impl BTree {
     /// # });
     /// ```
     pub fn new(min_degree: usize) -> Result<Self> {
-        match min_degree >= 2 {
-            true => Ok(Self {
+        if min_degree >= 2 {
+            Ok(Self {
                 roots: RwLock::new(BTreeMap::new()),
                 nodes: RwLock::new(HashMap::new()),
                 allocator: Arc::new(IncrementingAllocator::new()),
                 min_degree,
                 max_memory_bytes: None,
                 stats: RwLock::new(BTreeStats::default()),
-            }),
-            false => Err(StorageError::InvalidConfiguration(
+            })
+        } else {
+            Err(StorageError::InvalidConfiguration(
                 "min_degree must be >= 2".to_string(),
-            )),
+            ))
         }
     }
 
