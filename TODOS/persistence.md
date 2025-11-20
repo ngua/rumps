@@ -191,26 +191,30 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 **Design Principle**: All APIs are async from day one to avoid breaking changes when adding disk persistence in Phase 4. Uses `Arc<BTree>` pattern for thread-safe sharing.
 
-### 2.1 B-Tree Structure (rumps-storage)
-- [ ] Create `crates/rumps-storage/src/error.rs` with `StorageError` enum
-- [ ] Define `BTree` struct with:
+### 2.1 B-Tree Structure (rumps-storage) ✅ COMPLETE
+- [x] Create `crates/rumps-storage/src/error.rs` with `StorageError` enum
+- [x] Define `BTree` struct with:
   - `roots: RwLock<BTreeMap<Name, NodeId>>` - ordered variable registry
   - `nodes: RwLock<HashMap<NodeId, Node>>` - node storage pool
-  - `allocator: Arc<dyn NodeAllocator>` - flexible ID allocation
+  - `allocator: Arc<dyn NodeAllocator>` - flexible ID allocation (with `#[async_trait]`)
   - `min_degree: usize` - B-tree branching factor
   - `max_memory_bytes: Option<usize>` - optional memory limit
   - `stats: RwLock<BTreeStats>` - metrics tracking
-  - `storage: Option<Arc<dyn AsyncStorageEngine>>` (Phase 4)
-- [ ] Implement `BTree::new(min_degree) -> Result<Self>` constructor with validation
-- [ ] Implement `BTree::with_config(min_degree, max_memory_bytes) -> Result<Self>`
-- [ ] Implement `async fn find_node(&self, id: NodeId) -> Result<Node>` - navigate tree
-- [ ] Implement `async fn split_node(&self, id: NodeId) -> Result<()>` - split full nodes
-- [ ] Implement `async fn merge_nodes(&self, left: NodeId, right: NodeId) -> Result<()>`
-- [ ] Add `BTreeStats` tracking (splits, merges, memory usage)
-- [ ] Add `NodeAllocator` trait and `IncrementingAllocator` implementation
+  - `storage: Option<Arc<dyn AsyncStorageEngine>>` (for Phase 4)
+- [x] Implement `BTree::new(min_degree) -> Result<Self>` constructor with validation
+- [x] Implement `BTree::with_config(min_degree, max_memory_bytes) -> Result<Self>`
+- [x] Implement `Default` trait (min_degree = 3)
+- [x] Implement accessor methods: `min_degree()`, `node_count()`, `has_memory_limit()`, `stats()`, `check_memory_limit()`
+- [x] Add `BTreeStats` tracking (height, node_count, key_count, splits, merges, memory usage)
+- [x] Add `NodeAllocator` trait with `#[async_trait]` and `IncrementingAllocator` implementation
+- [x] Add comprehensive unit tests (12 tests including concurrent access tests)
+- [x] Add complete rustdoc with examples and scalability documentation
+- [ ] Implement `async fn find_node(&self, id: NodeId) -> Result<Node>` - navigate tree (Phase 2.2+)
+- [ ] Implement `async fn split_node(&self, id: NodeId) -> Result<()>` - split full nodes (Phase 2.2+)
+- [ ] Implement `async fn merge_nodes(&self, left: NodeId, right: NodeId) -> Result<()>` (Phase 2.2+)
 
 ### 2.2 MUMPS Operations - SET
-- [ ] Implement `async fn set(&self, name: &Name, key: &Key, value: Value, txn: Option<&TransactionContext>) -> Result<()>`:
+- [ ] Implement `async fn set_with_context(&self, name: &Name, key: &Key, value: Value, context: Option<&TransactionContext>) -> Result<()>`:
   - Use `load_node()` for cache-aware node access
   - Navigate to appropriate leaf node
   - Insert/update key-value pair
@@ -218,6 +222,9 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Handle node splits and tree growth
   - Use `save_node()` to persist changes
   - Update `BTreeStats` (key count, splits)
+  - If context is Some, check transaction isolation level and track writes
+- [ ] Implement `async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()>`:
+  - Simply delegate to `set_with_context(name, key, value, None)`
 - [ ] Add async tests for SET on empty tree (both Global and Local)
 - [ ] Add async tests for SET with existing keys (updates)
 - [ ] Add async tests for SET triggering node splits
@@ -226,17 +233,22 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [ ] Add concurrent SET tests with `Arc<BTree>`
 
 ### 2.3 MUMPS Operations - GET
-- [ ] Implement `async fn get(&self, name: &Name, key: &Key, txn: Option<&TransactionContext>) -> Result<Option<Value>>`:
+- [ ] Implement `async fn get_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<Option<Value>>`:
   - Use `load_node()` for cache-aware node access
   - Navigate tree following key path
-  - Return cloned value if exists
+  - Return cloned value if exists (see note below on value cloning)
+  - If context is Some, read from transaction's snapshot timestamp and see only committed values as of transaction start
+- [ ] Implement `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`:
+  - Simply delegate to `get_with_context(name, key, None)`
 - [ ] Add async tests for GET on non-existent keys
 - [ ] Add async tests for GET on existing keys
 - [ ] Add async tests for GET on partial paths (should return None if no value at that node)
 - [ ] Add concurrent GET tests during active writes
 
+**Note on Value Cloning**: All read operations return owned `Value` rather than references due to async lock lifetime constraints. Values must be cloned from the `RwLock` guard before it drops. This follows standard patterns in async concurrent data structures (like `dashmap::DashMap`). MUMPS values are typically small, making cloning cost acceptable. See `TODOS/btree.md` "Value Cloning and Lock Semantics" section for detailed rationale and future optimization strategies.
+
 ### 2.4 MUMPS Operations - KILL
-- [ ] Implement `async fn kill(&self, name: &Name, key: &Key, txn: Option<&TransactionContext>) -> Result<()>`:
+- [ ] Implement `async fn kill_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<()>`:
   - Use `load_node()` for cache-aware node access
   - Navigate to node
   - Delete entire subtree rooted at key
@@ -244,23 +256,32 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Handle node merging and tree shrinking
   - Use `save_node()` to persist changes
   - Update `BTreeStats` (key count, merges)
+  - If context is Some, track deletions in transaction context
+- [ ] Implement `async fn kill(&self, name: &Name, key: &Key) -> Result<()>`:
+  - Simply delegate to `kill_with_context(name, key, None)`
 - [ ] Add async tests for KILL leaf nodes (both Global and Local)
 - [ ] Add async tests for KILL intermediate nodes (removes subtree)
 - [ ] Add async tests for KILL root
 - [ ] Verify tree structure remains valid after KILL
 
 ### 2.5 MUMPS Operations - DATA
-- [ ] Implement `async fn data(&self, name: &Name, key: &Key, txn: Option<&TransactionContext>) -> Result<DataResult>`:
+- [ ] Implement `async fn data_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<DataResult>`:
   - Use `load_node()` for cache-aware node access
   - Return enum: `NoData`, `HasValue`, `HasDescendants`, `Both`
+  - If context is Some, use transaction's snapshot isolation
+- [ ] Implement `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>`:
+  - Simply delegate to `data_with_context(name, key, None)`
 - [ ] Add async tests for all four DATA states
 - [ ] Verify correct behavior for partial paths
 
 ### 2.6 MUMPS Operations - ORDER (Iterator)
-- [ ] Implement `async fn order(&self, name: &Name, key: &Key, txn: Option<&TransactionContext>) -> Result<Option<Key>>`:
+- [ ] Implement `async fn order_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<Option<Key>>`:
   - Use `load_node()` for cache-aware node access
   - Find next key in lexicographic order
   - Handle navigating between leaf nodes
+  - If context is Some, use transaction's snapshot isolation
+- [ ] Implement `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>`:
+  - Simply delegate to `order_with_context(name, key, None)`
 - [ ] Implement `BTreeIterator` with async next() method
 - [ ] Add async tests for ORDER on empty tree
 - [ ] Add async tests for ORDER returning next sibling
@@ -443,11 +464,11 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - `commit() -> Result<()>` - validate, write to WAL, apply changes
   - `rollback()` - discard buffered writes
 - [ ] Add MUMPS operations on `Transaction`:
-  - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>`
-  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`
-  - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>`
-  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>`
-  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>`
+  - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>` - delegates to `btree.set_with_context(name, key, value, Some(&self.context))`
+  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get_with_context(name, key, Some(&self.context))`
+  - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>` - delegates to `btree.kill_with_context(name, key, Some(&self.context))`
+  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data_with_context(name, key, Some(&self.context))`
+  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order_with_context(name, key, Some(&self.context))`
 - [ ] Enforce transaction rules:
   - Writes to `Name::Global` MUST be in transaction (return error otherwise)
   - `Name::Local` modifications work outside transactions
@@ -483,12 +504,13 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
     }).await?;
     ```
 - [ ] Add read-only operations (no transaction required):
-  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` (snapshot read)
-  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` (snapshot read)
-  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` (snapshot read)
+  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get()` (simple snapshot read)
+  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data()`
+  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order()`
 - [ ] Add local variable operations (no transaction required):
-  - `async fn set_local(&self, name: &Name, key: &Key, value: Value) -> Result<()>`
+  - `async fn set_local(&self, name: &Name, key: &Key, value: Value) -> Result<()>` - delegates to `btree.set()`
   - Must verify `name.is_local()`, return error if global
+  - Note: Locals use the simple `set()` method, not `set_with_context()`, since they never participate in transactions
 
 ### 5.3 API Documentation
 - [ ] Add rustdoc comments to all public types
@@ -622,10 +644,22 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 1 Complete! Ready for Phase 2 (In-Memory B-Tree Implementation)
-**Completed Checkboxes**: 24 / ~160
+**Current Phase**: Phase 2.1 Complete! Ready for Phase 2.2 (MUMPS Operations - SET)
+**Completed Checkboxes**: 33 / ~160
 
-**Recent Changes** (2025-11-16 - Today's Progress):
+**Recent Changes** (2025-11-18 - Phase 2.1 Complete):
+- ✅ Completed Phase 2.1: B-Tree Structure - Initial Setup
+  - Created `crates/rumps-storage/src/error.rs` with comprehensive error handling
+  - Created `crates/rumps-storage/src/btree.rs` with full structure and documentation
+  - Implemented `BTreeStats`, `NodeAllocator` trait, `IncrementingAllocator`
+  - Implemented `BTree` struct with all accessor methods and configuration options
+  - Added 12 unit tests including concurrent access tests
+  - Updated `src/lib.rs` with module declarations and exports
+  - Configured `Cargo.toml` with all dependencies (async-trait, tokio, futures, etc.)
+  - All tests passing, clippy clean, documentation complete
+  - Added scalability considerations and typical MUMPS deployment pattern documentation
+
+**Recent Changes** (2025-11-16):
 - ✅ Extended `Value` and `Subscript` types with `Char` and `Json` variants
 - ✅ Updated collation order: Boolean < Number < Char < String < Json
 - ✅ Fixed serialization for JSON compatibility with bincode

@@ -205,19 +205,31 @@ All dependencies configured: `async-trait`, `tokio`, `bincode`, `serde`, `thiser
 ### Phase 2.2-2.6: Tree Operations
 Will add async tree operations (SET, GET, KILL, DATA, ORDER) to the `BTree` struct.
 
-Each operation has two variants:
-- **Base method**: Simple, transaction-free version for common cases (e.g., `get()`, `set()`)
-- **Context method**: Transaction-aware version for Phase 5 integration (e.g., `get_with_context()`, `set_with_context()`)
+Each operation has two methods, with the simple version delegating to the context version:
+- **Context method**: Full implementation with optional transaction context (e.g., `get_with_context()`, `set_with_context()`)
+- **Simple method**: Convenience wrapper that calls context method with `None` (e.g., `get()`, `set()`)
 
-This design keeps the common case simple while supporting transactional operations when needed:
+This design avoids code duplication while keeping the common case simple:
 ```rust
-// Simple operations (most common, used for Locals and non-transactional reads)
-pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> { ... }
-pub async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()> { ... }
+// Full implementation with optional transaction context
+pub async fn get_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<Option<Value>> {
+    // Full implementation here
+    // If context is Some, use transaction snapshot isolation
+}
 
-// Transaction-aware operations (used by Transaction struct in Phase 5)
-pub async fn get_with_context(&self, name: &Name, key: &Key, context: &TransactionContext) -> Result<Option<Value>> { ... }
-pub async fn set_with_context(&self, name: &Name, key: &Key, value: Value, context: &TransactionContext) -> Result<()> { ... }
+pub async fn set_with_context(&self, name: &Name, key: &Key, value: Value, context: Option<&TransactionContext>) -> Result<()> {
+    // Full implementation here
+    // If context is Some, track writes in transaction
+}
+
+// Simple convenience wrappers (delegate to context versions with None)
+pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
+    self.get_with_context(name, key, None).await
+}
+
+pub async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()> {
+    self.set_with_context(name, key, value, None).await
+}
 ```
 
 The public API in Phase 5 (`Database` and `Transaction` structs) will hide this distinction from users.
