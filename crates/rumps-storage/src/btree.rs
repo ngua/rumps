@@ -353,6 +353,32 @@ impl BTree {
             None => Ok(()),
         }
     }
+
+    /// Finds and returns a node by its ID.
+    ///
+    /// This is an internal helper method used by tree traversal operations.
+    /// It looks up the node in the in-memory `HashMap` and clones it.
+    ///
+    /// In Phase 4, this will be replaced by `load_node()` which checks the
+    /// cache first and loads from disk if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::NodeNotFound` if the node doesn't exist.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Internal use only - not exposed in public API
+    /// let node = btree.find_node(node_id).await?;
+    /// ```
+    async fn find_node(&self, id: NodeId) -> Result<Node> {
+        let nodes = self.nodes.read().await;
+        nodes
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| StorageError::NodeNotFound(id))
+    }
 }
 
 impl Default for BTree {
@@ -520,5 +546,43 @@ mod tests {
         assert_eq!(btree.min_degree(), 100);
 
         // Future: Insert millions of keys and verify tree properties
+    }
+
+    #[tokio::test]
+    async fn test_find_node_not_found() {
+        let btree = BTree::new(3).unwrap();
+        let node_id = NodeId::from(42);
+
+        let result = btree.find_node(node_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::NodeNotFound(id)) => {
+                assert_eq!(id, node_id);
+            }
+            _ => panic!("Expected NodeNotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_find_node_exists() {
+        let btree = BTree::new(3).unwrap();
+
+        // Manually insert a node into the nodes HashMap
+        let node_id = NodeId::from(1);
+        let test_node = Node::new_leaf();
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(node_id, test_node.clone());
+        }
+
+        // Now find_node should succeed
+        let result = btree.find_node(node_id).await;
+        assert!(result.is_ok());
+        let found_node = result.unwrap();
+
+        // Verify we got the same node back
+        assert_eq!(found_node.is_leaf, test_node.is_leaf);
+        assert_eq!(found_node.keys.len(), test_node.keys.len());
     }
 }

@@ -209,7 +209,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [x] Add `NodeAllocator` trait with `#[async_trait]` and `IncrementingAllocator` implementation
 - [x] Add comprehensive unit tests (12 tests including concurrent access tests)
 - [x] Add complete rustdoc with examples and scalability documentation
-- [ ] Implement `async fn find_node(&self, id: NodeId) -> Result<Node>` - navigate tree (Phase 2.2+)
+- [x] Implement `async fn find_node(&self, id: NodeId) -> Result<Node>` - navigate tree
 - [ ] Implement `async fn split_node(&self, id: NodeId) -> Result<()>` - split full nodes (Phase 2.2+)
 - [ ] Implement `async fn merge_nodes(&self, left: NodeId, right: NodeId) -> Result<()>` (Phase 2.2+)
 
