@@ -526,6 +526,133 @@ impl BTree {
             }
         }
     }
+
+    /// Merges two underfull sibling nodes into one node.
+    ///
+    /// This operation is the inverse of `split_node` and is used when nodes
+    /// become underfull (fewer than `min_degree - 1` keys). The merge combines:
+    /// - All keys from the left node
+    /// - The separator key (and its value) from the parent
+    /// - All keys from the right node
+    ///
+    /// After merging, the right node is deallocated and the left node contains
+    /// all combined keys and values.
+    ///
+    /// # Design Note: B-tree vs B+-tree Semantics
+    ///
+    /// Following **B-tree semantics**, the separator value from the parent is
+    /// included in the merge. This is necessary because internal nodes contain
+    /// data in B-trees (unlike B+-trees where internal nodes only contain keys).
+    ///
+    /// The caller is responsible for:
+    /// 1. Removing the separator key from the parent
+    /// 2. Updating the parent's child pointer to reference only the merged node
+    ///
+    /// # B-tree Merge Example
+    ///
+    /// Before merge:
+    /// ```text
+    /// Parent: [..., 30, ...]
+    ///             /  \
+    /// Left:   [10, 20]
+    /// Right:  [40, 50]
+    /// ```
+    ///
+    /// After merge (left node):
+    /// ```text
+    /// Merged: [10, 20, 30, 40, 50]
+    /// ```
+    ///
+    /// # Parameters
+    ///
+    /// - `left_id`: ID of the left sibling node (will contain merged result)
+    /// - `separator_key`: The key from the parent between these siblings
+    /// - `separator_value`: The value associated with the separator key
+    /// - `right_id`: ID of the right sibling node (will be deallocated)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Either node doesn't exist (`NodeNotFound`)
+    /// - Nodes are incompatible (one leaf, one internal)
+    /// - Deallocation fails
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Internal use only - used during KILL operations
+    /// btree.merge_nodes(left_id, separator_key, separator_value, right_id).await?;
+    /// // Caller must remove separator from parent and update child pointer
+    /// ```
+    async fn merge_nodes(
+        &self,
+        left: NodeId,
+        separator_key: Key,
+        separator_value: NodeData,
+        right: NodeId,
+    ) -> Result<()> {
+        // Find both nodes
+        let left_node = self.find_node(left).await?;
+        let right_node = self.find_node(right).await?;
+
+        // Verify they're compatible (both leaf or both internal)
+        if left_node.is_leaf != right_node.is_leaf {
+            Err(StorageError::InvalidOperation(
+                "Cannot merge leaf and internal nodes".to_string(),
+            ))
+        } else {
+            // Destructure to take ownership of components
+            let Node {
+                keys: mut left_keys,
+                children: mut left_children,
+                values: mut left_values,
+                is_leaf,
+            } = left_node;
+
+            let Node {
+                keys: right_keys,
+                children: right_children,
+                values: right_values,
+                is_leaf: _,
+            } = right_node;
+
+            // Combine: left + separator + right
+            left_keys.push(separator_key);
+            left_keys.extend(right_keys);
+
+            left_values.push(separator_value);
+            left_values.extend(right_values);
+
+            // For internal nodes, merge children
+            if !is_leaf {
+                left_children.extend(right_children);
+            }
+
+            // Create merged node
+            let merged_node = Node {
+                keys: left_keys,
+                children: left_children,
+                values: left_values,
+                is_leaf,
+            };
+
+            // Write merged node and remove right node
+            let mut nodes = self.nodes.write().await;
+            nodes.insert(left, merged_node);
+            nodes.remove(&right);
+            drop(nodes);
+
+            // Deallocate right node ID
+            self.allocator.deallocate(right).await?;
+
+            // Update statistics
+            let mut stats = self.stats.write().await;
+            stats.merges += 1;
+            stats.node_count = stats.node_count.saturating_sub(1);
+
+            Ok(())
+        }
+    }
 }
 
 impl Default for BTree {
@@ -1069,5 +1196,452 @@ mod tests {
         let stats = btree.stats().await;
         assert_eq!(stats.splits, 2);
         assert_eq!(stats.node_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_merge_nodes_leaf() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create two leaf nodes and a separator
+        let left_id = NodeId::from(100);
+        let left_node = Node {
+            keys: vec![
+                Key::from(vec![10.into()]),
+                Key::from(vec![20.into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::Integer(10)),
+                NodeData::with_value(Value::Integer(20)),
+            ],
+            is_leaf: true,
+        };
+
+        let right_id = NodeId::from(101);
+        let right_node = Node {
+            keys: vec![
+                Key::from(vec![40.into()]),
+                Key::from(vec![50.into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::Integer(40)),
+                NodeData::with_value(Value::Integer(50)),
+            ],
+            is_leaf: true,
+        };
+
+        let separator_key = Key::from(vec![30.into()]);
+        let separator_value = NodeData::with_value(Value::Integer(30));
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(left_id, left_node);
+            nodes.insert(right_id, right_node);
+        }
+
+        // Merge the nodes
+        let result = btree.merge_nodes(left_id, separator_key, separator_value, right_id).await;
+        assert!(result.is_ok());
+
+        // Verify merged node contains all keys in order
+        let merged = btree.find_node(left_id).await.unwrap();
+        assert_eq!(merged.keys.len(), 5);
+        assert_eq!(merged.keys[0], Key::from(vec![10.into()]));
+        assert_eq!(merged.keys[1], Key::from(vec![20.into()]));
+        assert_eq!(merged.keys[2], Key::from(vec![30.into()]));
+        assert_eq!(merged.keys[3], Key::from(vec![40.into()]));
+        assert_eq!(merged.keys[4], Key::from(vec![50.into()]));
+        assert!(merged.is_leaf);
+
+        // Verify all values preserved
+        assert_eq!(merged.values.len(), 5);
+        assert_eq!(merged.values[0].value, Some(Value::Integer(10)));
+        assert_eq!(merged.values[1].value, Some(Value::Integer(20)));
+        assert_eq!(merged.values[2].value, Some(Value::Integer(30)));
+        assert_eq!(merged.values[3].value, Some(Value::Integer(40)));
+        assert_eq!(merged.values[4].value, Some(Value::Integer(50)));
+
+        // Verify right node was removed
+        let result = btree.find_node(right_id).await;
+        assert!(result.is_err());
+
+        // Verify stats
+        let stats = btree.stats().await;
+        assert_eq!(stats.merges, 1);
+    }
+
+    #[tokio::test]
+    async fn test_merge_nodes_internal_with_children() {
+        use rumps_types::{Key, NodeData};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create two internal nodes with children
+        let left_id = NodeId::from(100);
+        let left_node = Node {
+            keys: vec![
+                Key::from(vec![10.into()]),
+                Key::from(vec![20.into()]),
+            ],
+            children: vec![
+                NodeId::from(1),
+                NodeId::from(2),
+                NodeId::from(3),
+            ],
+            values: vec![
+                NodeData::empty(),
+                NodeData::empty(),
+            ],
+            is_leaf: false,
+        };
+
+        let right_id = NodeId::from(101);
+        let right_node = Node {
+            keys: vec![
+                Key::from(vec![40.into()]),
+                Key::from(vec![50.into()]),
+            ],
+            children: vec![
+                NodeId::from(4),
+                NodeId::from(5),
+                NodeId::from(6),
+            ],
+            values: vec![
+                NodeData::empty(),
+                NodeData::empty(),
+            ],
+            is_leaf: false,
+        };
+
+        let separator_key = Key::from(vec![30.into()]);
+        let separator_value = NodeData::empty();
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(left_id, left_node);
+            nodes.insert(right_id, right_node);
+        }
+
+        // Merge the nodes
+        btree.merge_nodes(left_id, separator_key, separator_value, right_id).await.unwrap();
+
+        // Verify merged node
+        let merged = btree.find_node(left_id).await.unwrap();
+        assert_eq!(merged.keys.len(), 5);
+        assert_eq!(merged.children.len(), 6);
+        assert!(!merged.is_leaf);
+
+        // Verify children are merged correctly
+        assert_eq!(merged.children[0], NodeId::from(1));
+        assert_eq!(merged.children[1], NodeId::from(2));
+        assert_eq!(merged.children[2], NodeId::from(3));
+        assert_eq!(merged.children[3], NodeId::from(4));
+        assert_eq!(merged.children[4], NodeId::from(5));
+        assert_eq!(merged.children[5], NodeId::from(6));
+    }
+
+    #[tokio::test]
+    async fn test_merge_nodes_incompatible_types() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create one leaf and one internal node
+        let left_id = NodeId::from(100);
+        let left_node = Node {
+            keys: vec![Key::from(vec![10.into()])],
+            children: vec![],
+            values: vec![NodeData::with_value(Value::Integer(10))],
+            is_leaf: true,
+        };
+
+        let right_id = NodeId::from(101);
+        let right_node = Node {
+            keys: vec![Key::from(vec![20.into()])],
+            children: vec![NodeId::from(1), NodeId::from(2)],
+            values: vec![NodeData::empty()],
+            is_leaf: false,
+        };
+
+        let separator_key = Key::from(vec![15.into()]);
+        let separator_value = NodeData::empty();
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(left_id, left_node);
+            nodes.insert(right_id, right_node);
+        }
+
+        // Try to merge - should fail
+        let result = btree.merge_nodes(left_id, separator_key, separator_value, right_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::InvalidOperation(msg)) => {
+                assert!(msg.contains("Cannot merge leaf and internal nodes"));
+            }
+            _ => panic!("Expected InvalidOperation error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_nodes_left_not_found() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        let left_id = NodeId::from(100);
+        let right_id = NodeId::from(101);
+
+        // Only insert right node
+        let right_node = Node {
+            keys: vec![Key::from(vec![10.into()])],
+            children: vec![],
+            values: vec![NodeData::with_value(Value::Integer(10))],
+            is_leaf: true,
+        };
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(right_id, right_node);
+        }
+
+        let separator_key = Key::from(vec![5.into()]);
+        let separator_value = NodeData::empty();
+
+        // Try to merge - should fail
+        let result = btree.merge_nodes(left_id, separator_key, separator_value, right_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::NodeNotFound(id)) => {
+                assert_eq!(id, left_id);
+            }
+            _ => panic!("Expected NodeNotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_nodes_right_not_found() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        let left_id = NodeId::from(100);
+        let right_id = NodeId::from(101);
+
+        // Only insert left node
+        let left_node = Node {
+            keys: vec![Key::from(vec![10.into()])],
+            children: vec![],
+            values: vec![NodeData::with_value(Value::Integer(10))],
+            is_leaf: true,
+        };
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(left_id, left_node);
+        }
+
+        let separator_key = Key::from(vec![15.into()]);
+        let separator_value = NodeData::empty();
+
+        // Try to merge - should fail
+        let result = btree.merge_nodes(left_id, separator_key, separator_value, right_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::NodeNotFound(id)) => {
+                assert_eq!(id, right_id);
+            }
+            _ => panic!("Expected NodeNotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_nodes_preserves_value_types() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create nodes with various value types
+        let left_id = NodeId::from(100);
+        let left_node = Node {
+            keys: vec![
+                Key::from(vec!["A".into()]),
+                Key::from(vec!["B".into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::String("Alpha".into())),
+                NodeData::with_value(Value::Integer(42)),
+            ],
+            is_leaf: true,
+        };
+
+        let right_id = NodeId::from(101);
+        let right_node = Node {
+            keys: vec![
+                Key::from(vec!["D".into()]),
+                Key::from(vec!["E".into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::Double(3.14.into())),
+                NodeData::with_value(Value::Char('X')),
+            ],
+            is_leaf: true,
+        };
+
+        let separator_key = Key::from(vec!["C".into()]);
+        let separator_value = NodeData::with_value(Value::Boolean(true));
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(left_id, left_node);
+            nodes.insert(right_id, right_node);
+        }
+
+        // Merge nodes
+        btree.merge_nodes(left_id, separator_key, separator_value, right_id).await.unwrap();
+
+        // Verify all value types are preserved
+        let merged = btree.find_node(left_id).await.unwrap();
+        assert_eq!(merged.values.len(), 5);
+        assert_eq!(merged.values[0].value, Some(Value::String("Alpha".into())));
+        assert_eq!(merged.values[1].value, Some(Value::Integer(42)));
+        assert_eq!(merged.values[2].value, Some(Value::Boolean(true)));
+        assert_eq!(merged.values[3].value, Some(Value::Double(3.14.into())));
+        assert_eq!(merged.values[4].value, Some(Value::Char('X')));
+    }
+
+    #[tokio::test]
+    async fn test_merge_nodes_stats_update() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create multiple pairs of nodes to merge
+        let left1_id = NodeId::from(100);
+        let right1_id = NodeId::from(101);
+        let left2_id = NodeId::from(102);
+        let right2_id = NodeId::from(103);
+
+        let node1_left = Node {
+            keys: vec![Key::from(vec![1.into()])],
+            children: vec![],
+            values: vec![NodeData::with_value(Value::Integer(1))],
+            is_leaf: true,
+        };
+
+        let node1_right = Node {
+            keys: vec![Key::from(vec![3.into()])],
+            children: vec![],
+            values: vec![NodeData::with_value(Value::Integer(3))],
+            is_leaf: true,
+        };
+
+        let node2_left = Node {
+            keys: vec![Key::from(vec![10.into()])],
+            children: vec![],
+            values: vec![NodeData::with_value(Value::Integer(10))],
+            is_leaf: true,
+        };
+
+        let node2_right = Node {
+            keys: vec![Key::from(vec![30.into()])],
+            children: vec![],
+            values: vec![NodeData::with_value(Value::Integer(30))],
+            is_leaf: true,
+        };
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(left1_id, node1_left);
+            nodes.insert(right1_id, node1_right);
+            nodes.insert(left2_id, node2_left);
+            nodes.insert(right2_id, node2_right);
+        }
+
+        // Initial stats
+        let stats = btree.stats().await;
+        assert_eq!(stats.merges, 0);
+
+        // Merge first pair
+        btree.merge_nodes(
+            left1_id,
+            Key::from(vec![2.into()]),
+            NodeData::with_value(Value::Integer(2)),
+            right1_id,
+        ).await.unwrap();
+
+        let stats = btree.stats().await;
+        assert_eq!(stats.merges, 1);
+
+        // Merge second pair
+        btree.merge_nodes(
+            left2_id,
+            Key::from(vec![20.into()]),
+            NodeData::with_value(Value::Integer(20)),
+            right2_id,
+        ).await.unwrap();
+
+        let stats = btree.stats().await;
+        assert_eq!(stats.merges, 2);
+    }
+
+    #[tokio::test]
+    async fn test_split_and_merge_roundtrip() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create a node with 5 keys
+        let original_id = NodeId::from(100);
+        let original_node = Node {
+            keys: vec![
+                Key::from(vec![10.into()]),
+                Key::from(vec![20.into()]),
+                Key::from(vec![30.into()]),
+                Key::from(vec![40.into()]),
+                Key::from(vec![50.into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::Integer(10)),
+                NodeData::with_value(Value::Integer(20)),
+                NodeData::with_value(Value::Integer(30)),
+                NodeData::with_value(Value::Integer(40)),
+                NodeData::with_value(Value::Integer(50)),
+            ],
+            is_leaf: true,
+        };
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(original_id, original_node);
+        }
+
+        // Split the node
+        let (median_key, median_value, right_id) = btree.split_node(original_id).await.unwrap();
+
+        // Merge back
+        btree.merge_nodes(original_id, median_key, median_value, right_id).await.unwrap();
+
+        // Verify we're back to original state
+        let final_node = btree.find_node(original_id).await.unwrap();
+        assert_eq!(final_node.keys.len(), 5);
+        assert_eq!(final_node.keys[0], Key::from(vec![10.into()]));
+        assert_eq!(final_node.keys[1], Key::from(vec![20.into()]));
+        assert_eq!(final_node.keys[2], Key::from(vec![30.into()]));
+        assert_eq!(final_node.keys[3], Key::from(vec![40.into()]));
+        assert_eq!(final_node.keys[4], Key::from(vec![50.into()]));
+
+        assert_eq!(final_node.values.len(), 5);
+        assert_eq!(final_node.values[0].value, Some(Value::Integer(10)));
+        assert_eq!(final_node.values[1].value, Some(Value::Integer(20)));
+        assert_eq!(final_node.values[2].value, Some(Value::Integer(30)));
+        assert_eq!(final_node.values[3].value, Some(Value::Integer(40)));
+        assert_eq!(final_node.values[4].value, Some(Value::Integer(50)));
     }
 }

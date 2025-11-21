@@ -210,8 +210,8 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [x] Add comprehensive unit tests (12 tests including concurrent access tests)
 - [x] Add complete rustdoc with examples and scalability documentation
 - [x] Implement `async fn find_node(&self, id: NodeId) -> Result<Node>` - navigate tree
-- [x] Implement `async fn split_node(&self, id: NodeId) -> Result<(Key, NodeData, NodeId)>` - split full nodes, returns median key+value to prevent data loss, with 7 comprehensive tests
-- [ ] Implement `async fn merge_nodes(&self, left: NodeId, right: NodeId) -> Result<()>` (Phase 2.2+)
+- [x] Implement `async fn split_node(&self, id: NodeId) -> Result<(Key, NodeData, NodeId)>` - split full nodes, returns median key+value to prevent data loss
+- [x] Implement `async fn merge_nodes(&self, left_id: NodeId, separator_key: Key, separator_value: NodeData, right_id: NodeId) -> Result<()>` - merge underfull nodes by combining left + separator + right (inverse of split; B-tree semantics require separator value from parent)
 
 ### 2.2 MUMPS Operations - SET
 - [ ] Implement `async fn set_with_context(&self, name: &Name, key: &Key, value: Value, context: Option<&TransactionContext>) -> Result<()>`:
