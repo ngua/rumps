@@ -442,7 +442,10 @@ impl BTree {
     /// let (median_key, median_data, right_id) = btree.split_node(full_node_id).await?;
     /// // Caller must promote median_key and median_data to parent and link right_id
     /// ```
-    async fn split_node(&self, id: NodeId) -> Result<(Key, NodeData, NodeId)> {
+    async fn split_node(
+        &self,
+        id: NodeId,
+    ) -> Result<(Key, Arc<NodeData>, NodeId)> {
         // Find the node to split (returns owned node)
         let node = self.find_node(id).await?;
 
@@ -588,7 +591,7 @@ impl BTree {
         &self,
         left: NodeId,
         separator_key: Key,
-        separator_value: NodeData,
+        separator_value: Arc<NodeData>,
         right: NodeId,
     ) -> Result<()> {
         // Find both nodes
@@ -620,7 +623,7 @@ impl BTree {
             left_keys.push(separator_key);
             left_keys.extend(right_keys);
 
-            left_values.push(separator_value);
+            left_values.push(Arc::clone(&separator_value));
             left_values.extend(right_values);
 
             // For internal nodes, merge children
@@ -754,7 +757,7 @@ impl BTree {
                 let new_root = Node {
                     keys: vec![key.clone()],
                     children: vec![],
-                    values: vec![NodeData::with_value(value)],
+                    values: vec![Arc::new(NodeData::with_value(value))],
                     is_leaf: true,
                 };
 
@@ -797,7 +800,7 @@ impl BTree {
                         let new_root = Node {
                             keys: vec![median_key],
                             children: vec![root_id, right_id],
-                            values: vec![median_value],
+                            values: vec![Arc::clone(&median_value)],
                             is_leaf: false,
                         };
 
@@ -870,14 +873,15 @@ impl BTree {
                 match updated_node.keys.get(pos) {
                     Some(existing_key) if existing_key == key => {
                         // Key exists, update the value
-                        updated_node.values[pos] = NodeData::with_value(value);
+                        updated_node.values[pos] =
+                            Arc::new(NodeData::with_value(value));
                     }
                     _ => {
                         // Key doesn't exist, insert it
                         updated_node.keys.insert(pos, key.clone());
                         updated_node
                             .values
-                            .insert(pos, NodeData::with_value(value));
+                            .insert(pos, Arc::new(NodeData::with_value(value)));
                     }
                 }
 
@@ -902,7 +906,7 @@ impl BTree {
                     // Insert median into this node
                     let mut updated_node = node;
                     updated_node.keys.insert(pos, median_key.clone());
-                    updated_node.values.insert(pos, median_value);
+                    updated_node.values.insert(pos, Arc::clone(&median_value));
                     updated_node.children.insert(pos + 1, new_child_id);
 
                     // Write updated parent
@@ -1131,11 +1135,11 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::Integer(10)),
-                NodeData::with_value(Value::Integer(20)),
-                NodeData::with_value(Value::Integer(30)),
-                NodeData::with_value(Value::Integer(40)),
-                NodeData::with_value(Value::Integer(50)),
+                Arc::new(NodeData::with_value(Value::Integer(10))),
+                Arc::new(NodeData::with_value(Value::Integer(20))),
+                Arc::new(NodeData::with_value(Value::Integer(30))),
+                Arc::new(NodeData::with_value(Value::Integer(40))),
+                Arc::new(NodeData::with_value(Value::Integer(50))),
             ],
             is_leaf: true,
         };
@@ -1194,10 +1198,10 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::Integer(10)),
-                NodeData::with_value(Value::Integer(20)),
-                NodeData::with_value(Value::Integer(30)),
-                NodeData::with_value(Value::Integer(40)),
+                Arc::new(NodeData::with_value(Value::Integer(10))),
+                Arc::new(NodeData::with_value(Value::Integer(20))),
+                Arc::new(NodeData::with_value(Value::Integer(30))),
+                Arc::new(NodeData::with_value(Value::Integer(40))),
             ],
             is_leaf: true,
         };
@@ -1254,11 +1258,11 @@ mod tests {
                 NodeId::from(6),
             ],
             values: vec![
-                NodeData::empty(),
-                NodeData::empty(),
-                NodeData::empty(),
-                NodeData::empty(),
-                NodeData::empty(),
+                Arc::new(NodeData::empty()),
+                Arc::new(NodeData::empty()),
+                Arc::new(NodeData::empty()),
+                Arc::new(NodeData::empty()),
+                Arc::new(NodeData::empty()),
             ],
             is_leaf: false,
         };
@@ -1275,7 +1279,7 @@ mod tests {
 
         // Verify median key and value (internal nodes have empty values)
         assert_eq!(median_key, Key::from(vec![30.into()]));
-        assert_eq!(median_value, NodeData::empty());
+        assert_eq!(median_value, Arc::new(NodeData::empty()));
 
         // Verify left node has correct children
         let left = btree.find_node(node_id).await.unwrap();
@@ -1354,11 +1358,11 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::String("Alpha".into())),
-                NodeData::with_value(Value::Integer(42)),
-                NodeData::with_value(Value::Boolean(true)),
-                NodeData::with_value(Value::Double(3.14.into())),
-                NodeData::with_value(Value::Char('X')),
+                Arc::new(NodeData::with_value(Value::String("Alpha".into()))),
+                Arc::new(NodeData::with_value(Value::Integer(42))),
+                Arc::new(NodeData::with_value(Value::Boolean(true))),
+                Arc::new(NodeData::with_value(Value::Double(3.14.into()))),
+                Arc::new(NodeData::with_value(Value::Char('X'))),
             ],
             is_leaf: true,
         };
@@ -1404,9 +1408,9 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::Integer(1)),
-                NodeData::with_value(Value::Integer(2)),
-                NodeData::with_value(Value::Integer(3)),
+                Arc::new(NodeData::with_value(Value::Integer(1))),
+                Arc::new(NodeData::with_value(Value::Integer(2))),
+                Arc::new(NodeData::with_value(Value::Integer(3))),
             ],
             is_leaf: true,
         };
@@ -1420,9 +1424,9 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::Integer(4)),
-                NodeData::with_value(Value::Integer(5)),
-                NodeData::with_value(Value::Integer(6)),
+                Arc::new(NodeData::with_value(Value::Integer(4))),
+                Arc::new(NodeData::with_value(Value::Integer(5))),
+                Arc::new(NodeData::with_value(Value::Integer(6))),
             ],
             is_leaf: true,
         };
@@ -1463,8 +1467,8 @@ mod tests {
             keys: vec![Key::from(vec![10.into()]), Key::from(vec![20.into()])],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::Integer(10)),
-                NodeData::with_value(Value::Integer(20)),
+                Arc::new(NodeData::with_value(Value::Integer(10))),
+                Arc::new(NodeData::with_value(Value::Integer(20))),
             ],
             is_leaf: true,
         };
@@ -1474,14 +1478,15 @@ mod tests {
             keys: vec![Key::from(vec![40.into()]), Key::from(vec![50.into()])],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::Integer(40)),
-                NodeData::with_value(Value::Integer(50)),
+                Arc::new(NodeData::with_value(Value::Integer(40))),
+                Arc::new(NodeData::with_value(Value::Integer(50))),
             ],
             is_leaf: true,
         };
 
         let separator_key = Key::from(vec![30.into()]);
-        let separator_value = NodeData::with_value(Value::Integer(30));
+        let separator_value =
+            Arc::new(NodeData::with_value(Value::Integer(30)));
 
         {
             let mut nodes = btree.nodes.write().await;
@@ -1533,7 +1538,10 @@ mod tests {
         let left_node = Node {
             keys: vec![Key::from(vec![10.into()]), Key::from(vec![20.into()])],
             children: vec![NodeId::from(1), NodeId::from(2), NodeId::from(3)],
-            values: vec![NodeData::empty(), NodeData::empty()],
+            values: vec![
+                Arc::new(NodeData::empty()),
+                Arc::new(NodeData::empty()),
+            ],
             is_leaf: false,
         };
 
@@ -1541,12 +1549,15 @@ mod tests {
         let right_node = Node {
             keys: vec![Key::from(vec![40.into()]), Key::from(vec![50.into()])],
             children: vec![NodeId::from(4), NodeId::from(5), NodeId::from(6)],
-            values: vec![NodeData::empty(), NodeData::empty()],
+            values: vec![
+                Arc::new(NodeData::empty()),
+                Arc::new(NodeData::empty()),
+            ],
             is_leaf: false,
         };
 
         let separator_key = Key::from(vec![30.into()]);
-        let separator_value = NodeData::empty();
+        let separator_value = Arc::new(NodeData::empty());
 
         {
             let mut nodes = btree.nodes.write().await;
@@ -1586,7 +1597,7 @@ mod tests {
         let left_node = Node {
             keys: vec![Key::from(vec![10.into()])],
             children: vec![],
-            values: vec![NodeData::with_value(Value::Integer(10))],
+            values: vec![Arc::new(NodeData::with_value(Value::Integer(10)))],
             is_leaf: true,
         };
 
@@ -1594,12 +1605,12 @@ mod tests {
         let right_node = Node {
             keys: vec![Key::from(vec![20.into()])],
             children: vec![NodeId::from(1), NodeId::from(2)],
-            values: vec![NodeData::empty()],
+            values: vec![Arc::new(NodeData::empty())],
             is_leaf: false,
         };
 
         let separator_key = Key::from(vec![15.into()]);
-        let separator_value = NodeData::empty();
+        let separator_value = Arc::new(NodeData::empty());
 
         {
             let mut nodes = btree.nodes.write().await;
@@ -1633,7 +1644,7 @@ mod tests {
         let right_node = Node {
             keys: vec![Key::from(vec![10.into()])],
             children: vec![],
-            values: vec![NodeData::with_value(Value::Integer(10))],
+            values: vec![Arc::new(NodeData::with_value(Value::Integer(10)))],
             is_leaf: true,
         };
 
@@ -1643,7 +1654,7 @@ mod tests {
         }
 
         let separator_key = Key::from(vec![5.into()]);
-        let separator_value = NodeData::empty();
+        let separator_value = Arc::new(NodeData::empty());
 
         // Try to merge - should fail
         let result = btree
@@ -1671,7 +1682,7 @@ mod tests {
         let left_node = Node {
             keys: vec![Key::from(vec![10.into()])],
             children: vec![],
-            values: vec![NodeData::with_value(Value::Integer(10))],
+            values: vec![Arc::new(NodeData::with_value(Value::Integer(10)))],
             is_leaf: true,
         };
 
@@ -1681,7 +1692,7 @@ mod tests {
         }
 
         let separator_key = Key::from(vec![15.into()]);
-        let separator_value = NodeData::empty();
+        let separator_value = Arc::new(NodeData::empty());
 
         // Try to merge - should fail
         let result = btree
@@ -1711,8 +1722,8 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::String("Alpha".into())),
-                NodeData::with_value(Value::Integer(42)),
+                Arc::new(NodeData::with_value(Value::String("Alpha".into()))),
+                Arc::new(NodeData::with_value(Value::Integer(42))),
             ],
             is_leaf: true,
         };
@@ -1725,14 +1736,15 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::Double(3.14.into())),
-                NodeData::with_value(Value::Char('X')),
+                Arc::new(NodeData::with_value(Value::Double(3.14.into()))),
+                Arc::new(NodeData::with_value(Value::Char('X'))),
             ],
             is_leaf: true,
         };
 
         let separator_key = Key::from(vec!["C".into()]);
-        let separator_value = NodeData::with_value(Value::Boolean(true));
+        let separator_value =
+            Arc::new(NodeData::with_value(Value::Boolean(true)));
 
         {
             let mut nodes = btree.nodes.write().await;
@@ -1771,28 +1783,28 @@ mod tests {
         let node1_left = Node {
             keys: vec![Key::from(vec![1.into()])],
             children: vec![],
-            values: vec![NodeData::with_value(Value::Integer(1))],
+            values: vec![Arc::new(NodeData::with_value(Value::Integer(1)))],
             is_leaf: true,
         };
 
         let node1_right = Node {
             keys: vec![Key::from(vec![3.into()])],
             children: vec![],
-            values: vec![NodeData::with_value(Value::Integer(3))],
+            values: vec![Arc::new(NodeData::with_value(Value::Integer(3)))],
             is_leaf: true,
         };
 
         let node2_left = Node {
             keys: vec![Key::from(vec![10.into()])],
             children: vec![],
-            values: vec![NodeData::with_value(Value::Integer(10))],
+            values: vec![Arc::new(NodeData::with_value(Value::Integer(10)))],
             is_leaf: true,
         };
 
         let node2_right = Node {
             keys: vec![Key::from(vec![30.into()])],
             children: vec![],
-            values: vec![NodeData::with_value(Value::Integer(30))],
+            values: vec![Arc::new(NodeData::with_value(Value::Integer(30)))],
             is_leaf: true,
         };
 
@@ -1813,7 +1825,7 @@ mod tests {
             .merge_nodes(
                 left1_id,
                 Key::from(vec![2.into()]),
-                NodeData::with_value(Value::Integer(2)),
+                Arc::new(NodeData::with_value(Value::Integer(2))),
                 right1_id,
             )
             .await
@@ -1827,7 +1839,7 @@ mod tests {
             .merge_nodes(
                 left2_id,
                 Key::from(vec![20.into()]),
-                NodeData::with_value(Value::Integer(20)),
+                Arc::new(NodeData::with_value(Value::Integer(20))),
                 right2_id,
             )
             .await
@@ -1855,11 +1867,11 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::Integer(10)),
-                NodeData::with_value(Value::Integer(20)),
-                NodeData::with_value(Value::Integer(30)),
-                NodeData::with_value(Value::Integer(40)),
-                NodeData::with_value(Value::Integer(50)),
+                Arc::new(NodeData::with_value(Value::Integer(10))),
+                Arc::new(NodeData::with_value(Value::Integer(20))),
+                Arc::new(NodeData::with_value(Value::Integer(30))),
+                Arc::new(NodeData::with_value(Value::Integer(40))),
+                Arc::new(NodeData::with_value(Value::Integer(50))),
             ],
             is_leaf: true,
         };

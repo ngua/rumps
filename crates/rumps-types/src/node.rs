@@ -32,6 +32,7 @@
 //! This allows reading many entries in a single disk operation rather than
 //! requiring one I/O per hierarchy level as a trie would.
 
+use std::sync::Arc;
 use std::{fmt, iter};
 
 use serde::de::{self, Deserializer, Visitor};
@@ -145,6 +146,7 @@ impl fmt::Display for NodeId {
 ///
 /// ```
 /// use rumps_types::{Node, NodeData, NodeId, Key, Value};
+/// use std::sync::Arc;
 ///
 /// // Create a leaf node with complete key paths
 /// let leaf = Node {
@@ -154,8 +156,8 @@ impl fmt::Display for NodeId {
 ///     ],
 ///     children: vec![],  // Empty for leaf
 ///     values: vec![
-///         NodeData::with_value(Value::String("John".into())),
-///         NodeData::with_value(Value::String("Jane".into())),
+///         Arc::new(NodeData::with_value(Value::String("John".into()))),
+///         Arc::new(NodeData::with_value(Value::String("Jane".into()))),
 ///     ],
 ///     is_leaf: true,
 /// };
@@ -170,8 +172,8 @@ pub struct Node {
     pub keys: Vec<Key>,
     /// References to child nodes (empty for leaf nodes)
     pub children: Vec<NodeId>,
-    /// Data associated with each key
-    pub values: Vec<NodeData>,
+    /// Data associated with each key (wrapped in Arc for efficient cloning during hierarchy navigation)
+    pub values: Vec<Arc<NodeData>>,
     /// Whether this is a leaf node (no children)
     pub is_leaf: bool,
 }
@@ -224,10 +226,11 @@ impl Node {
     ///
     /// ```
     /// use rumps_types::{Node, NodeData, Key, Value};
+    /// use std::sync::Arc;
     ///
     /// let mut node = Node::new_leaf();
     /// node.keys.push(Key::from(vec!["A".into()]));
-    /// node.values.push(NodeData::with_value(Value::Integer(1)));
+    /// node.values.push(Arc::new(NodeData::with_value(Value::Integer(1))));
     ///
     /// assert_eq!(node.len(), 1);
     /// ```
@@ -249,6 +252,18 @@ impl Node {
         self.keys.is_empty()
     }
 
+    /// Helper method to serialize values by unwrapping Arc.
+    fn serialize_values(&self) -> Vec<NodeData> {
+        self.values
+            .iter()
+            .map(|arc| {
+                // Try to unwrap Arc if refcount is 1, otherwise clone
+                Arc::try_unwrap(Arc::clone(arc))
+                    .unwrap_or_else(|arc| (*arc).clone())
+            })
+            .collect()
+    }
+
     /// Calculates the serialized size of this node in bytes.
     ///
     /// This is useful for determining when a node needs to be split to fit
@@ -259,13 +274,14 @@ impl Node {
     ///
     /// ```
     /// use rumps_types::{Node, NodeData, Key, Value};
+    /// use std::sync::Arc;
     ///
     /// let mut node = Node::new_leaf();
     /// let empty_size = node.serialized_size();
     ///
     /// // Add an entry
     /// node.keys.push(Key::from(vec!["A".into()]));
-    /// node.values.push(NodeData::with_value(Value::Integer(1)));
+    /// node.values.push(Arc::new(NodeData::with_value(Value::Integer(1))));
     ///
     /// let with_entry_size = node.serialized_size();
     /// assert!(with_entry_size > empty_size);
@@ -338,6 +354,9 @@ impl Serialize for Node {
 
         let mut bytes = vec![is_leaf_byte];
 
+        // Unwrap Arc to serialize the inner NodeData
+        let values_unwrapped = self.serialize_values();
+
         // Serialize keys
         bincode::serialize(&self.keys)
             .map_err(|e| {
@@ -358,8 +377,8 @@ impl Serialize for Node {
             })
             .and_then(|child_bytes| {
                 bytes.extend_from_slice(&child_bytes);
-                // Serialize values
-                bincode::serialize(&self.values).map_err(|e| {
+                // Serialize values (unwrapped from Arc)
+                bincode::serialize(&values_unwrapped).map_err(|e| {
                     serde::ser::Error::custom(format!(
                         "Failed to serialize values: {}",
                         e
@@ -419,14 +438,20 @@ impl<'de> Deserialize<'de> for Node {
                                                         let children_len = child_bytes.len();
                                                         let after_children = &after_keys[children_len..];
 
-                                                        // Deserialize values
+                                                        // Deserialize values and wrap in Arc
                                                         bincode::deserialize::<Vec<NodeData>>(after_children)
                                                             .map_err(|e| E::custom(format!("Failed to deserialize values: {}", e)))
-                                                            .map(|values| Node {
-                                                                keys,
-                                                                children,
-                                                                values,
-                                                                is_leaf,
+                                                            .map(|values_data| {
+                                                                let values: Vec<Arc<NodeData>> = values_data
+                                                                    .into_iter()
+                                                                    .map(Arc::new)
+                                                                    .collect();
+                                                                Node {
+                                                                    keys,
+                                                                    children,
+                                                                    values,
+                                                                    is_leaf,
+                                                                }
                                                             })
                                                     })
                                             })
@@ -1022,8 +1047,8 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::String("John".into())),
-                NodeData::with_value(Value::String("Jane".into())),
+                Arc::new(NodeData::with_value(Value::String("John".into()))),
+                Arc::new(NodeData::with_value(Value::String("Jane".into()))),
             ],
             is_leaf: true,
         };
@@ -1045,7 +1070,10 @@ mod tests {
                 NodeId::from(2u64),
                 NodeId::from(3u64),
             ],
-            values: vec![NodeData::empty(), NodeData::empty()],
+            values: vec![
+                Arc::new(NodeData::empty()),
+                Arc::new(NodeData::empty()),
+            ],
             is_leaf: false,
         };
 
@@ -1064,7 +1092,9 @@ mod tests {
             Node {
                 keys: vec![Key::from(vec!["A".into()])],
                 children: vec![],
-                values: vec![NodeData::with_value(Value::Integer(42))],
+                values: vec![Arc::new(NodeData::with_value(Value::Integer(
+                    42,
+                )))],
                 is_leaf: true,
             },
             Node {
@@ -1075,9 +1105,9 @@ mod tests {
                 ],
                 children: vec![],
                 values: vec![
-                    NodeData::with_value(Value::Boolean(true)),
-                    NodeData::with_value(Value::Double(3.14.into())),
-                    NodeData::new(Some(Value::Char('x')), true),
+                    Arc::new(NodeData::with_value(Value::Boolean(true))),
+                    Arc::new(NodeData::with_value(Value::Double(3.14.into()))),
+                    Arc::new(NodeData::new(Some(Value::Char('x')), true)),
                 ],
                 is_leaf: true,
             },
@@ -1095,7 +1125,7 @@ mod tests {
         let leaf = Node {
             keys: vec![Key::from(vec!["test".into()])],
             children: vec![],
-            values: vec![NodeData::with_value(Value::Integer(1))],
+            values: vec![Arc::new(NodeData::with_value(Value::Integer(1)))],
             is_leaf: true,
         };
 
@@ -1106,7 +1136,7 @@ mod tests {
         let internal = Node {
             keys: vec![Key::from(vec!["test".into()])],
             children: vec![NodeId::from(1u64), NodeId::from(2u64)],
-            values: vec![NodeData::empty()],
+            values: vec![Arc::new(NodeData::empty())],
             is_leaf: false,
         };
 
@@ -1135,13 +1165,15 @@ mod tests {
 
         // Add first entry
         node.keys.push(Key::from(vec!["A".into()]));
-        node.values.push(NodeData::with_value(Value::Integer(1)));
+        node.values
+            .push(Arc::new(NodeData::with_value(Value::Integer(1))));
         let one_entry_size = node.serialized_size();
         assert!(one_entry_size > empty_size);
 
         // Add second entry
         node.keys.push(Key::from(vec!["B".into()]));
-        node.values.push(NodeData::with_value(Value::Integer(2)));
+        node.values
+            .push(Arc::new(NodeData::with_value(Value::Integer(2))));
         let two_entry_size = node.serialized_size();
         assert!(two_entry_size > one_entry_size);
     }
@@ -1155,8 +1187,8 @@ mod tests {
             ],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::String("John".into())),
-                NodeData::with_value(Value::String("Jane".into())),
+                Arc::new(NodeData::with_value(Value::String("John".into()))),
+                Arc::new(NodeData::with_value(Value::String("Jane".into()))),
             ],
             is_leaf: true,
         };
@@ -1186,7 +1218,8 @@ mod tests {
         // Add several entries
         (0..10).for_each(|i| {
             node.keys.push(Key::from(vec![i.into()]));
-            node.values.push(NodeData::with_value(Value::Integer(i)));
+            node.values
+                .push(Arc::new(NodeData::with_value(Value::Integer(i))));
         });
 
         let key = Key::from(vec!["NEW".into()]);
@@ -1226,7 +1259,10 @@ mod tests {
                 NodeId::from(2u64),
                 NodeId::from(3u64),
             ],
-            values: vec![NodeData::empty(), NodeData::empty()],
+            values: vec![
+                Arc::new(NodeData::empty()),
+                Arc::new(NodeData::empty()),
+            ],
             is_leaf: false,
         };
 

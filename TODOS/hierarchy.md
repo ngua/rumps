@@ -24,6 +24,42 @@ The `has_descendants` flag enables three essential MUMPS operations:
 
 ---
 
+## Design Decision: Arc<NodeData> for Efficient Hierarchy Navigation
+
+**Critical Optimization**: `Node` stores `Vec<Arc<NodeData>>` instead of `Vec<NodeData>` directly.
+
+**Rationale**:
+- Hierarchy navigation (checking `has_descendants` flags) is extremely frequent in MUMPS operations
+- `$DATA`, `$ORDER`, `ensure_ancestors()` all repeatedly access NodeData without needing ownership
+- `Arc::clone()` (incrementing refcount) is much cheaper than cloning the entire `NodeData`
+- When extracting values in the public `get()` API, we can use `Arc::try_unwrap()` to avoid cloning if refcount is 1
+
+**Implementation Impact**:
+1. **Node Type Change**: `pub values: Vec<Arc<NodeData>>` in `rumps-types/src/node.rs`
+2. **Return Type**: `get_internal()` returns `Option<Arc<NodeData>>` instead of `Option<NodeData>`
+3. **Node Creation**: All values wrapped with `Arc::new(NodeData { ... })`
+4. **Serialization**: Custom serialize/deserialize unwraps/wraps Arc (already have custom impl)
+5. **Public API**: `get()` extracts value with smart unwrapping:
+   ```rust
+   pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
+       match self.get_internal(name, key).await? {
+           None => Ok(None),
+           Some(arc_data) => {
+               let node_data = Arc::try_unwrap(arc_data)
+                   .unwrap_or_else(|arc| (*arc).clone());
+               Ok(node_data.value)
+           }
+       }
+   }
+   ```
+
+**Performance Benefits**:
+- Hierarchy checks: O(1) Arc clone instead of O(value_size) data clone
+- Typical case: Most operations just check `has_descendants` flag, never clone the actual data
+- Smart extraction: When refcount is 1, `get()` consumes the Arc without any cloning
+
+---
+
 ## Storage Model Recap
 
 RUMPS uses a **flat B-tree** (not a true hierarchy) where keys are complete paths:
@@ -84,7 +120,25 @@ When setting `Key([a, b, c])` with value `v`:
 
 ## Implementation Steps
 
-### Step 1: Add `Key::ancestors()` Method
+### Step 1: Update Node Type with Arc<NodeData> Wrapper ✅ COMPLETE
+
+**File**: `crates/rumps-types/src/node.rs`
+
+**Summary**: Updated the `Node` struct to use `Vec<Arc<NodeData>>` instead of `Vec<NodeData>` for efficient cloning during hierarchy navigation.
+
+**Implementation Complete**:
+- ✅ Changed `values: Vec<NodeData>` to `values: Vec<Arc<NodeData>>`
+- ✅ Updated custom `Serialize` impl to unwrap Arc using `Arc::try_unwrap()` or clone
+- ✅ Updated custom `Deserialize` impl to wrap deserialized NodeData in `Arc::new()`
+- ✅ Updated all Node construction in `btree.rs` to wrap values in `Arc::new()`
+- ✅ Updated value access patterns to use `Arc::clone()` where needed
+- ✅ All 132 tests pass (103 in rumps-types + 29 in rumps-storage)
+- ✅ Verified serialization round-trip works correctly
+- ✅ Verified existing B-tree operations work with Arc-wrapped values
+
+---
+
+### Step 2: Add `Key::ancestors()` Method
 
 **File**: `crates/rumps-types/src/key.rs`
 
@@ -126,7 +180,7 @@ impl Key {
 
 ---
 
-### Step 2: Implement `get_internal()` - B-Tree Navigation
+### Step 3: Implement `get_internal()` - B-Tree Navigation
 
 **File**: `crates/rumps-storage/src/btree.rs` (private helpers impl block)
 
@@ -134,11 +188,14 @@ impl Key {
 
 **Implementation**:
 ```rust
-/// Internal GET that returns NodeData (not just Value).
+/// Internal GET that returns Arc<NodeData> (not just Value).
 ///
-/// This is used internally to access the `has_descendants` flag.
-/// The public `get()` method will strip this wrapper and return only the value.
-async fn get_internal(&self, name: &Name, key: &Key) -> Result<Option<NodeData>> {
+/// Returns an Arc for efficient hierarchy navigation - checking `has_descendants`
+/// flags is much cheaper with Arc::clone() than cloning the entire NodeData.
+///
+/// The public `get()` method will extract the value using Arc::try_unwrap()
+/// when possible, avoiding clones when the refcount is 1.
+async fn get_internal(&self, name: &Name, key: &Key) -> Result<Option<Arc<NodeData>>> {
     match self.roots.read().await.get(name).copied() {
         None => Ok(None),
         Some(root_id) => self.search_from_node(root_id, key).await,
@@ -146,20 +203,23 @@ async fn get_internal(&self, name: &Name, key: &Key) -> Result<Option<NodeData>>
 }
 
 /// Recursively search for a key starting from the given node.
+///
+/// Returns Arc<NodeData> for cheap cloning during hierarchy navigation.
 fn search_from_node<'a>(
     &'a self,
     node_id: NodeId,
     key: &'a Key,
-) -> Pin<Box<dyn Future<Output = Result<Option<NodeData>>> + Send + 'a>>
+) -> Pin<Box<dyn Future<Output = Result<Option<Arc<NodeData>>>> + Send + 'a>>
 {
     Box::pin(async move {
         let node = self.find_node(node_id).await?;
 
         match node.keys.binary_search(key) {
-            Ok(pos) => Ok(Some(node.values[pos].clone())),
-            Err(pos) => match node.is_leaf {
-                true => Ok(None),
-                false => self.search_from_node(node.children[pos], key).await,
+            Ok(pos) => Ok(Some(Arc::clone(&node.values[pos]))),
+            Err(pos) => if node.is_leaf {
+                Ok(None)
+              } else { 
+                self.search_from_node(node.children[pos], key).await
             }
         }
     })
@@ -169,11 +229,22 @@ fn search_from_node<'a>(
 **Critical Considerations**:
 - Must handle partial matches correctly (e.g., searching for `Key([1,2,3])` when tree only has `Key([1])` and `Key([1,2,5])`)
 - Must work for both leaf and internal nodes
-- Returns full `NodeData` including `has_descendants` flag
+- Returns `Arc<NodeData>` for cheap cloning during hierarchy checks
+
+**Note on Node Type**:
+This requires updating `Node` in `rumps-types/src/node.rs`:
+```rust
+pub struct Node {
+    pub keys: Vec<Key>,
+    pub children: Vec<NodeId>,
+    pub values: Vec<Arc<NodeData>>,  // ← Changed from Vec<NodeData>
+    pub is_leaf: bool,
+}
+```
 
 ---
 
-### Step 3: Implement `set_internal()` - NodeData-Based Insertion
+### Step 4: Implement `set_internal()` - NodeData-Based Insertion
 
 **File**: `crates/rumps-storage/src/btree.rs` (private helpers impl block)
 
@@ -235,15 +306,16 @@ fn insert_non_full_with_data<'a>(
                 Some(existing_key) if existing_key == key => {
                     // Key exists - MERGE NodeData
                     let existing_data = &updated_node.values[pos];
-                    updated_node.values[pos] = NodeData::new(
+                    let merged_data = NodeData::new(
                         data.value.or_else(|| existing_data.value.clone()),
                         existing_data.has_descendants || data.has_descendants,
                     );
+                    updated_node.values[pos] = Arc::new(merged_data);
                 }
                 _ => {
                     // Key doesn't exist - insert new
                     updated_node.keys.insert(pos, key.clone());
-                    updated_node.values.insert(pos, data);
+                    updated_node.values.insert(pos, Arc::new(data));
                 }
             }
 
@@ -260,7 +332,7 @@ fn insert_non_full_with_data<'a>(
 
 ---
 
-### Step 4: Implement `update_descendants_flag()`
+### Step 5: Implement `update_descendants_flag()`
 
 **File**: `crates/rumps-storage/src/btree.rs` (private helpers impl block)
 
@@ -273,17 +345,18 @@ fn insert_non_full_with_data<'a>(
 /// This is used when an ancestor already exists but needs its flag updated.
 async fn update_descendants_flag(&self, name: &Name, key: &Key, value: bool) -> Result<()> {
     // Use set_internal with merged NodeData
-    let existing_data = self.get_internal(name, key).await?
+    let existing_arc = self.get_internal(name, key).await?
         .ok_or_else(|| StorageError::NodeNotFound(/* key info */))?;
 
-    let updated_data = NodeData::new(existing_data.value, value);
+    // Clone the NodeData to update the flag
+    let updated_data = NodeData::new(existing_arc.value.clone(), value);
     self.set_internal(name, key, updated_data).await
 }
 ```
 
 ---
 
-### Step 5: Implement `ensure_ancestors()`
+### Step 6: Implement `ensure_ancestors()`
 
 **File**: `crates/rumps-storage/src/btree.rs` (private helpers impl block)
 
@@ -330,7 +403,7 @@ async fn ensure_ancestors(&self, name: &Name, key: &Key) -> Result<()> {
 
 ---
 
-### Step 6: Update Current `set_with_context()`
+### Step 7: Update Current `set_with_context()`
 
 **File**: `crates/rumps-storage/src/btree.rs` (public impl block)
 
@@ -362,12 +435,12 @@ match updated_node.keys.get(pos) {
     Some(existing_key) if existing_key == key => {
         // Key exists - CRITICAL: preserve has_descendants flag
         let existing_has_descendants = updated_node.values[pos].has_descendants;
-        updated_node.values[pos] = NodeData::new(Some(value), existing_has_descendants);
+        updated_node.values[pos] = Arc::new(NodeData::new(Some(value), existing_has_descendants));
     }
     _ => {
         // Key doesn't exist - insert with has_descendants=false initially
         updated_node.keys.insert(pos, key.clone());
-        updated_node.values.insert(pos, NodeData::with_value(value));
+        updated_node.values.insert(pos, Arc::new(NodeData::with_value(value)));
     }
 }
 ```
@@ -380,7 +453,7 @@ match updated_node.keys.get(pos) {
 
 ---
 
-### Step 7: Verify Node Splitting Preserves Flags
+### Step 8: Verify Node Splitting Preserves Flags
 
 **File**: `crates/rumps-storage/src/btree.rs`
 
@@ -460,10 +533,10 @@ mod tests {
 
         // Verify ancestor was created
         let ancestor_key = Key::from(vec![123.into()]);
-        let ancestor_data = btree.get_internal(&name, &ancestor_key).await.unwrap();
+        let ancestor_arc = btree.get_internal(&name, &ancestor_key).await.unwrap();
 
-        assert!(ancestor_data.is_some());
-        let data = ancestor_data.unwrap();
+        assert!(ancestor_arc.is_some());
+        let data = ancestor_arc.unwrap();
         assert!(data.value.is_none()); // No value on ancestor
         assert!(data.has_descendants);  // But has descendants
     }
@@ -498,18 +571,18 @@ mod tests {
 
         // Verify ancestor exists
         let key_parent = Key::from(vec![1.into()]);
-        let data = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
-        assert!(data.value.is_none());
-        assert!(data.has_descendants);
+        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        assert!(arc.value.is_none());
+        assert!(arc.has_descendants);
 
         // 2. Set ^VAR(1) = "parent_value"
         //    → Must preserve has_descendants=true AND add value
         btree.set(&name, &key_parent, Value::String("parent_value".into())).await.unwrap();
 
         // Verify ^VAR(1) has both value and has_descendants=true
-        let data = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
-        assert_eq!(data.value, Some(Value::String("parent_value".into())));
-        assert!(data.has_descendants);
+        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        assert_eq!(arc.value, Some(Value::String("parent_value".into())));
+        assert!(arc.has_descendants);
     }
 
     #[tokio::test]
@@ -527,16 +600,16 @@ mod tests {
         btree.set(&name, &key_child, Value::String("child".into())).await.unwrap();
 
         // Verify flag was set
-        let data = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
-        assert!(data.has_descendants);
+        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        assert!(arc.has_descendants);
 
         // 3. Set ^VAR(1) = "updated"
         btree.set(&name, &key_parent, Value::String("updated".into())).await.unwrap();
 
         // Verify ^VAR(1) still has has_descendants=true after update
-        let data = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
-        assert_eq!(data.value, Some(Value::String("updated".into())));
-        assert!(data.has_descendants); // MUST still be true
+        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        assert_eq!(arc.value, Some(Value::String("updated".into())));
+        assert!(arc.has_descendants); // MUST still be true
     }
 
     #[tokio::test]
@@ -550,8 +623,8 @@ mod tests {
         btree.set(&name, &Key::from(vec![1.into(), "C".into()]), Value::Integer(3)).await.unwrap();
 
         // Verify ^VAR(1) has has_descendants=true
-        let data = btree.get_internal(&name, &Key::from(vec![1.into()])).await.unwrap().unwrap();
-        assert!(data.has_descendants);
+        let arc = btree.get_internal(&name, &Key::from(vec![1.into()])).await.unwrap().unwrap();
+        assert!(arc.has_descendants);
     }
 
     #[tokio::test]
@@ -565,10 +638,10 @@ mod tests {
         btree.set(&name, &Key::from(vec![2.into(), 2.into()]), Value::Integer(22)).await.unwrap();
 
         // Verify ^VAR(1) and ^VAR(2) both have has_descendants
-        let data1 = btree.get_internal(&name, &Key::from(vec![1.into()])).await.unwrap().unwrap();
-        let data2 = btree.get_internal(&name, &Key::from(vec![2.into()])).await.unwrap().unwrap();
-        assert!(data1.has_descendants);
-        assert!(data2.has_descendants);
+        let arc1 = btree.get_internal(&name, &Key::from(vec![1.into()])).await.unwrap().unwrap();
+        let arc2 = btree.get_internal(&name, &Key::from(vec![2.into()])).await.unwrap().unwrap();
+        assert!(arc1.has_descendants);
+        assert!(arc2.has_descendants);
     }
 
     #[tokio::test]
@@ -595,9 +668,9 @@ mod tests {
         });
 
         // Verify parent was created exactly once with has_descendants=true
-        let data = btree.get_internal(&name, &Key::from(vec![1.into()])).await.unwrap().unwrap();
-        assert!(data.has_descendants);
-        assert!(data.value.is_none());
+        let arc = btree.get_internal(&name, &Key::from(vec![1.into()])).await.unwrap().unwrap();
+        assert!(arc.has_descendants);
+        assert!(arc.value.is_none());
     }
 }
 ```
@@ -606,28 +679,43 @@ mod tests {
 
 ## Comprehensive Implementation Checklist
 
-### Core Implementation
+### Step 1: Arc<NodeData> Wrapper (MUST BE DONE FIRST) ✅ COMPLETE
+- [x] **Update Node type** in `crates/rumps-types/src/node.rs`:
+  - [x] Change `values: Vec<NodeData>` to `values: Vec<Arc<NodeData>>`
+  - [x] Update `Serialize` impl to unwrap Arc using `try_unwrap` or clone
+  - [x] Update `Deserialize` impl to wrap deserialized NodeData in Arc::new()
+  - [x] Test serialization round-trip (serialize then deserialize)
+- [x] **Update all Node construction in btree.rs**:
+  - [x] Find all places that create Node instances
+  - [x] Wrap all `NodeData` values in `Arc::new()`
+  - [x] Update value access patterns to use `Arc::clone()` where needed
+- [x] **Run all existing tests** to verify no regressions from Arc change
+- [x] **Verify existing B-tree operations work** with Arc-wrapped values
+
+### Step 2: Core Implementation
 - [ ] Add `Key::ancestors()` method to `crates/rumps-types/src/key.rs`
 - [ ] Add unit tests for `Key::ancestors()` (empty, single, two, deep)
-- [ ] Implement `get_internal()` with full B-tree navigation
+- [ ] Implement `get_internal()` returning `Arc<NodeData>` with full B-tree navigation
+- [ ] Implement `search_from_node()` helper for recursive search
 - [ ] Test `get_internal()` with existing and non-existent keys
 - [ ] Implement `set_internal()` with NodeData merge behavior
   - [ ] OR operation on `has_descendants`
   - [ ] Value replacement when new value is provided
   - [ ] Handle concurrent ancestor creation gracefully
-- [ ] Create `insert_non_full_with_data()` helper
+  - [ ] Wrap all NodeData in Arc::new() when creating
+- [ ] Create `insert_non_full_with_data()` helper (wraps values in Arc)
 - [ ] Implement `update_descendants_flag()`
 - [ ] Implement `ensure_ancestors()` with sequential processing
 - [ ] Optional: Add `key_exists()` helper for clarity
 
-### Critical Fixes to Existing Code
+### Step 3: Critical Fixes to Existing Code
 - [ ] **Fix 1**: Update `insert_non_full()` to preserve `has_descendants` on updates
   - [ ] Check if key exists before updating
   - [ ] Preserve existing `has_descendants` flag when updating value
 - [ ] **Fix 2**: Call `ensure_ancestors()` in `set_with_context()` before insertion
 - [ ] **Fix 3**: Verify median promotion during splits preserves `NodeData` flags
 
-### Testing - Unit Tests
+### Step 4: Testing - Unit Tests
 - [ ] Test: `Key::ancestors()` with various depths
 - [ ] Test: Empty key has no ancestors
 - [ ] Test: Single subscript has no ancestors
@@ -635,7 +723,7 @@ mod tests {
 - [ ] Test: `get_internal()` returns correct `NodeData`
 - [ ] Test: `set_internal()` merges `NodeData` correctly
 
-### Testing - Integration Tests
+### Step 5: Testing - Integration Tests
 - [ ] Test: SET creates ancestor with `has_descendants=true`
 - [ ] Test: SET on deep nesting creates all ancestors
 - [ ] Test: Intermediate node becomes "both" (value + descendants)
@@ -646,7 +734,7 @@ mod tests {
 - [ ] Test: SET then GET returns same value (with ancestors)
 - [ ] Test: Verify ancestors have no values (only has_descendants)
 
-### Quality Assurance
+### Step 6: Quality Assurance
 - [ ] All new tests pass
 - [ ] All existing tests still pass
 - [ ] No clippy warnings
@@ -655,7 +743,7 @@ mod tests {
 - [ ] Code review for race conditions
 - [ ] Verify thread safety with concurrent operations
 
-### Documentation
+### Step 7: Documentation
 - [ ] Add rustdoc to `Key::ancestors()`
 - [ ] Document `get_internal()` behavior and purpose
 - [ ] Document `set_internal()` merge semantics explicitly
@@ -663,7 +751,7 @@ mod tests {
 - [ ] Update `set_with_context()` rustdoc to mention ancestor creation
 - [ ] Add examples to all new methods
 
-### Performance Validation
+### Step 8: Performance Validation
 - [ ] Verify O(d * log n) complexity acceptable for typical depths (2-3 levels)
 - [ ] Profile ancestor creation overhead
 - [ ] Consider caching "known ancestors" for future optimization (not in initial implementation)
@@ -673,12 +761,31 @@ mod tests {
 ## Integration with Future Operations
 
 ### GET (Phase 2.3)
-- Will use `get_internal()` helper
-- Public API returns `Option<Value>`, stripping the NodeData wrapper
+- Will use `get_internal()` helper which returns `Arc<NodeData>`
+- Public API returns `Option<Value>`, extracting value with smart unwrapping:
+  ```rust
+  pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
+      match self.get_internal(name, key).await? {
+          None => Ok(None),
+          Some(arc_data) => {
+              // Try to unwrap Arc if refcount is 1, otherwise clone
+              let node_data = Arc::try_unwrap(arc_data)
+                  .unwrap_or_else(|arc| (*arc).clone());
+              Ok(node_data.value)
+          }
+      }
+  }
+  ```
+- This approach optimizes for the common case where GET has exclusive access to the Arc
 
 ### DATA (Phase 2.5)
-- Will use `get_internal()` to access full NodeData
-- Returns enum based on `value` and `has_descendants` flags
+- Will use `get_internal()` to access full `Arc<NodeData>`
+- Can cheaply read both `value` and `has_descendants` fields from the Arc
+- Returns enum based on `value` and `has_descendants` flags:
+  - `NoData` (0): Neither value nor descendants
+  - `HasValue` (1): Value only
+  - `HasDescendants` (10): Descendants only
+  - `Both` (11): Both value and descendants
 
 ### KILL (Phase 2.4)
 - Must **update** ancestors after deletion
@@ -723,4 +830,4 @@ mod tests {
 
 ---
 
-Last Updated: 2025-11-21 (Restructured with integrated critical issues and comprehensive checklist)
+Last Updated: 2025-11-21 (Restructured with Arc<NodeData> optimization for efficient hierarchy navigation)
