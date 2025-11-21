@@ -214,6 +214,9 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [x] Implement `async fn merge_nodes(&self, left_id: NodeId, separator_key: Key, separator_value: NodeData, right_id: NodeId) -> Result<()>` - merge underfull nodes by combining left + separator + right (inverse of split; B-tree semantics require separator value from parent)
 
 ### 2.2 MUMPS Operations - SET
+
+**Important**: After completing the first two checkboxes below (basic SET implementation), you MUST implement hierarchical semantics by following the complete plan in `TODOS/hierarchy.md`. This includes maintaining `has_descendants` flags on ancestor nodes, which is critical for `$DATA`, `$ORDER`, and `KILL` operations.
+
 - [ ] Implement `async fn set_with_context(&self, name: &Name, key: &Key, value: Value, context: Option<&TransactionContext>) -> Result<()>`:
   - Use `load_node()` for cache-aware node access
   - Navigate to appropriate leaf node
@@ -225,6 +228,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - If context is Some, check transaction isolation level and track writes
 - [ ] Implement `async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()>`:
   - Simply delegate to `set_with_context(name, key, value, None)`
+- [ ] **→ See `TODOS/hierarchy.md` for complete hierarchical semantics implementation** (required before continuing)
 - [ ] Add async tests for SET on empty tree (both Global and Local)
 - [ ] Add async tests for SET with existing keys (updates)
 - [ ] Add async tests for SET triggering node splits
