@@ -138,45 +138,24 @@ When setting `Key([a, b, c])` with value `v`:
 
 ---
 
-### Step 2: Add `Key::ancestors()` Method
+### Step 2: Add `Key::ancestors()` Method ✅ COMPLETE
 
 **File**: `crates/rumps-types/src/key.rs`
 
-**Implementation**:
-```rust
-impl Key {
-    /// Returns all ancestor keys (all prefixes except the full key).
-    ///
-    /// For a key `Key([a, b, c])`, this returns `[Key([a]), Key([a, b])]`.
-    /// Empty keys and single-subscript keys have no ancestors.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use rumps_types::{Key, Subscript};
-    ///
-    /// let key = Key::from(vec![
-    ///     Subscript::from(123),
-    ///     Subscript::from("NAME"),
-    /// ]);
-    ///
-    /// let ancestors = key.ancestors();
-    /// assert_eq!(ancestors.len(), 1);
-    /// assert_eq!(ancestors[0], Key::from(vec![Subscript::from(123)]));
-    /// ```
-    pub fn ancestors(&self) -> Vec<Key> {
-        (1..self.len())
-            .map(|i| Key::from(self.as_slice()[..i].to_vec()))
-            .collect()
-    }
-}
-```
+**Summary**: Implemented `Key::ancestors()` method that returns all ancestor keys (prefixes) for a given key path.
 
-**Tests Required**:
-- Empty key → empty ancestors
-- Single subscript → empty ancestors
-- Two subscripts → one ancestor
-- Deep nesting (5+ levels) → all prefixes
+**Implementation Complete**:
+- ✅ Added `ancestors()` method to Key impl
+- ✅ Returns all prefixes except the full key
+- ✅ Empty keys and single-subscript keys return empty ancestors
+- ✅ Method uses functional iterator style with `map` and `collect`
+- ✅ Comprehensive documentation with examples
+- ✅ All unit tests pass:
+  - ✅ test_ancestors_empty_key
+  - ✅ test_ancestors_single_subscript
+  - ✅ test_ancestors_two_subscripts
+  - ✅ test_ancestors_deep_nesting (5 levels)
+- ✅ All 107 tests in rumps-types pass
 
 ---
 
@@ -472,47 +451,13 @@ This is already CORRECT - `split_node()` returns the median's `NodeData` which i
 
 ## Comprehensive Test Suite
 
-### Unit Tests in `crates/rumps-types/src/key.rs`
+### Unit Tests in `crates/rumps-types/src/key.rs` ✅ COMPLETE
 
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ancestors_empty_key() {
-        let key = Key::from(vec![]);
-        assert_eq!(key.ancestors().len(), 0);
-    }
-
-    #[test]
-    fn test_ancestors_single_subscript() {
-        let key = Key::from(vec![123.into()]);
-        assert_eq!(key.ancestors().len(), 0);
-    }
-
-    #[test]
-    fn test_ancestors_two_subscripts() {
-        let key = Key::from(vec![123.into(), "NAME".into()]);
-        let ancestors = key.ancestors();
-        assert_eq!(ancestors.len(), 1);
-        assert_eq!(ancestors[0], Key::from(vec![123.into()]));
-    }
-
-    #[test]
-    fn test_ancestors_deep_nesting() {
-        let key = Key::from(vec![
-            1.into(), 2.into(), 3.into(), 4.into(), 5.into()
-        ]);
-        let ancestors = key.ancestors();
-        assert_eq!(ancestors.len(), 4);
-        assert_eq!(ancestors[0], Key::from(vec![1.into()]));
-        assert_eq!(ancestors[1], Key::from(vec![1.into(), 2.into()]));
-        assert_eq!(ancestors[2], Key::from(vec![1.into(), 2.into(), 3.into()]));
-        assert_eq!(ancestors[3], Key::from(vec![1.into(), 2.into(), 3.into(), 4.into()]));
-    }
-}
-```
+All unit tests for `Key::ancestors()` have been implemented and are passing:
+- ✅ test_ancestors_empty_key
+- ✅ test_ancestors_single_subscript
+- ✅ test_ancestors_two_subscripts
+- ✅ test_ancestors_deep_nesting
 
 ### Integration Tests in `crates/rumps-storage/src/btree.rs`
 
@@ -693,8 +638,8 @@ mod tests {
 - [x] **Verify existing B-tree operations work** with Arc-wrapped values
 
 ### Step 2: Core Implementation
-- [ ] Add `Key::ancestors()` method to `crates/rumps-types/src/key.rs`
-- [ ] Add unit tests for `Key::ancestors()` (empty, single, two, deep)
+- [x] Add `Key::ancestors()` method to `crates/rumps-types/src/key.rs`
+- [x] Add unit tests for `Key::ancestors()` (empty, single, two, deep)
 - [ ] Implement `get_internal()` returning `Arc<NodeData>` with full B-tree navigation
 - [ ] Implement `search_from_node()` helper for recursive search
 - [ ] Test `get_internal()` with existing and non-existent keys
@@ -716,10 +661,10 @@ mod tests {
 - [ ] **Fix 3**: Verify median promotion during splits preserves `NodeData` flags
 
 ### Step 4: Testing - Unit Tests
-- [ ] Test: `Key::ancestors()` with various depths
-- [ ] Test: Empty key has no ancestors
-- [ ] Test: Single subscript has no ancestors
-- [ ] Test: Multiple levels return all prefixes
+- [x] Test: `Key::ancestors()` with various depths
+- [x] Test: Empty key has no ancestors
+- [x] Test: Single subscript has no ancestors
+- [x] Test: Multiple levels return all prefixes
 - [ ] Test: `get_internal()` returns correct `NodeData`
 - [ ] Test: `set_internal()` merges `NodeData` correctly
 
@@ -744,7 +689,7 @@ mod tests {
 - [ ] Verify thread safety with concurrent operations
 
 ### Step 7: Documentation
-- [ ] Add rustdoc to `Key::ancestors()`
+- [x] Add rustdoc to `Key::ancestors()`
 - [ ] Document `get_internal()` behavior and purpose
 - [ ] Document `set_internal()` merge semantics explicitly
 - [ ] Document `ensure_ancestors()` thread safety

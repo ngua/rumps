@@ -172,7 +172,20 @@ pub struct Node {
     pub keys: Vec<Key>,
     /// References to child nodes (empty for leaf nodes)
     pub children: Vec<NodeId>,
-    /// Data associated with each key (wrapped in Arc for efficient cloning during hierarchy navigation)
+    /// Data associated with each key.
+    ///
+    /// Values are wrapped in `Arc<NodeData>` for efficient hierarchy
+    /// navigation. MUMPS operations like `$DATA`, `$ORDER`, and internal
+    /// ancestor maintenance (`ensure_ancestors()`) frequently check the
+    /// `has_descendants` flag without needing ownership. Using `Arc`
+    /// makes these checks extremely cheap - `Arc::clone()` just
+    /// increments a reference count, rather than cloning the entire
+    /// `NodeData` and its potentially large `Value`.
+    ///
+    /// For the `$GET` primitive (which extracts values), the public API
+    /// uses `Arc::try_unwrap()` to avoid cloning when the refcount is 1,
+    /// providing zero-cost extraction in the common case where no other
+    /// references exist.
     pub values: Vec<Arc<NodeData>>,
     /// Whether this is a leaf node (no children)
     pub is_leaf: bool,

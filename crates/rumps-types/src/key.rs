@@ -546,6 +546,32 @@ impl Key {
     pub fn as_slice(&self) -> &[Subscript] {
         &self.0
     }
+
+    /// Returns all ancestor keys (all prefixes except the full key).
+    ///
+    /// For a key with subscripts `[a, b, c]`, this returns keys for
+    /// prefixes `[a]` and `[a, b]`. Empty keys and single-subscript keys
+    /// have no ancestors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::{Key, Subscript};
+    ///
+    /// let key = Key::from(vec![
+    ///     Subscript::from(123),
+    ///     Subscript::from("NAME"),
+    /// ]);
+    ///
+    /// let ancestors = key.ancestors();
+    /// assert_eq!(ancestors.len(), 1);
+    /// assert_eq!(ancestors[0], Key::from(vec![Subscript::from(123)]));
+    /// ```
+    pub fn ancestors(&self) -> Vec<Self> {
+        (1..self.len())
+            .map(|i| Self::from(self.as_slice()[..i].to_vec()))
+            .collect()
+    }
 }
 
 impl Default for Key {
@@ -1135,5 +1161,40 @@ mod tests {
         let serialized = bincode::serialize(&empty_key).unwrap();
         let deserialized: Key = bincode::deserialize(&serialized).unwrap();
         assert_eq!(empty_key, deserialized);
+    }
+
+    #[test]
+    fn test_ancestors_empty_key() {
+        let key = Key::from(vec![]);
+        assert_eq!(key.ancestors().len(), 0);
+    }
+
+    #[test]
+    fn test_ancestors_single_subscript() {
+        let key = Key::from(vec![123.into()]);
+        assert_eq!(key.ancestors().len(), 0);
+    }
+
+    #[test]
+    fn test_ancestors_two_subscripts() {
+        let key = Key::from(vec![123.into(), "NAME".into()]);
+        let ancestors = key.ancestors();
+        assert_eq!(ancestors.len(), 1);
+        assert_eq!(ancestors[0], Key::from(vec![123.into()]));
+    }
+
+    #[test]
+    fn test_ancestors_deep_nesting() {
+        let key =
+            Key::from(vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into()]);
+        let ancestors = key.ancestors();
+        assert_eq!(ancestors.len(), 4);
+        assert_eq!(ancestors[0], Key::from(vec![1.into()]));
+        assert_eq!(ancestors[1], Key::from(vec![1.into(), 2.into()]));
+        assert_eq!(ancestors[2], Key::from(vec![1.into(), 2.into(), 3.into()]));
+        assert_eq!(
+            ancestors[3],
+            Key::from(vec![1.into(), 2.into(), 3.into(), 4.into()])
+        );
     }
 }
