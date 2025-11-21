@@ -678,6 +678,258 @@ impl Default for BTree {
     }
 }
 
+/// MUMPS primitive operations (SET, GET, KILL, DATA, ORDER).
+///
+/// Public API
+impl BTree {
+    /// Sets a value in the tree at the specified variable name and key.
+    ///
+    /// This is the simple wrapper that delegates to `set_with_context` with no
+    /// transaction context. For transactional writes, use `set_with_context` directly.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rumps_storage::BTree;
+    /// use rumps_types::{Name, Key, Value};
+    ///
+    /// # tokio_test::block_on(async {
+    /// let btree = BTree::new(3)?;
+    ///
+    /// let name = Name::Global("PATIENT".into());
+    /// let key = Key::from(vec![123.into()]);
+    /// btree.set(&name, &key, "John Doe".into()).await?;
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
+    /// ```
+    pub async fn set(
+        &self,
+        name: &Name,
+        key: &Key,
+        value: rumps_types::Value,
+    ) -> Result<()> {
+        self.set_with_context(name, key, value, None).await
+    }
+
+    /// Sets a value with optional transaction context.
+    ///
+    /// This is the full implementation that supports transaction isolation.
+    /// When `context` is `Some`, writes are tracked in the transaction.
+    ///
+    /// For now (Phase 2), the context parameter is accepted but ignored.
+    /// Transaction support will be added in Phase 5.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Look up the root node ID for this variable name
+    /// 2. If no root exists, create a new leaf root with the key-value pair
+    /// 3. If root exists:
+    ///    a. Check if root is full; if so, split it and create new root
+    ///    b. Navigate down the tree to find the appropriate leaf
+    ///    c. Insert or update the key-value pair in the leaf
+    ///    d. Split nodes along the path if they become full
+    /// 4. Update statistics (key count, splits)
+    ///
+    /// # Note on has_descendants
+    ///
+    /// TODO: Currently not updating `has_descendants` flags. This will be
+    /// added in a future iteration when implementing hierarchical semantics.
+    pub async fn set_with_context(
+        &self,
+        name: &Name,
+        key: &Key,
+        value: rumps_types::Value,
+        // Will be Option<&TransactionContext> in Phase 5
+        _context: Option<()>,
+    ) -> Result<()> {
+        // Look up the root node ID for this variable name
+        let roots = self.roots.read().await;
+        let root_id_opt = roots.get(name).copied();
+        drop(roots);
+
+        match root_id_opt {
+            None => {
+                // Variable doesn't exist - create a new leaf root with single key-value
+                let new_root_id = self.allocator.allocate().await?;
+                let new_root = Node {
+                    keys: vec![key.clone()],
+                    children: vec![],
+                    values: vec![NodeData::with_value(value)],
+                    is_leaf: true,
+                };
+
+                // Insert the new root into storage
+                {
+                    let mut nodes = self.nodes.write().await;
+                    nodes.insert(new_root_id, new_root);
+                }
+
+                // Register the root in the roots map
+                {
+                    let mut roots = self.roots.write().await;
+                    roots.insert(name.clone(), new_root_id);
+                }
+
+                // Update statistics
+                {
+                    let mut stats = self.stats.write().await;
+                    stats.node_count += 1;
+                    stats.key_count += 1;
+                    stats.height = 1;
+                }
+
+                Ok(())
+            }
+            Some(root_id) => {
+                // Variable exists - navigate tree and insert
+                // Check if root is full and needs splitting
+                let root = self.find_node(root_id).await?;
+                let max_keys = 2 * self.min_degree - 1;
+
+                let new_root_id = match root.keys.len() {
+                    n if n == max_keys => {
+                        // Root is full, split it and create a new root
+                        let (median_key, median_value, right_id) =
+                            self.split_node(root_id).await?;
+
+                        // Create new root with the median
+                        let new_root_id = self.allocator.allocate().await?;
+                        let new_root = Node {
+                            keys: vec![median_key],
+                            children: vec![root_id, right_id],
+                            values: vec![median_value],
+                            is_leaf: false,
+                        };
+
+                        // Insert new root
+                        {
+                            let mut nodes = self.nodes.write().await;
+                            nodes.insert(new_root_id, new_root);
+                        }
+
+                        // Update root reference
+                        {
+                            let mut roots = self.roots.write().await;
+                            roots.insert(name.clone(), new_root_id);
+                        }
+
+                        // Update height
+                        {
+                            let mut stats = self.stats.write().await;
+                            stats.height += 1;
+                            stats.node_count += 1;
+                        }
+
+                        new_root_id
+                    }
+                    _ => root_id,
+                };
+
+                // Insert into the non-full root
+                self.insert_non_full(new_root_id, key, value).await?;
+
+                // Update key count statistics
+                {
+                    let mut stats = self.stats.write().await;
+                    stats.key_count += 1;
+                }
+
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Private helper methods for B-tree operations.
+impl BTree {
+    /// Inserts a key-value pair into a non-full node.
+    ///
+    /// This is a recursive helper for the SET operation. It assumes the given
+    /// node is not full (has fewer than 2*min_degree - 1 keys).
+    fn insert_non_full<'a>(
+        &'a self,
+        node_id: NodeId,
+        key: &'a Key,
+        value: rumps_types::Value,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let node = self.find_node(node_id).await?;
+
+            // Find the position where the key should be inserted
+            let pos = node
+                .keys
+                .binary_search(key)
+                .unwrap_or_else(|insert_pos| insert_pos);
+
+            if node.is_leaf {
+                // Leaf node: insert or update the key-value pair
+                let mut updated_node = node;
+
+                match updated_node.keys.get(pos) {
+                    Some(existing_key) if existing_key == key => {
+                        // Key exists, update the value
+                        updated_node.values[pos] = NodeData::with_value(value);
+                    }
+                    _ => {
+                        // Key doesn't exist, insert it
+                        updated_node.keys.insert(pos, key.clone());
+                        updated_node
+                            .values
+                            .insert(pos, NodeData::with_value(value));
+                    }
+                }
+
+                // Write the updated node back
+                let mut nodes = self.nodes.write().await;
+                nodes.insert(node_id, updated_node);
+
+                Ok(())
+            } else {
+                // Internal node: recurse to the appropriate child
+                let child_id = node.children[pos];
+
+                // Check if child is full
+                let child = self.find_node(child_id).await?;
+                let max_keys = 2 * self.min_degree - 1;
+
+                if child.keys.len() == max_keys {
+                    // Child is full, split it first
+                    let (median_key, median_value, new_child_id) =
+                        self.split_node(child_id).await?;
+
+                    // Insert median into this node
+                    let mut updated_node = node;
+                    updated_node.keys.insert(pos, median_key.clone());
+                    updated_node.values.insert(pos, median_value);
+                    updated_node.children.insert(pos + 1, new_child_id);
+
+                    // Write updated parent
+                    {
+                        let mut nodes = self.nodes.write().await;
+                        nodes.insert(node_id, updated_node.clone());
+                    }
+
+                    // Determine which child to recurse into
+                    let next_child_id = if *key > median_key {
+                        new_child_id
+                    } else {
+                        child_id
+                    };
+
+                    self.insert_non_full(next_child_id, key, value).await
+                } else {
+                    // Child is not full, recurse directly
+                    drop(child);
+                    drop(node);
+                    self.insert_non_full(child_id, key, value).await
+                }
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1117,7 +1369,8 @@ mod tests {
         }
 
         // Split the node
-        let (median_key, median_value, right_id) = btree.split_node(node_id).await.unwrap();
+        let (median_key, median_value, right_id) =
+            btree.split_node(node_id).await.unwrap();
         assert_eq!(median_key, Key::from(vec!["C".into()]));
         assert_eq!(median_value.value, Some(Value::Boolean(true)));
 
@@ -1207,10 +1460,7 @@ mod tests {
         // Create two leaf nodes and a separator
         let left_id = NodeId::from(100);
         let left_node = Node {
-            keys: vec![
-                Key::from(vec![10.into()]),
-                Key::from(vec![20.into()]),
-            ],
+            keys: vec![Key::from(vec![10.into()]), Key::from(vec![20.into()])],
             children: vec![],
             values: vec![
                 NodeData::with_value(Value::Integer(10)),
@@ -1221,10 +1471,7 @@ mod tests {
 
         let right_id = NodeId::from(101);
         let right_node = Node {
-            keys: vec![
-                Key::from(vec![40.into()]),
-                Key::from(vec![50.into()]),
-            ],
+            keys: vec![Key::from(vec![40.into()]), Key::from(vec![50.into()])],
             children: vec![],
             values: vec![
                 NodeData::with_value(Value::Integer(40)),
@@ -1243,7 +1490,9 @@ mod tests {
         }
 
         // Merge the nodes
-        let result = btree.merge_nodes(left_id, separator_key, separator_value, right_id).await;
+        let result = btree
+            .merge_nodes(left_id, separator_key, separator_value, right_id)
+            .await;
         assert!(result.is_ok());
 
         // Verify merged node contains all keys in order
@@ -1282,37 +1531,17 @@ mod tests {
         // Create two internal nodes with children
         let left_id = NodeId::from(100);
         let left_node = Node {
-            keys: vec![
-                Key::from(vec![10.into()]),
-                Key::from(vec![20.into()]),
-            ],
-            children: vec![
-                NodeId::from(1),
-                NodeId::from(2),
-                NodeId::from(3),
-            ],
-            values: vec![
-                NodeData::empty(),
-                NodeData::empty(),
-            ],
+            keys: vec![Key::from(vec![10.into()]), Key::from(vec![20.into()])],
+            children: vec![NodeId::from(1), NodeId::from(2), NodeId::from(3)],
+            values: vec![NodeData::empty(), NodeData::empty()],
             is_leaf: false,
         };
 
         let right_id = NodeId::from(101);
         let right_node = Node {
-            keys: vec![
-                Key::from(vec![40.into()]),
-                Key::from(vec![50.into()]),
-            ],
-            children: vec![
-                NodeId::from(4),
-                NodeId::from(5),
-                NodeId::from(6),
-            ],
-            values: vec![
-                NodeData::empty(),
-                NodeData::empty(),
-            ],
+            keys: vec![Key::from(vec![40.into()]), Key::from(vec![50.into()])],
+            children: vec![NodeId::from(4), NodeId::from(5), NodeId::from(6)],
+            values: vec![NodeData::empty(), NodeData::empty()],
             is_leaf: false,
         };
 
@@ -1326,7 +1555,10 @@ mod tests {
         }
 
         // Merge the nodes
-        btree.merge_nodes(left_id, separator_key, separator_value, right_id).await.unwrap();
+        btree
+            .merge_nodes(left_id, separator_key, separator_value, right_id)
+            .await
+            .unwrap();
 
         // Verify merged node
         let merged = btree.find_node(left_id).await.unwrap();
@@ -1376,7 +1608,9 @@ mod tests {
         }
 
         // Try to merge - should fail
-        let result = btree.merge_nodes(left_id, separator_key, separator_value, right_id).await;
+        let result = btree
+            .merge_nodes(left_id, separator_key, separator_value, right_id)
+            .await;
         assert!(result.is_err());
         match result {
             Err(StorageError::InvalidOperation(msg)) => {
@@ -1412,7 +1646,9 @@ mod tests {
         let separator_value = NodeData::empty();
 
         // Try to merge - should fail
-        let result = btree.merge_nodes(left_id, separator_key, separator_value, right_id).await;
+        let result = btree
+            .merge_nodes(left_id, separator_key, separator_value, right_id)
+            .await;
         assert!(result.is_err());
         match result {
             Err(StorageError::NodeNotFound(id)) => {
@@ -1448,7 +1684,9 @@ mod tests {
         let separator_value = NodeData::empty();
 
         // Try to merge - should fail
-        let result = btree.merge_nodes(left_id, separator_key, separator_value, right_id).await;
+        let result = btree
+            .merge_nodes(left_id, separator_key, separator_value, right_id)
+            .await;
         assert!(result.is_err());
         match result {
             Err(StorageError::NodeNotFound(id)) => {
@@ -1503,7 +1741,10 @@ mod tests {
         }
 
         // Merge nodes
-        btree.merge_nodes(left_id, separator_key, separator_value, right_id).await.unwrap();
+        btree
+            .merge_nodes(left_id, separator_key, separator_value, right_id)
+            .await
+            .unwrap();
 
         // Verify all value types are preserved
         let merged = btree.find_node(left_id).await.unwrap();
@@ -1568,23 +1809,29 @@ mod tests {
         assert_eq!(stats.merges, 0);
 
         // Merge first pair
-        btree.merge_nodes(
-            left1_id,
-            Key::from(vec![2.into()]),
-            NodeData::with_value(Value::Integer(2)),
-            right1_id,
-        ).await.unwrap();
+        btree
+            .merge_nodes(
+                left1_id,
+                Key::from(vec![2.into()]),
+                NodeData::with_value(Value::Integer(2)),
+                right1_id,
+            )
+            .await
+            .unwrap();
 
         let stats = btree.stats().await;
         assert_eq!(stats.merges, 1);
 
         // Merge second pair
-        btree.merge_nodes(
-            left2_id,
-            Key::from(vec![20.into()]),
-            NodeData::with_value(Value::Integer(20)),
-            right2_id,
-        ).await.unwrap();
+        btree
+            .merge_nodes(
+                left2_id,
+                Key::from(vec![20.into()]),
+                NodeData::with_value(Value::Integer(20)),
+                right2_id,
+            )
+            .await
+            .unwrap();
 
         let stats = btree.stats().await;
         assert_eq!(stats.merges, 2);
@@ -1623,10 +1870,14 @@ mod tests {
         }
 
         // Split the node
-        let (median_key, median_value, right_id) = btree.split_node(original_id).await.unwrap();
+        let (median_key, median_value, right_id) =
+            btree.split_node(original_id).await.unwrap();
 
         // Merge back
-        btree.merge_nodes(original_id, median_key, median_value, right_id).await.unwrap();
+        btree
+            .merge_nodes(original_id, median_key, median_value, right_id)
+            .await
+            .unwrap();
 
         // Verify we're back to original state
         let final_node = btree.find_node(original_id).await.unwrap();
