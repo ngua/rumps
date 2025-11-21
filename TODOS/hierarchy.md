@@ -139,36 +139,30 @@ impl Key {
 /// This is used internally to access the `has_descendants` flag.
 /// The public `get()` method will strip this wrapper and return only the value.
 async fn get_internal(&self, name: &Name, key: &Key) -> Result<Option<NodeData>> {
-    // Get root
-    let root_id = match self.roots.read().await.get(name).copied() {
-        Some(id) => id,
-        None => {
-            return Ok(None); // Variable doesn't exist
-        }
-    };
-
-    let mut current_id = root_id;
-
-    loop {
-        let node = self.find_node(current_id).await?;
-
-        // Binary search for key
-        match node.keys.binary_search(key) {
-            Ok(pos) => {
-                // Exact match found
-                return Ok(Some(node.values[pos].clone()));
-            }
-            Err(pos) => {
-                if node.is_leaf {
-                    // Not found in leaf
-                    return Ok(None);
-                } else {
-                    // Navigate to child
-                    current_id = node.children[pos];
-                }
-            }
-        }
+    match self.roots.read().await.get(name).copied() {
+        None => Ok(None),
+        Some(root_id) => self.search_from_node(root_id, key).await,
     }
+}
+
+/// Recursively search for a key starting from the given node.
+fn search_from_node<'a>(
+    &'a self,
+    node_id: NodeId,
+    key: &'a Key,
+) -> Pin<Box<dyn Future<Output = Result<Option<NodeData>>> + Send + 'a>>
+{
+    Box::pin(async move {
+        let node = self.find_node(node_id).await?;
+
+        match node.keys.binary_search(key) {
+            Ok(pos) => Ok(Some(node.values[pos].clone())),
+            Err(pos) => match node.is_leaf {
+                true => Ok(None),
+                false => self.search_from_node(node.children[pos], key).await,
+            }
+        }
+    })
 }
 ```
 
