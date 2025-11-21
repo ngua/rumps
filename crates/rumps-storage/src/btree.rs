@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rumps_types::{Name, Node, NodeId};
+use rumps_types::{Key, Name, Node, NodeId};
 use tokio::sync::RwLock;
 
 use crate::error::{Result, StorageError};
@@ -342,12 +342,13 @@ impl BTree {
         match self.max_memory_bytes {
             Some(limit) => {
                 let stats = self.stats.read().await;
-                match stats.memory_bytes > limit {
-                    true => Err(StorageError::MemoryLimitExceeded {
+                if stats.memory_bytes > limit {
+                    Err(StorageError::MemoryLimitExceeded {
                         used: stats.memory_bytes,
                         limit,
-                    }),
-                    false => Ok(()),
+                    })
+                } else {
+                    Ok(())
                 }
             }
             None => Ok(()),
@@ -378,6 +379,145 @@ impl BTree {
             .get(&id)
             .cloned()
             .ok_or_else(|| StorageError::NodeNotFound(id))
+    }
+
+    /// Splits a full node into two nodes.
+    ///
+    /// This operation is used when a node reaches maximum capacity
+    /// (2*min_degree - 1 keys). The node is split at the median:
+    /// - Left half: keys[0..mid] remain in the original node
+    /// - Median key: returned to be promoted to parent
+    /// - Right half: keys[mid+1..] moved to new node
+    ///
+    /// For internal nodes, children are also split appropriately:
+    /// - Left node gets children[0..=mid]
+    /// - Right node gets children[mid+1..]
+    ///
+    /// # B-tree Split Example
+    ///
+    /// Before split (min_degree=3, node has 5 keys):
+    /// ```text
+    /// Node: [10, 20, 30, 40, 50]
+    /// ```
+    ///
+    /// After split:
+    /// ```text
+    /// Left:  [10, 20]
+    /// Median: 30 (to be promoted to parent)
+    /// Right: [40, 50]
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID of the node to split
+    ///
+    /// # Returns
+    ///
+    /// A tuple of:
+    /// - `Key`: The median key to be promoted to the parent
+    /// - `NodeId`: The ID of the newly created right node
+    ///
+    /// The original node (identified by `id`) is modified in place to
+    /// contain only the left half of the keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The node doesn't exist (`NodeNotFound`)
+    /// - The node is not full enough to split
+    /// - Node allocation fails
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Internal use only - used during SET operations
+    /// let (median_key, right_id) = btree.split_node(full_node_id).await?;
+    /// // Caller must promote median_key to parent and link right_id
+    /// ```
+    async fn split_node(&self, id: NodeId) -> Result<(Key, NodeId)> {
+        // Find the node to split
+        let node = self.find_node(id).await?;
+
+        // Calculate the median index
+        let mid = node.keys.len() / 2;
+
+        // Verify we have enough keys to split
+        match node.keys.get(mid) {
+            None => Err(StorageError::InvalidOperation(
+                "Node has insufficient keys for splitting".to_string(),
+            )),
+            Some(median_key) => {
+                let median_key = median_key.clone();
+
+                // Allocate ID for the new right node
+                let right_id = self.allocator.allocate().await?;
+
+                // Split keys, values, and optionally children
+                let left_keys = node.keys.iter().take(mid).cloned().collect();
+                let right_keys = node
+                    .keys
+                    .iter()
+                    .skip(mid + 1)
+                    .cloned()
+                    .collect();
+
+                let left_values = node.values.iter().take(mid).cloned().collect();
+                let right_values = node
+                    .values
+                    .iter()
+                    .skip(mid + 1)
+                    .cloned()
+                    .collect();
+
+                // Split children for internal nodes
+                let (left_children, right_children) = if node.is_leaf {
+                    (Vec::new(), Vec::new())
+                } else {
+                    let left = node
+                        .children
+                        .iter()
+                        .take(mid + 1)
+                        .copied()
+                        .collect();
+                    let right = node
+                        .children
+                        .iter()
+                        .skip(mid + 1)
+                        .copied()
+                        .collect();
+                    (left, right)
+                };
+
+                // Create the right node
+                let right_node = Node {
+                    keys: right_keys,
+                    children: right_children,
+                    values: right_values,
+                    is_leaf: node.is_leaf,
+                };
+
+                // Update the original (left) node
+                let left_node = Node {
+                    keys: left_keys,
+                    children: left_children,
+                    values: left_values,
+                    is_leaf: node.is_leaf,
+                };
+
+                // Write both nodes to storage
+                let mut nodes = self.nodes.write().await;
+                nodes.insert(id, left_node);
+                nodes.insert(right_id, right_node);
+                drop(nodes);
+
+                // Update statistics
+                let mut stats = self.stats.write().await;
+                stats.splits += 1;
+                stats.node_count += 1;
+
+                Ok((median_key, right_id))
+            }
+        }
     }
 }
 
@@ -584,5 +724,342 @@ mod tests {
         // Verify we got the same node back
         assert_eq!(found_node.is_leaf, test_node.is_leaf);
         assert_eq!(found_node.keys.len(), test_node.keys.len());
+    }
+
+    #[tokio::test]
+    async fn test_split_node_leaf_odd_keys() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create a leaf node with 5 keys (odd number)
+        // Use high node ID to avoid conflicts with allocator
+        let node_id = NodeId::from(100);
+        let node = Node {
+            keys: vec![
+                Key::from(vec![10.into()]),
+                Key::from(vec![20.into()]),
+                Key::from(vec![30.into()]),
+                Key::from(vec![40.into()]),
+                Key::from(vec![50.into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::Integer(10)),
+                NodeData::with_value(Value::Integer(20)),
+                NodeData::with_value(Value::Integer(30)),
+                NodeData::with_value(Value::Integer(40)),
+                NodeData::with_value(Value::Integer(50)),
+            ],
+            is_leaf: true,
+        };
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(node_id, node);
+        }
+
+        // Split the node
+        let result = btree.split_node(node_id).await;
+        assert!(result.is_ok());
+        let (median_key, right_id) = result.unwrap();
+
+        // Verify median key
+        assert_eq!(median_key, Key::from(vec![30.into()]));
+
+        // Verify left node (original)
+        let left = btree.find_node(node_id).await.unwrap();
+        assert_eq!(left.keys.len(), 2);
+        assert_eq!(left.keys[0], Key::from(vec![10.into()]));
+        assert_eq!(left.keys[1], Key::from(vec![20.into()]));
+        assert!(left.is_leaf);
+
+        // Verify right node
+        let right = btree.find_node(right_id).await.unwrap();
+        assert_eq!(right.keys.len(), 2);
+        assert_eq!(right.keys[0], Key::from(vec![40.into()]));
+        assert_eq!(right.keys[1], Key::from(vec![50.into()]));
+        assert!(right.is_leaf);
+
+        // Verify stats
+        // Note: stats.node_count tracks new nodes created by operations,
+        // not total nodes in the tree
+        let stats = btree.stats().await;
+        assert_eq!(stats.splits, 1);
+        assert_eq!(stats.node_count, 1); // One new node created (right half)
+    }
+
+    #[tokio::test]
+    async fn test_split_node_leaf_even_keys() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create a leaf node with 4 keys (even number)
+        // Use high node ID to avoid conflicts with allocator
+        let node_id = NodeId::from(100);
+        let node = Node {
+            keys: vec![
+                Key::from(vec![10.into()]),
+                Key::from(vec![20.into()]),
+                Key::from(vec![30.into()]),
+                Key::from(vec![40.into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::Integer(10)),
+                NodeData::with_value(Value::Integer(20)),
+                NodeData::with_value(Value::Integer(30)),
+                NodeData::with_value(Value::Integer(40)),
+            ],
+            is_leaf: true,
+        };
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(node_id, node);
+        }
+
+        // Split the node
+        let result = btree.split_node(node_id).await;
+        assert!(result.is_ok());
+        let (median_key, right_id) = result.unwrap();
+
+        // Verify median key (middle of 4 keys is index 2)
+        assert_eq!(median_key, Key::from(vec![30.into()]));
+
+        // Verify left node
+        let left = btree.find_node(node_id).await.unwrap();
+        assert_eq!(left.keys.len(), 2);
+        assert_eq!(left.keys[0], Key::from(vec![10.into()]));
+        assert_eq!(left.keys[1], Key::from(vec![20.into()]));
+
+        // Verify right node
+        let right = btree.find_node(right_id).await.unwrap();
+        assert_eq!(right.keys.len(), 1);
+        assert_eq!(right.keys[0], Key::from(vec![40.into()]));
+    }
+
+    #[tokio::test]
+    async fn test_split_node_internal_with_children() {
+        use rumps_types::{Key, NodeData};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create an internal node with 5 keys and 6 children
+        // Use high node ID to avoid conflicts with allocator
+        let node_id = NodeId::from(100);
+        let node = Node {
+            keys: vec![
+                Key::from(vec![10.into()]),
+                Key::from(vec![20.into()]),
+                Key::from(vec![30.into()]),
+                Key::from(vec![40.into()]),
+                Key::from(vec![50.into()]),
+            ],
+            children: vec![
+                NodeId::from(1),
+                NodeId::from(2),
+                NodeId::from(3),
+                NodeId::from(4),
+                NodeId::from(5),
+                NodeId::from(6),
+            ],
+            values: vec![
+                NodeData::empty(),
+                NodeData::empty(),
+                NodeData::empty(),
+                NodeData::empty(),
+                NodeData::empty(),
+            ],
+            is_leaf: false,
+        };
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(node_id, node);
+        }
+
+        // Split the node
+        let result = btree.split_node(node_id).await;
+        assert!(result.is_ok());
+        let (median_key, right_id) = result.unwrap();
+
+        // Verify median key
+        assert_eq!(median_key, Key::from(vec![30.into()]));
+
+        // Verify left node has correct children
+        let left = btree.find_node(node_id).await.unwrap();
+        assert_eq!(left.keys.len(), 2);
+        assert_eq!(left.children.len(), 3); // mid+1 children
+        assert_eq!(left.children[0], NodeId::from(1));
+        assert_eq!(left.children[1], NodeId::from(2));
+        assert_eq!(left.children[2], NodeId::from(3));
+        assert!(!left.is_leaf);
+
+        // Verify right node has correct children
+        let right = btree.find_node(right_id).await.unwrap();
+        assert_eq!(right.keys.len(), 2);
+        assert_eq!(right.children.len(), 3);
+        assert_eq!(right.children[0], NodeId::from(4));
+        assert_eq!(right.children[1], NodeId::from(5));
+        assert_eq!(right.children[2], NodeId::from(6));
+        assert!(!right.is_leaf);
+    }
+
+    #[tokio::test]
+    async fn test_split_node_not_found() {
+        let btree = BTree::new(3).unwrap();
+        let node_id = NodeId::from(99);
+
+        let result = btree.split_node(node_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::NodeNotFound(id)) => {
+                assert_eq!(id, node_id);
+            }
+            _ => panic!("Expected NodeNotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_split_node_empty() {
+        let btree = BTree::new(3).unwrap();
+
+        // Create an empty node
+        let node_id = NodeId::from(0);
+        let node = Node::new_leaf();
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(node_id, node);
+        }
+
+        // Try to split - should fail
+        let result = btree.split_node(node_id).await;
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::InvalidOperation(msg)) => {
+                assert!(msg.contains("insufficient keys"));
+            }
+            _ => panic!("Expected InvalidOperation error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_split_node_preserves_values() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create a node with different value types
+        // Use high node ID to avoid conflicts with allocator
+        let node_id = NodeId::from(100);
+        let node = Node {
+            keys: vec![
+                Key::from(vec!["A".into()]),
+                Key::from(vec!["B".into()]),
+                Key::from(vec!["C".into()]),
+                Key::from(vec!["D".into()]),
+                Key::from(vec!["E".into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::String("Alpha".into())),
+                NodeData::with_value(Value::Integer(42)),
+                NodeData::with_value(Value::Boolean(true)),
+                NodeData::with_value(Value::Double(3.14.into())),
+                NodeData::with_value(Value::Char('X')),
+            ],
+            is_leaf: true,
+        };
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(node_id, node);
+        }
+
+        // Split the node
+        let (median_key, right_id) = btree.split_node(node_id).await.unwrap();
+        assert_eq!(median_key, Key::from(vec!["C".into()]));
+
+        // Verify left values
+        let left = btree.find_node(node_id).await.unwrap();
+        assert_eq!(left.values.len(), 2);
+        assert_eq!(
+            left.values[0].value,
+            Some(Value::String("Alpha".into()))
+        );
+        assert_eq!(left.values[1].value, Some(Value::Integer(42)));
+
+        // Verify right values
+        let right = btree.find_node(right_id).await.unwrap();
+        assert_eq!(right.values.len(), 2);
+        assert_eq!(right.values[0].value, Some(Value::Double(3.14.into())));
+        assert_eq!(right.values[1].value, Some(Value::Char('X')));
+    }
+
+    #[tokio::test]
+    async fn test_split_node_stats_update() {
+        use rumps_types::{Key, NodeData, Value};
+
+        let btree = BTree::new(3).unwrap();
+
+        // Create two nodes and split both to verify stats accumulation
+        // Use high node IDs to avoid conflicts with allocator
+        let node1_id = NodeId::from(100);
+        let node1 = Node {
+            keys: vec![
+                Key::from(vec![1.into()]),
+                Key::from(vec![2.into()]),
+                Key::from(vec![3.into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::Integer(1)),
+                NodeData::with_value(Value::Integer(2)),
+                NodeData::with_value(Value::Integer(3)),
+            ],
+            is_leaf: true,
+        };
+
+        let node2_id = NodeId::from(101);
+        let node2 = Node {
+            keys: vec![
+                Key::from(vec![4.into()]),
+                Key::from(vec![5.into()]),
+                Key::from(vec![6.into()]),
+            ],
+            children: vec![],
+            values: vec![
+                NodeData::with_value(Value::Integer(4)),
+                NodeData::with_value(Value::Integer(5)),
+                NodeData::with_value(Value::Integer(6)),
+            ],
+            is_leaf: true,
+        };
+
+        {
+            let mut nodes = btree.nodes.write().await;
+            nodes.insert(node1_id, node1);
+            nodes.insert(node2_id, node2);
+        }
+
+        // Initial stats
+        let stats = btree.stats().await;
+        assert_eq!(stats.splits, 0);
+        assert_eq!(stats.node_count, 0); // Stats track differently from actual node count
+
+        // Split first node
+        btree.split_node(node1_id).await.unwrap();
+        let stats = btree.stats().await;
+        assert_eq!(stats.splits, 1);
+        assert_eq!(stats.node_count, 1);
+
+        // Split second node
+        btree.split_node(node2_id).await.unwrap();
+        let stats = btree.stats().await;
+        assert_eq!(stats.splits, 2);
+        assert_eq!(stats.node_count, 2);
     }
 }

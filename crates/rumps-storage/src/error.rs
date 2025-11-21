@@ -24,6 +24,10 @@ pub enum StorageError {
     #[error("Memory limit exceeded: {used} bytes, limit {limit}")]
     MemoryLimitExceeded { used: usize, limit: usize },
 
+    /// Invalid operation
+    #[error("Invalid operation: {0}")]
+    InvalidOperation(String),
+
     /// I/O error (for future disk operations)
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
