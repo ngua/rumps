@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rumps_types::{Key, Name, Node, NodeId};
+use rumps_types::{Key, Name, Node, NodeData, NodeId};
 use tokio::sync::RwLock;
 
 use crate::error::{Result, StorageError};
@@ -393,6 +393,17 @@ impl BTree {
     /// - Left node gets children[0..=mid]
     /// - Right node gets children[mid+1..]
     ///
+    /// # Design Note: B-tree vs B+-tree Semantics
+    ///
+    /// This implementation follows **B-tree semantics**, not B+-tree semantics.
+    /// The median key-value pair is promoted to the parent node, meaning data
+    /// can exist in both internal and leaf nodes.
+    ///
+    /// This is an **intentional divergence** from the original MUMPS implementation,
+    /// which uses B+-tree semantics (all data in leaves, internal nodes contain
+    /// only keys for navigation). The B-tree approach simplifies implementation
+    /// while maintaining the same asymptotic performance characteristics.
+    ///
     /// # B-tree Split Example
     ///
     /// Before split (min_degree=3, node has 5 keys):
@@ -407,14 +418,11 @@ impl BTree {
     /// Right: [40, 50]
     /// ```
     ///
-    /// # Arguments
-    ///
-    /// * `id` - The ID of the node to split
-    ///
     /// # Returns
     ///
     /// A tuple of:
     /// - `Key`: The median key to be promoted to the parent
+    /// - `NodeData`: The median's associated data value
     /// - `NodeId`: The ID of the newly created right node
     ///
     /// The original node (identified by `id`) is modified in place to
@@ -431,11 +439,11 @@ impl BTree {
     ///
     /// ```ignore
     /// // Internal use only - used during SET operations
-    /// let (median_key, right_id) = btree.split_node(full_node_id).await?;
-    /// // Caller must promote median_key to parent and link right_id
+    /// let (median_key, median_data, right_id) = btree.split_node(full_node_id).await?;
+    /// // Caller must promote median_key and median_data to parent and link right_id
     /// ```
-    async fn split_node(&self, id: NodeId) -> Result<(Key, NodeId)> {
-        // Find the node to split
+    async fn split_node(&self, id: NodeId) -> Result<(Key, NodeData, NodeId)> {
+        // Find the node to split (returns owned node)
         let node = self.find_node(id).await?;
 
         // Calculate the median index
@@ -446,46 +454,45 @@ impl BTree {
             None => Err(StorageError::InvalidOperation(
                 "Node has insufficient keys for splitting".to_string(),
             )),
-            Some(median_key) => {
-                let median_key = median_key.clone();
+            Some(_) => {
+                // Destructure to take ownership of the node's components
+                let Node {
+                    mut keys,
+                    mut children,
+                    mut values,
+                    is_leaf,
+                } = node;
 
                 // Allocate ID for the new right node
                 let right_id = self.allocator.allocate().await?;
 
-                // Split keys, values, and optionally children
-                let left_keys = node.keys.iter().take(mid).cloned().collect();
-                let right_keys = node
-                    .keys
-                    .iter()
-                    .skip(mid + 1)
-                    .cloned()
-                    .collect();
+                // Split keys efficiently using split_off
+                // keys = [0..mid, mid, mid+1..end]
+                // After split_off: keys = [0..mid, mid], right_keys = [mid+1..end]
+                let right_keys = keys.split_off(mid + 1);
+                // Pop the median from left side: keys = [0..mid]
+                let median_key = keys.pop().ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Failed to extract median key".to_string(),
+                    )
+                })?;
 
-                let left_values = node.values.iter().take(mid).cloned().collect();
-                let right_values = node
-                    .values
-                    .iter()
-                    .skip(mid + 1)
-                    .cloned()
-                    .collect();
+                // Split values the same way and extract median value
+                let right_values = values.split_off(mid + 1);
+                let median_value = values.pop().ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Failed to extract median value".to_string(),
+                    )
+                })?;
 
                 // Split children for internal nodes
-                let (left_children, right_children) = if node.is_leaf {
-                    (Vec::new(), Vec::new())
+                // For n keys, there are n+1 children
+                // Left node (mid keys) needs mid+1 children: [0..=mid]
+                // Right node needs remaining children: [mid+1..end]
+                let right_children = if is_leaf {
+                    Vec::new()
                 } else {
-                    let left = node
-                        .children
-                        .iter()
-                        .take(mid + 1)
-                        .copied()
-                        .collect();
-                    let right = node
-                        .children
-                        .iter()
-                        .skip(mid + 1)
-                        .copied()
-                        .collect();
-                    (left, right)
+                    children.split_off(mid + 1)
                 };
 
                 // Create the right node
@@ -493,15 +500,15 @@ impl BTree {
                     keys: right_keys,
                     children: right_children,
                     values: right_values,
-                    is_leaf: node.is_leaf,
+                    is_leaf,
                 };
 
-                // Update the original (left) node
+                // Create the left node (reusing the split vectors)
                 let left_node = Node {
-                    keys: left_keys,
-                    children: left_children,
-                    values: left_values,
-                    is_leaf: node.is_leaf,
+                    keys,
+                    children,
+                    values,
+                    is_leaf,
                 };
 
                 // Write both nodes to storage
@@ -515,7 +522,7 @@ impl BTree {
                 stats.splits += 1;
                 stats.node_count += 1;
 
-                Ok((median_key, right_id))
+                Ok((median_key, median_value, right_id))
             }
         }
     }
@@ -628,8 +635,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_readers() {
-        use tokio::task;
         use futures::future;
+        use tokio::task;
 
         let btree = Arc::new(BTree::new(3).unwrap());
 
@@ -762,10 +769,11 @@ mod tests {
         // Split the node
         let result = btree.split_node(node_id).await;
         assert!(result.is_ok());
-        let (median_key, right_id) = result.unwrap();
+        let (median_key, median_value, right_id) = result.unwrap();
 
-        // Verify median key
+        // Verify median key and value
         assert_eq!(median_key, Key::from(vec![30.into()]));
+        assert_eq!(median_value.value, Some(Value::Integer(30)));
 
         // Verify left node (original)
         let left = btree.find_node(node_id).await.unwrap();
@@ -823,10 +831,11 @@ mod tests {
         // Split the node
         let result = btree.split_node(node_id).await;
         assert!(result.is_ok());
-        let (median_key, right_id) = result.unwrap();
+        let (median_key, median_value, right_id) = result.unwrap();
 
-        // Verify median key (middle of 4 keys is index 2)
+        // Verify median key and value (middle of 4 keys is index 2)
         assert_eq!(median_key, Key::from(vec![30.into()]));
+        assert_eq!(median_value.value, Some(Value::Integer(30)));
 
         // Verify left node
         let left = btree.find_node(node_id).await.unwrap();
@@ -883,10 +892,11 @@ mod tests {
         // Split the node
         let result = btree.split_node(node_id).await;
         assert!(result.is_ok());
-        let (median_key, right_id) = result.unwrap();
+        let (median_key, median_value, right_id) = result.unwrap();
 
-        // Verify median key
+        // Verify median key and value (internal nodes have empty values)
         assert_eq!(median_key, Key::from(vec![30.into()]));
+        assert_eq!(median_value, NodeData::empty());
 
         // Verify left node has correct children
         let left = btree.find_node(node_id).await.unwrap();
@@ -980,16 +990,14 @@ mod tests {
         }
 
         // Split the node
-        let (median_key, right_id) = btree.split_node(node_id).await.unwrap();
+        let (median_key, median_value, right_id) = btree.split_node(node_id).await.unwrap();
         assert_eq!(median_key, Key::from(vec!["C".into()]));
+        assert_eq!(median_value.value, Some(Value::Boolean(true)));
 
         // Verify left values
         let left = btree.find_node(node_id).await.unwrap();
         assert_eq!(left.values.len(), 2);
-        assert_eq!(
-            left.values[0].value,
-            Some(Value::String("Alpha".into()))
-        );
+        assert_eq!(left.values[0].value, Some(Value::String("Alpha".into())));
         assert_eq!(left.values[1].value, Some(Value::Integer(42)));
 
         // Verify right values
