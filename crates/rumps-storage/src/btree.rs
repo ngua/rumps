@@ -920,11 +920,28 @@ impl BTree {
             let node = self.find_node(node_id).await?;
 
             match node.keys.binary_search(key) {
-                Ok(pos) => Ok(Some(Arc::clone(&node.values[pos]))),
+                Ok(pos) => {
+                    let value = node.values.get(pos).ok_or_else(|| {
+                        StorageError::InvalidOperation(format!(
+                            "Value index {} out of bounds (len {})",
+                            pos,
+                            node.values.len()
+                        ))
+                    })?;
+                    Ok(Some(Arc::clone(value)))
+                }
                 Err(pos) => match node.is_leaf {
                     true => Ok(None),
                     false => {
-                        self.search_from_node(node.children[pos], key).await
+                        let child_id =
+                            node.children.get(pos).ok_or_else(|| {
+                                StorageError::InvalidOperation(format!(
+                                    "Child index {} out of bounds (len {})",
+                                    pos,
+                                    node.children.len()
+                                ))
+                            })?;
+                        self.search_from_node(*child_id, key).await
                     }
                 },
             }
@@ -1095,12 +1112,24 @@ impl BTree {
                 match updated_node.keys.get(pos) {
                     Some(existing_key) if existing_key == key => {
                         // Key exists - CRITICAL: preserve has_descendants flag
+                        let existing_value =
+                            updated_node.values.get(pos).ok_or_else(|| {
+                                StorageError::InvalidOperation(format!(
+                                    "Value index {} out of bounds (len {})",
+                                    pos,
+                                    updated_node.values.len()
+                                ))
+                            })?;
                         let existing_has_descendants =
-                            updated_node.values[pos].has_descendants;
-                        updated_node.values[pos] = Arc::new(NodeData::new(
-                            Some(value),
-                            existing_has_descendants,
-                        ));
+                            existing_value.has_descendants;
+                        let values_len = updated_node.values.len();
+                        *updated_node.values.get_mut(pos).ok_or_else(|| {
+                            StorageError::InvalidOperation(format!(
+                                "Value index {} out of bounds for mutation (len {})",
+                                pos,
+                                values_len
+                            ))
+                        })? = Arc::new(NodeData::new(Some(value), existing_has_descendants));
                     }
                     _ => {
                         // Key doesn't exist, insert with has_descendants=false initially
@@ -1118,7 +1147,13 @@ impl BTree {
                 Ok(())
             } else {
                 // Internal node: recurse to the appropriate child
-                let child_id = node.children[pos];
+                let child_id = *node.children.get(pos).ok_or_else(|| {
+                    StorageError::InvalidOperation(format!(
+                        "Child index {} out of bounds (len {})",
+                        pos,
+                        node.children.len()
+                    ))
+                })?;
 
                 // Check if child is full
                 let child = self.find_node(child_id).await?;
@@ -1196,13 +1231,27 @@ impl BTree {
                 match updated_node.keys.get(pos) {
                     Some(existing_key) if existing_key == key => {
                         // Key exists - MERGE NodeData with OR semantics
-                        let existing_data = &updated_node.values[pos];
+                        let existing_data =
+                            updated_node.values.get(pos).ok_or_else(|| {
+                                StorageError::InvalidOperation(format!(
+                                    "Value index {} out of bounds (len {})",
+                                    pos,
+                                    updated_node.values.len()
+                                ))
+                            })?;
                         let merged_data = NodeData::new(
                             data.value.or_else(|| existing_data.value.clone()),
                             existing_data.has_descendants
                                 || data.has_descendants,
                         );
-                        updated_node.values[pos] = Arc::new(merged_data);
+                        let values_len = updated_node.values.len();
+                        *updated_node.values.get_mut(pos).ok_or_else(|| {
+                            StorageError::InvalidOperation(format!(
+                                "Value index {} out of bounds for mutation (len {})",
+                                pos,
+                                values_len
+                            ))
+                        })? = Arc::new(merged_data);
                     }
                     _ => {
                         // Key doesn't exist, insert new NodeData
@@ -1218,7 +1267,13 @@ impl BTree {
                 Ok(())
             } else {
                 // Internal node: recurse to the appropriate child
-                let child_id = node.children[pos];
+                let child_id = *node.children.get(pos).ok_or_else(|| {
+                    StorageError::InvalidOperation(format!(
+                        "Child index {} out of bounds (len {})",
+                        pos,
+                        node.children.len()
+                    ))
+                })?;
 
                 // Check if child is full
                 let child = self.find_node(child_id).await?;
