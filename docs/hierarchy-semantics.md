@@ -71,10 +71,21 @@ The hierarchy is **implicit** in the key structure. We must maintain `has_descen
 2. **Return Type**: `get_internal()` returns `Option<Arc<NodeData>>` instead of `Option<NodeData>`
 3. **Node Creation**: All values wrapped with `Arc::new(NodeData { ... })`
 4. **Serialization**: Custom serialize/deserialize unwraps/wraps Arc
-5. **Public API**: `get()` extracts value by cloning:
+5. **Public API**: `get_with_context()` extracts value by cloning, and `get()` delegates to it:
    ```rust
-   pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
+   pub async fn get_with_context(
+       &self,
+       name: &Name,
+       key: &Key,
+       _context: Option<()>,
+   ) -> Result<Option<Value>> {
+       // Handle transaction context here...
+
        Ok(self.get_internal(name, key).await?.and_then(|arc_data| arc_data.value.clone()))
+   }
+
+   pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
+       self.get_with_context(name, key, None).await
    }
    ```
 
@@ -196,10 +207,21 @@ The noted optimization opportunities (especially ancestor caching) can be implem
 ### GET
 
 - Uses `get_internal()` helper which returns `Arc<NodeData>`
-- Public API returns `Option<Value>`, extracting value by cloning:
+- Main implementation is `get_with_context()` which accepts optional transaction context:
+  ```rust
+  pub async fn get_with_context(
+      &self,
+      name: &Name,
+      key: &Key,
+      _context: Option<()>,  // Will be Option<&TransactionContext> in Phase 5
+  ) -> Result<Option<Value>> {
+      Ok(self.get_internal(name, key).await?.and_then(|arc_data| arc_data.value.clone()))
+  }
+  ```
+- Public `get()` API is a convenience wrapper:
   ```rust
   pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
-      Ok(self.get_internal(name, key).await?.and_then(|arc_data| arc_data.value.clone()))
+      self.get_with_context(name, key, None).await
   }
   ```
 - Simple and clear: just clone the `Option<Value>` from the Arc
