@@ -77,7 +77,7 @@ The hierarchy is **implicit** in the key structure. We must maintain `has_descen
        &self,
        name: &Name,
        key: &Key,
-       _context: Option<()>,
+       _context: Option<()>, // Will later be `Option<TransactionContext>`
    ) -> Result<Option<Value>> {
        // Handle transaction context here...
 

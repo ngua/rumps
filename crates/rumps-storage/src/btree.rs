@@ -928,9 +928,10 @@ impl BTree {
                     })?;
                     Ok(Some(Arc::clone(value)))
                 }
-                Err(pos) => match node.is_leaf {
-                    true => Ok(None),
-                    false => {
+                Err(pos) => {
+                    if node.is_leaf {
+                        Ok(None)
+                    } else {
                         let child_id =
                             node.children.get(pos).ok_or_else(|| {
                                 StorageError::InvalidOperation(format!(
@@ -941,7 +942,7 @@ impl BTree {
                             })?;
                         self.search_from_node(*child_id, key).await
                     }
-                },
+                }
             }
         })
     }
@@ -1540,11 +1541,133 @@ mod tests {
 
     #[tokio::test]
     async fn test_stress_large_tree() {
-        // This test is a placeholder for Phase 2.2+ when SET operations are implemented
-        let btree = BTree::new(100).unwrap(); // Large min_degree
-        assert_eq!(btree.min_degree(), 100);
+        use std::sync::Arc;
 
-        // Future: Insert millions of keys and verify tree properties
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = Arc::new(BTree::new(3).unwrap());
+        let name = Name::Global("STRESS".into());
+
+        // Insert 1000 keys with various patterns
+        let num_keys: usize = 1000;
+
+        // Pattern 1: Sequential integers at depth 1
+        futures::stream::iter(0..num_keys / 2)
+            .then(|i| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                async move {
+                    let key = Key::from(vec![(i as i64).into()]);
+                    btree
+                        .set(&name, &key, Value::Integer(i as i64))
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Pattern 2: Nested keys at depth 2
+        futures::stream::iter(0..num_keys / 4)
+            .then(|i| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                async move {
+                    let key = Key::from(vec![1000.into(), (i as i64).into()]);
+                    btree
+                        .set(
+                            &name,
+                            &key,
+                            Value::String(format!("nested_{}", i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Pattern 3: Deep nesting at depth 5
+        futures::stream::iter(0..num_keys / 4)
+            .then(|i| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                async move {
+                    let key = Key::from(vec![
+                        2000.into(),
+                        ((i % 10) as i64).into(),
+                        ((i % 5) as i64).into(),
+                        ((i % 3) as i64).into(),
+                        (i as i64).into(),
+                    ]);
+                    btree
+                        .set(&name, &key, Value::Integer(i as i64))
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all Pattern 1 keys can be retrieved
+        futures::stream::iter(0..num_keys / 2)
+            .then(|i| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                async move {
+                    let key = Key::from(vec![(i as i64).into()]);
+                    let result = btree.get_internal(&name, &key).await.unwrap();
+                    assert!(result.is_some());
+                    assert_eq!(
+                        result.unwrap().value,
+                        Some(Value::Integer(i as i64))
+                    );
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all Pattern 2 keys can be retrieved
+        futures::stream::iter(0..num_keys / 4)
+            .then(|i| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                async move {
+                    let key = Key::from(vec![1000.into(), (i as i64).into()]);
+                    let result = btree.get_internal(&name, &key).await.unwrap();
+                    assert!(result.is_some());
+                    assert_eq!(
+                        result.unwrap().value,
+                        Some(Value::String(format!("nested_{}", i)))
+                    );
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify ancestor nodes were created with has_descendants=true
+        let ancestor = btree
+            .get_internal(&name, &Key::from(vec![1000.into()]))
+            .await
+            .unwrap();
+        assert!(ancestor.is_some());
+        assert_eq!(ancestor.as_ref().unwrap().value, None);
+        assert!(ancestor.unwrap().has_descendants);
+
+        // Verify deep ancestor chain for Pattern 3
+        let deep_ancestor = btree
+            .get_internal(&name, &Key::from(vec![2000.into()]))
+            .await
+            .unwrap();
+        assert!(deep_ancestor.is_some());
+        assert!(deep_ancestor.unwrap().has_descendants);
+
+        // Verify tree statistics
+        let stats = btree.stats().await;
+        assert!(stats.node_count > 0);
+        assert!(stats.key_count >= num_keys);
+        assert!(stats.height > 0);
     }
 
     #[tokio::test]
