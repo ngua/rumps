@@ -13,7 +13,12 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 tokio-test = "0.4"
+
+[[bench]]
+name = "hierarchy_bench"
+harness = false
 
 [lints.clippy]
 obfuscated_if_else = "allow"

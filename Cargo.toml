@@ -6,6 +6,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
 either = "1.13"
 itertools = "*"
 miette = "7.2"
