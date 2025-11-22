@@ -9,11 +9,7 @@ use tokio::runtime::Runtime;
 /// For depth=3, creates Key([1, 2, 3])
 /// This will result in (depth - 1) ancestors being created.
 fn create_key_at_depth(depth: usize) -> Key {
-    Key::from(
-        (1..=depth)
-            .map(|i| (i as i64).into())
-            .collect::<Vec<_>>(),
-    )
+    Key::from((1..=depth).map(|i| (i as i64).into()).collect::<Vec<_>>())
 }
 
 /// Benchmark INSERT operations at various depths to show hierarchical semantics performance characteristics.
@@ -25,19 +21,23 @@ fn bench_insert_depths(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
 
     [2, 3, 4, 5, 10].iter().copied().for_each(|depth| {
-        group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, &depth| {
-            b.iter(|| {
-                rt.block_on(async {
-                    let btree = BTree::new(3).unwrap();
-                    let name = Name::Global("VAR".into());
-                    let key = create_key_at_depth(depth);
-                    let value = Value::Integer(42);
+        group.bench_with_input(
+            BenchmarkId::from_parameter(depth),
+            &depth,
+            |b, &depth| {
+                b.iter(|| {
+                    rt.block_on(async {
+                        let btree = BTree::new(3).unwrap();
+                        let name = Name::Global("VAR".into());
+                        let key = create_key_at_depth(depth);
+                        let value = Value::Integer(42);
 
-                    // This call internally invokes ensure_ancestors() before insertion
-                    btree.set(&name, &key, value).await.unwrap();
-                })
-            });
-        });
+                        // This call internally invokes ensure_ancestors() before insertion
+                        btree.set(&name, &key, value).await.unwrap();
+                    })
+                });
+            },
+        );
     });
 
     group.finish();
@@ -64,10 +64,7 @@ fn bench_insert_with_existing_ancestors(c: &mut Criterion) {
                     4.into(),
                     100.into(),
                 ]);
-                btree
-                    .set(&name, &key1, Value::Integer(42))
-                    .await
-                    .unwrap();
+                btree.set(&name, &key1, Value::Integer(42)).await.unwrap();
 
                 // Second insert at same depth should be faster (ancestors exist)
                 let key2 = Key::from(vec![
@@ -77,10 +74,7 @@ fn bench_insert_with_existing_ancestors(c: &mut Criterion) {
                     4.into(),
                     200.into(),
                 ]);
-                btree
-                    .set(&name, &key2, Value::Integer(43))
-                    .await
-                    .unwrap();
+                btree.set(&name, &key2, Value::Integer(43)).await.unwrap();
             })
         });
     });
@@ -108,7 +102,11 @@ fn bench_ensure_ancestors(c: &mut Criterion) {
                         let name = name.clone();
                         async move {
                             btree
-                                .set(&name, &ancestor, Value::String("ancestor".into()))
+                                .set(
+                                    &name,
+                                    &ancestor,
+                                    Value::String("ancestor".into()),
+                                )
                                 .await
                                 .unwrap();
                         }
