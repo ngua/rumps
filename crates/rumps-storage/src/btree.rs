@@ -735,8 +735,9 @@ impl BTree {
     ///
     /// # Note on has_descendants
     ///
-    /// TODO: Currently not updating `has_descendants` flags. This will be
-    /// added in a future iteration when implementing hierarchical semantics.
+    /// This implementation maintains hierarchical semantics by ensuring all
+    /// ancestor keys exist with `has_descendants = true` before inserting
+    /// the target key-value pair.
     pub async fn set_with_context(
         &self,
         name: &Name,
@@ -750,6 +751,9 @@ impl BTree {
         // conflicts at commit time and only then apply changes to the B-tree.
         // This requires validating write-write conflicts and maintaining MVCC
         // timestamps for proper snapshot isolation.
+
+        // Ensure all ancestors exist with has_descendants=true
+        self.ensure_ancestors(name, key).await?;
 
         // Look up the root node ID for this variable name
         let roots = self.roots.read().await;
@@ -927,6 +931,141 @@ impl BTree {
         })
     }
 
+    /// Internal SET operation that accepts NodeData directly.
+    ///
+    /// This method is used internally for maintaining hierarchical semantics,
+    /// particularly when creating ancestor nodes with `has_descendants = true`.
+    ///
+    /// # Behavior for Existing Keys - Idempotent Merge
+    ///
+    /// If the key already exists, this method MERGES the NodeData:
+    /// - `has_descendants`: Performs OR operation (if either old or new is true, result is true)
+    /// - `value`: Takes new value if provided, otherwise keeps old value
+    ///
+    /// **Why idempotent merge is required:**
+    /// - Multiple child insertions can race to create the same ancestor node
+    /// - Each insertion must be able to set `has_descendants=true` independently
+    /// - The operation must be safe regardless of the order or concurrency
+    /// - Once `has_descendants=true` is set, it cannot be accidentally cleared
+    ///
+    /// This ensures that:
+    /// 1. Setting `has_descendants=true` is permanent (can't be undone by another set)
+    /// 2. Concurrent ancestor creation is safe (multiple operations can set same ancestor)
+    /// 3. User can update values without losing `has_descendants` flag
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Create an intermediate node (no value, only descendants)
+    /// btree.set_internal(&name, &ancestor_key, NodeData::with_descendants()).await?;
+    ///
+    /// // Later, add a value to the same node (preserves has_descendants)
+    /// btree.set_internal(&name, &ancestor_key, NodeData::with_value(value)).await?;
+    /// // Result: NodeData { value: Some(value), has_descendants: true }
+    /// ```
+    async fn set_internal(
+        &self,
+        name: &Name,
+        key: &Key,
+        data: NodeData,
+    ) -> Result<()> {
+        // Look up the root node ID for this variable name
+        let roots = self.roots.read().await;
+        let root_id_opt = roots.get(name).copied();
+        drop(roots);
+
+        match root_id_opt {
+            None => {
+                // Variable doesn't exist - create a new leaf root with the NodeData
+                let new_root_id = self.allocator.allocate().await?;
+                let new_root = Node {
+                    keys: vec![key.clone()],
+                    children: vec![],
+                    values: vec![Arc::new(data)],
+                    is_leaf: true,
+                };
+
+                // Insert the new root into storage
+                {
+                    let mut nodes = self.nodes.write().await;
+                    nodes.insert(new_root_id, new_root);
+                }
+
+                // Register the root in the roots map
+                {
+                    let mut roots = self.roots.write().await;
+                    roots.insert(name.clone(), new_root_id);
+                }
+
+                // Update statistics
+                {
+                    let mut stats = self.stats.write().await;
+                    stats.node_count += 1;
+                    stats.key_count += 1;
+                    stats.height = 1;
+                }
+
+                Ok(())
+            }
+            Some(root_id) => {
+                // Variable exists - navigate tree and insert
+                // Check if root is full and needs splitting
+                let root = self.find_node(root_id).await?;
+                let max_keys = 2 * self.min_degree - 1;
+
+                let new_root_id = match root.keys.len() {
+                    n if n == max_keys => {
+                        // Root is full, split it and create a new root
+                        let (median_key, median_value, right_id) =
+                            self.split_node(root_id).await?;
+
+                        // Create new root with the median
+                        let new_root_id = self.allocator.allocate().await?;
+                        let new_root = Node {
+                            keys: vec![median_key],
+                            children: vec![root_id, right_id],
+                            values: vec![Arc::clone(&median_value)],
+                            is_leaf: false,
+                        };
+
+                        // Insert new root
+                        {
+                            let mut nodes = self.nodes.write().await;
+                            nodes.insert(new_root_id, new_root);
+                        }
+
+                        // Update root reference
+                        {
+                            let mut roots = self.roots.write().await;
+                            roots.insert(name.clone(), new_root_id);
+                        }
+
+                        // Update height
+                        {
+                            let mut stats = self.stats.write().await;
+                            stats.height += 1;
+                            stats.node_count += 1;
+                        }
+
+                        new_root_id
+                    }
+                    _ => root_id,
+                };
+
+                // Insert into the non-full root using NodeData
+                self.insert_non_full_with_data(new_root_id, key, data).await?;
+
+                // Update key count statistics
+                {
+                    let mut stats = self.stats.write().await;
+                    stats.key_count += 1;
+                }
+
+                Ok(())
+            }
+        }
+    }
+
     /// Inserts a key-value pair into a non-full node.
     ///
     /// This is a recursive helper for the SET operation. It assumes the given
@@ -954,12 +1093,13 @@ impl BTree {
 
                 match updated_node.keys.get(pos) {
                     Some(existing_key) if existing_key == key => {
-                        // Key exists, update the value
+                        // Key exists - CRITICAL: preserve has_descendants flag
+                        let existing_has_descendants = updated_node.values[pos].has_descendants;
                         updated_node.values[pos] =
-                            Arc::new(NodeData::with_value(value));
+                            Arc::new(NodeData::new(Some(value), existing_has_descendants));
                     }
                     _ => {
-                        // Key doesn't exist, insert it
+                        // Key doesn't exist, insert with has_descendants=false initially
                         updated_node.keys.insert(pos, key.clone());
                         updated_node
                             .values
@@ -1013,6 +1153,190 @@ impl BTree {
                 }
             }
         })
+    }
+
+    /// Inserts a key with NodeData into a non-full node, with merge semantics.
+    ///
+    /// This is similar to `insert_non_full()` but accepts `NodeData` directly
+    /// and implements merge semantics for existing keys (required for idempotent
+    /// ancestor creation).
+    ///
+    /// # Merge Behavior
+    ///
+    /// When the key already exists:
+    /// - `has_descendants`: OR operation (old || new)
+    /// - `value`: Takes new value if Some, otherwise keeps old value
+    ///
+    /// This ensures concurrent ancestor creation is safe and idempotent.
+    fn insert_non_full_with_data<'a>(
+        &'a self,
+        node_id: NodeId,
+        key: &'a Key,
+        data: NodeData,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let node = self.find_node(node_id).await?;
+
+            // Find the position where the key should be inserted
+            let pos = node
+                .keys
+                .binary_search(key)
+                .unwrap_or_else(|insert_pos| insert_pos);
+
+            if node.is_leaf {
+                // Leaf node: insert or merge the key-value pair
+                let mut updated_node = node;
+
+                match updated_node.keys.get(pos) {
+                    Some(existing_key) if existing_key == key => {
+                        // Key exists - MERGE NodeData with OR semantics
+                        let existing_data = &updated_node.values[pos];
+                        let merged_data = NodeData::new(
+                            data.value.or_else(|| existing_data.value.clone()),
+                            existing_data.has_descendants || data.has_descendants,
+                        );
+                        updated_node.values[pos] = Arc::new(merged_data);
+                    }
+                    _ => {
+                        // Key doesn't exist, insert new NodeData
+                        updated_node.keys.insert(pos, key.clone());
+                        updated_node.values.insert(pos, Arc::new(data));
+                    }
+                }
+
+                // Write the updated node back
+                let mut nodes = self.nodes.write().await;
+                nodes.insert(node_id, updated_node);
+
+                Ok(())
+            } else {
+                // Internal node: recurse to the appropriate child
+                let child_id = node.children[pos];
+
+                // Check if child is full
+                let child = self.find_node(child_id).await?;
+                let max_keys = 2 * self.min_degree - 1;
+
+                if child.keys.len() == max_keys {
+                    // Child is full, split it first
+                    let (median_key, median_value, new_child_id) =
+                        self.split_node(child_id).await?;
+
+                    // Insert median into this node
+                    let mut updated_node = node;
+                    updated_node.keys.insert(pos, median_key.clone());
+                    updated_node.values.insert(pos, Arc::clone(&median_value));
+                    updated_node.children.insert(pos + 1, new_child_id);
+
+                    // Write updated parent
+                    {
+                        let mut nodes = self.nodes.write().await;
+                        nodes.insert(node_id, updated_node.clone());
+                    }
+
+                    // Determine which child to recurse into
+                    let next_child_id = if *key > median_key {
+                        new_child_id
+                    } else {
+                        child_id
+                    };
+
+                    self.insert_non_full_with_data(next_child_id, key, data).await
+                } else {
+                    // Child is not full, recurse directly
+                    drop(child);
+                    drop(node);
+                    self.insert_non_full_with_data(child_id, key, data).await
+                }
+            }
+        })
+    }
+
+    /// Updates the has_descendants flag for an existing key.
+    ///
+    /// This is used when an ancestor already exists but needs its flag updated.
+    /// Uses `set_internal()` with merged NodeData to preserve existing values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key doesn't exist.
+    async fn update_descendants_flag(
+        &self,
+        name: &Name,
+        key: &Key,
+        value: bool,
+    ) -> Result<()> {
+        // Get existing NodeData
+        let existing_arc = self
+            .get_internal(name, key)
+            .await?
+            .ok_or_else(|| {
+                StorageError::InvalidOperation(format!(
+                    "Cannot update has_descendants flag: key {:?} does not exist",
+                    key
+                ))
+            })?;
+
+        // Create updated NodeData with new flag value
+        let updated_data = NodeData::new(existing_arc.value.clone(), value);
+
+        // Use set_internal which will merge correctly
+        self.set_internal(name, key, updated_data).await
+    }
+
+    /// Ensures all ancestor keys exist with `has_descendants = true`.
+    ///
+    /// This method is called before inserting a new key to maintain the
+    /// hierarchical structure. For each ancestor that doesn't exist, it
+    /// creates an intermediate node (no value, only descendants).
+    ///
+    /// # Thread Safety
+    ///
+    /// This method is safe for concurrent execution. If multiple operations
+    /// try to create the same ancestor, `set_internal()` will merge the
+    /// NodeData using OR semantics on `has_descendants`, making the operation
+    /// idempotent.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Before inserting Key([1, 2, 3])
+    /// ensure_ancestors(&name, &Key::from(vec![1, 2, 3])).await?;
+    /// // Creates: Key([1]) and Key([1, 2]) with has_descendants=true
+    /// ```
+    async fn ensure_ancestors(&self, name: &Name, key: &Key) -> Result<()> {
+        use futures::stream::{self, TryStreamExt};
+
+        let ancestors = key.ancestors();
+
+        // Process each ancestor from root to leaf sequentially
+        // Convert iterator to TryStream by mapping items to Ok
+        stream::iter(ancestors.into_iter().map(Ok::<_, crate::error::StorageError>))
+            .try_for_each(|ancestor_key| async move {
+                match self.get_internal(name, &ancestor_key).await? {
+                    Some(node_data) => {
+                        // Ancestor exists - update has_descendants if needed
+                        if !node_data.has_descendants {
+                            self.update_descendants_flag(name, &ancestor_key, true)
+                                .await
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    None => {
+                        // Ancestor doesn't exist - create intermediate node
+                        self.set_internal(
+                            name,
+                            &ancestor_key,
+                            NodeData::with_descendants(),
+                        )
+                        .await
+                    }
+                }
+            })
+            .await
     }
 }
 
