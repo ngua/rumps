@@ -130,8 +130,6 @@ impl NodeAllocator for IncrementingAllocator {
 /// - Lazy loading of root mappings with an LRU cache
 /// - Granular locking (lock striping or optimistic concurrency)
 ///
-/// See `.slop/bottlenecks.md` for detailed analysis of scalability limits.
-///
 /// # Thread Safety
 ///
 /// The `BTree` is designed to be shared across threads using `Arc<BTree>`.
