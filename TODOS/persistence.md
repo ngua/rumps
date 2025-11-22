@@ -312,6 +312,293 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [ ] Add async tests for ORDER wrapping to next parent's child
 - [ ] Add async tests for exhaustive iteration over entire tree
 
+### 2.7 RUMPS Extension - COLLECT (Stream-Based Functional Iterator)
+
+**Note**: This is a RUMPS-specific extension not found in traditional MUMPS. It provides a functional, Rust-idiomatic stream-based interface for iterating and collecting values from the tree, designed for efficient handling of large datasets.
+
+**Rationale**: Traditional MUMPS requires imperative loops with `$ORDER` to iterate through data:
+```mumps
+FOR  SET PID=$ORDER(^PATIENT(PID))  QUIT:PID=""  DO
+. SET NAME=$GET(^PATIENT(PID,"NAME"))
+. ; Process NAME...
+```
+
+The `$COLLECT` primitive enables functional-style stream processing that's memory-efficient and composable with Rust's async ecosystem.
+
+#### Primary Stream-Based Method Signatures
+
+- [ ] Implement `fn collect_stream_with_context<'a, P, F, T>(&'a self, name: &'a Name, start: Option<&'a Key>, predicate: P, extract: F, context: Option<&'a TransactionContext>) -> impl Stream<Item = Result<T>> + 'a`:
+  ```rust
+  /// Create a stream of values from the tree that match the given predicate.
+  ///
+  /// # Arguments
+  /// * `name` - The global or local variable name
+  /// * `start` - Optional starting key (None starts from beginning)
+  /// * `predicate` - Function that determines whether to continue and include the entry
+  /// * `extract` - Function that transforms the entry into the desired output type
+  /// * `context` - Optional transaction context for snapshot isolation
+  ///
+  /// # Returns
+  /// A stream that yields extracted values from matching entries
+  ///
+  /// # Examples
+  /// ```ignore
+  /// use futures::StreamExt;
+  ///
+  /// // Process patient names as a stream
+  /// let mut name_stream = btree.collect_stream_with_context(
+  ///     &Name::Global("PATIENT".into()),
+  ///     None,
+  ///     |key, data| key.subscripts().len() == 2 && key.subscripts()[1] == "NAME".into(),
+  ///     |_key, data| data.value.clone().and_then(|v| match v {
+  ///         Value::String(s) => Some(s),
+  ///         _ => None,
+  ///     }),
+  ///     None,
+  /// );
+  ///
+  /// // Process stream items one by one
+  /// while let Some(result) = name_stream.next().await {
+  ///     match result {
+  ///         Ok(name) => println!("Patient: {}", name),
+  ///         Err(e) => eprintln!("Error: {}", e),
+  ///     }
+  /// }
+  /// ```
+  pub fn collect_stream_with_context<'a, P, F, T>(
+      &'a self,
+      name: &'a Name,
+      start: Option<&'a Key>,
+      predicate: P,
+      extract: F,
+      context: Option<&'a TransactionContext>,
+  ) -> impl Stream<Item = Result<T>> + 'a
+  where
+      P: Fn(&Key, &Arc<NodeData>) -> bool + Send + 'a,
+      F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + 'a,
+      T: Send + 'static,
+  {
+      // Implementation will use async_stream::stream! macro or manual Stream impl:
+      // 1. Use context for transaction isolation if provided
+      // 2. Start from `start` key or beginning of the tree
+      // 3. Use get_next_internal to iterate in order
+      // 4. For each entry, check predicate
+      // 5. If predicate returns false, end stream
+      // 6. If predicate returns true, apply extract function
+      // 7. Yield Some(result) for non-None extractions
+      // 8. Automatically handle backpressure
+  }
+  ```
+
+- [ ] Implement `fn collect_stream<'a, P, F, T>(&'a self, name: &'a Name, start: Option<&'a Key>, predicate: P, extract: F) -> impl Stream<Item = Result<T>> + 'a`:
+  ```rust
+  /// Create a stream of values from the tree (without transaction context).
+  /// Simply delegates to collect_stream_with_context with None context.
+  pub fn collect_stream<'a, P, F, T>(
+      &'a self,
+      name: &'a Name,
+      start: Option<&'a Key>,
+      predicate: P,
+      extract: F,
+  ) -> impl Stream<Item = Result<T>> + 'a
+  where
+      P: Fn(&Key, &Arc<NodeData>) -> bool + Send + 'a,
+      F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + 'a,
+      T: Send + 'static,
+  {
+      self.collect_stream_with_context(name, start, predicate, extract, None)
+  }
+  ```
+
+#### Convenience Methods for Vec Collection
+
+- [ ] Implement `async fn collect_vec_with_context<P, F, T>(&self, name: &Name, start: Option<&Key>, predicate: P, extract: F, context: Option<&TransactionContext>) -> Result<Vec<T>>`:
+  ```rust
+  /// Collect all matching values into a Vec.
+  /// Convenience method that collects the stream for cases where you need all results in memory.
+  ///
+  /// # Warning
+  /// For large datasets, prefer using the stream directly to avoid memory issues.
+  pub async fn collect_vec_with_context<P, F, T>(
+      &self,
+      name: &Name,
+      start: Option<&Key>,
+      predicate: P,
+      extract: F,
+      context: Option<&TransactionContext>,
+  ) -> Result<Vec<T>>
+  where
+      P: Fn(&Key, &Arc<NodeData>) -> bool + Send,
+      F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send,
+      T: Send + 'static,
+  {
+      use futures::StreamExt;
+
+      self.collect_stream_with_context(name, start, predicate, extract, context)
+          .try_collect()
+          .await
+  }
+  ```
+
+- [ ] Implement `async fn collect_vec<P, F, T>(&self, name: &Name, start: Option<&Key>, predicate: P, extract: F) -> Result<Vec<T>>`:
+  ```rust
+  /// Collect all matching values into a Vec (without transaction context).
+  pub async fn collect_vec<P, F, T>(
+      &self,
+      name: &Name,
+      start: Option<&Key>,
+      predicate: P,
+      extract: F,
+  ) -> Result<Vec<T>>
+  where
+      P: Fn(&Key, &Arc<NodeData>) -> bool + Send,
+      F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send,
+      T: Send + 'static,
+  {
+      self.collect_vec_with_context(name, start, predicate, extract, None).await
+  }
+  ```
+
+#### Supporting Internal Methods
+
+- [ ] Implement `async fn get_next_internal(&self, name: &Name, after: &Key) -> Result<Option<(Key, Arc<NodeData>)>>`:
+  - Navigate B-tree to find the next key after `after`
+  - Return both key and data for the next entry
+  - Handle transitions between leaf nodes
+  - Similar to ORDER but returns full entry
+
+- [ ] Implement `async fn get_prev_internal(&self, name: &Name, before: &Key) -> Result<Option<(Key, Arc<NodeData>)>>`:
+  - Navigate B-tree to find the previous key before `before`
+  - Support for bidirectional iteration (future enhancement)
+
+#### Stream-Based Usage Examples
+
+```rust
+use futures::StreamExt;
+
+// Process large dataset as stream (memory efficient)
+let mut data_stream = btree.collect_stream(
+    &Name::Global("DATA".into()),
+    Some(&Key::from(vec!["2025".into()])),
+    |key, _| key.subscripts().len() == 2 && key.subscripts()[0] == "2025".into(),
+    |_key, data| data.value.clone(),
+);
+
+// Process items one at a time without loading all into memory
+while let Some(result) = data_stream.next().await {
+    match result {
+        Ok(value) => process_value(value),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
+// Find first admin user using stream (early termination)
+let admin = btree.collect_stream(
+    &Name::Global("USERS".into()),
+    None,
+    |_key, data| data.value.is_some(),
+    |key, data| match data.value {
+        Some(Value::String(ref s)) if s.contains("admin") => Some((key.clone(), s.clone())),
+        _ => None,
+    },
+)
+.filter_map(|r| future::ready(r.ok()))
+.next()
+.await;
+
+// Take first 100 matching entries
+let first_100: Vec<String> = btree.collect_stream(
+    &Name::Global("LOGS".into()),
+    None,
+    |key, _| key.subscripts().first() == Some(&"2025".into()),
+    |_key, data| match data.value {
+        Some(Value::String(ref s)) => Some(s.clone()),
+        _ => None,
+    },
+)
+.take(100)
+.try_collect()
+.await?;
+
+// Count entries efficiently using fold
+let count = btree.collect_stream(
+    &Name::Global("STATS".into()),
+    None,
+    |key, _| key.subscripts().first() == Some(&"2025".into()),
+    |_key, data| if data.has_descendants { Some(()) } else { None },
+)
+.try_fold(0usize, |acc, _| future::ready(Ok(acc + 1)))
+.await?;
+
+// Use collect_vec for small datasets where you need all results
+let all_names = btree.collect_vec(
+    &Name::Global("PATIENT".into()),
+    None,
+    |key, _| key.subscripts().len() == 2 && key.subscripts()[1] == "NAME".into(),
+    |_key, data| match data.value {
+        Some(Value::String(ref s)) => Some(s.clone()),
+        _ => None,
+    },
+).await?;
+
+// Parallel processing with buffered stream
+use futures::stream::StreamExt;
+
+let processed_results: Vec<ProcessedData> = btree.collect_stream(
+    &Name::Global("RECORDS".into()),
+    None,
+    |_, data| data.value.is_some(),
+    |key, data| Some((key.clone(), data.value.clone())),
+)
+.map(|result| async move {
+    match result {
+        Ok((key, value)) => process_record_async(key, value).await,
+        Err(e) => Err(e),
+    }
+})
+.buffer_unordered(10)  // Process up to 10 records concurrently
+.try_collect()
+.await?;
+```
+
+#### Implementation Strategy
+
+1. **Phase 1**: Core Stream Infrastructure
+   - Implement `get_next_internal` using existing B-tree navigation
+   - Create stream wrapper using `async_stream` crate or manual `Stream` implementation
+   - Ensure proper lifetime management for borrowed references
+
+2. **Phase 2**: Stream-Based Collection
+   - Implement `collect_stream_with_context` with lazy evaluation
+   - Add support for early termination when predicate returns false
+   - Implement backpressure handling for slow consumers
+
+3. **Phase 3**: Optimizations
+   - Batch node reads to reduce lock contention
+   - Implement read-ahead buffering for sequential access patterns
+   - Add parallel stream processing support with `buffer_unordered`
+
+4. **Phase 4**: Advanced Features (Future)
+   - Bidirectional iteration with `get_prev_internal`
+   - Range queries with start and end bounds
+   - Snapshot iteration for long-running streams
+
+#### Testing
+
+- [ ] Test stream iteration over empty tree
+- [ ] Test stream with start key positioning
+- [ ] Test predicate-based filtering and early termination
+- [ ] Test extract function transformations
+- [ ] Test stream cancellation and cleanup
+- [ ] Test collecting stream to Vec for small datasets
+- [ ] Test streaming with transaction context
+- [ ] Test concurrent streams on same tree
+- [ ] Test memory usage with millions of entries (stream should be constant memory)
+- [ ] Test backpressure with slow consumers
+- [ ] Test stream combinators (take, filter_map, fold, etc.)
+- [ ] Benchmark stream vs Vec collection performance
+- [ ] Test error propagation through stream
+
 ---
 
 ## Phase 3: Serialization Layer
