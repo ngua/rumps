@@ -2599,4 +2599,266 @@ mod tests {
         let result = btree.get_internal(&name, &key).await.unwrap().unwrap();
         assert_eq!(result.value, Some(value));
     }
+
+    // Tests for hierarchical semantics - Step 4 implementation
+
+    #[tokio::test]
+    async fn test_set_creates_ancestors() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("PATIENT".into());
+
+        // Set a nested key
+        let key = Key::from(vec![123.into(), "NAME".into()]);
+        btree
+            .set(&name, &key, Value::String("John".into()))
+            .await
+            .unwrap();
+
+        // Verify ancestor was created
+        let ancestor_key = Key::from(vec![123.into()]);
+        let ancestor_arc = btree.get_internal(&name, &ancestor_key).await.unwrap();
+
+        assert!(ancestor_arc.is_some());
+        let data = ancestor_arc.unwrap();
+        assert!(data.value.is_none()); // No value on ancestor
+        assert!(data.has_descendants); // But has descendants
+    }
+
+    #[tokio::test]
+    async fn test_set_deep_nesting_creates_all_ancestors() {
+        use futures::stream::StreamExt;
+        use rumps_types::{Key, Name, Value};
+
+        let btree = Arc::new(BTree::new(3).unwrap());
+        let name = Name::Global("VAR".into());
+
+        // Set deeply nested key
+        let key = Key::from(vec![
+            1.into(),
+            2.into(),
+            3.into(),
+            4.into(),
+            5.into(),
+        ]);
+        btree.set(&name, &key, Value::Integer(42)).await.unwrap();
+
+        // Verify all 4 ancestors have has_descendants=true
+        let ancestors = key.ancestors();
+        assert_eq!(ancestors.len(), 4);
+
+        futures::stream::iter(ancestors)
+            .for_each(|ancestor_key| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                async move {
+                    let data = btree
+                        .get_internal(&name, &ancestor_key)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(data.has_descendants);
+                    assert!(data.value.is_none()); // Intermediate nodes have no value
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_intermediate_node_becomes_both() {
+        use rumps_types::{Key, Name, Value};
+
+        // CRITICAL EDGE CASE
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("VAR".into());
+
+        // 1. Set ^VAR(1,"A") = "child1"
+        //    → Creates ^VAR(1) with has_descendants=true, no value
+        let key_child = Key::from(vec![1.into(), "A".into()]);
+        btree
+            .set(&name, &key_child, Value::String("child1".into()))
+            .await
+            .unwrap();
+
+        // Verify ancestor exists
+        let key_parent = Key::from(vec![1.into()]);
+        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        assert!(arc.value.is_none());
+        assert!(arc.has_descendants);
+
+        // 2. Set ^VAR(1) = "parent_value"
+        //    → Must preserve has_descendants=true AND add value
+        btree
+            .set(&name, &key_parent, Value::String("parent_value".into()))
+            .await
+            .unwrap();
+
+        // Verify ^VAR(1) has both value and has_descendants=true
+        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        assert_eq!(arc.value, Some(Value::String("parent_value".into())));
+        assert!(arc.has_descendants);
+    }
+
+    #[tokio::test]
+    async fn test_set_preserves_has_descendants_on_update() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("VAR".into());
+
+        let key_parent = Key::from(vec![1.into()]);
+        let key_child = Key::from(vec![1.into(), 2.into()]);
+
+        // 1. Set ^VAR(1) = "first"
+        btree
+            .set(&name, &key_parent, Value::String("first".into()))
+            .await
+            .unwrap();
+
+        // 2. Set ^VAR(1,2) = "child" → ^VAR(1).has_descendants becomes true
+        btree
+            .set(&name, &key_child, Value::String("child".into()))
+            .await
+            .unwrap();
+
+        // Verify flag was set
+        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        assert!(arc.has_descendants);
+
+        // 3. Set ^VAR(1) = "updated"
+        btree
+            .set(&name, &key_parent, Value::String("updated".into()))
+            .await
+            .unwrap();
+
+        // Verify ^VAR(1) still has has_descendants=true after update
+        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        assert_eq!(arc.value, Some(Value::String("updated".into())));
+        assert!(arc.has_descendants); // MUST still be true
+    }
+
+    #[tokio::test]
+    async fn test_set_multiple_children_same_parent() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("VAR".into());
+
+        // Set ^VAR(1,"A"), ^VAR(1,"B"), ^VAR(1,"C")
+        btree
+            .set(
+                &name,
+                &Key::from(vec![1.into(), "A".into()]),
+                Value::Integer(1),
+            )
+            .await
+            .unwrap();
+        btree
+            .set(
+                &name,
+                &Key::from(vec![1.into(), "B".into()]),
+                Value::Integer(2),
+            )
+            .await
+            .unwrap();
+        btree
+            .set(
+                &name,
+                &Key::from(vec![1.into(), "C".into()]),
+                Value::Integer(3),
+            )
+            .await
+            .unwrap();
+
+        // Verify ^VAR(1) has has_descendants=true
+        let arc = btree
+            .get_internal(&name, &Key::from(vec![1.into()]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(arc.has_descendants);
+    }
+
+    #[tokio::test]
+    async fn test_set_sibling_paths() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("VAR".into());
+
+        // Set ^VAR(1,2), ^VAR(1,3), ^VAR(2,2)
+        btree
+            .set(
+                &name,
+                &Key::from(vec![1.into(), 2.into()]),
+                Value::Integer(12),
+            )
+            .await
+            .unwrap();
+        btree
+            .set(
+                &name,
+                &Key::from(vec![1.into(), 3.into()]),
+                Value::Integer(13),
+            )
+            .await
+            .unwrap();
+        btree
+            .set(
+                &name,
+                &Key::from(vec![2.into(), 2.into()]),
+                Value::Integer(22),
+            )
+            .await
+            .unwrap();
+
+        // Verify ^VAR(1) and ^VAR(2) both have has_descendants
+        let arc1 = btree
+            .get_internal(&name, &Key::from(vec![1.into()]))
+            .await
+            .unwrap()
+            .unwrap();
+        let arc2 = btree
+            .get_internal(&name, &Key::from(vec![2.into()]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(arc1.has_descendants);
+        assert!(arc2.has_descendants);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_ancestor_creation() {
+        use futures::future::join_all;
+        use rumps_types::{Key, Name, Value};
+
+        let btree = Arc::new(BTree::new(3).unwrap());
+        let name = Name::Global("VAR".into());
+
+        // Spawn multiple tasks creating children of same parent concurrently
+        let tasks = (0..10).map(|i| {
+            let btree = Arc::clone(&btree);
+            let name = name.clone();
+            tokio::spawn(async move {
+                let key = Key::from(vec![1.into(), i.into()]);
+                btree.set(&name, &key, Value::Integer(i)).await
+            })
+        });
+
+        // Wait for all to complete
+        let results: Vec<_> = join_all(tasks).await;
+        results.into_iter().for_each(|result| {
+            result.unwrap().unwrap();
+        });
+
+        // Verify parent was created exactly once with has_descendants=true
+        let arc = btree
+            .get_internal(&name, &Key::from(vec![1.into()]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(arc.has_descendants);
+        assert!(arc.value.is_none());
+    }
 }
