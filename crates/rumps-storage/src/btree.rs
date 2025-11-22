@@ -855,11 +855,11 @@ impl BTree {
 
 /// Private helper methods for B-tree operations.
 impl BTree {
-    /// Internal GET that returns Arc<NodeData> (not just Value).
+    /// Internal GET that returns `Arc<NodeData>` (not just Value).
     ///
     /// Returns an Arc for efficient hierarchy navigation - checking
     /// `has_descendants` flags is much cheaper with Arc::clone() than
-    /// cloning the entire NodeData.
+    /// cloning the entire `NodeData`.
     ///
     /// The public `get()` method extracts the value by cloning the
     /// `Option<Value>` from the Arc.
@@ -887,14 +887,14 @@ impl BTree {
 
     /// Recursively search for a key starting from the given node.
     ///
-    /// Returns Arc<NodeData> for cheap cloning during hierarchy navigation.
+    /// Returns `Arc<NodeData>` for cheap cloning during hierarchy navigation.
     ///
     /// # Algorithm
     ///
     /// Uses binary search to find the key position:
-    /// - If exact match found (Ok(pos)): Return the value at that position
-    /// - If not found (Err(pos)) and leaf node: Key doesn't exist, return None
-    /// - If not found (Err(pos)) and internal node: Recurse to child at pos
+    /// - If exact match found (`Ok(pos)`): Return the value at that position
+    /// - If not found (`Err(pos)`) and leaf node: Key doesn't exist, return None
+    /// - If not found (`Err(pos)`) and internal node: Recurse to child at pos
     ///
     /// The Err(pos) from binary_search indicates where the key would be
     /// inserted, which corresponds to the correct child pointer to follow.
@@ -931,14 +931,14 @@ impl BTree {
         })
     }
 
-    /// Internal SET operation that accepts NodeData directly.
+    /// Internal SET operation that accepts `NodeData` directly.
     ///
     /// This method is used internally for maintaining hierarchical semantics,
     /// particularly when creating ancestor nodes with `has_descendants = true`.
     ///
     /// # Behavior for Existing Keys - Idempotent Merge
     ///
-    /// If the key already exists, this method MERGES the NodeData:
+    /// If the key already exists, this method MERGES the `NodeData`:
     /// - `has_descendants`: Performs OR operation (if either old or new is true, result is true)
     /// - `value`: Takes new value if provided, otherwise keeps old value
     ///
@@ -1053,7 +1053,8 @@ impl BTree {
                 };
 
                 // Insert into the non-full root using NodeData
-                self.insert_non_full_with_data(new_root_id, key, data).await?;
+                self.insert_non_full_with_data(new_root_id, key, data)
+                    .await?;
 
                 // Update key count statistics
                 {
@@ -1094,9 +1095,12 @@ impl BTree {
                 match updated_node.keys.get(pos) {
                     Some(existing_key) if existing_key == key => {
                         // Key exists - CRITICAL: preserve has_descendants flag
-                        let existing_has_descendants = updated_node.values[pos].has_descendants;
-                        updated_node.values[pos] =
-                            Arc::new(NodeData::new(Some(value), existing_has_descendants));
+                        let existing_has_descendants =
+                            updated_node.values[pos].has_descendants;
+                        updated_node.values[pos] = Arc::new(NodeData::new(
+                            Some(value),
+                            existing_has_descendants,
+                        ));
                     }
                     _ => {
                         // Key doesn't exist, insert with has_descendants=false initially
@@ -1155,7 +1159,7 @@ impl BTree {
         })
     }
 
-    /// Inserts a key with NodeData into a non-full node, with merge semantics.
+    /// Inserts a key with `NodeData` into a non-full node, with merge semantics.
     ///
     /// This is similar to `insert_non_full()` but accepts `NodeData` directly
     /// and implements merge semantics for existing keys (required for idempotent
@@ -1195,7 +1199,8 @@ impl BTree {
                         let existing_data = &updated_node.values[pos];
                         let merged_data = NodeData::new(
                             data.value.or_else(|| existing_data.value.clone()),
-                            existing_data.has_descendants || data.has_descendants,
+                            existing_data.has_descendants
+                                || data.has_descendants,
                         );
                         updated_node.values[pos] = Arc::new(merged_data);
                     }
@@ -1243,7 +1248,8 @@ impl BTree {
                         child_id
                     };
 
-                    self.insert_non_full_with_data(next_child_id, key, data).await
+                    self.insert_non_full_with_data(next_child_id, key, data)
+                        .await
                 } else {
                     // Child is not full, recurse directly
                     drop(child);
@@ -1257,7 +1263,7 @@ impl BTree {
     /// Updates the has_descendants flag for an existing key.
     ///
     /// This is used when an ancestor already exists but needs its flag updated.
-    /// Uses `set_internal()` with merged NodeData to preserve existing values.
+    /// Uses `set_internal()` with merged `NodeData` to preserve existing values.
     ///
     /// # Errors
     ///
@@ -1296,7 +1302,7 @@ impl BTree {
     ///
     /// This method is safe for concurrent execution. If multiple operations
     /// try to create the same ancestor, `set_internal()` will merge the
-    /// NodeData using OR semantics on `has_descendants`, making the operation
+    /// `NodeData` using OR semantics on `has_descendants`, making the operation
     /// idempotent.
     ///
     /// # Examples
@@ -1313,30 +1319,34 @@ impl BTree {
 
         // Process each ancestor from root to leaf sequentially
         // Convert iterator to TryStream by mapping items to Ok
-        stream::iter(ancestors.into_iter().map(Ok::<_, crate::error::StorageError>))
-            .try_for_each(|ancestor_key| async move {
-                match self.get_internal(name, &ancestor_key).await? {
-                    Some(node_data) => {
-                        // Ancestor exists - update has_descendants if needed
-                        if !node_data.has_descendants {
-                            self.update_descendants_flag(name, &ancestor_key, true)
-                                .await
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    None => {
-                        // Ancestor doesn't exist - create intermediate node
-                        self.set_internal(
-                            name,
-                            &ancestor_key,
-                            NodeData::with_descendants(),
-                        )
-                        .await
+        stream::iter(
+            ancestors
+                .into_iter()
+                .map(Ok::<_, crate::error::StorageError>),
+        )
+        .try_for_each(|ancestor_key| async move {
+            match self.get_internal(name, &ancestor_key).await? {
+                Some(node_data) => {
+                    // Ancestor exists - update has_descendants if needed
+                    if !node_data.has_descendants {
+                        self.update_descendants_flag(name, &ancestor_key, true)
+                            .await
+                    } else {
+                        Ok(())
                     }
                 }
-            })
-            .await
+                None => {
+                    // Ancestor doesn't exist - create intermediate node
+                    self.set_internal(
+                        name,
+                        &ancestor_key,
+                        NodeData::with_descendants(),
+                    )
+                    .await
+                }
+            }
+        })
+        .await
     }
 }
 
@@ -2618,7 +2628,8 @@ mod tests {
 
         // Verify ancestor was created
         let ancestor_key = Key::from(vec![123.into()]);
-        let ancestor_arc = btree.get_internal(&name, &ancestor_key).await.unwrap();
+        let ancestor_arc =
+            btree.get_internal(&name, &ancestor_key).await.unwrap();
 
         assert!(ancestor_arc.is_some());
         let data = ancestor_arc.unwrap();
@@ -2635,13 +2646,8 @@ mod tests {
         let name = Name::Global("VAR".into());
 
         // Set deeply nested key
-        let key = Key::from(vec![
-            1.into(),
-            2.into(),
-            3.into(),
-            4.into(),
-            5.into(),
-        ]);
+        let key =
+            Key::from(vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into()]);
         btree.set(&name, &key, Value::Integer(42)).await.unwrap();
 
         // Verify all 4 ancestors have has_descendants=true
@@ -2683,7 +2689,11 @@ mod tests {
 
         // Verify ancestor exists
         let key_parent = Key::from(vec![1.into()]);
-        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        let arc = btree
+            .get_internal(&name, &key_parent)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(arc.value.is_none());
         assert!(arc.has_descendants);
 
@@ -2695,7 +2705,11 @@ mod tests {
             .unwrap();
 
         // Verify ^VAR(1) has both value and has_descendants=true
-        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        let arc = btree
+            .get_internal(&name, &key_parent)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(arc.value, Some(Value::String("parent_value".into())));
         assert!(arc.has_descendants);
     }
@@ -2723,7 +2737,11 @@ mod tests {
             .unwrap();
 
         // Verify flag was set
-        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        let arc = btree
+            .get_internal(&name, &key_parent)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(arc.has_descendants);
 
         // 3. Set ^VAR(1) = "updated"
@@ -2733,7 +2751,11 @@ mod tests {
             .unwrap();
 
         // Verify ^VAR(1) still has has_descendants=true after update
-        let arc = btree.get_internal(&name, &key_parent).await.unwrap().unwrap();
+        let arc = btree
+            .get_internal(&name, &key_parent)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(arc.value, Some(Value::String("updated".into())));
         assert!(arc.has_descendants); // MUST still be true
     }
