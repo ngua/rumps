@@ -32,31 +32,24 @@ The `has_descendants` flag enables three essential MUMPS operations:
 - Hierarchy navigation (checking `has_descendants` flags) is extremely frequent in MUMPS operations
 - `$DATA`, `$ORDER`, `ensure_ancestors()` all repeatedly access NodeData without needing ownership
 - `Arc::clone()` (incrementing refcount) is much cheaper than cloning the entire `NodeData`
-- When extracting values in the public `get()` API, we can use `Arc::try_unwrap()` to avoid cloning if refcount is 1
+- When extracting values in the public `get()` API, we simply clone the `Option<Value>`
 
 **Implementation Impact**:
 1. **Node Type Change**: `pub values: Vec<Arc<NodeData>>` in `rumps-types/src/node.rs`
 2. **Return Type**: `get_internal()` returns `Option<Arc<NodeData>>` instead of `Option<NodeData>`
 3. **Node Creation**: All values wrapped with `Arc::new(NodeData { ... })`
 4. **Serialization**: Custom serialize/deserialize unwraps/wraps Arc (already have custom impl)
-5. **Public API**: `get()` extracts value with smart unwrapping:
+5. **Public API**: `get()` extracts value by cloning:
    ```rust
    pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
-       match self.get_internal(name, key).await? {
-           None => Ok(None),
-           Some(arc_data) => {
-               let node_data = Arc::try_unwrap(arc_data)
-                   .unwrap_or_else(|arc| (*arc).clone());
-               Ok(node_data.value)
-           }
-       }
+       Ok(self.get_internal(name, key).await?.and_then(|arc_data| arc_data.value.clone()))
    }
    ```
 
 **Performance Benefits**:
 - Hierarchy checks: O(1) Arc clone instead of O(value_size) data clone
 - Typical case: Most operations just check `has_descendants` flag, never clone the actual data
-- Smart extraction: When refcount is 1, `get()` consumes the Arc without any cloning
+- Value extraction: Simple clone of the `Option<Value>` for GET operations
 
 ---
 
@@ -707,21 +700,13 @@ mod tests {
 
 ### GET (Phase 2.3)
 - Will use `get_internal()` helper which returns `Arc<NodeData>`
-- Public API returns `Option<Value>`, extracting value with smart unwrapping:
+- Public API returns `Option<Value>`, extracting value by cloning:
   ```rust
   pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
-      match self.get_internal(name, key).await? {
-          None => Ok(None),
-          Some(arc_data) => {
-              // Try to unwrap Arc if refcount is 1, otherwise clone
-              let node_data = Arc::try_unwrap(arc_data)
-                  .unwrap_or_else(|arc| (*arc).clone());
-              Ok(node_data.value)
-          }
-      }
+      Ok(self.get_internal(name, key).await?.and_then(|arc_data| arc_data.value.clone()))
   }
   ```
-- This approach optimizes for the common case where GET has exclusive access to the Arc
+- Simple and clear: just clone the `Option<Value>` from the Arc
 
 ### DATA (Phase 2.5)
 - Will use `get_internal()` to access full `Arc<NodeData>`

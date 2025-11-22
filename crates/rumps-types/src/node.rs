@@ -183,9 +183,7 @@ pub struct Node {
     /// `NodeData` and its potentially large `Value`.
     ///
     /// For the `$GET` primitive (which extracts values), the public API
-    /// uses `Arc::try_unwrap()` to avoid cloning when the refcount is 1,
-    /// providing zero-cost extraction in the common case where no other
-    /// references exist.
+    /// simply clones the `Option<Value>` from the Arc.
     pub values: Vec<Arc<NodeData>>,
     /// Whether this is a leaf node (no children)
     pub is_leaf: bool,
