@@ -745,6 +745,12 @@ impl BTree {
         // Will be Option<&TransactionContext> in Phase 5
         _context: Option<()>,
     ) -> Result<()> {
+        // TODO Phase 5: If context is Some, track this write in the transaction's
+        // buffered writes for snapshot isolation. The transaction will check for
+        // conflicts at commit time and only then apply changes to the B-tree.
+        // This requires validating write-write conflicts and maintaining MVCC
+        // timestamps for proper snapshot isolation.
+
         // Look up the root node ID for this variable name
         let roots = self.roots.read().await;
         let root_id_opt = roots.get(name).copied();
@@ -845,6 +851,82 @@ impl BTree {
 
 /// Private helper methods for B-tree operations.
 impl BTree {
+    /// Internal GET that returns Arc<NodeData> (not just Value).
+    ///
+    /// Returns an Arc for efficient hierarchy navigation - checking
+    /// `has_descendants` flags is much cheaper with Arc::clone() than
+    /// cloning the entire NodeData.
+    ///
+    /// The public `get()` method extracts the value by cloning the
+    /// `Option<Value>` from the Arc.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Internal use only
+    /// let arc_data = btree.get_internal(&name, &key).await?;
+    /// if let Some(data) = arc_data {
+    ///     println!("has_descendants: {}", data.has_descendants);
+    ///     println!("value: {:?}", data.value);
+    /// }
+    /// ```
+    async fn get_internal(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> Result<Option<Arc<NodeData>>> {
+        match self.roots.read().await.get(name).copied() {
+            None => Ok(None),
+            Some(root_id) => self.search_from_node(root_id, key).await,
+        }
+    }
+
+    /// Recursively search for a key starting from the given node.
+    ///
+    /// Returns Arc<NodeData> for cheap cloning during hierarchy navigation.
+    ///
+    /// # Algorithm
+    ///
+    /// Uses binary search to find the key position:
+    /// - If exact match found (Ok(pos)): Return the value at that position
+    /// - If not found (Err(pos)) and leaf node: Key doesn't exist, return None
+    /// - If not found (Err(pos)) and internal node: Recurse to child at pos
+    ///
+    /// The Err(pos) from binary_search indicates where the key would be
+    /// inserted, which corresponds to the correct child pointer to follow.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Internal use only
+    /// let result = btree.search_from_node(root_id, &key).await?;
+    /// ```
+    fn search_from_node<'a>(
+        &'a self,
+        node_id: NodeId,
+        key: &'a Key,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Option<Arc<NodeData>>>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let node = self.find_node(node_id).await?;
+
+            match node.keys.binary_search(key) {
+                Ok(pos) => Ok(Some(Arc::clone(&node.values[pos]))),
+                Err(pos) => match node.is_leaf {
+                    true => Ok(None),
+                    false => {
+                        self.search_from_node(node.children[pos], key).await
+                    }
+                },
+            }
+        })
+    }
+
     /// Inserts a key-value pair into a non-full node.
     ///
     /// This is a recursive helper for the SET operation. It assumes the given
@@ -1906,5 +1988,291 @@ mod tests {
         assert_eq!(final_node.values[2].value, Some(Value::Integer(30)));
         assert_eq!(final_node.values[3].value, Some(Value::Integer(40)));
         assert_eq!(final_node.values[4].value, Some(Value::Integer(50)));
+    }
+
+    // Tests for get_internal() - Step 3 of hierarchy implementation
+
+    #[tokio::test]
+    async fn test_get_internal_nonexistent_variable() {
+        use rumps_types::{Key, Name};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("PATIENT".into());
+        let key = Key::from(vec![123.into()]);
+
+        // Variable doesn't exist in roots
+        let result = btree.get_internal(&name, &key).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_internal_exact_match_single_key() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("PATIENT".into());
+        let key = Key::from(vec![123.into()]);
+        let value = Value::String("John Doe".into());
+
+        // Insert using SET
+        btree.set(&name, &key, value.clone()).await.unwrap();
+
+        // Retrieve using get_internal
+        let result = btree.get_internal(&name, &key).await.unwrap();
+        assert!(result.is_some());
+        let arc_data = result.unwrap();
+        assert_eq!(arc_data.value, Some(value));
+        assert!(!arc_data.has_descendants);
+    }
+
+    #[tokio::test]
+    async fn test_get_internal_exact_match_nested_key() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("PATIENT".into());
+        let key = Key::from(vec![123.into(), "NAME".into()]);
+        let value = Value::String("John Doe".into());
+
+        // Insert using SET
+        btree.set(&name, &key, value.clone()).await.unwrap();
+
+        // Retrieve using get_internal
+        let result = btree.get_internal(&name, &key).await.unwrap();
+        assert!(result.is_some());
+        let arc_data = result.unwrap();
+        assert_eq!(arc_data.value, Some(value));
+    }
+
+    #[tokio::test]
+    async fn test_get_internal_nonexistent_key() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("PATIENT".into());
+
+        // Insert some keys
+        btree
+            .set(&name, &Key::from(vec![100.into()]), Value::Integer(1))
+            .await
+            .unwrap();
+        btree
+            .set(&name, &Key::from(vec![200.into()]), Value::Integer(2))
+            .await
+            .unwrap();
+
+        // Search for key between existing keys
+        let result = btree
+            .get_internal(&name, &Key::from(vec![150.into()]))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+
+        // Search for key before all existing keys
+        let result = btree
+            .get_internal(&name, &Key::from(vec![50.into()]))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+
+        // Search for key after all existing keys
+        let result = btree
+            .get_internal(&name, &Key::from(vec![300.into()]))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_internal_partial_match_no_such_path() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("PATIENT".into());
+
+        // Insert keys: [1], [1,2,5]
+        btree
+            .set(&name, &Key::from(vec![1.into()]), Value::Integer(1))
+            .await
+            .unwrap();
+        btree
+            .set(
+                &name,
+                &Key::from(vec![1.into(), 2.into(), 5.into()]),
+                Value::Integer(125),
+            )
+            .await
+            .unwrap();
+
+        // Search for [1,2,3] - partial match with [1] but not exact
+        // Should return None because [1,2,3] doesn't exist
+        let result = btree
+            .get_internal(&name, &Key::from(vec![1.into(), 2.into(), 3.into()]))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_internal_multiple_keys_same_variable() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("VAR".into());
+
+        // Insert multiple keys
+        btree
+            .set(&name, &Key::from(vec![1.into()]), Value::Integer(1))
+            .await
+            .unwrap();
+        btree
+            .set(&name, &Key::from(vec![2.into()]), Value::Integer(2))
+            .await
+            .unwrap();
+        btree
+            .set(&name, &Key::from(vec![3.into()]), Value::Integer(3))
+            .await
+            .unwrap();
+
+        // Retrieve all keys
+        let result1 = btree
+            .get_internal(&name, &Key::from(vec![1.into()]))
+            .await
+            .unwrap()
+            .unwrap();
+        let result2 = btree
+            .get_internal(&name, &Key::from(vec![2.into()]))
+            .await
+            .unwrap()
+            .unwrap();
+        let result3 = btree
+            .get_internal(&name, &Key::from(vec![3.into()]))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result1.value, Some(Value::Integer(1)));
+        assert_eq!(result2.value, Some(Value::Integer(2)));
+        assert_eq!(result3.value, Some(Value::Integer(3)));
+    }
+
+    #[tokio::test]
+    async fn test_get_internal_different_variables() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name1 = Name::Global("VAR1".into());
+        let name2 = Name::Global("VAR2".into());
+        let key = Key::from(vec![123.into()]);
+
+        // Insert same key in different variables
+        btree
+            .set(&name1, &key, Value::String("VAR1 value".into()))
+            .await
+            .unwrap();
+        btree
+            .set(&name2, &key, Value::String("VAR2 value".into()))
+            .await
+            .unwrap();
+
+        // Retrieve from both variables
+        let result1 = btree.get_internal(&name1, &key).await.unwrap().unwrap();
+        let result2 = btree.get_internal(&name2, &key).await.unwrap().unwrap();
+
+        assert_eq!(result1.value, Some(Value::String("VAR1 value".into())));
+        assert_eq!(result2.value, Some(Value::String("VAR2 value".into())));
+    }
+
+    #[tokio::test]
+    async fn test_get_internal_returns_nodedata_with_flags() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("VAR".into());
+        let key = Key::from(vec![1.into()]);
+
+        btree.set(&name, &key, Value::Integer(42)).await.unwrap();
+
+        // Get the NodeData
+        let arc1 = btree.get_internal(&name, &key).await.unwrap().unwrap();
+        let arc2 = btree.get_internal(&name, &key).await.unwrap().unwrap();
+
+        // Both calls should return NodeData with identical content
+        assert_eq!(arc1.value, arc2.value);
+        assert_eq!(arc1.has_descendants, arc2.has_descendants);
+        assert_eq!(arc1.value, Some(Value::Integer(42)));
+        assert!(!arc1.has_descendants);
+    }
+
+    #[tokio::test]
+    async fn test_get_internal_with_tree_splits() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap(); // min_degree=3, max_keys=5
+        let name = Name::Global("VAR".into());
+
+        // Insert enough keys to cause splits
+        btree
+            .set(&name, &Key::from(vec![10.into()]), Value::Integer(10))
+            .await
+            .unwrap();
+        btree
+            .set(&name, &Key::from(vec![20.into()]), Value::Integer(20))
+            .await
+            .unwrap();
+        btree
+            .set(&name, &Key::from(vec![30.into()]), Value::Integer(30))
+            .await
+            .unwrap();
+        btree
+            .set(&name, &Key::from(vec![40.into()]), Value::Integer(40))
+            .await
+            .unwrap();
+        btree
+            .set(&name, &Key::from(vec![50.into()]), Value::Integer(50))
+            .await
+            .unwrap();
+        btree
+            .set(&name, &Key::from(vec![60.into()]), Value::Integer(60))
+            .await
+            .unwrap();
+
+        // Retrieve all keys after splits
+        let result30 = btree
+            .get_internal(&name, &Key::from(vec![30.into()]))
+            .await
+            .unwrap()
+            .unwrap();
+        let result60 = btree
+            .get_internal(&name, &Key::from(vec![60.into()]))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result30.value, Some(Value::Integer(30)));
+        assert_eq!(result60.value, Some(Value::Integer(60)));
+    }
+
+    #[tokio::test]
+    async fn test_get_internal_deep_nesting() {
+        use rumps_types::{Key, Name, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::Global("PATIENT".into());
+
+        // Insert deeply nested key
+        let key = Key::from(vec![
+            123.into(),
+            "DEMOGRAPHICS".into(),
+            "ADDRESS".into(),
+            "STREET".into(),
+        ]);
+        let value = Value::String("123 Main St".into());
+
+        btree.set(&name, &key, value.clone()).await.unwrap();
+
+        // Retrieve deeply nested key
+        let result = btree.get_internal(&name, &key).await.unwrap().unwrap();
+        assert_eq!(result.value, Some(value));
     }
 }

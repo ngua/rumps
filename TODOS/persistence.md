@@ -238,18 +238,38 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 ### 2.3 MUMPS Operations - GET
 - [ ] Implement `async fn get_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<Option<Value>>`:
-  - Use `load_node()` for cache-aware node access
-  - Navigate tree following key path
-  - Return cloned value if exists (see note below on value cloning)
+  - Use `get_internal()` to retrieve `Arc<NodeData>` (will use `load_node()` in Phase 4)
+  - Extract value by cloning `Option<Value>` from the Arc
   - If context is Some, read from transaction's snapshot timestamp and see only committed values as of transaction start
+  - Implementation:
+    ```rust
+    pub async fn get_with_context(
+        &self,
+        name: &Name,
+        key: &Key,
+        _context: Option<&TransactionContext>,
+    ) -> Result<Option<Value>> {
+        // TODO Phase 5: If context is Some, use transaction's snapshot isolation
+        // to read from the snapshot timestamp and see only committed values
+        // as of transaction start. This will require checking the transaction's
+        // read timestamp against the write timestamps of modifications.
+        Ok(self.get_internal(name, key).await?.and_then(|arc_data| arc_data.value.clone()))
+    }
+    ```
 - [ ] Implement `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`:
   - Simply delegate to `get_with_context(name, key, None)`
+  - Implementation:
+    ```rust
+    pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
+        self.get_with_context(name, key, None).await
+    }
+    ```
 - [ ] Add async tests for GET on non-existent keys
 - [ ] Add async tests for GET on existing keys
 - [ ] Add async tests for GET on partial paths (should return None if no value at that node)
 - [ ] Add concurrent GET tests during active writes
 
-**Note on Value Cloning**: All read operations return owned `Value` rather than references due to async lock lifetime constraints. Values must be cloned from the `RwLock` guard before it drops. This follows standard patterns in async concurrent data structures (like `dashmap::DashMap`). MUMPS values are typically small, making cloning cost acceptable. See `TODOS/btree.md` "Value Cloning and Lock Semantics" section for detailed rationale and future optimization strategies.
+**Note on Value Cloning**: All read operations return owned `Value` rather than references due to async lock lifetime constraints. Values must be cloned from the `RwLock` guard before it drops. This follows standard patterns in async concurrent data structures (like `dashmap::DashMap`). MUMPS values are typically small, making cloning cost acceptable. The public `get()` API simply clones the `Option<Value>` from the `Arc<NodeData>` returned by `get_internal()`. See `TODOS/btree.md` "Value Cloning and Lock Semantics" section for detailed rationale and future optimization strategies.
 
 ### 2.4 MUMPS Operations - KILL
 - [ ] Implement `async fn kill_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<()>`:

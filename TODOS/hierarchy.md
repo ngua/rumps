@@ -152,67 +152,31 @@ When setting `Key([a, b, c])` with value `v`:
 
 ---
 
-### Step 3: Implement `get_internal()` - B-Tree Navigation
+### Step 3: Implement `get_internal()` - B-Tree Navigation ✅ COMPLETE
 
 **File**: `crates/rumps-storage/src/btree.rs` (private helpers impl block)
 
-**Purpose**: Navigate the B-tree to retrieve full `NodeData` (not just `Value`).
+**Summary**: Implemented B-tree navigation to retrieve full `Arc<NodeData>` for efficient hierarchy operations.
 
-**Implementation**:
-```rust
-/// Internal GET that returns Arc<NodeData> (not just Value).
-///
-/// Returns an Arc for efficient hierarchy navigation - checking `has_descendants`
-/// flags is much cheaper with Arc::clone() than cloning the entire NodeData.
-///
-/// The public `get()` method will extract the value using Arc::try_unwrap()
-/// when possible, avoiding clones when the refcount is 1.
-async fn get_internal(&self, name: &Name, key: &Key) -> Result<Option<Arc<NodeData>>> {
-    match self.roots.read().await.get(name).copied() {
-        None => Ok(None),
-        Some(root_id) => self.search_from_node(root_id, key).await,
-    }
-}
-
-/// Recursively search for a key starting from the given node.
-///
-/// Returns Arc<NodeData> for cheap cloning during hierarchy navigation.
-fn search_from_node<'a>(
-    &'a self,
-    node_id: NodeId,
-    key: &'a Key,
-) -> Pin<Box<dyn Future<Output = Result<Option<Arc<NodeData>>>> + Send + 'a>>
-{
-    Box::pin(async move {
-        let node = self.find_node(node_id).await?;
-
-        match node.keys.binary_search(key) {
-            Ok(pos) => Ok(Some(Arc::clone(&node.values[pos]))),
-            Err(pos) => if node.is_leaf {
-                Ok(None)
-              } else { 
-                self.search_from_node(node.children[pos], key).await
-            }
-        }
-    })
-}
-```
-
-**Critical Considerations**:
-- Must handle partial matches correctly (e.g., searching for `Key([1,2,3])` when tree only has `Key([1])` and `Key([1,2,5])`)
-- Must work for both leaf and internal nodes
-- Returns `Arc<NodeData>` for cheap cloning during hierarchy checks
-
-**Note on Node Type**:
-This requires updating `Node` in `rumps-types/src/node.rs`:
-```rust
-pub struct Node {
-    pub keys: Vec<Key>,
-    pub children: Vec<NodeId>,
-    pub values: Vec<Arc<NodeData>>,  // ← Changed from Vec<NodeData>
-    pub is_leaf: bool,
-}
-```
+**Implementation Complete**:
+- ✅ Added `get_internal()` method returning `Option<Arc<NodeData>>`
+- ✅ Added `search_from_node()` recursive helper for tree traversal
+- ✅ Uses binary search to find keys in nodes
+- ✅ Correctly handles partial matches (returns None when key doesn't exist)
+- ✅ Works for both leaf and internal nodes
+- ✅ Returns `Arc<NodeData>` for cheap cloning during hierarchy checks
+- ✅ Comprehensive test coverage (10 tests):
+  - ✅ test_get_internal_nonexistent_variable
+  - ✅ test_get_internal_exact_match_single_key
+  - ✅ test_get_internal_exact_match_nested_key
+  - ✅ test_get_internal_nonexistent_key (before/between/after existing keys)
+  - ✅ test_get_internal_partial_match_no_such_path (critical edge case)
+  - ✅ test_get_internal_multiple_keys_same_variable
+  - ✅ test_get_internal_different_variables
+  - ✅ test_get_internal_returns_nodedata_with_flags
+  - ✅ test_get_internal_with_tree_splits
+  - ✅ test_get_internal_deep_nesting
+- ✅ All 39 tests in rumps-storage pass
 
 ---
 
@@ -633,9 +597,9 @@ mod tests {
 ### Step 2: Core Implementation
 - [x] Add `Key::ancestors()` method to `crates/rumps-types/src/key.rs`
 - [x] Add unit tests for `Key::ancestors()` (empty, single, two, deep)
-- [ ] Implement `get_internal()` returning `Arc<NodeData>` with full B-tree navigation
-- [ ] Implement `search_from_node()` helper for recursive search
-- [ ] Test `get_internal()` with existing and non-existent keys
+- [x] Implement `get_internal()` returning `Arc<NodeData>` with full B-tree navigation
+- [x] Implement `search_from_node()` helper for recursive search
+- [x] Test `get_internal()` with existing and non-existent keys (10 comprehensive tests)
 - [ ] Implement `set_internal()` with NodeData merge behavior
   - [ ] OR operation on `has_descendants`
   - [ ] Value replacement when new value is provided
