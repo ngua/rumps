@@ -18,11 +18,21 @@ pub enum StorageError {
 
     /// Node overflow (too many keys)
     #[error("Node overflow: {current} keys, max {max}")]
-    NodeOverflow { current: usize, max: usize },
+    NodeOverflow {
+        /// Current number of keys in the node
+        current: usize,
+        /// Maximum allowed keys
+        max: usize,
+    },
 
     /// Memory limit exceeded
     #[error("Memory limit exceeded: {used} bytes, limit {limit}")]
-    MemoryLimitExceeded { used: usize, limit: usize },
+    MemoryLimitExceeded {
+        /// Current memory usage in bytes
+        used: usize,
+        /// Memory limit in bytes
+        limit: usize,
+    },
 
     /// Invalid operation
     #[error("Invalid operation: {0}")]
@@ -41,4 +51,7 @@ pub enum StorageError {
     Transaction(String),
 }
 
+/// A specialized Result type for storage operations.
+///
+/// This is a convenience type alias that fixes the error type to [`StorageError`].
 pub type Result<T> = std::result::Result<T, StorageError>;
