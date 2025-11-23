@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use futures::StreamExt;
 use rumps_storage::BTree;
-use rumps_types::{Key, Name, Value};
+use rumps_types::{Key, Name, NodeData, Value};
 use tokio::runtime::Runtime;
 
 /// Helper function to create a key with the specified depth.
@@ -33,7 +33,14 @@ fn bench_insert_depths(c: &mut Criterion) {
                         let value = Value::Integer(42);
 
                         // This call internally invokes ensure_ancestors() before insertion
-                        btree.set(&name, &key, value).await.unwrap();
+                        btree
+                            .set_internal(
+                                &name,
+                                &key,
+                                NodeData::with_value(value),
+                            )
+                            .await
+                            .unwrap();
                     })
                 });
             },
@@ -64,7 +71,14 @@ fn bench_insert_with_existing_ancestors(c: &mut Criterion) {
                     4.into(),
                     100.into(),
                 ]);
-                btree.set(&name, &key1, Value::Integer(42)).await.unwrap();
+                btree
+                    .set_internal(
+                        &name,
+                        &key1,
+                        NodeData::with_value(Value::Integer(42)),
+                    )
+                    .await
+                    .unwrap();
 
                 // Second insert at same depth should be faster (ancestors exist)
                 let key2 = Key::from(vec![
@@ -74,7 +88,14 @@ fn bench_insert_with_existing_ancestors(c: &mut Criterion) {
                     4.into(),
                     200.into(),
                 ]);
-                btree.set(&name, &key2, Value::Integer(43)).await.unwrap();
+                btree
+                    .set_internal(
+                        &name,
+                        &key2,
+                        NodeData::with_value(Value::Integer(43)),
+                    )
+                    .await
+                    .unwrap();
             })
         });
     });
@@ -102,10 +123,12 @@ fn bench_ensure_ancestors(c: &mut Criterion) {
                         let name = name.clone();
                         async move {
                             btree
-                                .set(
+                                .set_internal(
                                     &name,
                                     &ancestor,
-                                    Value::String("ancestor".into()),
+                                    NodeData::with_value(Value::String(
+                                        "ancestor".into(),
+                                    )),
                                 )
                                 .await
                                 .unwrap();
@@ -130,7 +153,11 @@ fn bench_worst_case(c: &mut Criterion) {
                 let key = create_key_at_depth(10);
 
                 btree
-                    .set(&name, &key, Value::String("value".into()))
+                    .set_internal(
+                        &name,
+                        &key,
+                        NodeData::with_value(Value::String("value".into())),
+                    )
                     .await
                     .unwrap();
             })
@@ -150,7 +177,11 @@ fn bench_best_case(c: &mut Criterion) {
                 let key = create_key_at_depth(2);
 
                 btree
-                    .set(&name, &key, Value::String("value".into()))
+                    .set_internal(
+                        &name,
+                        &key,
+                        NodeData::with_value(Value::String("value".into())),
+                    )
                     .await
                     .unwrap();
             })

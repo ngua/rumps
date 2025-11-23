@@ -681,25 +681,36 @@ impl Default for BTree {
 
 /// MUMPS primitive operations (SET, GET, KILL, DATA, ORDER).
 ///
-/// Public API
+/// Public API - All write operations require a TransactionContext.
+/// Read operations can optionally use a TransactionContext for snapshot isolation.
 impl BTree {
     /// Sets a value in the tree at the specified variable name and key.
     ///
-    /// This is the simple wrapper that delegates to `set_with_context` with no
-    /// transaction context. For transactional writes, use `set_with_context` directly.
+    /// **Requires a transaction context.** All writes to globals must occur within transactions.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The variable name (Global or Local)
+    /// * `key` - The key path
+    /// * `value` - The value to store
+    /// * `txn` - Transaction context (required for all writes)
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// use rumps_storage::BTree;
-    /// use rumps_types::{Name, Key, Value};
+    /// use rumps_storage::{BTree, TransactionContext};
+    /// use rumps_types::{Name, Key, Value, TransactionId, TransactionTimestamp};
     ///
     /// # tokio_test::block_on(async {
     /// let btree = BTree::new(3)?;
+    /// let txn = TransactionContext::new(
+    ///     TransactionId::from(1),
+    ///     TransactionTimestamp::from(100),
+    /// );
     ///
     /// let name = Name::Global("PATIENT".into());
     /// let key = Key::from(vec![123.into()]);
-    /// btree.set(&name, &key, "John Doe".into()).await?;
+    /// btree.set(&name, &key, "John Doe".into(), &txn).await?;
     /// # Ok::<(), rumps_storage::StorageError>(())
     /// # });
     /// ```
@@ -708,147 +719,115 @@ impl BTree {
         name: &Name,
         key: &Key,
         value: rumps_types::Value,
+        _ctx: &crate::TransactionContext,
     ) -> Result<()> {
-        self.set_with_context(name, key, value, None).await
-    }
-
-    /// Sets a value with optional transaction context.
-    ///
-    /// This is the full implementation that supports transaction isolation.
-    /// When `context` is `Some`, writes are tracked in the transaction.
-    ///
-    /// For now (Phase 2), the context parameter is accepted but ignored.
-    /// Transaction support will be added in Phase 5.
-    ///
-    /// # Algorithm
-    ///
-    /// 1. Look up the root node ID for this variable name
-    /// 2. If no root exists, create a new leaf root with the key-value pair
-    /// 3. If root exists:
-    ///    a. Check if root is full; if so, split it and create new root
-    ///    b. Navigate down the tree to find the appropriate leaf
-    ///    c. Insert or update the key-value pair in the leaf
-    ///    d. Split nodes along the path if they become full
-    /// 4. Update statistics (key count, splits)
-    ///
-    /// # Note on has_descendants
-    ///
-    /// This implementation maintains hierarchical semantics by ensuring all
-    /// ancestor keys exist with `has_descendants = true` before inserting
-    /// the target key-value pair.
-    pub async fn set_with_context(
-        &self,
-        name: &Name,
-        key: &Key,
-        value: rumps_types::Value,
-        // Will be Option<&TransactionContext> in Phase 5
-        _context: Option<()>,
-    ) -> Result<()> {
-        // TODO Phase 5: If context is Some, track this write in the transaction's
-        // buffered writes for snapshot isolation. The transaction will check for
-        // conflicts at commit time and only then apply changes to the B-tree.
-        // This requires validating write-write conflicts and maintaining MVCC
-        // timestamps for proper snapshot isolation.
+        // TODO Phase 5: Use transaction context for snapshot isolation
+        // and buffered writes. For now, we just delegate to set_internal.
 
         // Ensure all ancestors exist with has_descendants=true
         self.ensure_ancestors(name, key).await?;
 
-        // Look up the root node ID for this variable name
-        let roots = self.roots.read().await;
-        let root_id_opt = roots.get(name).copied();
-        drop(roots);
-
-        match root_id_opt {
-            None => {
-                // Variable doesn't exist - create a new leaf root with single key-value
-                let new_root_id = self.allocator.allocate().await?;
-                let new_root = Node {
-                    keys: vec![key.clone()],
-                    children: vec![],
-                    values: vec![Arc::new(NodeData::with_value(value))],
-                    is_leaf: true,
-                };
-
-                // Insert the new root into storage
-                {
-                    let mut nodes = self.nodes.write().await;
-                    nodes.insert(new_root_id, new_root);
-                }
-
-                // Register the root in the roots map
-                {
-                    let mut roots = self.roots.write().await;
-                    roots.insert(name.clone(), new_root_id);
-                }
-
-                // Update statistics
-                {
-                    let mut stats = self.stats.write().await;
-                    stats.node_count += 1;
-                    stats.key_count += 1;
-                    stats.height = 1;
-                }
-
-                Ok(())
-            }
-            Some(root_id) => {
-                // Variable exists - navigate tree and insert
-                // Check if root is full and needs splitting
-                let root = self.find_node(root_id).await?;
-                let max_keys = 2 * self.min_degree - 1;
-
-                let new_root_id = match root.keys.len() {
-                    n if n == max_keys => {
-                        // Root is full, split it and create a new root
-                        let (median_key, median_value, right_id) =
-                            self.split_node(root_id).await?;
-
-                        // Create new root with the median
-                        let new_root_id = self.allocator.allocate().await?;
-                        let new_root = Node {
-                            keys: vec![median_key],
-                            children: vec![root_id, right_id],
-                            values: vec![Arc::clone(&median_value)],
-                            is_leaf: false,
-                        };
-
-                        // Insert new root
-                        {
-                            let mut nodes = self.nodes.write().await;
-                            nodes.insert(new_root_id, new_root);
-                        }
-
-                        // Update root reference
-                        {
-                            let mut roots = self.roots.write().await;
-                            roots.insert(name.clone(), new_root_id);
-                        }
-
-                        // Update height
-                        {
-                            let mut stats = self.stats.write().await;
-                            stats.height += 1;
-                            stats.node_count += 1;
-                        }
-
-                        new_root_id
-                    }
-                    _ => root_id,
-                };
-
-                // Insert into the non-full root
-                self.insert_non_full(new_root_id, key, value).await?;
-
-                // Update key count statistics
-                {
-                    let mut stats = self.stats.write().await;
-                    stats.key_count += 1;
-                }
-
-                Ok(())
-            }
-        }
+        // Delegate to internal implementation
+        self.set_internal(name, key, NodeData::with_value(value))
+            .await
     }
+
+    /// Gets a value from the tree.
+    ///
+    /// Optional transaction context for snapshot isolation (Phase 5).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let value = btree.get(&name, &key, None).await?;
+    /// ```
+    pub async fn get(
+        &self,
+        name: &Name,
+        key: &Key,
+        _ctx: Option<&crate::TransactionContext>,
+    ) -> Result<Option<rumps_types::Value>> {
+        // TODO Phase 5: If txn is Some, use snapshot isolation
+        self.get_internal(name, key)
+            .await
+            .map(|opt| opt.and_then(|data| data.value.clone()))
+    }
+
+    /// Deletes a key and all its descendants from the tree.
+    ///
+    /// **Requires a transaction context.** All writes to globals must occur within transactions.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// btree.kill(&name, &key, &txn).await?;
+    /// ```
+    pub async fn kill(
+        &self,
+        _name: &Name,
+        _key: &Key,
+        _ctx: &crate::TransactionContext,
+    ) -> Result<()> {
+        // TODO Phase 2.4: Implement KILL operation
+        todo!("KILL operation not yet implemented - see TODOS/persistence.md Phase 2.4")
+    }
+
+    /// Checks the data status of a node (MUMPS $DATA).
+    ///
+    /// Returns information about whether a node has a value and/or descendants.
+    /// Optional transaction context for snapshot isolation (Phase 5).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let status = btree.data(&name, &key, None).await?;
+    /// ```
+    pub async fn data(
+        &self,
+        _name: &Name,
+        _key: &Key,
+        _ctx: Option<&crate::TransactionContext>,
+    ) -> Result<DataStatus> {
+        // TODO Phase 2.5: Implement DATA operation
+        todo!("DATA operation not yet implemented - see TODOS/persistence.md Phase 2.5")
+    }
+
+    /// Returns the next key in lexicographic order (MUMPS $ORDER).
+    ///
+    /// Optional transaction context for snapshot isolation (Phase 5).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let next_key = btree.order(&name, Some(&key), None).await?;
+    /// ```
+    pub async fn order(
+        &self,
+        _name: &Name,
+        _after: Option<&Key>,
+        _ctx: Option<&crate::TransactionContext>,
+    ) -> Result<Option<Key>> {
+        // TODO Phase 2.6: Implement ORDER operation
+        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
+    }
+}
+
+/// Type for `$DATA` operation result.
+///
+/// NOTE: The `u8` representation follows conventional MUMPS semantics
+/// (i.e. returning the numerical representation of data status), whereas the
+/// Rust API can use a proper sum type for this
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataStatus {
+    /// No value, no descendants
+    NoData = 0,
+    /// Has value only
+    HasValue = 1,
+    /// Has descendants only
+    HasDescendants = 10,
+    /// Has both value and descendants
+    Both = 11,
 }
 
 /// Private helper methods for B-tree operations.
@@ -872,7 +851,9 @@ impl BTree {
     ///     println!("value: {:?}", data.value);
     /// }
     /// ```
-    async fn get_internal(
+    // Internal method for tests/benchmarks - not part of public API
+    #[doc(hidden)]
+    pub async fn get_internal(
         &self,
         name: &Name,
         key: &Key,
@@ -979,7 +960,9 @@ impl BTree {
     /// btree.set_internal(&name, &ancestor_key, NodeData::with_value(value)).await?;
     /// // Result: NodeData { value: Some(value), has_descendants: true }
     /// ```
-    async fn set_internal(
+    // Internal method for tests/benchmarks - not part of public API
+    #[doc(hidden)]
+    pub async fn set_internal(
         &self,
         name: &Name,
         key: &Key,
@@ -1081,6 +1064,35 @@ impl BTree {
                 Ok(())
             }
         }
+    }
+
+    // Internal method for tests/benchmarks - not part of public API
+    #[doc(hidden)]
+    pub async fn kill_internal(&self, _name: &Name, _key: &Key) -> Result<()> {
+        // TODO Phase 2.4: Implement KILL operation
+        todo!("KILL operation not yet implemented - see TODOS/persistence.md Phase 2.4")
+    }
+
+    // Internal method for tests/benchmarks - not part of public API
+    #[doc(hidden)]
+    pub async fn data_internal(
+        &self,
+        _name: &Name,
+        _key: &Key,
+    ) -> Result<DataStatus> {
+        // TODO Phase 2.5: Implement DATA operation
+        todo!("DATA operation not yet implemented - see TODOS/persistence.md Phase 2.5")
+    }
+
+    // Internal method for tests/benchmarks - not part of public API
+    #[doc(hidden)]
+    pub async fn order_internal(
+        &self,
+        _name: &Name,
+        _after: Option<&Key>,
+    ) -> Result<Option<Key>> {
+        // TODO Phase 2.6: Implement ORDER operation
+        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
     }
 
     /// Inserts a key-value pair into a non-full node.
@@ -1366,7 +1378,8 @@ impl BTree {
     /// ensure_ancestors(&name, &Key::from(vec![1, 2, 3])).await?;
     /// // Creates: Key([1]) and Key([1, 2]) with has_descendants=true
     /// ```
-    async fn ensure_ancestors(&self, name: &Name, key: &Key) -> Result<()> {
+    #[doc(hidden)]
+    pub async fn ensure_ancestors(&self, name: &Name, key: &Key) -> Result<()> {
         use futures::stream::{self, TryStreamExt};
 
         let ancestors = key.ancestors();
@@ -1559,8 +1572,13 @@ mod tests {
                 let name = name.clone();
                 async move {
                     let key = Key::from(vec![(i as i64).into()]);
+                    btree.ensure_ancestors(&name, &key).await.unwrap();
                     btree
-                        .set(&name, &key, Value::Integer(i as i64))
+                        .set_internal(
+                            &name,
+                            &key,
+                            NodeData::with_value(Value::Integer(i as i64)),
+                        )
                         .await
                         .unwrap();
                 }
@@ -1575,11 +1593,15 @@ mod tests {
                 let name = name.clone();
                 async move {
                     let key = Key::from(vec![1000.into(), (i as i64).into()]);
+                    btree.ensure_ancestors(&name, &key).await.unwrap();
                     btree
-                        .set(
+                        .set_internal(
                             &name,
                             &key,
-                            Value::String(format!("nested_{}", i)),
+                            NodeData::with_value(Value::String(format!(
+                                "nested_{}",
+                                i
+                            ))),
                         )
                         .await
                         .unwrap();
@@ -1601,8 +1623,13 @@ mod tests {
                         ((i % 3) as i64).into(),
                         (i as i64).into(),
                     ]);
+                    btree.ensure_ancestors(&name, &key).await.unwrap();
                     btree
-                        .set(&name, &key, Value::Integer(i as i64))
+                        .set_internal(
+                            &name,
+                            &key,
+                            NodeData::with_value(Value::Integer(i as i64)),
+                        )
                         .await
                         .unwrap();
                 }
@@ -2524,8 +2551,11 @@ mod tests {
         let key = Key::from(vec![123.into()]);
         let value = Value::String("John Doe".into());
 
-        // Insert using SET
-        btree.set(&name, &key, value.clone()).await.unwrap();
+        // Insert using set_internal
+        btree
+            .set_internal(&name, &key, NodeData::with_value(value.clone()))
+            .await
+            .unwrap();
 
         // Retrieve using get_internal
         let result = btree.get_internal(&name, &key).await.unwrap();
@@ -2544,8 +2574,11 @@ mod tests {
         let key = Key::from(vec![123.into(), "NAME".into()]);
         let value = Value::String("John Doe".into());
 
-        // Insert using SET
-        btree.set(&name, &key, value.clone()).await.unwrap();
+        // Insert using set_internal
+        btree
+            .set_internal(&name, &key, NodeData::with_value(value.clone()))
+            .await
+            .unwrap();
 
         // Retrieve using get_internal
         let result = btree.get_internal(&name, &key).await.unwrap();
@@ -2563,11 +2596,19 @@ mod tests {
 
         // Insert some keys
         btree
-            .set(&name, &Key::from(vec![100.into()]), Value::Integer(1))
+            .set_internal(
+                &name,
+                &Key::from(vec![100.into()]),
+                NodeData::with_value(Value::Integer(1)),
+            )
             .await
             .unwrap();
         btree
-            .set(&name, &Key::from(vec![200.into()]), Value::Integer(2))
+            .set_internal(
+                &name,
+                &Key::from(vec![200.into()]),
+                NodeData::with_value(Value::Integer(2)),
+            )
             .await
             .unwrap();
 
@@ -2602,14 +2643,18 @@ mod tests {
 
         // Insert keys: [1], [1,2,5]
         btree
-            .set(&name, &Key::from(vec![1.into()]), Value::Integer(1))
+            .set_internal(
+                &name,
+                &Key::from(vec![1.into()]),
+                NodeData::with_value(Value::Integer(1)),
+            )
             .await
             .unwrap();
         btree
-            .set(
+            .set_internal(
                 &name,
                 &Key::from(vec![1.into(), 2.into(), 5.into()]),
-                Value::Integer(125),
+                NodeData::with_value(Value::Integer(125)),
             )
             .await
             .unwrap();
@@ -2632,15 +2677,27 @@ mod tests {
 
         // Insert multiple keys
         btree
-            .set(&name, &Key::from(vec![1.into()]), Value::Integer(1))
+            .set_internal(
+                &name,
+                &Key::from(vec![1.into()]),
+                NodeData::with_value(Value::Integer(1)),
+            )
             .await
             .unwrap();
         btree
-            .set(&name, &Key::from(vec![2.into()]), Value::Integer(2))
+            .set_internal(
+                &name,
+                &Key::from(vec![2.into()]),
+                NodeData::with_value(Value::Integer(2)),
+            )
             .await
             .unwrap();
         btree
-            .set(&name, &Key::from(vec![3.into()]), Value::Integer(3))
+            .set_internal(
+                &name,
+                &Key::from(vec![3.into()]),
+                NodeData::with_value(Value::Integer(3)),
+            )
             .await
             .unwrap();
 
@@ -2677,11 +2734,19 @@ mod tests {
 
         // Insert same key in different variables
         btree
-            .set(&name1, &key, Value::String("VAR1 value".into()))
+            .set_internal(
+                &name1,
+                &key,
+                NodeData::with_value(Value::String("VAR1 value".into())),
+            )
             .await
             .unwrap();
         btree
-            .set(&name2, &key, Value::String("VAR2 value".into()))
+            .set_internal(
+                &name2,
+                &key,
+                NodeData::with_value(Value::String("VAR2 value".into())),
+            )
             .await
             .unwrap();
 
@@ -2701,7 +2766,10 @@ mod tests {
         let name = Name::Global("VAR".into());
         let key = Key::from(vec![1.into()]);
 
-        btree.set(&name, &key, Value::Integer(42)).await.unwrap();
+        btree
+            .set_internal(&name, &key, NodeData::with_value(Value::Integer(42)))
+            .await
+            .unwrap();
 
         // Get the NodeData
         let arc1 = btree.get_internal(&name, &key).await.unwrap().unwrap();
@@ -2723,27 +2791,51 @@ mod tests {
 
         // Insert enough keys to cause splits
         btree
-            .set(&name, &Key::from(vec![10.into()]), Value::Integer(10))
+            .set_internal(
+                &name,
+                &Key::from(vec![10.into()]),
+                NodeData::with_value(Value::Integer(10)),
+            )
             .await
             .unwrap();
         btree
-            .set(&name, &Key::from(vec![20.into()]), Value::Integer(20))
+            .set_internal(
+                &name,
+                &Key::from(vec![20.into()]),
+                NodeData::with_value(Value::Integer(20)),
+            )
             .await
             .unwrap();
         btree
-            .set(&name, &Key::from(vec![30.into()]), Value::Integer(30))
+            .set_internal(
+                &name,
+                &Key::from(vec![30.into()]),
+                NodeData::with_value(Value::Integer(30)),
+            )
             .await
             .unwrap();
         btree
-            .set(&name, &Key::from(vec![40.into()]), Value::Integer(40))
+            .set_internal(
+                &name,
+                &Key::from(vec![40.into()]),
+                NodeData::with_value(Value::Integer(40)),
+            )
             .await
             .unwrap();
         btree
-            .set(&name, &Key::from(vec![50.into()]), Value::Integer(50))
+            .set_internal(
+                &name,
+                &Key::from(vec![50.into()]),
+                NodeData::with_value(Value::Integer(50)),
+            )
             .await
             .unwrap();
         btree
-            .set(&name, &Key::from(vec![60.into()]), Value::Integer(60))
+            .set_internal(
+                &name,
+                &Key::from(vec![60.into()]),
+                NodeData::with_value(Value::Integer(60)),
+            )
             .await
             .unwrap();
 
@@ -2779,7 +2871,10 @@ mod tests {
         ]);
         let value = Value::String("123 Main St".into());
 
-        btree.set(&name, &key, value.clone()).await.unwrap();
+        btree
+            .set_internal(&name, &key, NodeData::with_value(value.clone()))
+            .await
+            .unwrap();
 
         // Retrieve deeply nested key
         let result = btree.get_internal(&name, &key).await.unwrap().unwrap();
@@ -2797,8 +2892,13 @@ mod tests {
 
         // Set a nested key
         let key = Key::from(vec![123.into(), "NAME".into()]);
+        btree.ensure_ancestors(&name, &key).await.unwrap();
         btree
-            .set(&name, &key, Value::String("John".into()))
+            .set_internal(
+                &name,
+                &key,
+                NodeData::with_value(Value::String("John".into())),
+            )
             .await
             .unwrap();
 
@@ -2824,7 +2924,11 @@ mod tests {
         // Set deeply nested key
         let key =
             Key::from(vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into()]);
-        btree.set(&name, &key, Value::Integer(42)).await.unwrap();
+        btree.ensure_ancestors(&name, &key).await.unwrap();
+        btree
+            .set_internal(&name, &key, NodeData::with_value(Value::Integer(42)))
+            .await
+            .unwrap();
 
         // Verify all 4 ancestors have has_descendants=true
         let ancestors = key.ancestors();
@@ -2858,8 +2962,13 @@ mod tests {
         // 1. Set ^VAR(1,"A") = "child1"
         //    → Creates ^VAR(1) with has_descendants=true, no value
         let key_child = Key::from(vec![1.into(), "A".into()]);
+        btree.ensure_ancestors(&name, &key_child).await.unwrap();
         btree
-            .set(&name, &key_child, Value::String("child1".into()))
+            .set_internal(
+                &name,
+                &key_child,
+                NodeData::with_value(Value::String("child1".into())),
+            )
             .await
             .unwrap();
 
@@ -2875,8 +2984,13 @@ mod tests {
 
         // 2. Set ^VAR(1) = "parent_value"
         //    → Must preserve has_descendants=true AND add value
+        btree.ensure_ancestors(&name, &key_parent).await.unwrap();
         btree
-            .set(&name, &key_parent, Value::String("parent_value".into()))
+            .set_internal(
+                &name,
+                &key_parent,
+                NodeData::with_value(Value::String("parent_value".into())),
+            )
             .await
             .unwrap();
 
@@ -2901,14 +3015,24 @@ mod tests {
         let key_child = Key::from(vec![1.into(), 2.into()]);
 
         // 1. Set ^VAR(1) = "first"
+        btree.ensure_ancestors(&name, &key_parent).await.unwrap();
         btree
-            .set(&name, &key_parent, Value::String("first".into()))
+            .set_internal(
+                &name,
+                &key_parent,
+                NodeData::with_value(Value::String("first".into())),
+            )
             .await
             .unwrap();
 
         // 2. Set ^VAR(1,2) = "child" → ^VAR(1).has_descendants becomes true
+        btree.ensure_ancestors(&name, &key_child).await.unwrap();
         btree
-            .set(&name, &key_child, Value::String("child".into()))
+            .set_internal(
+                &name,
+                &key_child,
+                NodeData::with_value(Value::String("child".into())),
+            )
             .await
             .unwrap();
 
@@ -2921,8 +3045,13 @@ mod tests {
         assert!(arc.has_descendants);
 
         // 3. Set ^VAR(1) = "updated"
+        btree.ensure_ancestors(&name, &key_parent).await.unwrap();
         btree
-            .set(&name, &key_parent, Value::String("updated".into()))
+            .set_internal(
+                &name,
+                &key_parent,
+                NodeData::with_value(Value::String("updated".into())),
+            )
             .await
             .unwrap();
 
@@ -2944,27 +3073,33 @@ mod tests {
         let name = Name::Global("VAR".into());
 
         // Set ^VAR(1,"A"), ^VAR(1,"B"), ^VAR(1,"C")
+        let key_a = Key::from(vec![1.into(), "A".into()]);
+        btree.ensure_ancestors(&name, &key_a).await.unwrap();
         btree
-            .set(
+            .set_internal(
                 &name,
-                &Key::from(vec![1.into(), "A".into()]),
-                Value::Integer(1),
+                &key_a,
+                NodeData::with_value(Value::Integer(1)),
             )
             .await
             .unwrap();
+        let key_b = Key::from(vec![1.into(), "B".into()]);
+        btree.ensure_ancestors(&name, &key_b).await.unwrap();
         btree
-            .set(
+            .set_internal(
                 &name,
-                &Key::from(vec![1.into(), "B".into()]),
-                Value::Integer(2),
+                &key_b,
+                NodeData::with_value(Value::Integer(2)),
             )
             .await
             .unwrap();
+        let key_c = Key::from(vec![1.into(), "C".into()]);
+        btree.ensure_ancestors(&name, &key_c).await.unwrap();
         btree
-            .set(
+            .set_internal(
                 &name,
-                &Key::from(vec![1.into(), "C".into()]),
-                Value::Integer(3),
+                &key_c,
+                NodeData::with_value(Value::Integer(3)),
             )
             .await
             .unwrap();
@@ -2986,27 +3121,33 @@ mod tests {
         let name = Name::Global("VAR".into());
 
         // Set ^VAR(1,2), ^VAR(1,3), ^VAR(2,2)
+        let key_12 = Key::from(vec![1.into(), 2.into()]);
+        btree.ensure_ancestors(&name, &key_12).await.unwrap();
         btree
-            .set(
+            .set_internal(
                 &name,
-                &Key::from(vec![1.into(), 2.into()]),
-                Value::Integer(12),
+                &key_12,
+                NodeData::with_value(Value::Integer(12)),
             )
             .await
             .unwrap();
+        let key_13 = Key::from(vec![1.into(), 3.into()]);
+        btree.ensure_ancestors(&name, &key_13).await.unwrap();
         btree
-            .set(
+            .set_internal(
                 &name,
-                &Key::from(vec![1.into(), 3.into()]),
-                Value::Integer(13),
+                &key_13,
+                NodeData::with_value(Value::Integer(13)),
             )
             .await
             .unwrap();
+        let key_22 = Key::from(vec![2.into(), 2.into()]);
+        btree.ensure_ancestors(&name, &key_22).await.unwrap();
         btree
-            .set(
+            .set_internal(
                 &name,
-                &Key::from(vec![2.into(), 2.into()]),
-                Value::Integer(22),
+                &key_22,
+                NodeData::with_value(Value::Integer(22)),
             )
             .await
             .unwrap();
@@ -3040,7 +3181,14 @@ mod tests {
             let name = name.clone();
             tokio::spawn(async move {
                 let key = Key::from(vec![1.into(), i.into()]);
-                btree.set(&name, &key, Value::Integer(i)).await
+                btree.ensure_ancestors(&name, &key).await.unwrap();
+                btree
+                    .set_internal(
+                        &name,
+                        &key,
+                        NodeData::with_value(Value::Integer(i)),
+                    )
+                    .await
             })
         });
 

@@ -54,7 +54,10 @@ impl TransactionContext {
     ///
     /// assert_eq!(rumps_types::TransactionId::from(1), txn.id);
     /// ```
-    pub fn new(id: TransactionId, start_timestamp: TransactionTimestamp) -> Self {
+    pub fn new(
+        id: TransactionId,
+        start_timestamp: TransactionTimestamp,
+    ) -> Self {
         Self {
             id,
             start_timestamp,

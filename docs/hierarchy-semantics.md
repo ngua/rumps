@@ -71,21 +71,33 @@ The hierarchy is **implicit** in the key structure. We must maintain `has_descen
 2. **Return Type**: `get_internal()` returns `Option<Arc<NodeData>>` instead of `Option<NodeData>`
 3. **Node Creation**: All values wrapped with `Arc::new(NodeData { ... })`
 4. **Serialization**: Custom serialize/deserialize unwraps/wraps Arc
-5. **Public API**: `get_with_context()` extracts value by cloning, and `get()` delegates to it:
+5. **Public API**: `get()` extracts value by cloning and accepts optional transaction context:
    ```rust
-   pub async fn get_with_context(
+   pub async fn get(
        &self,
        name: &Name,
        key: &Key,
-       _context: Option<()>, // Will later be `Option<TransactionContext>`
+       _txn: Option<&TransactionContext>,
    ) -> Result<Option<Value>> {
-       // Handle transaction context here...
-
-       Ok(self.get_internal(name, key).await?.and_then(|arc_data| arc_data.value.clone()))
+       // TODO Phase 5: If txn is Some, use transaction snapshot isolation
+       self.get_internal(name, key)
+           .await
+           .map(|opt| opt.and_then(|data| data.value.clone()))
    }
+   ```
 
-   pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
-       self.get_with_context(name, key, None).await
+   Write operations require a transaction context:
+   ```rust
+   pub async fn set(
+       &self,
+       name: &Name,
+       key: &Key,
+       value: Value,
+       _txn: &TransactionContext,
+   ) -> Result<()> {
+       // TODO Phase 5: Use transaction for buffered writes
+       self.ensure_ancestors(name, key).await?;
+       self.set_internal(name, key, NodeData::with_value(value)).await
    }
    ```
 
@@ -207,24 +219,23 @@ The noted optimization opportunities (especially ancestor caching) can be implem
 ### GET
 
 - Uses `get_internal()` helper which returns `Arc<NodeData>`
-- Main implementation is `get_with_context()` which accepts optional transaction context:
+- Public `get()` API accepts optional transaction context for snapshot isolation:
   ```rust
-  pub async fn get_with_context(
+  pub async fn get(
       &self,
       name: &Name,
       key: &Key,
-      _context: Option<()>,  // Will be Option<&TransactionContext> in Phase 5
+      _txn: Option<&TransactionContext>,
   ) -> Result<Option<Value>> {
-      Ok(self.get_internal(name, key).await?.and_then(|arc_data| arc_data.value.clone()))
-  }
-  ```
-- Public `get()` API is a convenience wrapper:
-  ```rust
-  pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
-      self.get_with_context(name, key, None).await
+      // TODO Phase 5: If txn is Some, use snapshot isolation
+      self.get_internal(name, key)
+          .await
+          .map(|opt| opt.and_then(|data| data.value.clone()))
   }
   ```
 - Simple and clear: just clone the `Option<Value>` from the Arc
+- For transaction-less reads: `btree.get(&name, &key, None).await?`
+- With transaction: `btree.get(&name, &key, Some(&txn)).await?`
 
 ### DATA
 

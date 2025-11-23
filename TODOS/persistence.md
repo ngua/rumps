@@ -215,9 +215,11 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 ### 2.2 MUMPS Operations - SET
 
-**Important**: After completing the first two checkboxes below (basic SET implementation), you MUST implement hierarchical semantics by following the complete plan in `TODOS/hierarchy.md`. This includes maintaining `has_descendants` flags on ancestor nodes, which is critical for `$DATA`, `$ORDER`, and `KILL` operations.
+**Important**: ~~After completing the first two checkboxes below (basic SET implementation), you MUST implement hierarchical semantics by following the complete plan in `TODOS/hierarchy.md`. This includes maintaining `has_descendants` flags on ancestor nodes, which is critical for `$DATA`, `$ORDER`, and `KILL` operations.~~ 
 
-- [ ] Implement `async fn set_with_context(&self, name: &Name, key: &Key, value: Value, context: Option<&TransactionContext>) -> Result<()>`:
+**NOTE**: Hierarchy semantics have been implemented, see `docs/hierarchy-semantics.md`
+
+- [ ] Implement `async fn set(&self, name: &Name, key: &Key, value: Value, ctx: &TransactionContext) -> Result<()>`:
   - Use `load_node()` for cache-aware node access
   - Navigate to appropriate leaf node
   - Insert/update key-value pair
@@ -225,10 +227,8 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Handle node splits and tree growth
   - Use `save_node()` to persist changes
   - Update `BTreeStats` (key count, splits)
-  - If context is Some, check transaction isolation level and track writes
-- [ ] Implement `async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()>`:
-  - Simply delegate to `set_with_context(name, key, value, None)`
-- [ ] **→ See `TODOS/hierarchy.md` for complete hierarchical semantics implementation** (required before continuing)
+  - Check transaction isolation level and track writes
+- [x] **→ See `docs/hierarchy-semantics.md` for complete hierarchical semantics implementation** (required before continuing; now completed)
 - [ ] Add async tests for SET on empty tree (both Global and Local)
 - [ ] Add async tests for SET with existing keys (updates)
 - [ ] Add async tests for SET triggering node splits
@@ -237,33 +237,11 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [ ] Add concurrent SET tests with `Arc<BTree>`
 
 ### 2.3 MUMPS Operations - GET
-- [ ] Implement `async fn get_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<Option<Value>>`:
-  - Use `get_internal()` to retrieve `Arc<NodeData>` (will use `load_node()` in Phase 4)
-  - Extract value by cloning `Option<Value>` from the Arc
-  - If context is Some, read from transaction's snapshot timestamp and see only committed values as of transaction start
-  - Implementation:
-    ```rust
-    pub async fn get_with_context(
-        &self,
-        name: &Name,
-        key: &Key,
-        _context: Option<&TransactionContext>,
-    ) -> Result<Option<Value>> {
-        // TODO Phase 5: If context is Some, use transaction's snapshot isolation
-        // to read from the snapshot timestamp and see only committed values
-        // as of transaction start. This will require checking the transaction's
-        // read timestamp against the write timestamps of modifications.
-        Ok(self.get_internal(name, key).await?.and_then(|arc_data| arc_data.value.clone()))
-    }
-    ```
-- [ ] Implement `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`:
-  - Simply delegate to `get_with_context(name, key, None)`
-  - Implementation:
-    ```rust
-    pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
-        self.get_with_context(name, key, None).await
-    }
-    ```
+
+**Status**: Public API stub exists with `todo!()` implementation. Internal `get_internal()` fully implemented and used by tests.
+
+- [x] Public stub implemented - calls `get_internal()` with optional transaction context
+- [ ] Complete implementation with full transaction snapshot isolation support
 - [ ] Add async tests for GET on non-existent keys
 - [ ] Add async tests for GET on existing keys
 - [ ] Add async tests for GET on partial paths (should return None if no value at that node)
@@ -272,7 +250,10 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 **Note on Value Cloning**: All read operations return owned `Value` rather than references due to async lock lifetime constraints. Values must be cloned from the `RwLock` guard before it drops. This follows standard patterns in async concurrent data structures (like `dashmap::DashMap`). MUMPS values are typically small, making cloning cost acceptable. The public `get()` API simply clones the `Option<Value>` from the `Arc<NodeData>` returned by `get_internal()`. See `TODOS/btree.md` "Value Cloning and Lock Semantics" section for detailed rationale and future optimization strategies.
 
 ### 2.4 MUMPS Operations - KILL
-- [ ] Implement `async fn kill_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<()>`:
+
+**Status**: Public API stub exists with `todo!()` implementation. Internal `kill_internal()` stub also exists with `todo!()`.
+
+- [ ] Implement KILL operation:
   - Use `load_node()` for cache-aware node access
   - Navigate to node
   - Delete entire subtree rooted at key
@@ -280,32 +261,33 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Handle node merging and tree shrinking
   - Use `save_node()` to persist changes
   - Update `BTreeStats` (key count, merges)
-  - If context is Some, track deletions in transaction context
-- [ ] Implement `async fn kill(&self, name: &Name, key: &Key) -> Result<()>`:
-  - Simply delegate to `kill_with_context(name, key, None)`
+  - Track deletions in transaction context
 - [ ] Add async tests for KILL leaf nodes (both Global and Local)
 - [ ] Add async tests for KILL intermediate nodes (removes subtree)
 - [ ] Add async tests for KILL root
 - [ ] Verify tree structure remains valid after KILL
 
 ### 2.5 MUMPS Operations - DATA
-- [ ] Implement `async fn data_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<DataResult>`:
+
+**Status**: Public API stub exists with `todo!()` implementation. Internal `data_internal()` stub also exists with `todo!()`. `DataStatus` enum defined.
+
+- [x] Implement proper `DataStatus` enum with variants: NoData(0), HasValue(1), HasDescendants(10), Both(11)
+- [ ] Implement DATA operation:
   - Use `load_node()` for cache-aware node access
   - Return enum: `NoData`, `HasValue`, `HasDescendants`, `Both`
-  - If context is Some, use transaction's snapshot isolation
-- [ ] Implement `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>`:
-  - Simply delegate to `data_with_context(name, key, None)`
+  - Use transaction snapshot isolation if context provided
 - [ ] Add async tests for all four DATA states
 - [ ] Verify correct behavior for partial paths
 
 ### 2.6 MUMPS Operations - ORDER (Iterator)
-- [ ] Implement `async fn order_with_context(&self, name: &Name, key: &Key, context: Option<&TransactionContext>) -> Result<Option<Key>>`:
+
+**Status**: Public API stub exists with `todo!()` implementation. Internal `order_internal()` stub also exists with `todo!()`.
+
+- [ ] Implement ORDER operation:
   - Use `load_node()` for cache-aware node access
   - Find next key in lexicographic order
   - Handle navigating between leaf nodes
-  - If context is Some, use transaction's snapshot isolation
-- [ ] Implement `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>`:
-  - Simply delegate to `order_with_context(name, key, None)`
+  - Use transaction snapshot isolation if context provided
 - [ ] Implement `BTreeIterator` with async next() method
 - [ ] Add async tests for ORDER on empty tree
 - [ ] Add async tests for ORDER returning next sibling
@@ -327,7 +309,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
 
 #### Primary Stream-Based Method Signatures
 
-- [ ] Implement `fn collect_stream_with_context<'a, P, F, T>(&'a self, name: &'a Name, start: Option<&'a Key>, predicate: P, extract: F, context: Option<&'a TransactionContext>) -> impl Stream<Item = Result<T>> + 'a`:
+- [ ] Implement `fn collect_stream<'a, P, F, T>(&'a self, name: &'a Name, start: Option<&'a Key>, predicate: P, extract: F, ctx: Option<&'a TransactionContext>) -> impl Stream<Item = Result<T>> + 'a`:
   ```rust
   /// Create a stream of values from the tree that match the given predicate.
   ///
@@ -336,7 +318,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   /// * `start` - Optional starting key (None starts from beginning)
   /// * `predicate` - Function that determines whether to continue and include the entry
   /// * `extract` - Function that transforms the entry into the desired output type
-  /// * `context` - Optional transaction context for snapshot isolation
+  /// * `txn` - Optional transaction context for snapshot isolation
   ///
   /// # Returns
   /// A stream that yields extracted values from matching entries
@@ -346,7 +328,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   /// use futures::StreamExt;
   ///
   /// // Process patient names as a stream
-  /// let mut name_stream = btree.collect_stream_with_context(
+  /// let mut name_stream = btree.collect_stream(
   ///     &Name::Global("PATIENT".into()),
   ///     None,
   ///     |key, data| key.subscripts().len() == 2 && key.subscripts()[1] == "NAME".into(),
@@ -365,13 +347,13 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   ///     }
   /// }
   /// ```
-  pub fn collect_stream_with_context<'a, P, F, T>(
+  pub fn collect_stream<'a, P, F, T>(
       &'a self,
       name: &'a Name,
       start: Option<&'a Key>,
       predicate: P,
       extract: F,
-      context: Option<&'a TransactionContext>,
+      ctx: Option<&'a TransactionContext>,
   ) -> impl Stream<Item = Result<T>> + 'a
   where
       P: Fn(&Key, &Arc<NodeData>) -> bool + Send + 'a,
@@ -379,7 +361,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
       T: Send + 'static,
   {
       // Implementation will use async_stream::stream! macro or manual Stream impl:
-      // 1. Use context for transaction isolation if provided
+      // 1. Use txn for transaction isolation if provided
       // 2. Start from `start` key or beginning of the tree
       // 3. Use get_next_internal to iterate in order
       // 4. For each entry, check predicate
@@ -390,42 +372,22 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   }
   ```
 
-- [ ] Implement `fn collect_stream<'a, P, F, T>(&'a self, name: &'a Name, start: Option<&'a Key>, predicate: P, extract: F) -> impl Stream<Item = Result<T>> + 'a`:
-  ```rust
-  /// Create a stream of values from the tree (without transaction context).
-  /// Simply delegates to collect_stream_with_context with None context.
-  pub fn collect_stream<'a, P, F, T>(
-      &'a self,
-      name: &'a Name,
-      start: Option<&'a Key>,
-      predicate: P,
-      extract: F,
-  ) -> impl Stream<Item = Result<T>> + 'a
-  where
-      P: Fn(&Key, &Arc<NodeData>) -> bool + Send + 'a,
-      F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + 'a,
-      T: Send + 'static,
-  {
-      self.collect_stream_with_context(name, start, predicate, extract, None)
-  }
-  ```
-
 #### Convenience Methods for Vec Collection
 
-- [ ] Implement `async fn collect_vec_with_context<P, F, T>(&self, name: &Name, start: Option<&Key>, predicate: P, extract: F, context: Option<&TransactionContext>) -> Result<Vec<T>>`:
+- [ ] Implement `async fn collect_vec<P, F, T>(&self, name: &Name, start: Option<&Key>, predicate: P, extract: F, ctx: Option<&TransactionContext>) -> Result<Vec<T>>`:
   ```rust
   /// Collect all matching values into a Vec.
   /// Convenience method that collects the stream for cases where you need all results in memory.
   ///
   /// # Warning
   /// For large datasets, prefer using the stream directly to avoid memory issues.
-  pub async fn collect_vec_with_context<P, F, T>(
+  pub async fn collect_vec<P, F, T>(
       &self,
       name: &Name,
       start: Option<&Key>,
       predicate: P,
       extract: F,
-      context: Option<&TransactionContext>,
+      ctx: Option<&TransactionContext>,
   ) -> Result<Vec<T>>
   where
       P: Fn(&Key, &Arc<NodeData>) -> bool + Send,
@@ -434,28 +396,9 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   {
       use futures::StreamExt;
 
-      self.collect_stream_with_context(name, start, predicate, extract, context)
+      self.collect_stream(name, start, predicate, extract, txn)
           .try_collect()
           .await
-  }
-  ```
-
-- [ ] Implement `async fn collect_vec<P, F, T>(&self, name: &Name, start: Option<&Key>, predicate: P, extract: F) -> Result<Vec<T>>`:
-  ```rust
-  /// Collect all matching values into a Vec (without transaction context).
-  pub async fn collect_vec<P, F, T>(
-      &self,
-      name: &Name,
-      start: Option<&Key>,
-      predicate: P,
-      extract: F,
-  ) -> Result<Vec<T>>
-  where
-      P: Fn(&Key, &Arc<NodeData>) -> bool + Send,
-      F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send,
-      T: Send + 'static,
-  {
-      self.collect_vec_with_context(name, start, predicate, extract, None).await
   }
   ```
 
@@ -482,6 +425,7 @@ let mut data_stream = btree.collect_stream(
     Some(&Key::from(vec!["2025".into()])),
     |key, _| key.subscripts().len() == 2 && key.subscripts()[0] == "2025".into(),
     |_key, data| data.value.clone(),
+    None, // No transaction context
 );
 
 // Process items one at a time without loading all into memory
@@ -501,6 +445,7 @@ let admin = btree.collect_stream(
         Some(Value::String(ref s)) if s.contains("admin") => Some((key.clone(), s.clone())),
         _ => None,
     },
+    None,
 )
 .filter_map(|r| future::ready(r.ok()))
 .next()
@@ -515,6 +460,7 @@ let first_100: Vec<String> = btree.collect_stream(
         Some(Value::String(ref s)) => Some(s.clone()),
         _ => None,
     },
+    None,
 )
 .take(100)
 .try_collect()
@@ -526,6 +472,7 @@ let count = btree.collect_stream(
     None,
     |key, _| key.subscripts().first() == Some(&"2025".into()),
     |_key, data| if data.has_descendants { Some(()) } else { None },
+    None,
 )
 .try_fold(0usize, |acc, _| future::ready(Ok(acc + 1)))
 .await?;
@@ -539,6 +486,7 @@ let all_names = btree.collect_vec(
         Some(Value::String(ref s)) => Some(s.clone()),
         _ => None,
     },
+    None,
 ).await?;
 
 // Parallel processing with buffered stream
@@ -549,6 +497,7 @@ let processed_results: Vec<ProcessedData> = btree.collect_stream(
     None,
     |_, data| data.value.is_some(),
     |key, data| Some((key.clone(), data.value.clone())),
+    None,
 )
 .map(|result| async move {
     match result {
@@ -569,7 +518,7 @@ let processed_results: Vec<ProcessedData> = btree.collect_stream(
    - Ensure proper lifetime management for borrowed references
 
 2. **Phase 2**: Stream-Based Collection
-   - Implement `collect_stream_with_context` with lazy evaluation
+   - Implement `collect_stream` with lazy evaluation
    - Add support for early termination when predicate returns false
    - Implement backpressure handling for slow consumers
 
@@ -775,11 +724,11 @@ let processed_results: Vec<ProcessedData> = btree.collect_stream(
   - `commit() -> Result<()>` - validate, write to WAL, apply changes
   - `rollback()` - discard buffered writes
 - [ ] Add MUMPS operations on `Transaction`:
-  - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>` - delegates to `btree.set_with_context(name, key, value, Some(&self.context))`
-  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get_with_context(name, key, Some(&self.context))`
-  - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>` - delegates to `btree.kill_with_context(name, key, Some(&self.context))`
-  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data_with_context(name, key, Some(&self.context))`
-  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order_with_context(name, key, Some(&self.context))`
+  - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>` - delegates to `btree.set(name, key, value, &self.context)`
+  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get(name, key, Some(&self.context))`
+  - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>` - delegates to `btree.kill(name, key, &self.context)`
+  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data(name, key, Some(&self.context))`
+  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order(name, key, Some(&self.context))`
 - [ ] Enforce transaction rules:
   - Writes to `Name::Global` MUST be in transaction (return error otherwise)
   - `Name::Local` modifications work outside transactions
@@ -815,13 +764,13 @@ let processed_results: Vec<ProcessedData> = btree.collect_stream(
     }).await?;
     ```
 - [ ] Add read-only operations (no transaction required):
-  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get()` (simple snapshot read)
-  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data()`
-  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order()`
+  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get(name, key, None)` (simple snapshot read)
+  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data(name, key, None)`
+  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order(name, key, None)`
 - [ ] Add local variable operations (no transaction required):
-  - `async fn set_local(&self, name: &Name, key: &Key, value: Value) -> Result<()>` - delegates to `btree.set()`
+  - `async fn set_local(&self, name: &Name, key: &Key, value: Value) -> Result<()>` - creates temporary transaction context internally for locals
   - Must verify `name.is_local()`, return error if global
-  - Note: Locals use the simple `set()` method, not `set_with_context()`, since they never participate in transactions
+  - Note: Locals still need a transaction context internally but the Database API handles this transparently
 
 ### 5.3 API Documentation
 - [ ] Add rustdoc comments to all public types
