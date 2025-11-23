@@ -215,9 +215,11 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 ### 2.2 MUMPS Operations - SET
 
-**Important**: ~~After completing the first two checkboxes below (basic SET implementation), you MUST implement hierarchical semantics by following the complete plan in `TODOS/hierarchy.md`. This includes maintaining `has_descendants` flags on ancestor nodes, which is critical for `$DATA`, `$ORDER`, and `KILL` operations.~~ 
+**Important**: ~~After completing the first two checkboxes below (basic SET implementation), you MUST implement hierarchical semantics by following the complete plan in `TODOS/hierarchy.md`. This includes maintaining `has_descendants` flags on ancestor nodes, which is critical for `$DATA`, `$ORDER`, and `KILL` operations.~~
 
 **NOTE**: Hierarchy semantics have been implemented, see `docs/hierarchy-semantics.md`
+
+**Transaction Note**: The signature includes `ctx: &TransactionContext` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction awareness (snapshot isolation, write tracking) will be added in Phase 5.
 
 - [ ] Implement `async fn set(&self, name: &Name, key: &Key, value: Value, ctx: &TransactionContext) -> Result<()>`:
   - Use `load_node()` for cache-aware node access
@@ -227,7 +229,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Handle node splits and tree growth
   - Use `save_node()` to persist changes
   - Update `BTreeStats` (key count, splits)
-  - Check transaction isolation level and track writes
+  - ~~Check transaction isolation level and track writes~~ (moved to Phase 5.4)
 - [x] **→ See `docs/hierarchy-semantics.md` for complete hierarchical semantics implementation** (required before continuing; now completed)
 - [ ] Add async tests for SET on empty tree (both Global and Local)
 - [ ] Add async tests for SET with existing keys (updates)
@@ -240,8 +242,11 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 **Status**: Public API stub exists with `todo!()` implementation. Internal `get_internal()` fully implemented and used by tests.
 
+**Transaction Note**: The signature includes optional `ctx: Option<&TransactionContext>` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction snapshot isolation will be added in Phase 5.
+
 - [x] Public stub implemented - calls `get_internal()` with optional transaction context
-- [ ] Complete implementation with full transaction snapshot isolation support
+- [ ] Complete basic implementation (navigate tree, return value if exists)
+- [ ] ~~Complete implementation with full transaction snapshot isolation support~~ (moved to Phase 5.4)
 - [ ] Add async tests for GET on non-existent keys
 - [ ] Add async tests for GET on existing keys
 - [ ] Add async tests for GET on partial paths (should return None if no value at that node)
@@ -253,6 +258,8 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 **Status**: Public API stub exists with `todo!()` implementation. Internal `kill_internal()` stub also exists with `todo!()`.
 
+**Transaction Note**: The signature includes `ctx: &TransactionContext` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction write tracking will be added in Phase 5.
+
 - [ ] Implement KILL operation:
   - Use `load_node()` for cache-aware node access
   - Navigate to node
@@ -261,7 +268,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Handle node merging and tree shrinking
   - Use `save_node()` to persist changes
   - Update `BTreeStats` (key count, merges)
-  - Track deletions in transaction context
+  - ~~Track deletions in transaction context~~ (moved to Phase 5.4)
 - [ ] Add async tests for KILL leaf nodes (both Global and Local)
 - [ ] Add async tests for KILL intermediate nodes (removes subtree)
 - [ ] Add async tests for KILL root
@@ -271,11 +278,13 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 **Status**: Public API stub exists with `todo!()` implementation. Internal `data_internal()` stub also exists with `todo!()`. `DataStatus` enum defined.
 
+**Transaction Note**: The signature includes optional `ctx: Option<&TransactionContext>` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction snapshot isolation will be added in Phase 5.
+
 - [x] Implement proper `DataStatus` enum with variants: NoData(0), HasValue(1), HasDescendants(10), Both(11)
 - [ ] Implement DATA operation:
   - Use `load_node()` for cache-aware node access
   - Return enum: `NoData`, `HasValue`, `HasDescendants`, `Both`
-  - Use transaction snapshot isolation if context provided
+  - ~~Use transaction snapshot isolation if context provided~~ (moved to Phase 5.4)
 - [ ] Add async tests for all four DATA states
 - [ ] Verify correct behavior for partial paths
 
@@ -283,11 +292,13 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 **Status**: Public API stub exists with `todo!()` implementation. Internal `order_internal()` stub also exists with `todo!()`.
 
+**Transaction Note**: The signature includes optional `ctx: Option<&TransactionContext>` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction snapshot isolation will be added in Phase 5.
+
 - [ ] Implement ORDER operation:
   - Use `load_node()` for cache-aware node access
   - Find next key in lexicographic order
   - Handle navigating between leaf nodes
-  - Use transaction snapshot isolation if context provided
+  - ~~Use transaction snapshot isolation if context provided~~ (moved to Phase 5.4)
 - [ ] Implement `BTreeIterator` with async next() method
 - [ ] Add async tests for ORDER on empty tree
 - [ ] Add async tests for ORDER returning next sibling
@@ -297,6 +308,8 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 ### 2.7 RUMPS Extension - COLLECT (Stream-Based Functional Iterator)
 
 **Note**: This is a RUMPS-specific extension not found in traditional MUMPS. It provides a functional, Rust-idiomatic stream-based interface for iterating and collecting values from the tree, designed for efficient handling of large datasets.
+
+**Transaction Note**: The signature includes optional `ctx: Option<&TransactionContext>` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction snapshot isolation will be added in Phase 5.
 
 **Rationale**: Traditional MUMPS requires imperative loops with `$ORDER` to iterate through data:
 ```mumps
@@ -318,7 +331,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   /// * `start` - Optional starting key (None starts from beginning)
   /// * `predicate` - Function that determines whether to continue and include the entry
   /// * `extract` - Function that transforms the entry into the desired output type
-  /// * `txn` - Optional transaction context for snapshot isolation
+  /// * `ctx` - Optional transaction context for snapshot isolation
   ///
   /// # Returns
   /// A stream that yields extracted values from matching entries
@@ -361,7 +374,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
       T: Send + 'static,
   {
       // Implementation will use async_stream::stream! macro or manual Stream impl:
-      // 1. Use txn for transaction isolation if provided
+      // 1. Use ctx for transaction isolation if provided (Phase 5.4)
       // 2. Start from `start` key or beginning of the tree
       // 3. Use get_next_internal to iterate in order
       // 4. For each entry, check predicate
@@ -396,7 +409,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   {
       use futures::StreamExt;
 
-      self.collect_stream(name, start, predicate, extract, txn)
+      self.collect_stream(name, start, predicate, extract, ctx)
           .try_collect()
           .await
   }
@@ -792,6 +805,45 @@ let processed_results: Vec<ProcessedData> = btree.collect_stream(
   - Multiple concurrent transactions
   - Conflict resolution at commit time
   - Using `tokio::spawn` for parallel transactions
+
+### 5.4 Adding Transaction Awareness to B-Tree Primitives
+
+This section covers updating the Phase 2 B-tree primitives (SET, GET, KILL, DATA, ORDER) to use the `TransactionContext` parameter that was added for future-proofing.
+
+**Note**: Phase 2 implementations intentionally ignore `TransactionContext`. This section adds the actual transaction awareness.
+
+- [ ] Update `BTree::set()` to use transaction context:
+  - Check transaction isolation level from `ctx.isolation_level`
+  - Track write operations in transaction context (for conflict detection)
+  - Use transaction timestamp for MVCC ordering (future enhancement)
+  - Buffer writes for atomic commit (coordinate with `Transaction` struct)
+- [ ] Update `BTree::get()` to use transaction context when provided:
+  - Implement snapshot isolation: reads see database state as of `ctx.start_timestamp`
+  - Check buffered writes in transaction before reading committed data
+  - Return most recent visible version based on transaction timestamp
+- [ ] Update `BTree::kill()` to use transaction context:
+  - Track deletion operations in transaction context
+  - Buffer deletions for atomic commit
+  - Update transaction write set
+- [ ] Update `BTree::data()` to use transaction context when provided:
+  - Apply snapshot isolation to DATA checks
+  - Consider buffered writes when determining node status
+  - Return status based on transaction's view of data
+- [ ] Update `BTree::order()` to use transaction context when provided:
+  - Apply snapshot isolation to iteration
+  - Skip uncommitted writes from other transactions
+  - Include buffered writes from current transaction in iteration order
+- [ ] Update `BTree::collect_stream()` to use transaction context when provided:
+  - Ensure stream sees consistent snapshot throughout iteration
+  - Apply same snapshot isolation rules as individual operations
+- [ ] Add tests for transaction isolation:
+  - Test that reads within transaction don't see uncommitted writes from other transactions
+  - Test that reads within transaction DO see own buffered writes
+  - Test that concurrent transactions maintain isolation
+- [ ] Add tests for write buffering:
+  - Test that writes are buffered, not immediately visible
+  - Test that commit makes all writes visible atomically
+  - Test that rollback discards all buffered writes
 
 ---
 
