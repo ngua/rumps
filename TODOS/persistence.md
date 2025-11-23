@@ -242,7 +242,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [x] Add async tests for SET with existing keys (updates) - covered by `preserves_has_descendants_on_update`
 - [x] Add async tests for SET triggering node splits - covered by `test_get_internal_with_tree_splits` at line 2819
 - [x] Add async tests for SET on multi-level subscripts (e.g., `["A", "B", "C"]`) - covered by `deep_nesting_creates_all_ancestors`
-- [ ] Add async tests verifying Global and Local namespaces are separate - **TODO: Add to `set_internal_tests` module**
+- [ ] ~Add async tests verifying Global and Local namespaces are separate - **TODO: Add to `set_internal_tests` module**~
 - [x] Add concurrent SET tests with `Arc<BTree>` - covered by `concurrent_ancestor_creation`
 
 **Missing Tests** (defer to Phase 5 or when transaction layer is ready):
@@ -250,19 +250,29 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - Tests verifying Global and Local namespaces are separate
 - Full transaction-aware `set()` tests (will add when Phase 5 transaction support is implemented)
 
-### 2.3 MUMPS Operations - GET
+### 2.3 MUMPS Operations - GET ✅ IMPLEMENTATION COMPLETE
 
-**Status**: Public API stub exists with `todo!()` implementation. Internal `get_internal()` fully implemented and used by tests.
+**Status**: Core implementation complete. Tests organized into `get_internal_tests` module. Transaction awareness will be added in Phase 5.
 
 **Transaction Note**: The signature includes optional `ctx: Option<&TransactionContext>` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction snapshot isolation will be added in Phase 5.
 
-- [x] Public stub implemented - calls `get_internal()` with optional transaction context
-- [ ] Complete basic implementation (navigate tree, return value if exists)
+- [x] Public API implemented - calls `get_internal()` with optional transaction context
+- [x] Internal `get_internal()` fully implemented - navigates tree, returns `Option<Arc<NodeData>>`
+- [x] Internal `search_from_node()` recursively searches B-tree from given node
+- [x] Public `get()` extracts `Option<Value>` from `NodeData`
+- [x] Add async tests for GET on non-existent keys - **11 tests in `btree::tests::get_internal_tests` module** at `crates/rumps-storage/src/btree.rs:2585`
+  - `nonexistent_variable`
+  - `exact_match_single_key`
+  - `exact_match_nested_key`
+  - `nonexistent_key`
+  - `partial_match_no_such_path`
+  - `multiple_keys_same_variable`
+  - `different_variables`
+  - `returns_nodedata_with_flags`
+  - `with_tree_splits`
+  - `deep_nesting`
+  - `concurrent_reads`
 - [ ] ~~Complete implementation with full transaction snapshot isolation support~~ (moved to Phase 5.4)
-- [ ] Add async tests for GET on non-existent keys
-- [ ] Add async tests for GET on existing keys
-- [ ] Add async tests for GET on partial paths (should return None if no value at that node)
-- [ ] Add concurrent GET tests during active writes
 
 **Note on Value Cloning**: All read operations return owned `Value` rather than references due to async lock lifetime constraints. Values must be cloned from the `RwLock` guard before it drops. This follows standard patterns in async concurrent data structures (like `dashmap::DashMap`). MUMPS values are typically small, making cloning cost acceptable. The public `get()` API simply clones the `Option<Value>` from the `Arc<NodeData>` returned by `get_internal()`. See `TODOS/btree.md` "Value Cloning and Lock Semantics" section for detailed rationale and future optimization strategies.
 
