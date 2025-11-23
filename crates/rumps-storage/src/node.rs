@@ -39,7 +39,7 @@ use serde::de::{self, Deserializer, Visitor};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
-use crate::{Key, Value};
+use rumps_types::{Key, Value};
 
 /// Identifier for a node in the B+-tree.
 ///
@@ -75,8 +75,8 @@ use crate::{Key, Value};
 ///
 /// # Examples
 ///
-/// ```
-/// use rumps_types::NodeId;
+/// ```ignore
+/// use rumps_storage::node::NodeId;
 ///
 /// // Create a node ID from a page offset
 /// let node_id = NodeId::from(42u64);
@@ -95,7 +95,7 @@ use crate::{Key, Value};
     Serialize,
     Deserialize
 )]
-pub struct NodeId(u64);
+pub(crate) struct NodeId(u64);
 
 impl From<u64> for NodeId {
     fn from(id: u64) -> Self {
@@ -144,8 +144,9 @@ impl fmt::Display for NodeId {
 ///
 /// # Examples
 ///
-/// ```
-/// use rumps_types::{Node, NodeData, NodeId, Key, Value};
+/// ```ignore
+/// use rumps_storage::node::{Node, NodeData, NodeId};
+/// use rumps_types::{Key, Value};
 /// use std::sync::Arc;
 ///
 /// // Create a leaf node with complete key paths
@@ -167,11 +168,11 @@ impl fmt::Display for NodeId {
 /// assert_eq!(leaf.values.len(), 2);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Node {
+pub(crate) struct Node {
     /// Complete key paths (sorted) stored in this node
-    pub keys: Vec<Key>,
+    pub(crate) keys: Vec<Key>,
     /// References to child nodes (empty for leaf nodes)
-    pub children: Vec<NodeId>,
+    pub(crate) children: Vec<NodeId>,
     /// Data associated with each key.
     ///
     /// Values are wrapped in `Arc<NodeData>` for efficient hierarchy
@@ -184,9 +185,9 @@ pub struct Node {
     ///
     /// For the `$GET` primitive (which extracts values), the public API
     /// simply clones the `Option<Value>` from the Arc.
-    pub values: Vec<Arc<NodeData>>,
+    pub(crate) values: Vec<Arc<NodeData>>,
     /// Whether this is a leaf node (no children)
-    pub is_leaf: bool,
+    pub(crate) is_leaf: bool,
 }
 
 impl Node {
@@ -194,15 +195,15 @@ impl Node {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::Node;
+    /// ```ignore
+    /// use rumps_storage::node::Node;
     ///
     /// let leaf = Node::new_leaf();
     /// assert!(leaf.is_leaf);
     /// assert!(leaf.keys.is_empty());
     /// assert!(leaf.children.is_empty());
     /// ```
-    pub fn new_leaf() -> Self {
+    pub(crate) fn new_leaf() -> Self {
         Self {
             keys: Vec::new(),
             children: Vec::new(),
@@ -215,14 +216,14 @@ impl Node {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::Node;
+    /// ```ignore
+    /// use rumps_storage::node::Node;
     ///
     /// let internal = Node::new_internal();
     /// assert!(!internal.is_leaf);
     /// assert!(internal.keys.is_empty());
     /// ```
-    pub fn new_internal() -> Self {
+    pub(crate) fn new_internal() -> Self {
         Self {
             keys: Vec::new(),
             children: Vec::new(),
@@ -235,8 +236,9 @@ impl Node {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::{Node, NodeData, Key, Value};
+    /// ```ignore
+    /// use rumps_storage::node::{Node, NodeData};
+    /// use rumps_types::{Key, Value};
     /// use std::sync::Arc;
     ///
     /// let mut node = Node::new_leaf();
@@ -245,7 +247,7 @@ impl Node {
     ///
     /// assert_eq!(node.len(), 1);
     /// ```
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.keys.len()
     }
 
@@ -253,13 +255,13 @@ impl Node {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::Node;
+    /// ```ignore
+    /// use rumps_storage::node::Node;
     ///
     /// let node = Node::new_leaf();
     /// assert!(node.is_empty());
     /// ```
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
 
@@ -283,8 +285,9 @@ impl Node {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::{Node, NodeData, Key, Value};
+    /// ```ignore
+    /// use rumps_storage::node::{Node, NodeData};
+    /// use rumps_types::{Key, Value};
     /// use std::sync::Arc;
     ///
     /// let mut node = Node::new_leaf();
@@ -297,7 +300,7 @@ impl Node {
     /// let with_entry_size = node.serialized_size();
     /// assert!(with_entry_size > empty_size);
     /// ```
-    pub fn serialized_size(&self) -> usize {
+    pub(crate) fn serialized_size(&self) -> usize {
         bincode::serialize(self)
             .map(|bytes| bytes.len())
             .unwrap_or(0)
@@ -317,8 +320,9 @@ impl Node {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::{Node, NodeData, Key, Value};
+    /// ```ignore
+    /// use rumps_storage::node::{Node, NodeData};
+    /// use rumps_types::{Key, Value};
     ///
     /// let node = Node::new_leaf();
     /// let key = Key::from(vec!["TEST".into()]);
@@ -331,7 +335,7 @@ impl Node {
     ///     println!("Need to split node first");
     /// }
     /// ```
-    pub fn would_fit(
+    pub(crate) fn would_fit(
         &self,
         key: &Key,
         value: &NodeData,
@@ -496,8 +500,9 @@ impl<'de> Deserialize<'de> for Node {
 ///
 /// # Examples
 ///
-/// ```
-/// use rumps_types::{NodeData, Value};
+/// ```ignore
+/// use rumps_storage::node::NodeData;
+/// use rumps_types::Value;
 ///
 /// // Create a leaf node with a value
 /// let leaf = NodeData::with_value(Value::Integer(42));
@@ -516,11 +521,11 @@ impl<'de> Deserialize<'de> for Node {
 /// assert!(empty.is_empty());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NodeData {
+pub(crate) struct NodeData {
     /// Optional value stored at this node
-    pub value: Option<Value>,
+    pub(crate) value: Option<Value>,
     /// Flag indicating whether this node has descendants
-    pub has_descendants: bool,
+    pub(crate) has_descendants: bool,
 }
 
 /// Tag byte for compact binary encoding of NodeData
@@ -541,14 +546,15 @@ impl NodeData {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::{NodeData, Value};
+    /// ```ignore
+    /// use rumps_storage::node::NodeData;
+    /// use rumps_types::Value;
     ///
     /// let node = NodeData::new(Some(Value::Integer(42)), false);
     /// assert_eq!(node.value, Some(Value::Integer(42)));
     /// assert_eq!(node.has_descendants, false);
     /// ```
-    pub fn new(value: Option<Value>, has_descendants: bool) -> Self {
+    pub(crate) fn new(value: Option<Value>, has_descendants: bool) -> Self {
         Self {
             value,
             has_descendants,
@@ -559,13 +565,14 @@ impl NodeData {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::{NodeData, Value};
+    /// ```ignore
+    /// use rumps_storage::node::NodeData;
+    /// use rumps_types::Value;
     ///
     /// let leaf = NodeData::with_value(Value::String("hello".into()));
     /// assert!(leaf.has_only_value());
     /// ```
-    pub fn with_value(value: Value) -> Self {
+    pub(crate) fn with_value(value: Value) -> Self {
         Self {
             value: Some(value),
             has_descendants: false,
@@ -576,13 +583,13 @@ impl NodeData {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::NodeData;
+    /// ```ignore
+    /// use rumps_storage::node::NodeData;
     ///
     /// let intermediate = NodeData::with_descendants();
     /// assert!(intermediate.has_only_descendants());
     /// ```
-    pub fn with_descendants() -> Self {
+    pub(crate) fn with_descendants() -> Self {
         Self {
             value: None,
             has_descendants: true,
@@ -593,13 +600,13 @@ impl NodeData {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::NodeData;
+    /// ```ignore
+    /// use rumps_storage::node::NodeData;
     ///
     /// let empty = NodeData::empty();
     /// assert!(empty.is_empty());
     /// ```
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             value: None,
             has_descendants: false,
@@ -610,8 +617,8 @@ impl NodeData {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::NodeData;
+    /// ```ignore
+    /// use rumps_storage::node::NodeData;
     ///
     /// let empty = NodeData::empty();
     /// assert!(empty.is_empty());
@@ -619,7 +626,7 @@ impl NodeData {
     /// let leaf = NodeData::with_value(42.into());
     /// assert!(!leaf.is_empty());
     /// ```
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.value.is_none() && !self.has_descendants
     }
 
@@ -627,8 +634,9 @@ impl NodeData {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::{NodeData, Value};
+    /// ```ignore
+    /// use rumps_storage::node::NodeData;
+    /// use rumps_types::Value;
     ///
     /// let leaf = NodeData::with_value(Value::Boolean(true));
     /// assert!(leaf.has_value());
@@ -636,7 +644,7 @@ impl NodeData {
     /// let intermediate = NodeData::with_descendants();
     /// assert!(!intermediate.has_value());
     /// ```
-    pub fn has_value(&self) -> bool {
+    pub(crate) fn has_value(&self) -> bool {
         self.value.is_some()
     }
 
@@ -644,8 +652,9 @@ impl NodeData {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::{NodeData, Value};
+    /// ```ignore
+    /// use rumps_storage::node::NodeData;
+    /// use rumps_types::Value;
     ///
     /// let leaf = NodeData::with_value(Value::Integer(42));
     /// assert!(leaf.has_only_value());
@@ -653,7 +662,7 @@ impl NodeData {
     /// let both = NodeData::new(Some(Value::Integer(42)), true);
     /// assert!(!both.has_only_value());
     /// ```
-    pub fn has_only_value(&self) -> bool {
+    pub(crate) fn has_only_value(&self) -> bool {
         self.value.is_some() && !self.has_descendants
     }
 
@@ -661,8 +670,9 @@ impl NodeData {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use rumps_types::{NodeData, Value};
+    /// ```ignore
+    /// use rumps_storage::node::NodeData;
+    /// use rumps_types::Value;
     ///
     /// let intermediate = NodeData::with_descendants();
     /// assert!(intermediate.has_only_descendants());
@@ -670,7 +680,7 @@ impl NodeData {
     /// let both = NodeData::new(Some(Value::Integer(42)), true);
     /// assert!(!both.has_only_descendants());
     /// ```
-    pub fn has_only_descendants(&self) -> bool {
+    pub(crate) fn has_only_descendants(&self) -> bool {
         self.value.is_none() && self.has_descendants
     }
 }
@@ -1282,49 +1292,4 @@ mod tests {
         assert_eq!(size, bytes.len());
         assert!(size > 0);
     }
-}
-
-/// Type for `$DATA` operation result.
-///
-/// This represents the four possible states a node can be in for the MUMPS
-/// `$DATA` intrinsic function, which checks whether a node has a value and/or descendants.
-///
-/// # MUMPS Semantics
-///
-/// The `u8` representation follows conventional MUMPS semantics where the numeric
-/// value indicates the data status. In RUMPS, we use a proper Rust enum for type safety
-/// while maintaining compatibility with the MUMPS numeric representation.
-///
-/// # Examples
-///
-/// ```
-/// use rumps_types::DataStatus;
-///
-/// // Node with no data
-/// let empty = DataStatus::NoData;
-/// assert_eq!(empty as u8, 0);
-///
-/// // Node with value only
-/// let value_only = DataStatus::HasValue;
-/// assert_eq!(value_only as u8, 1);
-///
-/// // Node with descendants only
-/// let descendants_only = DataStatus::HasDescendants;
-/// assert_eq!(descendants_only as u8, 10);
-///
-/// // Node with both value and descendants
-/// let both = DataStatus::Both;
-/// assert_eq!(both as u8, 11);
-/// ```
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DataStatus {
-    /// No value, no descendants
-    NoData = 0,
-    /// Has value only
-    HasValue = 1,
-    /// Has descendants only
-    HasDescendants = 10,
-    /// Has both value and descendants
-    Both = 11,
 }

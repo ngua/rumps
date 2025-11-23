@@ -19,6 +19,7 @@
 
 mod btree;
 mod error;
+pub(crate) mod node;
 mod transaction;
 
 pub use error::{Result, StorageError};

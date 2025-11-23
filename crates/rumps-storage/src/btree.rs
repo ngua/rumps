@@ -5,28 +5,29 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rumps_types::{DataStatus, Key, Name, Node, NodeData, NodeId};
+use rumps_types::{DataStatus, Key, Name};
 use tokio::sync::RwLock;
 
 use crate::error::{Result, StorageError};
+use crate::node::{Node, NodeData, NodeId};
 
 /// Statistics tracking for B-tree operations.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BTreeStats {
     /// Current height of the tree
-    pub height: usize,
+    pub(crate) height: usize,
     /// Total number of nodes
-    pub node_count: usize,
+    pub(crate) node_count: usize,
     /// Total number of keys across all nodes
-    pub key_count: usize,
+    pub(crate) key_count: usize,
     /// Average fill factor (keys per node / max keys per node)
-    pub avg_fill_factor: f64,
+    pub(crate) avg_fill_factor: f64,
     /// Memory usage in bytes (estimated)
-    pub memory_bytes: usize,
+    pub(crate) memory_bytes: usize,
     /// Number of splits performed
-    pub splits: u64,
+    pub(crate) splits: u64,
     /// Number of merges performed
-    pub merges: u64,
+    pub(crate) merges: u64,
 }
 
 /// Trait for node ID allocation strategies.
@@ -1770,7 +1771,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_leaf_odd_keys() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -1834,7 +1836,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_leaf_even_keys() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -1886,7 +1889,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_internal_with_children() {
-        use rumps_types::{Key, NodeData};
+        use rumps_types::Key;
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -1993,7 +1997,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_preserves_values() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -2045,7 +2050,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_stats_update() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -2109,7 +2115,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_leaf() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -2181,7 +2188,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_internal_with_children() {
-        use rumps_types::{Key, NodeData};
+        use rumps_types::Key;
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -2240,7 +2248,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_incompatible_types() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -2285,7 +2294,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_left_not_found() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -2323,7 +2333,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_right_not_found() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -2361,7 +2372,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_preserves_value_types() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -2422,7 +2434,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_stats_update() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -2503,7 +2516,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_and_merge_roundtrip() {
-        use rumps_types::{Key, NodeData, Value};
+        use rumps_types::{Key, Value};
+        use crate::node::NodeData;
 
         let btree = BTree::new(3).unwrap();
 
@@ -3264,7 +3278,8 @@ pub mod benches {
     use tokio::runtime::Runtime;
 
     use super::BTree;
-    use rumps_types::{Key, Name, NodeData, Value};
+    use crate::node::NodeData;
+    use rumps_types::{Key, Name, Value};
 
     /// Helper function to create a key with the specified depth.
     ///

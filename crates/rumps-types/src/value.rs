@@ -853,6 +853,51 @@ mod encoding {
     }
 }
 
+/// Type for `$DATA` operation result.
+///
+/// This represents the four possible states a node can be in for the MUMPS
+/// `$DATA` intrinsic function, which checks whether a node has a value and/or descendants.
+///
+/// # MUMPS Semantics
+///
+/// The `u8` representation follows conventional MUMPS semantics where the numeric
+/// value indicates the data status. In RUMPS, we use a proper Rust enum for type safety
+/// while maintaining compatibility with the MUMPS numeric representation.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::DataStatus;
+///
+/// // Node with no data
+/// let empty = DataStatus::NoData;
+/// assert_eq!(empty as u8, 0);
+///
+/// // Node with value only
+/// let value_only = DataStatus::HasValue;
+/// assert_eq!(value_only as u8, 1);
+///
+/// // Node with descendants only
+/// let descendants_only = DataStatus::HasDescendants;
+/// assert_eq!(descendants_only as u8, 10);
+///
+/// // Node with both value and descendants
+/// let both = DataStatus::Both;
+/// assert_eq!(both as u8, 11);
+/// ```
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataStatus {
+    /// No value, no descendants
+    NoData = 0,
+    /// Has value only
+    HasValue = 1,
+    /// Has descendants only
+    HasDescendants = 10,
+    /// Has both value and descendants
+    Both = 11,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

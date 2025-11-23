@@ -1,4 +1,4 @@
-use rumps_types::NodeId;
+use crate::node::NodeId;
 use thiserror::Error;
 
 /// Errors that can occur during B-tree operations.
