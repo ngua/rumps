@@ -1,8 +1,11 @@
+// TODO: Remove this once Phase 4-5 are implemented and all methods are actually used
+#![allow(dead_code)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rumps_types::{Key, Name, Node, NodeData, NodeId};
+use rumps_types::{DataStatus, Key, Name, Node, NodeData, NodeId};
 use tokio::sync::RwLock;
 
 use crate::error::{Result, StorageError};
@@ -477,7 +480,7 @@ impl BTree {
         id: NodeId,
     ) -> Result<(Key, Arc<NodeData>, NodeId)> {
         // Find the node to split (returns owned node)
-        let node = self.find_node(id).await?;
+        let node = self.load_node(id).await?;
 
         // Calculate the median index
         let mid = node.keys.len() / 2;
@@ -625,8 +628,8 @@ impl BTree {
         right: NodeId,
     ) -> Result<()> {
         // Find both nodes
-        let left_node = self.find_node(left).await?;
-        let right_node = self.find_node(right).await?;
+        let left_node = self.load_node(left).await?;
+        let right_node = self.load_node(right).await?;
 
         // Verify they're compatible (both leaf or both internal)
         if left_node.is_leaf != right_node.is_leaf {
@@ -840,24 +843,6 @@ impl BTree {
     }
 }
 
-/// Type for `$DATA` operation result.
-///
-/// NOTE: The `u8` representation follows conventional MUMPS semantics
-/// (i.e. returning the numerical representation of data status), whereas the
-/// Rust API can use a proper sum type for this
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DataStatus {
-    /// No value, no descendants
-    NoData = 0,
-    /// Has value only
-    HasValue = 1,
-    /// Has descendants only
-    HasDescendants = 10,
-    /// Has both value and descendants
-    Both = 11,
-}
-
 /// Private helper methods for B-tree operations.
 impl BTree {
     /// Internal GET that returns `Arc<NodeData>` (not just Value).
@@ -923,7 +908,7 @@ impl BTree {
         >,
     > {
         Box::pin(async move {
-            let node = self.find_node(node_id).await?;
+            let node = self.load_node(node_id).await?;
 
             match node.keys.binary_search(key) {
                 Ok(pos) => {
@@ -1060,7 +1045,7 @@ impl BTree {
             Some(root_id) => {
                 // Variable exists - navigate tree and insert
                 // Check if root is full and needs splitting
-                let root = self.find_node(root_id).await?;
+                let root = self.load_node(root_id).await?;
                 let max_keys = 2 * self.min_degree - 1;
 
                 let new_root_id = match root.keys.len() {
@@ -1156,7 +1141,7 @@ impl BTree {
         Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
     > {
         Box::pin(async move {
-            let node = self.find_node(node_id).await?;
+            let node = self.load_node(node_id).await?;
 
             // Find the position where the key should be inserted
             let pos = node
@@ -1215,7 +1200,7 @@ impl BTree {
                 })?;
 
                 // Check if child is full
-                let child = self.find_node(child_id).await?;
+                let child = self.load_node(child_id).await?;
                 let max_keys = 2 * self.min_degree - 1;
 
                 if child.keys.len() == max_keys {
@@ -1275,7 +1260,7 @@ impl BTree {
         Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
     > {
         Box::pin(async move {
-            let node = self.find_node(node_id).await?;
+            let node = self.load_node(node_id).await?;
 
             // Find the position where the key should be inserted
             let pos = node
@@ -1335,7 +1320,7 @@ impl BTree {
                 })?;
 
                 // Check if child is full
-                let child = self.find_node(child_id).await?;
+                let child = self.load_node(child_id).await?;
                 let max_keys = 2 * self.min_degree - 1;
 
                 if child.keys.len() == max_keys {

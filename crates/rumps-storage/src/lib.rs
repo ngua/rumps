@@ -21,8 +21,8 @@ mod btree;
 mod error;
 mod transaction;
 
-pub use btree::DataStatus;
 pub use error::{Result, StorageError};
+pub use rumps_types::DataStatus;
 pub use transaction::TransactionContext;
 
 #[cfg(feature = "bench")]
