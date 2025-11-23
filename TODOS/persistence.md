@@ -213,30 +213,42 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [x] Implement `async fn split_node(&self, id: NodeId) -> Result<(Key, NodeData, NodeId)>` - split full nodes, returns median key+value to prevent data loss
 - [x] Implement `async fn merge_nodes(&self, left_id: NodeId, separator_key: Key, separator_value: NodeData, right_id: NodeId) -> Result<()>` - merge underfull nodes by combining left + separator + right (inverse of split; B-tree semantics require separator value from parent)
 
-### 2.2 MUMPS Operations - SET
+### 2.2 MUMPS Operations - SET ✅ IMPLEMENTATION COMPLETE
 
-**Important**: ~~After completing the first two checkboxes below (basic SET implementation), you MUST implement hierarchical semantics by following the complete plan in `TODOS/hierarchy.md`. This includes maintaining `has_descendants` flags on ancestor nodes, which is critical for `$DATA`, `$ORDER`, and `KILL` operations.~~
+**Status**: Core implementation complete. Tests organized into `set_internal_tests` module. Transaction awareness will be added in Phase 5.
 
 **NOTE**: Hierarchy semantics have been implemented, see `docs/hierarchy-semantics.md`
 
 **Transaction Note**: The signature includes `ctx: &TransactionContext` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction awareness (snapshot isolation, write tracking) will be added in Phase 5.
 
-- [ ] Implement `async fn set(&self, name: &Name, key: &Key, value: Value, ctx: &TransactionContext) -> Result<()>`:
-  - Use `load_node()` for cache-aware node access
-  - Navigate to appropriate leaf node
-  - Insert/update key-value pair
-  - Update parent `has_descendants` flags up the path
-  - Handle node splits and tree growth
-  - Use `save_node()` to persist changes
-  - Update `BTreeStats` (key count, splits)
+- [x] Implement `async fn set(&self, name: &Name, key: &Key, value: Value, ctx: &TransactionContext) -> Result<()>`:
+  - [x] Use `load_node()` for cache-aware node access (via `set_internal` → `insert_non_full_with_data`)
+  - [x] Navigate to appropriate leaf node
+  - [x] Insert/update key-value pair
+  - [x] Update parent `has_descendants` flags up the path (via `ensure_ancestors`)
+  - [x] Handle node splits and tree growth
+  - [x] Use `save_node()` to persist changes (currently in-memory only; disk persistence in Phase 4)
+  - [x] Update `BTreeStats` (key count, splits)
   - ~~Check transaction isolation level and track writes~~ (moved to Phase 5.4)
 - [x] **→ See `docs/hierarchy-semantics.md` for complete hierarchical semantics implementation** (required before continuing; now completed)
-- [ ] Add async tests for SET on empty tree (both Global and Local)
-- [ ] Add async tests for SET with existing keys (updates)
-- [ ] Add async tests for SET triggering node splits
-- [ ] Add async tests for SET on multi-level subscripts (e.g., `["A", "B", "C"]`)
-- [ ] Add async tests verifying Global and Local namespaces are separate
-- [ ] Add concurrent SET tests with `Arc<BTree>`
+- [x] Add async tests for SET on empty tree (Global) - **7 tests in `btree::tests::set_internal_tests` module** at `crates/rumps-storage/src/btree.rs:2925`
+  - `creates_ancestors`
+  - `deep_nesting_creates_all_ancestors`
+  - `intermediate_node_becomes_both`
+  - `preserves_has_descendants_on_update`
+  - `multiple_children_same_parent`
+  - `sibling_paths`
+  - `concurrent_ancestor_creation`
+- [x] Add async tests for SET with existing keys (updates) - covered by `preserves_has_descendants_on_update`
+- [x] Add async tests for SET triggering node splits - covered by `test_get_internal_with_tree_splits` at line 2819
+- [x] Add async tests for SET on multi-level subscripts (e.g., `["A", "B", "C"]`) - covered by `deep_nesting_creates_all_ancestors`
+- [ ] Add async tests verifying Global and Local namespaces are separate - **TODO: Add to `set_internal_tests` module**
+- [x] Add concurrent SET tests with `Arc<BTree>` - covered by `concurrent_ancestor_creation`
+
+**Missing Tests** (defer to Phase 5 or when transaction layer is ready):
+- Tests with Local namespace (`Name::Local`)
+- Tests verifying Global and Local namespaces are separate
+- Full transaction-aware `set()` tests (will add when Phase 5 transaction support is implemented)
 
 ### 2.3 MUMPS Operations - GET
 
