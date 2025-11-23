@@ -754,12 +754,8 @@ impl BTree {
         _ctx: &crate::TransactionContext,
     ) -> Result<()> {
         // TODO Phase 5: Use transaction context for snapshot isolation
-        // and buffered writes. For now, we just delegate to set_internal.
-
-        // Ensure all ancestors exist with has_descendants=true
-        self.ensure_ancestors(name, key).await?;
-
-        // Delegate to internal implementation
+        // and buffered writes (e.g., write to transaction buffer instead
+        // of directly to tree). For now, we just delegate to `set_internal`.
         self.set_internal(name, key, NodeData::with_value(value))
             .await
     }
@@ -993,6 +989,31 @@ impl BTree {
     /// ```
     // Internal method for tests/benchmarks - not part of public API
     async fn set_internal(
+        &self,
+        name: &Name,
+        key: &Key,
+        data: NodeData,
+    ) -> Result<()> {
+        // Ensure all ancestors exist with has_descendants=true
+        // This is part of the core MUMPS hierarchical semantics
+        self.ensure_ancestors(name, key).await?;
+
+        // Delegate to raw insertion (no hierarchy management)
+        self.set_node(name, key, data).await
+    }
+
+    /// Raw node insertion without hierarchy management.
+    ///
+    /// This method performs the actual B-tree insertion without calling
+    /// `ensure_ancestors`. It's used internally by both `set_internal`
+    /// (after ensuring ancestors) and by `ensure_ancestors` itself.
+    ///
+    /// # Behavior for Existing Keys - Idempotent Merge
+    ///
+    /// If the key already exists, this method MERGES the `NodeData`:
+    /// - `has_descendants`: Performs OR operation (if either old or new is true, result is true)
+    /// - `value`: Takes new value if provided, otherwise keeps old value
+    async fn set_node(
         &self,
         name: &Name,
         key: &Key,
@@ -1381,8 +1402,8 @@ impl BTree {
         // Create updated NodeData with new flag value
         let updated_data = NodeData::new(existing_arc.value.clone(), value);
 
-        // Use set_internal which will merge correctly
-        self.set_internal(name, key, updated_data).await
+        // Use set_node to avoid recursive ensure_ancestors call
+        self.set_node(name, key, updated_data).await
     }
 
     /// Ensures all ancestor keys exist with `has_descendants = true`.
@@ -1430,7 +1451,8 @@ impl BTree {
                 }
                 None => {
                     // Ancestor doesn't exist - create intermediate node
-                    self.set_internal(
+                    // Use set_node to avoid recursive ensure_ancestors call
+                    self.set_node(
                         name,
                         &ancestor_key,
                         NodeData::with_descendants(),
@@ -3247,8 +3269,7 @@ pub mod benches {
     use tokio::runtime::Runtime;
 
     use super::BTree;
-    use crate::TransactionContext;
-    use rumps_types::{Key, Name, TransactionId, TransactionTimestamp, Value};
+    use rumps_types::{Key, Name, NodeData, Value};
 
     /// Helper function to create a key with the specified depth.
     ///
@@ -3277,14 +3298,14 @@ pub mod benches {
                             let name = Name::Global("VAR".into());
                             let key = create_key_at_depth(depth);
                             let value = Value::Integer(42);
-                            let txn = TransactionContext::new(
-                                TransactionId::from(1),
-                                TransactionTimestamp::from(0),
-                            );
 
-                            // This call internally invokes ensure_ancestors() before insertion
+                            // set_internal includes ensure_ancestors() + insertion
                             btree
-                                .set(&name, &key, value, &txn)
+                                .set_internal(
+                                    &name,
+                                    &key,
+                                    NodeData::with_value(value),
+                                )
                                 .await
                                 .unwrap();
                         })
@@ -3308,10 +3329,6 @@ pub mod benches {
                 rt.block_on(async {
                     let btree = BTree::new(3).unwrap();
                     let name = Name::Global("VAR".into());
-                    let txn = TransactionContext::new(
-                        TransactionId::from(1),
-                        TransactionTimestamp::from(0),
-                    );
 
                     // First insert creates all ancestors
                     let key1 = Key::from(vec![
@@ -3322,7 +3339,11 @@ pub mod benches {
                         100.into(),
                     ]);
                     btree
-                        .set(&name, &key1, Value::Integer(42), &txn)
+                        .set_internal(
+                            &name,
+                            &key1,
+                            NodeData::with_value(Value::Integer(42)),
+                        )
                         .await
                         .unwrap();
 
@@ -3335,7 +3356,11 @@ pub mod benches {
                         200.into(),
                     ]);
                     btree
-                        .set(&name, &key2, Value::Integer(43), &txn)
+                        .set_internal(
+                            &name,
+                            &key2,
+                            NodeData::with_value(Value::Integer(43)),
+                        )
                         .await
                         .unwrap();
                 })
@@ -3356,10 +3381,6 @@ pub mod benches {
                     let btree = BTree::new(3).unwrap();
                     let name = Name::Global("VAR".into());
                     let key = create_key_at_depth(5);
-                    let txn = TransactionContext::new(
-                        TransactionId::from(1),
-                        TransactionTimestamp::from(0),
-                    );
 
                     // Create all ancestors
                     let ancestors = key.ancestors();
@@ -3367,14 +3388,14 @@ pub mod benches {
                         .for_each(|ancestor| {
                             let btree = &btree;
                             let name = name.clone();
-                            let txn = &txn;
                             async move {
                                 btree
-                                    .set(
+                                    .set_internal(
                                         &name,
                                         &ancestor,
-                                        Value::String("ancestor".into()),
-                                        txn,
+                                        NodeData::with_value(Value::String(
+                                            "ancestor".into(),
+                                        )),
                                     )
                                     .await
                                     .unwrap();
@@ -3397,13 +3418,13 @@ pub mod benches {
                     let btree = BTree::new(3).unwrap();
                     let name = Name::Global("DEEP".into());
                     let key = create_key_at_depth(10);
-                    let txn = TransactionContext::new(
-                        TransactionId::from(1),
-                        TransactionTimestamp::from(0),
-                    );
 
                     btree
-                        .set(&name, &key, Value::String("value".into()), &txn)
+                        .set_internal(
+                            &name,
+                            &key,
+                            NodeData::with_value(Value::String("value".into())),
+                        )
                         .await
                         .unwrap();
                 })
@@ -3421,13 +3442,13 @@ pub mod benches {
                     let btree = BTree::new(3).unwrap();
                     let name = Name::Global("SHALLOW".into());
                     let key = create_key_at_depth(2);
-                    let txn = TransactionContext::new(
-                        TransactionId::from(1),
-                        TransactionTimestamp::from(0),
-                    );
 
                     btree
-                        .set(&name, &key, Value::String("value".into()), &txn)
+                        .set_internal(
+                            &name,
+                            &key,
+                            NodeData::with_value(Value::String("value".into())),
+                        )
                         .await
                         .unwrap();
                 })
