@@ -305,7 +305,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [x] Implement proper `DataStatus` enum with variants: NoData(0), HasValue(1), HasDescendants(10), Both(11)
 - [ ] Implement DATA operation:
   - Use `load_node()` for cache-aware node access
-  - Return enum: `NoData`, `HasValue`, `HasDescendants`, `Both`
+  - Return `DataStatus`
   - ~~Use transaction snapshot isolation if context provided~~ (moved to Phase 5.4)
 - [ ] Add async tests for all four DATA states
 - [ ] Verify correct behavior for partial paths

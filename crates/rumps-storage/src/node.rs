@@ -35,11 +35,10 @@
 use std::sync::Arc;
 use std::{fmt, iter};
 
+use rumps_types::{Key, Value};
 use serde::de::{self, Deserializer, Visitor};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
-
-use rumps_types::{Key, Value};
 
 /// Identifier for a node in the B+-tree.
 ///

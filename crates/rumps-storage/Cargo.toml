@@ -28,6 +28,9 @@ name = "btree_bench"
 harness = false
 required-features = ["bench"]
 
+[lints.rust]
+dead_code = "allow"
+
 [lints.clippy]
 obfuscated_if_else = "allow"
 type_complexity = "allow"

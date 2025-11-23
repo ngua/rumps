@@ -234,23 +234,19 @@ impl From<TransactionTimestamp> for u64 {
 /// assert_eq!(level, IsolationLevel::SnapshotIsolation);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub(crate) enum IsolationLevel {
     /// Snapshot Isolation: Each transaction sees a consistent snapshot.
     ///
     /// This is the default and currently only supported level in RUMPS.
     /// Transactions read from a consistent snapshot taken at transaction
     /// start and conflicts are detected at commit time.
+    #[default]
     SnapshotIsolation,
     // Future possibilities:
     // ReadCommitted,
     // RepeatableRead,
     // Serializable,
-}
-
-impl Default for IsolationLevel {
-    fn default() -> Self {
-        Self::SnapshotIsolation
-    }
 }
 
 impl fmt::Display for IsolationLevel {
@@ -372,16 +368,16 @@ impl fmt::Display for TransactionMetadata {
 #[derive(Debug, Clone)]
 pub struct TransactionContext {
     /// Unique transaction identifier
-    pub id: TransactionId,
+    pub(crate) id: TransactionId,
 
     /// The timestamp at which this transaction started (for snapshot isolation)
-    pub start_timestamp: TransactionTimestamp,
+    pub(crate) start_timestamp: TransactionTimestamp,
 
     /// Wall-clock time when the transaction began
-    pub start_time: Instant,
+    pub(crate) start_time: Instant,
 
     /// Isolation level for this transaction
-    pub isolation_level: IsolationLevel,
+    pub(crate) isolation_level: IsolationLevel,
 }
 
 impl TransactionContext {
@@ -400,7 +396,7 @@ impl TransactionContext {
     ///
     /// assert_eq!(TransactionId::from(1), txn.id);
     /// ```
-    pub fn new(
+    pub(crate) fn new(
         id: TransactionId,
         start_timestamp: TransactionTimestamp,
     ) -> Self {

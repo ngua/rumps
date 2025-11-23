@@ -1,5 +1,6 @@
-use crate::node::NodeId;
 use thiserror::Error;
+
+use crate::node::NodeId;
 
 /// Errors that can occur during B-tree operations.
 #[derive(Debug, Error)]

@@ -22,9 +22,8 @@ mod error;
 pub(crate) mod node;
 mod transaction;
 
+#[cfg(feature = "bench")]
+pub use btree::benches;
 pub use error::{Result, StorageError};
 pub use rumps_types::DataStatus;
 pub use transaction::TransactionContext;
-
-#[cfg(feature = "bench")]
-pub use btree::benches;
