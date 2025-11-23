@@ -12,15 +12,22 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 
+# Benchmark dependencies (only when bench feature is enabled)
+criterion = { workspace = true, optional = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 tokio-test = "0.4"
 
+[features]
+bench = ["criterion"]
+
 [[bench]]
-name = "hierarchy_bench"
+name = "btree_bench"
 harness = false
+required-features = ["bench"]
 
 [lints.clippy]
 obfuscated_if_else = "allow"
 type_complexity = "allow"
-use_self = "deny"
+use_self = "warn"

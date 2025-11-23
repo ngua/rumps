@@ -24,3 +24,6 @@ mod transaction;
 pub use btree::{BTree, DataStatus};
 pub use error::{Result, StorageError};
 pub use transaction::TransactionContext;
+
+#[cfg(feature = "bench")]
+pub use btree::benches;

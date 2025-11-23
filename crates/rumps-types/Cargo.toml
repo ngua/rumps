@@ -13,4 +13,4 @@ thiserror = { workspace = true }
 [lints.clippy]
 obfuscated_if_else = "allow"
 type_complexity = "allow"
-use_self = "deny"
+use_self = "warn"

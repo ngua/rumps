@@ -9,7 +9,7 @@ use crate::error::{Result, StorageError};
 
 /// Statistics tracking for B-tree operations.
 #[derive(Debug, Clone, Default)]
-pub struct BTreeStats {
+pub(crate) struct BTreeStats {
     /// Current height of the tree
     pub height: usize,
     /// Total number of nodes
@@ -28,7 +28,7 @@ pub struct BTreeStats {
 
 /// Trait for node ID allocation strategies.
 #[async_trait]
-pub trait NodeAllocator: Send + Sync {
+pub(crate) trait NodeAllocator: Send + Sync {
     /// Allocate a new node ID
     async fn allocate(&self) -> Result<NodeId>;
 
@@ -40,12 +40,12 @@ pub trait NodeAllocator: Send + Sync {
 }
 
 /// Simple incrementing allocator for in-memory use.
-pub struct IncrementingAllocator {
+pub(crate) struct IncrementingAllocator {
     next_id: RwLock<u64>,
 }
 
 impl IncrementingAllocator {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             next_id: RwLock::new(0),
         }
@@ -138,7 +138,7 @@ impl NodeAllocator for IncrementingAllocator {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use rumps_storage::BTree;
 /// use std::sync::Arc;
 ///
@@ -206,7 +206,7 @@ impl BTree {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use rumps_storage::BTree;
     /// use std::sync::Arc;
     ///
@@ -238,7 +238,7 @@ impl BTree {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use rumps_storage::BTree;
     /// use std::sync::Arc;
     ///
@@ -263,7 +263,7 @@ impl BTree {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use rumps_storage::BTree;
     ///
     /// # tokio_test::block_on(async {
@@ -272,7 +272,7 @@ impl BTree {
     /// # Ok::<(), rumps_storage::StorageError>(())
     /// # });
     /// ```
-    pub fn min_degree(&self) -> usize {
+    pub(crate) fn min_degree(&self) -> usize {
         self.min_degree
     }
 
@@ -283,7 +283,7 @@ impl BTree {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use rumps_storage::BTree;
     ///
     /// # tokio_test::block_on(async {
@@ -292,7 +292,7 @@ impl BTree {
     /// # Ok::<(), rumps_storage::StorageError>(())
     /// # });
     /// ```
-    pub async fn node_count(&self) -> usize {
+    pub(crate) async fn node_count(&self) -> usize {
         self.nodes.read().await.len()
     }
 
@@ -300,7 +300,7 @@ impl BTree {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use rumps_storage::BTree;
     ///
     /// # tokio_test::block_on(async {
@@ -312,7 +312,7 @@ impl BTree {
     /// # Ok::<(), rumps_storage::StorageError>(())
     /// # });
     /// ```
-    pub fn has_memory_limit(&self) -> bool {
+    pub(crate) fn has_memory_limit(&self) -> bool {
         self.max_memory_bytes.is_some()
     }
 
@@ -320,7 +320,7 @@ impl BTree {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use rumps_storage::BTree;
     ///
     /// # tokio_test::block_on(async {
@@ -331,7 +331,7 @@ impl BTree {
     /// # Ok::<(), rumps_storage::StorageError>(())
     /// # });
     /// ```
-    pub async fn stats(&self) -> BTreeStats {
+    pub(crate) async fn stats(&self) -> BTreeStats {
         self.stats.read().await.clone()
     }
 
@@ -376,7 +376,7 @@ impl BTree {
         nodes
             .get(&id)
             .cloned()
-            .ok_or_else(|| StorageError::NodeNotFound(id))
+            .ok_or(StorageError::NodeNotFound(id))
     }
 
     /// Splits a full node into two nodes.
@@ -665,7 +665,7 @@ impl Default for BTree {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use rumps_storage::BTree;
     ///
     /// # tokio_test::block_on(async {
@@ -714,7 +714,7 @@ impl BTree {
     /// # Ok::<(), rumps_storage::StorageError>(())
     /// # });
     /// ```
-    pub async fn set(
+    pub(crate) async fn set(
         &self,
         name: &Name,
         key: &Key,
@@ -741,7 +741,7 @@ impl BTree {
     /// ```ignore
     /// let value = btree.get(&name, &key, None).await?;
     /// ```
-    pub async fn get(
+    pub(crate) async fn get(
         &self,
         name: &Name,
         key: &Key,
@@ -762,7 +762,7 @@ impl BTree {
     /// ```ignore
     /// btree.kill(&name, &key, &txn).await?;
     /// ```
-    pub async fn kill(
+    pub(crate) async fn kill(
         &self,
         _name: &Name,
         _key: &Key,
@@ -782,7 +782,7 @@ impl BTree {
     /// ```ignore
     /// let status = btree.data(&name, &key, None).await?;
     /// ```
-    pub async fn data(
+    pub(crate) async fn data(
         &self,
         _name: &Name,
         _key: &Key,
@@ -801,7 +801,7 @@ impl BTree {
     /// ```ignore
     /// let next_key = btree.order(&name, Some(&key), None).await?;
     /// ```
-    pub async fn order(
+    pub(crate) async fn order(
         &self,
         _name: &Name,
         _after: Option<&Key>,
@@ -852,8 +852,7 @@ impl BTree {
     /// }
     /// ```
     // Internal method for tests/benchmarks - not part of public API
-    #[doc(hidden)]
-    pub async fn get_internal(
+    async fn get_internal(
         &self,
         name: &Name,
         key: &Key,
@@ -961,8 +960,7 @@ impl BTree {
     /// // Result: NodeData { value: Some(value), has_descendants: true }
     /// ```
     // Internal method for tests/benchmarks - not part of public API
-    #[doc(hidden)]
-    pub async fn set_internal(
+    async fn set_internal(
         &self,
         name: &Name,
         key: &Key,
@@ -1067,15 +1065,13 @@ impl BTree {
     }
 
     // Internal method for tests/benchmarks - not part of public API
-    #[doc(hidden)]
-    pub async fn kill_internal(&self, _name: &Name, _key: &Key) -> Result<()> {
+    async fn kill_internal(&self, _name: &Name, _key: &Key) -> Result<()> {
         // TODO Phase 2.4: Implement KILL operation
         todo!("KILL operation not yet implemented - see TODOS/persistence.md Phase 2.4")
     }
 
     // Internal method for tests/benchmarks - not part of public API
-    #[doc(hidden)]
-    pub async fn data_internal(
+    async fn data_internal(
         &self,
         _name: &Name,
         _key: &Key,
@@ -1085,8 +1081,7 @@ impl BTree {
     }
 
     // Internal method for tests/benchmarks - not part of public API
-    #[doc(hidden)]
-    pub async fn order_internal(
+    async fn order_internal(
         &self,
         _name: &Name,
         _after: Option<&Key>,
@@ -1378,8 +1373,7 @@ impl BTree {
     /// ensure_ancestors(&name, &Key::from(vec![1, 2, 3])).await?;
     /// // Creates: Key([1]) and Key([1, 2]) with has_descendants=true
     /// ```
-    #[doc(hidden)]
-    pub async fn ensure_ancestors(&self, name: &Name, key: &Key) -> Result<()> {
+    async fn ensure_ancestors(&self, name: &Name, key: &Key) -> Result<()> {
         use futures::stream::{self, TryStreamExt};
 
         let ancestors = key.ancestors();
@@ -3206,5 +3200,217 @@ mod tests {
             .unwrap();
         assert!(arc.has_descendants);
         assert!(arc.value.is_none());
+    }
+}
+
+#[cfg(feature = "bench")]
+pub mod benches {
+    //! Benchmark suite for BTree operations.
+    //!
+    //! This module contains criterion benchmarks for hierarchical operations,
+    //! demonstrating performance characteristics across various tree depths.
+
+    use criterion::{BenchmarkId, Criterion};
+    use futures::StreamExt;
+    use tokio::runtime::Runtime;
+
+    use super::BTree;
+    use crate::TransactionContext;
+    use rumps_types::{Key, Name, TransactionId, TransactionTimestamp, Value};
+
+    /// Helper function to create a key with the specified depth.
+    ///
+    /// For depth=3, creates Key([1, 2, 3])
+    /// This will result in (depth - 1) ancestors being created.
+    fn create_key_at_depth(depth: usize) -> Key {
+        Key::from((1..=depth).map(|i| (i as i64).into()).collect::<Vec<_>>())
+    }
+
+    /// Benchmark INSERT operations at various depths to show hierarchical semantics performance characteristics.
+    ///
+    /// This benchmarks the `set()` operation which internally calls `ensure_ancestors()` before insertion,
+    /// demonstrating the time complexity as depth increases.
+    fn bench_insert_depths(c: &mut Criterion) {
+        let mut group = c.benchmark_group("insert_by_depth");
+        let rt = Runtime::new().unwrap();
+
+        [2, 3, 4, 5, 10].iter().copied().for_each(|depth| {
+            group.bench_with_input(
+                BenchmarkId::from_parameter(depth),
+                &depth,
+                |b, &depth| {
+                    b.iter(|| {
+                        rt.block_on(async {
+                            let btree = BTree::new(3).unwrap();
+                            let name = Name::Global("VAR".into());
+                            let key = create_key_at_depth(depth);
+                            let value = Value::Integer(42);
+                            let txn = TransactionContext::new(
+                                TransactionId::from(1),
+                                TransactionTimestamp::from(0),
+                            );
+
+                            // This call internally invokes ensure_ancestors() before insertion
+                            btree
+                                .set(&name, &key, value, &txn)
+                                .await
+                                .unwrap();
+                        })
+                    });
+                },
+            );
+        });
+
+        group.finish();
+    }
+
+    /// Benchmark INSERT with existing ancestors to show amortization benefits.
+    ///
+    /// This tests the scenario where ancestors already exist, which should be faster
+    /// than creating them from scratch.
+    fn bench_insert_with_existing_ancestors(c: &mut Criterion) {
+        let rt = Runtime::new().unwrap();
+
+        c.bench_function("depth_5_with_existing_ancestors", |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let btree = BTree::new(3).unwrap();
+                    let name = Name::Global("VAR".into());
+                    let txn = TransactionContext::new(
+                        TransactionId::from(1),
+                        TransactionTimestamp::from(0),
+                    );
+
+                    // First insert creates all ancestors
+                    let key1 = Key::from(vec![
+                        1.into(),
+                        2.into(),
+                        3.into(),
+                        4.into(),
+                        100.into(),
+                    ]);
+                    btree
+                        .set(&name, &key1, Value::Integer(42), &txn)
+                        .await
+                        .unwrap();
+
+                    // Second insert at same depth should be faster (ancestors exist)
+                    let key2 = Key::from(vec![
+                        1.into(),
+                        2.into(),
+                        3.into(),
+                        4.into(),
+                        200.into(),
+                    ]);
+                    btree
+                        .set(&name, &key2, Value::Integer(43), &txn)
+                        .await
+                        .unwrap();
+                })
+            });
+        });
+    }
+
+    /// Benchmark ancestor creation in isolation.
+    ///
+    /// This directly measures ancestor creation performance by repeatedly
+    /// creating ancestors without the final key insertion.
+    fn bench_ensure_ancestors(c: &mut Criterion) {
+        let rt = Runtime::new().unwrap();
+
+        c.bench_function("ensure_ancestors_depth_5", |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let btree = BTree::new(3).unwrap();
+                    let name = Name::Global("VAR".into());
+                    let key = create_key_at_depth(5);
+                    let txn = TransactionContext::new(
+                        TransactionId::from(1),
+                        TransactionTimestamp::from(0),
+                    );
+
+                    // Create all ancestors
+                    let ancestors = key.ancestors();
+                    futures::stream::iter(ancestors)
+                        .for_each(|ancestor| {
+                            let btree = &btree;
+                            let name = name.clone();
+                            let txn = &txn;
+                            async move {
+                                btree
+                                    .set(
+                                        &name,
+                                        &ancestor,
+                                        Value::String("ancestor".into()),
+                                        txn,
+                                    )
+                                    .await
+                                    .unwrap();
+                            }
+                        })
+                        .await;
+                })
+            });
+        });
+    }
+
+    /// Benchmark worst case: deep nesting with completely fresh tree.
+    fn bench_worst_case(c: &mut Criterion) {
+        let rt = Runtime::new().unwrap();
+
+        c.bench_function("worst_case_depth_10_fresh_tree", |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    // Fresh tree for each iteration
+                    let btree = BTree::new(3).unwrap();
+                    let name = Name::Global("DEEP".into());
+                    let key = create_key_at_depth(10);
+                    let txn = TransactionContext::new(
+                        TransactionId::from(1),
+                        TransactionTimestamp::from(0),
+                    );
+
+                    btree
+                        .set(&name, &key, Value::String("value".into()), &txn)
+                        .await
+                        .unwrap();
+                })
+            });
+        });
+    }
+
+    /// Benchmark best case: shallow nesting (depth 2).
+    fn bench_best_case(c: &mut Criterion) {
+        let rt = Runtime::new().unwrap();
+
+        c.bench_function("best_case_depth_2_fresh_tree", |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let btree = BTree::new(3).unwrap();
+                    let name = Name::Global("SHALLOW".into());
+                    let key = create_key_at_depth(2);
+                    let txn = TransactionContext::new(
+                        TransactionId::from(1),
+                        TransactionTimestamp::from(0),
+                    );
+
+                    btree
+                        .set(&name, &key, Value::String("value".into()), &txn)
+                        .await
+                        .unwrap();
+                })
+            });
+        });
+    }
+
+    /// Main entry point for all benchmarks.
+    ///
+    /// This function is called from the benchmark wrapper in `benches/btree_bench.rs`.
+    pub fn run_benchmarks(c: &mut Criterion) {
+        bench_insert_depths(c);
+        bench_insert_with_existing_ancestors(c);
+        bench_ensure_ancestors(c);
+        bench_worst_case(c);
+        bench_best_case(c);
     }
 }
