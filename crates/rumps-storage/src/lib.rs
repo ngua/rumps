@@ -21,7 +21,7 @@ mod btree;
 mod error;
 mod transaction;
 
-pub use btree::{BTree, DataStatus};
+pub use btree::DataStatus;
 pub use error::{Result, StorageError};
 pub use transaction::TransactionContext;
 

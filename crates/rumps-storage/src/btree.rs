@@ -155,7 +155,7 @@ impl NodeAllocator for IncrementingAllocator {
 /// # Ok::<(), rumps_storage::StorageError>(())
 /// # });
 /// ```
-pub struct BTree {
+pub(crate) struct BTree {
     /// Maps variable names to root nodes (maintains sorted order).
     ///
     /// This `BTreeMap` enables ordered iteration over variable names,
@@ -217,7 +217,7 @@ impl BTree {
     /// # Ok::<(), rumps_storage::StorageError>(())
     /// # });
     /// ```
-    pub fn new(min_degree: usize) -> Result<Self> {
+    pub(crate) fn new(min_degree: usize) -> Result<Self> {
         if min_degree >= 2 {
             Ok(Self {
                 roots: RwLock::new(BTreeMap::new()),
@@ -250,7 +250,7 @@ impl BTree {
     /// # Ok::<(), rumps_storage::StorageError>(())
     /// # });
     /// ```
-    pub fn with_config(
+    pub(crate) fn with_config(
         min_degree: usize,
         max_memory_bytes: Option<usize>,
     ) -> Result<Self> {
@@ -353,13 +353,45 @@ impl BTree {
         }
     }
 
-    /// Finds and returns a node by its ID.
+    /// Loads a node from cache or disk (Phase 4).
+    ///
+    /// This is the cache-aware node loading method that will be used throughout
+    /// the codebase for retrieving nodes.
+    ///
+    /// # Current Implementation (Phase 2-3)
+    ///
+    /// Currently just looks up the node in the in-memory `HashMap`.
+    ///
+    /// # Future Implementation (Phase 4.5)
+    ///
+    /// TODO Phase 4.5: Implement cache-aware disk loading:
+    /// - Check cache first (`nodes` HashMap)
+    /// - Load from disk if cache miss (only for `Name::Global`)
+    /// - Keep `Name::Local` entirely in memory
+    /// - Add to cache with LRU eviction
+    /// - See TODOS/persistence.md Phase 4.5 for details
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::NodeNotFound` if the node doesn't exist.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let node = btree.load_node(root_id).await?;
+    /// ```
+    async fn load_node(&self, id: NodeId) -> Result<Node> {
+        // TODO Phase 4.5: Add disk loading logic here
+        self.find_node(id).await
+    }
+
+    /// Finds and returns a node by its ID from the in-memory cache.
     ///
     /// This is an internal helper method used by tree traversal operations.
     /// It looks up the node in the in-memory `HashMap` and clones it.
     ///
-    /// In Phase 4, this will be replaced by `load_node()` which checks the
-    /// cache first and loads from disk if needed.
+    /// For cache-aware loading that will support disk persistence in Phase 4,
+    /// use `load_node()` instead.
     ///
     /// # Errors
     ///
