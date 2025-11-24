@@ -44,7 +44,7 @@
 //! ```
 //! use rumps_types::{Name, Key, Subscript};
 //!
-//! let name = Name::Global("PATIENT".to_string());
+//! let name = Name::global("PATIENT");
 //! let key = Key::from(vec![
 //!     Subscript::from(123),
 //!     Subscript::from("NAME"),
@@ -67,11 +67,11 @@
 //! use rumps_types::{Name, Key, Subscript};
 //!
 //! // Global variable (persistent)
-//! let global_name = Name::Global("PATIENT".to_string());
+//! let global_name = Name::global("PATIENT");
 //! assert_eq!(global_name.to_string(), "^PATIENT");
 //!
 //! // Local variable (ephemeral)
-//! let local_name = Name::Local("TEMP".to_string());
+//! let local_name = Name::local("TEMP");
 //! assert_eq!(local_name.to_string(), "TEMP");
 //!
 //! // Hierarchical key path
@@ -101,11 +101,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// use rumps_types::Name;
 ///
 /// // Global variable (persistent, prefixed with ^)
-/// let global = Name::Global("PATIENT".to_string());
+/// let global = Name::global("PATIENT");
 /// assert_eq!(global.to_string(), "^PATIENT");
 ///
 /// // Local variable (ephemeral, no prefix)
-/// let local = Name::Local("TEMP".to_string());
+/// let local = Name::local("TEMP");
 /// assert_eq!(local.to_string(), "TEMP");
 /// ```
 ///
@@ -117,10 +117,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Name {
     /// A global variable (persistent, stored on disk).
+    ///
     /// Example: `^PATIENT`
     Global(String),
 
     /// A local variable (ephemeral, memory-only).
+    ///
     /// Example: `PATIENT`
     Local(String),
 }
@@ -155,10 +157,10 @@ impl Name {
     /// ```
     /// use rumps_types::Name;
     ///
-    /// let global = Name::Global("PATIENT".to_string());
+    /// let global = Name::global("PATIENT");
     /// assert_eq!(global.name(), "PATIENT");
     ///
-    /// let local = Name::Local("TEMP".to_string());
+    /// let local = Name::local("TEMP");
     /// assert_eq!(local.name(), "TEMP");
     /// ```
     pub fn name(&self) -> &str {
@@ -175,6 +177,40 @@ impl Name {
     /// Returns `true` if this is a local variable.
     pub fn is_local(&self) -> bool {
         matches!(self, Self::Local(_))
+    }
+
+    /// Creates a new global variable name.
+    ///
+    /// This is a convenience method to avoid the verbosity of `Name::Global("name".into())`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::Name;
+    ///
+    /// let global = Name::global("PATIENT");
+    /// assert_eq!(global, Name::global("PATIENT"));
+    /// assert_eq!(global.to_string(), "^PATIENT");
+    /// ```
+    pub fn global(name: &str) -> Self {
+        Self::Global(name.to_string())
+    }
+
+    /// Creates a new local variable name.
+    ///
+    /// This is a convenience method to avoid the verbosity of `Name::Local("name".into())`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::Name;
+    ///
+    /// let local = Name::local("TEMP");
+    /// assert_eq!(local, Name::local("TEMP"));
+    /// assert_eq!(local.to_string(), "TEMP");
+    /// ```
+    pub fn local(name: &str) -> Self {
+        Self::Local(name.to_string())
     }
 }
 
@@ -691,45 +727,45 @@ mod tests {
 
     #[test]
     fn test_global_display() {
-        let name = Name::Global("PATIENT".to_string());
+        let name = Name::global("PATIENT");
         assert_eq!(name.to_string(), "^PATIENT");
     }
 
     #[test]
     fn test_local_display() {
-        let name = Name::Local("TEMP".to_string());
+        let name = Name::local("TEMP");
         assert_eq!(name.to_string(), "TEMP");
     }
 
     #[test]
     fn test_name_accessor() {
-        let global = Name::Global("PATIENT".to_string());
+        let global = Name::global("PATIENT");
         assert_eq!(global.name(), "PATIENT");
 
-        let local = Name::Local("TEMP".to_string());
+        let local = Name::local("TEMP");
         assert_eq!(local.name(), "TEMP");
     }
 
     #[test]
     fn test_is_global() {
-        let global = Name::Global("PATIENT".to_string());
+        let global = Name::global("PATIENT");
         assert!(global.is_global());
         assert!(!global.is_local());
     }
 
     #[test]
     fn test_is_local() {
-        let local = Name::Local("TEMP".to_string());
+        let local = Name::local("TEMP");
         assert!(local.is_local());
         assert!(!local.is_global());
     }
 
     #[test]
     fn test_ordering() {
-        let global1 = Name::Global("A".to_string());
-        let global2 = Name::Global("B".to_string());
-        let local1 = Name::Local("A".to_string());
-        let local2 = Name::Local("B".to_string());
+        let global1 = Name::global("A");
+        let global2 = Name::global("B");
+        let local1 = Name::local("A");
+        let local2 = Name::local("B");
 
         // Globals should sort before locals (based on enum variant order)
         assert!(global1 < local1);
@@ -742,9 +778,9 @@ mod tests {
 
     #[test]
     fn test_equality() {
-        let global1 = Name::Global("PATIENT".to_string());
-        let global2 = Name::Global("PATIENT".to_string());
-        let local = Name::Local("PATIENT".to_string());
+        let global1 = Name::global("PATIENT");
+        let global2 = Name::global("PATIENT");
+        let local = Name::local("PATIENT");
 
         assert_eq!(global1, global2);
         assert_ne!(global1, local);
@@ -753,7 +789,7 @@ mod tests {
     #[test]
     fn test_serialization() {
         // Test that Global serializes as plain string (no enum tag)
-        let global = Name::Global("PATIENT".to_string());
+        let global = Name::global("PATIENT");
         let serialized = bincode::serialize(&global).unwrap();
 
         // Should be same as serializing the string directly
@@ -765,24 +801,24 @@ mod tests {
         assert_eq!(global, deserialized);
 
         // Test that Local also serializes as plain string
-        let local = Name::Local("TEMP".to_string());
+        let local = Name::local("TEMP");
         let serialized = bincode::serialize(&local).unwrap();
         let string_serialized = bincode::serialize("TEMP").unwrap();
         assert_eq!(serialized, string_serialized);
 
         // Deserializing always produces Global variant
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(deserialized, Name::Global("TEMP".to_string()));
+        assert_eq!(deserialized, Name::global("TEMP"));
         assert_ne!(deserialized, local);
     }
 
     #[test]
     fn test_name_clone() {
-        let global = Name::Global("PATIENT".to_string());
+        let global = Name::global("PATIENT");
         let global_clone = global.clone();
         assert_eq!(global, global_clone);
 
-        let local = Name::Local("TEMP".to_string());
+        let local = Name::local("TEMP");
         let local_clone = local.clone();
         assert_eq!(local, local_clone);
     }
@@ -791,9 +827,9 @@ mod tests {
     fn test_name_hash() {
         use std::collections::HashMap;
 
-        let global1 = Name::Global("PATIENT".to_string());
-        let global2 = Name::Global("PATIENT".to_string());
-        let local = Name::Local("PATIENT".to_string());
+        let global1 = Name::global("PATIENT");
+        let global2 = Name::global("PATIENT");
+        let local = Name::local("PATIENT");
 
         // Test that Name can be used as HashMap key
         let map = HashMap::from([
@@ -812,12 +848,12 @@ mod tests {
 
     #[test]
     fn test_name_debug() {
-        let global = Name::Global("PATIENT".to_string());
+        let global = Name::global("PATIENT");
         let debug_str = format!("{:?}", global);
         assert!(debug_str.contains("Global"));
         assert!(debug_str.contains("PATIENT"));
 
-        let local = Name::Local("TEMP".to_string());
+        let local = Name::local("TEMP");
         let debug_str = format!("{:?}", local);
         assert!(debug_str.contains("Local"));
         assert!(debug_str.contains("TEMP"));
@@ -825,22 +861,22 @@ mod tests {
 
     #[test]
     fn test_name_with_special_characters() {
-        let special = Name::Global("TEST$#@!".to_string());
+        let special = Name::global("TEST$#@!");
         assert_eq!(special.name(), "TEST$#@!");
         assert_eq!(special.to_string(), "^TEST$#@!");
 
-        let unicode = Name::Local("日本語".to_string());
+        let unicode = Name::local("日本語");
         assert_eq!(unicode.name(), "日本語");
         assert_eq!(unicode.to_string(), "日本語");
     }
 
     #[test]
     fn test_name_empty_string() {
-        let empty_global = Name::Global("".to_string());
+        let empty_global = Name::global("");
         assert_eq!(empty_global.name(), "");
         assert_eq!(empty_global.to_string(), "^");
 
-        let empty_local = Name::Local("".to_string());
+        let empty_local = Name::local("");
         assert_eq!(empty_local.name(), "");
         assert_eq!(empty_local.to_string(), "");
     }
@@ -848,19 +884,19 @@ mod tests {
     #[test]
     fn test_name_serialization_edge_cases() {
         // Test empty string
-        let empty = Name::Global("".to_string());
+        let empty = Name::global("");
         let serialized = bincode::serialize(&empty).unwrap();
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
         assert_eq!(empty, deserialized);
 
         // Test special characters
-        let special = Name::Global("^$#@!".to_string());
+        let special = Name::global("^$#@!");
         let serialized = bincode::serialize(&special).unwrap();
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
         assert_eq!(special, deserialized);
 
         // Test unicode
-        let unicode = Name::Global("日本語テスト".to_string());
+        let unicode = Name::global("日本語テスト");
         let serialized = bincode::serialize(&unicode).unwrap();
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
         assert_eq!(unicode, deserialized);
@@ -869,12 +905,12 @@ mod tests {
     #[test]
     fn test_name_comprehensive_ordering() {
         let names = vec![
-            Name::Global("A".to_string()),
-            Name::Global("B".to_string()),
-            Name::Global("Z".to_string()),
-            Name::Local("A".to_string()),
-            Name::Local("B".to_string()),
-            Name::Local("Z".to_string()),
+            Name::global("A"),
+            Name::global("B"),
+            Name::global("Z"),
+            Name::local("A"),
+            Name::local("B"),
+            Name::local("Z"),
         ];
 
         // Verify all globals come before all locals
@@ -885,15 +921,15 @@ mod tests {
         names.windows(2).all(|w| w[0] < w[1]);
 
         // Test with same name strings
-        let g = Name::Global("SAME".to_string());
-        let l = Name::Local("SAME".to_string());
+        let g = Name::global("SAME");
+        let l = Name::local("SAME");
         assert!(g < l);
     }
 
     #[test]
     fn test_name_partialord_consistency() {
-        let g1 = Name::Global("A".to_string());
-        let g2 = Name::Global("B".to_string());
+        let g1 = Name::global("A");
+        let g2 = Name::global("B");
 
         // PartialOrd should be consistent with Ord
         assert_eq!(g1.partial_cmp(&g2), Some(std::cmp::Ordering::Less));

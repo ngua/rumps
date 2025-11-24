@@ -750,7 +750,7 @@ impl BTree {
     ///     TransactionTimestamp::from(100),
     /// );
     ///
-    /// let name = Name::Global("PATIENT".into());
+    /// let name = Name::global("PATIENT");
     /// let key = key![123];
     /// btree.set(&name, &key, "John Doe".into(), &txn).await?;
     /// # Ok::<(), rumps_storage::StorageError>(())

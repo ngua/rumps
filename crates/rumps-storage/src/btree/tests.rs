@@ -141,7 +141,7 @@ async fn test_stress_large_tree() {
     use rumps_types::Value;
 
     let btree = Arc::new(BTree::new(3).unwrap());
-    let name = Name::Global("STRESS".into());
+    let name = Name::global("STRESS");
 
     // Insert 1000 keys with various patterns
     let num_keys: usize = 1000;
@@ -1090,7 +1090,7 @@ mod get_internal_tests {
         use rumps_types::Name;
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("PATIENT".into());
+        let name = Name::global("PATIENT");
         let key = key![123];
 
         // Variable doesn't exist in roots
@@ -1103,7 +1103,7 @@ mod get_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("PATIENT".into());
+        let name = Name::global("PATIENT");
         let key = key![123];
         let value = Value::String("John Doe".into());
 
@@ -1126,7 +1126,7 @@ mod get_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("PATIENT".into());
+        let name = Name::global("PATIENT");
         let key = key![123, "NAME"];
         let value = Value::String("John Doe".into());
 
@@ -1148,7 +1148,7 @@ mod get_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("PATIENT".into());
+        let name = Name::global("PATIENT");
 
         // Insert some keys
         btree
@@ -1186,7 +1186,7 @@ mod get_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("PATIENT".into());
+        let name = Name::global("PATIENT");
 
         // Insert keys: [1], [1,2,5]
         btree
@@ -1217,7 +1217,7 @@ mod get_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("VAR".into());
+        let name = Name::global("VAR");
 
         // Insert multiple keys
         btree
@@ -1263,8 +1263,8 @@ mod get_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name1 = Name::Global("VAR1".into());
-        let name2 = Name::Global("VAR2".into());
+        let name1 = Name::global("VAR1");
+        let name2 = Name::global("VAR2");
         let key = key![123];
 
         // Insert same key in different variables
@@ -1298,7 +1298,7 @@ mod get_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("VAR".into());
+        let name = Name::global("VAR");
         let key = key![1];
 
         btree
@@ -1322,7 +1322,7 @@ mod get_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap(); // min_degree=3, max_keys=5
-        let name = Name::Global("VAR".into());
+        let name = Name::global("VAR");
 
         // Insert enough keys to cause splits
         btree
@@ -1389,7 +1389,7 @@ mod get_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("PATIENT".into());
+        let name = Name::global("PATIENT");
 
         // Insert deeply nested key
         let k = key![123, "DEMOGRAPHICS", "ADDRESS", "STREET"];
@@ -1414,7 +1414,7 @@ mod get_internal_tests {
         use tokio::task;
 
         let btree = Arc::new(BTree::new(3).unwrap());
-        let name = Name::Global("CONCURRENT".into());
+        let name = Name::global("CONCURRENT");
 
         // Insert some test data
         btree
@@ -1479,7 +1479,7 @@ mod set_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("PATIENT".into());
+        let name = Name::global("PATIENT");
 
         // Set a nested key
         let key = key![123, "NAME"];
@@ -1510,7 +1510,7 @@ mod set_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = Arc::new(BTree::new(3).unwrap());
-        let name = Name::Global("VAR".into());
+        let name = Name::global("VAR");
 
         // Set deeply nested key
         let key = key![1, 2, 3, 4, 5];
@@ -1547,7 +1547,7 @@ mod set_internal_tests {
 
         // CRITICAL EDGE CASE
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("VAR".into());
+        let name = Name::global("VAR");
 
         // 1. Set ^VAR(1,"A") = "child1"
         //    → Creates ^VAR(1) with has_descendants=true, no value
@@ -1599,7 +1599,7 @@ mod set_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("VAR".into());
+        let name = Name::global("VAR");
 
         let key_parent = key![1];
         let key_child = key![1, 2];
@@ -1660,7 +1660,7 @@ mod set_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("VAR".into());
+        let name = Name::global("VAR");
 
         // Set ^VAR(1,"A"), ^VAR(1,"B"), ^VAR(1,"C")
         let key_a = key![1, "A"];
@@ -1704,7 +1704,7 @@ mod set_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
-        let name = Name::Global("VAR".into());
+        let name = Name::global("VAR");
 
         // Set ^VAR(1,2), ^VAR(1,3), ^VAR(2,2)
         let key_12 = key![1, 2];
@@ -1751,7 +1751,7 @@ mod set_internal_tests {
         use rumps_types::{Name, Value};
 
         let btree = Arc::new(BTree::new(3).unwrap());
-        let name = Name::Global("VAR".into());
+        let name = Name::global("VAR");
 
         // Spawn multiple tasks creating children of same parent concurrently
         let tasks = (0..10).map(|i| {
@@ -1822,7 +1822,7 @@ pub mod benches {
                     b.iter(|| {
                         rt.block_on(async {
                             let btree = BTree::new(3).unwrap();
-                            let name = Name::Global("VAR".into());
+                            let name = Name::global("VAR");
                             let key = create_key_at_depth(depth);
                             let value = Value::Integer(42);
 
@@ -1855,7 +1855,7 @@ pub mod benches {
             b.iter(|| {
                 rt.block_on(async {
                     let btree = BTree::new(3).unwrap();
-                    let name = Name::Global("VAR".into());
+                    let name = Name::global("VAR");
 
                     // First insert creates all ancestors
                     let k1 = key![1, 2, 3, 4, 100];
@@ -1894,7 +1894,7 @@ pub mod benches {
             b.iter(|| {
                 rt.block_on(async {
                     let btree = BTree::new(3).unwrap();
-                    let name = Name::Global("VAR".into());
+                    let name = Name::global("VAR");
                     let key = create_key_at_depth(5);
 
                     // Create all ancestors
@@ -1931,7 +1931,7 @@ pub mod benches {
                 rt.block_on(async {
                     // Fresh tree for each iteration
                     let btree = BTree::new(3).unwrap();
-                    let name = Name::Global("DEEP".into());
+                    let name = Name::global("DEEP");
                     let key = create_key_at_depth(10);
 
                     btree
@@ -1955,7 +1955,7 @@ pub mod benches {
             b.iter(|| {
                 rt.block_on(async {
                     let btree = BTree::new(3).unwrap();
-                    let name = Name::Global("SHALLOW".into());
+                    let name = Name::global("SHALLOW");
                     let key = create_key_at_depth(2);
 
                     btree
