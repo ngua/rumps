@@ -1,3 +1,5 @@
+use rumps_types::key;
+
 use super::*;
 
 #[test]
@@ -150,12 +152,12 @@ async fn test_stress_large_tree() {
             let btree = Arc::clone(&btree);
             let name = name.clone();
             async move {
-                let key = Key::from(vec![(i as i64).into()]);
-                btree.ensure_ancestors(&name, &key).await.unwrap();
+                let k = key![i as i64];
+                btree.ensure_ancestors(&name, &k).await.unwrap();
                 btree
                     .set_internal(
                         &name,
-                        &key,
+                        &k,
                         NodeData::with_value(Value::Integer(i as i64)),
                     )
                     .await
@@ -171,12 +173,12 @@ async fn test_stress_large_tree() {
             let btree = Arc::clone(&btree);
             let name = name.clone();
             async move {
-                let key = Key::from(vec![1000.into(), (i as i64).into()]);
-                btree.ensure_ancestors(&name, &key).await.unwrap();
+                let k = key![1000, i as i64];
+                btree.ensure_ancestors(&name, &k).await.unwrap();
                 btree
                     .set_internal(
                         &name,
-                        &key,
+                        &k,
                         NodeData::with_value(Value::String(format!(
                             "nested_{}",
                             i
@@ -195,18 +197,18 @@ async fn test_stress_large_tree() {
             let btree = Arc::clone(&btree);
             let name = name.clone();
             async move {
-                let key = Key::from(vec![
-                    2000.into(),
-                    ((i % 10) as i64).into(),
-                    ((i % 5) as i64).into(),
-                    ((i % 3) as i64).into(),
-                    (i as i64).into(),
-                ]);
-                btree.ensure_ancestors(&name, &key).await.unwrap();
+                let k = key![
+                    2000,
+                    (i % 10) as i64,
+                    (i % 5) as i64,
+                    (i % 3) as i64,
+                    i as i64,
+                ];
+                btree.ensure_ancestors(&name, &k).await.unwrap();
                 btree
                     .set_internal(
                         &name,
-                        &key,
+                        &k,
                         NodeData::with_value(Value::Integer(i as i64)),
                     )
                     .await
@@ -222,8 +224,8 @@ async fn test_stress_large_tree() {
             let btree = Arc::clone(&btree);
             let name = name.clone();
             async move {
-                let key = Key::from(vec![(i as i64).into()]);
-                let result = btree.get_internal(&name, &key).await.unwrap();
+                let k = key![i as i64];
+                let result = btree.get_internal(&name, &k).await.unwrap();
                 assert!(result.is_some());
                 assert_eq!(
                     result.unwrap().value,
@@ -240,8 +242,8 @@ async fn test_stress_large_tree() {
             let btree = Arc::clone(&btree);
             let name = name.clone();
             async move {
-                let key = Key::from(vec![1000.into(), (i as i64).into()]);
-                let result = btree.get_internal(&name, &key).await.unwrap();
+                let k = key![1000, i as i64];
+                let result = btree.get_internal(&name, &k).await.unwrap();
                 assert!(result.is_some());
                 assert_eq!(
                     result.unwrap().value,
@@ -253,19 +255,13 @@ async fn test_stress_large_tree() {
         .await;
 
     // Verify ancestor nodes were created with has_descendants=true
-    let ancestor = btree
-        .get_internal(&name, &Key::from(vec![1000.into()]))
-        .await
-        .unwrap();
+    let ancestor = btree.get_internal(&name, &key![1000]).await.unwrap();
     assert!(ancestor.is_some());
     assert_eq!(ancestor.as_ref().unwrap().value, None);
     assert!(ancestor.unwrap().has_descendants);
 
     // Verify deep ancestor chain for Pattern 3
-    let deep_ancestor = btree
-        .get_internal(&name, &Key::from(vec![2000.into()]))
-        .await
-        .unwrap();
+    let deep_ancestor = btree.get_internal(&name, &key![2000]).await.unwrap();
     assert!(deep_ancestor.is_some());
     assert!(deep_ancestor.unwrap().has_descendants);
 
@@ -316,7 +312,7 @@ async fn test_find_node_exists() {
 
 #[tokio::test]
 async fn test_split_node_leaf_odd_keys() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -326,13 +322,7 @@ async fn test_split_node_leaf_odd_keys() {
     // Use high node ID to avoid conflicts with allocator
     let node_id = NodeId::from(100);
     let node = Node {
-        keys: vec![
-            Key::from(vec![10.into()]),
-            Key::from(vec![20.into()]),
-            Key::from(vec![30.into()]),
-            Key::from(vec![40.into()]),
-            Key::from(vec![50.into()]),
-        ],
+        keys: vec![key![10], key![20], key![30], key![40], key![50]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::Integer(10))),
@@ -355,21 +345,21 @@ async fn test_split_node_leaf_odd_keys() {
     let (median_key, median_value, right_id) = result.unwrap();
 
     // Verify median key and value
-    assert_eq!(median_key, Key::from(vec![30.into()]));
+    assert_eq!(median_key, key![30]);
     assert_eq!(median_value.value, Some(Value::Integer(30)));
 
     // Verify left node (original)
     let left = btree.find_node(node_id).await.unwrap();
     assert_eq!(left.keys.len(), 2);
-    assert_eq!(left.keys[0], Key::from(vec![10.into()]));
-    assert_eq!(left.keys[1], Key::from(vec![20.into()]));
+    assert_eq!(left.keys[0], key![10]);
+    assert_eq!(left.keys[1], key![20]);
     assert!(left.is_leaf);
 
     // Verify right node
     let right = btree.find_node(right_id).await.unwrap();
     assert_eq!(right.keys.len(), 2);
-    assert_eq!(right.keys[0], Key::from(vec![40.into()]));
-    assert_eq!(right.keys[1], Key::from(vec![50.into()]));
+    assert_eq!(right.keys[0], key![40]);
+    assert_eq!(right.keys[1], key![50]);
     assert!(right.is_leaf);
 
     // Verify stats
@@ -382,7 +372,7 @@ async fn test_split_node_leaf_odd_keys() {
 
 #[tokio::test]
 async fn test_split_node_leaf_even_keys() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -392,12 +382,7 @@ async fn test_split_node_leaf_even_keys() {
     // Use high node ID to avoid conflicts with allocator
     let node_id = NodeId::from(100);
     let node = Node {
-        keys: vec![
-            Key::from(vec![10.into()]),
-            Key::from(vec![20.into()]),
-            Key::from(vec![30.into()]),
-            Key::from(vec![40.into()]),
-        ],
+        keys: vec![key![10], key![20], key![30], key![40]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::Integer(10))),
@@ -419,25 +404,23 @@ async fn test_split_node_leaf_even_keys() {
     let (median_key, median_value, right_id) = result.unwrap();
 
     // Verify median key and value (middle of 4 keys is index 2)
-    assert_eq!(median_key, Key::from(vec![30.into()]));
+    assert_eq!(median_key, key![30]);
     assert_eq!(median_value.value, Some(Value::Integer(30)));
 
     // Verify left node
     let left = btree.find_node(node_id).await.unwrap();
     assert_eq!(left.keys.len(), 2);
-    assert_eq!(left.keys[0], Key::from(vec![10.into()]));
-    assert_eq!(left.keys[1], Key::from(vec![20.into()]));
+    assert_eq!(left.keys[0], key![10]);
+    assert_eq!(left.keys[1], key![20]);
 
     // Verify right node
     let right = btree.find_node(right_id).await.unwrap();
     assert_eq!(right.keys.len(), 1);
-    assert_eq!(right.keys[0], Key::from(vec![40.into()]));
+    assert_eq!(right.keys[0], key![40]);
 }
 
 #[tokio::test]
 async fn test_split_node_internal_with_children() {
-    use rumps_types::Key;
-
     use crate::node::NodeData;
 
     let btree = BTree::new(3).unwrap();
@@ -446,13 +429,7 @@ async fn test_split_node_internal_with_children() {
     // Use high node ID to avoid conflicts with allocator
     let node_id = NodeId::from(100);
     let node = Node {
-        keys: vec![
-            Key::from(vec![10.into()]),
-            Key::from(vec![20.into()]),
-            Key::from(vec![30.into()]),
-            Key::from(vec![40.into()]),
-            Key::from(vec![50.into()]),
-        ],
+        keys: vec![key![10], key![20], key![30], key![40], key![50]],
         children: vec![
             NodeId::from(1),
             NodeId::from(2),
@@ -482,7 +459,7 @@ async fn test_split_node_internal_with_children() {
     let (median_key, median_value, right_id) = result.unwrap();
 
     // Verify median key and value (internal nodes have empty values)
-    assert_eq!(median_key, Key::from(vec![30.into()]));
+    assert_eq!(median_key, key![30]);
     assert_eq!(median_value, Arc::new(NodeData::empty()));
 
     // Verify left node has correct children
@@ -545,7 +522,7 @@ async fn test_split_node_empty() {
 
 #[tokio::test]
 async fn test_split_node_preserves_values() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -555,13 +532,7 @@ async fn test_split_node_preserves_values() {
     // Use high node ID to avoid conflicts with allocator
     let node_id = NodeId::from(100);
     let node = Node {
-        keys: vec![
-            Key::from(vec!["A".into()]),
-            Key::from(vec!["B".into()]),
-            Key::from(vec!["C".into()]),
-            Key::from(vec!["D".into()]),
-            Key::from(vec!["E".into()]),
-        ],
+        keys: vec![key!["A"], key!["B"], key!["C"], key!["D"], key!["E"]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::String("Alpha".into()))),
@@ -581,7 +552,7 @@ async fn test_split_node_preserves_values() {
     // Split the node
     let (median_key, median_value, right_id) =
         btree.split_node(node_id).await.unwrap();
-    assert_eq!(median_key, Key::from(vec!["C".into()]));
+    assert_eq!(median_key, key!["C"]);
     assert_eq!(median_value.value, Some(Value::Boolean(true)));
 
     // Verify left values
@@ -599,7 +570,7 @@ async fn test_split_node_preserves_values() {
 
 #[tokio::test]
 async fn test_split_node_stats_update() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -609,11 +580,7 @@ async fn test_split_node_stats_update() {
     // Use high node IDs to avoid conflicts with allocator
     let node1_id = NodeId::from(100);
     let node1 = Node {
-        keys: vec![
-            Key::from(vec![1.into()]),
-            Key::from(vec![2.into()]),
-            Key::from(vec![3.into()]),
-        ],
+        keys: vec![key![1], key![2], key![3]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::Integer(1))),
@@ -625,11 +592,7 @@ async fn test_split_node_stats_update() {
 
     let node2_id = NodeId::from(101);
     let node2 = Node {
-        keys: vec![
-            Key::from(vec![4.into()]),
-            Key::from(vec![5.into()]),
-            Key::from(vec![6.into()]),
-        ],
+        keys: vec![key![4], key![5], key![6]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::Integer(4))),
@@ -665,7 +628,7 @@ async fn test_split_node_stats_update() {
 
 #[tokio::test]
 async fn test_merge_nodes_leaf() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -674,7 +637,7 @@ async fn test_merge_nodes_leaf() {
     // Create two leaf nodes and a separator
     let left_id = NodeId::from(100);
     let left_node = Node {
-        keys: vec![Key::from(vec![10.into()]), Key::from(vec![20.into()])],
+        keys: vec![key![10], key![20]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::Integer(10))),
@@ -685,7 +648,7 @@ async fn test_merge_nodes_leaf() {
 
     let right_id = NodeId::from(101);
     let right_node = Node {
-        keys: vec![Key::from(vec![40.into()]), Key::from(vec![50.into()])],
+        keys: vec![key![40], key![50]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::Integer(40))),
@@ -694,7 +657,7 @@ async fn test_merge_nodes_leaf() {
         is_leaf: true,
     };
 
-    let separator_key = Key::from(vec![30.into()]);
+    let separator_key = key![30];
     let separator_value = Arc::new(NodeData::with_value(Value::Integer(30)));
 
     {
@@ -712,11 +675,11 @@ async fn test_merge_nodes_leaf() {
     // Verify merged node contains all keys in order
     let merged = btree.find_node(left_id).await.unwrap();
     assert_eq!(merged.keys.len(), 5);
-    assert_eq!(merged.keys[0], Key::from(vec![10.into()]));
-    assert_eq!(merged.keys[1], Key::from(vec![20.into()]));
-    assert_eq!(merged.keys[2], Key::from(vec![30.into()]));
-    assert_eq!(merged.keys[3], Key::from(vec![40.into()]));
-    assert_eq!(merged.keys[4], Key::from(vec![50.into()]));
+    assert_eq!(merged.keys[0], key![10]);
+    assert_eq!(merged.keys[1], key![20]);
+    assert_eq!(merged.keys[2], key![30]);
+    assert_eq!(merged.keys[3], key![40]);
+    assert_eq!(merged.keys[4], key![50]);
     assert!(merged.is_leaf);
 
     // Verify all values preserved
@@ -738,8 +701,6 @@ async fn test_merge_nodes_leaf() {
 
 #[tokio::test]
 async fn test_merge_nodes_internal_with_children() {
-    use rumps_types::Key;
-
     use crate::node::NodeData;
 
     let btree = BTree::new(3).unwrap();
@@ -747,7 +708,7 @@ async fn test_merge_nodes_internal_with_children() {
     // Create two internal nodes with children
     let left_id = NodeId::from(100);
     let left_node = Node {
-        keys: vec![Key::from(vec![10.into()]), Key::from(vec![20.into()])],
+        keys: vec![key![10], key![20]],
         children: vec![NodeId::from(1), NodeId::from(2), NodeId::from(3)],
         values: vec![Arc::new(NodeData::empty()), Arc::new(NodeData::empty())],
         is_leaf: false,
@@ -755,13 +716,13 @@ async fn test_merge_nodes_internal_with_children() {
 
     let right_id = NodeId::from(101);
     let right_node = Node {
-        keys: vec![Key::from(vec![40.into()]), Key::from(vec![50.into()])],
+        keys: vec![key![40], key![50]],
         children: vec![NodeId::from(4), NodeId::from(5), NodeId::from(6)],
         values: vec![Arc::new(NodeData::empty()), Arc::new(NodeData::empty())],
         is_leaf: false,
     };
 
-    let separator_key = Key::from(vec![30.into()]);
+    let separator_key = key![30];
     let separator_value = Arc::new(NodeData::empty());
 
     {
@@ -793,7 +754,7 @@ async fn test_merge_nodes_internal_with_children() {
 
 #[tokio::test]
 async fn test_merge_nodes_incompatible_types() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -802,7 +763,7 @@ async fn test_merge_nodes_incompatible_types() {
     // Create one leaf and one internal node
     let left_id = NodeId::from(100);
     let left_node = Node {
-        keys: vec![Key::from(vec![10.into()])],
+        keys: vec![key![10]],
         children: vec![],
         values: vec![Arc::new(NodeData::with_value(Value::Integer(10)))],
         is_leaf: true,
@@ -810,13 +771,13 @@ async fn test_merge_nodes_incompatible_types() {
 
     let right_id = NodeId::from(101);
     let right_node = Node {
-        keys: vec![Key::from(vec![20.into()])],
+        keys: vec![key![20]],
         children: vec![NodeId::from(1), NodeId::from(2)],
         values: vec![Arc::new(NodeData::empty())],
         is_leaf: false,
     };
 
-    let separator_key = Key::from(vec![15.into()]);
+    let separator_key = key![15];
     let separator_value = Arc::new(NodeData::empty());
 
     {
@@ -840,7 +801,7 @@ async fn test_merge_nodes_incompatible_types() {
 
 #[tokio::test]
 async fn test_merge_nodes_left_not_found() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -851,7 +812,7 @@ async fn test_merge_nodes_left_not_found() {
 
     // Only insert right node
     let right_node = Node {
-        keys: vec![Key::from(vec![10.into()])],
+        keys: vec![key![10]],
         children: vec![],
         values: vec![Arc::new(NodeData::with_value(Value::Integer(10)))],
         is_leaf: true,
@@ -862,7 +823,7 @@ async fn test_merge_nodes_left_not_found() {
         nodes.insert(right_id, right_node);
     }
 
-    let separator_key = Key::from(vec![5.into()]);
+    let separator_key = key![5];
     let separator_value = Arc::new(NodeData::empty());
 
     // Try to merge - should fail
@@ -880,7 +841,7 @@ async fn test_merge_nodes_left_not_found() {
 
 #[tokio::test]
 async fn test_merge_nodes_right_not_found() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -891,7 +852,7 @@ async fn test_merge_nodes_right_not_found() {
 
     // Only insert left node
     let left_node = Node {
-        keys: vec![Key::from(vec![10.into()])],
+        keys: vec![key![10]],
         children: vec![],
         values: vec![Arc::new(NodeData::with_value(Value::Integer(10)))],
         is_leaf: true,
@@ -902,7 +863,7 @@ async fn test_merge_nodes_right_not_found() {
         nodes.insert(left_id, left_node);
     }
 
-    let separator_key = Key::from(vec![15.into()]);
+    let separator_key = key![15];
     let separator_value = Arc::new(NodeData::empty());
 
     // Try to merge - should fail
@@ -920,7 +881,7 @@ async fn test_merge_nodes_right_not_found() {
 
 #[tokio::test]
 async fn test_merge_nodes_preserves_value_types() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -929,7 +890,7 @@ async fn test_merge_nodes_preserves_value_types() {
     // Create nodes with various value types
     let left_id = NodeId::from(100);
     let left_node = Node {
-        keys: vec![Key::from(vec!["A".into()]), Key::from(vec!["B".into()])],
+        keys: vec![key!["A"], key!["B"]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::String("Alpha".into()))),
@@ -940,7 +901,7 @@ async fn test_merge_nodes_preserves_value_types() {
 
     let right_id = NodeId::from(101);
     let right_node = Node {
-        keys: vec![Key::from(vec!["D".into()]), Key::from(vec!["E".into()])],
+        keys: vec![key!["D"], key!["E"]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::Double(3.14.into()))),
@@ -949,7 +910,7 @@ async fn test_merge_nodes_preserves_value_types() {
         is_leaf: true,
     };
 
-    let separator_key = Key::from(vec!["C".into()]);
+    let separator_key = key!["C"];
     let separator_value = Arc::new(NodeData::with_value(Value::Boolean(true)));
 
     {
@@ -976,7 +937,7 @@ async fn test_merge_nodes_preserves_value_types() {
 
 #[tokio::test]
 async fn test_merge_nodes_stats_update() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -989,28 +950,28 @@ async fn test_merge_nodes_stats_update() {
     let right2_id = NodeId::from(103);
 
     let node1_left = Node {
-        keys: vec![Key::from(vec![1.into()])],
+        keys: vec![key![1]],
         children: vec![],
         values: vec![Arc::new(NodeData::with_value(Value::Integer(1)))],
         is_leaf: true,
     };
 
     let node1_right = Node {
-        keys: vec![Key::from(vec![3.into()])],
+        keys: vec![key![3]],
         children: vec![],
         values: vec![Arc::new(NodeData::with_value(Value::Integer(3)))],
         is_leaf: true,
     };
 
     let node2_left = Node {
-        keys: vec![Key::from(vec![10.into()])],
+        keys: vec![key![10]],
         children: vec![],
         values: vec![Arc::new(NodeData::with_value(Value::Integer(10)))],
         is_leaf: true,
     };
 
     let node2_right = Node {
-        keys: vec![Key::from(vec![30.into()])],
+        keys: vec![key![30]],
         children: vec![],
         values: vec![Arc::new(NodeData::with_value(Value::Integer(30)))],
         is_leaf: true,
@@ -1032,7 +993,7 @@ async fn test_merge_nodes_stats_update() {
     btree
         .merge_nodes(
             left1_id,
-            Key::from(vec![2.into()]),
+            key![2],
             Arc::new(NodeData::with_value(Value::Integer(2))),
             right1_id,
         )
@@ -1046,7 +1007,7 @@ async fn test_merge_nodes_stats_update() {
     btree
         .merge_nodes(
             left2_id,
-            Key::from(vec![20.into()]),
+            key![20],
             Arc::new(NodeData::with_value(Value::Integer(20))),
             right2_id,
         )
@@ -1059,7 +1020,7 @@ async fn test_merge_nodes_stats_update() {
 
 #[tokio::test]
 async fn test_split_and_merge_roundtrip() {
-    use rumps_types::{Key, Value};
+    use rumps_types::Value;
 
     use crate::node::NodeData;
 
@@ -1068,13 +1029,7 @@ async fn test_split_and_merge_roundtrip() {
     // Create a node with 5 keys
     let original_id = NodeId::from(100);
     let original_node = Node {
-        keys: vec![
-            Key::from(vec![10.into()]),
-            Key::from(vec![20.into()]),
-            Key::from(vec![30.into()]),
-            Key::from(vec![40.into()]),
-            Key::from(vec![50.into()]),
-        ],
+        keys: vec![key![10], key![20], key![30], key![40], key![50]],
         children: vec![],
         values: vec![
             Arc::new(NodeData::with_value(Value::Integer(10))),
@@ -1104,11 +1059,11 @@ async fn test_split_and_merge_roundtrip() {
     // Verify we're back to original state
     let final_node = btree.find_node(original_id).await.unwrap();
     assert_eq!(final_node.keys.len(), 5);
-    assert_eq!(final_node.keys[0], Key::from(vec![10.into()]));
-    assert_eq!(final_node.keys[1], Key::from(vec![20.into()]));
-    assert_eq!(final_node.keys[2], Key::from(vec![30.into()]));
-    assert_eq!(final_node.keys[3], Key::from(vec![40.into()]));
-    assert_eq!(final_node.keys[4], Key::from(vec![50.into()]));
+    assert_eq!(final_node.keys[0], key![10]);
+    assert_eq!(final_node.keys[1], key![20]);
+    assert_eq!(final_node.keys[2], key![30]);
+    assert_eq!(final_node.keys[3], key![40]);
+    assert_eq!(final_node.keys[4], key![50]);
 
     assert_eq!(final_node.values.len(), 5);
     assert_eq!(final_node.values[0].value, Some(Value::Integer(10)));
@@ -1131,11 +1086,11 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn nonexistent_variable() {
-        use rumps_types::{Key, Name};
+        use rumps_types::Name;
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("PATIENT".into());
-        let key = Key::from(vec![123.into()]);
+        let key = key![123];
 
         // Variable doesn't exist in roots
         let result = btree.get_internal(&name, &key).await.unwrap();
@@ -1144,11 +1099,11 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn exact_match_single_key() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("PATIENT".into());
-        let key = Key::from(vec![123.into()]);
+        let key = key![123];
         let value = Value::String("John Doe".into());
 
         // Insert using set_internal
@@ -1167,11 +1122,11 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn exact_match_nested_key() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("PATIENT".into());
-        let key = Key::from(vec![123.into(), "NAME".into()]);
+        let key = key![123, "NAME"];
         let value = Value::String("John Doe".into());
 
         // Insert using set_internal
@@ -1189,7 +1144,7 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn nonexistent_key() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("PATIENT".into());
@@ -1198,7 +1153,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![100.into()]),
+                &key![100],
                 NodeData::with_value(Value::Integer(1)),
             )
             .await
@@ -1206,37 +1161,28 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![200.into()]),
+                &key![200],
                 NodeData::with_value(Value::Integer(2)),
             )
             .await
             .unwrap();
 
         // Search for key between existing keys
-        let result = btree
-            .get_internal(&name, &Key::from(vec![150.into()]))
-            .await
-            .unwrap();
+        let result = btree.get_internal(&name, &key![150]).await.unwrap();
         assert!(result.is_none());
 
         // Search for key before all existing keys
-        let result = btree
-            .get_internal(&name, &Key::from(vec![50.into()]))
-            .await
-            .unwrap();
+        let result = btree.get_internal(&name, &key![50]).await.unwrap();
         assert!(result.is_none());
 
         // Search for key after all existing keys
-        let result = btree
-            .get_internal(&name, &Key::from(vec![300.into()]))
-            .await
-            .unwrap();
+        let result = btree.get_internal(&name, &key![300]).await.unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn partial_match_no_such_path() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("PATIENT".into());
@@ -1245,7 +1191,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![1.into()]),
+                &key![1],
                 NodeData::with_value(Value::Integer(1)),
             )
             .await
@@ -1253,7 +1199,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![1.into(), 2.into(), 5.into()]),
+                &key![1, 2, 5],
                 NodeData::with_value(Value::Integer(125)),
             )
             .await
@@ -1261,16 +1207,13 @@ mod get_internal_tests {
 
         // Search for [1,2,3] - partial match with [1] but not exact
         // Should return None because [1,2,3] doesn't exist
-        let result = btree
-            .get_internal(&name, &Key::from(vec![1.into(), 2.into(), 3.into()]))
-            .await
-            .unwrap();
+        let result = btree.get_internal(&name, &key![1, 2, 3]).await.unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn multiple_keys_same_variable() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("VAR".into());
@@ -1279,7 +1222,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![1.into()]),
+                &key![1],
                 NodeData::with_value(Value::Integer(1)),
             )
             .await
@@ -1287,7 +1230,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![2.into()]),
+                &key![2],
                 NodeData::with_value(Value::Integer(2)),
             )
             .await
@@ -1295,28 +1238,19 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![3.into()]),
+                &key![3],
                 NodeData::with_value(Value::Integer(3)),
             )
             .await
             .unwrap();
 
         // Retrieve all keys
-        let result1 = btree
-            .get_internal(&name, &Key::from(vec![1.into()]))
-            .await
-            .unwrap()
-            .unwrap();
-        let result2 = btree
-            .get_internal(&name, &Key::from(vec![2.into()]))
-            .await
-            .unwrap()
-            .unwrap();
-        let result3 = btree
-            .get_internal(&name, &Key::from(vec![3.into()]))
-            .await
-            .unwrap()
-            .unwrap();
+        let result1 =
+            btree.get_internal(&name, &key![1]).await.unwrap().unwrap();
+        let result2 =
+            btree.get_internal(&name, &key![2]).await.unwrap().unwrap();
+        let result3 =
+            btree.get_internal(&name, &key![3]).await.unwrap().unwrap();
 
         assert_eq!(result1.value, Some(Value::Integer(1)));
         assert_eq!(result2.value, Some(Value::Integer(2)));
@@ -1325,12 +1259,12 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn different_variables() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name1 = Name::Global("VAR1".into());
         let name2 = Name::Global("VAR2".into());
-        let key = Key::from(vec![123.into()]);
+        let key = key![123];
 
         // Insert same key in different variables
         btree
@@ -1360,11 +1294,11 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn returns_nodedata_with_flags() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("VAR".into());
-        let key = Key::from(vec![1.into()]);
+        let key = key![1];
 
         btree
             .set_internal(&name, &key, NodeData::with_value(Value::Integer(42)))
@@ -1384,7 +1318,7 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn with_tree_splits() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap(); // min_degree=3, max_keys=5
         let name = Name::Global("VAR".into());
@@ -1393,7 +1327,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![10.into()]),
+                &key![10],
                 NodeData::with_value(Value::Integer(10)),
             )
             .await
@@ -1401,7 +1335,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![20.into()]),
+                &key![20],
                 NodeData::with_value(Value::Integer(20)),
             )
             .await
@@ -1409,7 +1343,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![30.into()]),
+                &key![30],
                 NodeData::with_value(Value::Integer(30)),
             )
             .await
@@ -1417,7 +1351,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![40.into()]),
+                &key![40],
                 NodeData::with_value(Value::Integer(40)),
             )
             .await
@@ -1425,7 +1359,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![50.into()]),
+                &key![50],
                 NodeData::with_value(Value::Integer(50)),
             )
             .await
@@ -1433,23 +1367,17 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![60.into()]),
+                &key![60],
                 NodeData::with_value(Value::Integer(60)),
             )
             .await
             .unwrap();
 
         // Retrieve all keys after splits
-        let result30 = btree
-            .get_internal(&name, &Key::from(vec![30.into()]))
-            .await
-            .unwrap()
-            .unwrap();
-        let result60 = btree
-            .get_internal(&name, &Key::from(vec![60.into()]))
-            .await
-            .unwrap()
-            .unwrap();
+        let result30 =
+            btree.get_internal(&name, &key![30]).await.unwrap().unwrap();
+        let result60 =
+            btree.get_internal(&name, &key![60]).await.unwrap().unwrap();
 
         assert_eq!(result30.value, Some(Value::Integer(30)));
         assert_eq!(result60.value, Some(Value::Integer(60)));
@@ -1457,27 +1385,22 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn deep_nesting() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("PATIENT".into());
 
         // Insert deeply nested key
-        let key = Key::from(vec![
-            123.into(),
-            "DEMOGRAPHICS".into(),
-            "ADDRESS".into(),
-            "STREET".into(),
-        ]);
+        let k = key![123, "DEMOGRAPHICS", "ADDRESS", "STREET"];
         let value = Value::String("123 Main St".into());
 
         btree
-            .set_internal(&name, &key, NodeData::with_value(value.clone()))
+            .set_internal(&name, &k, NodeData::with_value(value.clone()))
             .await
             .unwrap();
 
         // Retrieve deeply nested key
-        let result = btree.get_internal(&name, &key).await.unwrap().unwrap();
+        let result = btree.get_internal(&name, &k).await.unwrap().unwrap();
         assert_eq!(result.value, Some(value));
     }
 
@@ -1486,7 +1409,7 @@ mod get_internal_tests {
         use std::sync::Arc;
 
         use futures::future;
-        use rumps_types::{Key, Value};
+        use rumps_types::Value;
         use tokio::task;
 
         let btree = Arc::new(BTree::new(3).unwrap());
@@ -1496,7 +1419,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![1.into()]),
+                &key![1],
                 NodeData::with_value(Value::Integer(100)),
             )
             .await
@@ -1504,7 +1427,7 @@ mod get_internal_tests {
         btree
             .set_internal(
                 &name,
-                &Key::from(vec![2.into()]),
+                &key![2],
                 NodeData::with_value(Value::Integer(200)),
             )
             .await
@@ -1520,7 +1443,7 @@ mod get_internal_tests {
                         let btree_ref = Arc::clone(&btree_clone);
                         let name_ref = name_clone.clone();
                         async move {
-                            let key = Key::from(vec![((i % 2) + 1).into()]);
+                            let key = key![(i % 2) + 1];
                             let result = btree_ref
                                 .get_internal(&name_ref, &key)
                                 .await
@@ -1551,13 +1474,13 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn creates_ancestors() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("PATIENT".into());
 
         // Set a nested key
-        let key = Key::from(vec![123.into(), "NAME".into()]);
+        let key = key![123, "NAME"];
         btree.ensure_ancestors(&name, &key).await.unwrap();
         btree
             .set_internal(
@@ -1569,7 +1492,7 @@ mod set_internal_tests {
             .unwrap();
 
         // Verify ancestor was created
-        let ancestor_key = Key::from(vec![123.into()]);
+        let ancestor_key = key![123];
         let ancestor_arc =
             btree.get_internal(&name, &ancestor_key).await.unwrap();
 
@@ -1582,14 +1505,13 @@ mod set_internal_tests {
     #[tokio::test]
     async fn deep_nesting_creates_all_ancestors() {
         use futures::stream::StreamExt;
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = Arc::new(BTree::new(3).unwrap());
         let name = Name::Global("VAR".into());
 
         // Set deeply nested key
-        let key =
-            Key::from(vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into()]);
+        let key = key![1, 2, 3, 4, 5];
         btree.ensure_ancestors(&name, &key).await.unwrap();
         btree
             .set_internal(&name, &key, NodeData::with_value(Value::Integer(42)))
@@ -1619,7 +1541,7 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn intermediate_node_becomes_both() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         // CRITICAL EDGE CASE
         let btree = BTree::new(3).unwrap();
@@ -1627,7 +1549,7 @@ mod set_internal_tests {
 
         // 1. Set ^VAR(1,"A") = "child1"
         //    → Creates ^VAR(1) with has_descendants=true, no value
-        let key_child = Key::from(vec![1.into(), "A".into()]);
+        let key_child = key![1, "A"];
         btree.ensure_ancestors(&name, &key_child).await.unwrap();
         btree
             .set_internal(
@@ -1639,7 +1561,7 @@ mod set_internal_tests {
             .unwrap();
 
         // Verify ancestor exists
-        let key_parent = Key::from(vec![1.into()]);
+        let key_parent = key![1];
         let arc = btree
             .get_internal(&name, &key_parent)
             .await
@@ -1672,13 +1594,13 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn preserves_has_descendants_on_update() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("VAR".into());
 
-        let key_parent = Key::from(vec![1.into()]);
-        let key_child = Key::from(vec![1.into(), 2.into()]);
+        let key_parent = key![1];
+        let key_child = key![1, 2];
 
         // 1. Set ^VAR(1) = "first"
         btree.ensure_ancestors(&name, &key_parent).await.unwrap();
@@ -1733,13 +1655,13 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn multiple_children_same_parent() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("VAR".into());
 
         // Set ^VAR(1,"A"), ^VAR(1,"B"), ^VAR(1,"C")
-        let key_a = Key::from(vec![1.into(), "A".into()]);
+        let key_a = key![1, "A"];
         btree.ensure_ancestors(&name, &key_a).await.unwrap();
         btree
             .set_internal(
@@ -1749,7 +1671,7 @@ mod set_internal_tests {
             )
             .await
             .unwrap();
-        let key_b = Key::from(vec![1.into(), "B".into()]);
+        let key_b = key![1, "B"];
         btree.ensure_ancestors(&name, &key_b).await.unwrap();
         btree
             .set_internal(
@@ -1759,7 +1681,7 @@ mod set_internal_tests {
             )
             .await
             .unwrap();
-        let key_c = Key::from(vec![1.into(), "C".into()]);
+        let key_c = key![1, "C"];
         btree.ensure_ancestors(&name, &key_c).await.unwrap();
         btree
             .set_internal(
@@ -1771,23 +1693,19 @@ mod set_internal_tests {
             .unwrap();
 
         // Verify ^VAR(1) has has_descendants=true
-        let arc = btree
-            .get_internal(&name, &Key::from(vec![1.into()]))
-            .await
-            .unwrap()
-            .unwrap();
+        let arc = btree.get_internal(&name, &key![1]).await.unwrap().unwrap();
         assert!(arc.has_descendants);
     }
 
     #[tokio::test]
     async fn sibling_paths() {
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = BTree::new(3).unwrap();
         let name = Name::Global("VAR".into());
 
         // Set ^VAR(1,2), ^VAR(1,3), ^VAR(2,2)
-        let key_12 = Key::from(vec![1.into(), 2.into()]);
+        let key_12 = key![1, 2];
         btree.ensure_ancestors(&name, &key_12).await.unwrap();
         btree
             .set_internal(
@@ -1797,7 +1715,7 @@ mod set_internal_tests {
             )
             .await
             .unwrap();
-        let key_13 = Key::from(vec![1.into(), 3.into()]);
+        let key_13 = key![1, 3];
         btree.ensure_ancestors(&name, &key_13).await.unwrap();
         btree
             .set_internal(
@@ -1807,7 +1725,7 @@ mod set_internal_tests {
             )
             .await
             .unwrap();
-        let key_22 = Key::from(vec![2.into(), 2.into()]);
+        let key_22 = key![2, 2];
         btree.ensure_ancestors(&name, &key_22).await.unwrap();
         btree
             .set_internal(
@@ -1819,16 +1737,8 @@ mod set_internal_tests {
             .unwrap();
 
         // Verify ^VAR(1) and ^VAR(2) both have has_descendants
-        let arc1 = btree
-            .get_internal(&name, &Key::from(vec![1.into()]))
-            .await
-            .unwrap()
-            .unwrap();
-        let arc2 = btree
-            .get_internal(&name, &Key::from(vec![2.into()]))
-            .await
-            .unwrap()
-            .unwrap();
+        let arc1 = btree.get_internal(&name, &key![1]).await.unwrap().unwrap();
+        let arc2 = btree.get_internal(&name, &key![2]).await.unwrap().unwrap();
         assert!(arc1.has_descendants);
         assert!(arc2.has_descendants);
     }
@@ -1836,7 +1746,7 @@ mod set_internal_tests {
     #[tokio::test]
     async fn concurrent_ancestor_creation() {
         use futures::future::join_all;
-        use rumps_types::{Key, Name, Value};
+        use rumps_types::{Name, Value};
 
         let btree = Arc::new(BTree::new(3).unwrap());
         let name = Name::Global("VAR".into());
@@ -1846,7 +1756,7 @@ mod set_internal_tests {
             let btree = Arc::clone(&btree);
             let name = name.clone();
             tokio::spawn(async move {
-                let key = Key::from(vec![1.into(), i.into()]);
+                let key = key![1, i];
                 btree.ensure_ancestors(&name, &key).await.unwrap();
                 btree
                     .set_internal(
@@ -1865,11 +1775,7 @@ mod set_internal_tests {
         });
 
         // Verify parent was created exactly once with has_descendants=true
-        let arc = btree
-            .get_internal(&name, &Key::from(vec![1.into()]))
-            .await
-            .unwrap()
-            .unwrap();
+        let arc = btree.get_internal(&name, &key![1]).await.unwrap().unwrap();
         assert!(arc.has_descendants);
         assert!(arc.value.is_none());
     }
@@ -1883,7 +1789,7 @@ pub mod benches {
 
     use criterion::{BenchmarkId, Criterion};
     use futures::StreamExt;
-    use rumps_types::{Key, Name, Value};
+    use rumps_types::{key, Key, Name, Subscript, Value};
     use tokio::runtime::Runtime;
 
     use super::BTree;
@@ -1894,13 +1800,14 @@ pub mod benches {
     /// For depth=3, creates Key([1, 2, 3])
     /// This will result in (depth - 1) ancestors being created.
     fn create_key_at_depth(depth: usize) -> Key {
-        Key::from((1..=depth).map(|i| (i as i64).into()).collect::<Vec<_>>())
+        (1..=depth).map(|i| Subscript::from(i as i64)).collect()
     }
 
-    /// Benchmark INSERT operations at various depths to show hierarchical semantics performance characteristics.
+    /// Benchmark INSERT operations at various depths to show hierarchical semantics
+    /// performance characteristics.
     ///
-    /// This benchmarks the `set()` operation which internally calls `ensure_ancestors()` before insertion,
-    /// demonstrating the time complexity as depth increases.
+    /// This benchmarks the `set()` operation which internally calls `ensure_ancestors()`
+    /// before insertion, demonstrating the time complexity as depth increases.
     fn bench_insert_depths(c: &mut Criterion) {
         let mut group = c.benchmark_group("insert_by_depth");
         let rt = Runtime::new().unwrap();
@@ -1949,34 +1856,22 @@ pub mod benches {
                     let name = Name::Global("VAR".into());
 
                     // First insert creates all ancestors
-                    let key1 = Key::from(vec![
-                        1.into(),
-                        2.into(),
-                        3.into(),
-                        4.into(),
-                        100.into(),
-                    ]);
+                    let k1 = key![1, 2, 3, 4, 100];
                     btree
                         .set_internal(
                             &name,
-                            &key1,
+                            &k1,
                             NodeData::with_value(Value::Integer(42)),
                         )
                         .await
                         .unwrap();
 
                     // Second insert at same depth should be faster (ancestors exist)
-                    let key2 = Key::from(vec![
-                        1.into(),
-                        2.into(),
-                        3.into(),
-                        4.into(),
-                        200.into(),
-                    ]);
+                    let k2 = key![1, 2, 3, 4, 200];
                     btree
                         .set_internal(
                             &name,
-                            &key2,
+                            &k2,
                             NodeData::with_value(Value::Integer(43)),
                         )
                         .await

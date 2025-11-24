@@ -8,10 +8,9 @@
 // Re-export commonly used types
 pub use error::*;
 pub use key::*;
-pub use value::*;
-
 // Re-export serde_json::json! macro for convenience with JSON subscripts
 pub use serde_json::json;
+pub use value::*;
 
 mod error;
 mod key;

@@ -151,8 +151,8 @@ impl fmt::Display for NodeId {
 /// // Create a leaf node with complete key paths
 /// let leaf = Node {
 ///     keys: vec![
-///         Key::from(vec![123.into(), "NAME".into()]),
-///         Key::from(vec![124.into(), "NAME".into()]),
+///         key![123, "NAME"],
+///         key![124, "NAME"],
 ///     ],
 ///     children: vec![],  // Empty for leaf
 ///     values: vec![
@@ -241,7 +241,7 @@ impl Node {
     /// use std::sync::Arc;
     ///
     /// let mut node = Node::new_leaf();
-    /// node.keys.push(Key::from(vec!["A".into()]));
+    /// node.keys.push(key!["A"]);
     /// node.values.push(Arc::new(NodeData::with_value(Value::Integer(1))));
     ///
     /// assert_eq!(node.len(), 1);
@@ -293,7 +293,7 @@ impl Node {
     /// let empty_size = node.serialized_size();
     ///
     /// // Add an entry
-    /// node.keys.push(Key::from(vec!["A".into()]));
+    /// node.keys.push(key!["A"]);
     /// node.values.push(Arc::new(NodeData::with_value(Value::Integer(1))));
     ///
     /// let with_entry_size = node.serialized_size();
@@ -324,7 +324,7 @@ impl Node {
     /// use rumps_types::{Key, Value};
     ///
     /// let node = Node::new_leaf();
-    /// let key = Key::from(vec!["TEST".into()]);
+    /// let key = key!["TEST"];
     /// let value = NodeData::with_value(Value::Integer(42));
     ///
     /// // Assume 4KB page size
@@ -622,7 +622,7 @@ impl NodeData {
     /// let empty = NodeData::empty();
     /// assert!(empty.is_empty());
     ///
-    /// let leaf = NodeData::with_value(42.into());
+    /// let leaf = NodeData::with_value(42);
     /// assert!(!leaf.is_empty());
     /// ```
     pub(crate) fn is_empty(&self) -> bool {
@@ -804,6 +804,8 @@ impl<'de> Deserialize<'de> for NodeData {
 
 #[cfg(test)]
 mod tests {
+    use rumps_types::key;
+
     use super::*;
 
     // Creation Tests
@@ -1061,10 +1063,7 @@ mod tests {
     #[test]
     fn test_node_serialization_leaf_with_data() {
         let node = Node {
-            keys: vec![
-                Key::from(vec![123.into(), "NAME".into()]),
-                Key::from(vec![124.into(), "NAME".into()]),
-            ],
+            keys: vec![key![123, "NAME"], key![124, "NAME"]],
             children: vec![],
             values: vec![
                 Arc::new(NodeData::with_value(Value::String("John".into()))),
@@ -1081,10 +1080,7 @@ mod tests {
     #[test]
     fn test_node_serialization_internal_with_children() {
         let node = Node {
-            keys: vec![
-                Key::from(vec![100.into()]),
-                Key::from(vec![200.into()]),
-            ],
+            keys: vec![key![100], key![200]],
             children: vec![
                 NodeId::from(1u64),
                 NodeId::from(2u64),
@@ -1110,7 +1106,7 @@ mod tests {
             Node::new_leaf(),
             Node::new_internal(),
             Node {
-                keys: vec![Key::from(vec!["A".into()])],
+                keys: vec![key!["A"]],
                 children: vec![],
                 values: vec![Arc::new(NodeData::with_value(Value::Integer(
                     42,
@@ -1118,11 +1114,7 @@ mod tests {
                 is_leaf: true,
             },
             Node {
-                keys: vec![
-                    Key::from(vec![1.into(), "a".into()]),
-                    Key::from(vec![1.into(), "b".into()]),
-                    Key::from(vec![2.into(), "a".into()]),
-                ],
+                keys: vec![key![1, "a"], key![1, "b"], key![2, "a"]],
                 children: vec![],
                 values: vec![
                     Arc::new(NodeData::with_value(Value::Boolean(true))),
@@ -1143,7 +1135,7 @@ mod tests {
     #[test]
     fn test_node_serialization_preserves_is_leaf() {
         let leaf = Node {
-            keys: vec![Key::from(vec!["test".into()])],
+            keys: vec![key!["test"]],
             children: vec![],
             values: vec![Arc::new(NodeData::with_value(Value::Integer(1)))],
             is_leaf: true,
@@ -1154,7 +1146,7 @@ mod tests {
         assert!(deserialized.is_leaf);
 
         let internal = Node {
-            keys: vec![Key::from(vec!["test".into()])],
+            keys: vec![key!["test"]],
             children: vec![NodeId::from(1u64), NodeId::from(2u64)],
             values: vec![Arc::new(NodeData::empty())],
             is_leaf: false,
@@ -1184,14 +1176,14 @@ mod tests {
         let empty_size = node.serialized_size();
 
         // Add first entry
-        node.keys.push(Key::from(vec!["A".into()]));
+        node.keys.push(key!["A"]);
         node.values
             .push(Arc::new(NodeData::with_value(Value::Integer(1))));
         let one_entry_size = node.serialized_size();
         assert!(one_entry_size > empty_size);
 
         // Add second entry
-        node.keys.push(Key::from(vec!["B".into()]));
+        node.keys.push(key!["B"]);
         node.values
             .push(Arc::new(NodeData::with_value(Value::Integer(2))));
         let two_entry_size = node.serialized_size();
@@ -1201,10 +1193,7 @@ mod tests {
     #[test]
     fn test_node_serialized_size_matches_actual() {
         let node = Node {
-            keys: vec![
-                Key::from(vec![123.into(), "NAME".into()]),
-                Key::from(vec![124.into(), "NAME".into()]),
-            ],
+            keys: vec![key![123, "NAME"], key![124, "NAME"]],
             children: vec![],
             values: vec![
                 Arc::new(NodeData::with_value(Value::String("John".into()))),
@@ -1221,7 +1210,7 @@ mod tests {
     #[test]
     fn test_node_would_fit_empty_node() {
         let node = Node::new_leaf();
-        let key = Key::from(vec!["TEST".into()]);
+        let key = key!["TEST"];
         let value = NodeData::with_value(Value::Integer(42));
 
         // Should fit in a 4KB page
@@ -1237,12 +1226,12 @@ mod tests {
 
         // Add several entries
         (0..10).for_each(|i| {
-            node.keys.push(Key::from(vec![i.into()]));
+            node.keys.push(key![i]);
             node.values
                 .push(Arc::new(NodeData::with_value(Value::Integer(i))));
         });
 
-        let key = Key::from(vec!["NEW".into()]);
+        let key = key!["NEW"];
         let value = NodeData::with_value(Value::String("test".into()));
 
         // Should fit in a large page
@@ -1256,7 +1245,7 @@ mod tests {
     #[test]
     fn test_node_would_fit_large_value() {
         let node = Node::new_leaf();
-        let key = Key::from(vec!["LARGE".into()]);
+        let key = key!["LARGE"];
         let large_string = "x".repeat(5000);
         let value = NodeData::with_value(Value::String(large_string));
 
@@ -1270,10 +1259,7 @@ mod tests {
     #[test]
     fn test_node_serialized_size_internal_with_children() {
         let internal = Node {
-            keys: vec![
-                Key::from(vec![100.into()]),
-                Key::from(vec![200.into()]),
-            ],
+            keys: vec![key![100], key![200]],
             children: vec![
                 NodeId::from(1u64),
                 NodeId::from(2u64),

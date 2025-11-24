@@ -745,7 +745,7 @@ impl BTree {
     /// );
     ///
     /// let name = Name::Global("PATIENT".into());
-    /// let key = Key::from(vec![123.into()]);
+    /// let key = key![123];
     /// btree.set(&name, &key, "John Doe".into(), &txn).await?;
     /// # Ok::<(), rumps_storage::StorageError>(())
     /// # });
@@ -1409,7 +1409,7 @@ impl BTree {
     ///
     /// ```ignore
     /// // Before inserting Key([1, 2, 3])
-    /// ensure_ancestors(&name, &Key::from(vec![1, 2, 3])).await?;
+    /// ensure_ancestors(&name, &key![1, 2, 3]).await?;
     /// // Creates: Key([1]) and Key([1, 2]) with has_descendants=true
     /// ```
     async fn ensure_ancestors(&self, name: &Name, key: &Key) -> Result<()> {
