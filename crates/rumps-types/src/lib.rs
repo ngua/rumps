@@ -10,6 +10,9 @@ pub use error::*;
 pub use key::*;
 pub use value::*;
 
+// Re-export serde_json::json! macro for convenience with JSON subscripts
+pub use serde_json::json;
+
 mod error;
 mod key;
 mod value;

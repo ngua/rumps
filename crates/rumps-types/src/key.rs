@@ -401,6 +401,48 @@ impl From<serde_json::Value> for Subscript {
     }
 }
 
+/// Convenience macro for constructing [`Key`] instances from a list of subscript values.
+///
+/// This macro simplifies the creation of keys by automatically converting values
+/// into [`Subscript`] instances. It accepts any types that implement `Into<Subscript>`,
+/// including integers, floats, strings, booleans, chars, and `serde_json::Value`.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::{key, json, Key, Subscript};
+///
+/// // Simple key with multiple subscripts
+/// let k = key![123, "ADDRESS", "CITY"];
+/// assert_eq!(k, Key::from(vec![
+///     Subscript::from(123),
+///     Subscript::from("ADDRESS"),
+///     Subscript::from("CITY"),
+/// ]));
+///
+/// // Empty key
+/// let empty = key![];
+/// assert_eq!(empty, Key::new());
+///
+/// // Single subscript
+/// let single = key![42];
+/// assert_eq!(single, Key::from(vec![Subscript::from(42)]));
+///
+/// // Mixed types with trailing comma
+/// let mixed = key![false, 1.5, 'X', "test",];
+/// assert_eq!(mixed.len(), 4);
+///
+/// // With JSON subscript using re-exported json! macro
+/// let with_json = key![123, json!({"active": true})];
+/// assert_eq!(with_json.len(), 2);
+/// ```
+#[macro_export]
+macro_rules! key {
+    ($($item:expr),* $(,)?) => {
+        $crate::Key::from(vec![$($crate::Subscript::from($item)),*])
+    };
+}
+
 // Custom Serialize/Deserialize since we can't derive with serde_json::Value
 impl Serialize for Subscript {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -645,6 +687,7 @@ impl<'a> IntoIterator for &'a Key {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json;
 
     #[test]
     fn test_global_display() {
@@ -1038,14 +1081,13 @@ mod tests {
 
     #[test]
     fn test_key_creation() {
-        let key = Key::new();
-        assert!(key.is_empty());
-        assert_eq!(key.len(), 0);
+        let k = Key::new();
+        assert!(k.is_empty());
+        assert_eq!(k.len(), 0);
 
-        let key =
-            Key::from(vec![Subscript::from(123), Subscript::from("NAME")]);
-        assert!(!key.is_empty());
-        assert_eq!(key.len(), 2);
+        let k = key![123, "NAME"];
+        assert!(!k.is_empty());
+        assert_eq!(k.len(), 2);
     }
 
     #[test]
@@ -1065,35 +1107,35 @@ mod tests {
     #[test]
     fn test_key_ordering() {
         // Lexicographic ordering on subscript sequences
-        let key1 = Key::from(vec![Subscript::from(1)]);
-        let key2 = Key::from(vec![Subscript::from(10)]);
-        let key3 = Key::from(vec![Subscript::from(10), Subscript::from("A")]);
-        let key4 = Key::from(vec![Subscript::from(10), Subscript::from("B")]);
+        let key1 = key![1];
+        let key2 = key![10];
+        let key3 = key![10, "A"];
+        let key4 = key![10, "B"];
 
         assert!(key1 < key2);
         assert!(key2 < key3);
         assert!(key3 < key4);
 
         // Shorter keys come before longer keys with same prefix
-        let short_key = Key::from(vec![Subscript::from(1)]);
-        let long_key = Key::from(vec![Subscript::from(1), Subscript::from(2)]);
+        let short_key = key![1];
+        let long_key = key![1, 2];
         assert!(short_key < long_key);
     }
 
     #[test]
     fn test_key_extended_collation_ordering() {
         // Test that extended RUMPS collation carries through to keys
-        let key_bool = Key::from(vec![Subscript::from(false)]);
-        let key_num = Key::from(vec![Subscript::from(10)]);
-        let key_str = Key::from(vec![Subscript::from("ABC")]);
+        let key_bool = key![false];
+        let key_num = key![10];
+        let key_str = key!["ABC"];
 
         assert!(key_bool < key_num);
         assert!(key_num < key_str);
 
         // Multi-level keys
-        let key1 = Key::from(vec![Subscript::from(10), Subscript::from(true)]);
-        let key2 = Key::from(vec![Subscript::from(10), Subscript::from(5)]);
-        let key3 = Key::from(vec![Subscript::from(10), Subscript::from("A")]);
+        let key1 = key![10, true];
+        let key2 = key![10, 5];
+        let key3 = key![10, "A"];
 
         assert!(key1 < key2);
         assert!(key2 < key3);
@@ -1101,37 +1143,32 @@ mod tests {
 
     #[test]
     fn test_key_display() {
-        let empty_key = Key::new();
+        let empty_key = key![];
         assert_eq!(empty_key.to_string(), "()");
 
-        let single_key = Key::from(vec![Subscript::from(123)]);
+        let single_key = key![123];
         assert_eq!(single_key.to_string(), "(123)");
 
-        let multi_key =
-            Key::from(vec![Subscript::from(123), Subscript::from("NAME")]);
+        let multi_key = key![123, "NAME"];
         assert_eq!(multi_key.to_string(), "(123, NAME)");
     }
 
     #[test]
     fn test_key_iteration() {
-        let key = Key::from(vec![
-            Subscript::from(1),
-            Subscript::from(2),
-            Subscript::from(3),
-        ]);
+        let k = key![1, 2, 3];
 
-        let collected: Vec<_> = key.iter().cloned().collect();
+        let collected: Vec<_> = k.iter().cloned().collect();
         assert_eq!(
             collected,
             vec![Subscript::from(1), Subscript::from(2), Subscript::from(3)]
         );
 
         // Test IntoIterator for &Key
-        let count = (&key).into_iter().count();
+        let count = (&k).into_iter().count();
         assert_eq!(count, 3);
 
         // Test IntoIterator for Key
-        let key_copy = key.clone();
+        let key_copy = k.clone();
         let count = key_copy.into_iter().count();
         assert_eq!(count, 3);
     }
@@ -1146,18 +1183,14 @@ mod tests {
 
     #[test]
     fn test_key_serialization() {
-        let key = Key::from(vec![
-            Subscript::from(123),
-            Subscript::from("NAME"),
-            Subscript::from(true),
-        ]);
+        let k = key![123, "NAME", true];
 
-        let serialized = bincode::serialize(&key).unwrap();
+        let serialized = bincode::serialize(&k).unwrap();
         let deserialized: Key = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(key, deserialized);
+        assert_eq!(k, deserialized);
 
         // Test empty key
-        let empty_key = Key::new();
+        let empty_key = key![];
         let serialized = bincode::serialize(&empty_key).unwrap();
         let deserialized: Key = bincode::deserialize(&serialized).unwrap();
         assert_eq!(empty_key, deserialized);
@@ -1165,36 +1198,72 @@ mod tests {
 
     #[test]
     fn test_ancestors_empty_key() {
-        let key = Key::from(vec![]);
-        assert_eq!(key.ancestors().len(), 0);
+        let k = key![];
+        assert_eq!(k.ancestors().len(), 0);
     }
 
     #[test]
     fn test_ancestors_single_subscript() {
-        let key = Key::from(vec![123.into()]);
-        assert_eq!(key.ancestors().len(), 0);
+        let k = key![123];
+        assert_eq!(k.ancestors().len(), 0);
     }
 
     #[test]
     fn test_ancestors_two_subscripts() {
-        let key = Key::from(vec![123.into(), "NAME".into()]);
-        let ancestors = key.ancestors();
+        let k = key![123, "NAME"];
+        let ancestors = k.ancestors();
         assert_eq!(ancestors.len(), 1);
-        assert_eq!(ancestors[0], Key::from(vec![123.into()]));
+        assert_eq!(ancestors[0], key![123]);
     }
 
     #[test]
     fn test_ancestors_deep_nesting() {
-        let key =
-            Key::from(vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into()]);
-        let ancestors = key.ancestors();
+        let k = key![1, 2, 3, 4, 5];
+        let ancestors = k.ancestors();
         assert_eq!(ancestors.len(), 4);
-        assert_eq!(ancestors[0], Key::from(vec![1.into()]));
-        assert_eq!(ancestors[1], Key::from(vec![1.into(), 2.into()]));
-        assert_eq!(ancestors[2], Key::from(vec![1.into(), 2.into(), 3.into()]));
+        assert_eq!(ancestors[0], key![1]);
+        assert_eq!(ancestors[1], key![1, 2]);
+        assert_eq!(ancestors[2], key![1, 2, 3]);
+        assert_eq!(ancestors[3], key![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_key_macro() {
+        // Empty key
+        let empty = key![];
+        assert_eq!(empty, Key::new());
+
+        // Single subscript
+        let single = key![42];
+        assert_eq!(single, Key::from(vec![Subscript::from(42)]));
+
+        // Multiple subscripts with different types
+        let multi = key![123, "ADDRESS", "CITY"];
         assert_eq!(
-            ancestors[3],
-            Key::from(vec![1.into(), 2.into(), 3.into(), 4.into()])
+            multi,
+            Key::from(vec![
+                Subscript::from(123),
+                Subscript::from("ADDRESS"),
+                Subscript::from("CITY"),
+            ])
         );
+
+        // Mixed types
+        let mixed = key![false, 1.5, 'X', "test"];
+        assert_eq!(mixed.len(), 4);
+        assert!(mixed.get(0).unwrap().is_boolean());
+        assert!(mixed.get(1).unwrap().is_number());
+        assert!(mixed.get(2).unwrap().is_char());
+        assert!(mixed.get(3).unwrap().is_string());
+
+        // Trailing comma
+        let trailing = key![1, 2, 3,];
+        assert_eq!(trailing.len(), 3);
+
+        // With JSON subscript
+        let with_json = key![123, json!({"active": true, "count": 5})];
+        assert_eq!(with_json.len(), 2);
+        assert!(with_json.get(0).unwrap().is_number());
+        assert!(with_json.get(1).unwrap().is_json());
     }
 }
