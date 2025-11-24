@@ -11,6 +11,12 @@ use tokio::sync::RwLock;
 use crate::error::{Result, StorageError};
 use crate::node::{Node, NodeData, NodeId};
 
+#[cfg(any(test, feature = "bench"))]
+mod tests;
+
+#[cfg(feature = "bench")]
+pub use tests::benches;
+
 /// Statistics tracking for B-tree operations.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BTreeStats {
@@ -1450,9 +1456,3 @@ impl BTree {
         .await
     }
 }
-
-#[cfg(any(test, feature = "bench"))]
-mod tests;
-
-#[cfg(feature = "bench")]
-pub use tests::benches;

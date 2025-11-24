@@ -773,7 +773,7 @@ mod encoding {
                         Some(Ok((*value, offset)))
                     } else {
                         *shift += 7;
-                        Some(Err(io::Error::new(io::ErrorKind::Other, ""))) // Continue scanning
+                        Some(Err(io::Error::other(""))) // Continue scanning
                     }
                 }
             })
@@ -839,7 +839,7 @@ mod encoding {
                     } else {
                         *shift = next_shift;
                         // Continue scanning
-                        Some(Err(io::Error::new(io::ErrorKind::Other, "")))
+                        Some(Err(io::Error::other("")))
                     }
                 }
             })
