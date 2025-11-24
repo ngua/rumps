@@ -1081,6 +1081,7 @@ async fn test_split_and_merge_roundtrip() {
 /// NOTE: These tests use `get_internal` directly since transaction support
 /// (Phase 5) is not yet implemented. Tests for the public `get` API with
 /// transaction context will be added once Phase 5 is complete.
+#[cfg(test)]
 mod get_internal_tests {
     use super::*;
 
@@ -1469,6 +1470,7 @@ mod get_internal_tests {
 /// NOTE: These tests use `set_internal` directly since transaction support
 /// (Phase 5) is not yet implemented. Tests for the public `set` API will be
 /// added once transaction context is fully functional.
+#[cfg(test)]
 mod set_internal_tests {
     use super::*;
 
