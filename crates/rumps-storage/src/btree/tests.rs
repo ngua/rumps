@@ -281,7 +281,7 @@ async fn test_find_node_not_found() {
     assert!(result.is_err());
     match result {
         Err(StorageError::NodeNotFound(id)) => {
-            assert_eq!(id, node_id);
+            assert_eq!(id, u64::from(node_id));
         }
         _ => panic!("Expected NodeNotFound error"),
     }
@@ -490,7 +490,7 @@ async fn test_split_node_not_found() {
     assert!(result.is_err());
     match result {
         Err(StorageError::NodeNotFound(id)) => {
-            assert_eq!(id, node_id);
+            assert_eq!(id, u64::from(node_id));
         }
         _ => panic!("Expected NodeNotFound error"),
     }
@@ -833,7 +833,7 @@ async fn test_merge_nodes_left_not_found() {
     assert!(result.is_err());
     match result {
         Err(StorageError::NodeNotFound(id)) => {
-            assert_eq!(id, left_id);
+            assert_eq!(id, u64::from(left_id));
         }
         _ => panic!("Expected NodeNotFound error"),
     }
@@ -873,7 +873,7 @@ async fn test_merge_nodes_right_not_found() {
     assert!(result.is_err());
     match result {
         Err(StorageError::NodeNotFound(id)) => {
-            assert_eq!(id, right_id);
+            assert_eq!(id, u64::from(right_id));
         }
         _ => panic!("Expected NodeNotFound error"),
     }

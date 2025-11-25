@@ -1,7 +1,5 @@
 use thiserror::Error;
 
-use crate::node::NodeId;
-
 /// Errors that can occur during B-tree operations.
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -9,9 +7,11 @@ pub enum StorageError {
     #[error("Invalid configuration: {0}")]
     InvalidConfiguration(String),
 
-    /// Node not found in storage
-    #[error("Node {0:?} not found")]
-    NodeNotFound(NodeId),
+    /// Node not found in storage.
+    ///
+    /// The u64 represents a NodeId (which is a private internal type).
+    #[error("Node({0}) not found")]
+    NodeNotFound(u64),
 
     /// Key not found in tree
     #[error("Key not found: {0}")]

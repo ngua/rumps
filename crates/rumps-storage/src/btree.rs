@@ -418,7 +418,7 @@ impl BTree {
         nodes
             .get(&id)
             .cloned()
-            .ok_or(StorageError::NodeNotFound(id))
+            .ok_or(StorageError::NodeNotFound(id.into()))
     }
 
     /// Splits a full node into two nodes.
