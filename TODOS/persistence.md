@@ -752,12 +752,72 @@ let processed_results: Vec<ProcessedData> = btree.collects(
 ### 5.1 Transaction Infrastructure
 - [ ] Add `tokio` dependency to `rumps-storage/Cargo.toml`
 - [ ] Create `crates/rumps-storage/src/transaction.rs` module
+- [ ] Define `TransactionBuilder` struct:
+  ```rust
+  pub struct TransactionBuilder {
+      isolation: IsolationLevel,
+      conflict_strategy: ConflictStrategy,
+      timeout: Option<u64>, // in ms
+      priority: TransactionPriority,
+      retry_count: u32,
+  }
+  
+  impl Default for TransactionBuilder { 
+    // defaults
+  }
+
+  impl TransactionBuilder {
+      pub async fn begin(&self, db: &Database) -> Result<Transaction> { /* ... */ }
+
+      pub fn isolation(mut self, level: IsolationLevel) -> Self { /* ... */ }
+      pub fn conflict(mut self, strategy: ConflictStrategy) -> Self { /* ... */ }
+      pub fn timeout(mut self, ms: u64) -> Self { /* ... */ }
+      pub fn priority(mut self, priority: TransactionPriority) -> Self { /* ... */ }
+      pub fn retries(mut self, count: u32) -> Self { /* ... */ }
+  }
+  ```
+- [ ] Define transaction-related enums:
+  ```rust
+  pub enum IsolationLevel {
+      ReadCommitted,
+      SnapshotIsolation, // default
+      Serializable,
+  }
+
+  pub enum ConflictStrategy {
+      Abort,     // default - fail on conflict
+      Retry(u32), // retry N times
+      Skip,      // skip transaction on conflict
+      Overwrite, // last-write-wins
+  }
+
+  pub enum TransactionPriority {
+      Low,
+      Normal,  // default
+      High,
+  }
+  ```
 - [ ] Define `Transaction` struct:
   - Transaction ID
   - Reference to `Database` (via `Arc`)
   - Buffered writes (in-memory staging for transaction)
   - Snapshot of database state at transaction start
   - Transaction state (Active, Committed, Aborted)
+  - Configuration from builder (isolation, conflict strategy, etc.)
+- [ ] Implement `Default` for `Transaction`:
+  ```rust
+  impl Default for TransactionBuilder {
+      fn default() -> Self {
+          Self {
+              isolation: IsolationLevel::SnapshotIsolation,
+              conflict_strategy: ConflictStrategy::Abort,
+              timeout: None,
+              priority: TransactionPriority::Normal,
+              retry_count: 0,
+          }
+      }
+  }
+  ```
 - [ ] Implement transaction lifecycle methods:
   - `begin()` - create transaction, get snapshot
   - `commit() -> Result<()>` - validate, write to WAL, apply changes
@@ -792,13 +852,65 @@ let processed_results: Vec<ProcessedData> = btree.collects(
 - [ ] Implement `Database::create(path: &Path) -> Result<Self>`
 - [ ] Implement `Database::in_memory() -> Result<Self>` for testing
 - [ ] Implement transaction API:
-  - `async fn transaction<F, R>(&self, f: F) -> Result<R>` where `F: FnOnce(&mut Transaction) -> Future<Result<R>>`
-  - Auto-commit on Ok, auto-rollback on Err
-  - Example usage:
+  - Simple default transaction:
     ```rust
+    async fn transaction<F, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(&mut Transaction) -> Future<Result<R>>
+    {
+        let txn = TransactionBuilder::default().begin(self).await?;
+        // Auto-commit on Ok, auto-rollback on Err
+        // ...
+    }
+    ```
+  - Configured transaction with builder:
+    ```rust
+    async fn transaction_with<F, R>(&self, builder: TransactionBuilder, f: F) -> Result<R>
+    where
+        F: FnOnce(&mut Transaction) -> Future<Result<R>>
+    {
+        let txn = builder.begin(self).await?;
+        // Auto-commit on Ok, auto-rollback on Err
+        // ...
+    }
+    ```
+  - Direct transaction builder access:
+    ```rust
+    fn build_transaction(&self) -> TransactionBuilder {
+        TransactionBuilder::default()
+    }
+    ```
+  - Example usage - Simple default transaction:
+    ```rust
+    // Simple default transaction (snapshot isolation, abort on conflict)
     db.transaction(|txn| async move {
         let name = txn.get(&Name::Global("PATIENT".into()), &key).await?;
         txn.set(&Name::Global("PATIENT".into()), &key, new_value).await?;
+        Ok(())
+    }).await?;
+    ```
+  - Example usage - Configured transaction:
+    ```rust
+    // Transaction with retry on conflict
+    let builder = db.build_transaction()
+        .conflict(ConflictStrategy::Retry(3))
+        .timeout(5000);
+
+    db.transaction_with(builder, |txn| async move {
+        // Critical operation that may conflict
+        let balance = txn.get(&Name::Global("ACCOUNT".into()), &from_key).await?
+            .unwrap_or(Value::Integer(0));
+        // ... perform transfer ...
+        Ok(())
+    }).await?;
+
+    // High-priority serializable transaction
+    let builder = TransactionBuilder::default()
+        .isolation(IsolationLevel::Serializable)
+        .priority(TransactionPriority::High);
+
+    db.transaction_with(builder, |txn| async move {
+        // Critical financial transaction
         Ok(())
     }).await?;
     ```

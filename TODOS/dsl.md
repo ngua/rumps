@@ -133,47 +133,47 @@ RUMPS modernizes MUMPS operators, making them more readable and consistent with 
 
 ### Operator Comparison Table
 
-| Category | MUMPS | RUMPS | Description | Notes |
-|----------|-------|-------|-------------|-------|
-| **Arithmetic** |
-| Addition | `+` | `+` | Add two numbers | Same |
-| Subtraction | `-` | `-` | Subtract | Same |
-| Multiplication | `*` | `*` | Multiply | Same |
-| Division | `/` | `/` | Divide (float) | Same |
-| Integer Division | `\` | `//` | Integer division | More intuitive |
-| Modulo | `#` | `%` | Remainder | Standard notation |
-| Exponentiation | `**` | `^` or `**` | Power | Both supported |
-| **String** |
-| Concatenation | `_` | `+` or `++` | String concat | More intuitive |
-| Contains | `[` | `contains` or `∈` | Substring check | Clearer |
-| Not Contains | `']` | `!contains` or `∉` | Not substring | Clearer |
-| Follows | `]` | `>` | String comparison | Context-aware |
-| Pattern Match | `?` | `matches` or `~` | Regex match | Modern regex |
-| **Comparison** |
-| Equals | `=` | `==` | Equality | Consistent |
-| Not Equals | `'=` | `!=` or `≠` | Inequality | Standard |
-| Less Than | `<` | `<` | Less than | Same |
-| Greater Than | `>` | `>` | Greater than | Same |
-| Less or Equal | `<=` or `'>` | `<=` or `≤` | Less or equal | Standard |
-| Greater or Equal | `>=` or `'<` | `>=` or `≥` | Greater or equal | Standard |
-| **Logical** |
-| And | `&` or `&&` | `AND` or `&&` | Logical AND | Clearer |
-| Or | `!` or `!!` | `OR` or `\|\|` | Logical OR | Standard |
-| Not | `'` | `NOT` or `!` | Logical NOT | Standard |
-| **Special** |
-| Indirection | `@` | `@` or `eval` | Dynamic evaluation | Enhanced |
-| Global Prefix | `^` | `^` | Global variable | Same |
-| Function Prefix | `$` | `$` | Built-in function | Same |
-| **Assignment** |
-| Set | `SET` or `S` | `SET` or `=` | Assignment | Flexible |
-| Kill | `KILL` or `K` | `KILL` or `DELETE` | Delete variable | Options |
-| **New in RUMPS** |
-| Null Coalesce | N/A | `??` | Default if null | `a ?? b` |
-| Optional Chain | N/A | `?.` | Safe navigation | `obj?.field` |
-| Pipe | N/A | `\|>` | Pipeline operator | Functional |
-| Range | N/A | `..` | Range operator | `1..10` |
-| Spread | N/A | `...` | Spread operator | `...array` |
-| Type Check | N/A | `is` | Type checking | `x is Number` |
+| Category              | MUMPS           | RUMPS                | Description          | Notes              |
+|-----------------------|-----------------|----------------------|----------------------|--------------------|
+| **Arithmetic**        |                 |                      |                      |                    |
+| Addition              | `+`             | `+`                  | Add two numbers      | Same               |
+| Subtraction           | `-`             | `-`                  | Subtract             | Same               |
+| Multiplication        | `*`             | `*`                  | Multiply             | Same               |
+| Division              | `/`             | `/`                  | Divide (float)       | Same               |
+| Integer Division      | `\`             | `//`                 | Integer division     | More intuitive     |
+| Modulo                | `#`             | `%`                  | Remainder            | Standard notation  |
+| Exponentiation        | `**`            | `^` or `**`          | Power                | Both supported     |
+| **String**            |                 |                      |                      |                    |
+| Concatenation         | `_`             | `+` or `++`          | String concat        | More intuitive     |
+| Contains              | `[`             | `contains` or `∈`    | Substring check      | Clearer            |
+| Not Contains          | `']`            | `!contains` or `∉`   | Not substring        | Clearer            |
+| Follows               | `]`             | `>`                  | String comparison    | Context-aware      |
+| Pattern Match         | `?`             | `matches` or `~`     | Regex match          | Modern regex       |
+| **Comparison**        |                 |                      |                      |                    |
+| Equals                | `=`             | `==`                 | Equality             | Consistent         |
+| Not Equals            | `'=`            | `!=` or `≠`          | Inequality           | Standard           |
+| Less Than             | `<`             | `<`                  | Less than            | Same               |
+| Greater Than          | `>`             | `>`                  | Greater than         | Same               |
+| Less or Equal         | `<=` or `'>`    | `<=` or `≤`          | Less or equal        | Standard           |
+| Greater or Equal      | `>=` or `'<`    | `>=` or `≥`          | Greater or equal     | Standard           |
+| **Logical**           |                 |                      |                      |                    |
+| And                   | `&` or `&&`     | `AND` or `&&`        | Logical AND          | Clearer            |
+| Or                    | `!` or `!!`     | `OR` or `\|\|`       | Logical OR           | Standard           |
+| Not                   | `'`             | `NOT` or `!`         | Logical NOT          | Standard           |
+| **Special**           |                 |                      |                      |                    |
+| Indirection           | `@`             | `@` or `eval`        | Dynamic evaluation   | Enhanced           |
+| Global Prefix         | `^`             | `^`                  | Global variable      | Same               |
+| Function Prefix       | `$`             | `$`                  | Built-in function    | Same               |
+| **Assignment**        |                 |                      |                      |                    |
+| Set                   | `SET` or `S`    | `SET` or `=`         | Assignment           | Flexible           |
+| Kill                  | `KILL` or `K`   | `KILL` or `DELETE`   | Delete variable      | Options            |
+| **New in RUMPS**      |                 |                      |                      |                    |
+| Null Coalesce         | N/A             | `??`                 | Default if null      | `a ?? b`           |
+| Optional Chain        | N/A             | `?.`                 | Safe navigation      | `obj?.field`       |
+| Pipe                  | N/A             | `\|>`                | Pipeline operator    | Functional         |
+| Range                 | N/A             | `..`                 | Range operator       | `1..10`            |
+| Spread                | N/A             | `...`                | Spread operator      | `...array`         |
+| Type Check            | N/A             | `is`                 | Type checking        | `x is Number`      |
 
 ### Operator Usage Examples
 
