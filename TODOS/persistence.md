@@ -242,7 +242,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [x] Add async tests for SET with existing keys (updates) - covered by `preserves_has_descendants_on_update`
 - [x] Add async tests for SET triggering node splits - covered by `test_get_internal_with_tree_splits` at line 2819
 - [x] Add async tests for SET on multi-level subscripts (e.g., `["A", "B", "C"]`) - covered by `deep_nesting_creates_all_ancestors`
-- [ ] ~Add async tests verifying Global and Local namespaces are separate - **TODO: Add to `set_internal_tests` module**~
+- [ ] ~~Add async tests verifying Global and Local namespaces are separate - TODO: Add to `set_internal_tests` module~~ 
 - [x] Add concurrent SET tests with `Arc<BTree>` - covered by `concurrent_ancestor_creation`
 
 **Missing Tests** (defer to Phase 5 or when transaction layer is ready):
@@ -331,20 +331,24 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 **Note**: This is a RUMPS-specific extension not found in traditional MUMPS. It provides a functional, Rust-idiomatic stream-based interface for iterating and collecting values from the tree, designed for efficient handling of large datasets.
 
+**DSL Design Note**: The RUMPS DSL design, including how `$COLLECT` will serve as the foundation for ALL looping constructs, is documented in **`TODOS/dsl.md`**. See that document for:
+- Comparison between traditional MUMPS loops and RUMPS declarative streams
+- DSL syntax and operation examples
+- Console output formatting options
+- Complete language design and implementation roadmap
+
 **Transaction Note**: The signature includes optional `ctx: Option<&TransactionContext>` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction snapshot isolation will be added in Phase 5.
 
-**Rationale**: Traditional MUMPS requires imperative loops with `$ORDER` to iterate through data:
-```mumps
-FOR  SET PID=$ORDER(^PATIENT(PID))  QUIT:PID=""  DO
-. SET NAME=$GET(^PATIENT(PID,"NAME"))
-. ; Process NAME...
-```
-
-The `$COLLECT` primitive enables functional-style stream processing that's memory-efficient and composable with Rust's async ecosystem.
+**Implementation Rationale**: The `$COLLECT` primitive provides a Rust-native stream interface that:
+- Integrates naturally with Rust's async ecosystem (futures, tokio)
+- Enables lazy evaluation and backpressure handling
+- Supports functional composition with standard stream combinators
+- Provides memory-efficient processing of large datasets
+- Allows parallel processing when appropriate
 
 #### Primary Stream-Based Method Signatures
 
-- [ ] Implement `fn collect_stream<'a, P, F, T>(&'a self, name: &'a Name, start: Option<&'a Key>, predicate: P, extract: F, ctx: Option<&'a TransactionContext>) -> impl Stream<Item = Result<T>> + 'a`:
+- [ ] Implement `fn collects<'a, P, F, T>(&'a self, name: &'a Name, start: Option<&'a Key>, predicate: P, extract: F, ctx: Option<&'a TransactionContext>) -> impl Stream<Item = Result<T>> + 'a`:
   ```rust
   /// Create a stream of values from the tree that match the given predicate.
   ///
@@ -363,7 +367,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   /// use futures::StreamExt;
   ///
   /// // Process patient names as a stream
-  /// let mut name_stream = btree.collect_stream(
+  /// let mut names = btree.collects(
   ///     &Name::Global("PATIENT".into()),
   ///     None,
   ///     |key, data| key.subscripts().len() == 2 && key.subscripts()[1] == "NAME".into(),
@@ -375,14 +379,14 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   /// );
   ///
   /// // Process stream items one by one
-  /// while let Some(result) = name_stream.next().await {
+  /// while let Some(result) = names.next().await {
   ///     match result {
   ///         Ok(name) => println!("Patient: {}", name),
   ///         Err(e) => eprintln!("Error: {}", e),
   ///     }
   /// }
   /// ```
-  pub fn collect_stream<'a, P, F, T>(
+  pub fn collects<'a, P, F, T>(
       &'a self,
       name: &'a Name,
       start: Option<&'a Key>,
@@ -431,7 +435,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
   {
       use futures::StreamExt;
 
-      self.collect_stream(name, start, predicate, extract, ctx)
+      self.collects(name, start, predicate, extract, ctx)
           .try_collect()
           .await
   }
@@ -455,7 +459,7 @@ The `$COLLECT` primitive enables functional-style stream processing that's memor
 use futures::StreamExt;
 
 // Process large dataset as stream (memory efficient)
-let mut data_stream = btree.collect_stream(
+let mut data_stream = btree.collects(
     &Name::Global("DATA".into()),
     Some(&Key::from(vec!["2025".into()])),
     |key, _| key.subscripts().len() == 2 && key.subscripts()[0] == "2025".into(),
@@ -472,7 +476,7 @@ while let Some(result) = data_stream.next().await {
 }
 
 // Find first admin user using stream (early termination)
-let admin = btree.collect_stream(
+let admin = btree.collects(
     &Name::Global("USERS".into()),
     None,
     |_key, data| data.value.is_some(),
@@ -487,7 +491,7 @@ let admin = btree.collect_stream(
 .await;
 
 // Take first 100 matching entries
-let first_100: Vec<String> = btree.collect_stream(
+let first_100: Vec<String> = btree.collects(
     &Name::Global("LOGS".into()),
     None,
     |key, _| key.subscripts().first() == Some(&"2025".into()),
@@ -502,7 +506,7 @@ let first_100: Vec<String> = btree.collect_stream(
 .await?;
 
 // Count entries efficiently using fold
-let count = btree.collect_stream(
+let count = btree.collects(
     &Name::Global("STATS".into()),
     None,
     |key, _| key.subscripts().first() == Some(&"2025".into()),
@@ -527,7 +531,7 @@ let all_names = btree.collect_vec(
 // Parallel processing with buffered stream
 use futures::stream::StreamExt;
 
-let processed_results: Vec<ProcessedData> = btree.collect_stream(
+let processed_results: Vec<ProcessedData> = btree.collects(
     &Name::Global("RECORDS".into()),
     None,
     |_, data| data.value.is_some(),
@@ -553,7 +557,7 @@ let processed_results: Vec<ProcessedData> = btree.collect_stream(
    - Ensure proper lifetime management for borrowed references
 
 2. **Phase 2**: Stream-Based Collection
-   - Implement `collect_stream` with lazy evaluation
+   - Implement `collects` with lazy evaluation
    - Add support for early termination when predicate returns false
    - Implement backpressure handling for slow consumers
 
@@ -855,7 +859,7 @@ This section covers updating the Phase 2 B-tree primitives (SET, GET, KILL, DATA
   - Apply snapshot isolation to iteration
   - Skip uncommitted writes from other transactions
   - Include buffered writes from current transaction in iteration order
-- [ ] Update `BTree::collect_stream()` to use transaction context when provided:
+- [ ] Update `BTree::collects()` to use transaction context when provided:
   - Ensure stream sees consistent snapshot throughout iteration
   - Apply same snapshot isolation rules as individual operations
 - [ ] Add tests for transaction isolation:
