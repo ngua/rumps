@@ -767,7 +767,33 @@ let processed_results: Vec<ProcessedData> = btree.collects(
   }
 
   impl TransactionBuilder {
-      pub async fn begin(&self, db: &Database) -> Result<Transaction> { /* ... */ }
+      pub async fn begin(&self, db: &Database) -> Result<Transaction> {
+          // Purpose: Creates and initializes a new transaction with the configured settings.
+          //
+          // What it does:
+          // 1. Generates a unique TransactionId (monotonically increasing or UUID)
+          // 2. Captures the current database timestamp for snapshot isolation
+          // 3. Takes a read-only snapshot of the database state at this moment
+          //    - For SnapshotIsolation: All reads will see data as of this timestamp
+          //    - For ReadCommitted: Snapshot updated on each read
+          //    - For Serializable: Tracks all reads/writes for conflict detection
+          // 4. Initializes empty write buffer for staging changes
+          // 5. Registers transaction with the database's TransactionManager
+          //    - Allows coordination with other concurrent transactions
+          //    - Enables deadlock detection and priority scheduling
+          // 6. Starts optional timeout timer if configured
+          // 7. Logs transaction start to WAL (for recovery tracking)
+          // 8. Returns Transaction struct in Active state
+          //
+          // The returned Transaction holds:
+          // - A clone of the Database (via db.clone(), which is cheap since Database contains Arc fields)
+          // - Its unique ID and timestamp
+          // - The configuration from this builder
+          // - Empty write buffer ready for operations
+          // - Snapshot view for consistent reads
+          //
+          // Note: Calls db.clone() to store in Transaction, which is cheap due to Arc fields
+      }
 
       pub fn isolation(mut self, level: IsolationLevel) -> Self { /* ... */ }
       pub fn conflict(mut self, strategy: ConflictStrategy) -> Self { /* ... */ }
@@ -798,13 +824,63 @@ let processed_results: Vec<ProcessedData> = btree.collects(
   }
   ```
 - [ ] Define `Transaction` struct:
-  - Transaction ID
-  - Reference to `Database` (via `Arc`)
-  - Buffered writes (in-memory staging for transaction)
-  - Snapshot of database state at transaction start
-  - Transaction state (Active, Committed, Aborted)
-  - Configuration from builder (isolation, conflict strategy, etc.)
-- [ ] Implement `Default` for `Transaction`:
+  ```rust
+  pub struct Transaction {
+      // Identity & Lifecycle
+      id: TransactionId,                           // Unique identifier for this transaction
+      state: RwLock<TransactionState>,            // Active, Committed, or Aborted
+      start_timestamp: TransactionTimestamp,       // Snapshot timestamp for isolation
+
+      // Database Reference
+      db: Database,                               // Database (cheap to clone via Arc fields)
+
+      // Configuration (from builder)
+      isolation: IsolationLevel,                  // Determines read/write behavior
+      conflict_strategy: ConflictStrategy,        // How to handle conflicts at commit
+      priority: TransactionPriority,              // For scheduling and deadlock resolution
+      timeout: Option<Instant>,                   // Deadline for transaction completion
+      retry_count: u32,                           // Remaining retries on conflict
+
+      // Write Buffering
+      writes: RwLock<HashMap<(Name, Key), WriteOp>>,  // Buffered write operations
+      deleted_subtrees: RwLock<HashSet<(Name, Key)>>, // Tracks KILL operations
+
+      // Read Tracking (for conflict detection)
+      read_set: RwLock<HashSet<(Name, Key)>>,    // Keys read (for Serializable isolation)
+
+      // Snapshot Data
+      snapshot: Arc<Snapshot>,                    // Immutable view of DB at start_timestamp
+
+      // Metrics
+      ops_count: AtomicU64,                       // Number of operations performed
+      start_time: Instant,                        // Wall clock time when started
+  }
+
+  // Write operation types for the write buffer
+  enum WriteOp {
+      Set(NodeData),      // SET operation with new value
+      Delete,             // DELETE single key
+      KillSubtree,        // KILL entire subtree
+  }
+
+  // Snapshot represents a consistent view of the database
+  struct Snapshot {
+      timestamp: TransactionTimestamp,
+      // In practice, might reference:
+      // - Immutable B-tree roots at this timestamp (MVCC)
+      // - Or a copy-on-write data structure
+      // - Or version chains with timestamps
+      roots: HashMap<Name, NodeId>,  // Root nodes at snapshot time
+  }
+  ```
+
+  Key design decisions:
+  - Uses `RwLock` for concurrent access to mutable fields
+  - Buffers all writes in memory until commit (no partial visibility)
+  - Tracks reads for Serializable isolation conflict detection
+  - Holds immutable snapshot for consistent reads
+  - Includes metrics for monitoring and debugging
+- [ ] Implement `Default` for `TransactionBuilder`:
   ```rust
   impl Default for TransactionBuilder {
       fn default() -> Self {
@@ -841,10 +917,22 @@ let processed_results: Vec<ProcessedData> = btree.collects(
       btree: Arc<BTree>,
       transaction_manager: Arc<TransactionManager>,
   }
+
+  impl Clone for Database {
+      fn clone(&self) -> Self {
+          Self {
+              btree: Arc::clone(&self.btree),
+              transaction_manager: Arc::clone(&self.transaction_manager),
+          }
+      }
+  }
   ```
   - Uses `Arc<BTree>` for thread-safe sharing
   - B-tree handles both `Name::Global` (persistent) and `Name::Local` (ephemeral)
   - Transaction manager coordinates concurrent transactions
+  - **Important**: Database implements `Clone` by cloning the Arc fields, making it cheap to clone
+  - This pattern allows passing `&Database` to APIs while enabling cheap cloning when needed (e.g., for storing in Transaction)
+  - Common pattern in async Rust (similar to `reqwest::Client`, `sqlx::Pool`, etc.)
 - [ ] Implement `Database::open(path: &Path) -> Result<Self>`:
   - Create `FileStorageEngine` with config
   - Initialize `BTree::with_storage(min_degree, storage)`
