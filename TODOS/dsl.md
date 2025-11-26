@@ -145,8 +145,8 @@ RUMPS modernizes MUMPS operators, making them more readable and consistent with 
 | Exponentiation        | `**`            | `^` or `**`          | Power                | Both supported     |
 | **String**            |                 |                      |                      |                    |
 | Concatenation         | `_`             | `+` or `++`          | String concat        | More intuitive     |
-| Contains              | `[`             | `contains` or `∈`    | Substring check      | Clearer            |
-| Not Contains          | `']`            | `!contains` or `∉`   | Not substring        | Clearer            |
+| Contains              | `[`             | `contains`           | Substring check      | Clearer            |
+| Not Contains          | `']`            | `!contains`          | Not substring        | Clearer            |
 | Follows               | `]`             | `>`                  | String comparison    | Context-aware      |
 | Pattern Match         | `?`             | `matches` or `~`     | Regex match          | Modern regex       |
 | **Comparison**        |                 |                      |                      |                    |
@@ -179,12 +179,12 @@ RUMPS modernizes MUMPS operators, making them more readable and consistent with 
 
 #### Arithmetic
 ```rumps
-; MUMPS style (still supported)
+; MUMPS style (not supported)
 SET result = 10 + 20 * 3
 SET quotient = 100 \ 3  ; Integer division
 SET remainder = 100 # 3  ; Modulo
 
-; RUMPS style (preferred)
+; RUMPS style
 SET result = 10 + 20 * 3
 SET quotient = 100 // 3  ; More intuitive integer division
 SET remainder = 100 % 3   ; Standard modulo notation
@@ -209,11 +209,6 @@ IF text matches /^\d+$/ { OUTPUT "All numbers" }
 ; RUMPS uses standard comparison operators
 IF age >= 18 AND age <= 65 {
   SET category = "Working Age"
-}
-
-; Unicode operators also supported for mathematical clarity
-IF x ∈ validSet AND y ≠ 0 {
-  SET result = x / y
 }
 ```
 
@@ -264,11 +259,12 @@ IF value is Number {
 RUMPS enhances MUMPS pattern matching with modern regex support:
 
 ```rumps
-; MUMPS patterns (still supported)
+; MUMPS patterns (not supported)
 IF ssn?3N1"-"2N1"-"4N { ; Social Security Number format }
 
-; RUMPS regex patterns (preferred)
-IF email matches /^[^@]+@[^@]+\.[^@]+$/ {
+; RUMPS regex patterns
+; Social Security Number format
+IF email matches /^[^@]+@[^@]+\.[^@]+$/ { 
   SET valid_email = true
 }
 
