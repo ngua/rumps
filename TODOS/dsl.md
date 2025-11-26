@@ -276,6 +276,265 @@ IF date matches /(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})/ {
 }
 ```
 
+## JSON Operators
+
+RUMPS provides comprehensive JSON operators for working with structured data, inspired by PostgreSQL's JSON support but with clearer, more readable syntax.
+
+### Field Access Operators
+
+| Operator | Description                      | Example          | Result             |
+|----------|----------------------------------|------------------|--------------------|
+| `.`      | Get field (returns JSON)         | `data.name`      | `"John"` (as JSON) |
+| `..`     | Get field (returns text/scalar)  | `data..name`     | `John` (as string) |
+| `->`     | Get field by key (returns JSON)  | `data->"name"`   | `"John"` (as JSON) |
+| `->>`    | Get field by key (returns text)  | `data->>"name"`  | `John` (as string) |
+
+#### Usage Examples
+```rumps
+SET patient = { "name": "John", "age": 42, "active": true }
+
+; Dot notation (preferred for known fields)
+SET name = patient.name           ; JSON string "John"
+SET name = patient..name          ; Plain string John
+
+; Arrow notation (for dynamic keys or special characters)
+SET field = "name"
+SET name = patient->field         ; JSON string "John"
+SET name = patient->>field        ; Plain string John
+
+; Works with arrays too
+SET items = ["a", "b", "c"]
+SET first = items.0               ; "a" as JSON
+SET first = items..0              ; a as string
+```
+
+### Path Navigation
+
+| Operator | Description                       | Example                  | Result             |
+|----------|-----------------------------------|--------------------------|--------------------|
+| `#>`     | Get value at path (returns JSON)  | `data #> ["addr", "city"]` | `"NYC"` (as JSON)  |
+| `#>>`    | Get value at path (returns text)  | `data #>> ["addr", "city"]` | `NYC` (as string)  |
+| `@`      | Path expression                   | `data@.addr.city`        | `"NYC"`            |
+
+#### Usage Examples
+```rumps
+SET record = {
+  "patient": {
+    "name": "John",
+    "addresses": [
+      { "type": "home", "city": "NYC" },
+      { "type": "work", "city": "Boston" }
+    ]
+  }
+}
+
+; Path array notation
+SET city = record #> ["patient", "addresses", 0, "city"]   ; "NYC" as JSON
+SET city = record #>> ["patient", "addresses", 0, "city"]  ; NYC as string
+
+; Path expression notation (cleaner for literals)
+SET city = record@.patient.addresses[0].city               ; "NYC"
+
+; Wildcard paths (future)
+SET cities = record@.patient.addresses[*].city             ; ["NYC", "Boston"]
+```
+
+### Containment Operators
+
+| Operator | Description  | Example                     | Result |
+|----------|--------------|-----------------------------|--------|
+| `@>`     | Contains     | `{"a":1, "b":2} @> {"a":1}` | `true` |
+| `<@`     | Contained by | `{"a":1} <@ {"a":1, "b":2}` | `true` |
+
+#### Usage Examples
+```rumps
+SET full = { "name": "John", "age": 42, "active": true }
+SET partial = { "name": "John" }
+
+; Check if full contains partial
+IF full @> partial {
+  OUTPUT "Match found"
+}
+
+; Check if partial is contained by full
+IF partial <@ full {
+  OUTPUT "Is subset"
+}
+
+; Works with arrays
+SET arr = [1, 2, 3, 4, 5]
+IF arr @> [2, 3] {
+  OUTPUT "Contains 2 and 3"
+}
+```
+
+### Key/Element Existence
+
+| Operator | Description    | Example                    | Result |
+|----------|----------------|----------------------------|--------|
+| `?`      | Key exists     | `data ? "name"`            | `true` |
+| `?\|`    | Any key exists | `data ?\| ["name", "alias"]` | `true` |
+| `?&`     | All keys exist | `data ?& ["name", "age"]`  | `true` |
+
+#### Usage Examples
+```rumps
+SET data = { "name": "John", "age": 42 }
+
+; Single key existence
+IF data ? "name" {
+  OUTPUT "Has name"
+}
+
+; Any of multiple keys
+IF data ?| ["email", "phone", "name"] {
+  OUTPUT "Has at least one contact method"
+}
+
+; All keys required
+IF data ?& ["name", "age", "active"] {
+  OUTPUT "Record is complete"
+} ELSE {
+  OUTPUT "Missing required fields"
+}
+
+; Works with arrays (checks index exists)
+SET arr = ["a", "b", "c"]
+IF arr ? 0 {
+  OUTPUT "Has first element"
+}
+```
+
+### Modification Operators
+
+| Operator | Description       | Example                 | Result              |
+|----------|-------------------|-------------------------|---------------------|
+| `\|\|`   | Concatenate/merge | `{"a":1} \|\| {"b":2}`  | `{"a":1, "b":2}`    |
+| `-`      | Delete key        | `{"a":1, "b":2} - "a"`  | `{"b":2}`           |
+| `#-`     | Delete at path    | `data #- ["addr", "zip"]` | (removes nested key) |
+
+#### Usage Examples
+```rumps
+; Merge objects (right overwrites left on conflict)
+SET base = { "name": "John", "role": "user" }
+SET update = { "role": "admin", "active": true }
+SET merged = base || update
+; Result: { "name": "John", "role": "admin", "active": true }
+
+; Delete single key
+SET data = { "name": "John", "temp": "delete me" }
+SET clean = data - "temp"
+; Result: { "name": "John" }
+
+; Delete multiple keys
+SET clean = data - ["temp", "internal"]
+
+; Delete at nested path
+SET record = { "user": { "name": "John", "password": "secret" } }
+SET safe = record #- ["user", "password"]
+; Result: { "user": { "name": "John" } }
+
+; Array operations
+SET arr = ["a", "b", "c"]
+SET shorter = arr - 1              ; Remove by index: ["a", "c"]
+SET shorter = arr - "b"            ; Remove by value: ["a", "c"]
+```
+
+### JSON Functions
+
+RUMPS provides built-in functions for JSON manipulation:
+
+| Function                    | Description            | Example                              |
+|-----------------------------|------------------------|--------------------------------------|
+| `$json_type(val)`           | Get JSON type          | `$json_type(42)` → `"number"`        |
+| `$json_keys(obj)`           | Get object keys        | `$json_keys({"a":1})` → `["a"]`      |
+| `$json_values(obj)`         | Get object values      | `$json_values({"a":1})` → `[1]`      |
+| `$json_length(val)`         | Get length             | `$json_length([1,2,3])` → `3`        |
+| `$json_parse(str)`          | Parse JSON string      | `$json_parse("{\"a\":1}")` → `{"a":1}` |
+| `$json_stringify(val)`      | Convert to JSON string | `$json_stringify({"a":1})` → `"{\"a\":1}"` |
+| `$json_set(obj, path, val)` | Set value at path      | `$json_set(data, ["a"], 1)`          |
+| `$json_merge_deep(a, b)`    | Deep merge objects     | `$json_merge_deep(base, overlay)`    |
+| `$json_flatten(obj)`        | Flatten nested object  | `$json_flatten({"a":{"b":1}})` → `{"a.b":1}` |
+| `$json_unflatten(obj)`      | Unflatten object       | `$json_unflatten({"a.b":1})` → `{"a":{"b":1}}` |
+
+#### Usage Examples
+```rumps
+SET data = { "users": [{"name": "John"}, {"name": "Jane"}] }
+
+; Type checking
+IF $json_type(data.users) == "array" {
+  OUTPUT "Users is an array"
+}
+
+; Get keys and values
+SET keys = $json_keys(data)                    ; ["users"]
+SET userList = $json_values(data.users.0)      ; ["John"]
+
+; Length operations
+SET count = $json_length(data.users)           ; 2
+
+; Parse and stringify
+SET jsonStr = "{\"temp\": 72}"
+SET parsed = $json_parse(jsonStr)
+SET back = $json_stringify(parsed)
+
+; Immutable update at path
+SET updated = $json_set(data, ["users", 0, "age"], 42)
+; Result: { "users": [{"name": "John", "age": 42}, {"name": "Jane"}] }
+
+; Deep merge (recursive)
+SET base = { "config": { "a": 1, "b": 2 } }
+SET overlay = { "config": { "b": 3, "c": 4 } }
+SET merged = $json_merge_deep(base, overlay)
+; Result: { "config": { "a": 1, "b": 3, "c": 4 } }
+```
+
+### JSON in Stream Operations
+
+JSON operators integrate naturally with `$COLLECT` streams:
+
+```rumps
+; Filter by JSON field
+$COLLECT ^PATIENTS
+  WHERE value ? "active"
+  WHERE value..active == true
+  SELECT {
+    id: key[0],
+    name: value..name,
+    email: value..contact..email ?? "N/A"
+  }
+  OUTPUT AS JSON
+
+; Aggregate JSON data
+$COLLECT ^ORDERS
+  WHERE value @> {"status": "completed"}
+  SELECT value..amount
+  AGGREGATE SUM INTO totalRevenue
+
+; Transform nested structures
+$COLLECT ^RECORDS
+  SELECT value #>> ["metadata", "tags"]
+  FILTER value != null
+  INTO tagList
+```
+
+### Operator Precedence
+
+JSON operators have the following precedence (highest to lowest):
+
+1. `.` `..` (field access)
+2. `->` `->>` (arrow access)
+3. `#>` `#>>` (path access)
+4. `?` `?|` `?&` (existence)
+5. `@>` `<@` (containment)
+6. `-` `#-` (deletion)
+7. `||` (concatenation)
+
+Use parentheses to override precedence when needed:
+```rumps
+SET result = (data || defaults)..name    ; Merge first, then access
+SET result = data || (defaults..name)    ; Access first, then merge (different!)
+```
+
 ## Fundamental Primitive: $COLLECT
 
 The `$COLLECT` primitive is the **foundation for ALL iteration** in RUMPS. It creates a lazy stream from a B-tree variable that can be transformed, filtered, and consumed.
