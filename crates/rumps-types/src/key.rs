@@ -786,6 +786,42 @@ impl<'a> IntoIterator for &'a Key {
     }
 }
 
+/// Convenience macro for constructing a [`Name::Global`] variable name.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::{global, Name};
+///
+/// let name = global!("PATIENT");
+/// assert_eq!(name, Name::Global("PATIENT".into()));
+/// assert_eq!(name.to_string(), "^PATIENT");
+/// ```
+#[macro_export]
+macro_rules! global {
+    ($name:expr) => {
+        $crate::Name::Global($name.into())
+    };
+}
+
+/// Convenience macro for constructing a [`Name::Local`] variable name.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::{local, Name};
+///
+/// let name = local!("TEMP");
+/// assert_eq!(name, Name::Local("TEMP".into()));
+/// assert_eq!(name.to_string(), "TEMP");
+/// ```
+#[macro_export]
+macro_rules! local {
+    ($name:expr) => {
+        $crate::Name::Local($name.into())
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
