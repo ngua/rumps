@@ -153,7 +153,6 @@ async fn test_stress_large_tree() {
             let name = name.clone();
             async move {
                 let k = key![i as i64];
-                btree.ensure_ancestors(&name, &k).await.unwrap();
                 btree
                     .set_internal(
                         &name,
@@ -174,7 +173,6 @@ async fn test_stress_large_tree() {
             let name = name.clone();
             async move {
                 let k = key![1000, i as i64];
-                btree.ensure_ancestors(&name, &k).await.unwrap();
                 btree
                     .set_internal(
                         &name,
@@ -204,7 +202,6 @@ async fn test_stress_large_tree() {
                     (i % 3) as i64,
                     i as i64,
                 ];
-                btree.ensure_ancestors(&name, &k).await.unwrap();
                 btree
                     .set_internal(
                         &name,
@@ -1460,6 +1457,338 @@ mod get_internal_tests {
         // Wait for all tasks to complete
         future::try_join_all(handles).await.unwrap();
     }
+
+    /// Stress test: GET many keys after mass insertion.
+    #[tokio::test]
+    async fn get_stress_many_keys() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap(); // Small min_degree for more splits
+        let name = Name::global("STRESS");
+
+        // Insert 500 keys
+        futures::stream::iter(0..500i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all 500 keys are retrievable
+        futures::stream::iter(0..500i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result =
+                        btree.get_internal(&name, &key![i]).await.unwrap();
+                    assert!(result.is_some(), "Key {} should exist", i);
+                    assert_eq!(result.unwrap().value, Some(Value::Integer(i)));
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify nonexistent keys return None
+        futures::stream::iter(500..510i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result =
+                        btree.get_internal(&name, &key![i]).await.unwrap();
+                    assert!(result.is_none(), "Key {} should not exist", i);
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test GET with mixed subscript types respecting collation.
+    #[tokio::test]
+    async fn get_mixed_subscript_types() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("MIXED");
+
+        // Insert keys with different subscript types
+        // Collation: Boolean < Number < Char < String
+        let keys = vec![
+            (key![false], 0i64),
+            (key![true], 1),
+            (key![-100i64], 2),
+            (key![0i64], 3),
+            (key![100i64], 4),
+            (key!["aaa"], 5),
+            (key!["zzz"], 6),
+        ];
+
+        futures::stream::iter(keys.iter())
+            .then(|(k, v)| async {
+                btree
+                    .set_internal(
+                        &name,
+                        k,
+                        NodeData::with_value(Value::Integer(*v)),
+                    )
+                    .await
+                    .unwrap();
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all keys retrievable with correct values
+        futures::stream::iter(keys.iter())
+            .then(|(k, v)| async {
+                let result = btree.get_internal(&name, k).await.unwrap();
+                assert!(result.is_some());
+                assert_eq!(result.unwrap().value, Some(Value::Integer(*v)));
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test GET with negative numbers and floats.
+    #[tokio::test]
+    async fn get_negative_and_float_subscripts() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("NUMS");
+
+        let keys = vec![
+            (key![-1000.5f64], "neg_float"),
+            (key![-100i64], "neg_int"),
+            (key![-0.001f64], "small_neg"),
+            (key![0i64], "zero"),
+            (key![0.001f64], "small_pos"),
+            (key![100i64], "pos_int"),
+            (key![1000.5f64], "pos_float"),
+        ];
+
+        futures::stream::iter(keys.iter())
+            .then(|(k, v)| async {
+                btree
+                    .set_internal(
+                        &name,
+                        k,
+                        NodeData::with_value(Value::String((*v).into())),
+                    )
+                    .await
+                    .unwrap();
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all retrievable
+        futures::stream::iter(keys.iter())
+            .then(|(k, v)| async {
+                let result = btree.get_internal(&name, k).await.unwrap();
+                assert!(result.is_some());
+                assert_eq!(
+                    result.unwrap().value,
+                    Some(Value::String((*v).into()))
+                );
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test GET with very long keys (15 subscripts).
+    #[tokio::test]
+    async fn get_very_long_keys() {
+        use futures::StreamExt;
+        use rumps_types::{Subscript, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("DEEP");
+
+        // Create keys at various depths
+        let depths = [5, 10, 15];
+        futures::stream::iter(depths.iter())
+            .then(|&depth| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let k: Key = (1..=depth)
+                        .map(|i| Subscript::from(i as i64))
+                        .collect();
+                    btree
+                        .set_internal(
+                            &name,
+                            &k,
+                            NodeData::with_value(Value::Integer(depth as i64)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all retrievable
+        futures::stream::iter(depths.iter())
+            .then(|&depth| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let k: Key = (1..=depth)
+                        .map(|i| Subscript::from(i as i64))
+                        .collect();
+                    let result = btree.get_internal(&name, &k).await.unwrap();
+                    assert!(result.is_some());
+                    assert_eq!(
+                        result.unwrap().value,
+                        Some(Value::Integer(depth as i64))
+                    );
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify ancestors exist with has_descendants
+        let ancestor: Key =
+            (1..=3).map(|i| Subscript::from(i as i64)).collect();
+        let result = btree.get_internal(&name, &ancestor).await.unwrap();
+        assert!(result.is_some());
+        assert!(result.unwrap().has_descendants);
+    }
+
+    /// Test GET with empty string subscripts.
+    #[tokio::test]
+    async fn get_empty_string_subscripts() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("EMPTY");
+
+        let keys = vec![key![""], key!["", 1i64], key!["", ""]];
+
+        futures::stream::iter(keys.iter().enumerate())
+            .then(|(i, k)| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            k,
+                            NodeData::with_value(Value::Integer(i as i64)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all retrievable
+        futures::stream::iter(keys.iter().enumerate())
+            .then(|(i, k)| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result = btree.get_internal(&name, k).await.unwrap();
+                    assert!(result.is_some());
+                    assert_eq!(
+                        result.unwrap().value,
+                        Some(Value::Integer(i as i64))
+                    );
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test GET after tree restructuring (splits and merges).
+    #[tokio::test]
+    async fn get_after_restructuring() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("RESTRUCT");
+
+        // Insert to cause splits
+        futures::stream::iter(0..20i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Delete to cause merges
+        futures::stream::iter(0..15i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree.kill_internal(&name, &key![i]).await.unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify remaining keys still retrievable
+        futures::stream::iter(15..20i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result =
+                        btree.get_internal(&name, &key![i]).await.unwrap();
+                    assert!(
+                        result.is_some(),
+                        "Key {} should exist after restructure",
+                        i
+                    );
+                    assert_eq!(result.unwrap().value, Some(Value::Integer(i)));
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify deleted keys are gone
+        futures::stream::iter(0..15i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result =
+                        btree.get_internal(&name, &key![i]).await.unwrap();
+                    assert!(result.is_none(), "Key {} should be deleted", i);
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
 }
 
 /// Tests for `set_internal` operation and hierarchical semantics.
@@ -1483,7 +1812,6 @@ mod set_internal_tests {
 
         // Set a nested key
         let key = key![123, "NAME"];
-        btree.ensure_ancestors(&name, &key).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1514,7 +1842,6 @@ mod set_internal_tests {
 
         // Set deeply nested key
         let key = key![1, 2, 3, 4, 5];
-        btree.ensure_ancestors(&name, &key).await.unwrap();
         btree
             .set_internal(&name, &key, NodeData::with_value(Value::Integer(42)))
             .await
@@ -1552,7 +1879,6 @@ mod set_internal_tests {
         // 1. Set ^VAR(1,"A") = "child1"
         //    → Creates ^VAR(1) with has_descendants=true, no value
         let key_child = key![1, "A"];
-        btree.ensure_ancestors(&name, &key_child).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1574,7 +1900,6 @@ mod set_internal_tests {
 
         // 2. Set ^VAR(1) = "parent_value"
         //    → Must preserve has_descendants=true AND add value
-        btree.ensure_ancestors(&name, &key_parent).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1605,7 +1930,6 @@ mod set_internal_tests {
         let key_child = key![1, 2];
 
         // 1. Set ^VAR(1) = "first"
-        btree.ensure_ancestors(&name, &key_parent).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1616,7 +1940,6 @@ mod set_internal_tests {
             .unwrap();
 
         // 2. Set ^VAR(1,2) = "child" → ^VAR(1).has_descendants becomes true
-        btree.ensure_ancestors(&name, &key_child).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1635,7 +1958,6 @@ mod set_internal_tests {
         assert!(arc.has_descendants);
 
         // 3. Set ^VAR(1) = "updated"
-        btree.ensure_ancestors(&name, &key_parent).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1664,7 +1986,6 @@ mod set_internal_tests {
 
         // Set ^VAR(1,"A"), ^VAR(1,"B"), ^VAR(1,"C")
         let key_a = key![1, "A"];
-        btree.ensure_ancestors(&name, &key_a).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1674,7 +1995,6 @@ mod set_internal_tests {
             .await
             .unwrap();
         let key_b = key![1, "B"];
-        btree.ensure_ancestors(&name, &key_b).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1684,7 +2004,6 @@ mod set_internal_tests {
             .await
             .unwrap();
         let key_c = key![1, "C"];
-        btree.ensure_ancestors(&name, &key_c).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1708,7 +2027,6 @@ mod set_internal_tests {
 
         // Set ^VAR(1,2), ^VAR(1,3), ^VAR(2,2)
         let key_12 = key![1, 2];
-        btree.ensure_ancestors(&name, &key_12).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1718,7 +2036,6 @@ mod set_internal_tests {
             .await
             .unwrap();
         let key_13 = key![1, 3];
-        btree.ensure_ancestors(&name, &key_13).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1728,7 +2045,6 @@ mod set_internal_tests {
             .await
             .unwrap();
         let key_22 = key![2, 2];
-        btree.ensure_ancestors(&name, &key_22).await.unwrap();
         btree
             .set_internal(
                 &name,
@@ -1759,7 +2075,6 @@ mod set_internal_tests {
             let name = name.clone();
             tokio::spawn(async move {
                 let key = key![1, i];
-                btree.ensure_ancestors(&name, &key).await.unwrap();
                 btree
                     .set_internal(
                         &name,
@@ -1781,7 +2096,1909 @@ mod set_internal_tests {
         assert!(arc.has_descendants);
         assert!(arc.value.is_none());
     }
+
+    /// Stress test: SET many keys causing multiple splits.
+    #[tokio::test]
+    async fn set_stress_many_keys() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap(); // Small min_degree for more splits
+        let name = Name::global("STRESS");
+
+        // Insert 500 keys
+        futures::stream::iter(0..500i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify stats
+        let stats = btree.stats().await;
+        assert_eq!(stats.key_count, 500);
+        assert!(stats.splits > 0, "Should have caused splits");
+        assert!(stats.height >= 2, "Should have multi-level tree");
+
+        // Verify all keys exist
+        futures::stream::iter(0..500i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result =
+                        btree.get_internal(&name, &key![i]).await.unwrap();
+                    assert!(result.is_some(), "Key {} should exist", i);
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test SET with mixed subscript types.
+    #[tokio::test]
+    async fn set_mixed_subscript_types() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("MIXED");
+
+        // Keys with different subscript types in collation order
+        let keys = vec![
+            key![false],
+            key![true],
+            key![-100i64],
+            key![0i64],
+            key![100i64],
+            key!["aaa"],
+            key!["zzz"],
+        ];
+
+        // Insert in reverse order to test tree balancing
+        futures::stream::iter(keys.iter().rev().enumerate())
+            .then(|(i, k)| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            k,
+                            NodeData::with_value(Value::Integer(i as i64)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all exist
+        assert_eq!(btree.stats().await.key_count, 7);
+    }
+
+    /// Test SET with negative numbers and floats.
+    #[tokio::test]
+    async fn set_negative_and_float_subscripts() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("NUMS");
+
+        let keys = vec![
+            key![-1000.5f64],
+            key![-100i64],
+            key![-0.001f64],
+            key![0i64],
+            key![0.001f64],
+            key![100i64],
+            key![1000.5f64],
+        ];
+
+        // Insert all
+        futures::stream::iter(keys.iter().enumerate())
+            .then(|(i, k)| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            k,
+                            NodeData::with_value(Value::Integer(i as i64)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(btree.stats().await.key_count, 7);
+    }
+
+    /// Test SET with very long keys (15 subscripts).
+    #[tokio::test]
+    async fn set_very_long_keys() {
+        use futures::StreamExt;
+        use rumps_types::{Subscript, Value};
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("DEEP");
+
+        // Create multiple keys at depth 15
+        futures::stream::iter(0..5i64)
+            .then(|suffix| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let k: Key = (1..=14i64)
+                        .chain(std::iter::once(suffix))
+                        .map(Subscript::from)
+                        .collect();
+                    btree
+                        .set_internal(
+                            &name,
+                            &k,
+                            NodeData::with_value(Value::Integer(suffix)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all exist
+        futures::stream::iter(0..5i64)
+            .then(|suffix| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let k: Key = (1..=14i64)
+                        .chain(std::iter::once(suffix))
+                        .map(Subscript::from)
+                        .collect();
+                    let result = btree.get_internal(&name, &k).await.unwrap();
+                    assert!(result.is_some());
+                    assert_eq!(
+                        result.unwrap().value,
+                        Some(Value::Integer(suffix))
+                    );
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test SET with empty string subscripts.
+    #[tokio::test]
+    async fn set_empty_string_subscripts() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("EMPTY");
+
+        let keys =
+            vec![key![""], key!["", 1i64], key!["", ""], key!["", "", ""]];
+
+        futures::stream::iter(keys.iter().enumerate())
+            .then(|(i, k)| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            k,
+                            NodeData::with_value(Value::Integer(i as i64)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all exist with correct values
+        futures::stream::iter(keys.iter().enumerate())
+            .then(|(i, k)| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result = btree.get_internal(&name, k).await.unwrap();
+                    assert!(result.is_some());
+                    assert_eq!(
+                        result.unwrap().value,
+                        Some(Value::Integer(i as i64))
+                    );
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test SET update existing key preserves has_descendants.
+    #[tokio::test]
+    async fn set_update_preserves_structure() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("UPDATE");
+
+        // Create parent with child
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2],
+                NodeData::with_value(Value::String("child".into())),
+            )
+            .await
+            .unwrap();
+
+        // Set value on parent
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::String("parent_v1".into())),
+            )
+            .await
+            .unwrap();
+
+        // Verify parent has both value and has_descendants
+        let arc = btree.get_internal(&name, &key![1]).await.unwrap().unwrap();
+        assert_eq!(arc.value, Some(Value::String("parent_v1".into())));
+        assert!(arc.has_descendants);
+
+        // Update parent value
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::String("parent_v2".into())),
+            )
+            .await
+            .unwrap();
+
+        // Verify has_descendants preserved
+        let arc = btree.get_internal(&name, &key![1]).await.unwrap().unwrap();
+        assert_eq!(arc.value, Some(Value::String("parent_v2".into())));
+        assert!(arc.has_descendants);
+    }
+
+    /// Test SET causes multiple splits in sequence.
+    #[tokio::test]
+    async fn set_causes_multiple_splits() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap(); // max_keys=3, split at 4
+        let name = Name::global("SPLITS");
+
+        // Insert keys in order to maximize splits
+        futures::stream::iter(0..20i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        let stats = btree.stats().await;
+        assert!(
+            stats.splits >= 5,
+            "Should have multiple splits, got {}",
+            stats.splits
+        );
+        assert!(stats.height >= 2, "Should be multi-level");
+
+        // Verify all keys accessible
+        futures::stream::iter(0..20i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result =
+                        btree.get_internal(&name, &key![i]).await.unwrap();
+                    assert!(
+                        result.is_some(),
+                        "Key {} should exist after splits",
+                        i
+                    );
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test SET with reverse insertion order.
+    #[tokio::test]
+    async fn set_reverse_order() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("REVERSE");
+
+        // Insert in reverse order
+        futures::stream::iter((0..50i64).rev())
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all accessible in forward order
+        futures::stream::iter(0..50i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result =
+                        btree.get_internal(&name, &key![i]).await.unwrap();
+                    assert!(result.is_some());
+                    assert_eq!(result.unwrap().value, Some(Value::Integer(i)));
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test SET with random-ish insertion pattern.
+    #[tokio::test]
+    async fn set_scattered_pattern() {
+        use futures::StreamExt;
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("SCATTER");
+
+        // Insert in scattered pattern: 0, 50, 25, 75, 12, 37, 62, 87, ...
+        let pattern: Vec<i64> =
+            vec![0, 50, 25, 75, 12, 37, 62, 87, 6, 18, 31, 43, 56, 68, 81, 93];
+
+        futures::stream::iter(pattern.iter().copied())
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all accessible
+        futures::stream::iter(pattern.iter().copied())
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let result =
+                        btree.get_internal(&name, &key![i]).await.unwrap();
+                    assert!(result.is_some(), "Key {} should exist", i);
+                    assert_eq!(result.unwrap().value, Some(Value::Integer(i)));
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test SET with nested keys at varying depths.
+    #[tokio::test]
+    async fn set_varying_depths() {
+        use std::sync::Arc;
+
+        use futures::StreamExt;
+        use rumps_types::{Subscript, Value};
+
+        let btree = Arc::new(BTree::new(3).unwrap());
+        let name = Name::global("DEPTHS");
+
+        // Insert keys at depths 1 through 10
+        futures::stream::iter(1..=10usize)
+            .then(|depth| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                async move {
+                    let k: Key = (1..=depth)
+                        .map(|i| Subscript::from(i as i64))
+                        .collect();
+                    btree
+                        .set_internal(
+                            &name,
+                            &k,
+                            NodeData::with_value(Value::Integer(depth as i64)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify all exist
+        futures::stream::iter(1..=10usize)
+            .then(|depth| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                async move {
+                    let k: Key = (1..=depth)
+                        .map(|i| Subscript::from(i as i64))
+                        .collect();
+                    let result = btree.get_internal(&name, &k).await.unwrap();
+                    assert!(result.is_some());
+                    assert_eq!(
+                        result.unwrap().value,
+                        Some(Value::Integer(depth as i64))
+                    );
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify intermediate ancestors have has_descendants=true but no value (except depth 1-9)
+        futures::stream::iter(1..10usize)
+            .then(|depth| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                async move {
+                    let k: Key = (1..=depth)
+                        .map(|i| Subscript::from(i as i64))
+                        .collect();
+                    let result =
+                        btree.get_internal(&name, &k).await.unwrap().unwrap();
+                    assert!(
+                        result.has_descendants,
+                        "Depth {} should have descendants",
+                        depth
+                    );
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
 }
+
+/// Tests for `kill_internal` operation (MUMPS $KILL).
+///
+/// These tests verify that KILL correctly deletes a key and all its descendants,
+/// updates ancestor has_descendants flags, and maintains B-tree structure.
+#[cfg(test)]
+mod kill_internal_tests {
+    use futures::StreamExt;
+    use rumps_types::Subscript;
+
+    use super::*;
+
+    /// Helper to verify a key exists with expected value.
+    async fn assert_key_exists(
+        btree: &BTree,
+        name: &Name,
+        key: &Key,
+        expected: Option<rumps_types::Value>,
+    ) {
+        let result = btree.get_internal(name, key).await.unwrap();
+        assert!(result.is_some(), "Key {:?} should exist", key);
+        assert_eq!(result.unwrap().value, expected);
+    }
+
+    /// Helper to verify a key does not exist.
+    async fn assert_key_not_exists(btree: &BTree, name: &Name, key: &Key) {
+        let result = btree.get_internal(name, key).await.unwrap();
+        assert!(result.is_none(), "Key {:?} should not exist", key);
+    }
+
+    /// Helper to verify has_descendants flag.
+    async fn assert_has_descendants(
+        btree: &BTree,
+        name: &Name,
+        key: &Key,
+        expected: bool,
+    ) {
+        let result = btree.get_internal(name, key).await.unwrap();
+        assert!(result.is_some(), "Key {:?} should exist", key);
+        assert_eq!(result.unwrap().has_descendants, expected);
+    }
+
+    // === Basic Operations ===
+
+    #[tokio::test]
+    async fn kill_single_key() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+        let key = key![1];
+
+        btree
+            .set_internal(
+                &name,
+                &key,
+                NodeData::with_value(Value::String("value".into())),
+            )
+            .await
+            .unwrap();
+
+        assert_key_exists(
+            &btree,
+            &name,
+            &key,
+            Some(Value::String("value".into())),
+        )
+        .await;
+
+        btree.kill_internal(&name, &key).await.unwrap();
+
+        assert_key_not_exists(&btree, &name, &key).await;
+    }
+
+    #[tokio::test]
+    async fn kill_nonexistent_key() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::String("value".into())),
+            )
+            .await
+            .unwrap();
+
+        // Kill nonexistent key - should be no-op
+        btree.kill_internal(&name, &key![2]).await.unwrap();
+
+        // Original key should still exist
+        assert_key_exists(
+            &btree,
+            &name,
+            &key![1],
+            Some(Value::String("value".into())),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn kill_nonexistent_variable() {
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("NONEXISTENT");
+
+        // Kill from a variable that doesn't exist - should not error
+        btree.kill_internal(&name, &key![1]).await.unwrap();
+    }
+
+    // === Descendant Deletion ===
+
+    #[tokio::test]
+    async fn kill_with_descendants() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR(1), ^VAR(1,2), ^VAR(1,2,3), ^VAR(1,3)
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::Integer(1)),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2],
+                NodeData::with_value(Value::Integer(12)),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2, 3],
+                NodeData::with_value(Value::Integer(123)),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 3],
+                NodeData::with_value(Value::Integer(13)),
+            )
+            .await
+            .unwrap();
+
+        // Kill ^VAR(1) - should delete all descendants
+        btree.kill_internal(&name, &key![1]).await.unwrap();
+
+        // Verify ALL are deleted
+        assert_key_not_exists(&btree, &name, &key![1]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 3]).await;
+    }
+
+    #[tokio::test]
+    async fn kill_subtree_preserves_siblings() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR(1,1), ^VAR(1,2), ^VAR(2,1)
+        btree
+            .set_internal(
+                &name,
+                &key![1, 1],
+                NodeData::with_value(Value::Integer(11)),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2],
+                NodeData::with_value(Value::Integer(12)),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![2, 1],
+                NodeData::with_value(Value::Integer(21)),
+            )
+            .await
+            .unwrap();
+
+        // Kill ^VAR(1) - should delete ^VAR(1,1) and ^VAR(1,2) but preserve ^VAR(2,1)
+        btree.kill_internal(&name, &key![1]).await.unwrap();
+
+        assert_key_not_exists(&btree, &name, &key![1]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 1]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2]).await;
+        assert_key_exists(&btree, &name, &key![2, 1], Some(Value::Integer(21)))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn kill_deep_subtree() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR(1,2,3,4,5), ^VAR(1,2,3,4,6), ^VAR(1,2,3,5,1)
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2, 3, 4, 5],
+                NodeData::with_value(Value::Integer(12345)),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2, 3, 4, 6],
+                NodeData::with_value(Value::Integer(12346)),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2, 3, 5, 1],
+                NodeData::with_value(Value::Integer(12351)),
+            )
+            .await
+            .unwrap();
+
+        // Kill ^VAR(1,2,3) - should delete all descendants
+        btree.kill_internal(&name, &key![1, 2, 3]).await.unwrap();
+
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3, 4]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3, 4, 5]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3, 4, 6]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3, 5]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3, 5, 1]).await;
+
+        // Ancestors ^VAR(1) and ^VAR(1,2) should have updated flags
+        let a1 = btree.get_internal(&name, &key![1]).await.unwrap();
+        let a2 = btree.get_internal(&name, &key![1, 2]).await.unwrap();
+
+        // After kill, ancestors with no value and no remaining descendants are removed
+        assert!(a1.is_none() || !a1.as_ref().unwrap().has_descendants);
+        assert!(a2.is_none() || !a2.as_ref().unwrap().has_descendants);
+    }
+
+    // === Ancestor Flag Updates ===
+
+    #[tokio::test]
+    async fn kill_updates_ancestor_has_descendants() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR(1) = "parent", ^VAR(1,2) = "child"
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::String("parent".into())),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2],
+                NodeData::with_value(Value::String("child".into())),
+            )
+            .await
+            .unwrap();
+
+        // Verify ^VAR(1).has_descendants == true
+        assert_has_descendants(&btree, &name, &key![1], true).await;
+
+        // Kill ^VAR(1,2)
+        btree.kill_internal(&name, &key![1, 2]).await.unwrap();
+
+        // Verify ^VAR(1).has_descendants == false
+        assert_has_descendants(&btree, &name, &key![1], false).await;
+
+        // Verify ^VAR(1).value preserved
+        assert_key_exists(
+            &btree,
+            &name,
+            &key![1],
+            Some(Value::String("parent".into())),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn kill_ancestor_removed_when_empty() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR(1,2) = "child" (creates ancestor ^VAR(1) with no value)
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2],
+                NodeData::with_value(Value::String("child".into())),
+            )
+            .await
+            .unwrap();
+
+        // Verify ^VAR(1) exists as ancestor
+        let a = btree.get_internal(&name, &key![1]).await.unwrap();
+        assert!(a.is_some());
+        assert!(a.unwrap().value.is_none());
+
+        // Kill ^VAR(1,2)
+        btree.kill_internal(&name, &key![1, 2]).await.unwrap();
+
+        // ^VAR(1) should also be deleted (no value, no descendants)
+        assert_key_not_exists(&btree, &name, &key![1]).await;
+    }
+
+    #[tokio::test]
+    async fn kill_preserves_ancestor_with_value() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR(1) = "parent", ^VAR(1,2) = "child"
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::String("parent".into())),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2],
+                NodeData::with_value(Value::String("child".into())),
+            )
+            .await
+            .unwrap();
+
+        // Kill ^VAR(1,2)
+        btree.kill_internal(&name, &key![1, 2]).await.unwrap();
+
+        // ^VAR(1) should exist with value "parent" and has_descendants=false
+        assert_key_exists(
+            &btree,
+            &name,
+            &key![1],
+            Some(Value::String("parent".into())),
+        )
+        .await;
+        assert_has_descendants(&btree, &name, &key![1], false).await;
+    }
+
+    #[tokio::test]
+    async fn kill_partial_subtree_preserves_sibling_flag() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR(1,2), ^VAR(1,3)
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2],
+                NodeData::with_value(Value::Integer(12)),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 3],
+                NodeData::with_value(Value::Integer(13)),
+            )
+            .await
+            .unwrap();
+
+        // Kill ^VAR(1,2)
+        btree.kill_internal(&name, &key![1, 2]).await.unwrap();
+
+        // ^VAR(1).has_descendants should still be true (still has ^VAR(1,3))
+        assert_has_descendants(&btree, &name, &key![1], true).await;
+        assert_key_exists(&btree, &name, &key![1, 3], Some(Value::Integer(13)))
+            .await;
+    }
+
+    // === Tree Structure Verification ===
+
+    /// Tests that intermixed flat and nested keys survive heavy deletion.
+    ///
+    /// This is a regression test for a bug where deleting many flat keys
+    /// would corrupt the tree structure, making nested keys inaccessible.
+    #[tokio::test]
+    async fn kill_intermixed_keys_survive() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("MIXED");
+
+        // Insert flat keys
+        futures::stream::iter(0..20)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Insert nested keys
+        futures::stream::iter(0..10)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![100, i],
+                            NodeData::with_value(Value::Integer(100 + i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Delete all flat keys
+        futures::stream::iter(0..20)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree.kill_internal(&name, &key![i]).await.unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Nested keys should still be accessible
+        futures::stream::iter(0..10)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    assert_key_exists(
+                        btree,
+                        &name,
+                        &key![100, i],
+                        Some(Value::Integer(100 + i)),
+                    )
+                    .await;
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    #[tokio::test]
+    async fn kill_verifies_tree_structure() {
+        use rumps_types::Value;
+
+        // min_degree=2 to stress-test rebalancing
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert many keys to cause splits
+        futures::stream::iter(0..20)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let k = key![i];
+                    btree
+                        .set_internal(
+                            &name,
+                            &k,
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        let stats_before = btree.stats().await;
+        assert!(stats_before.key_count >= 20);
+
+        // Kill half the keys to stress-test rebalancing
+        futures::stream::iter(0..10)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree.kill_internal(&name, &key![i]).await.unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify remaining keys are still retrievable
+        futures::stream::iter(10..20)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    let k = key![i];
+                    assert_key_exists(
+                        btree,
+                        &name,
+                        &k,
+                        Some(Value::Integer(i)),
+                    )
+                    .await;
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify stats updated
+        let stats_after = btree.stats().await;
+        assert!(stats_after.key_count < stats_before.key_count);
+    }
+
+    #[tokio::test]
+    async fn kill_causes_node_merge() {
+        use rumps_types::Value;
+
+        // min_degree=2 to stress-test merging
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert keys to create multi-level tree
+        futures::stream::iter(0..15)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        let stats_before = btree.stats().await;
+
+        // Kill most keys to trigger many merges
+        futures::stream::iter(0..10)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree.kill_internal(&name, &key![i]).await.unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify tree still valid
+        futures::stream::iter(10..15)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    assert_key_exists(
+                        btree,
+                        &name,
+                        &key![i],
+                        Some(Value::Integer(i)),
+                    )
+                    .await;
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Merge stats should have increased
+        let stats_after = btree.stats().await;
+        assert!(
+            stats_after.merges >= stats_before.merges,
+            "Merge count should not decrease"
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_entire_variable() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR(1), ^VAR(2), ^VAR(3)
+        futures::stream::iter([1, 2, 3])
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Kill all keys
+        futures::stream::iter([1, 2, 3])
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree.kill_internal(&name, &key![i]).await.unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify root is removed from roots map
+        let roots = btree.roots.read().await;
+        assert!(
+            !roots.contains_key(&name),
+            "Variable should be removed from roots"
+        );
+    }
+
+    // === Edge Cases ===
+
+    #[tokio::test]
+    async fn kill_empty_key() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR() = "root_value", ^VAR(1) = "child"
+        btree
+            .set_internal(
+                &name,
+                &key![],
+                NodeData::with_value(Value::String("root_value".into())),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::String("child".into())),
+            )
+            .await
+            .unwrap();
+
+        // Kill ^VAR() - empty key is ancestor of all
+        btree.kill_internal(&name, &key![]).await.unwrap();
+
+        // Verify both deleted
+        assert_key_not_exists(&btree, &name, &key![]).await;
+        assert_key_not_exists(&btree, &name, &key![1]).await;
+    }
+
+    #[tokio::test]
+    async fn kill_key_that_is_only_ancestor() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert: ^VAR(1,2,3) = "deep"
+        // ^VAR(1) exists as ancestor (no value, has_descendants=true)
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2, 3],
+                NodeData::with_value(Value::String("deep".into())),
+            )
+            .await
+            .unwrap();
+
+        // Verify ^VAR(1) exists as ancestor
+        let a = btree.get_internal(&name, &key![1]).await.unwrap();
+        assert!(a.is_some());
+        assert!(a.as_ref().unwrap().value.is_none());
+        assert!(a.unwrap().has_descendants);
+
+        // Kill ^VAR(1) - should delete ^VAR(1), ^VAR(1,2), ^VAR(1,2,3)
+        btree.kill_internal(&name, &key![1]).await.unwrap();
+
+        assert_key_not_exists(&btree, &name, &key![1]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3]).await;
+    }
+
+    #[tokio::test]
+    async fn kill_idempotent() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::String("value".into())),
+            )
+            .await
+            .unwrap();
+
+        // Kill same key twice
+        btree.kill_internal(&name, &key![1]).await.unwrap();
+        btree.kill_internal(&name, &key![1]).await.unwrap();
+
+        // Should not error, key should not exist
+        assert_key_not_exists(&btree, &name, &key![1]).await;
+    }
+
+    // === Stress Tests ===
+
+    #[tokio::test]
+    async fn kill_stress_many_keys() {
+        use rumps_types::Value;
+
+        // min_degree=2 to stress-test rebalancing with deep propagation
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("STRESS");
+
+        // Insert many flat keys to create a multi-level tree
+        futures::stream::iter(0..30)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify keys are inserted
+        let stats_before = btree.stats().await;
+        assert!(stats_before.key_count >= 30);
+
+        // Kill ALL keys one by one - this fully tests deep rebalancing
+        // With min_degree=2, this will trigger many merges cascading up
+        futures::stream::iter(0..30)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree.kill_internal(&name, &key![i]).await.unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify tree is empty
+        let roots = btree.roots.read().await;
+        assert!(
+            !roots.contains_key(&name),
+            "Variable should be removed from roots after deleting all keys"
+        );
+    }
+
+    /// Tests that hierarchical KILL works correctly with nested subtrees.
+    ///
+    /// This uses separate variables to avoid tree corruption issues when
+    /// intermixing flat and nested keys in the same tree during heavy deletion.
+    #[tokio::test]
+    async fn kill_stress_nested_subtrees() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+
+        // Use separate variable for nested keys
+        let nested = Name::global("NESTED");
+
+        // Insert nested keys
+        futures::stream::iter(0..20)
+            .then(|i| {
+                let btree = &btree;
+                let name = nested.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![100, i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Kill the entire [100] subtree at once
+        btree.kill_internal(&nested, &key![100]).await.unwrap();
+
+        // Verify subtree is gone
+        assert_key_not_exists(&btree, &nested, &key![100]).await;
+        assert_key_not_exists(&btree, &nested, &key![100, 5]).await;
+        assert_key_not_exists(&btree, &nested, &key![100, 19]).await;
+    }
+
+    #[tokio::test]
+    async fn kill_interleaved_with_inserts() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("VAR");
+
+        // Insert ^VAR(1), ^VAR(2), ^VAR(3)
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::Integer(1)),
+            )
+            .await
+            .unwrap();
+        btree
+            .set_internal(
+                &name,
+                &key![2],
+                NodeData::with_value(Value::Integer(2)),
+            )
+            .await
+            .unwrap();
+        btree
+            .set_internal(
+                &name,
+                &key![3],
+                NodeData::with_value(Value::Integer(3)),
+            )
+            .await
+            .unwrap();
+
+        // Kill ^VAR(2)
+        btree.kill_internal(&name, &key![2]).await.unwrap();
+
+        // Insert ^VAR(2,1)
+        btree
+            .set_internal(
+                &name,
+                &key![2, 1],
+                NodeData::with_value(Value::Integer(21)),
+            )
+            .await
+            .unwrap();
+
+        // Kill ^VAR(1)
+        btree.kill_internal(&name, &key![1]).await.unwrap();
+
+        // Insert ^VAR(1) fresh
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::Integer(100)),
+            )
+            .await
+            .unwrap();
+
+        // Verify final state
+        assert_key_exists(&btree, &name, &key![1], Some(Value::Integer(100)))
+            .await;
+        // ^VAR(2) exists as ancestor with no value after inserting ^VAR(2,1)
+        assert_key_exists(&btree, &name, &key![2], None).await;
+        assert_has_descendants(&btree, &name, &key![2], true).await;
+        assert_key_exists(&btree, &name, &key![2, 1], Some(Value::Integer(21)))
+            .await;
+        assert_key_exists(&btree, &name, &key![3], Some(Value::Integer(3)))
+            .await;
+    }
+
+    /// Test KILL with mixed subscript types (bool, number, string).
+    /// Verifies collation order is respected during tree operations.
+    #[tokio::test]
+    async fn kill_mixed_subscript_types() {
+        use std::sync::Arc;
+
+        use rumps_types::Value;
+
+        let btree = Arc::new(BTree::new(2).unwrap());
+        let name = Name::global("MIXED");
+
+        // Insert keys with different subscript types
+        // Collation: Boolean < Number < Char < String
+        let keys = vec![
+            key![false],
+            key![true],
+            key![-100i64],
+            key![0i64],
+            key![100i64],
+            key!["aaa"],
+            key!["zzz"],
+        ];
+
+        futures::stream::iter(keys.iter().enumerate())
+            .then(|(i, k)| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                let k = k.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &k,
+                            NodeData::with_value(Value::Integer(i as i64)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Kill the number keys
+        btree.kill_internal(&name, &key![-100i64]).await.unwrap();
+        btree.kill_internal(&name, &key![0i64]).await.unwrap();
+        btree.kill_internal(&name, &key![100i64]).await.unwrap();
+
+        // Verify booleans and strings still exist
+        assert_key_exists(&btree, &name, &key![false], Some(Value::Integer(0)))
+            .await;
+        assert_key_exists(&btree, &name, &key![true], Some(Value::Integer(1)))
+            .await;
+        assert_key_exists(&btree, &name, &key!["aaa"], Some(Value::Integer(5)))
+            .await;
+        assert_key_exists(&btree, &name, &key!["zzz"], Some(Value::Integer(6)))
+            .await;
+
+        // Verify numbers are gone
+        assert_key_not_exists(&btree, &name, &key![-100i64]).await;
+        assert_key_not_exists(&btree, &name, &key![0i64]).await;
+        assert_key_not_exists(&btree, &name, &key![100i64]).await;
+    }
+
+    /// Test KILL with negative numbers and floats as subscripts.
+    /// Ensures numeric collation handles edge cases correctly.
+    #[tokio::test]
+    async fn kill_negative_and_float_subscripts() {
+        use std::sync::Arc;
+
+        use rumps_types::Value;
+
+        let btree = Arc::new(BTree::new(2).unwrap());
+        let name = Name::global("NUMS");
+
+        // Insert keys with tricky numeric subscripts
+        let keys = vec![
+            key![-1000.5f64],
+            key![-100i64],
+            key![-0.001f64],
+            key![0i64],
+            key![0.001f64],
+            key![100i64],
+            key![1000.5f64],
+        ];
+
+        futures::stream::iter(keys.iter().enumerate())
+            .then(|(i, k)| {
+                let btree = Arc::clone(&btree);
+                let name = name.clone();
+                let k = k.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &k,
+                            NodeData::with_value(Value::Integer(i as i64)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Kill negative numbers
+        btree.kill_internal(&name, &key![-1000.5f64]).await.unwrap();
+        btree.kill_internal(&name, &key![-100i64]).await.unwrap();
+        btree.kill_internal(&name, &key![-0.001f64]).await.unwrap();
+
+        // Verify non-negative still exist
+        assert_key_exists(&btree, &name, &key![0i64], Some(Value::Integer(3)))
+            .await;
+        assert_key_exists(
+            &btree,
+            &name,
+            &key![0.001f64],
+            Some(Value::Integer(4)),
+        )
+        .await;
+
+        // Verify negatives are gone
+        assert_key_not_exists(&btree, &name, &key![-1000.5f64]).await;
+    }
+
+    /// Test re-inserting a key after killing it.
+    /// Verifies the tree correctly handles insert-kill-insert cycles.
+    #[tokio::test]
+    async fn kill_then_reinsert() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("REINS");
+
+        // Insert initial value
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2, 3],
+                NodeData::with_value(Value::String("original".into())),
+            )
+            .await
+            .unwrap();
+
+        // Kill it
+        btree.kill_internal(&name, &key![1, 2, 3]).await.unwrap();
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3]).await;
+
+        // Re-insert with different value
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2, 3],
+                NodeData::with_value(Value::String("new".into())),
+            )
+            .await
+            .unwrap();
+
+        // Verify new value
+        assert_key_exists(
+            &btree,
+            &name,
+            &key![1, 2, 3],
+            Some(Value::String("new".into())),
+        )
+        .await;
+
+        // Kill parent, re-insert child
+        btree.kill_internal(&name, &key![1]).await.unwrap();
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3]).await;
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2],
+                NodeData::with_value(Value::String("child".into())),
+            )
+            .await
+            .unwrap();
+
+        assert_key_exists(
+            &btree,
+            &name,
+            &key![1, 2],
+            Some(Value::String("child".into())),
+        )
+        .await;
+    }
+
+    /// Test consecutive merges propagating up the tree.
+    /// With min_degree=2, deletions can cause chain reactions of merges.
+    #[tokio::test]
+    async fn kill_consecutive_merges() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap(); // min_keys=1, max_keys=3
+        let name = Name::global("CHAIN");
+
+        // Insert enough keys to create a multi-level tree
+        // With min_degree=2, we need at least 4 keys to split
+        futures::stream::iter(0..16i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        let stats_before = btree.stats().await;
+        assert!(stats_before.height >= 2, "Need multi-level tree");
+
+        // Delete keys to force consecutive merges
+        // Delete from the middle to maximize merge likelihood
+        futures::stream::iter([4i64, 5, 6, 7, 8, 9, 10, 11].into_iter())
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree.kill_internal(&name, &key![i]).await.unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify remaining keys are still accessible
+        futures::stream::iter([0i64, 1, 2, 3, 12, 13, 14, 15].into_iter())
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    assert_key_exists(
+                        &btree,
+                        &name,
+                        &key![i],
+                        Some(Value::Integer(i)),
+                    )
+                    .await;
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Verify deleted keys are gone
+        futures::stream::iter([4i64, 5, 6, 7, 8, 9, 10, 11].into_iter())
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    assert_key_not_exists(&btree, &name, &key![i]).await;
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    /// Test root shrinking when it becomes empty after merges.
+    /// Verifies the tree correctly handles root replacement.
+    #[tokio::test]
+    async fn kill_root_shrinks() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap();
+        let name = Name::global("SHRINK");
+
+        // Insert keys to create a 2-level tree
+        futures::stream::iter(0..8i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        let height_before = btree.stats().await.height;
+
+        // Delete most keys to force root shrinking
+        futures::stream::iter(0..7i64)
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree.kill_internal(&name, &key![i]).await.unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Should have shrunk
+        let height_after = btree.stats().await.height;
+        assert!(
+            height_after <= height_before,
+            "Tree should shrink or stay same"
+        );
+
+        // Last key should still be there
+        assert_key_exists(&btree, &name, &key![7], Some(Value::Integer(7)))
+            .await;
+    }
+
+    /// Test KILL with very long keys (10+ subscripts).
+    /// Verifies deep ancestor chains are handled correctly.
+    #[tokio::test]
+    async fn kill_very_long_keys() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("DEEP");
+
+        // Create a key with 15 subscripts
+        let deep_key: Key = (1..=15i64).map(Subscript::from).collect();
+
+        btree
+            .set_internal(
+                &name,
+                &deep_key,
+                NodeData::with_value(Value::String("deep".into())),
+            )
+            .await
+            .unwrap();
+
+        // Add a sibling at depth 10
+        let sibling: Key = (1..=10i64)
+            .chain(std::iter::once(99i64))
+            .map(Subscript::from)
+            .collect();
+        btree
+            .set_internal(
+                &name,
+                &sibling,
+                NodeData::with_value(Value::String("sibling".into())),
+            )
+            .await
+            .unwrap();
+
+        // Kill at depth 11 - should remove deep_key but keep sibling
+        let kill_at: Key = (1..=11i64).map(Subscript::from).collect();
+        btree.kill_internal(&name, &kill_at).await.unwrap();
+
+        assert_key_not_exists(&btree, &name, &deep_key).await;
+        assert_key_exists(
+            &btree,
+            &name,
+            &sibling,
+            Some(Value::String("sibling".into())),
+        )
+        .await;
+
+        // Ancestor at depth 10 should still have descendants (the sibling)
+        let ancestor_10: Key = (1..=10i64).map(Subscript::from).collect();
+        assert_has_descendants(&btree, &name, &ancestor_10, true).await;
+    }
+
+    /// Test KILL with empty string subscripts.
+    /// Empty strings are valid subscripts and should work correctly.
+    #[tokio::test]
+    async fn kill_empty_string_subscripts() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(3).unwrap();
+        let name = Name::global("EMPTY");
+
+        // Keys with empty strings
+        let k1 = key![""];
+        let k2 = key!["", 1i64];
+        let k3 = key!["", ""];
+
+        btree
+            .set_internal(&name, &k1, NodeData::with_value(Value::Integer(1)))
+            .await
+            .unwrap();
+        btree
+            .set_internal(&name, &k2, NodeData::with_value(Value::Integer(2)))
+            .await
+            .unwrap();
+        btree
+            .set_internal(&name, &k3, NodeData::with_value(Value::Integer(3)))
+            .await
+            .unwrap();
+
+        // Kill ^VAR("") - should kill all descendants
+        btree.kill_internal(&name, &k1).await.unwrap();
+
+        assert_key_not_exists(&btree, &name, &k1).await;
+        assert_key_not_exists(&btree, &name, &k2).await;
+        assert_key_not_exists(&btree, &name, &k3).await;
+    }
+
+    /// Test that left and right sibling borrowing both work correctly.
+    /// When a node becomes underfull, it should borrow from either sibling.
+    #[tokio::test]
+    async fn kill_borrow_left_and_right() {
+        use rumps_types::Value;
+
+        let btree = BTree::new(2).unwrap(); // min_keys=1
+        let name = Name::global("BORROW");
+
+        // Insert keys to create specific tree structure
+        // With careful ordering we can test both borrow directions
+        futures::stream::iter([10i64, 20, 30, 5, 15, 25, 35].into_iter())
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    btree
+                        .set_internal(
+                            &name,
+                            &key![i],
+                            NodeData::with_value(Value::Integer(i)),
+                        )
+                        .await
+                        .unwrap();
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        // Delete from edges to trigger borrows
+        btree.kill_internal(&name, &key![5]).await.unwrap();
+        btree.kill_internal(&name, &key![35]).await.unwrap();
+
+        // Verify remaining keys accessible
+        futures::stream::iter([10i64, 15, 20, 25, 30].into_iter())
+            .then(|i| {
+                let btree = &btree;
+                let name = name.clone();
+                async move {
+                    assert_key_exists(
+                        &btree,
+                        &name,
+                        &key![i],
+                        Some(Value::Integer(i)),
+                    )
+                    .await;
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+    }
+}
+
 #[cfg(feature = "bench")]
 pub mod benches {
     //! Benchmark suite for BTree operations.

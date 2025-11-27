@@ -287,7 +287,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Navigate to node
   - Delete entire subtree rooted at key
   - Update parent `has_descendants` flags
-  - Handle node merging and tree shrinking
+  - Handle node merging and tree shrinking (make sure to promote intermediate value!)
   - Use `save_node()` to persist changes
   - Update `BTreeStats` (key count, merges)
   - ~~Track deletions in transaction context~~ (moved to Phase 5.4)
