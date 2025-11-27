@@ -1,6 +1,12 @@
-use rumps_types::key;
+use std::sync::Arc;
+
+use futures::{future, StreamExt};
+use rumps_types::{key, Name, Value};
+use tokio::task;
+use tokio::time::{sleep, Duration};
 
 use super::*;
+use crate::node::NodeData;
 
 #[test]
 fn test_btree_new() {
@@ -82,9 +88,6 @@ async fn test_btree_stats() {
 
 #[tokio::test]
 async fn test_concurrent_readers() {
-    use futures::future;
-    use tokio::task;
-
     let btree = Arc::new(BTree::new(3).unwrap());
 
     // Spawn 10 concurrent reader tasks
@@ -107,8 +110,6 @@ async fn test_concurrent_readers() {
 
 #[tokio::test]
 async fn test_writer_blocks_readers() {
-    use tokio::time::{sleep, Duration};
-
     let btree = Arc::new(BTree::new(3).unwrap());
 
     // Acquire write lock and hold it
@@ -135,11 +136,6 @@ async fn test_writer_blocks_readers() {
 
 #[tokio::test]
 async fn test_stress_large_tree() {
-    use std::sync::Arc;
-
-    use futures::StreamExt;
-    use rumps_types::Value;
-
     let btree = Arc::new(BTree::new(3).unwrap());
     let name = Name::global("STRESS");
 
@@ -309,10 +305,6 @@ async fn test_find_node_exists() {
 
 #[tokio::test]
 async fn test_split_node_leaf_odd_keys() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create a leaf node with 5 keys (odd number)
@@ -369,10 +361,6 @@ async fn test_split_node_leaf_odd_keys() {
 
 #[tokio::test]
 async fn test_split_node_leaf_even_keys() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create a leaf node with 4 keys (even number)
@@ -418,8 +406,6 @@ async fn test_split_node_leaf_even_keys() {
 
 #[tokio::test]
 async fn test_split_node_internal_with_children() {
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create an internal node with 5 keys and 6 children
@@ -519,10 +505,6 @@ async fn test_split_node_empty() {
 
 #[tokio::test]
 async fn test_split_node_preserves_values() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create a node with different value types
@@ -567,10 +549,6 @@ async fn test_split_node_preserves_values() {
 
 #[tokio::test]
 async fn test_split_node_stats_update() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create two nodes and split both to verify stats accumulation
@@ -625,10 +603,6 @@ async fn test_split_node_stats_update() {
 
 #[tokio::test]
 async fn test_merge_nodes_leaf() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create two leaf nodes and a separator
@@ -698,8 +672,6 @@ async fn test_merge_nodes_leaf() {
 
 #[tokio::test]
 async fn test_merge_nodes_internal_with_children() {
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create two internal nodes with children
@@ -751,10 +723,6 @@ async fn test_merge_nodes_internal_with_children() {
 
 #[tokio::test]
 async fn test_merge_nodes_incompatible_types() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create one leaf and one internal node
@@ -798,10 +766,6 @@ async fn test_merge_nodes_incompatible_types() {
 
 #[tokio::test]
 async fn test_merge_nodes_left_not_found() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     let left_id = NodeId::from(100);
@@ -838,10 +802,6 @@ async fn test_merge_nodes_left_not_found() {
 
 #[tokio::test]
 async fn test_merge_nodes_right_not_found() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     let left_id = NodeId::from(100);
@@ -878,10 +838,6 @@ async fn test_merge_nodes_right_not_found() {
 
 #[tokio::test]
 async fn test_merge_nodes_preserves_value_types() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create nodes with various value types
@@ -934,10 +890,6 @@ async fn test_merge_nodes_preserves_value_types() {
 
 #[tokio::test]
 async fn test_merge_nodes_stats_update() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create multiple pairs of nodes to merge
@@ -1017,10 +969,6 @@ async fn test_merge_nodes_stats_update() {
 
 #[tokio::test]
 async fn test_split_and_merge_roundtrip() {
-    use rumps_types::Value;
-
-    use crate::node::NodeData;
-
     let btree = BTree::new(3).unwrap();
 
     // Create a node with 5 keys
@@ -1080,12 +1028,17 @@ async fn test_split_and_merge_roundtrip() {
 /// transaction context will be added once Phase 5 is complete.
 #[cfg(test)]
 mod get_internal_tests {
+    use std::sync::Arc;
+
+    use futures::{future, StreamExt};
+    use rumps_types::{key, Name, Subscript, Value};
+    use tokio::task;
+
     use super::*;
+    use crate::node::NodeData;
 
     #[tokio::test]
     async fn nonexistent_variable() {
-        use rumps_types::Name;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("PATIENT");
         let key = key![123];
@@ -1097,8 +1050,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn exact_match_single_key() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("PATIENT");
         let key = key![123];
@@ -1120,8 +1071,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn exact_match_nested_key() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("PATIENT");
         let key = key![123, "NAME"];
@@ -1142,8 +1091,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn nonexistent_key() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("PATIENT");
 
@@ -1180,8 +1127,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn partial_match_no_such_path() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("PATIENT");
 
@@ -1211,8 +1156,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn multiple_keys_same_variable() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -1257,8 +1200,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn different_variables() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name1 = Name::global("VAR1");
         let name2 = Name::global("VAR2");
@@ -1292,8 +1233,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn returns_nodedata_with_flags() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
         let key = key![1];
@@ -1316,8 +1255,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn with_tree_splits() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap(); // min_degree=3, max_keys=5
         let name = Name::global("VAR");
 
@@ -1383,8 +1320,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn deep_nesting() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("PATIENT");
 
@@ -1404,12 +1339,6 @@ mod get_internal_tests {
 
     #[tokio::test]
     async fn concurrent_reads() {
-        use std::sync::Arc;
-
-        use futures::future;
-        use rumps_types::Value;
-        use tokio::task;
-
         let btree = Arc::new(BTree::new(3).unwrap());
         let name = Name::global("CONCURRENT");
 
@@ -1461,9 +1390,6 @@ mod get_internal_tests {
     /// Stress test: GET many keys after mass insertion.
     #[tokio::test]
     async fn get_stress_many_keys() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap(); // Small min_degree for more splits
         let name = Name::global("STRESS");
 
@@ -1519,9 +1445,6 @@ mod get_internal_tests {
     /// Test GET with mixed subscript types respecting collation.
     #[tokio::test]
     async fn get_mixed_subscript_types() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("MIXED");
 
@@ -1565,9 +1488,6 @@ mod get_internal_tests {
     /// Test GET with negative numbers and floats.
     #[tokio::test]
     async fn get_negative_and_float_subscripts() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("NUMS");
 
@@ -1612,9 +1532,6 @@ mod get_internal_tests {
     /// Test GET with very long keys (15 subscripts).
     #[tokio::test]
     async fn get_very_long_keys() {
-        use futures::StreamExt;
-        use rumps_types::{Subscript, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("DEEP");
 
@@ -1672,9 +1589,6 @@ mod get_internal_tests {
     /// Test GET with empty string subscripts.
     #[tokio::test]
     async fn get_empty_string_subscripts() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("EMPTY");
 
@@ -1719,9 +1633,6 @@ mod get_internal_tests {
     /// Test GET after tree restructuring (splits and merges).
     #[tokio::test]
     async fn get_after_restructuring() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("RESTRUCT");
 
@@ -1801,12 +1712,17 @@ mod get_internal_tests {
 /// added once transaction context is fully functional.
 #[cfg(test)]
 mod set_internal_tests {
+    use std::sync::Arc;
+
+    use futures::future::join_all;
+    use futures::StreamExt;
+    use rumps_types::{key, Name, Subscript, Value};
+
     use super::*;
+    use crate::node::NodeData;
 
     #[tokio::test]
     async fn creates_ancestors() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("PATIENT");
 
@@ -1834,9 +1750,6 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn deep_nesting_creates_all_ancestors() {
-        use futures::stream::StreamExt;
-        use rumps_types::{Name, Value};
-
         let btree = Arc::new(BTree::new(3).unwrap());
         let name = Name::global("VAR");
 
@@ -1870,8 +1783,6 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn intermediate_node_becomes_both() {
-        use rumps_types::{Name, Value};
-
         // CRITICAL EDGE CASE
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
@@ -1921,8 +1832,6 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn preserves_has_descendants_on_update() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -1979,8 +1888,6 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn multiple_children_same_parent() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -2020,8 +1927,6 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn sibling_paths() {
-        use rumps_types::{Name, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -2063,9 +1968,6 @@ mod set_internal_tests {
 
     #[tokio::test]
     async fn concurrent_ancestor_creation() {
-        use futures::future::join_all;
-        use rumps_types::{Name, Value};
-
         let btree = Arc::new(BTree::new(3).unwrap());
         let name = Name::global("VAR");
 
@@ -2100,9 +2002,6 @@ mod set_internal_tests {
     /// Stress test: SET many keys causing multiple splits.
     #[tokio::test]
     async fn set_stress_many_keys() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap(); // Small min_degree for more splits
         let name = Name::global("STRESS");
 
@@ -2149,9 +2048,6 @@ mod set_internal_tests {
     /// Test SET with mixed subscript types.
     #[tokio::test]
     async fn set_mixed_subscript_types() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("MIXED");
 
@@ -2192,9 +2088,6 @@ mod set_internal_tests {
     /// Test SET with negative numbers and floats.
     #[tokio::test]
     async fn set_negative_and_float_subscripts() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("NUMS");
 
@@ -2233,9 +2126,6 @@ mod set_internal_tests {
     /// Test SET with very long keys (15 subscripts).
     #[tokio::test]
     async fn set_very_long_keys() {
-        use futures::StreamExt;
-        use rumps_types::{Subscript, Value};
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("DEEP");
 
@@ -2287,9 +2177,6 @@ mod set_internal_tests {
     /// Test SET with empty string subscripts.
     #[tokio::test]
     async fn set_empty_string_subscripts() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("EMPTY");
 
@@ -2335,8 +2222,6 @@ mod set_internal_tests {
     /// Test SET update existing key preserves has_descendants.
     #[tokio::test]
     async fn set_update_preserves_structure() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("UPDATE");
 
@@ -2384,9 +2269,6 @@ mod set_internal_tests {
     /// Test SET causes multiple splits in sequence.
     #[tokio::test]
     async fn set_causes_multiple_splits() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap(); // max_keys=3, split at 4
         let name = Name::global("SPLITS");
 
@@ -2439,9 +2321,6 @@ mod set_internal_tests {
     /// Test SET with reverse insertion order.
     #[tokio::test]
     async fn set_reverse_order() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("REVERSE");
 
@@ -2483,9 +2362,6 @@ mod set_internal_tests {
     /// Test SET with random-ish insertion pattern.
     #[tokio::test]
     async fn set_scattered_pattern() {
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("SCATTER");
 
@@ -2530,11 +2406,6 @@ mod set_internal_tests {
     /// Test SET with nested keys at varying depths.
     #[tokio::test]
     async fn set_varying_depths() {
-        use std::sync::Arc;
-
-        use futures::StreamExt;
-        use rumps_types::{Subscript, Value};
-
         let btree = Arc::new(BTree::new(3).unwrap());
         let name = Name::global("DEPTHS");
 
@@ -2611,8 +2482,6 @@ mod set_internal_tests {
     /// 4. All original keys must remain accessible
     #[tokio::test]
     async fn set_root_split_preserves_children() {
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap(); // max_keys=3
         let name = Name::global("ROOTSPLIT");
 
@@ -2683,11 +2552,6 @@ mod set_internal_tests {
     /// 4. Eventually the root itself splits
     #[tokio::test]
     async fn set_split_propagates_to_root() {
-        use std::sync::Arc;
-
-        use futures::StreamExt;
-        use rumps_types::Value;
-
         let btree = Arc::new(BTree::new(2).unwrap()); // max_keys=3, very small
         let name = Name::global("PROPAGATE");
 
@@ -2752,17 +2616,21 @@ mod set_internal_tests {
 /// updates ancestor has_descendants flags, and maintains B-tree structure.
 #[cfg(test)]
 mod kill_internal_tests {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
     use futures::StreamExt;
-    use rumps_types::Subscript;
+    use rumps_types::{key, Name, Subscript, Value};
 
     use super::*;
+    use crate::node::NodeData;
 
     /// Helper to verify a key exists with expected value.
     async fn assert_key_exists(
         btree: &BTree,
         name: &Name,
         key: &Key,
-        expected: Option<rumps_types::Value>,
+        expected: Option<Value>,
     ) {
         let result = btree.get_internal(name, key).await.unwrap();
         assert!(result.is_some(), "Key {:?} should exist", key);
@@ -2791,8 +2659,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_single_key() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
         let key = key![1];
@@ -2821,8 +2687,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_nonexistent_key() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -2861,8 +2725,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_with_descendants() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -2915,8 +2777,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_subtree_preserves_siblings() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -2960,8 +2820,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_deep_subtree() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3016,8 +2874,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_updates_ancestor_has_descendants() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3061,8 +2917,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_ancestor_removed_when_empty() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3090,8 +2944,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_preserves_ancestor_with_value() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3130,8 +2982,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_partial_subtree_preserves_sibling_flag() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3171,8 +3021,6 @@ mod kill_internal_tests {
     /// would corrupt the tree structure, making nested keys inaccessible.
     #[tokio::test]
     async fn kill_intermixed_keys_survive() {
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("MIXED");
 
@@ -3247,8 +3095,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_verifies_tree_structure() {
-        use rumps_types::Value;
-
         // min_degree=2 to stress-test rebalancing
         let btree = BTree::new(2).unwrap();
         let name = Name::global("VAR");
@@ -3314,8 +3160,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_causes_node_merge() {
-        use rumps_types::Value;
-
         // min_degree=2 to stress-test merging
         let btree = BTree::new(2).unwrap();
         let name = Name::global("VAR");
@@ -3381,8 +3225,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_entire_variable() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3429,8 +3271,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_empty_key() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3463,8 +3303,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_key_that_is_only_ancestor() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3495,8 +3333,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_idempotent() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3521,8 +3357,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_stress_many_keys() {
-        use rumps_types::Value;
-
         // min_degree=2 to stress-test rebalancing with deep propagation
         let btree = BTree::new(2).unwrap();
         let name = Name::global("STRESS");
@@ -3577,8 +3411,6 @@ mod kill_internal_tests {
     /// intermixing flat and nested keys in the same tree during heavy deletion.
     #[tokio::test]
     async fn kill_stress_nested_subtrees() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
 
         // Use separate variable for nested keys
@@ -3614,8 +3446,6 @@ mod kill_internal_tests {
 
     #[tokio::test]
     async fn kill_interleaved_with_inserts() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("VAR");
 
@@ -3687,10 +3517,6 @@ mod kill_internal_tests {
     /// Verifies collation order is respected during tree operations.
     #[tokio::test]
     async fn kill_mixed_subscript_types() {
-        use std::sync::Arc;
-
-        use rumps_types::Value;
-
         let btree = Arc::new(BTree::new(2).unwrap());
         let name = Name::global("MIXED");
 
@@ -3750,10 +3576,6 @@ mod kill_internal_tests {
     /// Ensures numeric collation handles edge cases correctly.
     #[tokio::test]
     async fn kill_negative_and_float_subscripts() {
-        use std::sync::Arc;
-
-        use rumps_types::Value;
-
         let btree = Arc::new(BTree::new(2).unwrap());
         let name = Name::global("NUMS");
 
@@ -3811,8 +3633,6 @@ mod kill_internal_tests {
     /// Verifies the tree correctly handles insert-kill-insert cycles.
     #[tokio::test]
     async fn kill_then_reinsert() {
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("REINS");
 
@@ -3875,8 +3695,6 @@ mod kill_internal_tests {
     /// With min_degree=2, deletions can cause chain reactions of merges.
     #[tokio::test]
     async fn kill_consecutive_merges() {
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap(); // min_keys=1, max_keys=3
         let name = Name::global("CHAIN");
 
@@ -3951,8 +3769,6 @@ mod kill_internal_tests {
     /// Verifies the tree correctly handles root replacement.
     #[tokio::test]
     async fn kill_root_shrinks() {
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap();
         let name = Name::global("SHRINK");
 
@@ -4005,8 +3821,6 @@ mod kill_internal_tests {
     /// Verifies deep ancestor chains are handled correctly.
     #[tokio::test]
     async fn kill_very_long_keys() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("DEEP");
 
@@ -4058,8 +3872,6 @@ mod kill_internal_tests {
     /// Empty strings are valid subscripts and should work correctly.
     #[tokio::test]
     async fn kill_empty_string_subscripts() {
-        use rumps_types::Value;
-
         let btree = BTree::new(3).unwrap();
         let name = Name::global("EMPTY");
 
@@ -4093,8 +3905,6 @@ mod kill_internal_tests {
     /// When a node becomes underfull, it should borrow from either sibling.
     #[tokio::test]
     async fn kill_borrow_left_and_right() {
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap(); // min_keys=1
         let name = Name::global("BORROW");
 
@@ -4150,8 +3960,6 @@ mod kill_internal_tests {
     /// 4. Rebalance if necessary
     #[tokio::test]
     async fn kill_from_internal_node() {
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap(); // max_keys=3
         let name = Name::global("INTERNAL");
 
@@ -4217,10 +4025,6 @@ mod kill_internal_tests {
     /// finding a predecessor that is several levels deep.
     #[tokio::test]
     async fn kill_predecessor_replacement_chain() {
-        use std::sync::Arc;
-
-        use rumps_types::Value;
-
         let btree = Arc::new(BTree::new(2).unwrap());
         let name = Name::global("PREDCHAIN");
 
@@ -4311,8 +4115,6 @@ mod kill_internal_tests {
     ///    - Merge with right sibling
     #[tokio::test]
     async fn set_kill_roundtrip_boundary() {
-        use rumps_types::Value;
-
         let btree = BTree::new(2).unwrap(); // min_keys=1, max_keys=3
         let name = Name::global("BOUNDARY");
 
@@ -4391,11 +4193,6 @@ mod kill_internal_tests {
     /// that all expected keys are accessible.
     #[tokio::test]
     async fn interleaved_set_kill_invariants() {
-        use std::collections::HashSet;
-        use std::sync::Arc;
-
-        use rumps_types::Value;
-
         let btree = Arc::new(BTree::new(2).unwrap());
         let name = Name::global("INTERLEAVE");
         let mut expected: HashSet<i64> = HashSet::new();
@@ -4554,10 +4351,6 @@ mod kill_internal_tests {
     /// rebalancing operations extremely frequent.
     #[tokio::test]
     async fn min_degree_2_stress() {
-        use std::sync::Arc;
-
-        use rumps_types::Value;
-
         let btree = Arc::new(BTree::new(2).unwrap()); // min_keys=1, max_keys=3
         let name = Name::global("MINDEG2");
 

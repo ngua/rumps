@@ -1,5 +1,6 @@
 // TODO: Remove this once Phase 4-5 are implemented and all methods are actually used
 #![allow(dead_code)]
+#![allow(clippy::only_used_in_recursion)]
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -15,12 +16,6 @@ use crate::node::{Node, NodeData, NodeId};
 
 #[cfg(any(test, feature = "bench"))]
 mod tests;
-
-/// Direction for sibling borrowing during B-tree rebalancing.
-enum BorrowDir {
-    Left,
-    Right,
-}
 
 #[cfg(feature = "bench")]
 pub use tests::benches;
@@ -860,6 +855,13 @@ impl BTree {
     }
 }
 
+/// Direction for sibling borrowing during B-tree rebalancing.
+/// (used in private `impl` method[s] below)
+enum BorrowDir {
+    Left,
+    Right,
+}
+
 /// Private helper methods for B-tree operations.
 impl BTree {
     /// Internal GET that returns `Arc<NodeData>` (not just Value).
@@ -1454,8 +1456,6 @@ impl BTree {
         parent_id: NodeId,
         child_idx: usize,
     ) -> Result<bool> {
-        use BorrowDir::{Left, Right};
-
         let parent = self.load_node(parent_id).await?;
         let min_keys = self.min_degree - 1;
         let idx_err = |i| {
@@ -1470,8 +1470,13 @@ impl BTree {
                 .ok_or_else(|| idx_err(child_idx - 1))?;
             let left = self.load_node(left_id).await?;
             if left.keys.len() > min_keys {
-                self.borrow_from_sibling(parent_id, child_idx, left_id, Left)
-                    .await?;
+                self.borrow_from_sibling(
+                    parent_id,
+                    child_idx,
+                    left_id,
+                    BorrowDir::Left,
+                )
+                .await?;
                 return Ok(false); // No merge, parent unchanged
             }
         }
@@ -1484,8 +1489,13 @@ impl BTree {
                 .ok_or_else(|| idx_err(child_idx + 1))?;
             let right = self.load_node(right_id).await?;
             if right.keys.len() > min_keys {
-                self.borrow_from_sibling(parent_id, child_idx, right_id, Right)
-                    .await?;
+                self.borrow_from_sibling(
+                    parent_id,
+                    child_idx,
+                    right_id,
+                    BorrowDir::Right,
+                )
+                .await?;
                 return Ok(false); // No merge, parent unchanged
             }
         }
@@ -1541,8 +1551,6 @@ impl BTree {
         sibling_id: NodeId,
         dir: BorrowDir,
     ) -> Result<()> {
-        use BorrowDir::{Left, Right};
-
         let mut nodes = self.nodes.write().await;
         let idx_err = |i| {
             StorageError::InvalidOperation(format!("Index {} out of bounds", i))
@@ -1558,8 +1566,8 @@ impl BTree {
             .get(child_idx)
             .ok_or_else(|| idx_err(child_idx))?;
         let sep_idx = match dir {
-            Left => child_idx - 1,
-            Right => child_idx,
+            BorrowDir::Left => child_idx - 1,
+            BorrowDir::Right => child_idx,
         };
 
         // Get separator from parent
@@ -1580,7 +1588,7 @@ impl BTree {
             let empty_err =
                 || StorageError::InvalidOperation("Empty sibling".into());
             match dir {
-                Left => (
+                BorrowDir::Left => (
                     sib.keys.pop().ok_or_else(empty_err)?,
                     sib.values.pop().ok_or_else(empty_err)?,
                     match sib.is_leaf {
@@ -1588,7 +1596,7 @@ impl BTree {
                         false => sib.children.pop(),
                     },
                 ),
-                Right => (
+                BorrowDir::Right => (
                     sib.keys.drain(..1).next().ok_or_else(empty_err)?,
                     sib.values.drain(..1).next().ok_or_else(empty_err)?,
                     match sib.is_leaf {
@@ -1605,14 +1613,14 @@ impl BTree {
                 .get_mut(&child_id)
                 .ok_or_else(|| StorageError::NodeNotFound(child_id.into()))?;
             match dir {
-                Left => {
+                BorrowDir::Left => {
                     child.keys.insert(0, sep_key);
                     child.values.insert(0, sep_val);
                     borrowed_child
                         .into_iter()
                         .for_each(|c| child.children.insert(0, c));
                 }
-                Right => {
+                BorrowDir::Right => {
                     child.keys.push(sep_key);
                     child.values.push(sep_val);
                     borrowed_child
