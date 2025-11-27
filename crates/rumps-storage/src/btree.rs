@@ -3,8 +3,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::{future, pin};
 
 use async_trait::async_trait;
+use futures::TryStreamExt;
 use rumps_types::{DataStatus, Key, Name};
 use tokio::sync::RwLock;
 
@@ -13,6 +15,12 @@ use crate::node::{Node, NodeData, NodeId};
 
 #[cfg(any(test, feature = "bench"))]
 mod tests;
+
+/// Direction for sibling borrowing during B-tree rebalancing.
+enum BorrowDir {
+    Left,
+    Right,
+}
 
 #[cfg(feature = "bench")]
 pub use tests::benches;
@@ -802,12 +810,14 @@ impl BTree {
     /// ```
     pub(crate) async fn kill(
         &self,
-        _name: &Name,
-        _key: &Key,
+        name: &Name,
+        key: &Key,
         _ctx: &crate::TransactionContext,
     ) -> Result<()> {
-        // TODO Phase 2.4: Implement KILL operation
-        todo!("KILL operation not yet implemented - see TODOS/persistence.md Phase 2.4")
+        // TODO Phase 5: Use transaction context for snapshot isolation
+        // and buffered writes (e.g., write to transaction buffer instead
+        // of directly to tree). For now, we just delegate to `kill_internal`.
+        self.kill_internal(name, key).await
     }
 
     /// Checks the data status of a node (MUMPS $DATA).
@@ -907,9 +917,9 @@ impl BTree {
         &'a self,
         node_id: NodeId,
         key: &'a Key,
-    ) -> std::pin::Pin<
+    ) -> pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<Option<Arc<NodeData>>>>
+            dyn future::Future<Output = Result<Option<Arc<NodeData>>>>
                 + Send
                 + 'a,
         >,
@@ -1109,10 +1119,749 @@ impl BTree {
         }
     }
 
+    /// Internal KILL operation that deletes a key and all its descendants.
+    ///
+    /// This method implements MUMPS KILL semantics:
+    /// 1. Deletes the specified key (if it exists)
+    /// 2. Deletes all descendants (keys that start with the given key as prefix)
+    /// 3. Updates ancestor `has_descendants` flags
+    /// 4. Handles tree rebalancing (node merging when underfull)
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Collect all keys that match the prefix (the key itself and all descendants)
+    /// 2. Delete each key from the tree
+    /// 3. After all deletions, update ancestor `has_descendants` flags
+    /// 4. Remove empty ancestor nodes (nodes with no value and no descendants)
     // Internal method for tests/benchmarks - not part of public API
-    async fn kill_internal(&self, _name: &Name, _key: &Key) -> Result<()> {
-        // TODO Phase 2.4: Implement KILL operation
-        todo!("KILL operation not yet implemented - see TODOS/persistence.md Phase 2.4")
+    async fn kill_internal(&self, name: &Name, key: &Key) -> Result<()> {
+        // Step 1: Collect all keys to delete (the key and its descendants)
+        let mut keys_to_delete =
+            self.collect_keys_with_prefix(name, key).await?;
+
+        if keys_to_delete.is_empty() {
+            Ok(())
+        } else {
+            // Step 2: Delete each key from the tree
+            // We delete in reverse order (deepest first) to minimize rebalancing
+            keys_to_delete
+                .sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| b.cmp(a)));
+
+            // Delete each key
+            futures::stream::iter(
+                keys_to_delete.iter().map(Ok::<_, StorageError>),
+            )
+            .try_for_each(|k| self.delete_key(name, k))
+            .await?;
+
+            // Step 3: Update ancestor has_descendants flags
+            self.update_ancestors_after_kill(name, key).await
+        }
+    }
+
+    /// Collects all keys that start with the given prefix.
+    ///
+    /// Returns a vector of all keys (including the prefix itself if it exists)
+    /// that have the prefix as their starting subscripts.
+    async fn collect_keys_with_prefix(
+        &self,
+        name: &Name,
+        prefix: &Key,
+    ) -> Result<Vec<Key>> {
+        let roots = self.roots.read().await;
+        match roots.get(name).copied() {
+            None => Ok(vec![]),
+            Some(root_id) => {
+                drop(roots);
+                self.collect_keys_from_node(root_id, prefix).await
+            }
+        }
+    }
+
+    /// Recursively collects keys from a node that match the prefix.
+    fn collect_keys_from_node<'a>(
+        &'a self,
+        node_id: NodeId,
+        prefix: &'a Key,
+    ) -> pin::Pin<Box<dyn future::Future<Output = Result<Vec<Key>>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let node = self.load_node(node_id).await?;
+
+            // Binary search to find starting position for prefix range
+            let start_pos =
+                node.keys.binary_search(prefix).unwrap_or_else(|pos| pos);
+
+            // Collect matching keys from this node
+            let matching_keys: Vec<Key> = node
+                .keys
+                .iter()
+                .skip(start_pos)
+                .take_while(|k| k.starts_with(prefix))
+                .cloned()
+                .collect();
+
+            // For internal nodes, also check children
+            match node.is_leaf {
+                true => Ok(matching_keys),
+                false => {
+                    // Check all children that could contain matching keys
+                    let child_results = futures::future::try_join_all(
+                        (start_pos
+                            ..=node.children.len().min(node.keys.len() + 1))
+                            .filter_map(|i| node.children.get(i).copied())
+                            .map(|child_id| {
+                                self.collect_keys_from_node(child_id, prefix)
+                            }),
+                    )
+                    .await?;
+
+                    Ok(child_results.into_iter().fold(
+                        matching_keys,
+                        |mut acc, keys| {
+                            acc.extend(keys);
+                            acc
+                        },
+                    ))
+                }
+            }
+        })
+    }
+
+    /// Deletes a single key from the tree.
+    ///
+    /// This handles the B-tree deletion algorithm:
+    /// 1. Find the key in the tree
+    /// 2. If in a leaf, remove it directly
+    /// 3. If in an internal node, replace with predecessor/successor
+    /// 4. Rebalance if node becomes underfull
+    async fn delete_key(&self, name: &Name, key: &Key) -> Result<()> {
+        let roots = self.roots.read().await;
+        match roots.get(name).copied() {
+            None => Ok(()), // Nothing to delete
+            Some(root_id) => {
+                drop(roots);
+                self.delete_key_from_node(name, root_id, key, vec![])
+                    .await?;
+
+                // Check if root is now empty and shrink tree if needed
+                self.shrink_root_if_needed(name).await
+            }
+        }
+    }
+
+    /// Recursively deletes a key from a subtree rooted at node_id.
+    ///
+    /// `ancestors` is the chain from root to parent: `[(grandparent, idx), (parent, idx)]`
+    /// This allows us to propagate rebalancing upward through the tree.
+    ///
+    /// Returns true if the key was found and deleted.
+    fn delete_key_from_node<'a>(
+        &'a self,
+        name: &'a Name,
+        node_id: NodeId,
+        key: &'a Key,
+        ancestors: Vec<(NodeId, usize)>,
+    ) -> pin::Pin<Box<dyn future::Future<Output = Result<bool>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let node = self.load_node(node_id).await?;
+
+            match node.keys.binary_search(key) {
+                Ok(pos) => match node.is_leaf {
+                    true => {
+                        // Case 1: Key is in a leaf - remove it directly
+                        {
+                            let mut nodes = self.nodes.write().await;
+                            let n =
+                                nodes.get_mut(&node_id).ok_or_else(|| {
+                                    StorageError::NodeNotFound(node_id.into())
+                                })?;
+                            n.keys.remove(pos);
+                            n.values.remove(pos);
+                        }
+                        {
+                            let mut stats = self.stats.write().await;
+                            stats.key_count = stats.key_count.saturating_sub(1);
+                        }
+                        self.rebalance_with_ancestors(name, node_id, ancestors)
+                            .await?;
+                        Ok(true)
+                    }
+                    false => {
+                        // Case 2: Key is in an internal node - replace with predecessor
+                        let left_child =
+                            *node.children.get(pos).ok_or_else(|| {
+                                StorageError::InvalidOperation(format!(
+                                    "Child index {} out of bounds",
+                                    pos
+                                ))
+                            })?;
+                        let (pred_key, pred_val) =
+                            self.find_predecessor(left_child).await?;
+
+                        // Replace key with predecessor
+                        {
+                            let mut nodes = self.nodes.write().await;
+                            let n =
+                                nodes.get_mut(&node_id).ok_or_else(|| {
+                                    StorageError::NodeNotFound(node_id.into())
+                                })?;
+                            *n.keys.get_mut(pos).ok_or_else(|| {
+                                StorageError::InvalidOperation(format!(
+                                    "Key index {} out of bounds",
+                                    pos
+                                ))
+                            })? = pred_key.clone();
+                            *n.values.get_mut(pos).ok_or_else(|| {
+                                StorageError::InvalidOperation(format!(
+                                    "Value index {} out of bounds",
+                                    pos
+                                ))
+                            })? = pred_val;
+                        }
+
+                        // Delete predecessor from left subtree
+                        let mut child_ancestors = ancestors.clone();
+                        child_ancestors.push((node_id, pos));
+                        self.delete_key_from_node(
+                            name,
+                            left_child,
+                            &pred_key,
+                            child_ancestors,
+                        )
+                        .await?;
+                        self.rebalance_with_ancestors(name, node_id, ancestors)
+                            .await?;
+                        Ok(true)
+                    }
+                },
+                Err(pos) => match node.is_leaf {
+                    true => Ok(false),
+                    false => {
+                        let child_id =
+                            node.children.get(pos).copied().ok_or_else(
+                                || {
+                                    StorageError::InvalidOperation(format!(
+                                        "Child index {} out of bounds",
+                                        pos
+                                    ))
+                                },
+                            )?;
+                        drop(node);
+                        let mut child_ancestors = ancestors;
+                        child_ancestors.push((node_id, pos));
+                        self.delete_key_from_node(
+                            name,
+                            child_id,
+                            key,
+                            child_ancestors,
+                        )
+                        .await
+                    }
+                },
+            }
+        })
+    }
+
+    /// Finds the predecessor (rightmost key in subtree).
+    fn find_predecessor<'a>(
+        &'a self,
+        node_id: NodeId,
+    ) -> pin::Pin<
+        Box<
+            dyn future::Future<Output = Result<(Key, Arc<NodeData>)>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let node = self.load_node(node_id).await?;
+            match node.is_leaf {
+                true => {
+                    let i =
+                        node.keys.len().checked_sub(1).ok_or_else(|| {
+                            StorageError::InvalidOperation(
+                                "Empty node".to_string(),
+                            )
+                        })?;
+                    let k = node.keys.get(i).ok_or_else(|| {
+                        StorageError::InvalidOperation(
+                            "Key index out of bounds".to_string(),
+                        )
+                    })?;
+                    let v = node.values.get(i).ok_or_else(|| {
+                        StorageError::InvalidOperation(
+                            "Value index out of bounds".to_string(),
+                        )
+                    })?;
+                    Ok((k.clone(), Arc::clone(v)))
+                }
+                false => {
+                    let child = *node.children.last().ok_or_else(|| {
+                        StorageError::InvalidOperation(
+                            "No children".to_string(),
+                        )
+                    })?;
+                    self.find_predecessor(child).await
+                }
+            }
+        })
+    }
+
+    /// Rebalances a node if underfull, propagating fixes up the ancestor chain.
+    fn rebalance_with_ancestors<'a>(
+        &'a self,
+        name: &'a Name,
+        node_id: NodeId,
+        mut ancestors: Vec<(NodeId, usize)>,
+    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let node = self.load_node(node_id).await?;
+            let min_keys = self.min_degree - 1;
+
+            // Root can have fewer keys, or node is not underfull
+            match ancestors.pop() {
+                None => Ok(()), // This is the root
+                Some((parent_id, child_idx)) if node.keys.len() < min_keys => {
+                    drop(node);
+                    let merged =
+                        self.fix_underfull_node(parent_id, child_idx).await?;
+                    // If we merged, parent lost a key - check if parent needs fixing
+                    match merged {
+                        true => {
+                            self.rebalance_with_ancestors(
+                                name, parent_id, ancestors,
+                            )
+                            .await
+                        }
+                        false => Ok(()),
+                    }
+                }
+                _ => Ok(()),
+            }
+        })
+    }
+
+    /// Fixes an underfull node by borrowing from sibling or merging.
+    ///
+    /// Returns `true` if a merge was performed (parent lost a key).
+    async fn fix_underfull_node(
+        &self,
+        parent_id: NodeId,
+        child_idx: usize,
+    ) -> Result<bool> {
+        use BorrowDir::{Left, Right};
+
+        let parent = self.load_node(parent_id).await?;
+        let min_keys = self.min_degree - 1;
+        let idx_err = |i| {
+            StorageError::InvalidOperation(format!("Index {} out of bounds", i))
+        };
+
+        // Try to borrow from left sibling
+        if child_idx > 0 {
+            let left_id = *parent
+                .children
+                .get(child_idx - 1)
+                .ok_or_else(|| idx_err(child_idx - 1))?;
+            let left = self.load_node(left_id).await?;
+            if left.keys.len() > min_keys {
+                self.borrow_from_sibling(parent_id, child_idx, left_id, Left)
+                    .await?;
+                return Ok(false); // No merge, parent unchanged
+            }
+        }
+
+        // Try to borrow from right sibling
+        if child_idx < parent.children.len().saturating_sub(1) {
+            let right_id = *parent
+                .children
+                .get(child_idx + 1)
+                .ok_or_else(|| idx_err(child_idx + 1))?;
+            let right = self.load_node(right_id).await?;
+            if right.keys.len() > min_keys {
+                self.borrow_from_sibling(parent_id, child_idx, right_id, Right)
+                    .await?;
+                return Ok(false); // No merge, parent unchanged
+            }
+        }
+
+        // Must merge - prefer left sibling
+        let (left_id, right_id, sep_idx) = match child_idx > 0 {
+            true => (
+                *parent
+                    .children
+                    .get(child_idx - 1)
+                    .ok_or_else(|| idx_err(child_idx - 1))?,
+                *parent
+                    .children
+                    .get(child_idx)
+                    .ok_or_else(|| idx_err(child_idx))?,
+                child_idx - 1,
+            ),
+            false => (
+                *parent
+                    .children
+                    .get(child_idx)
+                    .ok_or_else(|| idx_err(child_idx))?,
+                *parent
+                    .children
+                    .get(child_idx + 1)
+                    .ok_or_else(|| idx_err(child_idx + 1))?,
+                child_idx,
+            ),
+        };
+        let sep_key = parent
+            .keys
+            .get(sep_idx)
+            .ok_or_else(|| idx_err(sep_idx))?
+            .clone();
+        let sep_val = Arc::clone(
+            parent.values.get(sep_idx).ok_or_else(|| idx_err(sep_idx))?,
+        );
+        drop(parent);
+
+        self.merge_nodes(left_id, sep_key, sep_val, right_id)
+            .await?;
+        self.remove_separator_from_parent(parent_id, sep_idx)
+            .await?;
+
+        Ok(true) // Merged, parent lost a key
+    }
+
+    /// Borrows a key from a sibling.
+    async fn borrow_from_sibling(
+        &self,
+        parent_id: NodeId,
+        child_idx: usize,
+        sibling_id: NodeId,
+        dir: BorrowDir,
+    ) -> Result<()> {
+        use BorrowDir::{Left, Right};
+
+        let mut nodes = self.nodes.write().await;
+        let idx_err = |i| {
+            StorageError::InvalidOperation(format!("Index {} out of bounds", i))
+        };
+
+        let parent = nodes
+            .get(&parent_id)
+            .ok_or_else(|| StorageError::NodeNotFound(parent_id.into()))?
+            .clone();
+
+        let child_id = *parent
+            .children
+            .get(child_idx)
+            .ok_or_else(|| idx_err(child_idx))?;
+        let sep_idx = match dir {
+            Left => child_idx - 1,
+            Right => child_idx,
+        };
+
+        // Get separator from parent
+        let sep_key = parent
+            .keys
+            .get(sep_idx)
+            .ok_or_else(|| idx_err(sep_idx))?
+            .clone();
+        let sep_val = Arc::clone(
+            parent.values.get(sep_idx).ok_or_else(|| idx_err(sep_idx))?,
+        );
+
+        // Extract from sibling (pop from end if left, drain first if right)
+        let (new_sep_key, new_sep_val, borrowed_child) = {
+            let sib = nodes
+                .get_mut(&sibling_id)
+                .ok_or_else(|| StorageError::NodeNotFound(sibling_id.into()))?;
+            let empty_err =
+                || StorageError::InvalidOperation("Empty sibling".into());
+            match dir {
+                Left => (
+                    sib.keys.pop().ok_or_else(empty_err)?,
+                    sib.values.pop().ok_or_else(empty_err)?,
+                    match sib.is_leaf {
+                        true => None,
+                        false => sib.children.pop(),
+                    },
+                ),
+                Right => (
+                    sib.keys.drain(..1).next().ok_or_else(empty_err)?,
+                    sib.values.drain(..1).next().ok_or_else(empty_err)?,
+                    match sib.is_leaf {
+                        true => None,
+                        false => sib.children.drain(..1).next(),
+                    },
+                ),
+            }
+        };
+
+        // Insert separator into child (front if left, end if right)
+        {
+            let child = nodes
+                .get_mut(&child_id)
+                .ok_or_else(|| StorageError::NodeNotFound(child_id.into()))?;
+            match dir {
+                Left => {
+                    child.keys.insert(0, sep_key);
+                    child.values.insert(0, sep_val);
+                    borrowed_child
+                        .into_iter()
+                        .for_each(|c| child.children.insert(0, c));
+                }
+                Right => {
+                    child.keys.push(sep_key);
+                    child.values.push(sep_val);
+                    borrowed_child
+                        .into_iter()
+                        .for_each(|c| child.children.push(c));
+                }
+            }
+        }
+
+        // Update separator in parent
+        {
+            let p = nodes
+                .get_mut(&parent_id)
+                .ok_or_else(|| StorageError::NodeNotFound(parent_id.into()))?;
+            *p.keys.get_mut(sep_idx).ok_or_else(|| idx_err(sep_idx))? =
+                new_sep_key;
+            *p.values.get_mut(sep_idx).ok_or_else(|| idx_err(sep_idx))? =
+                new_sep_val;
+        }
+
+        Ok(())
+    }
+
+    /// Removes the separator key and child pointer from parent after merge.
+    async fn remove_separator_from_parent(
+        &self,
+        parent_id: NodeId,
+        sep_idx: usize,
+    ) -> Result<()> {
+        let mut nodes = self.nodes.write().await;
+        let parent = nodes
+            .get_mut(&parent_id)
+            .ok_or_else(|| StorageError::NodeNotFound(parent_id.into()))?;
+
+        parent.keys.remove(sep_idx);
+        parent.values.remove(sep_idx);
+        parent.children.remove(sep_idx + 1);
+
+        // Update key count
+        drop(nodes);
+        let mut stats = self.stats.write().await;
+        stats.key_count = stats.key_count.saturating_sub(1);
+        drop(stats);
+
+        // If parent is root and now empty, it was handled by shrink_root_if_needed
+        // Otherwise, we might need to recursively fix parent
+        // For now, we'll rely on the caller to check
+        Ok(())
+    }
+
+    /// Shrinks the tree if root is empty after deletion.
+    async fn shrink_root_if_needed(&self, name: &Name) -> Result<()> {
+        let roots = self.roots.read().await;
+        let root_id = match roots.get(name).copied() {
+            None => {
+                drop(roots);
+                return Ok(());
+            }
+            Some(id) => id,
+        };
+        drop(roots);
+
+        let root = self.load_node(root_id).await?;
+
+        // If root has no keys but has one child, promote that child
+        match (
+            root.keys.is_empty(),
+            root.is_leaf,
+            root.children.first().copied(),
+        ) {
+            (true, false, Some(new_root_id)) => {
+                // Promote the only child to be the new root
+                {
+                    let mut roots = self.roots.write().await;
+                    roots.insert(name.clone(), new_root_id);
+                }
+
+                // Deallocate old root
+                {
+                    let mut nodes = self.nodes.write().await;
+                    nodes.remove(&root_id);
+                }
+                self.allocator.deallocate(root_id).await?;
+
+                // Update height
+                {
+                    let mut stats = self.stats.write().await;
+                    stats.height = stats.height.saturating_sub(1);
+                    stats.node_count = stats.node_count.saturating_sub(1);
+                }
+
+                Ok(())
+            }
+            (true, true, _) => {
+                // Root is empty leaf - remove the variable entirely
+                {
+                    let mut roots = self.roots.write().await;
+                    roots.remove(name);
+                }
+
+                // Deallocate the root node
+                {
+                    let mut nodes = self.nodes.write().await;
+                    nodes.remove(&root_id);
+                }
+                self.allocator.deallocate(root_id).await?;
+
+                // Update stats
+                {
+                    let mut stats = self.stats.write().await;
+                    stats.height = 0;
+                    stats.node_count = stats.node_count.saturating_sub(1);
+                }
+
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Updates ancestor has_descendants flags after a KILL operation.
+    ///
+    /// For each ancestor of the killed key, checks if it still has any descendants.
+    /// If not, sets has_descendants to false. If the ancestor has no value and
+    /// no descendants, it is removed entirely.
+    async fn update_ancestors_after_kill(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> Result<()> {
+        use futures::stream::{self, TryStreamExt};
+
+        // Process ancestors from deepest to shallowest
+        let mut ancestors = key.ancestors();
+        ancestors.reverse();
+
+        stream::iter(ancestors.into_iter().map(Ok::<_, StorageError>))
+            .try_for_each(|ancestor_key| async move {
+                match self.get_internal(name, &ancestor_key).await? {
+                    None => Ok(()), // Ancestor doesn't exist, nothing to update
+                    Some(node_data) => {
+                        // Check if ancestor still has any descendants
+                        let has_remaining_descendants = self
+                            .has_any_descendants(name, &ancestor_key)
+                            .await?;
+
+                        match (
+                            has_remaining_descendants,
+                            node_data.value.is_some(),
+                        ) {
+                            (true, _) => {
+                                // Still has descendants, ensure flag is set
+                                match node_data.has_descendants {
+                                    true => Ok(()),
+                                    false => {
+                                        self.update_descendants_flag(
+                                            name,
+                                            &ancestor_key,
+                                            true,
+                                        )
+                                        .await
+                                    }
+                                }
+                            }
+                            (false, true) => {
+                                // No descendants but has value - update flag
+                                self.update_descendants_flag(
+                                    name,
+                                    &ancestor_key,
+                                    false,
+                                )
+                                .await
+                            }
+                            (false, false) => {
+                                // No descendants and no value - remove the node
+                                self.delete_key(name, &ancestor_key).await
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+    }
+
+    /// Checks if a key has any descendants in the tree.
+    ///
+    /// Returns true if there exists any key K' where K'.starts_with(key) and K' != key.
+    async fn has_any_descendants(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> Result<bool> {
+        let roots = self.roots.read().await;
+        match roots.get(name).copied() {
+            None => Ok(false),
+            Some(root_id) => {
+                drop(roots);
+                self.check_descendants_from_node(root_id, key).await
+            }
+        }
+    }
+
+    /// Recursively checks if any key with the given prefix exists (excluding exact match).
+    fn check_descendants_from_node<'a>(
+        &'a self,
+        node_id: NodeId,
+        prefix: &'a Key,
+    ) -> pin::Pin<Box<dyn future::Future<Output = Result<bool>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let node = self.load_node(node_id).await?;
+
+            // Binary search to find starting position
+            let start_pos =
+                node.keys.binary_search(prefix).unwrap_or_else(|p| p);
+
+            // Check keys in this node
+            let found_in_node = node
+                .keys
+                .iter()
+                .skip(start_pos)
+                .any(|k| k.starts_with(prefix) && k != prefix);
+
+            match found_in_node {
+                true => Ok(true),
+                false if node.is_leaf => Ok(false),
+                false => {
+                    // Check children that might contain descendants
+                    let check_range = start_pos
+                        ..=node.children.len().min(node.keys.len() + 1);
+
+                    futures::stream::iter(
+                        check_range
+                            .filter_map(|i| node.children.get(i).copied())
+                            .map(Ok::<_, StorageError>),
+                    )
+                    .try_fold(false, |acc, child_id| async move {
+                        match acc {
+                            true => Ok(true),
+                            false => {
+                                self.check_descendants_from_node(
+                                    child_id, prefix,
+                                )
+                                .await
+                            }
+                        }
+                    })
+                    .await
+                }
+            }
+        })
     }
 
     // Internal method for tests/benchmarks - not part of public API
@@ -1137,112 +1886,19 @@ impl BTree {
 
     /// Inserts a key-value pair into a non-full node.
     ///
-    /// This is a recursive helper for the SET operation. It assumes the given
-    /// node is not full (has fewer than 2*min_degree - 1 keys).
+    /// Delegates to `insert_non_full_with_data` with appropriate `NodeData`.
     fn insert_non_full<'a>(
         &'a self,
         node_id: NodeId,
         key: &'a Key,
         value: rumps_types::Value,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
-    > {
-        Box::pin(async move {
-            let node = self.load_node(node_id).await?;
-
-            // Find the position where the key should be inserted
-            let pos = node
-                .keys
-                .binary_search(key)
-                .unwrap_or_else(|insert_pos| insert_pos);
-
-            if node.is_leaf {
-                // Leaf node: insert or update the key-value pair
-                let mut updated_node = node;
-
-                match updated_node.keys.get(pos) {
-                    Some(existing_key) if existing_key == key => {
-                        // Key exists - CRITICAL: preserve has_descendants flag
-                        let existing_value =
-                            updated_node.values.get(pos).ok_or_else(|| {
-                                StorageError::InvalidOperation(format!(
-                                    "Value index {} out of bounds (len {})",
-                                    pos,
-                                    updated_node.values.len()
-                                ))
-                            })?;
-                        let existing_has_descendants =
-                            existing_value.has_descendants;
-                        let values_len = updated_node.values.len();
-                        *updated_node.values.get_mut(pos).ok_or_else(|| {
-                            StorageError::InvalidOperation(format!(
-                                "Value index {} out of bounds for mutation (len {})",
-                                pos,
-                                values_len
-                            ))
-                        })? = Arc::new(NodeData::new(Some(value), existing_has_descendants));
-                    }
-                    _ => {
-                        // Key doesn't exist, insert with has_descendants=false initially
-                        updated_node.keys.insert(pos, key.clone());
-                        updated_node
-                            .values
-                            .insert(pos, Arc::new(NodeData::with_value(value)));
-                    }
-                }
-
-                // Write the updated node back
-                let mut nodes = self.nodes.write().await;
-                nodes.insert(node_id, updated_node);
-
-                Ok(())
-            } else {
-                // Internal node: recurse to the appropriate child
-                let child_id = *node.children.get(pos).ok_or_else(|| {
-                    StorageError::InvalidOperation(format!(
-                        "Child index {} out of bounds (len {})",
-                        pos,
-                        node.children.len()
-                    ))
-                })?;
-
-                // Check if child is full
-                let child = self.load_node(child_id).await?;
-                let max_keys = 2 * self.min_degree - 1;
-
-                if child.keys.len() == max_keys {
-                    // Child is full, split it first
-                    let (median_key, median_value, new_child_id) =
-                        self.split_node(child_id).await?;
-
-                    // Insert median into this node
-                    let mut updated_node = node;
-                    updated_node.keys.insert(pos, median_key.clone());
-                    updated_node.values.insert(pos, Arc::clone(&median_value));
-                    updated_node.children.insert(pos + 1, new_child_id);
-
-                    // Write updated parent
-                    {
-                        let mut nodes = self.nodes.write().await;
-                        nodes.insert(node_id, updated_node.clone());
-                    }
-
-                    // Determine which child to recurse into
-                    let next_child_id = if *key > median_key {
-                        new_child_id
-                    } else {
-                        child_id
-                    };
-
-                    self.insert_non_full(next_child_id, key, value).await
-                } else {
-                    // Child is not full, recurse directly
-                    drop(child);
-                    drop(node);
-                    self.insert_non_full(child_id, key, value).await
-                }
-            }
-        })
+    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
+    {
+        self.insert_non_full_with_data(
+            node_id,
+            key,
+            NodeData::with_value(value),
+        )
     }
 
     /// Inserts a key with `NodeData` into a non-full node, with merge semantics.
@@ -1263,9 +1919,8 @@ impl BTree {
         node_id: NodeId,
         key: &'a Key,
         data: NodeData,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
-    > {
+    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
+    {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
 
@@ -1378,24 +2033,71 @@ impl BTree {
         &self,
         name: &Name,
         key: &Key,
-        value: bool,
+        flag: bool,
     ) -> Result<()> {
-        // Get existing NodeData
-        let existing_arc = self
-            .get_internal(name, key)
-            .await?
-            .ok_or_else(|| {
-                StorageError::InvalidOperation(format!(
-                    "Cannot update has_descendants flag: key {:?} does not exist",
-                    key
-                ))
-            })?;
+        // Find the node containing this key and update directly.
+        // We can't use set_node because its OR merge semantics prevent
+        // setting has_descendants to false.
+        let roots = self.roots.read().await;
+        let root_id = roots.get(name).copied().ok_or_else(|| {
+            StorageError::InvalidOperation(format!(
+                "Cannot update has_descendants flag: variable {:?} not found",
+                name
+            ))
+        })?;
+        drop(roots);
 
-        // Create updated NodeData with new flag value
-        let updated_data = NodeData::new(existing_arc.value.clone(), value);
+        self.update_flag_in_node(root_id, key, flag).await
+    }
 
-        // Use set_node to avoid recursive ensure_ancestors call
-        self.set_node(name, key, updated_data).await
+    /// Recursively finds and updates the has_descendants flag for a key.
+    fn update_flag_in_node<'a>(
+        &'a self,
+        node_id: NodeId,
+        key: &'a Key,
+        flag: bool,
+    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let node = self.load_node(node_id).await?;
+            let pos = node.keys.binary_search(key).unwrap_or_else(|p| p);
+
+            match node.keys.get(pos) {
+                Some(k) if k == key => {
+                    // Found the key - update the flag directly
+                    let mut nodes = self.nodes.write().await;
+                    let n = nodes.get_mut(&node_id).ok_or_else(|| {
+                        StorageError::NodeNotFound(node_id.into())
+                    })?;
+                    let old = n.values.get(pos).ok_or_else(|| {
+                        StorageError::InvalidOperation(format!(
+                            "Value index {} out of bounds",
+                            pos
+                        ))
+                    })?;
+                    let updated = NodeData::new(old.value.clone(), flag);
+                    *n.values.get_mut(pos).ok_or_else(|| {
+                        StorageError::InvalidOperation(format!(
+                            "Value index {} out of bounds for mutation",
+                            pos
+                        ))
+                    })? = Arc::new(updated);
+                    Ok(())
+                }
+                _ if node.is_leaf => Err(StorageError::InvalidOperation(
+                    format!("Key {:?} not found for flag update", key),
+                )),
+                _ => {
+                    let child = *node.children.get(pos).ok_or_else(|| {
+                        StorageError::InvalidOperation(format!(
+                            "Child index {} out of bounds",
+                            pos
+                        ))
+                    })?;
+                    self.update_flag_in_node(child, key, flag).await
+                }
+            }
+        })
     }
 
     /// Ensures all ancestor keys exist with `has_descendants = true`.
