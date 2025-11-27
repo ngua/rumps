@@ -517,15 +517,15 @@ impl BTree {
                 // After split_off: keys = [0..mid, mid], right_keys = [mid+1..end]
                 let right_keys = keys.split_off(mid + 1);
                 // Pop the median from left side: keys = [0..mid]
-                let median_key = keys.pop().ok_or_else(|| {
+                let med_key = keys.pop().ok_or_else(|| {
                     StorageError::InvalidOperation(
                         "Failed to extract median key".to_string(),
                     )
                 })?;
 
                 // Split values the same way and extract median value
-                let right_values = values.split_off(mid + 1);
-                let median_value = values.pop().ok_or_else(|| {
+                let right_vals = values.split_off(mid + 1);
+                let med_val = values.pop().ok_or_else(|| {
                     StorageError::InvalidOperation(
                         "Failed to extract median value".to_string(),
                     )
@@ -545,7 +545,7 @@ impl BTree {
                 let right_node = Node {
                     keys: right_keys,
                     children: right_children,
-                    values: right_values,
+                    values: right_vals,
                     is_leaf,
                 };
 
@@ -568,7 +568,7 @@ impl BTree {
                 stats.splits += 1;
                 stats.node_count += 1;
 
-                Ok((median_key, median_value, right_id))
+                Ok((med_key, med_val, right_id))
             }
         }
     }
@@ -632,17 +632,17 @@ impl BTree {
     /// ```
     async fn merge_nodes(
         &self,
-        left: NodeId,
-        separator_key: Key,
-        separator_value: Arc<NodeData>,
-        right: NodeId,
+        left_id: NodeId,
+        sep_key: Key,
+        sep_val: Arc<NodeData>,
+        right_id: NodeId,
     ) -> Result<()> {
         // Find both nodes
-        let left_node = self.load_node(left).await?;
-        let right_node = self.load_node(right).await?;
+        let left = self.load_node(left_id).await?;
+        let right = self.load_node(right_id).await?;
 
         // Verify they're compatible (both leaf or both internal)
-        if left_node.is_leaf != right_node.is_leaf {
+        if left.is_leaf != right.is_leaf {
             Err(StorageError::InvalidOperation(
                 "Cannot merge leaf and internal nodes".to_string(),
             ))
@@ -651,23 +651,23 @@ impl BTree {
             let Node {
                 keys: mut left_keys,
                 children: mut left_children,
-                values: mut left_values,
+                values: mut left_vals,
                 is_leaf,
-            } = left_node;
+            } = left;
 
             let Node {
                 keys: right_keys,
                 children: right_children,
-                values: right_values,
+                values: right_vals,
                 is_leaf: _,
-            } = right_node;
+            } = right;
 
             // Combine: left + separator + right
-            left_keys.push(separator_key);
+            left_keys.push(sep_key);
             left_keys.extend(right_keys);
 
-            left_values.push(Arc::clone(&separator_value));
-            left_values.extend(right_values);
+            left_vals.push(Arc::clone(&sep_val));
+            left_vals.extend(right_vals);
 
             // For internal nodes, merge children
             if !is_leaf {
@@ -675,21 +675,21 @@ impl BTree {
             }
 
             // Create merged node
-            let merged_node = Node {
+            let merged = Node {
                 keys: left_keys,
                 children: left_children,
-                values: left_values,
+                values: left_vals,
                 is_leaf,
             };
 
             // Write merged node and remove right node
             let mut nodes = self.nodes.write().await;
-            nodes.insert(left, merged_node);
-            nodes.remove(&right);
+            nodes.insert(left_id, merged);
+            nodes.remove(&right_id);
             drop(nodes);
 
             // Deallocate right node ID
-            self.allocator.deallocate(right).await?;
+            self.allocator.deallocate(right_id).await?;
 
             // Update statistics
             let mut stats = self.stats.write().await;
@@ -895,6 +895,113 @@ impl BTree {
         }
     }
 
+    /// Internal SET operation that accepts `NodeData` directly.
+    ///
+    /// This method is used internally for maintaining hierarchical semantics,
+    /// particularly when creating ancestor nodes with `has_descendants = true`.
+    ///
+    /// # Behavior for Existing Keys - Idempotent Merge
+    ///
+    /// If the key already exists, this method MERGES the `NodeData`:
+    /// - `has_descendants`: Performs OR operation (if either old or new is true, result is true)
+    /// - `value`: Takes new value if provided, otherwise keeps old value
+    ///
+    /// **Why idempotent merge is required:**
+    /// - Multiple child insertions can race to create the same ancestor node
+    /// - Each insertion must be able to set `has_descendants=true` independently
+    /// - The operation must be safe regardless of the order or concurrency
+    /// - Once `has_descendants=true` is set, it cannot be accidentally cleared
+    ///
+    /// This ensures that:
+    /// 1. Setting `has_descendants=true` is permanent (can't be undone by another set)
+    /// 2. Concurrent ancestor creation is safe (multiple operations can set same ancestor)
+    /// 3. User can update values without losing `has_descendants` flag
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Create an intermediate node (no value, only descendants)
+    /// btree.set_internal(&name, &ancestor_key, NodeData::with_descendants()).await?;
+    ///
+    /// // Later, add a value to the same node (preserves has_descendants)
+    /// btree.set_internal(&name, &ancestor_key, NodeData::with_value(value)).await?;
+    /// // Result: NodeData { value: Some(value), has_descendants: true }
+    /// ```
+    // Internal method for tests/benchmarks - not part of public API
+    async fn set_internal(
+        &self,
+        name: &Name,
+        key: &Key,
+        data: NodeData,
+    ) -> Result<()> {
+        // Ensure all ancestors exist with has_descendants=true
+        // This is part of the core MUMPS hierarchical semantics
+        self.ensure_ancestors(name, key).await?;
+
+        // Delegate to raw insertion (no hierarchy management)
+        self.set_node(name, key, data).await
+    }
+
+    /// Internal KILL operation that deletes a key and all its descendants.
+    ///
+    /// This method implements MUMPS KILL semantics:
+    /// 1. Deletes the specified key (if it exists)
+    /// 2. Deletes all descendants (keys that start with the given key as prefix)
+    /// 3. Updates ancestor `has_descendants` flags
+    /// 4. Handles tree rebalancing (node merging when underfull)
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Collect all keys that match the prefix (the key itself and all descendants)
+    /// 2. Delete each key from the tree
+    /// 3. After all deletions, update ancestor `has_descendants` flags
+    /// 4. Remove empty ancestor nodes (nodes with no value and no descendants)
+    // Internal method for tests/benchmarks - not part of public API
+    async fn kill_internal(&self, name: &Name, key: &Key) -> Result<()> {
+        // Step 1: Collect all keys to delete (the key and its descendants)
+        let mut keys_to_delete =
+            self.collect_keys_with_prefix(name, key).await?;
+
+        if keys_to_delete.is_empty() {
+            Ok(())
+        } else {
+            // Step 2: Delete each key from the tree
+            // We delete in reverse order (deepest first) to minimize rebalancing
+            keys_to_delete
+                .sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| b.cmp(a)));
+
+            // Delete each key
+            futures::stream::iter(
+                keys_to_delete.iter().map(Ok::<_, StorageError>),
+            )
+            .try_for_each(|k| self.delete_key(name, k))
+            .await?;
+
+            // Step 3: Update ancestor has_descendants flags
+            self.update_ancestors_after_kill(name, key).await
+        }
+    }
+
+    // Internal method, unimplemented
+    async fn data_internal(
+        &self,
+        _name: &Name,
+        _key: &Key,
+    ) -> Result<DataStatus> {
+        // TODO Phase 2.5: Implement DATA operation
+        todo!("DATA operation not yet implemented - see TODOS/persistence.md Phase 2.5")
+    }
+
+    // Internal method, unimplemented
+    async fn order_internal(
+        &self,
+        _name: &Name,
+        _after: Option<&Key>,
+    ) -> Result<Option<Key>> {
+        // TODO Phase 2.6: Implement ORDER operation
+        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
+    }
+
     /// Recursively search for a key starting from the given node.
     ///
     /// Returns `Arc<NodeData>` for cheap cloning during hierarchy navigation.
@@ -959,53 +1066,6 @@ impl BTree {
         })
     }
 
-    /// Internal SET operation that accepts `NodeData` directly.
-    ///
-    /// This method is used internally for maintaining hierarchical semantics,
-    /// particularly when creating ancestor nodes with `has_descendants = true`.
-    ///
-    /// # Behavior for Existing Keys - Idempotent Merge
-    ///
-    /// If the key already exists, this method MERGES the `NodeData`:
-    /// - `has_descendants`: Performs OR operation (if either old or new is true, result is true)
-    /// - `value`: Takes new value if provided, otherwise keeps old value
-    ///
-    /// **Why idempotent merge is required:**
-    /// - Multiple child insertions can race to create the same ancestor node
-    /// - Each insertion must be able to set `has_descendants=true` independently
-    /// - The operation must be safe regardless of the order or concurrency
-    /// - Once `has_descendants=true` is set, it cannot be accidentally cleared
-    ///
-    /// This ensures that:
-    /// 1. Setting `has_descendants=true` is permanent (can't be undone by another set)
-    /// 2. Concurrent ancestor creation is safe (multiple operations can set same ancestor)
-    /// 3. User can update values without losing `has_descendants` flag
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Create an intermediate node (no value, only descendants)
-    /// btree.set_internal(&name, &ancestor_key, NodeData::with_descendants()).await?;
-    ///
-    /// // Later, add a value to the same node (preserves has_descendants)
-    /// btree.set_internal(&name, &ancestor_key, NodeData::with_value(value)).await?;
-    /// // Result: NodeData { value: Some(value), has_descendants: true }
-    /// ```
-    // Internal method for tests/benchmarks - not part of public API
-    async fn set_internal(
-        &self,
-        name: &Name,
-        key: &Key,
-        data: NodeData,
-    ) -> Result<()> {
-        // Ensure all ancestors exist with has_descendants=true
-        // This is part of the core MUMPS hierarchical semantics
-        self.ensure_ancestors(name, key).await?;
-
-        // Delegate to raw insertion (no hierarchy management)
-        self.set_node(name, key, data).await
-    }
-
     /// Raw node insertion without hierarchy management.
     ///
     /// This method performs the actual B-tree insertion without calling
@@ -1025,14 +1085,14 @@ impl BTree {
     ) -> Result<()> {
         // Look up the root node ID for this variable name
         let roots = self.roots.read().await;
-        let root_id_opt = roots.get(name).copied();
+        let root_id = roots.get(name).copied();
         drop(roots);
 
-        match root_id_opt {
+        match root_id {
             None => {
                 // Variable doesn't exist - create a new leaf root with the NodeData
-                let new_root_id = self.allocator.allocate().await?;
-                let new_root = Node {
+                let new_id = self.allocator.allocate().await?;
+                let root = Node {
                     keys: vec![key.clone()],
                     children: vec![],
                     values: vec![Arc::new(data)],
@@ -1042,13 +1102,13 @@ impl BTree {
                 // Insert the new root into storage
                 {
                     let mut nodes = self.nodes.write().await;
-                    nodes.insert(new_root_id, new_root);
+                    nodes.insert(new_id, root);
                 }
 
                 // Register the root in the roots map
                 {
                     let mut roots = self.roots.write().await;
-                    roots.insert(name.clone(), new_root_id);
+                    roots.insert(name.clone(), new_id);
                 }
 
                 // Update statistics
@@ -1070,15 +1130,15 @@ impl BTree {
                 let new_root_id = match root.keys.len() {
                     n if n == max_keys => {
                         // Root is full, split it and create a new root
-                        let (median_key, median_value, right_id) =
+                        let (med_key, med_val, right_id) =
                             self.split_node(root_id).await?;
 
                         // Create new root with the median
                         let new_root_id = self.allocator.allocate().await?;
                         let new_root = Node {
-                            keys: vec![median_key],
+                            keys: vec![med_key],
                             children: vec![root_id, right_id],
-                            values: vec![Arc::clone(&median_value)],
+                            values: vec![Arc::clone(&med_val)],
                             is_leaf: false,
                         };
 
@@ -1118,46 +1178,6 @@ impl BTree {
 
                 Ok(())
             }
-        }
-    }
-
-    /// Internal KILL operation that deletes a key and all its descendants.
-    ///
-    /// This method implements MUMPS KILL semantics:
-    /// 1. Deletes the specified key (if it exists)
-    /// 2. Deletes all descendants (keys that start with the given key as prefix)
-    /// 3. Updates ancestor `has_descendants` flags
-    /// 4. Handles tree rebalancing (node merging when underfull)
-    ///
-    /// # Algorithm
-    ///
-    /// 1. Collect all keys that match the prefix (the key itself and all descendants)
-    /// 2. Delete each key from the tree
-    /// 3. After all deletions, update ancestor `has_descendants` flags
-    /// 4. Remove empty ancestor nodes (nodes with no value and no descendants)
-    // Internal method for tests/benchmarks - not part of public API
-    async fn kill_internal(&self, name: &Name, key: &Key) -> Result<()> {
-        // Step 1: Collect all keys to delete (the key and its descendants)
-        let mut keys_to_delete =
-            self.collect_keys_with_prefix(name, key).await?;
-
-        if keys_to_delete.is_empty() {
-            Ok(())
-        } else {
-            // Step 2: Delete each key from the tree
-            // We delete in reverse order (deepest first) to minimize rebalancing
-            keys_to_delete
-                .sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| b.cmp(a)));
-
-            // Delete each key
-            futures::stream::iter(
-                keys_to_delete.iter().map(Ok::<_, StorageError>),
-            )
-            .try_for_each(|k| self.delete_key(name, k))
-            .await?;
-
-            // Step 3: Update ancestor has_descendants flags
-            self.update_ancestors_after_kill(name, key).await
         }
     }
 
@@ -1414,14 +1434,13 @@ impl BTree {
                     let merged =
                         self.fix_underfull_node(parent_id, child_idx).await?;
                     // If we merged, parent lost a key - check if parent needs fixing
-                    match merged {
-                        true => {
-                            self.rebalance_with_ancestors(
-                                name, parent_id, ancestors,
-                            )
-                            .await
-                        }
-                        false => Ok(()),
+                    if merged {
+                        self.rebalance_with_ancestors(
+                            name, parent_id, ancestors,
+                        )
+                        .await
+                    } else {
+                        Ok(())
                     }
                 }
                 _ => Ok(()),
@@ -1439,44 +1458,42 @@ impl BTree {
     ) -> Result<bool> {
         let parent = self.load_node(parent_id).await?;
         let min_keys = self.min_degree - 1;
-        let idx_err = |i| {
+        let err = |i| {
             StorageError::InvalidOperation(format!("Index {} out of bounds", i))
         };
 
         // Check if we can borrow from left sibling
-        let can_borrow_left = match child_idx > 0 {
-            true => {
-                let left_id = *parent
-                    .children
-                    .get(child_idx - 1)
-                    .ok_or_else(|| idx_err(child_idx - 1))?;
-                let left = self.load_node(left_id).await?;
-                left.keys.len() > min_keys
-            }
-            false => false,
+        let borrow_left = if child_idx > 0 {
+            let left_id = *parent
+                .children
+                .get(child_idx - 1)
+                .ok_or_else(|| err(child_idx - 1))?;
+            let left = self.load_node(left_id).await?;
+            left.keys.len() > min_keys
+        } else {
+            false
         };
 
         // Check if we can borrow from right sibling
-        let can_borrow_right = match !can_borrow_left
+        let borrow_right = if !borrow_left
             && child_idx < parent.children.len().saturating_sub(1)
         {
-            true => {
-                let right_id = *parent
-                    .children
-                    .get(child_idx + 1)
-                    .ok_or_else(|| idx_err(child_idx + 1))?;
-                let right = self.load_node(right_id).await?;
-                right.keys.len() > min_keys
-            }
-            false => false,
+            let right_id = *parent
+                .children
+                .get(child_idx + 1)
+                .ok_or_else(|| err(child_idx + 1))?;
+            let right = self.load_node(right_id).await?;
+            right.keys.len() > min_keys
+        } else {
+            false
         };
 
-        if can_borrow_left {
+        if borrow_left {
             // Borrow from left sibling
             let left_id = *parent
                 .children
                 .get(child_idx - 1)
-                .ok_or_else(|| idx_err(child_idx - 1))?;
+                .ok_or_else(|| err(child_idx - 1))?;
             drop(parent);
             self.borrow_from_sibling(
                 parent_id,
@@ -1486,12 +1503,12 @@ impl BTree {
             )
             .await?;
             Ok(false) // No merge, parent unchanged
-        } else if can_borrow_right {
+        } else if borrow_right {
             // Borrow from right sibling
             let right_id = *parent
                 .children
                 .get(child_idx + 1)
-                .ok_or_else(|| idx_err(child_idx + 1))?;
+                .ok_or_else(|| err(child_idx + 1))?;
             drop(parent);
             self.borrow_from_sibling(
                 parent_id,
@@ -1503,37 +1520,38 @@ impl BTree {
             Ok(false) // No merge, parent unchanged
         } else {
             // Must merge - prefer left sibling
-            let (left_id, right_id, sep_idx) = match child_idx > 0 {
-                true => (
+            let (left_id, right_id, sep_idx) = if child_idx > 0 {
+                (
                     *parent
                         .children
                         .get(child_idx - 1)
-                        .ok_or_else(|| idx_err(child_idx - 1))?,
+                        .ok_or_else(|| err(child_idx - 1))?,
                     *parent
                         .children
                         .get(child_idx)
-                        .ok_or_else(|| idx_err(child_idx))?,
+                        .ok_or_else(|| err(child_idx))?,
                     child_idx - 1,
-                ),
-                false => (
+                )
+            } else {
+                (
                     *parent
                         .children
                         .get(child_idx)
-                        .ok_or_else(|| idx_err(child_idx))?,
+                        .ok_or_else(|| err(child_idx))?,
                     *parent
                         .children
                         .get(child_idx + 1)
-                        .ok_or_else(|| idx_err(child_idx + 1))?,
+                        .ok_or_else(|| err(child_idx + 1))?,
                     child_idx,
-                ),
+                )
             };
             let sep_key = parent
                 .keys
                 .get(sep_idx)
-                .ok_or_else(|| idx_err(sep_idx))?
+                .ok_or_else(|| err(sep_idx))?
                 .clone();
             let sep_val = Arc::clone(
-                parent.values.get(sep_idx).ok_or_else(|| idx_err(sep_idx))?,
+                parent.values.get(sep_idx).ok_or_else(|| err(sep_idx))?,
             );
             drop(parent);
 
@@ -1551,11 +1569,11 @@ impl BTree {
         &self,
         parent_id: NodeId,
         child_idx: usize,
-        sibling_id: NodeId,
+        sib_id: NodeId,
         dir: BorrowDir,
     ) -> Result<()> {
         let mut nodes = self.nodes.write().await;
-        let idx_err = |i| {
+        let err = |i| {
             StorageError::InvalidOperation(format!("Index {} out of bounds", i))
         };
 
@@ -1567,7 +1585,7 @@ impl BTree {
         let child_id = *parent
             .children
             .get(child_idx)
-            .ok_or_else(|| idx_err(child_idx))?;
+            .ok_or_else(|| err(child_idx))?;
         let sep_idx = match dir {
             BorrowDir::Left => child_idx - 1,
             BorrowDir::Right => child_idx,
@@ -1577,34 +1595,35 @@ impl BTree {
         let sep_key = parent
             .keys
             .get(sep_idx)
-            .ok_or_else(|| idx_err(sep_idx))?
+            .ok_or_else(|| err(sep_idx))?
             .clone();
-        let sep_val = Arc::clone(
-            parent.values.get(sep_idx).ok_or_else(|| idx_err(sep_idx))?,
-        );
+        let sep_val =
+            Arc::clone(parent.values.get(sep_idx).ok_or_else(|| err(sep_idx))?);
 
         // Extract from sibling (pop from end if left, drain first if right)
         let (new_sep_key, new_sep_val, borrowed_child) = {
             let sib = nodes
-                .get_mut(&sibling_id)
-                .ok_or_else(|| StorageError::NodeNotFound(sibling_id.into()))?;
-            let empty_err =
+                .get_mut(&sib_id)
+                .ok_or_else(|| StorageError::NodeNotFound(sib_id.into()))?;
+            let empty =
                 || StorageError::InvalidOperation("Empty sibling".into());
             match dir {
                 BorrowDir::Left => (
-                    sib.keys.pop().ok_or_else(empty_err)?,
-                    sib.values.pop().ok_or_else(empty_err)?,
-                    match sib.is_leaf {
-                        true => None,
-                        false => sib.children.pop(),
+                    sib.keys.pop().ok_or_else(empty)?,
+                    sib.values.pop().ok_or_else(empty)?,
+                    if sib.is_leaf {
+                        None
+                    } else {
+                        sib.children.pop()
                     },
                 ),
                 BorrowDir::Right => (
-                    sib.keys.drain(..1).next().ok_or_else(empty_err)?,
-                    sib.values.drain(..1).next().ok_or_else(empty_err)?,
-                    match sib.is_leaf {
-                        true => None,
-                        false => sib.children.drain(..1).next(),
+                    sib.keys.drain(..1).next().ok_or_else(empty)?,
+                    sib.values.drain(..1).next().ok_or_else(empty)?,
+                    if sib.is_leaf {
+                        None
+                    } else {
+                        sib.children.drain(..1).next()
                     },
                 ),
             }
@@ -1638,9 +1657,8 @@ impl BTree {
             let p = nodes
                 .get_mut(&parent_id)
                 .ok_or_else(|| StorageError::NodeNotFound(parent_id.into()))?;
-            *p.keys.get_mut(sep_idx).ok_or_else(|| idx_err(sep_idx))? =
-                new_sep_key;
-            *p.values.get_mut(sep_idx).ok_or_else(|| idx_err(sep_idx))? =
+            *p.keys.get_mut(sep_idx).ok_or_else(|| err(sep_idx))? = new_sep_key;
+            *p.values.get_mut(sep_idx).ok_or_else(|| err(sep_idx))? =
                 new_sep_val;
         }
 
@@ -1759,48 +1777,40 @@ impl BTree {
 
         // Process ancestors from deepest to shallowest
         let mut ancestors = key.ancestors();
+
         ancestors.reverse();
 
         stream::iter(ancestors.into_iter().map(Ok::<_, StorageError>))
-            .try_for_each(|ancestor_key| async move {
-                match self.get_internal(name, &ancestor_key).await? {
+            .try_for_each(|anc_key| async move {
+                match self.get_internal(name, &anc_key).await? {
                     None => Ok(()), // Ancestor doesn't exist, nothing to update
-                    Some(node_data) => {
+                    Some(data) => {
                         // Check if ancestor still has any descendants
-                        let has_remaining_descendants = self
-                            .has_any_descendants(name, &ancestor_key)
-                            .await?;
+                        let has_desc =
+                            self.has_any_descendants(name, &anc_key).await?;
 
-                        match (
-                            has_remaining_descendants,
-                            node_data.value.is_some(),
-                        ) {
+                        match (has_desc, data.value.is_some()) {
                             (true, _) => {
                                 // Still has descendants, ensure flag is set
-                                match node_data.has_descendants {
-                                    true => Ok(()),
-                                    false => {
-                                        self.update_descendants_flag(
-                                            name,
-                                            &ancestor_key,
-                                            true,
-                                        )
-                                        .await
-                                    }
+                                if data.has_descendants {
+                                    Ok(())
+                                } else {
+                                    self.update_descendants_flag(
+                                        name, &anc_key, true,
+                                    )
+                                    .await
                                 }
                             }
                             (false, true) => {
                                 // No descendants but has value - update flag
                                 self.update_descendants_flag(
-                                    name,
-                                    &ancestor_key,
-                                    false,
+                                    name, &anc_key, false,
                                 )
                                 .await
                             }
                             (false, false) => {
                                 // No descendants and no value - remove the node
-                                self.delete_key(name, &ancestor_key).await
+                                self.delete_key(name, &anc_key).await
                             }
                         }
                     }
@@ -1878,26 +1888,6 @@ impl BTree {
                 .await
             }
         })
-    }
-
-    // Internal method for tests/benchmarks - not part of public API
-    async fn data_internal(
-        &self,
-        _name: &Name,
-        _key: &Key,
-    ) -> Result<DataStatus> {
-        // TODO Phase 2.5: Implement DATA operation
-        todo!("DATA operation not yet implemented - see TODOS/persistence.md Phase 2.5")
-    }
-
-    // Internal method for tests/benchmarks - not part of public API
-    async fn order_internal(
-        &self,
-        _name: &Name,
-        _after: Option<&Key>,
-    ) -> Result<Option<Key>> {
-        // TODO Phase 2.6: Implement ORDER operation
-        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
     }
 
     /// Inserts a key-value pair into a non-full node.
