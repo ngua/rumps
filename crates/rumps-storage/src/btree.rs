@@ -1191,39 +1191,34 @@ impl BTree {
             let node = self.load_node(node_id).await?;
 
             // Binary search to find starting position for prefix range
-            let start_pos =
-                node.keys.binary_search(prefix).unwrap_or_else(|pos| pos);
+            let start = node.keys.binary_search(prefix).unwrap_or_else(|p| p);
 
             // Collect matching keys from this node
-            let matching_keys: Vec<Key> = node
+            let matching: Vec<Key> = node
                 .keys
                 .iter()
-                .skip(start_pos)
+                .skip(start)
                 .take_while(|k| k.starts_with(prefix))
                 .cloned()
                 .collect();
 
-            // For internal nodes, also check children
+            // For internal nodes, also check children that could contain matches
             if node.is_leaf {
-                Ok(matching_keys)
+                Ok(matching)
             } else {
-                // Check all children that could contain matching keys
+                // Children at indices [start, start + matching.len()] could contain matches
+                let end = start + matching.len() + 1;
                 let child_results = futures::future::try_join_all(
-                    (start_pos..=node.children.len().min(node.keys.len() + 1))
+                    (start..end)
                         .filter_map(|i| node.children.get(i).copied())
-                        .map(|child_id| {
-                            self.collect_keys_from_node(child_id, prefix)
-                        }),
+                        .map(|c| self.collect_keys_from_node(c, prefix)),
                 )
                 .await?;
 
-                Ok(child_results.into_iter().fold(
-                    matching_keys,
-                    |mut acc, keys| {
-                        acc.extend(keys);
-                        acc
-                    },
-                ))
+                Ok(child_results.into_iter().fold(matching, |mut acc, keys| {
+                    acc.extend(keys);
+                    acc
+                }))
             }
         })
     }
@@ -1254,15 +1249,13 @@ impl BTree {
     ///
     /// `ancestors` is the chain from root to parent: `[(grandparent, idx), (parent, idx)]`
     /// This allows us to propagate rebalancing upward through the tree.
-    ///
-    /// Returns true if the key was found and deleted.
     fn delete_key_from_node<'a>(
         &'a self,
         name: &'a Name,
         node_id: NodeId,
         key: &'a Key,
         ancestors: Vec<(NodeId, usize)>,
-    ) -> pin::Pin<Box<dyn future::Future<Output = Result<bool>> + Send + 'a>>
+    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
     {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
@@ -1285,8 +1278,7 @@ impl BTree {
                             stats.key_count = stats.key_count.saturating_sub(1);
                         }
                         self.rebalance_with_ancestors(name, node_id, ancestors)
-                            .await?;
-                        Ok(true)
+                            .await
                     } else {
                         // Case 2: Key is in an internal node - replace with predecessor
                         let left_child =
@@ -1333,13 +1325,12 @@ impl BTree {
                             &pred_key,
                             child_ancestors,
                         )
-                        .await?;
-                        Ok(true)
+                        .await
                     }
                 }
                 Err(pos) => {
                     if node.is_leaf {
-                        Ok(false)
+                        Ok(()) // Key not found, nothing to delete
                     } else {
                         let child_id =
                             node.children.get(pos).copied().ok_or_else(
@@ -1847,27 +1838,33 @@ impl BTree {
             let node = self.load_node(node_id).await?;
 
             // Binary search to find starting position
-            let start_pos =
-                node.keys.binary_search(prefix).unwrap_or_else(|p| p);
+            let start = node.keys.binary_search(prefix).unwrap_or_else(|p| p);
 
-            // Check keys in this node
-            let found_in_node = node
+            // Check keys in this node (excluding exact match)
+            let found = node
                 .keys
                 .iter()
-                .skip(start_pos)
-                .any(|k| k.starts_with(prefix) && k != prefix);
+                .skip(start)
+                .take_while(|k| k.starts_with(prefix))
+                .any(|k| k != prefix);
 
-            if found_in_node {
+            if found {
                 Ok(true)
             } else if node.is_leaf {
                 Ok(false)
             } else {
                 // Check children that might contain descendants
-                let check_range =
-                    start_pos..=node.children.len().min(node.keys.len() + 1);
+                // Count matching keys to determine child range
+                let matching_count = node
+                    .keys
+                    .iter()
+                    .skip(start)
+                    .take_while(|k| k.starts_with(prefix))
+                    .count();
+                let end = start + matching_count + 1;
 
                 futures::stream::iter(
-                    check_range
+                    (start..end)
                         .filter_map(|i| node.children.get(i).copied())
                         .map(Ok::<_, StorageError>),
                 )

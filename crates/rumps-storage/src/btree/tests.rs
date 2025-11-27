@@ -4345,6 +4345,106 @@ mod kill_internal_tests {
             .await;
     }
 
+    // === Namespace Tests ===
+
+    /// Test KILL on Local namespace (ephemeral variables).
+    ///
+    /// Verifies that KILL works correctly for local variables, not just globals.
+    #[tokio::test]
+    async fn kill_local_namespace() {
+        let btree = BTree::new(3).unwrap();
+        let name = Name::local("LOCAL");
+
+        // Insert into local: LOCAL(1), LOCAL(1,2), LOCAL(1,2,3)
+        btree
+            .set_internal(
+                &name,
+                &key![1],
+                NodeData::with_value(Value::String("local_parent".into())),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2],
+                NodeData::with_value(Value::String("local_child".into())),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &name,
+                &key![1, 2, 3],
+                NodeData::with_value(Value::String("local_grandchild".into())),
+            )
+            .await
+            .unwrap();
+
+        // Kill LOCAL(1) - should delete entire subtree
+        btree.kill_internal(&name, &key![1]).await.unwrap();
+
+        assert_key_not_exists(&btree, &name, &key![1]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2]).await;
+        assert_key_not_exists(&btree, &name, &key![1, 2, 3]).await;
+    }
+
+    /// Test that Global and Local namespaces are separate.
+    ///
+    /// KILL on a global should not affect local with same name, and vice versa.
+    #[tokio::test]
+    async fn kill_namespaces_are_separate() {
+        let btree = BTree::new(3).unwrap();
+        let global = Name::global("VAR");
+        let local = Name::local("VAR");
+
+        // Insert same keys into both namespaces
+        btree
+            .set_internal(
+                &global,
+                &key![1, 2],
+                NodeData::with_value(Value::String("global".into())),
+            )
+            .await
+            .unwrap();
+
+        btree
+            .set_internal(
+                &local,
+                &key![1, 2],
+                NodeData::with_value(Value::String("local".into())),
+            )
+            .await
+            .unwrap();
+
+        // KILL global ^VAR(1)
+        btree.kill_internal(&global, &key![1]).await.unwrap();
+
+        // Global should be gone
+        assert_key_not_exists(&btree, &global, &key![1]).await;
+        assert_key_not_exists(&btree, &global, &key![1, 2]).await;
+
+        // Local should still exist
+        assert_key_exists(
+            &btree,
+            &local,
+            &key![1, 2],
+            Some(Value::String("local".into())),
+        )
+        .await;
+
+        // Now KILL local VAR(1)
+        btree.kill_internal(&local, &key![1]).await.unwrap();
+
+        // Local should also be gone now
+        assert_key_not_exists(&btree, &local, &key![1]).await;
+        assert_key_not_exists(&btree, &local, &key![1, 2]).await;
+    }
+
+    // === Stress Tests ===
+
     /// Stress test with min_degree=2 (smallest valid B-tree).
     ///
     /// With min_degree=2, each node can have 1-3 keys, making

@@ -276,13 +276,13 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 **Note on Value Cloning**: All read operations return owned `Value` rather than references due to async lock lifetime constraints. Values must be cloned from the `RwLock` guard before it drops. This follows standard patterns in async concurrent data structures (like `dashmap::DashMap`). MUMPS values are typically small, making cloning cost acceptable. The public `get()` API simply clones the `Option<Value>` from the `Arc<NodeData>` returned by `get_internal()`. See `TODOS/btree.md` "Value Cloning and Lock Semantics" section for detailed rationale and future optimization strategies.
 
-### 2.4 MUMPS Operations - KILL
+### 2.4 MUMPS Operations - KILL ✅ IMPLEMENTATION COMPLETE
 
-**Status**: Public API stub exists with `todo!()` implementation. Internal `kill_internal()` stub also exists with `todo!()`.
+**Status**: Core implementation complete. Tests organized into `kill_internal_tests` module. Transaction awareness will be added in Phase 5.
 
 **Transaction Note**: The signature includes `ctx: &TransactionContext` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction write tracking will be added in Phase 5.
 
-- [ ] Implement KILL operation:
+- [x] Implement KILL operation:
   - Use `load_node()` for cache-aware node access
   - Navigate to node
   - Delete entire subtree rooted at key
@@ -291,10 +291,19 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Use `save_node()` to persist changes
   - Update `BTreeStats` (key count, merges)
   - ~~Track deletions in transaction context~~ (moved to Phase 5.4)
-- [ ] Add async tests for KILL leaf nodes (both Global and Local)
-- [ ] Add async tests for KILL intermediate nodes (removes subtree)
-- [ ] Add async tests for KILL root
-- [ ] Verify tree structure remains valid after KILL
+- [x] Add async tests for KILL leaf nodes (both Global and Local) - **35 tests in `btree::tests::kill_internal_tests` module** at `crates/rumps-storage/src/btree/tests.rs:2618`
+  - `kill_single_key`, `kill_nonexistent_key`, `kill_nonexistent_variable`
+  - `kill_local_namespace`, `kill_namespaces_are_separate`
+- [x] Add async tests for KILL intermediate nodes (removes subtree)
+  - `kill_with_descendants`, `kill_subtree_preserves_siblings`, `kill_deep_subtree`
+  - `kill_key_that_is_only_ancestor`, `kill_from_internal_node`, `kill_predecessor_replacement_chain`
+- [x] Add async tests for KILL root
+  - `kill_entire_variable`, `kill_root_shrinks`, `kill_empty_key`
+- [x] Verify tree structure remains valid after KILL
+  - `kill_verifies_tree_structure`, `kill_causes_node_merge`, `kill_consecutive_merges`
+  - `kill_borrow_left_and_right`, `kill_intermixed_keys_survive`
+  - `kill_stress_many_keys`, `kill_stress_nested_subtrees`, `min_degree_2_stress`
+  - `interleaved_set_kill_invariants`, `set_kill_roundtrip_boundary`
 
 ### 2.5 MUMPS Operations - DATA
 
@@ -1182,8 +1191,17 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 2.1 Complete! Ready for Phase 2.2 (MUMPS Operations - SET)
-**Completed Checkboxes**: 33 / ~160
+**Current Phase**: Phase 2.4 Complete! Ready for Phase 2.5 (MUMPS Operations - DATA)
+**Completed Checkboxes**: ~50 / ~160
+
+**Recent Changes** (2025-11-27 - Phase 2.4 KILL Complete):
+- ✅ Completed Phase 2.4: MUMPS Operations - KILL
+  - Implemented `kill_internal` with full B-tree deletion algorithm
+  - Handles subtree deletion, ancestor flag updates, and tree rebalancing
+  - 35 comprehensive tests covering all edge cases
+  - Tests for both Global and Local namespaces
+  - Stress tests for rebalancing (merges, borrows, consecutive operations)
+  - All tests passing, clippy clean
 
 **Recent Changes** (2025-11-18 - Phase 2.1 Complete):
 - ✅ Completed Phase 2.1: B-Tree Structure - Initial Setup
