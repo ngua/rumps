@@ -325,22 +325,30 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - `deep_hierarchy`, `multiple_children` (hierarchical tests)
   - `after_kill_becomes_no_data`, `kill_child_updates_parent`, `kill_subtree_updates_ancestor` (state transitions)
 
-### 2.6 MUMPS Operations - ORDER (Iterator)
+### 2.6 MUMPS Operations - ORDER (Iterator) ✅ IMPLEMENTATION COMPLETE
 
-**Status**: Public API stub exists with `todo!()` implementation. Internal `order_internal()` stub also exists with `todo!()`.
+**Status**: Core implementation complete. Tests organized into `order_internal_tests` module. Transaction awareness will be added in Phase 5.
 
 **Transaction Note**: The signature includes optional `ctx: Option<&TransactionContext>` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction snapshot isolation will be added in Phase 5.
 
-- [ ] Implement ORDER operation:
-  - Use `load_node()` for cache-aware node access
-  - Find next key in lexicographic order
-  - Handle navigating between leaf nodes
+- [x] Implement ORDER operation:
+  - Uses `load_node()` for cache-aware node access
+  - `order_internal(name, None)` returns first (smallest) key
+  - `order_internal(name, Some(key))` returns next key after given key
+  - `find_leftmost_key()` traverses left spine for minimum
+  - `find_successor_key()` handles navigation between leaf nodes via binary search
   - ~~Use transaction snapshot isolation if context provided~~ (moved to Phase 5.4)
-- [ ] Implement `BTreeIterator` with async next() method
-- [ ] Add async tests for ORDER on empty tree
-- [ ] Add async tests for ORDER returning next sibling
-- [ ] Add async tests for ORDER wrapping to next parent's child
-- [ ] Add async tests for exhaustive iteration over entire tree
+- [ ] Implement `BTreeIterator` with async next() method (deferred - can use `order_internal` directly)
+- [x] Add async tests for ORDER on empty tree - **15 tests in `btree::tests::order_internal_tests` module** at `crates/rumps-storage/src/btree/tests.rs:4998`
+  - `empty_tree_returns_none`, `nonexistent_variable_returns_none`
+  - `first_key_single_entry`, `first_key_multiple_entries`
+  - `successor_existing_key`, `successor_nonexistent_key`, `successor_last_key_returns_none`, `successor_past_last_key_returns_none`
+  - `hierarchical_keys_sorted_correctly`
+  - `namespaces_are_separate`
+  - `full_iteration`
+  - `iteration_across_tree_splits`
+  - `extended_collation_order`
+  - `stress_many_keys` (500 keys), `stress_deep_hierarchy`
 
 ### 2.7 RUMPS Extension - COLLECT (Stream-Based Functional Iterator)
 
@@ -1197,8 +1205,17 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 2.5 Complete! Ready for Phase 2.6 (MUMPS Operations - ORDER)
-**Completed Checkboxes**: ~55 / ~160
+**Current Phase**: Phase 2.6 Complete! Ready for Phase 2.7 (RUMPS Extension - COLLECT)
+**Completed Checkboxes**: ~60 / ~160
+
+**Recent Changes** (2025-11-27 - Phase 2.6 ORDER Complete):
+- ✅ Completed Phase 2.6: MUMPS Operations - ORDER
+  - Implemented `order_internal` for finding next key in lexicographic order
+  - `find_leftmost_key()` traverses left spine for minimum key
+  - `find_successor_key()` navigates B-tree to find successor, handles leaf-to-leaf transitions
+  - 15 tests covering empty trees, successors, hierarchical keys, namespaces, collation order
+  - Stress tests with 500 keys and deep hierarchies
+  - All 181 tests passing, clippy clean
 
 **Recent Changes** (2025-11-27 - Phase 2.5 DATA Complete):
 - ✅ Completed Phase 2.5: MUMPS Operations - DATA

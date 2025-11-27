@@ -8,9 +8,13 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    pre-commit-nix = {
+      url = "github:cachix/pre-commit-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, flake-parts, rust-overlay, ... }@inputs:
+  outputs = { self, flake-parts, rust-overlay, pre-commit-nix, ... }@inputs:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" ];
       perSystem =
@@ -23,9 +27,20 @@
         let
           toolchain = pkgs.rust-bin.selectLatestNightlyWith (
             t: t.default.override {
-              extensions = [ "rust-src" ];
+              extensions = [ "rust-src" "rustfmt" ];
             }
           );
+
+          pre-commit = pre-commit-nix.lib.${system}.run {
+            src = ./.;
+            hooks = {
+              nixpkgs-fmt.enable = true;
+              rustfmt = {
+                enable = true;
+                packageOverrides.rustfmt = toolchain;
+              };
+            };
+          };
         in
         {
 
@@ -34,7 +49,10 @@
             overlays = [ rust-overlay.overlays.default ];
           };
 
+          checks.pre-commit = pre-commit;
+
           devShells.default = pkgs.mkShell {
+            inherit (pre-commit) shellHook;
             nativeBuildInputs = with pkgs; [
               rust-analyzer-unwrapped
               toolchain
