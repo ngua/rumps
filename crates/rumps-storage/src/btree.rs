@@ -366,12 +366,13 @@ impl BTree {
     ///
     /// # Type Parameters
     ///
-    /// * `P` - Predicate function: `(&Key, &Arc<NodeData>) -> bool`
+    /// * `P` - Predicate function: `(&Key, &NodeData) -> bool`
     ///   - Returns `true` to include the entry in the stream
     ///   - Returns `false` to skip the entry (iteration continues)
-    /// * `F` - Extract function: `(&Key, Arc<NodeData>) -> Option<T>`
+    /// * `F` - Extract function: `(&Key, &NodeData) -> Option<T>`
     ///   - Transforms matching entries into output type `T`
     ///   - Returns `None` to skip (entry matched predicate but shouldn't be yielded)
+    ///   - Clone `NodeData` or its fields if ownership is needed
     /// * `T` - Output type yielded by the stream
     ///
     /// # Arguments
@@ -416,8 +417,8 @@ impl BTree {
         _ctx: Option<&'a crate::TransactionContext>,
     ) -> impl Stream<Item = Result<T>> + Send + 'a
     where
-        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
-        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
         // Phase 5.4 will add transaction snapshot isolation here
@@ -828,8 +829,8 @@ impl BTree {
         extract: F,
     ) -> impl Stream<Item = Result<T>> + Send + 'a
     where
-        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
-        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
         // Wrap closures in Arc for shared ownership across async iterations
@@ -877,8 +878,8 @@ impl BTree {
         >,
     >
     where
-        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
-        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
         Box::pin(async move {
@@ -910,8 +911,8 @@ impl BTree {
         >,
     >
     where
-        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
-        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
         Box::pin(async move {
@@ -947,13 +948,13 @@ impl BTree {
         >,
     >
     where
-        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
-        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
         Box::pin(async move {
             if pred(&key, &data) {
-                match extract(&key, data) {
+                match extract(&key, &data) {
                     Some(val) => Some((Ok(val), Some(Some(key)))),
                     None => {
                         // Extract returned None - recurse to skip

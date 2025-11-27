@@ -371,16 +371,22 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 #### Primary Stream-Based Method Signatures
 
-- [ ] Implement `fn collects<'a, P, F, T>(&'a self, name: &'a Name, start: Option<&'a Key>, predicate: P, extract: F, ctx: Option<&'a TransactionContext>) -> impl Stream<Item = Result<T>> + 'a`:
+**Note on API Layers:**
+- The **B-tree layer** (`BTree::collects`) passes `&NodeData` to callbacks, exposing both `value` and `has_descendants`
+- The **Database layer** (`Database::collects`) will pass `&Option<Value>` to callbacks, hiding internal `NodeData` structure
+- This provides a cleaner public API while allowing internal code to access full node metadata
+
+- [x] Implement `BTree::collects_internal` - internal implementation with `&NodeData` (DONE)
+- [x] Implement `BTree::collects` - wrapper with transaction context placeholder (DONE)
+- [ ] Implement `Database::collects` - public API with `&Option<Value>` signature:
   ```rust
   /// Create a stream of values from the tree that match the given predicate.
   ///
   /// # Arguments
   /// * `name` - The global or local variable name
   /// * `start` - Optional starting key (None starts from beginning)
-  /// * `predicate` - Function that determines whether to continue and include the entry
+  /// * `predicate` - Function that determines whether to include the entry
   /// * `extract` - Function that transforms the entry into the desired output type
-  /// * `ctx` - Optional transaction context for snapshot isolation
   ///
   /// # Returns
   /// A stream that yields extracted values from matching entries
@@ -390,15 +396,14 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   /// use futures::StreamExt;
   ///
   /// // Process patient names as a stream
-  /// let mut names = btree.collects(
+  /// let mut names = db.collects(
   ///     &Name::Global("PATIENT".into()),
   ///     None,
-  ///     |key, data| key.subscripts().len() == 2 && key.subscripts()[1] == "NAME".into(),
-  ///     |_key, data| data.value.clone().and_then(|v| match v {
-  ///         Value::String(s) => Some(s),
+  ///     |key, value| key.len() == 2,
+  ///     |_key, value| value.as_ref().and_then(|v| match v {
+  ///         Value::String(s) => Some(s.clone()),
   ///         _ => None,
   ///     }),
-  ///     None,
   /// );
   ///
   /// // Process stream items one by one
@@ -415,22 +420,13 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
       start: Option<&'a Key>,
       predicate: P,
       extract: F,
-      ctx: Option<&'a TransactionContext>,
   ) -> impl Stream<Item = Result<T>> + 'a
   where
-      P: Fn(&Key, &Arc<NodeData>) -> bool + Send + 'a,
-      F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + 'a,
-      T: Send + 'static,
+      P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + 'a,
+      F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + 'a,
+      T: Send + 'a,
   {
-      // Implementation will use async_stream::stream! macro or manual Stream impl:
-      // 1. Use ctx for transaction isolation if provided (Phase 5.4)
-      // 2. Start from `start` key or beginning of the tree
-      // 3. Use get_next_internal to iterate in order
-      // 4. For each entry, check predicate
-      // 5. If predicate returns false, end stream
-      // 6. If predicate returns true, apply extract function
-      // 7. Yield Some(result) for non-None extractions
-      // 8. Automatically handle backpressure
+      // Delegates to BTree::collects, adapting callbacks to extract value from NodeData
   }
   ```
 

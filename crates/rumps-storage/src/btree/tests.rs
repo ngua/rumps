@@ -6050,6 +6050,84 @@ mod tests {
             assert_eq!(collected, vec!["Alice: 25", "Bob: 30"]);
         }
 
+        #[tokio::test]
+        async fn extract_with_owned_nodedata() {
+            let btree = BTree::default();
+            let name = global!("OWNED");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![1],
+                    NodeData::new(Some(Value::Integer(10)), true),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![2],
+                    NodeData::new(Some(Value::Integer(20)), false),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(&name, &key![3], NodeData::new(None, true))
+                .await
+                .unwrap();
+
+            // Clone the entire NodeData to take ownership, then transform
+            let collected: Vec<(Key, NodeData)> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, _| true,
+                    |k, d| Some((k.clone(), d.clone())), // Clone to get owned NodeData
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected.len(), 3);
+
+            // Verify we have owned copies with correct data
+            let (k1, d1) = &collected[0];
+            assert_eq!(*k1, key![1]);
+            assert_eq!(d1.value, Some(Value::Integer(10)));
+            assert!(d1.has_descendants);
+
+            let (k2, d2) = &collected[1];
+            assert_eq!(*k2, key![2]);
+            assert_eq!(d2.value, Some(Value::Integer(20)));
+            assert!(!d2.has_descendants);
+
+            let (k3, d3) = &collected[2];
+            assert_eq!(*k3, key![3]);
+            assert_eq!(d3.value, None);
+            assert!(d3.has_descendants);
+
+            // Demonstrate we can mutate the owned data (wouldn't work with refs)
+            let mut modified: Vec<NodeData> = collected
+                .into_iter()
+                .map(|(_, mut d)| {
+                    // Double any integer values
+                    d.value = d.value.map(|v| match v {
+                        Value::Integer(i) => Value::Integer(i * 2),
+                        other => other,
+                    });
+                    d
+                })
+                .collect();
+
+            assert_eq!(modified[0].value, Some(Value::Integer(20)));
+            assert_eq!(modified[1].value, Some(Value::Integer(40)));
+            assert_eq!(modified[2].value, None);
+
+            // Can also modify has_descendants
+            modified.iter_mut().for_each(|d| d.has_descendants = false);
+            assert!(modified.iter().all(|d| !d.has_descendants));
+        }
+
         // === Hierarchical Data Tests ===
 
         #[tokio::test]
