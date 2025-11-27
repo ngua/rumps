@@ -5591,6 +5591,878 @@ mod tests {
             });
         }
     }
+
+    /// Tests for the `collects_internal` (RUMPS `$COLLECT`) operation.
+    ///
+    /// `$COLLECT` is a RUMPS extension providing stream-based iteration over
+    /// tree entries with filtering and transformation.
+    mod collects_internal_tests {
+        use super::*;
+
+        // === Basic Iteration Tests ===
+
+        #[tokio::test]
+        async fn empty_tree_returns_empty_stream() {
+            let btree = BTree::default();
+            let name = global!("EMPTY");
+
+            let collected: Vec<Key> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, _| true,            // Accept all
+                    |k, _| Some(k.clone()), // Extract key
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert!(collected.is_empty());
+        }
+
+        #[tokio::test]
+        async fn nonexistent_variable_returns_empty_stream() {
+            let btree = BTree::default();
+            let name = global!("EXISTS");
+            let other = global!("OTHER");
+
+            // Set up one variable
+            btree
+                .set_internal(
+                    &name,
+                    &key![1],
+                    NodeData::with_value(Value::Integer(1)),
+                )
+                .await
+                .unwrap();
+
+            // Collect from a different variable
+            let collected: Vec<Key> = btree
+                .collects_internal(
+                    &other,
+                    None,
+                    |_, _| true,
+                    |k, _| Some(k.clone()),
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert!(collected.is_empty());
+        }
+
+        #[tokio::test]
+        async fn single_entry() {
+            let btree = BTree::default();
+            let name = global!("SINGLE");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![42],
+                    NodeData::with_value(Value::Integer(42)),
+                )
+                .await
+                .unwrap();
+
+            let collected: Vec<(Key, Value)> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, _| true,
+                    |k, d| d.value.clone().map(|v| (k.clone(), v)),
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected.len(), 1);
+            assert_eq!(collected[0].0, key![42]);
+            assert_eq!(collected[0].1, Value::Integer(42));
+        }
+
+        #[tokio::test]
+        async fn multiple_entries_in_order() {
+            let btree = BTree::default();
+            let name = global!("MULTI");
+
+            // Insert out of order
+            btree
+                .set_internal(
+                    &name,
+                    &key![30],
+                    NodeData::with_value(Value::Integer(30)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![10],
+                    NodeData::with_value(Value::Integer(10)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![20],
+                    NodeData::with_value(Value::Integer(20)),
+                )
+                .await
+                .unwrap();
+
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, _| true,
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            // Should be in sorted order
+            assert_eq!(collected, vec![10, 20, 30]);
+        }
+
+        // === Start Key Tests ===
+
+        #[tokio::test]
+        async fn start_from_specific_key() {
+            let btree = BTree::default();
+            let name = global!("START");
+
+            futures::stream::iter(1..=5)
+                .then(|i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            // Start from key 2 (should get 3, 4, 5)
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    Some(&key![2]),
+                    |_, _| true,
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected, vec![3, 4, 5]);
+        }
+
+        #[tokio::test]
+        async fn start_from_nonexistent_key() {
+            let btree = BTree::default();
+            let name = global!("STARTNE");
+
+            futures::stream::iter(vec![10, 20, 30])
+                .then(|i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            // Start from key 15 (doesn't exist, should get 20, 30)
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    Some(&key![15]),
+                    |_, _| true,
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected, vec![20, 30]);
+        }
+
+        #[tokio::test]
+        async fn start_past_last_key() {
+            let btree = BTree::default();
+            let name = global!("PASTEND");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![10],
+                    NodeData::with_value(Value::Integer(10)),
+                )
+                .await
+                .unwrap();
+
+            // Start from key 100 (past all keys)
+            let collected: Vec<Key> = btree
+                .collects_internal(
+                    &name,
+                    Some(&key![100]),
+                    |_, _| true,
+                    |k, _| Some(k.clone()),
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert!(collected.is_empty());
+        }
+
+        // === Predicate Filtering Tests ===
+
+        #[tokio::test]
+        async fn predicate_filters_entries() {
+            let btree = BTree::default();
+            let name = global!("FILTER");
+
+            futures::stream::iter(1..=10)
+                .then(|i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            // Only collect even numbers
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, d| {
+                        d.value
+                            .as_ref()
+                            .map(|v| match v {
+                                Value::Integer(i) => i % 2 == 0,
+                                _ => false,
+                            })
+                            .unwrap_or(false)
+                    },
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected, vec![2, 4, 6, 8, 10]);
+        }
+
+        #[tokio::test]
+        async fn predicate_false_skips_entry() {
+            let btree = BTree::default();
+            let name = global!("SKIPSOME");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![1],
+                    NodeData::with_value(Value::String("skip".into())),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![2],
+                    NodeData::with_value(Value::Integer(2)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![3],
+                    NodeData::with_value(Value::String("skip".into())),
+                )
+                .await
+                .unwrap();
+
+            // Only collect integers
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, d| matches!(d.value.as_ref(), Some(Value::Integer(_))),
+                    |_, d| match d.value.as_ref() {
+                        Some(Value::Integer(i)) => Some(*i),
+                        _ => None,
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected, vec![2]);
+        }
+
+        // === Extract Function Tests ===
+
+        #[tokio::test]
+        async fn extract_returns_none_skips_entry() {
+            let btree = BTree::default();
+            let name = global!("EXTRACTNONE");
+
+            futures::stream::iter(1..=5)
+                .then(|i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            // Extract only returns Some for values > 2
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, _| true, // Accept all
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) if *i > 2 => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected, vec![3, 4, 5]);
+        }
+
+        #[tokio::test]
+        async fn extract_transforms_entries() {
+            let btree = BTree::default();
+            let name = global!("TRANSFORM");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key!["Alice"],
+                    NodeData::with_value(Value::Integer(25)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key!["Bob"],
+                    NodeData::with_value(Value::Integer(30)),
+                )
+                .await
+                .unwrap();
+
+            // Transform to formatted strings
+            let collected: Vec<String> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, _| true,
+                    |k, d| {
+                        d.value.as_ref().map(|v| {
+                            format!(
+                                "{}: {}",
+                                k.get(0).map_or("?".to_string(), |s| {
+                                    match s {
+                                        rumps_types::Subscript::String(s) => {
+                                            s.clone()
+                                        }
+                                        _ => "?".to_string(),
+                                    }
+                                }),
+                                match v {
+                                    Value::Integer(i) => i.to_string(),
+                                    _ => "?".to_string(),
+                                }
+                            )
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected, vec!["Alice: 25", "Bob: 30"]);
+        }
+
+        // === Hierarchical Data Tests ===
+
+        #[tokio::test]
+        async fn hierarchical_keys() {
+            let btree = BTree::default();
+            let name = global!("PATIENT");
+
+            // Set up patient data (hierarchical)
+            btree
+                .set_internal(
+                    &name,
+                    &key![123, "NAME"],
+                    NodeData::with_value(Value::String("John Doe".into())),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![123, "DOB"],
+                    NodeData::with_value(Value::String("1990-01-01".into())),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![124, "NAME"],
+                    NodeData::with_value(Value::String("Jane Smith".into())),
+                )
+                .await
+                .unwrap();
+
+            // Collect all entries with values (skip intermediate nodes)
+            let collected: Vec<(Key, String)> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, d| d.value.is_some(),
+                    |k, d| {
+                        d.value.as_ref().map(|v| {
+                            (
+                                k.clone(),
+                                match v {
+                                    Value::String(s) => s.clone(),
+                                    _ => "?".to_string(),
+                                },
+                            )
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected.len(), 3);
+            assert!(collected.iter().any(|(k, _)| *k == key![123, "DOB"]));
+            assert!(collected.iter().any(|(k, _)| *k == key![123, "NAME"]));
+            assert!(collected.iter().any(|(k, _)| *k == key![124, "NAME"]));
+        }
+
+        #[tokio::test]
+        async fn filter_by_key_depth() {
+            let btree = BTree::default();
+            let name = global!("DEPTH");
+
+            // Create structure with varying depths
+            btree
+                .set_internal(
+                    &name,
+                    &key![1],
+                    NodeData::with_value(Value::Integer(1)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, 2],
+                    NodeData::with_value(Value::Integer(12)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, 2, 3],
+                    NodeData::with_value(Value::Integer(123)),
+                )
+                .await
+                .unwrap();
+
+            // Collect only depth-2 keys
+            let collected: Vec<Key> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |k, _| k.len() == 2,
+                    |k, _| Some(k.clone()),
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected, vec![key![1, 2]]);
+        }
+
+        // === Namespace Tests ===
+
+        #[tokio::test]
+        async fn local_namespace() {
+            let btree = BTree::default();
+            let name = local!("LOCAL");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![1],
+                    NodeData::with_value(Value::Integer(1)),
+                )
+                .await
+                .unwrap();
+
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, _| true,
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected, vec![1]);
+        }
+
+        #[tokio::test]
+        async fn namespaces_are_separate() {
+            let btree = BTree::default();
+            let g = global!("VAR");
+            let l = local!("VAR");
+
+            btree
+                .set_internal(
+                    &g,
+                    &key![1],
+                    NodeData::with_value(Value::Integer(100)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &l,
+                    &key![1],
+                    NodeData::with_value(Value::Integer(200)),
+                )
+                .await
+                .unwrap();
+
+            let global_vals: Vec<i64> = btree
+                .collects_internal(
+                    &g,
+                    None,
+                    |_, _| true,
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            let local_vals: Vec<i64> = btree
+                .collects_internal(
+                    &l,
+                    None,
+                    |_, _| true,
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(global_vals, vec![100]);
+            assert_eq!(local_vals, vec![200]);
+        }
+
+        // === Stream Behavior Tests ===
+
+        #[tokio::test]
+        async fn stream_is_lazy() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            let btree = BTree::default();
+            let name = global!("LAZY");
+
+            futures::stream::iter(1..=10)
+                .then(|i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            let count = Arc::new(AtomicUsize::new(0));
+            let count_clone = Arc::clone(&count);
+
+            // Take only 3 items - should not evaluate all entries
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    move |_, _| {
+                        count_clone.fetch_add(1, Ordering::SeqCst);
+                        true
+                    },
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .take(3)
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected, vec![1, 2, 3]);
+            // The predicate should have been called exactly 3 times
+            assert_eq!(count.load(Ordering::SeqCst), 3);
+        }
+
+        #[tokio::test]
+        async fn stream_with_tree_splits() {
+            let btree = BTree::new(2).unwrap(); // Small degree to force splits
+            let name = global!("SPLITS");
+
+            // Insert enough keys to cause multiple splits
+            futures::stream::iter(0..50)
+                .then(|i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, _| true,
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            // Should have all 50 values in order
+            let expected: Vec<i64> = (0..50).collect();
+            assert_eq!(collected, expected);
+        }
+
+        // === Stress Tests ===
+
+        #[tokio::test]
+        async fn stress_many_entries() {
+            let btree = BTree::default();
+            let name = global!("STRESS");
+
+            // Insert 100 entries (reduced for test speed)
+            futures::stream::iter(0..100)
+                .then(|i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, _| true,
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(collected.len(), 100);
+
+            // Verify order
+            collected.windows(2).for_each(|w| {
+                assert!(
+                    w[0] < w[1],
+                    "Values out of order: {} >= {}",
+                    w[0],
+                    w[1]
+                );
+            });
+        }
+
+        #[tokio::test]
+        async fn stress_with_filtering() {
+            let btree = BTree::default();
+            let name = global!("STRESSFILT");
+
+            // Insert 200 entries (reduced for test speed)
+            futures::stream::iter(0..200)
+                .then(|i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            // Collect only multiples of 7
+            let collected: Vec<i64> = btree
+                .collects_internal(
+                    &name,
+                    None,
+                    |_, d| {
+                        d.value
+                            .as_ref()
+                            .map(|v| match v {
+                                Value::Integer(i) => i % 7 == 0,
+                                _ => false,
+                            })
+                            .unwrap_or(false)
+                    },
+                    |_, d| {
+                        d.value.as_ref().and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                    },
+                )
+                .try_collect()
+                .await
+                .unwrap();
+
+            // Should have 29 multiples of 7 from 0-199 (0, 7, 14, ..., 196)
+            assert_eq!(collected.len(), 29);
+            collected.iter().for_each(|&v| {
+                assert_eq!(v % 7, 0, "Value {} is not a multiple of 7", v);
+            });
+        }
+    }
 }
 
 #[cfg(feature = "bench")]
