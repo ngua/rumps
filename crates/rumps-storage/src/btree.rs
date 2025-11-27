@@ -1204,28 +1204,26 @@ impl BTree {
                 .collect();
 
             // For internal nodes, also check children
-            match node.is_leaf {
-                true => Ok(matching_keys),
-                false => {
-                    // Check all children that could contain matching keys
-                    let child_results = futures::future::try_join_all(
-                        (start_pos
-                            ..=node.children.len().min(node.keys.len() + 1))
-                            .filter_map(|i| node.children.get(i).copied())
-                            .map(|child_id| {
-                                self.collect_keys_from_node(child_id, prefix)
-                            }),
-                    )
-                    .await?;
+            if node.is_leaf {
+                Ok(matching_keys)
+            } else {
+                // Check all children that could contain matching keys
+                let child_results = futures::future::try_join_all(
+                    (start_pos..=node.children.len().min(node.keys.len() + 1))
+                        .filter_map(|i| node.children.get(i).copied())
+                        .map(|child_id| {
+                            self.collect_keys_from_node(child_id, prefix)
+                        }),
+                )
+                .await?;
 
-                    Ok(child_results.into_iter().fold(
-                        matching_keys,
-                        |mut acc, keys| {
-                            acc.extend(keys);
-                            acc
-                        },
-                    ))
-                }
+                Ok(child_results.into_iter().fold(
+                    matching_keys,
+                    |mut acc, keys| {
+                        acc.extend(keys);
+                        acc
+                    },
+                ))
             }
         })
     }
@@ -1270,8 +1268,8 @@ impl BTree {
             let node = self.load_node(node_id).await?;
 
             match node.keys.binary_search(key) {
-                Ok(pos) => match node.is_leaf {
-                    true => {
+                Ok(pos) => {
+                    if node.is_leaf {
                         // Case 1: Key is in a leaf - remove it directly
                         {
                             let mut nodes = self.nodes.write().await;
@@ -1289,8 +1287,7 @@ impl BTree {
                         self.rebalance_with_ancestors(name, node_id, ancestors)
                             .await?;
                         Ok(true)
-                    }
-                    false => {
+                    } else {
                         // Case 2: Key is in an internal node - replace with predecessor
                         let left_child =
                             *node.children.get(pos).ok_or_else(|| {
@@ -1339,10 +1336,11 @@ impl BTree {
                         .await?;
                         Ok(true)
                     }
-                },
-                Err(pos) => match node.is_leaf {
-                    true => Ok(false),
-                    false => {
+                }
+                Err(pos) => {
+                    if node.is_leaf {
+                        Ok(false)
+                    } else {
                         let child_id =
                             node.children.get(pos).copied().ok_or_else(
                                 || {
@@ -1363,7 +1361,7 @@ impl BTree {
                         )
                         .await
                     }
-                },
+                }
             }
         })
     }
@@ -1381,34 +1379,26 @@ impl BTree {
     > {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
-            match node.is_leaf {
-                true => {
-                    let i =
-                        node.keys.len().checked_sub(1).ok_or_else(|| {
-                            StorageError::InvalidOperation(
-                                "Empty node".to_string(),
-                            )
-                        })?;
-                    let k = node.keys.get(i).ok_or_else(|| {
-                        StorageError::InvalidOperation(
-                            "Key index out of bounds".to_string(),
-                        )
-                    })?;
-                    let v = node.values.get(i).ok_or_else(|| {
-                        StorageError::InvalidOperation(
-                            "Value index out of bounds".to_string(),
-                        )
-                    })?;
-                    Ok((k.clone(), Arc::clone(v)))
-                }
-                false => {
-                    let child = *node.children.last().ok_or_else(|| {
-                        StorageError::InvalidOperation(
-                            "No children".to_string(),
-                        )
-                    })?;
-                    self.find_predecessor(child).await
-                }
+            if node.is_leaf {
+                let i = node.keys.len().checked_sub(1).ok_or_else(|| {
+                    StorageError::InvalidOperation("Empty node".to_string())
+                })?;
+                let k = node.keys.get(i).ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Key index out of bounds".to_string(),
+                    )
+                })?;
+                let v = node.values.get(i).ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Value index out of bounds".to_string(),
+                    )
+                })?;
+                Ok((k.clone(), Arc::clone(v)))
+            } else {
+                let child = *node.children.last().ok_or_else(|| {
+                    StorageError::InvalidOperation("No children".to_string())
+                })?;
+                self.find_predecessor(child).await
             }
         })
     }
@@ -1462,85 +1452,107 @@ impl BTree {
             StorageError::InvalidOperation(format!("Index {} out of bounds", i))
         };
 
-        // Try to borrow from left sibling
-        if child_idx > 0 {
+        // Check if we can borrow from left sibling
+        let can_borrow_left = match child_idx > 0 {
+            true => {
+                let left_id = *parent
+                    .children
+                    .get(child_idx - 1)
+                    .ok_or_else(|| idx_err(child_idx - 1))?;
+                let left = self.load_node(left_id).await?;
+                left.keys.len() > min_keys
+            }
+            false => false,
+        };
+
+        // Check if we can borrow from right sibling
+        let can_borrow_right = match !can_borrow_left
+            && child_idx < parent.children.len().saturating_sub(1)
+        {
+            true => {
+                let right_id = *parent
+                    .children
+                    .get(child_idx + 1)
+                    .ok_or_else(|| idx_err(child_idx + 1))?;
+                let right = self.load_node(right_id).await?;
+                right.keys.len() > min_keys
+            }
+            false => false,
+        };
+
+        if can_borrow_left {
+            // Borrow from left sibling
             let left_id = *parent
                 .children
                 .get(child_idx - 1)
                 .ok_or_else(|| idx_err(child_idx - 1))?;
-            let left = self.load_node(left_id).await?;
-            if left.keys.len() > min_keys {
-                self.borrow_from_sibling(
-                    parent_id,
-                    child_idx,
-                    left_id,
-                    BorrowDir::Left,
-                )
-                .await?;
-                return Ok(false); // No merge, parent unchanged
-            }
-        }
-
-        // Try to borrow from right sibling
-        if child_idx < parent.children.len().saturating_sub(1) {
+            drop(parent);
+            self.borrow_from_sibling(
+                parent_id,
+                child_idx,
+                left_id,
+                BorrowDir::Left,
+            )
+            .await?;
+            Ok(false) // No merge, parent unchanged
+        } else if can_borrow_right {
+            // Borrow from right sibling
             let right_id = *parent
                 .children
                 .get(child_idx + 1)
                 .ok_or_else(|| idx_err(child_idx + 1))?;
-            let right = self.load_node(right_id).await?;
-            if right.keys.len() > min_keys {
-                self.borrow_from_sibling(
-                    parent_id,
-                    child_idx,
-                    right_id,
-                    BorrowDir::Right,
-                )
-                .await?;
-                return Ok(false); // No merge, parent unchanged
-            }
-        }
-
-        // Must merge - prefer left sibling
-        let (left_id, right_id, sep_idx) = match child_idx > 0 {
-            true => (
-                *parent
-                    .children
-                    .get(child_idx - 1)
-                    .ok_or_else(|| idx_err(child_idx - 1))?,
-                *parent
-                    .children
-                    .get(child_idx)
-                    .ok_or_else(|| idx_err(child_idx))?,
-                child_idx - 1,
-            ),
-            false => (
-                *parent
-                    .children
-                    .get(child_idx)
-                    .ok_or_else(|| idx_err(child_idx))?,
-                *parent
-                    .children
-                    .get(child_idx + 1)
-                    .ok_or_else(|| idx_err(child_idx + 1))?,
+            drop(parent);
+            self.borrow_from_sibling(
+                parent_id,
                 child_idx,
-            ),
-        };
-        let sep_key = parent
-            .keys
-            .get(sep_idx)
-            .ok_or_else(|| idx_err(sep_idx))?
-            .clone();
-        let sep_val = Arc::clone(
-            parent.values.get(sep_idx).ok_or_else(|| idx_err(sep_idx))?,
-        );
-        drop(parent);
-
-        self.merge_nodes(left_id, sep_key, sep_val, right_id)
+                right_id,
+                BorrowDir::Right,
+            )
             .await?;
-        self.remove_separator_from_parent(parent_id, sep_idx)
-            .await?;
+            Ok(false) // No merge, parent unchanged
+        } else {
+            // Must merge - prefer left sibling
+            let (left_id, right_id, sep_idx) = match child_idx > 0 {
+                true => (
+                    *parent
+                        .children
+                        .get(child_idx - 1)
+                        .ok_or_else(|| idx_err(child_idx - 1))?,
+                    *parent
+                        .children
+                        .get(child_idx)
+                        .ok_or_else(|| idx_err(child_idx))?,
+                    child_idx - 1,
+                ),
+                false => (
+                    *parent
+                        .children
+                        .get(child_idx)
+                        .ok_or_else(|| idx_err(child_idx))?,
+                    *parent
+                        .children
+                        .get(child_idx + 1)
+                        .ok_or_else(|| idx_err(child_idx + 1))?,
+                    child_idx,
+                ),
+            };
+            let sep_key = parent
+                .keys
+                .get(sep_idx)
+                .ok_or_else(|| idx_err(sep_idx))?
+                .clone();
+            let sep_val = Arc::clone(
+                parent.values.get(sep_idx).ok_or_else(|| idx_err(sep_idx))?,
+            );
+            drop(parent);
 
-        Ok(true) // Merged, parent lost a key
+            self.merge_nodes(left_id, sep_key, sep_val, right_id)
+                .await?;
+            self.remove_separator_from_parent(parent_id, sep_idx)
+                .await?;
+
+            Ok(true) // Merged, parent lost a key
+        }
     }
 
     /// Borrows a key from a sibling.
@@ -1674,70 +1686,71 @@ impl BTree {
     /// Shrinks the tree if root is empty after deletion.
     async fn shrink_root_if_needed(&self, name: &Name) -> Result<()> {
         let roots = self.roots.read().await;
-        let root_id = match roots.get(name).copied() {
-            None => {
-                drop(roots);
-                return Ok(());
-            }
-            Some(id) => id,
-        };
+        let root_id = roots.get(name).copied();
         drop(roots);
 
-        let root = self.load_node(root_id).await?;
+        match root_id {
+            None => Ok(()),
+            Some(root_id) => {
+                let root = self.load_node(root_id).await?;
 
-        // If root has no keys but has one child, promote that child
-        match (
-            root.keys.is_empty(),
-            root.is_leaf,
-            root.children.first().copied(),
-        ) {
-            (true, false, Some(new_root_id)) => {
-                // Promote the only child to be the new root
-                {
-                    let mut roots = self.roots.write().await;
-                    roots.insert(name.clone(), new_root_id);
+                // If root has no keys but has one child, promote that child
+                match (
+                    root.keys.is_empty(),
+                    root.is_leaf,
+                    root.children.first().copied(),
+                ) {
+                    (true, false, Some(new_root_id)) => {
+                        // Promote the only child to be the new root
+                        {
+                            let mut roots = self.roots.write().await;
+                            roots.insert(name.clone(), new_root_id);
+                        }
+
+                        // Deallocate old root
+                        {
+                            let mut nodes = self.nodes.write().await;
+                            nodes.remove(&root_id);
+                        }
+                        self.allocator.deallocate(root_id).await?;
+
+                        // Update height
+                        {
+                            let mut stats = self.stats.write().await;
+                            stats.height = stats.height.saturating_sub(1);
+                            stats.node_count =
+                                stats.node_count.saturating_sub(1);
+                        }
+
+                        Ok(())
+                    }
+                    (true, true, _) => {
+                        // Root is empty leaf - remove the variable entirely
+                        {
+                            let mut roots = self.roots.write().await;
+                            roots.remove(name);
+                        }
+
+                        // Deallocate the root node
+                        {
+                            let mut nodes = self.nodes.write().await;
+                            nodes.remove(&root_id);
+                        }
+                        self.allocator.deallocate(root_id).await?;
+
+                        // Update stats
+                        {
+                            let mut stats = self.stats.write().await;
+                            stats.height = 0;
+                            stats.node_count =
+                                stats.node_count.saturating_sub(1);
+                        }
+
+                        Ok(())
+                    }
+                    _ => Ok(()),
                 }
-
-                // Deallocate old root
-                {
-                    let mut nodes = self.nodes.write().await;
-                    nodes.remove(&root_id);
-                }
-                self.allocator.deallocate(root_id).await?;
-
-                // Update height
-                {
-                    let mut stats = self.stats.write().await;
-                    stats.height = stats.height.saturating_sub(1);
-                    stats.node_count = stats.node_count.saturating_sub(1);
-                }
-
-                Ok(())
             }
-            (true, true, _) => {
-                // Root is empty leaf - remove the variable entirely
-                {
-                    let mut roots = self.roots.write().await;
-                    roots.remove(name);
-                }
-
-                // Deallocate the root node
-                {
-                    let mut nodes = self.nodes.write().await;
-                    nodes.remove(&root_id);
-                }
-                self.allocator.deallocate(root_id).await?;
-
-                // Update stats
-                {
-                    let mut stats = self.stats.write().await;
-                    stats.height = 0;
-                    stats.node_count = stats.node_count.saturating_sub(1);
-                }
-
-                Ok(())
-            }
-            _ => Ok(()),
         }
     }
 
@@ -1844,32 +1857,28 @@ impl BTree {
                 .skip(start_pos)
                 .any(|k| k.starts_with(prefix) && k != prefix);
 
-            match found_in_node {
-                true => Ok(true),
-                false if node.is_leaf => Ok(false),
-                false => {
-                    // Check children that might contain descendants
-                    let check_range = start_pos
-                        ..=node.children.len().min(node.keys.len() + 1);
+            if found_in_node {
+                Ok(true)
+            } else if node.is_leaf {
+                Ok(false)
+            } else {
+                // Check children that might contain descendants
+                let check_range =
+                    start_pos..=node.children.len().min(node.keys.len() + 1);
 
-                    futures::stream::iter(
-                        check_range
-                            .filter_map(|i| node.children.get(i).copied())
-                            .map(Ok::<_, StorageError>),
-                    )
-                    .try_fold(false, |acc, child_id| async move {
-                        match acc {
-                            true => Ok(true),
-                            false => {
-                                self.check_descendants_from_node(
-                                    child_id, prefix,
-                                )
-                                .await
-                            }
-                        }
-                    })
-                    .await
-                }
+                futures::stream::iter(
+                    check_range
+                        .filter_map(|i| node.children.get(i).copied())
+                        .map(Ok::<_, StorageError>),
+                )
+                .try_fold(false, |acc, child_id| async move {
+                    if acc {
+                        Ok(true)
+                    } else {
+                        self.check_descendants_from_node(child_id, prefix).await
+                    }
+                })
+                .await
             }
         })
     }
