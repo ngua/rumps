@@ -827,12 +827,12 @@ impl BTree {
     /// ```
     pub(crate) async fn data(
         &self,
-        _name: &Name,
-        _key: &Key,
+        name: &Name,
+        key: &Key,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<DataStatus> {
-        // TODO Phase 2.5: Implement DATA operation
-        todo!("DATA operation not yet implemented - see TODOS/persistence.md Phase 2.5")
+        // Phase 5.4 will add transaction snapshot isolation here
+        self.data_internal(name, key).await
     }
 
     /// Returns the next key in lexicographic order (MUMPS $ORDER).
@@ -982,14 +982,24 @@ impl BTree {
         }
     }
 
-    // Internal method, unimplemented
-    async fn data_internal(
-        &self,
-        _name: &Name,
-        _key: &Key,
-    ) -> Result<DataStatus> {
-        // TODO Phase 2.5: Implement DATA operation
-        todo!("DATA operation not yet implemented - see TODOS/persistence.md Phase 2.5")
+    /// Internal DATA operation returning MUMPS `$DATA` status.
+    ///
+    /// Maps the `NodeData` to `DataStatus`:
+    /// - `NoData` (0): Node doesn't exist or has neither value nor descendants
+    /// - `HasValue` (1): Node has value but no descendants
+    /// - `HasDescendants` (10): Node has descendants but no value
+    /// - `Both` (11): Node has both value and descendants
+    async fn data_internal(&self, name: &Name, key: &Key) -> Result<DataStatus> {
+        self.get_internal(name, key).await.map(|opt| {
+            opt.map_or(DataStatus::NoData, |nd| {
+                match (nd.value.is_some(), nd.has_descendants) {
+                    (false, false) => DataStatus::NoData,
+                    (true, false) => DataStatus::HasValue,
+                    (false, true) => DataStatus::HasDescendants,
+                    (true, true) => DataStatus::Both,
+                }
+            })
+        })
     }
 
     // Internal method, unimplemented
