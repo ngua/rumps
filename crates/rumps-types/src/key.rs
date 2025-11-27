@@ -650,6 +650,72 @@ impl Key {
             .map(|i| Self::from(self.as_slice()[..i].to_vec()))
             .collect()
     }
+
+    /// Returns `true` if this key starts with the given prefix.
+    ///
+    /// A key starts with a prefix if:
+    /// - The prefix length is <= this key's length
+    /// - All subscripts in the prefix match the corresponding subscripts in this key
+    ///
+    /// Note: An empty prefix matches any key, and a key always starts with itself.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::{Key, Subscript};
+    ///
+    /// let key = Key::from(vec![
+    ///     Subscript::from(1),
+    ///     Subscript::from(2),
+    ///     Subscript::from(3),
+    /// ]);
+    ///
+    /// let prefix = Key::from(vec![Subscript::from(1), Subscript::from(2)]);
+    /// assert!(key.starts_with(&prefix));
+    ///
+    /// let not_prefix = Key::from(vec![Subscript::from(1), Subscript::from(9)]);
+    /// assert!(!key.starts_with(&not_prefix));
+    ///
+    /// // A key starts with itself
+    /// assert!(key.starts_with(&key));
+    ///
+    /// // Empty prefix matches everything
+    /// assert!(key.starts_with(&Key::new()));
+    /// ```
+    #[inline]
+    pub fn starts_with(&self, prefix: &Self) -> bool {
+        self.0.len() >= prefix.0.len()
+            && self.0[..prefix.0.len()] == prefix.0[..]
+    }
+
+    /// Returns the parent key (all subscripts except the last), or None if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::{Key, Subscript};
+    ///
+    /// let key = Key::from(vec![
+    ///     Subscript::from(1),
+    ///     Subscript::from(2),
+    ///     Subscript::from(3),
+    /// ]);
+    ///
+    /// let parent = key.parent().unwrap();
+    /// assert_eq!(parent, Key::from(vec![Subscript::from(1), Subscript::from(2)]));
+    ///
+    /// let single = Key::from(vec![Subscript::from(1)]);
+    /// assert_eq!(single.parent(), Some(Key::new())); // Empty key
+    ///
+    /// let empty = Key::new();
+    /// assert_eq!(empty.parent(), None);
+    /// ```
+    pub fn parent(&self) -> Option<Self> {
+        match self.0.len() {
+            0 => None,
+            n => Some(Self::from(self.0[..n - 1].to_vec())),
+        }
+    }
 }
 
 impl Default for Key {
