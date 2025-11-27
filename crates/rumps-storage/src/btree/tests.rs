@@ -4552,12 +4552,7 @@ mod kill_internal_tests {
     ///
     /// With min_degree=2, each node can have 1-3 keys, making
     /// rebalancing operations extremely frequent.
-    ///
-    /// KNOWN BUG: This test currently fails with NodeNotFound during deletion.
-    /// The tree structure becomes inconsistent after certain merge operations.
-    /// See: https://github.com/... (TODO: file issue)
     #[tokio::test]
-    #[ignore = "Known bug: NodeNotFound during deletion - tree structure inconsistency after merges"]
     async fn min_degree_2_stress() {
         use std::sync::Arc;
 

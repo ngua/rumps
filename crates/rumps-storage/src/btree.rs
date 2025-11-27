@@ -1322,7 +1322,11 @@ impl BTree {
                         }
 
                         // Delete predecessor from left subtree
-                        let mut child_ancestors = ancestors.clone();
+                        // Pass ancestors WITH current node so rebalancing propagates
+                        // correctly through this node and up to the root.
+                        // Do NOT call rebalance_with_ancestors again after - the
+                        // recursive delete already handles it.
+                        let mut child_ancestors = ancestors;
                         child_ancestors.push((node_id, pos));
                         self.delete_key_from_node(
                             name,
@@ -1331,8 +1335,6 @@ impl BTree {
                             child_ancestors,
                         )
                         .await?;
-                        self.rebalance_with_ancestors(name, node_id, ancestors)
-                            .await?;
                         Ok(true)
                     }
                 },
