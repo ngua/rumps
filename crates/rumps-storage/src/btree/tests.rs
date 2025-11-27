@@ -65,7 +65,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_btree_node_count() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
         assert_eq!(btree.node_count().await, 0);
 
         // Will add nodes in future phases
@@ -80,7 +80,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_btree_stats() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
         let stats = btree.stats().await;
         assert_eq!(stats.node_count, 0);
         assert_eq!(stats.key_count, 0);
@@ -91,7 +91,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_readers() {
-        let btree = Arc::new(BTree::new(3).unwrap());
+        let btree = Arc::new(BTree::default());
 
         // Spawn 10 concurrent reader tasks
         let handles = (0..10)
@@ -113,7 +113,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_writer_blocks_readers() {
-        let btree = Arc::new(BTree::new(3).unwrap());
+        let btree = Arc::new(BTree::default());
 
         // Acquire write lock and hold it
         let write_guard = btree.nodes.write().await;
@@ -139,7 +139,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stress_large_tree() {
-        let btree = Arc::new(BTree::new(3).unwrap());
+        let btree = Arc::new(BTree::default());
         let name = global!("STRESS");
 
         // Insert 1000 keys with various patterns
@@ -271,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_node_not_found() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
         let node_id = NodeId::from(42);
 
         let result = btree.find_node(node_id).await;
@@ -286,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_node_exists() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Manually insert a node into the nodes HashMap
         let node_id = NodeId::from(1);
@@ -309,7 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_leaf_odd_keys() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create a leaf node with 5 keys (odd number)
         // Use high node ID to avoid conflicts with allocator
@@ -365,7 +365,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_leaf_even_keys() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create a leaf node with 4 keys (even number)
         // Use high node ID to avoid conflicts with allocator
@@ -410,7 +410,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_internal_with_children() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create an internal node with 5 keys and 6 children
         // Use high node ID to avoid conflicts with allocator
@@ -470,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_not_found() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
         let node_id = NodeId::from(99);
 
         let result = btree.split_node(node_id).await;
@@ -485,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_empty() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create an empty node
         let node_id = NodeId::from(0);
@@ -509,7 +509,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_preserves_values() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create a node with different value types
         // Use high node ID to avoid conflicts with allocator
@@ -553,7 +553,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_stats_update() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create two nodes and split both to verify stats accumulation
         // Use high node IDs to avoid conflicts with allocator
@@ -607,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_leaf() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create two leaf nodes and a separator
         let left_id = NodeId::from(100);
@@ -677,7 +677,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_internal_with_children() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create two internal nodes with children
         let left_id = NodeId::from(100);
@@ -734,7 +734,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_incompatible_types() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create one leaf and one internal node
         let left_id = NodeId::from(100);
@@ -777,7 +777,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_left_not_found() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         let left_id = NodeId::from(100);
         let right_id = NodeId::from(101);
@@ -813,7 +813,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_right_not_found() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         let left_id = NodeId::from(100);
         let right_id = NodeId::from(101);
@@ -849,7 +849,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_preserves_value_types() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create nodes with various value types
         let left_id = NodeId::from(100);
@@ -902,7 +902,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_stats_update() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create multiple pairs of nodes to merge
         let left1_id = NodeId::from(100);
@@ -981,7 +981,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_and_merge_roundtrip() {
-        let btree = BTree::new(3).unwrap();
+        let btree = BTree::default();
 
         // Create a node with 5 keys
         let original_id = NodeId::from(100);
@@ -1051,7 +1051,7 @@ mod tests {
 
         #[tokio::test]
         async fn nonexistent_variable() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
             let key = key![123];
 
@@ -1062,7 +1062,7 @@ mod tests {
 
         #[tokio::test]
         async fn exact_match_single_key() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
             let key = key![123];
             let value = Value::String("John Doe".into());
@@ -1083,7 +1083,7 @@ mod tests {
 
         #[tokio::test]
         async fn exact_match_nested_key() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
             let key = key![123, "NAME"];
             let value = Value::String("John Doe".into());
@@ -1103,7 +1103,7 @@ mod tests {
 
         #[tokio::test]
         async fn nonexistent_key() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
 
             // Insert some keys
@@ -1139,7 +1139,7 @@ mod tests {
 
         #[tokio::test]
         async fn partial_match_no_such_path() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
 
             // Insert keys: [1], [1,2,5]
@@ -1169,7 +1169,7 @@ mod tests {
 
         #[tokio::test]
         async fn multiple_keys_same_variable() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert multiple keys
@@ -1213,7 +1213,7 @@ mod tests {
 
         #[tokio::test]
         async fn different_variables() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name1 = global!("VAR1");
             let name2 = global!("VAR2");
             let key = key![123];
@@ -1248,7 +1248,7 @@ mod tests {
 
         #[tokio::test]
         async fn returns_nodedata_with_flags() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
             let key = key![1];
 
@@ -1274,7 +1274,7 @@ mod tests {
 
         #[tokio::test]
         async fn with_tree_splits() {
-            let btree = BTree::new(3).unwrap(); // min_degree=3, max_keys=5
+            let btree = BTree::default(); // min_degree=3, max_keys=5
             let name = global!("VAR");
 
             // Insert enough keys to cause splits
@@ -1339,7 +1339,7 @@ mod tests {
 
         #[tokio::test]
         async fn deep_nesting() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
 
             // Insert deeply nested key
@@ -1358,7 +1358,7 @@ mod tests {
 
         #[tokio::test]
         async fn concurrent_reads() {
-            let btree = Arc::new(BTree::new(3).unwrap());
+            let btree = Arc::new(BTree::default());
             let name = global!("CONCURRENT");
 
             // Insert some test data
@@ -1554,7 +1554,7 @@ mod tests {
         /// Test GET with very long keys (15 subscripts).
         #[tokio::test]
         async fn get_very_long_keys() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("DEEP");
 
             // Create keys at various depths
@@ -1614,7 +1614,7 @@ mod tests {
         /// Test GET with empty string subscripts.
         #[tokio::test]
         async fn get_empty_string_subscripts() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("EMPTY");
 
             let keys = vec![key![""], key!["", 1i64], key!["", ""]];
@@ -1756,7 +1756,7 @@ mod tests {
 
         #[tokio::test]
         async fn creates_ancestors() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
 
             // Set a nested key
@@ -1783,7 +1783,7 @@ mod tests {
 
         #[tokio::test]
         async fn deep_nesting_creates_all_ancestors() {
-            let btree = Arc::new(BTree::new(3).unwrap());
+            let btree = Arc::new(BTree::default());
             let name = global!("VAR");
 
             // Set deeply nested key
@@ -1821,7 +1821,7 @@ mod tests {
         #[tokio::test]
         async fn intermediate_node_becomes_both() {
             // CRITICAL EDGE CASE
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // 1. Set ^VAR(1,"A") = "child1"
@@ -1869,7 +1869,7 @@ mod tests {
 
         #[tokio::test]
         async fn preserves_has_descendants_on_update() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             let key_parent = key![1];
@@ -1925,7 +1925,7 @@ mod tests {
 
         #[tokio::test]
         async fn multiple_children_same_parent() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Set ^VAR(1,"A"), ^VAR(1,"B"), ^VAR(1,"C")
@@ -1965,7 +1965,7 @@ mod tests {
 
         #[tokio::test]
         async fn sibling_paths() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Set ^VAR(1,2), ^VAR(1,3), ^VAR(2,2)
@@ -2008,7 +2008,7 @@ mod tests {
 
         #[tokio::test]
         async fn concurrent_ancestor_creation() {
-            let btree = Arc::new(BTree::new(3).unwrap());
+            let btree = Arc::new(BTree::default());
             let name = global!("VAR");
 
             // Spawn multiple tasks creating children of same parent concurrently
@@ -2167,7 +2167,7 @@ mod tests {
         /// Test SET with very long keys (15 subscripts).
         #[tokio::test]
         async fn set_very_long_keys() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("DEEP");
 
             // Create multiple keys at depth 15
@@ -2219,7 +2219,7 @@ mod tests {
         /// Test SET with empty string subscripts.
         #[tokio::test]
         async fn set_empty_string_subscripts() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("EMPTY");
 
             let keys =
@@ -2265,7 +2265,7 @@ mod tests {
         /// Test SET update existing key preserves has_descendants.
         #[tokio::test]
         async fn set_update_preserves_structure() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("UPDATE");
 
             // Create parent with child
@@ -2458,7 +2458,7 @@ mod tests {
         /// Test SET with nested keys at varying depths.
         #[tokio::test]
         async fn set_varying_depths() {
-            let btree = Arc::new(BTree::new(3).unwrap());
+            let btree = Arc::new(BTree::default());
             let name = global!("DEPTHS");
 
             // Insert keys at depths 1 through 10
@@ -2720,7 +2720,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_single_key() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
             let key = key![1];
 
@@ -2748,7 +2748,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_nonexistent_key() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             btree
@@ -2775,7 +2775,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_nonexistent_variable() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("NONEXISTENT");
 
             // Kill from a variable that doesn't exist - should not error
@@ -2786,7 +2786,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_with_descendants() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR(1), ^VAR(1,2), ^VAR(1,2,3), ^VAR(1,3)
@@ -2838,7 +2838,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_subtree_preserves_siblings() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR(1,1), ^VAR(1,2), ^VAR(2,1)
@@ -2886,7 +2886,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_deep_subtree() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR(1,2,3,4,5), ^VAR(1,2,3,4,6), ^VAR(1,2,3,5,1)
@@ -2940,7 +2940,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_updates_ancestor_has_descendants() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR(1) = "parent", ^VAR(1,2) = "child"
@@ -2983,7 +2983,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_ancestor_removed_when_empty() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR(1,2) = "child" (creates ancestor ^VAR(1) with no value)
@@ -3010,7 +3010,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_preserves_ancestor_with_value() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR(1) = "parent", ^VAR(1,2) = "child"
@@ -3048,7 +3048,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_partial_subtree_preserves_sibling_flag() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR(1,2), ^VAR(1,3)
@@ -3296,7 +3296,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_entire_variable() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR(1), ^VAR(2), ^VAR(3)
@@ -3342,7 +3342,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_empty_key() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR() = "root_value", ^VAR(1) = "child"
@@ -3374,7 +3374,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_key_that_is_only_ancestor() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert: ^VAR(1,2,3) = "deep"
@@ -3404,7 +3404,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_idempotent() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             btree
@@ -3482,7 +3482,7 @@ mod tests {
         /// intermixing flat and nested keys in the same tree during heavy deletion.
         #[tokio::test]
         async fn kill_stress_nested_subtrees() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
 
             // Use separate variable for nested keys
             let nested = global!("NESTED");
@@ -3517,7 +3517,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_interleaved_with_inserts() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert ^VAR(1), ^VAR(2), ^VAR(3)
@@ -3927,7 +3927,7 @@ mod tests {
         /// Verifies deep ancestor chains are handled correctly.
         #[tokio::test]
         async fn kill_very_long_keys() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("DEEP");
 
             // Create a key with 15 subscripts
@@ -3978,7 +3978,7 @@ mod tests {
         /// Empty strings are valid subscripts and should work correctly.
         #[tokio::test]
         async fn kill_empty_string_subscripts() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("EMPTY");
 
             // Keys with empty strings
@@ -4489,7 +4489,7 @@ mod tests {
         /// Verifies that KILL works correctly for local variables, not just globals.
         #[tokio::test]
         async fn kill_local_namespace() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = local!("LOCAL");
 
             // Insert into local: LOCAL(1), LOCAL(1,2), LOCAL(1,2,3)
@@ -4535,7 +4535,7 @@ mod tests {
         /// KILL on a global should not affect local with same name, and vice versa.
         #[tokio::test]
         async fn kill_namespaces_are_separate() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let global = global!("VAR");
             let local = local!("VAR");
 
@@ -4681,7 +4681,7 @@ mod tests {
 
         #[tokio::test]
         async fn nonexistent_variable() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
             let key = key![123];
 
@@ -4691,7 +4691,7 @@ mod tests {
 
         #[tokio::test]
         async fn nonexistent_key() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
 
             btree
@@ -4709,7 +4709,7 @@ mod tests {
 
         #[tokio::test]
         async fn has_value_only() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
             let key = key![1];
 
@@ -4728,7 +4728,7 @@ mod tests {
 
         #[tokio::test]
         async fn has_descendants_only() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Set a nested key - this creates ancestor with has_descendants=true
@@ -4748,7 +4748,7 @@ mod tests {
 
         #[tokio::test]
         async fn has_both_value_and_descendants() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Set parent with value
@@ -4780,7 +4780,7 @@ mod tests {
 
         #[tokio::test]
         async fn local_variable() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = local!("TEMP");
             let key = key!["A"];
 
@@ -4799,7 +4799,7 @@ mod tests {
 
         #[tokio::test]
         async fn namespaces_separate() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let global = global!("VAR");
             let local = local!("VAR");
             let key = key![1];
@@ -4827,7 +4827,7 @@ mod tests {
 
         #[tokio::test]
         async fn deep_hierarchy() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
 
             // Create deep structure: ^PATIENT(1,"NAME","FIRST") = "John"
@@ -4863,7 +4863,7 @@ mod tests {
 
         #[tokio::test]
         async fn multiple_children() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("DATA");
 
             // Parent with multiple children
@@ -4912,7 +4912,7 @@ mod tests {
 
         #[tokio::test]
         async fn after_kill_becomes_no_data() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
             let key = key![1];
 
@@ -4936,7 +4936,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_child_updates_parent() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Parent with value + child
@@ -4970,7 +4970,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_subtree_updates_ancestor() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Deep structure
@@ -5005,7 +5005,7 @@ mod tests {
 
         #[tokio::test]
         async fn empty_tree_returns_none() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // No keys in tree, should return None
@@ -5015,7 +5015,7 @@ mod tests {
 
         #[tokio::test]
         async fn nonexistent_variable_returns_none() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
             let other = global!("OTHER");
 
@@ -5038,7 +5038,7 @@ mod tests {
 
         #[tokio::test]
         async fn first_key_single_entry() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             btree
@@ -5056,7 +5056,7 @@ mod tests {
 
         #[tokio::test]
         async fn first_key_multiple_entries() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert in non-sorted order
@@ -5094,7 +5094,7 @@ mod tests {
 
         #[tokio::test]
         async fn successor_existing_key() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             btree
@@ -5135,7 +5135,7 @@ mod tests {
 
         #[tokio::test]
         async fn successor_nonexistent_key() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             btree
@@ -5168,7 +5168,7 @@ mod tests {
 
         #[tokio::test]
         async fn successor_last_key_returns_none() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             btree
@@ -5196,7 +5196,7 @@ mod tests {
 
         #[tokio::test]
         async fn successor_past_last_key_returns_none() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             btree
@@ -5218,7 +5218,7 @@ mod tests {
 
         #[tokio::test]
         async fn hierarchical_keys_sorted_correctly() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("PATIENT");
 
             // Insert hierarchical keys
@@ -5284,7 +5284,7 @@ mod tests {
 
         #[tokio::test]
         async fn namespaces_are_separate() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let global = global!("VAR");
             let local = local!("VAR");
 
@@ -5326,7 +5326,7 @@ mod tests {
 
         #[tokio::test]
         async fn full_iteration() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert keys
@@ -5417,7 +5417,7 @@ mod tests {
 
         #[tokio::test]
         async fn extended_collation_order() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("VAR");
 
             // Insert different types (boolean < number < string)
@@ -5483,7 +5483,7 @@ mod tests {
 
         #[tokio::test]
         async fn stress_many_keys() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("STRESS");
 
             // Insert 500 keys in random order
@@ -5533,7 +5533,7 @@ mod tests {
 
         #[tokio::test]
         async fn stress_deep_hierarchy() {
-            let btree = BTree::new(3).unwrap();
+            let btree = BTree::default();
             let name = global!("DEEP");
 
             // Create deeply nested structure
@@ -5632,7 +5632,7 @@ pub mod benches {
                 |b, &depth| {
                     b.iter(|| {
                         rt.block_on(async {
-                            let btree = BTree::new(3).unwrap();
+                            let btree = BTree::default();
                             let name = global!("VAR");
                             let key = create_key_at_depth(depth);
                             let value = Value::Integer(42);
@@ -5665,7 +5665,7 @@ pub mod benches {
         c.bench_function("depth_5_with_existing_ancestors", |b| {
             b.iter(|| {
                 rt.block_on(async {
-                    let btree = BTree::new(3).unwrap();
+                    let btree = BTree::default();
                     let name = global!("VAR");
 
                     // First insert creates all ancestors
@@ -5704,7 +5704,7 @@ pub mod benches {
         c.bench_function("ensure_ancestors_depth_5", |b| {
             b.iter(|| {
                 rt.block_on(async {
-                    let btree = BTree::new(3).unwrap();
+                    let btree = BTree::default();
                     let name = global!("VAR");
                     let key = create_key_at_depth(5);
 
@@ -5741,7 +5741,7 @@ pub mod benches {
             b.iter(|| {
                 rt.block_on(async {
                     // Fresh tree for each iteration
-                    let btree = BTree::new(3).unwrap();
+                    let btree = BTree::default();
                     let name = global!("DEEP");
                     let key = create_key_at_depth(10);
 
@@ -5765,7 +5765,7 @@ pub mod benches {
         c.bench_function("best_case_depth_2_fresh_tree", |b| {
             b.iter(|| {
                 rt.block_on(async {
-                    let btree = BTree::new(3).unwrap();
+                    let btree = BTree::default();
                     let name = global!("SHALLOW");
                     let key = create_key_at_depth(2);
 
