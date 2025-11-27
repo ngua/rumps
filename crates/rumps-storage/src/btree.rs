@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::{future, pin};
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
+use futures::{Stream, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name};
 use tokio::sync::RwLock;
 
@@ -354,6 +354,74 @@ impl BTree {
     ) -> Result<Option<Key>> {
         // Phase 5.4 will add transaction snapshot isolation here
         self.order_internal(name, after).await
+    }
+
+    /// Creates a stream of key-value pairs from the tree (RUMPS `$COLLECT`).
+    ///
+    /// This is a RUMPS extension (not in traditional MUMPS) that provides
+    /// stream-based iteration over tree entries. The stream yields entries
+    /// that match the predicate, transformed by the extract function.
+    ///
+    /// Optional transaction context for snapshot isolation (Phase 5).
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - Predicate function: `(&Key, &Arc<NodeData>) -> bool`
+    ///   - Returns `true` to include the entry in the stream
+    ///   - Returns `false` to skip the entry (iteration continues)
+    /// * `F` - Extract function: `(&Key, Arc<NodeData>) -> Option<T>`
+    ///   - Transforms matching entries into output type `T`
+    ///   - Returns `None` to skip (entry matched predicate but shouldn't be yielded)
+    /// * `T` - Output type yielded by the stream
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The global or local variable name
+    /// * `start` - Optional starting key (`None` starts from beginning)
+    /// * `predicate` - Function that determines whether to include entries
+    /// * `extract` - Function that transforms entries into output type
+    /// * `ctx` - Optional transaction context for snapshot isolation
+    ///
+    /// # Returns
+    ///
+    /// A `Stream` that yields `Result<T>` for each matching entry.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use futures::StreamExt;
+    ///
+    /// // Collect all patient names as a stream
+    /// let mut names = btree.collects(
+    ///     &Name::Global("PATIENT".into()),
+    ///     None,
+    ///     |key, _| key.len() == 2, // Only 2-level keys
+    ///     |key, data| data.value.clone().map(|v| (key.clone(), v)),
+    ///     None,
+    /// );
+    ///
+    /// while let Some(result) = names.next().await {
+    ///     match result {
+    ///         Ok((key, value)) => println!("{:?} = {:?}", key, value),
+    ///         Err(e) => eprintln!("Error: {}", e),
+    ///     }
+    /// }
+    /// ```
+    pub(crate) fn collects<'a, P, F, T>(
+        &'a self,
+        name: &'a Name,
+        start: Option<&'a Key>,
+        pred: P,
+        extract: F,
+        _ctx: Option<&'a crate::TransactionContext>,
+    ) -> impl Stream<Item = Result<T>> + Send + 'a
+    where
+        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        // Phase 5.4 will add transaction snapshot isolation here
+        self.collects_internal(name, start, pred, extract)
     }
 }
 
@@ -730,6 +798,175 @@ impl BTree {
                 }
             }
         }
+    }
+
+    /// Internal COLLECT operation returning a stream of key-value pairs.
+    ///
+    /// Creates a stream that iterates over tree entries in lexicographic order,
+    /// filtering by predicate and transforming with extract function.
+    ///
+    /// # Algorithm
+    ///
+    /// Uses `futures::stream::unfold` with recursive async helper:
+    /// 1. Start from `start` key or beginning of tree
+    /// 2. For each iteration, use `order_internal` to get next key
+    /// 3. Fetch `NodeData` for the key via `get_internal`
+    /// 4. Apply predicate - if `false`, recurse to skip entry
+    /// 5. Apply extract - yield `Some(T)` results, recurse on `None`
+    /// 6. End when `order_internal` returns `None`
+    ///
+    /// # Stream Semantics
+    ///
+    /// - **Lazy**: Entries are fetched on-demand as the stream is consumed
+    /// - **Memory-efficient**: Only one entry is held at a time
+    /// - **Cancellable**: Dropping the stream stops iteration immediately
+    fn collects_internal<'a, P, F, T>(
+        &'a self,
+        name: &'a Name,
+        start: Option<&'a Key>,
+        pred: P,
+        extract: F,
+    ) -> impl Stream<Item = Result<T>> + Send + 'a
+    where
+        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        // Wrap closures in Arc for shared ownership across async iterations
+        let pred = Arc::new(pred);
+        let extract = Arc::new(extract);
+
+        // State: `Some(key)` = last key yielded, `None` = start from beginning
+        // We use `Option<Option<Key>>` where outer `None` signals stream end
+        let init_state: Option<Option<Key>> = Some(start.cloned());
+
+        futures::stream::unfold(init_state, move |state| {
+            let pred = Arc::clone(&pred);
+            let extract = Arc::clone(&extract);
+
+            async move {
+                // `None` state means stream is exhausted
+                let cursor = state?;
+                self.collects_find_next(
+                    name,
+                    cursor,
+                    pred.as_ref(),
+                    extract.as_ref(),
+                )
+                .await
+            }
+        })
+    }
+
+    /// Recursive helper for `collects_internal` that finds the next matching entry.
+    ///
+    /// Returns `Some((item, next_state))` when a matching entry is found,
+    /// or `None` when iteration is exhausted.
+    fn collects_find_next<'a, P, F, T>(
+        &'a self,
+        name: &'a Name,
+        cursor: Option<Key>,
+        pred: &'a P,
+        extract: &'a F,
+    ) -> pin::Pin<
+        Box<
+            dyn future::Future<
+                    Output = Option<(Result<T>, Option<Option<Key>>)>,
+                > + Send
+                + 'a,
+        >,
+    >
+    where
+        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        Box::pin(async move {
+            // Get next key using order_internal
+            match self.order_internal(name, cursor.as_ref()).await {
+                Ok(None) => None,               // No more keys - end stream
+                Err(e) => Some((Err(e), None)), // Yield error and end stream
+                Ok(Some(next_key)) => {
+                    self.collects_process_key(name, next_key, pred, extract)
+                        .await
+                }
+            }
+        })
+    }
+
+    /// Process a key for `collects_find_next`, handling data fetch, predicate, and extract.
+    fn collects_process_key<'a, P, F, T>(
+        &'a self,
+        name: &'a Name,
+        key: Key,
+        pred: &'a P,
+        extract: &'a F,
+    ) -> pin::Pin<
+        Box<
+            dyn future::Future<
+                    Output = Option<(Result<T>, Option<Option<Key>>)>,
+                > + Send
+                + 'a,
+        >,
+    >
+    where
+        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        Box::pin(async move {
+            match self.get_internal(name, &key).await {
+                Err(e) => Some((Err(e), None)), // Yield error and end stream
+                Ok(None) => {
+                    // Key exists but no data (shouldn't happen) - recurse to skip
+                    self.collects_find_next(name, Some(key), pred, extract)
+                        .await
+                }
+                Ok(Some(data)) => {
+                    self.collects_apply_filters(name, key, data, pred, extract)
+                        .await
+                }
+            }
+        })
+    }
+
+    /// Apply predicate and extract for `collects_process_key`.
+    fn collects_apply_filters<'a, P, F, T>(
+        &'a self,
+        name: &'a Name,
+        key: Key,
+        data: Arc<NodeData>,
+        pred: &'a P,
+        extract: &'a F,
+    ) -> pin::Pin<
+        Box<
+            dyn future::Future<
+                    Output = Option<(Result<T>, Option<Option<Key>>)>,
+                > + Send
+                + 'a,
+        >,
+    >
+    where
+        P: Fn(&Key, &Arc<NodeData>) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        Box::pin(async move {
+            if pred(&key, &data) {
+                match extract(&key, data) {
+                    Some(val) => Some((Ok(val), Some(Some(key)))),
+                    None => {
+                        // Extract returned None - recurse to skip
+                        self.collects_find_next(name, Some(key), pred, extract)
+                            .await
+                    }
+                }
+            } else {
+                // Predicate returned false - recurse to skip
+                self.collects_find_next(name, Some(key), pred, extract)
+                    .await
+            }
+        })
     }
 
     /// Finds the leftmost (smallest) key in the subtree rooted at `node_id`.
