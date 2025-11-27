@@ -348,12 +348,12 @@ impl BTree {
     /// ```
     pub(crate) async fn order(
         &self,
-        _name: &Name,
-        _after: Option<&Key>,
+        name: &Name,
+        after: Option<&Key>,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<Option<Key>> {
-        // TODO Phase 2.6: Implement ORDER operation
-        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
+        // Phase 5.4 will add transaction snapshot isolation here
+        self.order_internal(name, after).await
     }
 }
 
@@ -698,14 +698,161 @@ impl BTree {
         })
     }
 
-    // Internal method, unimplemented
+    /// Internal ORDER operation returning the next key in lexicographic order.
+    ///
+    /// Given a variable name and an optional key, returns the next key in
+    /// sorted order. This implements MUMPS `$ORDER` semantics at the storage layer.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(key))` - The next key in lexicographic order
+    /// * `Ok(None)` - No more keys (end of iteration or empty tree)
+    ///
+    /// # Algorithm
+    ///
+    /// 1. If `after` is `None`, return the leftmost (smallest) key
+    /// 2. Otherwise, find the smallest key strictly greater than `after`
+    ///
+    /// This involves B-tree traversal that may cross between leaf nodes.
     async fn order_internal(
         &self,
-        _name: &Name,
-        _after: Option<&Key>,
+        name: &Name,
+        after: Option<&Key>,
     ) -> Result<Option<Key>> {
-        // TODO Phase 2.6: Implement ORDER operation
-        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
+        let roots = self.roots.read().await;
+        match roots.get(name).copied() {
+            None => Ok(None),
+            Some(root_id) => {
+                drop(roots);
+                match after {
+                    None => self.find_leftmost_key(root_id).await,
+                    Some(key) => self.find_successor_key(root_id, key).await,
+                }
+            }
+        }
+    }
+
+    /// Finds the leftmost (smallest) key in the subtree rooted at `node_id`.
+    ///
+    /// This traverses down the left spine of the tree to find the minimum key.
+    fn find_leftmost_key<'a>(
+        &'a self,
+        node_id: NodeId,
+    ) -> pin::Pin<
+        Box<dyn future::Future<Output = Result<Option<Key>>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let node = self.load_node(node_id).await?;
+
+            if node.is_leaf {
+                // Return the first key in the leaf, if any
+                Ok(node.keys.first().cloned())
+            } else {
+                // Recurse to the leftmost child
+                match node.children.first() {
+                    Some(&child_id) => self.find_leftmost_key(child_id).await,
+                    None => {
+                        // Internal node with no children - shouldn't happen in valid B-tree
+                        // Fall back to first key in this node
+                        Ok(node.keys.first().cloned())
+                    }
+                }
+            }
+        })
+    }
+
+    /// Finds the smallest key strictly greater than `target` in the subtree.
+    ///
+    /// This is the core of the `$ORDER` implementation. It navigates the B-tree
+    /// to find the successor key, handling transitions between leaf nodes.
+    ///
+    /// # Algorithm
+    ///
+    /// For each node visited:
+    /// 1. Binary search to find position where `target` would be inserted
+    /// 2. If we find an exact match at position `pos`:
+    ///    - If internal node and `pos+1` child exists: successor is leftmost key in that subtree
+    ///    - If there's a key at `pos+1` in this node: check if it could be the answer
+    /// 3. If no exact match:
+    ///    - The insertion point tells us where to look for the successor
+    fn find_successor_key<'a>(
+        &'a self,
+        node_id: NodeId,
+        target: &'a Key,
+    ) -> pin::Pin<
+        Box<dyn future::Future<Output = Result<Option<Key>>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let node = self.load_node(node_id).await?;
+
+            // Binary search: find the position where target would be inserted
+            let search_result = node.keys.binary_search(target);
+
+            if node.is_leaf {
+                // In a leaf node, we need to find the first key > target
+                let pos = match search_result {
+                    Ok(p) => p + 1, // Found exact match, successor is at p+1
+                    Err(p) => p,    // Not found, first key >= target is at p
+                };
+
+                // Return the key at that position if it exists
+                Ok(node.keys.get(pos).cloned())
+            } else {
+                // Internal node: need to navigate children
+                match search_result {
+                    Ok(pos) => {
+                        // Found exact match at `pos`
+                        // The successor could be:
+                        // 1. Leftmost key in the right subtree (child at pos+1)
+                        // 2. If no such child/key exists, the next key in this node
+                        match node.children.get(pos + 1) {
+                            Some(&child_id) => {
+                                // Try to find leftmost in right subtree
+                                let left =
+                                    self.find_leftmost_key(child_id).await?;
+                                match left {
+                                    Some(k) => Ok(Some(k)),
+                                    None => {
+                                        // Right subtree is empty, try next key
+                                        Ok(node.keys.get(pos + 1).cloned())
+                                    }
+                                }
+                            }
+                            None => {
+                                // No right child, try next key in node
+                                Ok(node.keys.get(pos + 1).cloned())
+                            }
+                        }
+                    }
+                    Err(pos) => {
+                        // Key not found; `pos` is insertion point
+                        // The successor could be:
+                        // 1. In the child at `pos` (keys < key at pos)
+                        // 2. The key at `pos` itself
+                        // 3. In a subtree to the right
+                        match node.children.get(pos) {
+                            Some(&child_id) => {
+                                // Search in the appropriate child first
+                                let child_result = self
+                                    .find_successor_key(child_id, target)
+                                    .await?;
+                                match child_result {
+                                    Some(k) => Ok(Some(k)),
+                                    None => {
+                                        // Child had no successor, try key at `pos`
+                                        Ok(node.keys.get(pos).cloned())
+                                    }
+                                }
+                            }
+                            None => {
+                                // No child at pos, return key at pos if it exists
+                                Ok(node.keys.get(pos).cloned())
+                            }
+                        }
+                    }
+                }
+            }
+        })
     }
 
     /// Finds and returns a node by its ID from the in-memory cache.
