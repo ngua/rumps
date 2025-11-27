@@ -4670,6 +4670,325 @@ mod tests {
                 .await;
         }
     }
+
+    mod data_internal_tests {
+        use rumps_types::{key, DataStatus, Name, Value};
+
+        use super::*;
+        use crate::node::NodeData;
+
+        // === Basic States ===
+
+        #[tokio::test]
+        async fn nonexistent_variable() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("PATIENT");
+            let key = key![123];
+
+            let status = btree.data_internal(&name, &key).await.unwrap();
+            assert_eq!(status, DataStatus::NoData);
+        }
+
+        #[tokio::test]
+        async fn nonexistent_key() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("PATIENT");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![100],
+                    NodeData::with_value(Value::Integer(1)),
+                )
+                .await
+                .unwrap();
+
+            let status = btree.data_internal(&name, &key![200]).await.unwrap();
+            assert_eq!(status, DataStatus::NoData);
+        }
+
+        #[tokio::test]
+        async fn has_value_only() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+            let key = key![1];
+
+            btree
+                .set_internal(
+                    &name,
+                    &key,
+                    NodeData::with_value(Value::String("leaf".into())),
+                )
+                .await
+                .unwrap();
+
+            let status = btree.data_internal(&name, &key).await.unwrap();
+            assert_eq!(status, DataStatus::HasValue);
+        }
+
+        #[tokio::test]
+        async fn has_descendants_only() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            // Set a nested key - this creates ancestor with has_descendants=true
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "CHILD"],
+                    NodeData::with_value(Value::String("child".into())),
+                )
+                .await
+                .unwrap();
+
+            // Parent key [1] should have descendants but no value
+            let status = btree.data_internal(&name, &key![1]).await.unwrap();
+            assert_eq!(status, DataStatus::HasDescendants);
+        }
+
+        #[tokio::test]
+        async fn has_both_value_and_descendants() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            // Set parent with value
+            btree
+                .set_internal(
+                    &name,
+                    &key![1],
+                    NodeData::with_value(Value::String("parent".into())),
+                )
+                .await
+                .unwrap();
+
+            // Set child - this updates parent's has_descendants
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "CHILD"],
+                    NodeData::with_value(Value::String("child".into())),
+                )
+                .await
+                .unwrap();
+
+            // Parent should have both value and descendants
+            let status = btree.data_internal(&name, &key![1]).await.unwrap();
+            assert_eq!(status, DataStatus::Both);
+        }
+
+        // === Namespace Tests ===
+
+        #[tokio::test]
+        async fn local_variable() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::local("TEMP");
+            let key = key!["A"];
+
+            btree
+                .set_internal(
+                    &name,
+                    &key,
+                    NodeData::with_value(Value::Boolean(true)),
+                )
+                .await
+                .unwrap();
+
+            let status = btree.data_internal(&name, &key).await.unwrap();
+            assert_eq!(status, DataStatus::HasValue);
+        }
+
+        #[tokio::test]
+        async fn namespaces_separate() {
+            let btree = BTree::new(3).unwrap();
+            let global = Name::global("VAR");
+            let local = Name::local("VAR");
+            let key = key![1];
+
+            // Set only in global
+            btree
+                .set_internal(
+                    &global,
+                    &key,
+                    NodeData::with_value(Value::Integer(42)),
+                )
+                .await
+                .unwrap();
+
+            // Global has value
+            let status = btree.data_internal(&global, &key).await.unwrap();
+            assert_eq!(status, DataStatus::HasValue);
+
+            // Local does not exist
+            let status = btree.data_internal(&local, &key).await.unwrap();
+            assert_eq!(status, DataStatus::NoData);
+        }
+
+        // === Hierarchical Tests ===
+
+        #[tokio::test]
+        async fn deep_hierarchy() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("PATIENT");
+
+            // Create deep structure: ^PATIENT(1,"NAME","FIRST") = "John"
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "NAME", "FIRST"],
+                    NodeData::with_value(Value::String("John".into())),
+                )
+                .await
+                .unwrap();
+
+            // Leaf has value only
+            let status = btree
+                .data_internal(&name, &key![1, "NAME", "FIRST"])
+                .await
+                .unwrap();
+            assert_eq!(status, DataStatus::HasValue);
+
+            // Intermediate nodes have descendants only
+            let status = btree.data_internal(&name, &key![1, "NAME"]).await.unwrap();
+            assert_eq!(status, DataStatus::HasDescendants);
+
+            let status = btree.data_internal(&name, &key![1]).await.unwrap();
+            assert_eq!(status, DataStatus::HasDescendants);
+
+            // Non-existent sibling path
+            let status = btree.data_internal(&name, &key![1, "DOB"]).await.unwrap();
+            assert_eq!(status, DataStatus::NoData);
+        }
+
+        #[tokio::test]
+        async fn multiple_children() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("DATA");
+
+            // Parent with multiple children
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "A"],
+                    NodeData::with_value(Value::Integer(1)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "B"],
+                    NodeData::with_value(Value::Integer(2)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "C"],
+                    NodeData::with_value(Value::Integer(3)),
+                )
+                .await
+                .unwrap();
+
+            // Parent has descendants
+            let status = btree.data_internal(&name, &key![1]).await.unwrap();
+            assert_eq!(status, DataStatus::HasDescendants);
+
+            // Each child has value
+            let status = btree.data_internal(&name, &key![1, "A"]).await.unwrap();
+            assert_eq!(status, DataStatus::HasValue);
+            let status = btree.data_internal(&name, &key![1, "B"]).await.unwrap();
+            assert_eq!(status, DataStatus::HasValue);
+            let status = btree.data_internal(&name, &key![1, "C"]).await.unwrap();
+            assert_eq!(status, DataStatus::HasValue);
+        }
+
+        // === State Transitions ===
+
+        #[tokio::test]
+        async fn after_kill_becomes_no_data() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+            let key = key![1];
+
+            btree
+                .set_internal(
+                    &name,
+                    &key,
+                    NodeData::with_value(Value::String("val".into())),
+                )
+                .await
+                .unwrap();
+
+            let status = btree.data_internal(&name, &key).await.unwrap();
+            assert_eq!(status, DataStatus::HasValue);
+
+            btree.kill_internal(&name, &key).await.unwrap();
+
+            let status = btree.data_internal(&name, &key).await.unwrap();
+            assert_eq!(status, DataStatus::NoData);
+        }
+
+        #[tokio::test]
+        async fn kill_child_updates_parent() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            // Parent with value + child
+            btree
+                .set_internal(
+                    &name,
+                    &key![1],
+                    NodeData::with_value(Value::String("parent".into())),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "CHILD"],
+                    NodeData::with_value(Value::String("child".into())),
+                )
+                .await
+                .unwrap();
+
+            let status = btree.data_internal(&name, &key![1]).await.unwrap();
+            assert_eq!(status, DataStatus::Both);
+
+            // Kill the child
+            btree.kill_internal(&name, &key![1, "CHILD"]).await.unwrap();
+
+            // Parent should now have value only
+            let status = btree.data_internal(&name, &key![1]).await.unwrap();
+            assert_eq!(status, DataStatus::HasValue);
+        }
+
+        #[tokio::test]
+        async fn kill_subtree_updates_ancestor() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            // Deep structure
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "A", "X"],
+                    NodeData::with_value(Value::Integer(1)),
+                )
+                .await
+                .unwrap();
+
+            let status = btree.data_internal(&name, &key![1]).await.unwrap();
+            assert_eq!(status, DataStatus::HasDescendants);
+
+            // Kill intermediate node (removes subtree)
+            btree.kill_internal(&name, &key![1, "A"]).await.unwrap();
+
+            // Ancestor should now have no data
+            let status = btree.data_internal(&name, &key![1]).await.unwrap();
+            assert_eq!(status, DataStatus::NoData);
+        }
+    }
 }
 
 #[cfg(feature = "bench")]

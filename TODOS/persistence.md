@@ -305,19 +305,25 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - `kill_stress_many_keys`, `kill_stress_nested_subtrees`, `min_degree_2_stress`
   - `interleaved_set_kill_invariants`, `set_kill_roundtrip_boundary`
 
-### 2.5 MUMPS Operations - DATA
+### 2.5 MUMPS Operations - DATA ✅ IMPLEMENTATION COMPLETE
 
-**Status**: Public API stub exists with `todo!()` implementation. Internal `data_internal()` stub also exists with `todo!()`. `DataStatus` enum defined.
+**Status**: Core implementation complete. Tests organized into `data_internal_tests` module. Transaction awareness will be added in Phase 5.
 
 **Transaction Note**: The signature includes optional `ctx: Option<&TransactionContext>` for future-proofing, but Phase 2 implementation does NOT need to use it. Transaction snapshot isolation will be added in Phase 5.
 
 - [x] Implement proper `DataStatus` enum with variants: NoData(0), HasValue(1), HasDescendants(10), Both(11)
-- [ ] Implement DATA operation:
-  - Use `load_node()` for cache-aware node access
-  - Return `DataStatus`
+- [x] Implement DATA operation:
+  - Uses `get_internal()` to fetch `NodeData`
+  - Maps `(value.is_some(), has_descendants)` to `DataStatus`
   - ~~Use transaction snapshot isolation if context provided~~ (moved to Phase 5.4)
-- [ ] Add async tests for all four DATA states
-- [ ] Verify correct behavior for partial paths
+- [x] Add async tests for all four DATA states - **12 tests in `btree::tests::data_internal_tests` module** at `crates/rumps-storage/src/btree/tests.rs:4674`
+  - `nonexistent_variable`, `nonexistent_key` (NoData)
+  - `has_value_only` (HasValue)
+  - `has_descendants_only` (HasDescendants)
+  - `has_both_value_and_descendants` (Both)
+  - `local_variable`, `namespaces_separate` (namespace tests)
+  - `deep_hierarchy`, `multiple_children` (hierarchical tests)
+  - `after_kill_becomes_no_data`, `kill_child_updates_parent`, `kill_subtree_updates_ancestor` (state transitions)
 
 ### 2.6 MUMPS Operations - ORDER (Iterator)
 
@@ -1191,8 +1197,14 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 2.4 Complete! Ready for Phase 2.5 (MUMPS Operations - DATA)
-**Completed Checkboxes**: ~50 / ~160
+**Current Phase**: Phase 2.5 Complete! Ready for Phase 2.6 (MUMPS Operations - ORDER)
+**Completed Checkboxes**: ~55 / ~160
+
+**Recent Changes** (2025-11-27 - Phase 2.5 DATA Complete):
+- ✅ Completed Phase 2.5: MUMPS Operations - DATA
+  - Implemented `data_internal` using `get_internal` + mapping to `DataStatus`
+  - 12 tests covering all four states, namespaces, hierarchy, and state transitions
+  - All tests passing, clippy clean
 
 **Recent Changes** (2025-11-27 - Phase 2.4 KILL Complete):
 - ✅ Completed Phase 2.4: MUMPS Operations - KILL
