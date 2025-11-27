@@ -4994,6 +4994,603 @@ mod tests {
             assert_eq!(status, DataStatus::NoData);
         }
     }
+
+    mod order_internal_tests {
+        use rumps_types::{key, Key, Name, Value};
+
+        use super::*;
+        use crate::node::NodeData;
+
+        // === Empty/Nonexistent Cases ===
+
+        #[tokio::test]
+        async fn empty_tree_returns_none() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            // No keys in tree, should return None
+            let result = btree.order_internal(&name, None).await.unwrap();
+            assert_eq!(result, None);
+        }
+
+        #[tokio::test]
+        async fn nonexistent_variable_returns_none() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+            let other = Name::global("OTHER");
+
+            // Add key to VAR
+            btree
+                .set_internal(
+                    &name,
+                    &key![1],
+                    NodeData::with_value(Value::Integer(1)),
+                )
+                .await
+                .unwrap();
+
+            // Query OTHER which doesn't exist
+            let result = btree.order_internal(&other, None).await.unwrap();
+            assert_eq!(result, None);
+        }
+
+        // === First Key (None after) ===
+
+        #[tokio::test]
+        async fn first_key_single_entry() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![42],
+                    NodeData::with_value(Value::Integer(42)),
+                )
+                .await
+                .unwrap();
+
+            let result = btree.order_internal(&name, None).await.unwrap();
+            assert_eq!(result, Some(key![42]));
+        }
+
+        #[tokio::test]
+        async fn first_key_multiple_entries() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            // Insert in non-sorted order
+            btree
+                .set_internal(
+                    &name,
+                    &key![30],
+                    NodeData::with_value(Value::Integer(30)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![10],
+                    NodeData::with_value(Value::Integer(10)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![20],
+                    NodeData::with_value(Value::Integer(20)),
+                )
+                .await
+                .unwrap();
+
+            // Should return the smallest key
+            let result = btree.order_internal(&name, None).await.unwrap();
+            assert_eq!(result, Some(key![10]));
+        }
+
+        // === Successor Key (Some after) ===
+
+        #[tokio::test]
+        async fn successor_existing_key() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![10],
+                    NodeData::with_value(Value::Integer(10)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![20],
+                    NodeData::with_value(Value::Integer(20)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![30],
+                    NodeData::with_value(Value::Integer(30)),
+                )
+                .await
+                .unwrap();
+
+            // Successor of 10 is 20
+            let result =
+                btree.order_internal(&name, Some(&key![10])).await.unwrap();
+            assert_eq!(result, Some(key![20]));
+
+            // Successor of 20 is 30
+            let result =
+                btree.order_internal(&name, Some(&key![20])).await.unwrap();
+            assert_eq!(result, Some(key![30]));
+        }
+
+        #[tokio::test]
+        async fn successor_nonexistent_key() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![10],
+                    NodeData::with_value(Value::Integer(10)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![30],
+                    NodeData::with_value(Value::Integer(30)),
+                )
+                .await
+                .unwrap();
+
+            // Key 20 doesn't exist, successor should be 30
+            let result =
+                btree.order_internal(&name, Some(&key![20])).await.unwrap();
+            assert_eq!(result, Some(key![30]));
+
+            // Key 5 doesn't exist, successor should be 10
+            let result =
+                btree.order_internal(&name, Some(&key![5])).await.unwrap();
+            assert_eq!(result, Some(key![10]));
+        }
+
+        #[tokio::test]
+        async fn successor_last_key_returns_none() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![10],
+                    NodeData::with_value(Value::Integer(10)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![20],
+                    NodeData::with_value(Value::Integer(20)),
+                )
+                .await
+                .unwrap();
+
+            // Successor of last key is None
+            let result =
+                btree.order_internal(&name, Some(&key![20])).await.unwrap();
+            assert_eq!(result, None);
+        }
+
+        #[tokio::test]
+        async fn successor_past_last_key_returns_none() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            btree
+                .set_internal(
+                    &name,
+                    &key![10],
+                    NodeData::with_value(Value::Integer(10)),
+                )
+                .await
+                .unwrap();
+
+            // Key 100 is past all keys
+            let result =
+                btree.order_internal(&name, Some(&key![100])).await.unwrap();
+            assert_eq!(result, None);
+        }
+
+        // === Hierarchical Keys ===
+
+        #[tokio::test]
+        async fn hierarchical_keys_sorted_correctly() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("PATIENT");
+
+            // Insert hierarchical keys
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "NAME"],
+                    NodeData::with_value(Value::String("John".into())),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, "DOB"],
+                    NodeData::with_value(Value::String("1990-01-01".into())),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![2, "NAME"],
+                    NodeData::with_value(Value::String("Jane".into())),
+                )
+                .await
+                .unwrap();
+
+            // The ancestor key![1] was created automatically
+            // Order: key![1] < key![1, "DOB"] < key![1, "NAME"] < key![2] < key![2, "NAME"]
+
+            let first = btree.order_internal(&name, None).await.unwrap();
+            assert_eq!(first, Some(key![1]));
+
+            let second =
+                btree.order_internal(&name, Some(&key![1])).await.unwrap();
+            assert_eq!(second, Some(key![1, "DOB"]));
+
+            let third = btree
+                .order_internal(&name, Some(&key![1, "DOB"]))
+                .await
+                .unwrap();
+            assert_eq!(third, Some(key![1, "NAME"]));
+
+            let fourth = btree
+                .order_internal(&name, Some(&key![1, "NAME"]))
+                .await
+                .unwrap();
+            assert_eq!(fourth, Some(key![2]));
+
+            let fifth =
+                btree.order_internal(&name, Some(&key![2])).await.unwrap();
+            assert_eq!(fifth, Some(key![2, "NAME"]));
+
+            let sixth = btree
+                .order_internal(&name, Some(&key![2, "NAME"]))
+                .await
+                .unwrap();
+            assert_eq!(sixth, None);
+        }
+
+        // === Namespace Separation ===
+
+        #[tokio::test]
+        async fn namespaces_are_separate() {
+            let btree = BTree::new(3).unwrap();
+            let global = Name::global("VAR");
+            let local = Name::local("VAR");
+
+            btree
+                .set_internal(
+                    &global,
+                    &key![10],
+                    NodeData::with_value(Value::Integer(10)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &local,
+                    &key![20],
+                    NodeData::with_value(Value::Integer(20)),
+                )
+                .await
+                .unwrap();
+
+            // Global only sees its own keys
+            let g_first = btree.order_internal(&global, None).await.unwrap();
+            assert_eq!(g_first, Some(key![10]));
+            let g_next = btree
+                .order_internal(&global, Some(&key![10]))
+                .await
+                .unwrap();
+            assert_eq!(g_next, None);
+
+            // Local only sees its own keys
+            let l_first = btree.order_internal(&local, None).await.unwrap();
+            assert_eq!(l_first, Some(key![20]));
+            let l_next =
+                btree.order_internal(&local, Some(&key![20])).await.unwrap();
+            assert_eq!(l_next, None);
+        }
+
+        // === Full Iteration ===
+
+        #[tokio::test]
+        async fn full_iteration() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            // Insert keys
+            let keys_to_insert = vec![
+                key![5],
+                key![3],
+                key![8],
+                key![1],
+                key![9],
+                key![2],
+                key![7],
+                key![4],
+                key![6],
+            ];
+
+            futures::stream::iter(keys_to_insert.iter())
+                .then(|k| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                k,
+                                NodeData::with_value(Value::Integer(1)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            // Iterate through all keys using order_internal
+            let mut collected = Vec::new();
+            let mut current = btree.order_internal(&name, None).await.unwrap();
+
+            while let Some(k) = current {
+                collected.push(k.clone());
+                current = btree.order_internal(&name, Some(&k)).await.unwrap();
+            }
+
+            // Should be in sorted order
+            let expected: Vec<Key> = (1..=9).map(|i| key![i as i64]).collect();
+            assert_eq!(collected, expected);
+        }
+
+        // === Tree Split Scenarios ===
+
+        #[tokio::test]
+        async fn iteration_across_tree_splits() {
+            let btree = BTree::new(2).unwrap(); // Small degree forces splits
+            let name = Name::global("VAR");
+
+            // Insert enough keys to cause splits
+            futures::stream::iter(0..20)
+                .then(|i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i as i64],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            // Verify full iteration still works
+            let mut collected = Vec::new();
+            let mut current = btree.order_internal(&name, None).await.unwrap();
+
+            while let Some(k) = current {
+                collected.push(k.clone());
+                current = btree.order_internal(&name, Some(&k)).await.unwrap();
+            }
+
+            let expected: Vec<Key> = (0..20).map(|i| key![i as i64]).collect();
+            assert_eq!(collected, expected);
+        }
+
+        // === Extended Collation Order ===
+
+        #[tokio::test]
+        async fn extended_collation_order() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("VAR");
+
+            // Insert different types (boolean < number < string)
+            btree
+                .set_internal(
+                    &name,
+                    &key!["Z"],
+                    NodeData::with_value(Value::String("string".into())),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![false],
+                    NodeData::with_value(Value::Boolean(false)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![100],
+                    NodeData::with_value(Value::Integer(100)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![true],
+                    NodeData::with_value(Value::Boolean(true)),
+                )
+                .await
+                .unwrap();
+
+            // Order: false < true < 100 < "Z"
+            let first = btree.order_internal(&name, None).await.unwrap();
+            assert_eq!(first, Some(key![false]));
+
+            let second = btree
+                .order_internal(&name, Some(&key![false]))
+                .await
+                .unwrap();
+            assert_eq!(second, Some(key![true]));
+
+            let third = btree
+                .order_internal(&name, Some(&key![true]))
+                .await
+                .unwrap();
+            assert_eq!(third, Some(key![100]));
+
+            let fourth =
+                btree.order_internal(&name, Some(&key![100])).await.unwrap();
+            assert_eq!(fourth, Some(key!["Z"]));
+
+            let fifth =
+                btree.order_internal(&name, Some(&key!["Z"])).await.unwrap();
+            assert_eq!(fifth, None);
+        }
+
+        // === Stress Tests ===
+
+        #[tokio::test]
+        async fn stress_many_keys() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("STRESS");
+
+            // Insert 500 keys in random order
+            let mut keys: Vec<i64> = (0..500).collect();
+            // Simple shuffle using deterministic pattern
+            keys.sort_by_key(|&k| (k * 7919) % 500);
+
+            futures::stream::iter(keys.iter())
+                .then(|&i| {
+                    let btree = &btree;
+                    let name = &name;
+                    async move {
+                        btree
+                            .set_internal(
+                                name,
+                                &key![i],
+                                NodeData::with_value(Value::Integer(i)),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await;
+
+            // Verify iteration returns all keys in order
+            let mut collected = Vec::new();
+            let mut current = btree.order_internal(&name, None).await.unwrap();
+
+            while let Some(k) = current {
+                collected.push(k.clone());
+                current = btree.order_internal(&name, Some(&k)).await.unwrap();
+            }
+
+            assert_eq!(collected.len(), 500);
+
+            // Verify ordering
+            collected.windows(2).for_each(|w| {
+                assert!(
+                    w[0] < w[1],
+                    "Keys out of order: {:?} >= {:?}",
+                    w[0],
+                    w[1]
+                );
+            });
+        }
+
+        #[tokio::test]
+        async fn stress_deep_hierarchy() {
+            let btree = BTree::new(3).unwrap();
+            let name = Name::global("DEEP");
+
+            // Create deeply nested structure
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, 2, 3, 4, 5],
+                    NodeData::with_value(Value::Integer(12345)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, 2, 3, 4, 6],
+                    NodeData::with_value(Value::Integer(12346)),
+                )
+                .await
+                .unwrap();
+            btree
+                .set_internal(
+                    &name,
+                    &key![1, 2, 3, 5],
+                    NodeData::with_value(Value::Integer(1235)),
+                )
+                .await
+                .unwrap();
+
+            // Iterate and verify
+            let mut collected = Vec::new();
+            let mut current = btree.order_internal(&name, None).await.unwrap();
+
+            while let Some(k) = current {
+                collected.push(k.clone());
+                current = btree.order_internal(&name, Some(&k)).await.unwrap();
+            }
+
+            // Should include ancestors + leaf keys
+            assert!(collected.contains(&key![1]));
+            assert!(collected.contains(&key![1, 2]));
+            assert!(collected.contains(&key![1, 2, 3]));
+            assert!(collected.contains(&key![1, 2, 3, 4]));
+            assert!(collected.contains(&key![1, 2, 3, 4, 5]));
+            assert!(collected.contains(&key![1, 2, 3, 4, 6]));
+            assert!(collected.contains(&key![1, 2, 3, 5]));
+
+            // Verify order
+            collected.windows(2).for_each(|w| {
+                assert!(
+                    w[0] < w[1],
+                    "Keys out of order: {:?} >= {:?}",
+                    w[0],
+                    w[1]
+                );
+            });
+        }
+    }
 }
 
 #[cfg(feature = "bench")]
