@@ -14,7 +14,7 @@
 //!
 //! - **Keys**: Complete paths stored as `Key` (e.g., `[123, "NAME"]`)
 //! - **Nodes**: Group multiple key-value pairs for efficient disk I/O
-//! - **Pages**: Each node fits in a fixed-size disk page (e.g., 4KB)
+//! - **Pages**: Each node fits in a fixed-size disk page (e.g., `4KB`)
 //!
 //! Example node contents:
 //! ```text
@@ -45,7 +45,7 @@ use serde::{Deserialize, Serialize};
 /// `NodeId` serves as an indirect reference to nodes rather than direct ownership
 /// via `Box<Node>`. This design choice enables several critical features:
 ///
-/// # Why `NodeId` instead of `Box<Node>`?
+/// # Why `NodeId` Instead of `Box<Node>`?
 ///
 /// 1. **Lazy Loading**: For persistent globals, child nodes can be loaded from disk
 ///    only when accessed, rather than loading entire subtrees into memory.
@@ -58,7 +58,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// 4. **Unified Model**: The same `Node` structure works for both:
 ///    - **Globals**: `NodeId` → `PageId` (disk page offset)
-///    - **Locals**: `NodeId` → in-memory index in HashMap
+///    - **Locals**: `NodeId` → in-memory index in `HashMap`
 ///
 /// 5. **MVCC Support**: Future snapshot isolation can reference different node
 ///    versions via `NodeId` without duplicating entire subtrees.
@@ -69,7 +69,7 @@ use serde::{Deserialize, Serialize};
 /// # Implementation Notes
 ///
 /// The storage layer (in `rumps-storage`) will provide a `NodeManager` or similar
-/// abstraction to resolve `NodeId → Node` lookups, handling the distinction between
+/// abstraction to resolve `NodeId` → `Node` lookups, handling the distinction between
 /// in-memory and on-disk storage transparently.
 ///
 /// # Examples
@@ -128,7 +128,7 @@ impl fmt::Display for NodeId {
 /// - Internal nodes have `n + 1` children (one per key interval, plus rightmost)
 /// - Leaf nodes have no children (empty `children` vector)
 /// - Keys are always sorted in ascending order
-/// - Values has `n` entries (one per key)
+/// - `values` has `n` entries (one per key)
 ///
 /// # Design Note: Children as `Vec<NodeId>`
 ///
@@ -183,7 +183,7 @@ pub(crate) struct Node {
     /// `NodeData` and its potentially large `Value`.
     ///
     /// For the `$GET` primitive (which extracts values), the public API
-    /// simply clones the `Option<Value>` from the Arc.
+    /// simply clones the `Option<Value>` from the `Arc`.
     pub(crate) values: Vec<Arc<NodeData>>,
     /// Whether this is a leaf node (no children)
     pub(crate) is_leaf: bool,
@@ -250,7 +250,7 @@ impl Node {
         self.keys.len()
     }
 
-    /// Returns true if this node has no keys.
+    /// Returns `true` if this node has no keys.
     ///
     /// # Examples
     ///
@@ -264,12 +264,12 @@ impl Node {
         self.keys.is_empty()
     }
 
-    /// Helper method to serialize values by unwrapping Arc.
+    /// Helper method to serialize values by unwrapping `Arc`.
     fn serialize_values(&self) -> Vec<NodeData> {
         self.values
             .iter()
             .map(|arc| {
-                // Try to unwrap Arc if refcount is 1, otherwise clone
+                // Try to unwrap `Arc` if refcount is 1, otherwise clone
                 Arc::try_unwrap(Arc::clone(arc))
                     .unwrap_or_else(|arc| (*arc).clone())
             })
@@ -280,7 +280,7 @@ impl Node {
     ///
     /// This is useful for determining when a node needs to be split to fit
     /// within a fixed page size. The calculation accounts for all components:
-    /// is_leaf flag, keys, children, and values.
+    /// `is_leaf` flag, `keys`, `children`, and `values`.
     ///
     /// # Examples
     ///
@@ -612,7 +612,7 @@ impl NodeData {
         }
     }
 
-    /// Returns true if no value and no descendants.
+    /// Returns `true` if no value and no descendants.
     ///
     /// # Examples
     ///
@@ -629,7 +629,7 @@ impl NodeData {
         self.value.is_none() && !self.has_descendants
     }
 
-    /// Returns true if has a value.
+    /// Returns `true` if has a value.
     ///
     /// # Examples
     ///
@@ -647,7 +647,7 @@ impl NodeData {
         self.value.is_some()
     }
 
-    /// Returns true if has value but no descendants (pure leaf).
+    /// Returns `true` if has value but no descendants (pure leaf).
     ///
     /// # Examples
     ///
@@ -665,7 +665,7 @@ impl NodeData {
         self.value.is_some() && !self.has_descendants
     }
 
-    /// Returns true if has descendants but no value (pure intermediate).
+    /// Returns `true` if has descendants but no value (pure intermediate).
     ///
     /// # Examples
     ///

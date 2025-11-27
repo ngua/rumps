@@ -95,13 +95,13 @@ impl NodeAllocator for IncrementingAllocator {
 /// For a B-tree of minimum degree `t` (where `min_degree = t`):
 /// - Each node (except root) contains `t-1` to `2t-1` keys
 /// - Each internal node (except root) has `t` to `2t` children
-/// - The root has 1 to `2t-1` keys (can be smaller)
+/// - The root has `1` to `2t-1` keys (can be smaller)
 /// - All leaves are at the same depth
 /// - Keys within a node are sorted in ascending order
 ///
 /// # Design Decisions
 ///
-/// ## BTreeMap for roots
+/// ## `BTreeMap` for roots
 /// Variable names are stored in a `BTreeMap` to support ordered iteration,
 /// enabling MUMPS `$ORDER` semantics over variable names themselves.
 ///
@@ -125,7 +125,7 @@ impl NodeAllocator for IncrementingAllocator {
 /// **Typical**: Hundreds of globals, each with millions of child records
 /// - Example: `^PATIENT` with 5 million patient records
 /// - Example: `^ORDER` with 10 million order records
-/// - Root index: ~100-500 variable names (~20 KB in memory)
+/// - Root index: ~100-500 variable names (~20KB in memory)
 ///
 /// **Not Typical**: Millions of distinct globals
 /// - This would require gigabytes of memory just for root names
@@ -157,12 +157,12 @@ impl NodeAllocator for IncrementingAllocator {
 ///
 /// # tokio_test::block_on(async {
 /// // Create a B-tree with minimum degree 3
-/// // (nodes will have 2-5 keys)
+/// // (nodes will have `2-5` keys)
 /// let btree = Arc::new(BTree::new(3)?);
 /// assert_eq!(btree.min_degree(), 3);
 /// assert_eq!(btree.node_count().await, 0);
 ///
-/// // Use default configuration (min_degree = 3)
+/// // Use default configuration (`min_degree = 3`)
 /// let btree = Arc::new(BTree::default());
 /// assert_eq!(btree.min_degree(), 3);
 /// # Ok::<(), rumps_storage::StorageError>(())
@@ -211,11 +211,11 @@ pub(crate) struct BTree {
 }
 
 impl Default for BTree {
-    /// Creates a B-tree with default minimum degree of 3.
+    /// Creates a B-tree with default minimum degree of `3`.
     ///
     /// This provides a good balance between tree height and node utilization:
-    /// - Nodes contain 2-5 keys
-    /// - Internal nodes have 3-6 children
+    /// - Nodes contain `2-5` keys
+    /// - Internal nodes have `3-6` children
     ///
     /// # Examples
     ///
@@ -233,10 +233,10 @@ impl Default for BTree {
     }
 }
 
-/// MUMPS primitive operations (SET, GET, KILL, DATA, ORDER).
+/// MUMPS primitive operations (`SET`, `GET`, `KILL`, `DATA`, `ORDER`).
 ///
-/// Public API - All write operations require a TransactionContext.
-/// Read operations can optionally use a TransactionContext for snapshot isolation.
+/// Public API - All write operations require a `TransactionContext`.
+/// Read operations can optionally use a `TransactionContext` for snapshot isolation.
 impl BTree {
     /// Sets a value in the tree at the specified variable name and key.
     ///
@@ -270,7 +270,7 @@ impl BTree {
     ) -> Result<()> {
         // TODO Phase 5: Use transaction context for snapshot isolation
         // and buffered writes (e.g., write to transaction buffer instead
-        // of directly to tree). For now, we just delegate to `set_internal`.
+        // of directly to tree). For now, we just delegate to `set_internal()`.
         self.set_internal(name, key, NodeData::with_value(value))
             .await
     }
@@ -290,7 +290,7 @@ impl BTree {
         key: &Key,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<Option<rumps_types::Value>> {
-        // TODO Phase 5: If txn is Some, use snapshot isolation
+        // TODO Phase 5: If `txn` is `Some`, use snapshot isolation
         self.get_internal(name, key)
             .await
             .map(|opt| opt.and_then(|data| data.value.clone()))
@@ -313,11 +313,11 @@ impl BTree {
     ) -> Result<()> {
         // TODO Phase 5: Use transaction context for snapshot isolation
         // and buffered writes (e.g., write to transaction buffer instead
-        // of directly to tree). For now, we just delegate to `kill_internal`.
+        // of directly to tree). For now, we just delegate to `kill_internal()`.
         self.kill_internal(name, key).await
     }
 
-    /// Checks the data status of a node (MUMPS $DATA).
+    /// Checks the data status of a node (MUMPS `$DATA`).
     ///
     /// Returns information about whether a node has a value and/or descendants.
     /// Optional transaction context for snapshot isolation (Phase 5).
@@ -337,7 +337,7 @@ impl BTree {
         self.data_internal(name, key).await
     }
 
-    /// Returns the next key in lexicographic order (MUMPS $ORDER).
+    /// Returns the next key in lexicographic order (MUMPS `$ORDER`).
     ///
     /// Optional transaction context for snapshot isolation (Phase 5).
     ///
@@ -526,7 +526,7 @@ impl BTree {
     /// # Future Implementation (Phase 4.5)
     ///
     /// TODO Phase 4.5: Implement cache-aware disk loading:
-    /// - Check cache first (`nodes` HashMap)
+    /// - Check cache first (`nodes` `HashMap`)
     /// - Load from disk if cache miss (only for `Name::Global`)
     /// - Keep `Name::Local` entirely in memory
     /// - Add to cache with LRU eviction
@@ -548,7 +548,7 @@ impl BTree {
 }
 
 /// Direction for sibling borrowing during B-tree rebalancing.
-/// (used in private `impl` method[s] below)
+/// (used in private `impl` methods below)
 enum BorrowDir {
     Left,
     Right,
@@ -556,14 +556,14 @@ enum BorrowDir {
 
 /// Private utilities for B-tree operations
 impl BTree {
-    /// Internal GET that returns `Arc<NodeData>` (not just Value).
+    /// Internal GET that returns `Arc<NodeData>` (not just `Value`).
     ///
-    /// Returns an Arc for efficient hierarchy navigation - checking
-    /// `has_descendants` flags is much cheaper with Arc::clone() than
+    /// Returns an `Arc` for efficient hierarchy navigation - checking
+    /// `has_descendants` flags is much cheaper with `Arc::clone()` than
     /// cloning the entire `NodeData`.
     ///
     /// The public `get()` method extracts the value by cloning the
-    /// `Option<Value>` from the Arc.
+    /// `Option<Value>` from the `Arc`.
     ///
     /// # Examples
     ///
@@ -595,17 +595,17 @@ impl BTree {
     /// # Behavior for Existing Keys - Idempotent Merge
     ///
     /// If the key already exists, this method MERGES the `NodeData`:
-    /// - `has_descendants`: Performs OR operation (if either old or new is true, result is true)
+    /// - `has_descendants`: Performs OR operation (if either old or new is `true`, result is `true`)
     /// - `value`: Takes new value if provided, otherwise keeps old value
     ///
     /// **Why idempotent merge is required:**
     /// - Multiple child insertions can race to create the same ancestor node
-    /// - Each insertion must be able to set `has_descendants=true` independently
+    /// - Each insertion must be able to set `has_descendants = true` independently
     /// - The operation must be safe regardless of the order or concurrency
-    /// - Once `has_descendants=true` is set, it cannot be accidentally cleared
+    /// - Once `has_descendants = true` is set, it cannot be accidentally cleared
     ///
     /// This ensures that:
-    /// 1. Setting `has_descendants=true` is permanent (can't be undone by another set)
+    /// 1. Setting `has_descendants = true` is permanent (can't be undone by another set)
     /// 2. Concurrent ancestor creation is safe (multiple operations can set same ancestor)
     /// 3. User can update values without losing `has_descendants` flag
     ///
@@ -626,7 +626,7 @@ impl BTree {
         key: &Key,
         data: NodeData,
     ) -> Result<()> {
-        // Ensure all ancestors exist with has_descendants=true
+        // Ensure all ancestors exist with `has_descendants = true`
         // This is part of the core MUMPS hierarchical semantics
         self.ensure_ancestors(name, key).await?;
 
@@ -636,7 +636,7 @@ impl BTree {
 
     /// Internal KILL operation that deletes a key and all its descendants.
     ///
-    /// This method implements MUMPS KILL semantics:
+    /// This method implements MUMPS `KILL` semantics:
     /// 1. Deletes the specified key (if it exists)
     /// 2. Deletes all descendants (keys that start with the given key as prefix)
     /// 3. Updates ancestor `has_descendants` flags
@@ -737,14 +737,14 @@ impl BTree {
     /// Splits a full node into two nodes.
     ///
     /// This operation is used when a node reaches maximum capacity
-    /// (2*min_degree - 1 keys). The node is split at the median:
-    /// - Left half: keys[0..mid] remain in the original node
+    /// (`2*min_degree - 1` keys). The node is split at the median:
+    /// - Left half: `keys[0..mid]` remain in the original node
     /// - Median key: returned to be promoted to parent
-    /// - Right half: keys[mid+1..] moved to new node
+    /// - Right half: `keys[mid+1..]` moved to new node
     ///
     /// For internal nodes, children are also split appropriately:
-    /// - Left node gets children[0..=mid]
-    /// - Right node gets children[mid+1..]
+    /// - Left node gets `children[0..=mid]`
+    /// - Right node gets `children[mid+1..]`
     ///
     /// # Design Note: B-tree vs B+-tree Semantics
     ///
@@ -759,7 +759,7 @@ impl BTree {
     ///
     /// # B-tree Split Example
     ///
-    /// Before split (min_degree=3, node has 5 keys):
+    /// Before split (`min_degree=3`, node has 5 keys):
     /// ```text
     /// Node: [10, 20, 30, 40, 50]
     /// ```
@@ -885,7 +885,7 @@ impl BTree {
 
     /// Merges two underfull sibling nodes into one node.
     ///
-    /// This operation is the inverse of `split_node` and is used when nodes
+    /// This operation is the inverse of `split_node()` and is used when nodes
     /// become underfull (fewer than `min_degree - 1` keys). The merge combines:
     /// - All keys from the left node
     /// - The separator key (and its value) from the parent
@@ -1018,10 +1018,10 @@ impl BTree {
     ///
     /// Uses binary search to find the key position:
     /// - If exact match found (`Ok(pos)`): Return the value at that position
-    /// - If not found (`Err(pos)`) and leaf node: Key doesn't exist, return None
-    /// - If not found (`Err(pos)`) and internal node: Recurse to child at pos
+    /// - If not found (`Err(pos)`) and leaf node: Key doesn't exist, return `None`
+    /// - If not found (`Err(pos)`) and internal node: Recurse to child at `pos`
     ///
-    /// The Err(pos) from binary_search indicates where the key would be
+    /// The `Err(pos)` from `binary_search` indicates where the key would be
     /// inserted, which corresponds to the correct child pointer to follow.
     ///
     /// # Examples
@@ -1077,13 +1077,13 @@ impl BTree {
     /// Raw node insertion without hierarchy management.
     ///
     /// This method performs the actual B-tree insertion without calling
-    /// `ensure_ancestors`. It's used internally by both `set_internal`
-    /// (after ensuring ancestors) and by `ensure_ancestors` itself.
+    /// `ensure_ancestors()`. It's used internally by both `set_internal()`
+    /// (after ensuring ancestors) and by `ensure_ancestors()` itself.
     ///
     /// # Behavior for Existing Keys - Idempotent Merge
     ///
     /// If the key already exists, this method MERGES the `NodeData`:
-    /// - `has_descendants`: Performs OR operation (if either old or new is true, result is true)
+    /// - `has_descendants`: Performs OR operation (if either old or new is `true`, result is `true`)
     /// - `value`: Takes new value if provided, otherwise keeps old value
     async fn set_node(
         &self,
@@ -1771,10 +1771,10 @@ impl BTree {
         }
     }
 
-    /// Updates ancestor has_descendants flags after a KILL operation.
+    /// Updates ancestor `has_descendants` flags after a KILL operation.
     ///
     /// For each ancestor of the killed key, checks if it still has any descendants.
-    /// If not, sets has_descendants to false. If the ancestor has no value and
+    /// If not, sets `has_descendants` to `false`. If the ancestor has no value and
     /// no descendants, it is removed entirely.
     async fn update_ancestors_after_kill(
         &self,
@@ -1829,7 +1829,7 @@ impl BTree {
 
     /// Checks if a key has any descendants in the tree.
     ///
-    /// Returns true if there exists any key K' where K'.starts_with(key) and K' != key.
+    /// Returns `true` if there exists any key `K'` where `K'.starts_with(key)` and `K' != key`.
     async fn has_any_descendants(
         &self,
         name: &Name,
@@ -1900,7 +1900,7 @@ impl BTree {
 
     /// Inserts a key-value pair into a non-full node.
     ///
-    /// Delegates to `insert_non_full_with_data` with appropriate `NodeData`.
+    /// Delegates to `insert_non_full_with_data()` with appropriate `NodeData`.
     fn insert_non_full<'a>(
         &'a self,
         node_id: NodeId,
@@ -1924,8 +1924,8 @@ impl BTree {
     /// # Merge Behavior
     ///
     /// When the key already exists:
-    /// - `has_descendants`: OR operation (old || new)
-    /// - `value`: Takes new value if Some, otherwise keeps old value
+    /// - `has_descendants`: OR operation (`old || new`)
+    /// - `value`: Takes new value if `Some`, otherwise keeps old value
     ///
     /// This ensures concurrent ancestor creation is safe and idempotent.
     fn insert_non_full_with_data<'a>(
@@ -2035,7 +2035,7 @@ impl BTree {
         })
     }
 
-    /// Updates the has_descendants flag for an existing key.
+    /// Updates the `has_descendants` flag for an existing key.
     ///
     /// This is used when an ancestor already exists but needs its flag updated.
     /// Uses `set_internal()` with merged `NodeData` to preserve existing values.
@@ -2050,12 +2050,12 @@ impl BTree {
         flag: bool,
     ) -> Result<()> {
         // Find the node containing this key and update directly.
-        // We can't use set_node because its OR merge semantics prevent
-        // setting has_descendants to false.
+        // We can't use `set_node()` because its OR merge semantics prevent
+        // setting `has_descendants` to `false`.
         let roots = self.roots.read().await;
         let root_id = roots.get(name).copied().ok_or_else(|| {
             StorageError::InvalidOperation(format!(
-                "Cannot update has_descendants flag: variable {:?} not found",
+                "Cannot update `has_descendants` flag: variable {:?} not found",
                 name
             ))
         })?;
@@ -2064,7 +2064,7 @@ impl BTree {
         self.update_flag_in_node(root_id, key, flag).await
     }
 
-    /// Recursively finds and updates the has_descendants flag for a key.
+    /// Recursively finds and updates the `has_descendants` flag for a key.
     fn update_flag_in_node<'a>(
         &'a self,
         node_id: NodeId,
