@@ -4848,14 +4848,16 @@ mod tests {
             assert_eq!(status, DataStatus::HasValue);
 
             // Intermediate nodes have descendants only
-            let status = btree.data_internal(&name, &key![1, "NAME"]).await.unwrap();
+            let status =
+                btree.data_internal(&name, &key![1, "NAME"]).await.unwrap();
             assert_eq!(status, DataStatus::HasDescendants);
 
             let status = btree.data_internal(&name, &key![1]).await.unwrap();
             assert_eq!(status, DataStatus::HasDescendants);
 
             // Non-existent sibling path
-            let status = btree.data_internal(&name, &key![1, "DOB"]).await.unwrap();
+            let status =
+                btree.data_internal(&name, &key![1, "DOB"]).await.unwrap();
             assert_eq!(status, DataStatus::NoData);
         }
 
@@ -4895,11 +4897,14 @@ mod tests {
             assert_eq!(status, DataStatus::HasDescendants);
 
             // Each child has value
-            let status = btree.data_internal(&name, &key![1, "A"]).await.unwrap();
+            let status =
+                btree.data_internal(&name, &key![1, "A"]).await.unwrap();
             assert_eq!(status, DataStatus::HasValue);
-            let status = btree.data_internal(&name, &key![1, "B"]).await.unwrap();
+            let status =
+                btree.data_internal(&name, &key![1, "B"]).await.unwrap();
             assert_eq!(status, DataStatus::HasValue);
-            let status = btree.data_internal(&name, &key![1, "C"]).await.unwrap();
+            let status =
+                btree.data_internal(&name, &key![1, "C"]).await.unwrap();
             assert_eq!(status, DataStatus::HasValue);
         }
 

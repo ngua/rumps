@@ -210,6 +210,154 @@ pub(crate) struct BTree {
     stats: RwLock<BTreeStats>,
 }
 
+impl Default for BTree {
+    /// Creates a B-tree with default minimum degree of 3.
+    ///
+    /// This provides a good balance between tree height and node utilization:
+    /// - Nodes contain 2-5 keys
+    /// - Internal nodes have 3-6 children
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rumps_storage::BTree;
+    ///
+    /// # tokio_test::block_on(async {
+    /// let btree = BTree::default();
+    /// assert_eq!(btree.min_degree(), 3);
+    /// assert_eq!(btree.node_count().await, 0);
+    /// # });
+    /// ```
+    fn default() -> Self {
+        Self::new(3).expect("Default configuration is valid")
+    }
+}
+
+/// MUMPS primitive operations (SET, GET, KILL, DATA, ORDER).
+///
+/// Public API - All write operations require a TransactionContext.
+/// Read operations can optionally use a TransactionContext for snapshot isolation.
+impl BTree {
+    /// Sets a value in the tree at the specified variable name and key.
+    ///
+    /// **Requires a transaction context.** All writes to globals must occur within transactions.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rumps_storage::{BTree, TransactionContext};
+    /// use rumps_types::{Name, Key, Value, TransactionId, TransactionTimestamp};
+    ///
+    /// # tokio_test::block_on(async {
+    /// let btree = BTree::new(3)?;
+    /// let txn = TransactionContext::new(
+    ///     TransactionId::from(1),
+    ///     TransactionTimestamp::from(100),
+    /// );
+    ///
+    /// let name = Name::global("PATIENT");
+    /// let key = key![123];
+    /// btree.set(&name, &key, "John Doe".into(), &txn).await?;
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
+    /// ```
+    pub(crate) async fn set(
+        &self,
+        name: &Name,
+        key: &Key,
+        value: rumps_types::Value,
+        _ctx: &crate::TransactionContext,
+    ) -> Result<()> {
+        // TODO Phase 5: Use transaction context for snapshot isolation
+        // and buffered writes (e.g., write to transaction buffer instead
+        // of directly to tree). For now, we just delegate to `set_internal`.
+        self.set_internal(name, key, NodeData::with_value(value))
+            .await
+    }
+
+    /// Gets a value from the tree.
+    ///
+    /// Optional transaction context for snapshot isolation (Phase 5).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let value = btree.get(&name, &key, None).await?;
+    /// ```
+    pub(crate) async fn get(
+        &self,
+        name: &Name,
+        key: &Key,
+        _ctx: Option<&crate::TransactionContext>,
+    ) -> Result<Option<rumps_types::Value>> {
+        // TODO Phase 5: If txn is Some, use snapshot isolation
+        self.get_internal(name, key)
+            .await
+            .map(|opt| opt.and_then(|data| data.value.clone()))
+    }
+
+    /// Deletes a key and all its descendants from the tree.
+    ///
+    /// **Requires a transaction context.** All writes to globals must occur within transactions.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// btree.kill(&name, &key, &txn).await?;
+    /// ```
+    pub(crate) async fn kill(
+        &self,
+        name: &Name,
+        key: &Key,
+        _ctx: &crate::TransactionContext,
+    ) -> Result<()> {
+        // TODO Phase 5: Use transaction context for snapshot isolation
+        // and buffered writes (e.g., write to transaction buffer instead
+        // of directly to tree). For now, we just delegate to `kill_internal`.
+        self.kill_internal(name, key).await
+    }
+
+    /// Checks the data status of a node (MUMPS $DATA).
+    ///
+    /// Returns information about whether a node has a value and/or descendants.
+    /// Optional transaction context for snapshot isolation (Phase 5).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let status = btree.data(&name, &key, None).await?;
+    /// ```
+    pub(crate) async fn data(
+        &self,
+        name: &Name,
+        key: &Key,
+        _ctx: Option<&crate::TransactionContext>,
+    ) -> Result<DataStatus> {
+        // Phase 5.4 will add transaction snapshot isolation here
+        self.data_internal(name, key).await
+    }
+
+    /// Returns the next key in lexicographic order (MUMPS $ORDER).
+    ///
+    /// Optional transaction context for snapshot isolation (Phase 5).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let next_key = btree.order(&name, Some(&key), None).await?;
+    /// ```
+    pub(crate) async fn order(
+        &self,
+        _name: &Name,
+        _after: Option<&Key>,
+        _ctx: Option<&crate::TransactionContext>,
+    ) -> Result<Option<Key>> {
+        // TODO Phase 2.6: Implement ORDER operation
+        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
+    }
+}
+
+// Public utilities
 impl BTree {
     /// Creates a new empty B-tree with the specified minimum degree.
     ///
@@ -396,6 +544,168 @@ impl BTree {
     async fn load_node(&self, id: NodeId) -> Result<Node> {
         // TODO Phase 4.5: Add disk loading logic here
         self.find_node(id).await
+    }
+}
+
+/// Direction for sibling borrowing during B-tree rebalancing.
+/// (used in private `impl` method[s] below)
+enum BorrowDir {
+    Left,
+    Right,
+}
+
+/// Private utilities for B-tree operations
+impl BTree {
+    /// Internal GET that returns `Arc<NodeData>` (not just Value).
+    ///
+    /// Returns an Arc for efficient hierarchy navigation - checking
+    /// `has_descendants` flags is much cheaper with Arc::clone() than
+    /// cloning the entire `NodeData`.
+    ///
+    /// The public `get()` method extracts the value by cloning the
+    /// `Option<Value>` from the Arc.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Internal use only
+    /// let arc_data = btree.get_internal(&name, &key).await?;
+    /// if let Some(data) = arc_data {
+    ///     println!("has_descendants: {}", data.has_descendants);
+    ///     println!("value: {:?}", data.value);
+    /// }
+    /// ```
+    // Internal method for tests/benchmarks - not part of public API
+    async fn get_internal(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> Result<Option<Arc<NodeData>>> {
+        match self.roots.read().await.get(name).copied() {
+            None => Ok(None),
+            Some(root_id) => self.search_from_node(root_id, key).await,
+        }
+    }
+
+    /// Internal SET operation that accepts `NodeData` directly.
+    ///
+    /// This method is used internally for maintaining hierarchical semantics,
+    /// particularly when creating ancestor nodes with `has_descendants = true`.
+    ///
+    /// # Behavior for Existing Keys - Idempotent Merge
+    ///
+    /// If the key already exists, this method MERGES the `NodeData`:
+    /// - `has_descendants`: Performs OR operation (if either old or new is true, result is true)
+    /// - `value`: Takes new value if provided, otherwise keeps old value
+    ///
+    /// **Why idempotent merge is required:**
+    /// - Multiple child insertions can race to create the same ancestor node
+    /// - Each insertion must be able to set `has_descendants=true` independently
+    /// - The operation must be safe regardless of the order or concurrency
+    /// - Once `has_descendants=true` is set, it cannot be accidentally cleared
+    ///
+    /// This ensures that:
+    /// 1. Setting `has_descendants=true` is permanent (can't be undone by another set)
+    /// 2. Concurrent ancestor creation is safe (multiple operations can set same ancestor)
+    /// 3. User can update values without losing `has_descendants` flag
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Create an intermediate node (no value, only descendants)
+    /// btree.set_internal(&name, &ancestor_key, NodeData::with_descendants()).await?;
+    ///
+    /// // Later, add a value to the same node (preserves has_descendants)
+    /// btree.set_internal(&name, &ancestor_key, NodeData::with_value(value)).await?;
+    /// // Result: NodeData { value: Some(value), has_descendants: true }
+    /// ```
+    // Internal method for tests/benchmarks - not part of public API
+    async fn set_internal(
+        &self,
+        name: &Name,
+        key: &Key,
+        data: NodeData,
+    ) -> Result<()> {
+        // Ensure all ancestors exist with has_descendants=true
+        // This is part of the core MUMPS hierarchical semantics
+        self.ensure_ancestors(name, key).await?;
+
+        // Delegate to raw insertion (no hierarchy management)
+        self.set_node(name, key, data).await
+    }
+
+    /// Internal KILL operation that deletes a key and all its descendants.
+    ///
+    /// This method implements MUMPS KILL semantics:
+    /// 1. Deletes the specified key (if it exists)
+    /// 2. Deletes all descendants (keys that start with the given key as prefix)
+    /// 3. Updates ancestor `has_descendants` flags
+    /// 4. Handles tree rebalancing (node merging when underfull)
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Collect all keys that match the prefix (the key itself and all descendants)
+    /// 2. Delete each key from the tree
+    /// 3. After all deletions, update ancestor `has_descendants` flags
+    /// 4. Remove empty ancestor nodes (nodes with no value and no descendants)
+    // Internal method for tests/benchmarks - not part of public API
+    async fn kill_internal(&self, name: &Name, key: &Key) -> Result<()> {
+        // Step 1: Collect all keys to delete (the key and its descendants)
+        let mut keys_to_delete =
+            self.collect_keys_with_prefix(name, key).await?;
+
+        if keys_to_delete.is_empty() {
+            Ok(())
+        } else {
+            // Step 2: Delete each key from the tree
+            // We delete in reverse order (deepest first) to minimize rebalancing
+            keys_to_delete
+                .sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| b.cmp(a)));
+
+            // Delete each key
+            futures::stream::iter(
+                keys_to_delete.iter().map(Ok::<_, StorageError>),
+            )
+            .try_for_each(|k| self.delete_key(name, k))
+            .await?;
+
+            // Step 3: Update ancestor has_descendants flags
+            self.update_ancestors_after_kill(name, key).await
+        }
+    }
+
+    /// Internal DATA operation returning MUMPS `$DATA` status.
+    ///
+    /// Maps the `NodeData` to `DataStatus`:
+    /// - `NoData` (0): Node doesn't exist or has neither value nor descendants
+    /// - `HasValue` (1): Node has value but no descendants
+    /// - `HasDescendants` (10): Node has descendants but no value
+    /// - `Both` (11): Node has both value and descendants
+    async fn data_internal(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> Result<DataStatus> {
+        self.get_internal(name, key).await.map(|opt| {
+            opt.map_or(DataStatus::NoData, |nd| {
+                match (nd.value.is_some(), nd.has_descendants) {
+                    (false, false) => DataStatus::NoData,
+                    (true, false) => DataStatus::HasValue,
+                    (false, true) => DataStatus::HasDescendants,
+                    (true, true) => DataStatus::Both,
+                }
+            })
+        })
+    }
+
+    // Internal method, unimplemented
+    async fn order_internal(
+        &self,
+        _name: &Name,
+        _after: Option<&Key>,
+    ) -> Result<Option<Key>> {
+        // TODO Phase 2.6: Implement ORDER operation
+        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
     }
 
     /// Finds and returns a node by its ID from the in-memory cache.
@@ -698,318 +1008,6 @@ impl BTree {
 
             Ok(())
         }
-    }
-}
-
-impl Default for BTree {
-    /// Creates a B-tree with default minimum degree of 3.
-    ///
-    /// This provides a good balance between tree height and node utilization:
-    /// - Nodes contain 2-5 keys
-    /// - Internal nodes have 3-6 children
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rumps_storage::BTree;
-    ///
-    /// # tokio_test::block_on(async {
-    /// let btree = BTree::default();
-    /// assert_eq!(btree.min_degree(), 3);
-    /// assert_eq!(btree.node_count().await, 0);
-    /// # });
-    /// ```
-    fn default() -> Self {
-        Self::new(3).expect("Default configuration is valid")
-    }
-}
-
-/// MUMPS primitive operations (SET, GET, KILL, DATA, ORDER).
-///
-/// Public API - All write operations require a TransactionContext.
-/// Read operations can optionally use a TransactionContext for snapshot isolation.
-impl BTree {
-    /// Sets a value in the tree at the specified variable name and key.
-    ///
-    /// **Requires a transaction context.** All writes to globals must occur within transactions.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The variable name (Global or Local)
-    /// * `key` - The key path
-    /// * `value` - The value to store
-    /// * `txn` - Transaction context (required for all writes)
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rumps_storage::{BTree, TransactionContext};
-    /// use rumps_types::{Name, Key, Value, TransactionId, TransactionTimestamp};
-    ///
-    /// # tokio_test::block_on(async {
-    /// let btree = BTree::new(3)?;
-    /// let txn = TransactionContext::new(
-    ///     TransactionId::from(1),
-    ///     TransactionTimestamp::from(100),
-    /// );
-    ///
-    /// let name = Name::global("PATIENT");
-    /// let key = key![123];
-    /// btree.set(&name, &key, "John Doe".into(), &txn).await?;
-    /// # Ok::<(), rumps_storage::StorageError>(())
-    /// # });
-    /// ```
-    pub(crate) async fn set(
-        &self,
-        name: &Name,
-        key: &Key,
-        value: rumps_types::Value,
-        _ctx: &crate::TransactionContext,
-    ) -> Result<()> {
-        // TODO Phase 5: Use transaction context for snapshot isolation
-        // and buffered writes (e.g., write to transaction buffer instead
-        // of directly to tree). For now, we just delegate to `set_internal`.
-        self.set_internal(name, key, NodeData::with_value(value))
-            .await
-    }
-
-    /// Gets a value from the tree.
-    ///
-    /// Optional transaction context for snapshot isolation (Phase 5).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let value = btree.get(&name, &key, None).await?;
-    /// ```
-    pub(crate) async fn get(
-        &self,
-        name: &Name,
-        key: &Key,
-        _ctx: Option<&crate::TransactionContext>,
-    ) -> Result<Option<rumps_types::Value>> {
-        // TODO Phase 5: If txn is Some, use snapshot isolation
-        self.get_internal(name, key)
-            .await
-            .map(|opt| opt.and_then(|data| data.value.clone()))
-    }
-
-    /// Deletes a key and all its descendants from the tree.
-    ///
-    /// **Requires a transaction context.** All writes to globals must occur within transactions.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// btree.kill(&name, &key, &txn).await?;
-    /// ```
-    pub(crate) async fn kill(
-        &self,
-        name: &Name,
-        key: &Key,
-        _ctx: &crate::TransactionContext,
-    ) -> Result<()> {
-        // TODO Phase 5: Use transaction context for snapshot isolation
-        // and buffered writes (e.g., write to transaction buffer instead
-        // of directly to tree). For now, we just delegate to `kill_internal`.
-        self.kill_internal(name, key).await
-    }
-
-    /// Checks the data status of a node (MUMPS $DATA).
-    ///
-    /// Returns information about whether a node has a value and/or descendants.
-    /// Optional transaction context for snapshot isolation (Phase 5).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let status = btree.data(&name, &key, None).await?;
-    /// ```
-    pub(crate) async fn data(
-        &self,
-        name: &Name,
-        key: &Key,
-        _ctx: Option<&crate::TransactionContext>,
-    ) -> Result<DataStatus> {
-        // Phase 5.4 will add transaction snapshot isolation here
-        self.data_internal(name, key).await
-    }
-
-    /// Returns the next key in lexicographic order (MUMPS $ORDER).
-    ///
-    /// Optional transaction context for snapshot isolation (Phase 5).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let next_key = btree.order(&name, Some(&key), None).await?;
-    /// ```
-    pub(crate) async fn order(
-        &self,
-        _name: &Name,
-        _after: Option<&Key>,
-        _ctx: Option<&crate::TransactionContext>,
-    ) -> Result<Option<Key>> {
-        // TODO Phase 2.6: Implement ORDER operation
-        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
-    }
-}
-
-/// Direction for sibling borrowing during B-tree rebalancing.
-/// (used in private `impl` method[s] below)
-enum BorrowDir {
-    Left,
-    Right,
-}
-
-/// Private helper methods for B-tree operations.
-impl BTree {
-    /// Internal GET that returns `Arc<NodeData>` (not just Value).
-    ///
-    /// Returns an Arc for efficient hierarchy navigation - checking
-    /// `has_descendants` flags is much cheaper with Arc::clone() than
-    /// cloning the entire `NodeData`.
-    ///
-    /// The public `get()` method extracts the value by cloning the
-    /// `Option<Value>` from the Arc.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Internal use only
-    /// let arc_data = btree.get_internal(&name, &key).await?;
-    /// if let Some(data) = arc_data {
-    ///     println!("has_descendants: {}", data.has_descendants);
-    ///     println!("value: {:?}", data.value);
-    /// }
-    /// ```
-    // Internal method for tests/benchmarks - not part of public API
-    async fn get_internal(
-        &self,
-        name: &Name,
-        key: &Key,
-    ) -> Result<Option<Arc<NodeData>>> {
-        match self.roots.read().await.get(name).copied() {
-            None => Ok(None),
-            Some(root_id) => self.search_from_node(root_id, key).await,
-        }
-    }
-
-    /// Internal SET operation that accepts `NodeData` directly.
-    ///
-    /// This method is used internally for maintaining hierarchical semantics,
-    /// particularly when creating ancestor nodes with `has_descendants = true`.
-    ///
-    /// # Behavior for Existing Keys - Idempotent Merge
-    ///
-    /// If the key already exists, this method MERGES the `NodeData`:
-    /// - `has_descendants`: Performs OR operation (if either old or new is true, result is true)
-    /// - `value`: Takes new value if provided, otherwise keeps old value
-    ///
-    /// **Why idempotent merge is required:**
-    /// - Multiple child insertions can race to create the same ancestor node
-    /// - Each insertion must be able to set `has_descendants=true` independently
-    /// - The operation must be safe regardless of the order or concurrency
-    /// - Once `has_descendants=true` is set, it cannot be accidentally cleared
-    ///
-    /// This ensures that:
-    /// 1. Setting `has_descendants=true` is permanent (can't be undone by another set)
-    /// 2. Concurrent ancestor creation is safe (multiple operations can set same ancestor)
-    /// 3. User can update values without losing `has_descendants` flag
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Create an intermediate node (no value, only descendants)
-    /// btree.set_internal(&name, &ancestor_key, NodeData::with_descendants()).await?;
-    ///
-    /// // Later, add a value to the same node (preserves has_descendants)
-    /// btree.set_internal(&name, &ancestor_key, NodeData::with_value(value)).await?;
-    /// // Result: NodeData { value: Some(value), has_descendants: true }
-    /// ```
-    // Internal method for tests/benchmarks - not part of public API
-    async fn set_internal(
-        &self,
-        name: &Name,
-        key: &Key,
-        data: NodeData,
-    ) -> Result<()> {
-        // Ensure all ancestors exist with has_descendants=true
-        // This is part of the core MUMPS hierarchical semantics
-        self.ensure_ancestors(name, key).await?;
-
-        // Delegate to raw insertion (no hierarchy management)
-        self.set_node(name, key, data).await
-    }
-
-    /// Internal KILL operation that deletes a key and all its descendants.
-    ///
-    /// This method implements MUMPS KILL semantics:
-    /// 1. Deletes the specified key (if it exists)
-    /// 2. Deletes all descendants (keys that start with the given key as prefix)
-    /// 3. Updates ancestor `has_descendants` flags
-    /// 4. Handles tree rebalancing (node merging when underfull)
-    ///
-    /// # Algorithm
-    ///
-    /// 1. Collect all keys that match the prefix (the key itself and all descendants)
-    /// 2. Delete each key from the tree
-    /// 3. After all deletions, update ancestor `has_descendants` flags
-    /// 4. Remove empty ancestor nodes (nodes with no value and no descendants)
-    // Internal method for tests/benchmarks - not part of public API
-    async fn kill_internal(&self, name: &Name, key: &Key) -> Result<()> {
-        // Step 1: Collect all keys to delete (the key and its descendants)
-        let mut keys_to_delete =
-            self.collect_keys_with_prefix(name, key).await?;
-
-        if keys_to_delete.is_empty() {
-            Ok(())
-        } else {
-            // Step 2: Delete each key from the tree
-            // We delete in reverse order (deepest first) to minimize rebalancing
-            keys_to_delete
-                .sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| b.cmp(a)));
-
-            // Delete each key
-            futures::stream::iter(
-                keys_to_delete.iter().map(Ok::<_, StorageError>),
-            )
-            .try_for_each(|k| self.delete_key(name, k))
-            .await?;
-
-            // Step 3: Update ancestor has_descendants flags
-            self.update_ancestors_after_kill(name, key).await
-        }
-    }
-
-    /// Internal DATA operation returning MUMPS `$DATA` status.
-    ///
-    /// Maps the `NodeData` to `DataStatus`:
-    /// - `NoData` (0): Node doesn't exist or has neither value nor descendants
-    /// - `HasValue` (1): Node has value but no descendants
-    /// - `HasDescendants` (10): Node has descendants but no value
-    /// - `Both` (11): Node has both value and descendants
-    async fn data_internal(&self, name: &Name, key: &Key) -> Result<DataStatus> {
-        self.get_internal(name, key).await.map(|opt| {
-            opt.map_or(DataStatus::NoData, |nd| {
-                match (nd.value.is_some(), nd.has_descendants) {
-                    (false, false) => DataStatus::NoData,
-                    (true, false) => DataStatus::HasValue,
-                    (false, true) => DataStatus::HasDescendants,
-                    (true, true) => DataStatus::Both,
-                }
-            })
-        })
-    }
-
-    // Internal method, unimplemented
-    async fn order_internal(
-        &self,
-        _name: &Name,
-        _after: Option<&Key>,
-    ) -> Result<Option<Key>> {
-        // TODO Phase 2.6: Implement ORDER operation
-        todo!("ORDER operation not yet implemented - see TODOS/persistence.md Phase 2.6")
     }
 
     /// Recursively search for a key starting from the given node.
