@@ -378,68 +378,17 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 - [x] Implement `BTree::collects_internal` - internal implementation with `&NodeData` (DONE)
 - [x] Implement `BTree::collects` - wrapper with transaction context placeholder (DONE)
-- [ ] Implement `Database::collects` - public API with `&Option<Value>` signature:
-  ```rust
-  /// Create a stream of values from the tree that match the given predicate.
-  ///
-  /// # Arguments
-  /// * `name` - The global or local variable name
-  /// * `start` - Optional starting key (None starts from beginning)
-  /// * `predicate` - Function that determines whether to include the entry
-  /// * `extract` - Function that transforms the entry into the desired output type
-  ///
-  /// # Returns
-  /// A stream that yields extracted values from matching entries
-  ///
-  /// # Examples
-  /// ```ignore
-  /// use futures::StreamExt;
-  ///
-  /// // Process patient names as a stream
-  /// let mut names = db.collects(
-  ///     &Name::Global("PATIENT".into()),
-  ///     None,
-  ///     |key, value| key.len() == 2,
-  ///     |_key, value| value.as_ref().and_then(|v| match v {
-  ///         Value::String(s) => Some(s.clone()),
-  ///         _ => None,
-  ///     }),
-  /// );
-  ///
-  /// // Process stream items one by one
-  /// while let Some(result) = names.next().await {
-  ///     match result {
-  ///         Ok(name) => println!("Patient: {}", name),
-  ///         Err(e) => eprintln!("Error: {}", e),
-  ///     }
-  /// }
-  /// ```
-  pub fn collects<'a, P, F, T>(
-      &'a self,
-      name: &'a Name,
-      start: Option<&'a Key>,
-      predicate: P,
-      extract: F,
-  ) -> impl Stream<Item = Result<T>> + 'a
-  where
-      P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + 'a,
-      F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + 'a,
-      T: Send + 'a,
-  {
-      // Delegates to BTree::collects, adapting callbacks to extract value from NodeData
-  }
-  ```
 
 #### Convenience Methods for Vec Collection
 
-- [ ] Implement `async fn collect_vec<P, F, T>(&self, name: &Name, start: Option<&Key>, predicate: P, extract: F, ctx: Option<&TransactionContext>) -> Result<Vec<T>>`:
+- [ ] Implement `async fn collects_vec<P, F, T>(&self, name: &Name, start: Option<&Key>, predicate: P, extract: F, ctx: Option<&TransactionContext>) -> Result<Vec<T>>`:
   ```rust
   /// Collect all matching values into a Vec.
   /// Convenience method that collects the stream for cases where you need all results in memory.
   ///
   /// # Warning
   /// For large datasets, prefer using the stream directly to avoid memory issues.
-  pub async fn collect_vec<P, F, T>(
+  pub async fn collects_vec<P, F, T>(
       &self,
       name: &Name,
       start: Option<&Key>,
@@ -535,8 +484,8 @@ let count = btree.collects(
 .try_fold(0usize, |acc, _| future::ready(Ok(acc + 1)))
 .await?;
 
-// Use collect_vec for small datasets where you need all results
-let all_names = btree.collect_vec(
+// Use collects_vec for small datasets where you need all results
+let all_names = btree.collects_vec(
     &Name::Global("PATIENT".into()),
     None,
     |key, _| key.subscripts().len() == 2 && key.subscripts()[1] == "NAME".into(),
@@ -603,7 +552,7 @@ let processed_results: Vec<ProcessedData> = btree.collects(
 - [ ] Test memory usage with millions of entries (stream should be constant memory)
 - [ ] Test backpressure with slow consumers
 - [ ] Test stream combinators (take, filter_map, fold, etc.)
-- [ ] Benchmark stream vs Vec collection performance
+- [ ] Benchmark stream and Vec collection performance
 - [ ] Test error propagation through stream
 
 ---
@@ -917,16 +866,6 @@ let processed_results: Vec<ProcessedData> = btree.collects(
   - `begin()` - create transaction, get snapshot
   - `commit() -> Result<()>` - validate, write to WAL, apply changes
   - `rollback()` - discard buffered writes
-- [ ] Add MUMPS operations on `Transaction`:
-  - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>` - delegates to `btree.set(name, key, value, &self.context)`
-  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get(name, key, Some(&self.context))`
-  - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>` - delegates to `btree.kill(name, key, &self.context)`
-  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data(name, key, Some(&self.context))`
-  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order(name, key, Some(&self.context))`
-- [ ] Enforce transaction rules:
-  - Writes to `Name::Global` MUST be in transaction (return error otherwise)
-  - `Name::Local` modifications work outside transactions
-  - GET/DATA/ORDER can work with or without transactions
 
 ### 5.2 Async Database Handle
 - [ ] Create `crates/rumps-storage/src/database.rs` module
@@ -1021,14 +960,37 @@ let processed_results: Vec<ProcessedData> = btree.collects(
         Ok(())
     }).await?;
     ```
-- [ ] Add read-only operations (no transaction required):
-  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get(name, key, None)` (simple snapshot read)
-  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data(name, key, None)`
-  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order(name, key, None)`
-- [ ] Add local variable operations (no transaction required):
-  - `async fn set_local(&self, name: &Name, key: &Key, value: Value) -> Result<()>` - creates temporary transaction context internally for locals
-  - Must verify `name.is_local()`, return error if global
-  - Note: Locals still need a transaction context internally but the Database API handles this transparently
+- [ ] Add public operations on `Database`:
+  - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>` - delegates to `btree.set(name, key, value, &self.context)`
+  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get(name, key, Some(&self.context))`
+  - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>` - delegates to `btree.kill(name, key, &self.context)`
+  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data(name, key, Some(&self.context))`
+  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order(name, key, Some(&self.context))`
+  - `collects`:
+    ```rust
+    pub fn collects<'a, P, F, T>(
+        &'a self,
+        name: &'a Name,
+        start: Option<&'a Key>,
+        predicate: P,
+        extract: F,
+    ) -> impl Stream<Item = Result<T>> + 'a
+    where
+        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        // Delegates to BTree::collects, adapting callbacks to extract value from NodeData
+    }
+    ```
+    - Delegates to `BTree::collects`
+    - Public `Datbase` API exposes `&Option<Value>` signature (i.e. hides `NodeData` internals of `BTree::collects`)
+- [ ] Enforce transaction rules:
+  - Writes to `Name::Global` MUST be in transaction (return error otherwise)
+  - `Name::Local` modifications work outside transactions
+    - Creates temporary transaction context internally for locals
+    - Note: Locals still need a transaction context internally (`BTree::set`) but the Database API handles this transparently
+  - GET/DATA/ORDER can work with or without transactions
 
 ### 5.3 API Documentation
 - [ ] Add rustdoc comments to all public types
