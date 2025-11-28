@@ -381,179 +381,28 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 #### Convenience Methods for Vec Collection
 
-- [ ] Implement `async fn collects_vec<P, F, T>(&self, name: &Name, start: Option<&Key>, predicate: P, extract: F, ctx: Option<&TransactionContext>) -> Result<Vec<T>>`:
-  ```rust
-  /// Collect all matching values into a Vec.
-  /// Convenience method that collects the stream for cases where you need all results in memory.
-  ///
-  /// # Warning
-  /// For large datasets, prefer using the stream directly to avoid memory issues.
-  pub async fn collects_vec<P, F, T>(
-      &self,
-      name: &Name,
-      start: Option<&Key>,
-      predicate: P,
-      extract: F,
-      ctx: Option<&TransactionContext>,
-  ) -> Result<Vec<T>>
-  where
-      P: Fn(&Key, &Arc<NodeData>) -> bool + Send,
-      F: Fn(&Key, Arc<NodeData>) -> Option<T> + Send,
-      T: Send + 'static,
-  {
-      use futures::StreamExt;
-
-      self.collects(name, start, predicate, extract, ctx)
-          .try_collect()
-          .await
-  }
-  ```
+- [x] Implement `async fn collects_vec<P, F, T>(&self, name: &Name, start: Option<&Key>, predicate: P, extract: F, ctx: Option<&TransactionContext>) -> Result<Vec<T>>` (DONE):
 
 #### Supporting Internal Methods
 
-- [ ] Implement `async fn get_next_internal(&self, name: &Name, after: &Key) -> Result<Option<(Key, Arc<NodeData>)>>`:
-  - Navigate B-tree to find the next key after `after`
+- [x] Implement `async fn get_next_internal(&self, name: &Name, after: Option<&Key>) -> Result<Option<(Key, Arc<NodeData>)>>` (DONE):
+  - Navigate B-tree to find the next key after `after` (or first key if `None`)
   - Return both key and data for the next entry
   - Handle transitions between leaf nodes
-  - Similar to ORDER but returns full entry
+  - Combines `order_internal` + `get_internal` into single call for efficiency
 
-- [ ] Implement `async fn get_prev_internal(&self, name: &Name, before: &Key) -> Result<Option<(Key, Arc<NodeData>)>>`:
-  - Navigate B-tree to find the previous key before `before`
-  - Support for bidirectional iteration (future enhancement)
+#### Testing (Completed)
 
-#### Stream-Based Usage Examples
-
-```rust
-use futures::StreamExt;
-
-// Process large dataset as stream (memory efficient)
-let mut data_stream = btree.collects(
-    &Name::Global("DATA".into()),
-    Some(&Key::from(vec!["2025".into()])),
-    |key, _| key.subscripts().len() == 2 && key.subscripts()[0] == "2025".into(),
-    |_key, data| data.value.clone(),
-    None, // No transaction context
-);
-
-// Process items one at a time without loading all into memory
-while let Some(result) = data_stream.next().await {
-    match result {
-        Ok(value) => process_value(value),
-        Err(e) => eprintln!("Error: {}", e),
-    }
-}
-
-// Find first admin user using stream (early termination)
-let admin = btree.collects(
-    &Name::Global("USERS".into()),
-    None,
-    |_key, data| data.value.is_some(),
-    |key, data| match data.value {
-        Some(Value::String(ref s)) if s.contains("admin") => Some((key.clone(), s.clone())),
-        _ => None,
-    },
-    None,
-)
-.filter_map(|r| future::ready(r.ok()))
-.next()
-.await;
-
-// Take first 100 matching entries
-let first_100: Vec<String> = btree.collects(
-    &Name::Global("LOGS".into()),
-    None,
-    |key, _| key.subscripts().first() == Some(&"2025".into()),
-    |_key, data| match data.value {
-        Some(Value::String(ref s)) => Some(s.clone()),
-        _ => None,
-    },
-    None,
-)
-.take(100)
-.try_collect()
-.await?;
-
-// Count entries efficiently using fold
-let count = btree.collects(
-    &Name::Global("STATS".into()),
-    None,
-    |key, _| key.subscripts().first() == Some(&"2025".into()),
-    |_key, data| if data.has_descendants { Some(()) } else { None },
-    None,
-)
-.try_fold(0usize, |acc, _| future::ready(Ok(acc + 1)))
-.await?;
-
-// Use collects_vec for small datasets where you need all results
-let all_names = btree.collects_vec(
-    &Name::Global("PATIENT".into()),
-    None,
-    |key, _| key.subscripts().len() == 2 && key.subscripts()[1] == "NAME".into(),
-    |_key, data| match data.value {
-        Some(Value::String(ref s)) => Some(s.clone()),
-        _ => None,
-    },
-    None,
-).await?;
-
-// Parallel processing with buffered stream
-use futures::stream::StreamExt;
-
-let processed_results: Vec<ProcessedData> = btree.collects(
-    &Name::Global("RECORDS".into()),
-    None,
-    |_, data| data.value.is_some(),
-    |key, data| Some((key.clone(), data.value.clone())),
-    None,
-)
-.map(|result| async move {
-    match result {
-        Ok((key, value)) => process_record_async(key, value).await,
-        Err(e) => Err(e),
-    }
-})
-.buffer_unordered(10)  // Process up to 10 records concurrently
-.try_collect()
-.await?;
-```
-
-#### Implementation Strategy
-
-1. **Phase 1**: Core Stream Infrastructure
-   - Implement `get_next_internal` using existing B-tree navigation
-   - Create stream wrapper using `async_stream` crate or manual `Stream` implementation
-   - Ensure proper lifetime management for borrowed references
-
-2. **Phase 2**: Stream-Based Collection
-   - Implement `collects` with lazy evaluation
-   - Add support for early termination when predicate returns false
-   - Implement backpressure handling for slow consumers
-
-3. **Phase 3**: Optimizations
-   - Batch node reads to reduce lock contention
-   - Implement read-ahead buffering for sequential access patterns
-   - Add parallel stream processing support with `buffer_unordered`
-
-4. **Phase 4**: Advanced Features (Future)
-   - Bidirectional iteration with `get_prev_internal`
-   - Range queries with start and end bounds
-   - Snapshot iteration for long-running streams
-
-#### Testing
-
-- [ ] Test stream iteration over empty tree
-- [ ] Test stream with start key positioning
-- [ ] Test predicate-based filtering and early termination
-- [ ] Test extract function transformations
-- [ ] Test stream cancellation and cleanup
-- [ ] Test collecting stream to Vec for small datasets
-- [ ] Test streaming with transaction context
-- [ ] Test concurrent streams on same tree
-- [ ] Test memory usage with millions of entries (stream should be constant memory)
-- [ ] Test backpressure with slow consumers
-- [ ] Test stream combinators (take, filter_map, fold, etc.)
-- [ ] Benchmark stream and Vec collection performance
-- [ ] Test error propagation through stream
+- [x] Test stream iteration over empty tree
+- [x] Test stream with start key positioning
+- [x] Test predicate-based filtering and early termination
+- [x] Test extract function transformations
+- [x] Test collecting stream to Vec for small datasets
+- [x] Test stream combinators (take, filter_map, fold, etc.)
+- [x] Test error propagation through stream
+- [x] Test namespaces are separate (global vs local)
+- [x] Test hierarchical keys
+- [x] Test stress with many entries
 
 ---
 
@@ -717,6 +566,83 @@ let processed_results: Vec<ProcessedData> = btree.collects(
 
 **Concurrency Model**: The public API will be async with snapshot isolation for reads and exclusive locks for transaction commits.
 
+### Two-Layer Public API Architecture
+
+The public API has **two layers** above the internal `BTree`:
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         User Code                                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│  db.transaction(|txn| async {                                           │
+│      txn.set(&global, &key, val).await?;  // ← Transaction methods      │
+│      txn.get(&global, &key).await?;                                     │
+│  })                                                                     │
+│                                                                         │
+│  db.get(&local, &key).await?;             // ← Database methods         │
+│  db.set(&local, &key, val).await?;        //   (locals only for writes) │
+│                                           //   (returns err for global) │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Layer 1: Database                                                      │
+│  ─────────────────                                                      │
+│  • Main entry point for users                                           │
+│  • Holds Arc<BTree> + Arc<TransactionManager>                           │
+│  • Provides transaction closure API: db.transaction(...)                │
+│  • Direct methods for reads (any namespace) and local writes            │
+│  • Rejects global writes outside transactions                           │
+│                                                                         │
+│  Methods:                                                               │
+│  • get(), data(), order(), collects() → delegate to BTree w/ context    │
+│  • set(), kill() → for locals only; globals require Transaction         │
+│  • transaction(), transaction_with() → create Transaction scope         │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Layer 2: Transaction                                                   │
+│  ────────────────────                                                   │
+│  • Used inside db.transaction(|txn| ...) closures                       │
+│  • Buffers writes until commit                                          │
+│  • Provides snapshot isolation for reads                                │
+│  • Tracks read/write sets for conflict detection                        │
+│                                                                         │
+│  Methods (same names as Database, different semantics):                 │
+│  • get() → check write buffer first, then snapshot                      │
+│  • set() → buffer write, don't apply yet                                │
+│  • kill() → buffer deletion, track subtree                              │
+│  • data(), order(), collects() → use snapshot + write buffer            │
+│  • commit() → validate, write WAL, apply buffered writes                │
+│  • rollback() → discard write buffer                                    │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Internal: BTree                                                        │
+│  ───────────────                                                        │
+│  • Low-level B-tree operations                                          │
+│  • All methods accept TransactionContext parameter                      │
+│  • Phase 2 implementations ignore context (added for future-proofing)   │
+│  • Phase 5.4 retrofits context usage for isolation/buffering            │
+│                                                                         │
+│  Methods:                                                               │
+│  • set(name, key, value, &ctx)                                          │
+│  • get(name, key, Option<&ctx>)                                         │
+│  • kill(name, key, &ctx)                                                │
+│  • data(name, key, Option<&ctx>)                                        │
+│  • order(name, key, Option<&ctx>)                                       │
+│  • collects(name, start, predicate, extract, Option<&ctx>)              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Insight**: `Transaction` and `Database` expose the same method names (`get`, `set`, `kill`, etc.), but:
+- `Database` methods are for **direct access** (reads anywhere, writes to locals only)
+- `Transaction` methods are for **transactional access** (buffers writes, provides isolation)
+
+Both ultimately delegate to `BTree` methods, but with different `TransactionContext` configurations.
+
 ### 5.1 Transaction Infrastructure
 - [ ] Add `tokio` dependency to `rumps-storage/Cargo.toml`
 - [ ] Create `crates/rumps-storage/src/transaction.rs` module
@@ -866,6 +792,32 @@ let processed_results: Vec<ProcessedData> = btree.collects(
   - `begin()` - create transaction, get snapshot
   - `commit() -> Result<()>` - validate, write to WAL, apply changes
   - `rollback()` - discard buffered writes
+- [ ] Implement `Transaction` MUMPS operation methods (used inside `db.transaction(|txn| ...)` closures):
+  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`:
+    - Check `self.writes` buffer first for pending `WriteOp::Set`
+    - Check `self.deleted_subtrees` for pending kills (return `None` if deleted)
+    - Fall back to `self.db.btree.get(name, key, Some(&self.context))` using snapshot
+    - Track key in `self.read_set` (for Serializable isolation)
+  - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>`:
+    - Buffer write in `self.writes` as `WriteOp::Set(NodeData { value: Some(value), ... })`
+    - Do NOT call `BTree::set` yet (deferred until commit)
+    - Update `self.ops_count`
+  - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>`:
+    - Buffer deletion in `self.writes` as `WriteOp::KillSubtree`
+    - Track in `self.deleted_subtrees` for read consistency
+    - Do NOT call `BTree::kill` yet (deferred until commit)
+  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus>`:
+    - Check write buffer and deleted subtrees first
+    - Fall back to `self.db.btree.data(name, key, Some(&self.context))`
+    - Combine buffered state with snapshot state
+  - `async fn order(&self, name: &Name, after: Option<&Key>) -> Result<Option<Key>>`:
+    - Must merge snapshot iteration with buffered writes
+    - Buffered sets may insert new keys; buffered kills may remove keys
+    - Fall back to `self.db.btree.order(name, after, Some(&self.context))`
+  - `fn collects<P, F, T>(&self, name: &Name, start: Option<&Key>, pred: P, ext: F) -> impl Stream`:
+    - Stream must reflect buffered writes + snapshot
+    - Delegates to `self.db.btree.collects(...)` with buffer overlay
+  - **Note**: These methods have the same signatures as `Database` methods but different semantics (buffering vs direct)
 
 ### 5.2 Async Database Handle
 - [ ] Create `crates/rumps-storage/src/database.rs` module
@@ -960,31 +912,26 @@ let processed_results: Vec<ProcessedData> = btree.collects(
         Ok(())
     }).await?;
     ```
-- [ ] Add public operations on `Database`:
-  - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>` - delegates to `btree.set(name, key, value, &self.context)`
-  - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>` - delegates to `btree.get(name, key, Some(&self.context))`
-  - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>` - delegates to `btree.kill(name, key, &self.context)`
-  - `async fn data(&self, name: &Name, key: &Key) -> Result<DataResult>` - delegates to `btree.data(name, key, Some(&self.context))`
-  - `async fn order(&self, name: &Name, key: &Key) -> Result<Option<Key>>` - delegates to `btree.order(name, key, Some(&self.context))`
-  - `collects`:
-    ```rust
-    pub fn collects<'a, P, F, T>(
-        &'a self,
-        name: &'a Name,
-        start: Option<&'a Key>,
-        predicate: P,
-        extract: F,
-    ) -> impl Stream<Item = Result<T>> + 'a
-    where
-        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + 'a,
-        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + 'a,
-        T: Send + 'a,
-    {
-        // Delegates to BTree::collects, adapting callbacks to extract value from NodeData
-    }
-    ```
-    - Delegates to `BTree::collects`
-    - Public `Datbase` API exposes `&Option<Value>` signature (i.e. hides `NodeData` internals of `BTree::collects`)
+- [ ] Implement `Database` MUMPS operation methods (direct access, no write buffering):
+  - **Read operations** (work with or without active transaction):
+    - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`:
+      - Delegates to `self.btree.get(name, key, None)` (no transaction context)
+      - Works for both globals and locals
+    - `async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus>`:
+      - Delegates to `self.btree.data(name, key, None)`
+    - `async fn order(&self, name: &Name, after: Option<&Key>) -> Result<Option<Key>>`:
+      - Delegates to `self.btree.order(name, after, None)`
+    - `fn collects<P, F, T>(&self, ...) -> impl Stream`:
+      - Delegates to `self.btree.collects(..., None)`
+      - Public `Database` API exposes `&Option<Value>` (hides `NodeData` internals)
+  - **Write operations** (locals only; globals require `Transaction`):
+    - `async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()>`:
+      - If `name` is `Name::Global(...)`: return `Err(StorageError::GlobalRequiresTransaction)`
+      - If `name` is `Name::Local(...)`: create ephemeral context, delegate to `self.btree.set(name, key, value, &ctx)`
+    - `async fn kill(&self, name: &Name, key: &Key) -> Result<()>`:
+      - If `name` is `Name::Global(...)`: return `Err(StorageError::GlobalRequiresTransaction)`
+      - If `name` is `Name::Local(...)`: create ephemeral context, delegate to `self.btree.kill(name, key, &ctx)`
+  - **Note**: Unlike `Transaction` methods, `Database` methods do NOT buffer writes—they apply immediately (for locals) or reject (for globals)
 - [ ] Enforce transaction rules:
   - Writes to `Name::Global` MUST be in transaction (return error otherwise)
   - `Name::Local` modifications work outside transactions
@@ -1133,14 +1080,12 @@ This section covers updating the Phase 2 B-tree primitives (SET, GET, KILL, DATA
 - [ ] Run `cargo fmt` on all crates
 - [ ] Run `cargo clippy` and fix all warnings
 - [ ] Ensure `use_self` lint is respected (use `Self` where appropriate)
-- [ ] Review all `unwrap()` calls and replace with proper error handling
 - [ ] Add `#![warn(missing_docs)]` to crate roots
 
 ### 7.3 Final Validation
 - [ ] Run full test suite: `cargo test --workspace`
 - [ ] Run benchmarks: `cargo bench --workspace`
 - [ ] Build docs: `cargo doc --workspace --no-deps`
-- [ ] Review CLAUDE.md and check off Goal 1 items
 
 ---
 
@@ -1157,6 +1102,18 @@ These are not part of the current plan but should be kept in mind:
 - **Networking**: Client-server protocol for remote access
 - **Replication**: Multi-node deployment with data replication
 - **Distributed Transactions**: Two-phase commit for multi-node transactions
+- **$COLLECT Enhancements**:
+  - Parallel processing with `buffer_unordered` for concurrent record processing:
+    ```rust
+    let results: Vec<_> = btree.collects(...)
+        .map(|r| async move { process_record_async(r).await })
+        .buffer_unordered(10)
+        .try_collect()
+        .await?;
+    ```
+  - Bidirectional iteration via `get_prev_internal` for reverse traversal
+  - Batch node reads and read-ahead buffering for performance
+  - Range queries with end bounds (inclusive/exclusive)
 
 ---
 
