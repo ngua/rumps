@@ -20,6 +20,7 @@
 mod btree;
 mod error;
 pub(crate) mod node;
+pub(crate) mod serialize;
 mod transaction;
 
 #[cfg(feature = "bench")]

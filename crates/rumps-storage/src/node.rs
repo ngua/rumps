@@ -354,6 +354,39 @@ impl Node {
             })
             .unwrap_or(false)
     }
+
+    /// Serializes this node to a compact binary representation.
+    ///
+    /// Uses bincode with the provided configuration for encoding options.
+    /// See [`SerializeConfig`](crate::serialize::SerializeConfig) for details.
+    pub(crate) fn serialize(
+        &self,
+        cfg: &crate::serialize::SerializeConfig,
+    ) -> crate::error::Result<Vec<u8>> {
+        use bincode::Options;
+        cfg.bincode_options().serialize(self).map_err(|e| {
+            crate::error::StorageError::Serialization(format!(
+                "failed to serialize node: {}",
+                e
+            ))
+        })
+    }
+
+    /// Deserializes a node from its binary representation.
+    ///
+    /// Expects data in the format produced by [`Node::serialize`].
+    pub(crate) fn deserialize(
+        bytes: &[u8],
+        cfg: &crate::serialize::SerializeConfig,
+    ) -> crate::error::Result<Self> {
+        use bincode::Options;
+        cfg.bincode_options().deserialize(bytes).map_err(|e| {
+            crate::error::StorageError::Serialization(format!(
+                "failed to deserialize node: {}",
+                e
+            ))
+        })
+    }
 }
 
 impl Serialize for Node {
