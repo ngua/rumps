@@ -228,6 +228,7 @@ impl Default for BTree {
     /// assert_eq!(btree.node_count().await, 0);
     /// # });
     /// ```
+    #[allow(clippy::expect_used)]
     fn default() -> Self {
         Self::new(3).expect("Default configuration is valid")
     }
@@ -423,6 +424,42 @@ impl BTree {
     {
         // Phase 5.4 will add transaction snapshot isolation here
         self.collects_internal(name, start, pred, extract)
+    }
+
+    /// Collects all matching entries into a `Vec`.
+    ///
+    /// Convenience wrapper around `collects` that consumes the entire stream.
+    /// Use `collects` directly for large datasets to avoid loading everything
+    /// into memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The variable name (global or local)
+    /// * `start` - Optional key to start iteration after (exclusive)
+    /// * `pred` - Predicate returning `true` to include entry, `false` to skip
+    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
+    /// * `ctx` - Optional transaction context (currently unused)
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<T>` containing all extracted values from matching entries.
+    pub(crate) async fn collects_vec<P, F, T>(
+        &self,
+        name: &Name,
+        start: Option<&Key>,
+        pred: P,
+        extract: F,
+        ctx: Option<&crate::TransactionContext>,
+    ) -> Result<Vec<T>>
+    where
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
+        T: Send,
+    {
+        use futures::TryStreamExt;
+        self.collects(name, start, pred, extract, ctx)
+            .try_collect()
+            .await
     }
 }
 
@@ -801,6 +838,34 @@ impl BTree {
         }
     }
 
+    /// Internal operation returning next key and its data in one call.
+    ///
+    /// Combines `order_internal` and `get_internal` for efficiency in iteration.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The variable name (global or local)
+    /// * `after` - The key to start after, or `None` to get the first entry
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some((key, data)))` - Next entry found
+    /// * `Ok(None)` - No more entries
+    /// * `Err(...)` - Error during traversal
+    async fn get_next_internal(
+        &self,
+        name: &Name,
+        after: Option<&Key>,
+    ) -> Result<Option<(Key, Arc<NodeData>)>> {
+        match self.order_internal(name, after).await? {
+            None => Ok(None),
+            Some(key) => self
+                .get_internal(name, &key)
+                .await
+                .map(|opt| opt.map(|data| (key, data))),
+        }
+    }
+
     /// Internal COLLECT operation returning a stream of key-value pairs.
     ///
     /// Creates a stream that iterates over tree entries in lexicographic order,
@@ -810,11 +875,10 @@ impl BTree {
     ///
     /// Uses `futures::stream::unfold` with recursive async helper:
     /// 1. Start from `start` key or beginning of tree
-    /// 2. For each iteration, use `order_internal` to get next key
-    /// 3. Fetch `NodeData` for the key via `get_internal`
-    /// 4. Apply predicate - if `false`, recurse to skip entry
-    /// 5. Apply extract - yield `Some(T)` results, recurse on `None`
-    /// 6. End when `order_internal` returns `None`
+    /// 2. For each iteration, use `get_next_internal` to get next key + data
+    /// 3. Apply predicate - if `false`, recurse to skip entry
+    /// 4. Apply extract - yield `Some(T)` results, recurse on `None`
+    /// 5. End when `get_next_internal` returns `None`
     ///
     /// # Stream Semantics
     ///
@@ -883,47 +947,11 @@ impl BTree {
         T: Send + 'a,
     {
         Box::pin(async move {
-            // Get next key using order_internal
-            match self.order_internal(name, cursor.as_ref()).await {
-                Ok(None) => None,               // No more keys - end stream
+            // Get next key and data in one call
+            match self.get_next_internal(name, cursor.as_ref()).await {
+                Ok(None) => None,               // No more entries - end stream
                 Err(e) => Some((Err(e), None)), // Yield error and end stream
-                Ok(Some(next_key)) => {
-                    self.collects_process_key(name, next_key, pred, extract)
-                        .await
-                }
-            }
-        })
-    }
-
-    /// Process a key for `collects_find_next`, handling data fetch, predicate, and extract.
-    fn collects_process_key<'a, P, F, T>(
-        &'a self,
-        name: &'a Name,
-        key: Key,
-        pred: &'a P,
-        extract: &'a F,
-    ) -> pin::Pin<
-        Box<
-            dyn future::Future<
-                    Output = Option<(Result<T>, Option<Option<Key>>)>,
-                > + Send
-                + 'a,
-        >,
-    >
-    where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
-        T: Send + 'a,
-    {
-        Box::pin(async move {
-            match self.get_internal(name, &key).await {
-                Err(e) => Some((Err(e), None)), // Yield error and end stream
-                Ok(None) => {
-                    // Key exists but no data (shouldn't happen) - recurse to skip
-                    self.collects_find_next(name, Some(key), pred, extract)
-                        .await
-                }
-                Ok(Some(data)) => {
+                Ok(Some((key, data))) => {
                     self.collects_apply_filters(name, key, data, pred, extract)
                         .await
                 }
@@ -931,7 +959,7 @@ impl BTree {
         })
     }
 
-    /// Apply predicate and extract for `collects_process_key`.
+    /// Apply predicate and extract for `collects_find_next`.
     fn collects_apply_filters<'a, P, F, T>(
         &'a self,
         name: &'a Name,
