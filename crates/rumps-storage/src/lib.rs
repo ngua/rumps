@@ -22,6 +22,7 @@ mod error;
 pub(crate) mod node;
 pub(crate) mod page;
 mod transaction;
+mod wal;
 
 #[cfg(feature = "bench")]
 pub use btree::benches;

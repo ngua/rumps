@@ -455,11 +455,11 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 ### 4.1 Write-Ahead Log (WAL)
 - [x] Create `crates/rumps-storage/src/wal.rs` module
-- [ ] Define WAL record types:
-  - Transaction begin/commit/abort records
-  - SET operation records (name, key, old value, new value)
-  - KILL operation records (name, key, subtree metadata)
-  - Checkpoint records
+- [x] Define WAL record types (`WalRecord` enum):
+  - `TxnBegin { txn_id }` / `TxnCommit { txn_id }` / `TxnAbort { txn_id }`
+  - `Set { txn_id, name, key, old, new }` - with old `NodeData` for undo
+  - `Kill { txn_id, name, key, subtree }` - subtree as `Vec<(Key, NodeData)>` for undo
+  - `Checkpoint { seq }` - monotonic sequence number
 - [ ] Define WAL file format:
   - Record header (type, length, transaction ID, checksum)
   - Serialized operation data
