@@ -1,4 +1,4 @@
-//! Page size configuration for RUMPS storage.
+//! Page-based storage configuration for RUMPS.
 //!
 //! The page size is a compile-time constant that determines the maximum
 //! size of serialized B-tree nodes. This affects disk I/O alignment,

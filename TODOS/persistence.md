@@ -410,14 +410,14 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 ### 3.1 Bincode Setup ✅ COMPLETE
 - [x] Add `bincode` dependency to `rumps-storage/Cargo.toml`
-- [x] Create `crates/rumps-storage/src/serialize.rs` module with `PAGE_SIZE` constant
+- [x] Create `crates/rumps-storage/src/page.rs` module with `PAGE_SIZE` constant
 - [x] Use transparent serde via `#[serde(from = "NodeRaw", into = "NodeRaw")]` on `Node`
   - `NodeRaw` is an intermediate struct without `Arc`s for efficient serialization
   - Derived `Serialize`/`Deserialize` on `NodeRaw` (no custom serde needed)
   - `From<Node> for NodeRaw` and `From<NodeRaw> for Node` conversions
 - [x] Configure `PAGE_SIZE` via `RUMPS_PAGE_SIZE` env var at compile time:
   - `build.rs` reads `RUMPS_PAGE_SIZE` (defaults to `4096`)
-  - `serialize.rs` uses `env!("RUMPS_PAGE_SIZE")` for compile-time constant
+  - `page.rs` uses `env!("RUMPS_PAGE_SIZE")` for compile-time constant
   - Example: `RUMPS_PAGE_SIZE=8192 cargo build`
 
 **Design Notes**:
@@ -454,7 +454,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 **Design Principle**: All storage operations are async from the start. The `AsyncStorageEngine` trait abstracts disk operations, allowing the B-tree to remain agnostic about storage details.
 
 ### 4.1 Write-Ahead Log (WAL)
-- [ ] Create `crates/rumps-storage/src/wal.rs` module
+- [x] Create `crates/rumps-storage/src/wal.rs` module
 - [ ] Define WAL record types:
   - Transaction begin/commit/abort records
   - SET operation records (name, key, old value, new value)
@@ -484,8 +484,8 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [ ] Add tests for crash recovery scenarios
 
 ### 4.2 Page-Based Storage
-- [x] Define `PAGE_SIZE` constant (done in Phase 3.1 via `serialize.rs`)
-- [ ] Create `crates/rumps-storage/src/page.rs` module
+- [x] Define `PAGE_SIZE` constant (done in Phase 3.1 via `page.rs`)
+- [x] Create `crates/rumps-storage/src/page.rs` module (done in Phase 3.1)
 - [ ] Define `PageId` type (u64 offset into file)
 - [ ] Implement `PageCache` struct:
   - LRU cache of pages in memory
@@ -1139,7 +1139,7 @@ These are not part of the current plan but should be kept in mind:
 **Recent Changes** (2025-11-28 - Phase 3 Serialization Complete):
 - ✅ Completed Phase 3: Serialization Layer
   - Added `bincode` dependency (already present)
-  - Created `serialize.rs` with compile-time `PAGE_SIZE` constant
+  - Created `page.rs` with compile-time `PAGE_SIZE` constant
   - Implemented transparent serde for `Node` via `NodeRaw` intermediate struct
   - `NodeRaw` avoids `Arc` overhead in serialization
   - `#[serde(from = "NodeRaw", into = "NodeRaw")]` provides seamless `bincode::serialize`/`deserialize`
