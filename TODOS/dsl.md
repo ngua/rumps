@@ -11,6 +11,42 @@ RUMPS is **not** a reimplementation of MUMPS, but rather a **declarative evoluti
 - Enables automatic parallelization and optimization
 - Maintains type safety (future enhancement)
 
+## Naming Convention: Train-Case
+
+RUMPS uses **train-case** (also known as kebab-case) for all identifiers:
+
+```rumps
+; Namespaced builtins
+Json.parse, Json.stringify, Json.keys
+String.length, String.upper
+Math.sqrt, Math.abs
+
+; Variables
+SET my-var = 123
+SET patient-name = "John Doe"
+SET last-visit-date = Time.now()
+```
+
+**Important**: Because `-` is used in identifiers, the subtraction operator **requires spaces**:
+
+```rumps
+; Subtraction - spaces required
+SET result = total - tax        ; OK: subtraction
+SET diff = end-time - start-time  ; OK: subtraction of two train-case vars
+
+; Identifiers - no spaces
+SET my-var = 123                ; OK: train-case identifier
+
+; Ambiguous - parse error
+SET x = a-b                     ; ERROR: ambiguous, use spaces for subtraction
+```
+
+This convention was chosen because:
+- Train-case is highly readable
+- It fits the "modern but readable" style of RUMPS
+- Common in DSLs (Lisp, Clojure, CSS, YAML, CLI tools)
+- Requiring spaces around operators improves code readability anyway
+
 ## Transaction Blocks
 
 RUMPS requires **explicit transactions** for all writes to persistent globals. Transactions provide ACID guarantees and support various conflict resolution strategies.
@@ -29,8 +65,8 @@ TRANSACTION {
 
 ```rumps
 TRANSACTION {
-  SET ^INVENTORY(item_id,"COUNT") = ^INVENTORY(item_id,"COUNT") - 1
-  SET ^ORDER(order_id,"STATUS") = "PROCESSED"
+  SET ^INVENTORY(item-id,"COUNT") = ^INVENTORY(item-id,"COUNT") - 1
+  SET ^ORDER(order-id,"STATUS") = "PROCESSED"
 } ON CONFLICT RETRY 3
 
 TRANSACTION {
@@ -41,12 +77,12 @@ TRANSACTION {
 
 TRANSACTION {
   ; Optimistic update - skip if already modified
-  SET ^CACHE(key) = computed_value
+  SET ^CACHE(key) = computed-value
 } ON CONFLICT SKIP
 
 TRANSACTION {
   ; Last-write-wins semantics
-  SET ^CONFIG(setting) = new_value
+  SET ^CONFIG(setting) = new-value
 } ON CONFLICT OVERWRITE
 ```
 
@@ -90,13 +126,13 @@ TRANSACTION WITH PRIORITY HIGH {
 TRANSACTION {
   SET ^ORDER(id,"STATUS") = "PROCESSING"
 
-  SAVEPOINT process_items
+  SAVEPOINT process-items
 
-  $COLLECT ^ORDER(id,"ITEMS")
+  COLLECT ^ORDER(id,"ITEMS")
     FOREACH item => {
       TRANSACTION {  ; Nested transaction
         SET ^INVENTORY(item.id,"COUNT") = ^INVENTORY(item.id,"COUNT") - item.qty
-      } ON CONFLICT ROLLBACK TO process_items
+      } ON CONFLICT ROLLBACK TO process-items
     }
 
   SET ^ORDER(id,"STATUS") = "COMPLETED"
@@ -106,10 +142,10 @@ TRANSACTION {
 ### Transaction Context Variables
 ```rumps
 TRANSACTION {
-  ; Built-in transaction variables
-  SET ^AUDIT($TXN.ID, "USER") = $USER
-  SET ^AUDIT($TXN.ID, "TIME") = $TXN.START_TIME
-  SET ^AUDIT($TXN.ID, "OPERATIONS") = $TXN.OP_COUNT
+  ; Built-in transaction context
+  SET ^AUDIT(Txn.id, "USER") = Session.user
+  SET ^AUDIT(Txn.id, "TIME") = Txn.start-time
+  SET ^AUDIT(Txn.id, "OPERATIONS") = Txn.op-count
 }
 ```
 
@@ -119,8 +155,8 @@ TRANSACTION {
   SET ^CRITICAL(id) = value
 } ON ERROR {
   ; Error handling block
-  LOG "Transaction failed: " + $ERROR.MESSAGE
-  ALERT admin_user
+  LOG "Transaction failed: " + Error.message
+  ALERT admin-user
 } FINALLY {
   ; Cleanup code that always runs
   RELEASE locks
@@ -226,14 +262,14 @@ SET valid = exists(user) && user.active && user.age >= 18
 #### New RUMPS Operators
 ```rumps
 ; Null coalescing - use default if null/undefined
-SET name = $GET(^PATIENT(id,"NAME")) ?? "Unknown"
+SET name = GET(^PATIENT(id, "NAME")) ?? "Unknown"
 
 ; Optional chaining - safe navigation
 SET city = patient?.address?.city ?? "N/A"
 
 ; Pipeline operator for functional composition
 ^DATA
-  |> $COLLECT
+  |> COLLECT
   |> FILTER active
   |> MAP transform
   |> OUTPUT
@@ -248,9 +284,9 @@ SET combined = [...array1, ...array2]
 
 ; Type checking
 IF value is Number {
-  SET result = value * 2
+  SET res = value * 2
 } ELSE IF value is String {
-  SET result = "Value: " + value
+  SET res = "Value: " + value
 }
 ```
 
@@ -264,15 +300,15 @@ IF ssn?3N1"-"2N1"-"4N { ; Social Security Number format }
 
 ; RUMPS regex patterns
 ; Social Security Number format
-IF email matches /^[^@]+@[^@]+\.[^@]+$/ { 
-  SET valid_email = true
+IF email matches /^[^@]+@[^@]+\.[^@]+$/ {
+  SET valid-email = true
 }
 
 ; Named capture groups
 IF date matches /(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})/ {
-  SET year = $MATCH.year
-  SET month = $MATCH.month
-  SET day = $MATCH.day
+  SET year = Match.year
+  SET month = Match.month
+  SET day = Match.day
 }
 ```
 
@@ -439,62 +475,62 @@ SET shorter = arr - 1              ; Remove by index: ["a", "c"]
 SET shorter = arr - "b"            ; Remove by value: ["a", "c"]
 ```
 
-### JSON Functions
+### JSON Namespace
 
-RUMPS provides built-in functions for JSON manipulation:
+The `Json` namespace provides functions for JSON manipulation:
 
-| Function                    | Description            | Example                              |
-|-----------------------------|------------------------|--------------------------------------|
-| `$json_type(val)`           | Get JSON type          | `$json_type(42)` → `"number"`        |
-| `$json_keys(obj)`           | Get object keys        | `$json_keys({"a":1})` → `["a"]`      |
-| `$json_values(obj)`         | Get object values      | `$json_values({"a":1})` → `[1]`      |
-| `$json_length(val)`         | Get length             | `$json_length([1,2,3])` → `3`        |
-| `$json_parse(str)`          | Parse JSON string      | `$json_parse("{\"a\":1}")` → `{"a":1}` |
-| `$json_stringify(val)`      | Convert to JSON string | `$json_stringify({"a":1})` → `"{\"a\":1}"` |
-| `$json_set(obj, path, val)` | Set value at path      | `$json_set(data, ["a"], 1)`          |
-| `$json_merge_deep(a, b)`    | Deep merge objects     | `$json_merge_deep(base, overlay)`    |
-| `$json_flatten(obj)`        | Flatten nested object  | `$json_flatten({"a":{"b":1}})` → `{"a.b":1}` |
-| `$json_unflatten(obj)`      | Unflatten object       | `$json_unflatten({"a.b":1})` → `{"a":{"b":1}}` |
+| Function                     | Description            | Example                              |
+|------------------------------|------------------------|--------------------------------------|
+| `Json.type(val)`             | Get JSON type          | `Json.type(42)` → `Json.Number`      |
+| `Json.keys(obj)`             | Get object keys        | `Json.keys({"a":1})` → `["a"]`       |
+| `Json.values(obj)`           | Get object values      | `Json.values({"a":1})` → `[1]`       |
+| `Json.length(val)`           | Get length             | `Json.length([1,2,3])` → `3`         |
+| `Json.parse(str)`            | Parse JSON string      | `Json.parse("{\"a\":1}")`            |
+| `Json.stringify(val)`        | Convert to JSON string | `Json.stringify({"a":1})`            |
+| `Json.set(obj, path, val)`   | Set value at path      | `Json.set(data, ["a"], 1)`           |
+| `Json.merge-deep(a, b)`      | Deep merge objects     | `Json.merge-deep(base, overlay)`     |
+| `Json.flatten(obj)`          | Flatten nested object  | `Json.flatten({"a":{"b":1}})`        |
+| `Json.unflatten(obj)`        | Unflatten object       | `Json.unflatten({"a.b":1})`          |
 
 #### Usage Examples
 ```rumps
 SET data = { "users": [{"name": "John"}, {"name": "Jane"}] }
 
 ; Type checking
-IF $json_type(data.users) == "array" {
+IF Json.type(data.users) == Json.Array {
   OUTPUT "Users is an array"
 }
 
 ; Get keys and values
-SET keys = $json_keys(data)                    ; ["users"]
-SET userList = $json_values(data.users.0)      ; ["John"]
+SET keys = Json.keys(data)                    ; ["users"]
+SET user-list = Json.values(data.users.0)     ; ["John"]
 
 ; Length operations
-SET count = $json_length(data.users)           ; 2
+SET count = Json.length(data.users)           ; 2
 
 ; Parse and stringify
-SET jsonStr = "{\"temp\": 72}"
-SET parsed = $json_parse(jsonStr)
-SET back = $json_stringify(parsed)
+SET json-str = "{\"temp\": 72}"
+SET parsed = Json.parse(json-str)
+SET back = Json.stringify(parsed)
 
 ; Immutable update at path
-SET updated = $json_set(data, ["users", 0, "age"], 42)
+SET updated = Json.set(data, ["users", 0, "age"], 42)
 ; Result: { "users": [{"name": "John", "age": 42}, {"name": "Jane"}] }
 
 ; Deep merge (recursive)
 SET base = { "config": { "a": 1, "b": 2 } }
 SET overlay = { "config": { "b": 3, "c": 4 } }
-SET merged = $json_merge_deep(base, overlay)
+SET merged = Json.merge-deep(base, overlay)
 ; Result: { "config": { "a": 1, "b": 3, "c": 4 } }
 ```
 
 ### JSON in Stream Operations
 
-JSON operators integrate naturally with `$COLLECT` streams:
+JSON operators integrate naturally with `COLLECT` streams:
 
 ```rumps
 ; Filter by JSON field
-$COLLECT ^PATIENTS
+COLLECT ^PATIENTS
   WHERE value ? "active"
   WHERE value..active == true
   SELECT {
@@ -505,16 +541,16 @@ $COLLECT ^PATIENTS
   OUTPUT AS JSON
 
 ; Aggregate JSON data
-$COLLECT ^ORDERS
+COLLECT ^ORDERS
   WHERE value @> {"status": "completed"}
   SELECT value..amount
-  AGGREGATE SUM INTO totalRevenue
+  AGGREGATE SUM INTO total-revenue
 
 ; Transform nested structures
-$COLLECT ^RECORDS
+COLLECT ^RECORDS
   SELECT value #>> ["metadata", "tags"]
   FILTER value != null
-  INTO tagList
+  INTO tag-list
 ```
 
 ### Operator Precedence
@@ -535,15 +571,523 @@ SET result = (data || defaults)..name    ; Merge first, then access
 SET result = data || (defaults..name)    ; Access first, then merge (different!)
 ```
 
-## Fundamental Primitive: $COLLECT
+## Procedures
 
-The `$COLLECT` primitive is the **foundation for ALL iteration** in RUMPS. It creates a lazy stream from a B-tree variable that can be transformed, filtered, and consumed.
+Procedures are named, reusable blocks of code. They can accept arguments, perform computations, and yield a result.
+
+### Basic Syntax
+
+```rumps
+PROCEDURE <name> (<args>) DO
+  <body>
+END
+```
+
+### Simple Procedures
+
+```rumps
+PROCEDURE greet (name) DO
+  OUTPUT "Hello, " + name + "!"
+END
+
+PROCEDURE add (a, b) DO
+  a + b
+END
+
+PROCEDURE square (x) DO
+  x * x
+END
+```
+
+The last expression in a procedure body is its result (no explicit `RETURN`).
+
+### Calling Procedures
+
+```rumps
+; Direct call
+greet("World")
+
+; Capture result
+SET sum = add(10, 20)
+
+; In expressions
+SET area = square(side) * 4
+
+; In pipelines
+^NUMBERS
+  |> COLLECT
+  |> MAP square
+  |> OUTPUT
+```
+
+### Multi-Statement Procedures
+
+Use `;` or newlines to separate statements. The final expression is the result:
+
+```rumps
+PROCEDURE process-patient (id) DO
+  SET name = GET(^PATIENT(id, "NAME"))
+  SET age = GET(^PATIENT(id, "AGE"))
+  SET visits = COLLECT ^VISITS
+    WHERE key[0] == id
+    COUNT
+
+  {
+    name: name,
+    age: age,
+    visit-count: visits
+  }
+END
+```
+
+### Procedures with Side Effects
+
+Procedures that perform side effects but don't need to yield a value:
+
+```rumps
+PROCEDURE log-access (user, resource) DO
+  TRANSACTION {
+    SET ^AUDIT(Time.now(), user) = resource
+  }
+END
+
+PROCEDURE notify-all (msg) DO
+  COLLECT ^USERS
+    WHERE value..active == true
+    FOREACH user => {
+      send-notification(user..id, msg)
+    }
+END
+```
+
+### Procedures in Stream Operations
+
+Procedures integrate naturally with `COLLECT` streams:
+
+```rumps
+PROCEDURE is-adult (record) DO
+  record..age >= 18
+END
+
+PROCEDURE format-name (record) DO
+  record..last + ", " + record..first
+END
+
+; Use in pipeline
+COLLECT ^PERSONS
+  FILTER is-adult
+  MAP format-name
+  OUTPUT
+```
+
+### Recursive Procedures
+
+```rumps
+PROCEDURE factorial (n) DO
+  IF n <= 1 { 1 }
+  ELSE { n * factorial(n - 1) }
+END
+
+PROCEDURE tree-sum (node-key) DO
+  SET val = GET(^TREE(node-key, "VALUE")) ?? 0
+  SET children-sum = COLLECT ^TREE(node-key, "CHILDREN")
+    MAP tree-sum
+    AGGREGATE SUM
+
+  val + children-sum
+END
+```
+
+### Closures / Anonymous Procedures (Future)
+
+For inline use in streams:
+
+```rumps
+; Potential syntax options:
+
+; Arrow syntax
+COLLECT ^DATA
+  MAP (x) => x * 2
+  FILTER (x) => x > 10
+
+; Block syntax
+COLLECT ^DATA
+  MAP { |x| x * 2 }
+  FILTER { |x| x > 10 }
+
+; DO syntax (consistent with procedures)
+COLLECT ^DATA
+  MAP DO (x) x * 2 END
+  FILTER DO (x) x > 10 END
+```
+
+**Open question**: Which anonymous procedure syntax to adopt?
+
+## Namespaces
+
+RUMPS uses **PascalCase namespaces** with dot notation for organizing functions and types.
+
+### Defining Namespaces
+
+```rumps
+NAMESPACE MyUtils DO
+  PROCEDURE double (x: Int) -> Int DO
+    x * 2
+  END
+
+  PROCEDURE triple (x: Int) -> Int DO
+    x * 3
+  END
+END
+
+; Usage
+SET result = MyUtils.double(21)  ; 42
+```
+
+### Standard Library Namespaces
+
+#### `String` — String operations
+
+| Function              | Description                    | Example                          |
+|-----------------------|--------------------------------|----------------------------------|
+| `String.length(s)`    | Get length                     | `String.length("hello")` → `5`   |
+| `String.upper(s)`     | Uppercase                      | `String.upper("hi")` → `"HI"`    |
+| `String.lower(s)`     | Lowercase                      | `String.lower("HI")` → `"hi"`    |
+| `String.trim(s)`      | Trim whitespace                | `String.trim("  x  ")` → `"x"`   |
+| `String.split(s, d)`  | Split by delimiter             | `String.split("a,b", ",")` → `["a", "b"]` |
+| `String.join(arr, d)` | Join with delimiter            | `String.join(["a", "b"], ",")` → `"a,b"` |
+| `String.slice(s, i, j)`| Substring                     | `String.slice("hello", 1, 3)` → `"el"` |
+| `String.contains(s, sub)` | Check substring            | `String.contains("hello", "ell")` → `true` |
+| `String.replace(s, old, new)` | Replace occurrences    | `String.replace("foo", "o", "a")` → `"faa"` |
+
+#### `Array` — Array operations
+
+| Function                | Description                  | Example                          |
+|-------------------------|------------------------------|----------------------------------|
+| `Array.length(arr)`     | Get length                   | `Array.length([1,2,3])` → `3`    |
+| `Array.push(arr, val)`  | Append element               | `Array.push([1,2], 3)` → `[1,2,3]` |
+| `Array.pop(arr)`        | Remove last                  | `Array.pop([1,2,3])` → `[1,2]`   |
+| `Array.head(arr)`       | First element                | `Array.head([1,2,3])` → `1`      |
+| `Array.tail(arr)`       | All but first                | `Array.tail([1,2,3])` → `[2,3]`  |
+| `Array.reverse(arr)`    | Reverse order                | `Array.reverse([1,2,3])` → `[3,2,1]` |
+| `Array.sort(arr)`       | Sort ascending               | `Array.sort([3,1,2])` → `[1,2,3]` |
+| `Array.concat(a, b)`    | Concatenate                  | `Array.concat([1], [2])` → `[1,2]` |
+| `Array.slice(arr, i, j)`| Subarray                     | `Array.slice([1,2,3,4], 1, 3)` → `[2,3]` |
+| `Array.contains(arr, v)`| Check membership             | `Array.contains([1,2,3], 2)` → `true` |
+
+#### `Map` — Map operations
+
+| Function                | Description                  | Example                          |
+|-------------------------|------------------------------|----------------------------------|
+| `Map.keys(m)`           | Get all keys                 | `Map.keys({a: 1})` → `["a"]`     |
+| `Map.values(m)`         | Get all values               | `Map.values({a: 1})` → `[1]`     |
+| `Map.has(m, k)`         | Check key exists             | `Map.has({a: 1}, "a")` → `true`  |
+| `Map.get(m, k)`         | Get value (Option)           | `Map.get({a: 1}, "a")` → `Some(1)` |
+| `Map.set(m, k, v)`      | Set key-value                | `Map.set({}, "a", 1)` → `{a: 1}` |
+| `Map.remove(m, k)`      | Remove key                   | `Map.remove({a: 1}, "a")` → `{}` |
+| `Map.merge(a, b)`       | Merge maps                   | `Map.merge({a: 1}, {b: 2})` → `{a: 1, b: 2}` |
+
+#### `Math` — Mathematical operations
+
+| Function              | Description                    | Example                          |
+|-----------------------|--------------------------------|----------------------------------|
+| `Math.abs(x)`         | Absolute value                 | `Math.abs(-5)` → `5`             |
+| `Math.min(a, b)`      | Minimum                        | `Math.min(3, 7)` → `3`           |
+| `Math.max(a, b)`      | Maximum                        | `Math.max(3, 7)` → `7`           |
+| `Math.floor(x)`       | Floor                          | `Math.floor(3.7)` → `3`          |
+| `Math.ceil(x)`        | Ceiling                        | `Math.ceil(3.2)` → `4`           |
+| `Math.round(x)`       | Round                          | `Math.round(3.5)` → `4`          |
+| `Math.sqrt(x)`        | Square root                    | `Math.sqrt(16)` → `4.0`          |
+| `Math.pow(x, y)`      | Power                          | `Math.pow(2, 3)` → `8`           |
+| `Math.log(x)`         | Natural log                    | `Math.log(2.718)` → `~1.0`       |
+| `Math.sin(x)`         | Sine                           | `Math.sin(0)` → `0.0`            |
+| `Math.cos(x)`         | Cosine                         | `Math.cos(0)` → `1.0`            |
+| `Math.random()`       | Random 0-1                     | `Math.random()` → `0.xxxxx`      |
+
+#### `Option` — Option operations
+
+| Function                | Description                  | Example                          |
+|-------------------------|------------------------------|----------------------------------|
+| `Option.some(v)`        | Wrap value                   | `Option.some(42)` → `Some(42)`   |
+| `Option.none()`         | Empty option                 | `Option.none()` → `None`         |
+| `Option.is-some(o)`     | Check if Some                | `Option.is-some(Some(1))` → `true` |
+| `Option.is-none(o)`     | Check if None                | `Option.is-none(None)` → `true`  |
+| `Option.unwrap(o)`      | Get value or panic           | `Option.unwrap(Some(1))` → `1`   |
+| `Option.unwrap-or(o, d)`| Get value or default         | `Option.unwrap-or(None, 0)` → `0`|
+| `Option.map(o, f)`      | Transform if Some            | `Option.map(Some(1), double)` → `Some(2)` |
+
+#### `Result` — Result operations
+
+| Function                  | Description                | Example                          |
+|---------------------------|----------------------------|----------------------------------|
+| `Result.ok(v)`            | Success value              | `Result.ok(42)` → `Ok(42)`       |
+| `Result.err(e)`           | Error value                | `Result.err("fail")` → `Err("fail")` |
+| `Result.is-ok(r)`         | Check if Ok                | `Result.is-ok(Ok(1))` → `true`   |
+| `Result.is-err(r)`        | Check if Err               | `Result.is-err(Err("x"))` → `true` |
+| `Result.unwrap(r)`        | Get value or panic         | `Result.unwrap(Ok(1))` → `1`     |
+| `Result.unwrap-or(r, d)`  | Get value or default       | `Result.unwrap-or(Err("x"), 0)` → `0` |
+| `Result.map(r, f)`        | Transform if Ok            | `Result.map(Ok(1), double)` → `Ok(2)` |
+| `Result.map-err(r, f)`    | Transform if Err           | `Result.map-err(Err("x"), upper)` |
+
+#### `Io` — Input/Output (Future)
+
+| Function                | Description                  |
+|-------------------------|------------------------------|
+| `Io.read-file(path)`    | Read file contents           |
+| `Io.write-file(path, s)`| Write to file                |
+| `Io.stdin()`            | Read from stdin              |
+| `Io.print(s)`           | Print to stdout              |
+| `Io.eprint(s)`          | Print to stderr              |
+
+### Namespace Imports
+
+```rumps
+; Import specific functions
+IMPORT String.{length, upper, lower}
+
+; Use without prefix
+SET len = length("hello")
+
+; Import entire namespace with alias
+IMPORT Math AS M
+
+SET x = M.sqrt(16)
+
+; Import everything (use sparingly)
+IMPORT Array.*
+
+SET arr = reverse([1, 2, 3])
+```
+
+## Types
+
+RUMPS uses **PascalCase** for type names. Types are reserved keywords.
+
+RUMPS uses **square brackets** for type parameters: `Array[Int]`, `Map[String, Int]`.
+
+### Native Types
+
+Native types are the core RUMPS types with full type tracking.
+
+#### Primitives
+
+| Type     | Description                | Examples                    |
+|----------|----------------------------|-----------------------------|
+| `Null`   | Null/undefined value       | `null`                      |
+| `Bool`   | Boolean                    | `true`, `false`             |
+| `Int`    | Integer                    | `42`, `-7`, `0`             |
+| `Float`  | Floating-point number      | `3.14`, `-0.5`, `1e10`      |
+| `String` | Text string                | `"hello"`, `""`             |
+
+#### Collections
+
+| Type            | Description                          | Examples                     |
+|-----------------|--------------------------------------|------------------------------|
+| `Array[T]`      | Typed array                          | `Array[Int]`, `Array[String]`|
+| `Map[K, V]`     | Key-value map                        | `Map[String, Int]`           |
+| `Set[T]`        | Unique value set                     | `Set[String]`                |
+| `Tuple[...]`    | Fixed heterogeneous collection       | `Tuple[Int, String, Bool]`   |
+
+#### Wrappers
+
+| Type            | Description                          | Examples                     |
+|-----------------|--------------------------------------|------------------------------|
+| `Option[T]`     | Nullable/optional value              | `Option[String]`             |
+| `Result[T, E]`  | Success or error                     | `Result[Int, String]`        |
+
+#### Special
+
+| Type            | Description                          | Examples                     |
+|-----------------|--------------------------------------|------------------------------|
+| `Stream[T]`     | Lazy stream of `T`                   | `Stream[Key]`                |
+| `Proc[A, R]`    | Procedure `A -> R`                   | `Proc[Int, Int]`             |
+| `Key`           | Subscript key                        | `Key`                        |
+| `Global`        | Global variable reference            | `Global`                     |
+| `Local`         | Local variable reference             | `Local`                      |
+| `Type`          | Type value (reflection)              | `Type`                       |
+
+#### Abstract
+
+| Type     | Description                |
+|----------|----------------------------|
+| `Number` | `Int` or `Float`           |
+| `Any`    | Any native type            |
+| `Never`  | Bottom type (no values)    |
+
+### JSON Types
+
+JSON types represent dynamic data from parsing or external sources. They mirror JSON's structure but are distinct from native types.
+
+| Type          | Description                          | Native Equivalent            |
+|---------------|--------------------------------------|------------------------------|
+| `Json`        | Any JSON value                       | `Any`                        |
+| `Json.Null`   | JSON null                            | `Null`                       |
+| `Json.Bool`   | JSON boolean                         | `Bool`                       |
+| `Json.Number` | JSON number (no int/float distinction)| `Number`                    |
+| `Json.String` | JSON string                          | `String`                     |
+| `Json.Array`  | JSON array (heterogeneous)           | `Array[Json]`                |
+| `Json.Object` | JSON object (string keys)            | `Map[String, Json]`          |
+
+### Native vs JSON
+
+```rumps
+; Native types - from RUMPS operations, fully typed
+SET keys: Array[Key] = COLLECT ^DATA SELECT key INTO
+SET counts: Map[String, Int] = compute-histogram(data)
+
+; JSON types - from parsing, dynamically typed
+SET json: Json = Json.parse(input-str)
+SET arr: Json.Array = Json.parse("[1, 2, 3]")
+
+; Convert JSON to native (validated at runtime)
+SET nums: Array[Int] = arr as Array[Int]
+
+; Convert native to JSON
+SET out: Json = nums as Json
+```
+
+**Key differences**:
+- Native `Array[Int]` guarantees all elements are `Int`
+- `Json.Array` can contain mixed types (`[1, "hello", true]`)
+- Native `Map[K, V]` has typed keys; `Json.Object` always has `String` keys
+- JSON numbers don't distinguish `Int` vs `Float`
+
+### Type Annotations
+
+Type annotations are optional but can be added to procedure arguments and return types:
+
+```rumps
+; Untyped (inferred)
+PROCEDURE add (a, b) DO
+  a + b
+END
+
+; Typed arguments
+PROCEDURE add (a: Int, b: Int) DO
+  a + b
+END
+
+; Typed arguments and return
+PROCEDURE add (a: Int, b: Int) -> Int DO
+  a + b
+END
+
+; Complex types
+PROCEDURE process (data: Json.Object) -> Json.Array DO
+  Json.values(data)
+END
+```
+
+### Type Checking
+
+Runtime type checking with `is`:
+
+```rumps
+IF value is String {
+  OUTPUT "It's a string: " + value
+} ELSE IF value is Number {
+  OUTPUT "It's a number: " + String.from(value)
+} ELSE IF value is Null {
+  OUTPUT "It's null"
+}
+```
+
+Get type as a value with `Type.of`:
+
+```rumps
+SET t = Type.of(value)
+
+IF t == String { ... }
+IF t == Int OR t == Float { ... }
+```
+
+### Type Coercion
+
+Explicit conversion via type namespaces:
+
+| Function          | Description              | Example                     |
+|-------------------|--------------------------|-----------------------------|
+| `Int.from(val)`   | Convert to Int           | `Int.from("42")` → `42`     |
+| `Float.from(val)` | Convert to Float         | `Float.from("3.14")` → `3.14` |
+| `String.from(val)`| Convert to String        | `String.from(42)` → `"42"`  |
+| `Bool.from(val)`  | Convert to Bool          | `Bool.from(1)` → `true`     |
+| `Array.from(val)` | Wrap in Array            | `Array.from(1)` → `[1]`     |
+
+Or use the `as` keyword for casting:
+
+```rumps
+SET n = "42" as Int
+SET s = 3.14 as String
+```
+
+### Parameterized Type Examples
+
+```rumps
+; Array of specific type
+PROCEDURE sum (nums: Array[Int]) -> Int DO
+  nums |> AGGREGATE SUM
+END
+
+; Optional/nullable return
+PROCEDURE find (id: Int) -> Option[String] DO
+  GET(^DATA(id, "NAME"))
+END
+
+; Result type for fallible operations
+PROCEDURE parse-int (s: String) -> Result[Int, String] DO
+  ; returns Ok[Int] or Err[String]
+END
+
+; Stream processing with known element type
+PROCEDURE get-names () -> Stream[String] DO
+  COLLECT ^PATIENTS
+    SELECT value..name
+END
+
+; Procedure as first-class value
+PROCEDURE apply-twice (f: Proc[Int, Int], x: Int) -> Int DO
+  f(f(x))
+END
+
+; Map type
+PROCEDURE word-count (words: Array[String]) -> Map[String, Int] DO
+  ; ...
+END
+```
+
+### Structural Object Types (Future)
+
+For objects with known shape:
+
+```rumps
+; Inline structural type
+PROCEDURE process (patient: {name: String, age: Int}) DO
+  OUTPUT patient..name
+END
+
+; Type alias
+TYPE Patient = {
+  name: String,
+  age: Int,
+  active: Bool
+}
+
+PROCEDURE admit (p: Patient) DO
+  ; ...
+END
+```
+
+**Open question**: How much static type checking to enforce at parse/compile time vs runtime?
+
+## Fundamental Primitive: COLLECT
+
+The `COLLECT` primitive is the **foundation for ALL iteration** in RUMPS. It creates a lazy stream from a B-tree variable that can be transformed, filtered, and consumed.
 
 ### Basic Syntax Forms
 
 #### 1. Block Form
 ```rumps
-$COLLECT ^DATA
+COLLECT ^DATA
   WHERE condition
   SELECT transformation
   ACTION
@@ -552,7 +1096,7 @@ $COLLECT ^DATA
 #### 2. Pipeline Form
 ```rumps
 ^DATA
-  |> $COLLECT WHERE condition
+  |> COLLECT WHERE condition
   |> SELECT transformation
   |> ACTION
 ```
@@ -567,21 +1111,21 @@ All operations are composable and can be chained together. Operations are **lazy
 
 #### WHERE - Filter by predicate
 ```rumps
-$COLLECT ^PATIENT
+COLLECT ^PATIENT
   WHERE key[0] > 100 AND key[0] < 200
-  WHERE has_value  ; Multiple WHERE clauses are ANDed together
+  WHERE has-value  ; Multiple WHERE clauses are ANDed together
 ```
 
 #### WHILE - Take while condition is true (early termination)
 ```rumps
-$COLLECT ^LOG
+COLLECT ^LOG
   WHILE key[0] <= "2025-01-01"  ; Stops at first false condition
 ```
 
 #### FILTER - Post-selection filtering
 ```rumps
-$COLLECT ^PATIENT
-  SELECT $GET(^PATIENT(key[0],"NAME"))
+COLLECT ^PATIENT
+  SELECT GET(^PATIENT(key[0],"NAME"))
   FILTER value.contains("Smith")
 ```
 
@@ -590,46 +1134,46 @@ $COLLECT ^PATIENT
 #### SELECT - Transform each element
 ```rumps
 ; Simple selection
-$COLLECT ^DATA
+COLLECT ^DATA
   SELECT value
 
 ; Field extraction
-$COLLECT ^PATIENT
-  SELECT $GET(^PATIENT(key[0],"NAME"))
+COLLECT ^PATIENT
+  SELECT GET(^PATIENT(key[0],"NAME"))
 
 ; Object construction
-$COLLECT ^PATIENT
+COLLECT ^PATIENT
   SELECT {
     id: key[0],
-    name: $GET(^PATIENT(key[0],"NAME")),
-    dob: $GET(^PATIENT(key[0],"DOB"))
+    name: GET(^PATIENT(key[0],"NAME")),
+    dob: GET(^PATIENT(key[0],"DOB"))
   }
 ```
 
 #### MAP - Alias for SELECT (for familiarity)
 ```rumps
-$COLLECT ^DATA
-  MAP fn_process_record
+COLLECT ^DATA
+  MAP process-record
 ```
 
 ### Limiting Operations
 
 #### TAKE - Take first N elements
 ```rumps
-$COLLECT ^LOG
+COLLECT ^LOG
   TAKE 100
 ```
 
 #### SKIP - Skip first N elements
 ```rumps
-$COLLECT ^LOG
+COLLECT ^LOG
   SKIP 100
   TAKE 50  ; Get items 101-150
 ```
 
 #### TAKE_WHILE / SKIP_WHILE - Conditional limiting
 ```rumps
-$COLLECT ^DATA
+COLLECT ^DATA
   SKIP_WHILE value < 0
   TAKE_WHILE value < 1000
 ```
@@ -638,50 +1182,50 @@ $COLLECT ^DATA
 
 #### AGGREGATE - Multiple aggregations at once
 ```rumps
-$COLLECT ^SALES
-  SELECT $GET(^SALES(key[0],"AMOUNT"))
+COLLECT ^SALES
+  SELECT GET(^SALES(key[0],"AMOUNT"))
   AGGREGATE
-    COUNT INTO total_sales
-    SUM INTO total_revenue
-    AVG INTO average_sale
-    MIN INTO smallest_sale
-    MAX INTO largest_sale
+    COUNT INTO total-sales
+    SUM INTO total-revenue
+    AVG INTO avg-sale
+    MIN INTO min-sale
+    MAX INTO max-sale
 ```
 
 #### COUNT - Count elements
 ```rumps
-$COLLECT ^PATIENT
-  COUNT INTO patient_count
+COLLECT ^PATIENT
+  COUNT INTO patient-count
 ```
 
 #### REDUCE - Custom reduction
 ```rumps
-$COLLECT ^DATA
-  REDUCE WITH fn_custom_reducer INITIAL 0 INTO result
+COLLECT ^DATA
+  REDUCE WITH custom-reducer INITIAL 0 INTO result
 ```
 
 ### Grouping Operations
 
 #### GROUP BY - Group elements by key
 ```rumps
-$COLLECT ^VISITS
+COLLECT ^VISITS
   WHERE key[1] == "2025"
   GROUP BY key[0]  ; Group by patient ID
-  AGGREGATE COUNT INTO visit_counts
+  AGGREGATE COUNT INTO visit-counts
 ```
 
 ### Ordering Operations
 
 #### SORT BY - Sort stream
 ```rumps
-$COLLECT ^PATIENT
-  SELECT { id: key[0], name: $GET(^PATIENT(key[0],"NAME")) }
+COLLECT ^PATIENT
+  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
   SORT BY name ASC
 ```
 
 #### REVERSE - Reverse stream order
 ```rumps
-$COLLECT ^DATA
+COLLECT ^DATA
   REVERSE
 ```
 
@@ -689,7 +1233,7 @@ $COLLECT ^DATA
 
 #### JOIN - Join with another variable
 ```rumps
-$COLLECT ^ORDER
+COLLECT ^ORDER
   JOIN ^CUSTOMER ON key[0] == ^CUSTOMER.key[0]
   SELECT { order: value, customer: ^CUSTOMER.value }
 ```
@@ -698,9 +1242,9 @@ $COLLECT ^ORDER
 
 #### PARALLEL - Process in parallel
 ```rumps
-$COLLECT ^RECORDS
+COLLECT ^RECORDS
   PARALLEL 10  ; Process up to 10 records concurrently
-  MAP expensive_operation
+  MAP expensive-op
 ```
 
 ## Terminal Operations
@@ -709,11 +1253,11 @@ Terminal operations consume the stream and produce a result.
 
 ### INTO - Collect into variable
 ```rumps
-$COLLECT ^DATA
+COLLECT ^DATA
   SELECT value
   INTO results  ; Local variable
 
-$COLLECT ^DATA
+COLLECT ^DATA
   SELECT value
   INTO ^PROCESSED  ; Global variable (requires transaction)
 ```
@@ -724,78 +1268,78 @@ The `OUTPUT` operation in RUMPS supports multiple formatting options for flexibl
 
 #### Simple Output
 ```rumps
-$COLLECT ^DATA
+COLLECT ^DATA
   OUTPUT  ; Each item on new line
 ```
 
 #### Template Output
 ```rumps
-$COLLECT ^PATIENT
-  SELECT { id: key[0], name: $GET(^PATIENT(key[0],"NAME")) }
+COLLECT ^PATIENT
+  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
   OUTPUT "Patient #{id}: {name}"
 ```
 
 #### Formatted Output
 ```rumps
 ; JSON format
-$COLLECT ^CONFIG
+COLLECT ^CONFIG
   OUTPUT AS JSON
 
 ; Table format
-$COLLECT ^STATS
+COLLECT ^STATS
   OUTPUT AS TABLE HEADERS ["Date", "Count", "Average"]
 
 ; CSV format
-$COLLECT ^DATA
+COLLECT ^DATA
   OUTPUT WITH SEPARATOR ","
 
 ; XML format (future)
-$COLLECT ^DATA
+COLLECT ^DATA
   OUTPUT AS XML ROOT "records" ELEMENT "record"
 ```
 
 #### Output Targets
 ```rumps
 ; Standard error
-$COLLECT ^ERRORS
+COLLECT ^ERRORS
   OUTPUT TO ERROR
 
 ; File output (future)
-$COLLECT ^DATA
+COLLECT ^DATA
   OUTPUT TO FILE "/tmp/output.txt"
 
 ; Network output (future)
-$COLLECT ^METRICS
+COLLECT ^METRICS
   OUTPUT TO HTTP "https://metrics.example.com/api"
 ```
 
 #### Extended Output Examples
 ```rumps
 ; Simple output - each item on a new line
-$COLLECT ^DATA
+COLLECT ^DATA
   OUTPUT
 
 ; Template-based formatting with field interpolation
-$COLLECT ^PATIENT
-  SELECT { id: key[0], name: $GET(^PATIENT(key[0],"NAME")) }
+COLLECT ^PATIENT
+  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
   OUTPUT "ID: {id} - Name: {name}"
 
 ; JSON output for structured data
-$COLLECT ^CONFIG
+COLLECT ^CONFIG
   SELECT { key: key, value: value }
   OUTPUT AS JSON
 
 ; Table formatting for reports
-$COLLECT ^STATS
+COLLECT ^STATS
   SELECT { date: key[0], total: value.sum, avg: value.avg }
   OUTPUT AS TABLE HEADERS ["Date", "Total", "Average"]
 
 ; Custom separators and formatting
-$COLLECT ^LIST
+COLLECT ^LIST
   OUTPUT WITH SEPARATOR ", "  ; Output as comma-separated values
 
 ; Conditional output
-$COLLECT ^ERRORS
+COLLECT ^ERRORS
   WHERE value.severity == "HIGH"
   OUTPUT TO ERROR  ; Write to stderr instead of stdout
 ```
@@ -804,8 +1348,8 @@ This declarative output approach eliminates the need for manual formatting loops
 
 ### FOREACH - Side effects
 ```rumps
-$COLLECT ^TASKS
-  FOREACH fn_process_task  ; Execute function for each element
+COLLECT ^TASKS
+  FOREACH process-task  ; Execute function for each element
 ```
 
 ## Complete Examples
@@ -821,34 +1365,34 @@ $COLLECT ^TASKS
 ; . . WRITE "Patient ",PID," last visited on ",LASTVISIT,!
 
 ; RUMPS declarative approach
-$COLLECT ^PATIENT
-  WHERE has_descendants
+COLLECT ^PATIENT
+  WHERE has-descendants
   SELECT {
     id: key[0],
-    last_visit: $GET(^PATIENT(key[0],"LASTVISIT"))
+    last-visit: GET(^PATIENT(key[0],"LASTVISIT"))
   }
-  FILTER last_visit > 20250101
-  OUTPUT "Patient {id} last visited on {last_visit}"
+  FILTER last-visit > 20250101
+  OUTPUT "Patient {id} last visited on {last-visit}"
 
 ; Get count
-$COLLECT ^PATIENT
-  WHERE has_descendants
-  FILTER $GET(^PATIENT(key[0],"LASTVISIT")) > 20250101
-  COUNT INTO recent_count
+COLLECT ^PATIENT
+  WHERE has-descendants
+  FILTER GET(^PATIENT(key[0],"LASTVISIT")) > 20250101
+  COUNT INTO recent-count
 ```
 
 ### Example 2: Top 10 customers by order value
 ```rumps
 ^ORDERS
-  |> $COLLECT
-  |> GROUP BY $GET(^ORDERS(key[0],"CUSTOMER_ID"))
-  |> AGGREGATE SUM $GET(^ORDERS(key[0],"AMOUNT")) INTO total
+  |> COLLECT
+  |> GROUP BY GET(^ORDERS(key[0],"CUSTOMER-ID"))
+  |> AGGREGATE SUM GET(^ORDERS(key[0],"AMOUNT")) INTO total
   |> SORT BY total DESC
   |> TAKE 10
-  |> JOIN ^CUSTOMER ON group_key
+  |> JOIN ^CUSTOMER ON group-key
   |> SELECT {
-       customer_name: $GET(^CUSTOMER(group_key,"NAME")),
-       total_orders: total
+       customer-name: GET(^CUSTOMER(group-key,"NAME")),
+       total-orders: total
      }
   |> OUTPUT AS TABLE HEADERS ["Customer", "Total Orders"]
 ```
@@ -857,20 +1401,20 @@ $COLLECT ^PATIENT
 ```rumps
 ; Extract, transform, and load data
 TRANSACTION {
-  $COLLECT ^RAW_DATA
-    WHERE key[0] >= last_processed_id
+  COLLECT ^RAW-DATA
+    WHERE key[0] >= last-processed-id
     PARALLEL 5
-    MAP fn_validate_record
-    FILTER is_valid
-    MAP fn_transform_record
+    MAP validate-record
+    FILTER is-valid
+    MAP transform-record
     SELECT {
-      id: generate_id(),
-      data: transformed_value,
-      processed_at: $NOW
+      id: generate-id(),
+      data: transformed-val,
+      processed-at: Time.now()
     }
-    INTO ^PROCESSED_DATA
+    INTO ^PROCESSED-DATA
 
-  SET last_processed_id = $LAST(^RAW_DATA)
+  SET last-processed-id = LAST(^RAW-DATA)
 }
 ```
 
@@ -880,7 +1424,7 @@ TRANSACTION {
 
 | Pattern | Traditional MUMPS | RUMPS DSL | Benefits |
 |---------|------------------|-----------|----------|
-| Simple iteration | `FOR SET I=$O(^D(I)) Q:I="" DO` | `$COLLECT ^D` | Cleaner syntax |
+| Simple iteration | `FOR SET I=$O(^D(I)) Q:I="" DO` | `COLLECT ^D` | Cleaner syntax |
 | Filtering | `IF` statements in loop body | `WHERE` / `FILTER` clauses | Declarative intent |
 | Counting | Manual counter variable | `COUNT INTO` | No state management |
 | First N items | Counter with `QUIT` | `TAKE n` | Clear intent |
@@ -895,17 +1439,17 @@ The following table shows common MUMPS iteration patterns and their conceptual R
 
 | Traditional MUMPS (Imperative) | Future RUMPS DSL (Declarative) | Description |
 |--------------------------------|--------------------------------|-------------|
-| ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. WRITE ID,!` | ```rumps```<br/>`$COLLECT ^DATA`<br/>`  SELECT key[0]`<br/>`  OUTPUT` | Iterate through all top-level keys |
-| ```mumps```<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`WRITE "Total: ",CNT,!` | ```rumps```<br/>`$COLLECT ^PAT`<br/>`  COUNT INTO total`<br/>`WRITE "Total: ",total,!` | Count entries |
-| ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. IF ID>100 QUIT`<br/>`. ; Process ID` | ```rumps```<br/>`$COLLECT ^DATA`<br/>`  WHILE key[0] <= 100`<br/>`  ; Process automatically` | Early termination with condition |
-| ```mumps```<br/>`SET I=0`<br/>`FOR  SET ID=$ORDER(^LOG(ID)) QUIT:ID=""  DO`<br/>`. SET I=I+1`<br/>`. IF I>10 QUIT`<br/>`. ; Process first 10` | ```rumps```<br/>`$COLLECT ^LOG`<br/>`  TAKE 10`<br/>`  ; Process automatically` | Take first N entries |
-| ```mumps```<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. IF NAME["Smith" DO`<br/>`. . ; Process Smith patients` | ```rumps```<br/>`$COLLECT ^PAT`<br/>`  WHERE has_descendants`<br/>`  SELECT $GET(^PAT(key[0],"NAME"))`<br/>`  FILTER value.contains("Smith")`<br/>`  ; Process automatically` | Filter with condition |
-| ```mumps```<br/>`KILL RESULTS`<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`. SET RESULTS(CNT)=$GET(^DATA(ID,"VAL"))` | ```rumps```<br/>`$COLLECT ^DATA`<br/>`  SELECT $GET(^DATA(key[0],"VAL"))`<br/>`  INTO RESULTS` | Collect into array |
-| ```mumps```<br/>`FOR  SET D=$ORDER(^LOG(2025,D)) QUIT:D=""  DO`<br/>`. FOR  SET T=$ORDER(^LOG(2025,D,T)) QUIT:T=""  DO`<br/>`. . ; Process each timestamp` | ```rumps```<br/>`$COLLECT ^LOG`<br/>`  WHERE key[0] == 2025 AND key.len == 3`<br/>`  ; All 2025 timestamps, flat` | Nested iteration (flattened) |
-| ```mumps```<br/>`; Complex aggregation`<br/>`SET TOT=0,CNT=0`<br/>`FOR  SET ID=$ORDER(^SALE(ID)) QUIT:ID=""  DO`<br/>`. SET AMT=$GET(^SALE(ID,"AMOUNT"))`<br/>`. SET TOT=TOT+AMT,CNT=CNT+1`<br/>`SET AVG=TOT/CNT` | ```rumps```<br/>`$COLLECT ^SALE`<br/>`  SELECT $GET(^SALE(key[0],"AMOUNT"))`<br/>`  AGGREGATE`<br/>`    SUM INTO total`<br/>`    COUNT INTO count`<br/>`    AVG INTO average` | Aggregation operations |
-| ```mumps```<br/>`; Display all patient info`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. SET DOB=$GET(^PAT(ID,"DOB"))`<br/>`. WRITE "Patient ",ID,": ",NAME`<br/>`. WRITE " (DOB: ",DOB,")",!` | ```rumps```<br/>`$COLLECT ^PAT`<br/>`  SELECT {`<br/>`    id: key[0],`<br/>`    name: $GET(^PAT(key[0],"NAME")),`<br/>`    dob: $GET(^PAT(key[0],"DOB"))`<br/>`  }`<br/>`  OUTPUT "Patient {id}: {name} (DOB: {dob})"` | Console output with formatting |
+| ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. WRITE ID,!` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  SELECT key[0]`<br/>`  OUTPUT` | Iterate through all top-level keys |
+| ```mumps```<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`WRITE "Total: ",CNT,!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  COUNT INTO tot`<br/>`WRITE "Total: ",tot,!` | Count entries |
+| ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. IF ID>100 QUIT`<br/>`. ; Process ID` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  WHILE key[0] <= 100`<br/>`  ; Process automatically` | Early termination with condition |
+| ```mumps```<br/>`SET I=0`<br/>`FOR  SET ID=$ORDER(^LOG(ID)) QUIT:ID=""  DO`<br/>`. SET I=I+1`<br/>`. IF I>10 QUIT`<br/>`. ; Process first 10` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  TAKE 10`<br/>`  ; Process automatically` | Take first N entries |
+| ```mumps```<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. IF NAME["Smith" DO`<br/>`. . ; Process Smith patients` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  WHERE has-descendants`<br/>`  SELECT GET(^PAT(key[0],"NAME"))`<br/>`  FILTER value.contains("Smith")`<br/>`  ; Process automatically` | Filter with condition |
+| ```mumps```<br/>`KILL RESULTS`<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`. SET RESULTS(CNT)=$GET(^DATA(ID,"VAL"))` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  SELECT GET(^DATA(key[0],"VAL"))`<br/>`  INTO RESULTS` | Collect into array |
+| ```mumps```<br/>`FOR  SET D=$ORDER(^LOG(2025,D)) QUIT:D=""  DO`<br/>`. FOR  SET T=$ORDER(^LOG(2025,D,T)) QUIT:T=""  DO`<br/>`. . ; Process each timestamp` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  WHERE key[0] == 2025 AND key.len == 3`<br/>`  ; All 2025 timestamps, flat` | Nested iteration (flattened) |
+| ```mumps```<br/>`; Complex aggregation`<br/>`SET TOT=0,CNT=0`<br/>`FOR  SET ID=$ORDER(^SALE(ID)) QUIT:ID=""  DO`<br/>`. SET AMT=$GET(^SALE(ID,"AMOUNT"))`<br/>`. SET TOT=TOT+AMT,CNT=CNT+1`<br/>`SET AVG=TOT/CNT` | ```rumps```<br/>`COLLECT ^SALE`<br/>`  SELECT GET(^SALE(key[0],"AMOUNT"))`<br/>`  AGGREGATE`<br/>`    SUM INTO total`<br/>`    COUNT INTO count`<br/>`    AVG INTO average` | Aggregation operations |
+| ```mumps```<br/>`; Display all patient info`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. SET DOB=$GET(^PAT(ID,"DOB"))`<br/>`. WRITE "Patient ",ID,": ",NAME`<br/>`. WRITE " (DOB: ",DOB,")",!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  SELECT {`<br/>`    id: key[0],`<br/>`    name: GET(^PAT(key[0],"NAME")),`<br/>`    dob: GET(^PAT(key[0],"DOB"))`<br/>`  }`<br/>`  OUTPUT "Patient {id}: {name} (DOB: {dob})"` | Console output with formatting |
 
-### Key Advantages of RUMPS `$COLLECT` Approach
+### Key Advantages of RUMPS `COLLECT` Approach
 
 1. **No Manual State**: No need for iteration variables, counters, or manual loop control
 2. **Declarative Intent**: The code expresses *what* you want, not *how* to iterate
@@ -917,7 +1461,7 @@ The following table shows common MUMPS iteration patterns and their conceptual R
 ## Implementation Phases
 
 ### Phase 1: Core Stream Operations (Storage Layer)
-- [ ] Implement `$COLLECT` primitive in Rust (see `persistence.md` Phase 2.7)
+- [ ] Implement `COLLECT` primitive in Rust (see `persistence.md` Phase 2.7)
 - [ ] Basic filtering: WHERE, FILTER
 - [ ] Basic transformation: SELECT
 - [ ] Basic limiting: TAKE, SKIP
@@ -933,15 +1477,20 @@ The following table shows common MUMPS iteration patterns and their conceptual R
 - [ ] Design formal grammar (EBNF)
 - [ ] Implement lexer/tokenizer
 - [ ] Implement parser (recursive descent or parser combinator)
+  - Or just use `chumsky`? Worth investigating
 - [ ] Build AST representation
 - [ ] Implement interpreter that calls Rust storage layer
 
 ### Phase 4: Output Formatting
+- [ ] Needs to support stdout/stderr writes
 - [ ] Template string interpolation
 - [ ] JSON output formatter
 - [ ] Table output formatter
 - [ ] CSV output formatter
 - [ ] Custom separators
+- [ ] Some other ideas:
+  - To file
+  - To remote (e.g. `OUTPUT TO HTTP "https://metrics.example.com/api"`)
 
 ### Phase 5: Parallel and Async
 - [ ] PARALLEL operation implementation
@@ -983,7 +1532,7 @@ These tasks should be completed after the storage engine implementation is finis
 ### Formal Specification
 - [ ] **Design formal EBNF grammar for RUMPS DSL**
   - Complete lexical structure (tokens, keywords, operators)
-  - Expression grammar (including $COLLECT streams)
+  - Expression grammar (including COLLECT streams)
   - Statement grammar (assignments, transactions, control flow)
   - Type annotations (if explicit typing is supported)
   - Comments and documentation syntax
@@ -994,10 +1543,10 @@ These tasks should be completed after the storage engine implementation is finis
   - Concurrency guarantees
 
 ### Parser Implementation
-- [ ] **Create prototype parser for basic $COLLECT operations**
+- [ ] **Create prototype parser for basic COLLECT operations**
   - Choose parsing approach (recursive descent, parser combinator, or parser generator)
   - Implement tokenizer/lexer
-  - Parse basic $COLLECT with WHERE and SELECT
+  - Parse basic COLLECT with WHERE and SELECT
   - Generate initial AST representation
   - Add error recovery and helpful error messages
 - [ ] **Implement full parser**
