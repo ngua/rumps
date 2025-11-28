@@ -458,7 +458,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [x] Define WAL record types (`WalRecord` enum):
   - `TxnBegin { txn_id }` / `TxnCommit { txn_id }` / `TxnAbort { txn_id }`
   - `Set { txn_id, name, key, old, new }` - with old `NodeData` for undo
-  - `Kill { txn_id, name, key, subtree }` - subtree as `Vec<(Key, NodeData)>` for undo
+  - `KillEntry { txn_id, name, key, subtree }` - single entry of subtree as `NodeData` for undo
   - `Checkpoint { seq }` - monotonic sequence number
 - [ ] Define WAL file format:
   - Record header (type, length, transaction ID, checksum)

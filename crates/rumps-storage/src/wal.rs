@@ -3,6 +3,27 @@
 //! The WAL ensures durability by logging all modifications before they are
 //! applied to the main data file. On crash recovery, uncommitted transactions
 //! can be rolled back and committed transactions can be replayed.
+//!
+//! # Design: Incremental Kill Records
+//!
+//! When a KILL operation removes a subtree (e.g., `KILL ^PATIENT(123)` which
+//! has children `NAME`, `DOB`, `ADDR`), we emit one `KillEntry` record per
+//! deleted key rather than storing the entire subtree in a single record.
+//!
+//! This keeps each WAL record bounded in size, at the cost of a longer WAL
+//! for large subtree deletions.
+//!
+//! ## Alternative approaches (not implemented):
+//!
+//! 1. **Inline subtree**: Store `Vec<(Key, NodeData)>` in a single record.
+//!    Simpler but unbounded record size for large subtrees.
+//!
+//! 2. **Reference-based undo**: Store references to data file locations
+//!    instead of actual data. Bounded size but complicates recovery (must
+//!    read both WAL and data file).
+//!
+//! 3. **Hybrid**: Small subtrees inline, large ones split or use references.
+//!    More complex, may be worth revisiting if performance requires it.
 
 use rumps_types::{global, key, Key, Name, Value};
 use serde::{Deserialize, Serialize};
@@ -13,7 +34,7 @@ use crate::transaction::TransactionId;
 /// A record in the Write-Ahead Log.
 ///
 /// Each record represents either a transaction lifecycle event (begin, commit,
-/// abort) or a data modification operation (set, kill).
+/// abort) or a single data modification operation (set, kill entry).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum WalRecord {
     /// Transaction has started.
@@ -42,7 +63,7 @@ pub(crate) enum WalRecord {
     Set {
         /// The transaction performing this operation.
         txn_id: TransactionId,
-        /// The variable name (global or local).
+        /// The variable name (global only; locals aren't persisted).
         name: Name,
         /// The key path.
         key: Key,
@@ -52,19 +73,20 @@ pub(crate) enum WalRecord {
         new: NodeData,
     },
 
-    /// A KILL operation within a transaction.
+    /// A single entry deletion within a KILL operation.
     ///
-    /// Kills remove an entire subtree rooted at the given key.
-    Kill {
+    /// When killing a subtree, one `KillEntry` is emitted per deleted key.
+    /// This keeps each record bounded in size. To undo a KILL, replay all
+    /// `KillEntry` records for that transaction by re-inserting their data.
+    KillEntry {
         /// The transaction performing this operation.
         txn_id: TransactionId,
-        /// The variable name (global or local).
+        /// The variable name (global only; locals aren't persisted).
         name: Name,
-        /// The key path of the subtree root.
+        /// The key path of the deleted entry.
         key: Key,
-        /// Serialized subtree data for undo on abort.
-        /// Contains all key-value pairs that were deleted.
-        subtree: Vec<(Key, NodeData)>,
+        /// The deleted data (for undo on abort).
+        data: NodeData,
     },
 
     /// A checkpoint marker.
@@ -142,18 +164,12 @@ mod tests {
     }
 
     #[test]
-    fn kill_roundtrip() {
-        let rec = WalRecord::Kill {
+    fn kill_entry_roundtrip() {
+        let rec = WalRecord::KillEntry {
             txn_id: 3.into(),
             name: global!("PATIENT"),
-            key: key![123],
-            subtree: vec![
-                (key![123, "NAME"], NodeData::new(Some("John".into()), false)),
-                (
-                    key![123, "DOB"],
-                    NodeData::new(Some("1990-01-01".into()), false),
-                ),
-            ],
+            key: key![123, "NAME"],
+            data: NodeData::new(Some("John".into()), false),
         };
         let bytes = bincode::serialize(&rec).expect("serialize");
         let decoded: WalRecord =
@@ -192,5 +208,53 @@ mod tests {
                 Ok::<_, Box<bincode::ErrorKind>>(())
             })
             .expect("roundtrip");
+    }
+
+    #[test]
+    fn encoding_sizes() {
+        // Check bincode encoding overhead for each variant
+        let txn_begin = WalRecord::TxnBegin { txn_id: 1.into() };
+        let txn_commit = WalRecord::TxnCommit { txn_id: 1.into() };
+        let checkpoint = WalRecord::Checkpoint { seq: 1 };
+        let set_minimal = WalRecord::Set {
+            txn_id: 1.into(),
+            name: global!("X"),
+            key: key![1],
+            old: None,
+            new: NodeData::new(Some(1i64.into()), false),
+        };
+        let kill_minimal = WalRecord::KillEntry {
+            txn_id: 1.into(),
+            name: global!("X"),
+            key: key![1],
+            data: NodeData::new(Some(1i64.into()), false),
+        };
+
+        let sizes = [
+            ("TxnBegin", bincode::serialize(&txn_begin).unwrap().len()),
+            ("TxnCommit", bincode::serialize(&txn_commit).unwrap().len()),
+            ("Checkpoint", bincode::serialize(&checkpoint).unwrap().len()),
+            (
+                "Set (minimal)",
+                bincode::serialize(&set_minimal).unwrap().len(),
+            ),
+            (
+                "KillEntry (minimal)",
+                bincode::serialize(&kill_minimal).unwrap().len(),
+            ),
+        ];
+
+        // Print sizes for inspection (visible with --nocapture)
+        sizes.iter().for_each(|(name, size)| {
+            eprintln!("{name}: {size} bytes");
+        });
+
+        // Sanity checks - these should be reasonably small
+        assert!(sizes[0].1 <= 16, "TxnBegin too large: {}", sizes[0].1);
+        assert!(sizes[1].1 <= 16, "TxnCommit too large: {}", sizes[1].1);
+        assert!(sizes[2].1 <= 16, "Checkpoint too large: {}", sizes[2].1);
+        // Set/KillEntry have more fields, but minimal versions should be bounded
+        assert!(sizes[3].1 <= 64, "Set too large: {}", sizes[3].1);
+        assert!(sizes[4].1 <= 64, "KillEntry too large: {}", sizes[4].1);
     }
 }
