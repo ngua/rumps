@@ -25,7 +25,14 @@
 //! 3. **Hybrid**: Small subtrees inline, large ones split or use references.
 //!    More complex, may be worth revisiting if performance requires it.
 
-use rumps_types::{global, key, Key, Name, Value};
+mod format;
+
+#[allow(unused_imports)] // Will be used by WalWriter/WalReader
+pub(crate) use format::{
+    FileHeader, RecordHeader, FILE_HEADER_SIZE, RECORD_HEADER_SIZE, WAL_MAGIC,
+    WAL_VERSION,
+};
+use rumps_types::{Key, Name, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::node::NodeData;
@@ -103,7 +110,10 @@ pub(crate) enum WalRecord {
 // ephemeral. I.e. we can't (intentionally) round-trip a local, so everything
 // below is a global (which is what will really be written)
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use rumps_types::{global, key};
+
     use super::*;
 
     #[test]

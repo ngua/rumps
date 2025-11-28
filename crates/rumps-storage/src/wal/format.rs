@@ -1,0 +1,240 @@
+//! WAL file format definitions.
+//!
+//! # File Structure
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │ File Header (16 bytes)                                      │
+//! │   magic: [u8; 4]     = b"RWAL"                              │
+//! │   version: u16       = 1                                    │
+//! │   flags: u16         = 0 (reserved)                         │
+//! │   first_seq: u64     = sequence number of first record      │
+//! ├─────────────────────────────────────────────────────────────┤
+//! │ Record 0                                                    │
+//! │   header: RecordHeader (20 bytes)                           │
+//! │   payload: [u8; header.len]                                 │
+//! ├─────────────────────────────────────────────────────────────┤
+//! │ Record 1                                                    │
+//! │   header: RecordHeader (20 bytes)                           │
+//! │   payload: [u8; header.len]                                 │
+//! ├─────────────────────────────────────────────────────────────┤
+//! │ ...                                                         │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Record Header
+//!
+//! Each record is prefixed with a fixed-size header:
+//!
+//! ```text
+//! ┌────────────────────────────────────────┐
+//! │ RecordHeader (20 bytes)                │
+//! │   checksum: u32   - CRC32 of payload   │
+//! │   len: u32        - payload length     │
+//! │   seq: u64        - sequence number    │
+//! │   flags: u32      - reserved           │
+//! └────────────────────────────────────────┘
+//! ```
+//!
+//! The payload is the bincode-serialized `WalRecord`.
+
+/// Magic bytes identifying a RUMPS WAL file.
+pub(crate) const WAL_MAGIC: [u8; 4] = *b"RWAL";
+
+/// Current WAL format version.
+pub(crate) const WAL_VERSION: u16 = 1;
+
+/// Size of the file header in bytes.
+pub(crate) const FILE_HEADER_SIZE: usize = 16;
+
+/// Size of a record header in bytes.
+pub(crate) const RECORD_HEADER_SIZE: usize = 20;
+
+/// WAL file header, written once at the start of each WAL file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileHeader {
+    /// Magic bytes (`b"RWAL"`).
+    pub(crate) magic: [u8; 4],
+    /// Format version.
+    pub(crate) version: u16,
+    /// Reserved flags.
+    pub(crate) flags: u16,
+    /// Sequence number of the first record in this file.
+    pub(crate) first_seq: u64,
+}
+
+impl FileHeader {
+    /// Create a new file header with the given first sequence number.
+    pub(crate) fn new(first_seq: u64) -> Self {
+        Self {
+            magic: WAL_MAGIC,
+            version: WAL_VERSION,
+            flags: 0,
+            first_seq,
+        }
+    }
+
+    /// Serialize the header to bytes.
+    pub(crate) fn to_bytes(self) -> [u8; FILE_HEADER_SIZE] {
+        let mut buf = [0u8; FILE_HEADER_SIZE];
+        buf[0..4].copy_from_slice(&self.magic);
+        buf[4..6].copy_from_slice(&self.version.to_le_bytes());
+        buf[6..8].copy_from_slice(&self.flags.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.first_seq.to_le_bytes());
+        buf
+    }
+
+    /// Deserialize from bytes. Returns `None` if magic/version mismatch.
+    pub(crate) fn from_bytes(buf: &[u8; FILE_HEADER_SIZE]) -> Option<Self> {
+        let magic: [u8; 4] = buf[0..4].try_into().ok()?;
+        (magic == WAL_MAGIC).then_some(())?;
+
+        let version = u16::from_le_bytes(buf[4..6].try_into().ok()?);
+        (version == WAL_VERSION).then_some(())?;
+
+        let flags = u16::from_le_bytes(buf[6..8].try_into().ok()?);
+        let first_seq = u64::from_le_bytes(buf[8..16].try_into().ok()?);
+
+        Some(Self {
+            magic,
+            version,
+            flags,
+            first_seq,
+        })
+    }
+}
+
+/// Header preceding each WAL record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RecordHeader {
+    /// CRC32 checksum of the payload bytes.
+    pub(crate) checksum: u32,
+    /// Length of the payload in bytes.
+    pub(crate) len: u32,
+    /// Monotonically increasing sequence number.
+    pub(crate) seq: u64,
+    /// Reserved flags (currently unused).
+    pub(crate) flags: u32,
+}
+
+impl RecordHeader {
+    /// Create a new record header for the given payload.
+    pub(crate) fn new(seq: u64, payload: &[u8]) -> Self {
+        Self {
+            checksum: crc32(payload),
+            len: payload.len() as u32,
+            seq,
+            flags: 0,
+        }
+    }
+
+    /// Serialize the header to bytes.
+    pub(crate) fn to_bytes(self) -> [u8; RECORD_HEADER_SIZE] {
+        let mut buf = [0u8; RECORD_HEADER_SIZE];
+        buf[0..4].copy_from_slice(&self.checksum.to_le_bytes());
+        buf[4..8].copy_from_slice(&self.len.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.seq.to_le_bytes());
+        buf[16..20].copy_from_slice(&self.flags.to_le_bytes());
+        buf
+    }
+
+    /// Deserialize from bytes.
+    ///
+    /// # Safety note
+    ///
+    /// The `unwrap()` calls below are infallible because `buf` is a fixed-size
+    /// array of exactly `RECORD_HEADER_SIZE` (20) bytes, and each slice is
+    /// exactly the size needed for the corresponding integer type.
+    #[allow(clippy::unwrap_used)]
+    pub(crate) fn from_bytes(buf: &[u8; RECORD_HEADER_SIZE]) -> Self {
+        Self {
+            checksum: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
+            len: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
+            seq: u64::from_le_bytes(buf[8..16].try_into().unwrap()),
+            flags: u32::from_le_bytes(buf[16..20].try_into().unwrap()),
+        }
+    }
+
+    /// Verify the checksum matches the given payload.
+    pub(crate) fn verify(&self, payload: &[u8]) -> bool {
+        payload.len() == self.len as usize && crc32(payload) == self.checksum
+    }
+}
+
+/// Compute CRC32 checksum (IEEE polynomial).
+fn crc32(data: &[u8]) -> u32 {
+    crc32fast::hash(data)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_header_roundtrip() {
+        let hdr = FileHeader::new(12345);
+        let bytes = hdr.to_bytes();
+        let decoded = FileHeader::from_bytes(&bytes);
+        assert_eq!(decoded, Some(hdr));
+    }
+
+    #[test]
+    fn file_header_rejects_bad_magic() {
+        let mut bytes = FileHeader::new(0).to_bytes();
+        bytes[0] = b'X';
+        assert_eq!(FileHeader::from_bytes(&bytes), None);
+    }
+
+    #[test]
+    fn file_header_rejects_bad_version() {
+        let mut bytes = FileHeader::new(0).to_bytes();
+        bytes[4] = 99; // wrong version
+        assert_eq!(FileHeader::from_bytes(&bytes), None);
+    }
+
+    #[test]
+    fn record_header_roundtrip() {
+        let payload = b"hello world";
+        let hdr = RecordHeader::new(42, payload);
+        let bytes = hdr.to_bytes();
+        let decoded = RecordHeader::from_bytes(&bytes);
+        assert_eq!(decoded, hdr);
+        assert!(decoded.verify(payload));
+    }
+
+    #[test]
+    fn record_header_detects_corruption() {
+        let payload = b"hello world";
+        let hdr = RecordHeader::new(42, payload);
+        let corrupted = b"hello worLd"; // one byte changed
+        assert!(!hdr.verify(corrupted));
+    }
+
+    #[test]
+    fn record_header_detects_truncation() {
+        let payload = b"hello world";
+        let hdr = RecordHeader::new(42, payload);
+        let truncated = b"hello";
+        assert!(!hdr.verify(truncated));
+    }
+
+    #[test]
+    fn crc32_known_values() {
+        // Empty string
+        assert_eq!(crc32(b""), 0x0000_0000);
+        // "123456789" has well-known CRC32 = 0xCBF43926
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn header_sizes_correct() {
+        assert_eq!(FILE_HEADER_SIZE, 16);
+        assert_eq!(RECORD_HEADER_SIZE, 20);
+        assert_eq!(FileHeader::new(0).to_bytes().len(), FILE_HEADER_SIZE);
+        assert_eq!(
+            RecordHeader::new(0, b"").to_bytes().len(),
+            RECORD_HEADER_SIZE
+        );
+    }
+}

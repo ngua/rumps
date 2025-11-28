@@ -651,6 +651,7 @@ impl From<Node> for NodeRaw {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use rumps_types::key;
 

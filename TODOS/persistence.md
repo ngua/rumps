@@ -460,10 +460,11 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - `Set { txn_id, name, key, old, new }` - with old `NodeData` for undo
   - `KillEntry { txn_id, name, key, subtree }` - single entry of subtree as `NodeData` for undo
   - `Checkpoint { seq }` - monotonic sequence number
-- [ ] Define WAL file format:
-  - Record header (type, length, transaction ID, checksum)
-  - Serialized operation data
-  - Transaction boundaries
+- [x] Define WAL file format (`wal/format.rs`):
+  - `FileHeader` (16 bytes): magic `b"RWAL"`, version, flags, first_seq
+  - `RecordHeader` (20 bytes): CRC32 checksum, payload length, sequence number, flags
+  - Payload: bincode-serialized `WalRecord`
+  - CRC32 (IEEE polynomial) for corruption detection
 - [ ] Implement `WalWriter`:
   - Append records to WAL file
   - Flush/fsync on transaction commit (configurable sync policy)

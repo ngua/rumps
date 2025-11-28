@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::sync::Arc;
 
@@ -6826,6 +6827,7 @@ mod tests {
 }
 
 #[cfg(feature = "bench")]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 pub mod benches {
     //! Benchmark suite for BTree operations.
     //!

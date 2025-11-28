@@ -15,14 +15,13 @@
 //! Operations use interior mutability via `RwLock` for concurrent access.
 
 #![warn(missing_docs)]
-#![deny(clippy::use_self)]
 
-mod btree;
-mod error;
+pub(crate) mod btree;
+pub(crate) mod error;
 pub(crate) mod node;
 pub(crate) mod page;
-mod transaction;
-mod wal;
+pub(crate) mod transaction;
+pub(crate) mod wal;
 
 #[cfg(feature = "bench")]
 pub use btree::benches;
