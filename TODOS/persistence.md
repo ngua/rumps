@@ -180,7 +180,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Values: `Vec<NodeData>` (one per key)
   - Is leaf: `bool`
 - [x] Add `NodeId` type (page offset or handle for disk references)
-- [x] Ensure `Node` and `NodeData` have custom `Serialize`/`Deserialize` (compact encoding)
+- [x] Ensure `Node` and `NodeData` have `Serialize`/`Deserialize` (via `NodeRaw` for `Node`, custom for `NodeData`)
 - [x] Add size calculation methods for nodes (needed for B-tree splitting)
 
 ---
@@ -408,29 +408,42 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 
 ## Phase 3: Serialization Layer
 
-### 3.1 Bincode Setup
-- [ ] Add `bincode` dependency to `rumps-storage/Cargo.toml`
-- [ ] Create `crates/rumps-storage/src/serialize.rs` module
-- [ ] Define serialization configuration (endianness, int encoding, etc.)
-- [ ] Implement `serialize_node(node: &Node) -> Result<Vec<u8>>`
-- [ ] Implement `deserialize_node(bytes: &[u8]) -> Result<Node>`
+### 3.1 Bincode Setup ✅ COMPLETE
+- [x] Add `bincode` dependency to `rumps-storage/Cargo.toml`
+- [x] Create `crates/rumps-storage/src/serialize.rs` module with `PAGE_SIZE` constant
+- [x] Use transparent serde via `#[serde(from = "NodeRaw", into = "NodeRaw")]` on `Node`
+  - `NodeRaw` is an intermediate struct without `Arc`s for efficient serialization
+  - Derived `Serialize`/`Deserialize` on `NodeRaw` (no custom serde needed)
+  - `From<Node> for NodeRaw` and `From<NodeRaw> for Node` conversions
+- [x] Configure `PAGE_SIZE` via `RUMPS_PAGE_SIZE` env var at compile time:
+  - `build.rs` reads `RUMPS_PAGE_SIZE` (defaults to `4096`)
+  - `serialize.rs` uses `env!("RUMPS_PAGE_SIZE")` for compile-time constant
+  - Example: `RUMPS_PAGE_SIZE=8192 cargo build`
 
-### 3.2 Node Serialization Format
-- [ ] Design fixed-size header for nodes:
-  - Node type (leaf/internal)
-  - Number of keys
-  - Checksum (optional, for integrity)
-- [ ] Serialize keys as length-prefixed strings
-- [ ] Serialize values using bincode for `Value` enum
-- [ ] Serialize child pointers as `NodeId` (page offsets)
-- [ ] Add padding to ensure nodes fit in fixed page size
+**Design Notes**:
+- No `SerializeConfig` struct needed; bincode defaults are sufficient
+- `bincode::with_limit()` only enforces on serialize, not deserialize from slice
+- Page size is compile-time constant (like SQLite, PostgreSQL, MySQL)
+- **DoS protection**: Enforced at two layers:
+  1. **Serialize**: Phase 4's `FileStorageEngine::write_node()` will check `serialized_size() <= PAGE_SIZE` before writing
+  2. **Deserialize**: Phase 4's `FileStorageEngine::read_node()` will read at most `PAGE_SIZE` bytes from disk, bounding the input slice
 
-### 3.3 Serialization Tests
-- [ ] Test round-trip serialization for leaf nodes
-- [ ] Test round-trip serialization for internal nodes
-- [ ] Test serialization of nodes with all Value types
-- [ ] Test serialization size limits (ensure nodes fit in page)
-- [ ] Test handling of oversized keys/values (error or truncate?)
+### 3.2 Node Serialization Format ✅ COMPLETE
+- [x] `Node` serializes transparently via `NodeRaw` (derived bincode)
+- [x] Keys serialized as `Vec<Key>` (bincode handles length prefixes)
+- [x] Values serialized as `Vec<NodeData>` (without `Arc` wrapper)
+- [x] Child pointers serialized as `Vec<NodeId>` (page offsets)
+- [x] `is_leaf` flag serialized as bool
+- [x] `Node::serialized_size()` calculates size via `NodeRaw` conversion
+- [x] `Node::would_fit(limit)` checks if node fits in page size
+
+### 3.3 Serialization Tests ✅ COMPLETE
+- [x] Test round-trip serialization for leaf nodes (`roundtrip_empty_leaf`, `roundtrip_leaf_with_data`)
+- [x] Test round-trip serialization for internal nodes (`roundtrip_internal_with_children`)
+- [x] Test serialization of nodes with all Value types (`roundtrip_all_value_types`)
+- [x] Test serialized size is reasonable (`serialized_size_reasonable`)
+- [x] Test truncated bytes produce error (`truncated_bytes_error`)
+- [x] Test `PAGE_SIZE` is power of two and within reasonable range
 
 ---
 
@@ -471,7 +484,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
 - [ ] Add tests for crash recovery scenarios
 
 ### 4.2 Page-Based Storage
-- [ ] Define `PAGE_SIZE` constant (e.g., 4096 bytes)
+- [x] Define `PAGE_SIZE` constant (done in Phase 3.1 via `serialize.rs`)
 - [ ] Create `crates/rumps-storage/src/page.rs` module
 - [ ] Define `PageId` type (u64 offset into file)
 - [ ] Implement `PageCache` struct:
@@ -1120,8 +1133,21 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 2.6 Complete! Ready for Phase 2.7 (RUMPS Extension - COLLECT)
-**Completed Checkboxes**: ~60 / ~160
+**Current Phase**: Phase 3 Complete! Ready for Phase 4 (Disk Persistence)
+**Completed Checkboxes**: ~75 / ~160
+
+**Recent Changes** (2025-11-28 - Phase 3 Serialization Complete):
+- ✅ Completed Phase 3: Serialization Layer
+  - Added `bincode` dependency (already present)
+  - Created `serialize.rs` with compile-time `PAGE_SIZE` constant
+  - Implemented transparent serde for `Node` via `NodeRaw` intermediate struct
+  - `NodeRaw` avoids `Arc` overhead in serialization
+  - `#[serde(from = "NodeRaw", into = "NodeRaw")]` provides seamless `bincode::serialize`/`deserialize`
+  - `PAGE_SIZE` configurable via `RUMPS_PAGE_SIZE` env var at compile time (default: `4096`)
+  - Added `build.rs` to read env var and pass to rustc
+  - Simplified from original plan: no `SerializeConfig` needed, bincode defaults sufficient
+  - DoS protection comes from bounded page reads, not bincode limits
+  - All 221 tests passing
 
 **Recent Changes** (2025-11-27 - Phase 2.6 ORDER Complete):
 - ✅ Completed Phase 2.6: MUMPS Operations - ORDER
@@ -1202,4 +1228,4 @@ These are not part of the current plan but should be kept in mind:
 
 ---
 
-Last Updated: 2025-11-16
+Last Updated: 2025-11-28

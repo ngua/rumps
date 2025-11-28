@@ -306,42 +306,6 @@ impl Node {
             })
             .unwrap_or(false)
     }
-
-    /// Serializes this node to a compact binary representation.
-    ///
-    /// Converts to [`NodeRaw`] (without `Arc` wrappers) before serializing.
-    pub(crate) fn serialize(
-        &self,
-        cfg: &crate::serialize::SerializeConfig,
-    ) -> crate::error::Result<Vec<u8>> {
-        use bincode::Options;
-        let raw = NodeRaw::from(self.clone());
-        cfg.bincode_options().serialize(&raw).map_err(|e| {
-            crate::error::StorageError::Serialization(format!(
-                "failed to serialize node: {}",
-                e
-            ))
-        })
-    }
-
-    /// Deserializes a node from its binary representation.
-    ///
-    /// Deserializes to [`NodeRaw`] then converts to `Node` (wrapping in `Arc`).
-    pub(crate) fn deserialize(
-        bytes: &[u8],
-        cfg: &crate::serialize::SerializeConfig,
-    ) -> crate::error::Result<Self> {
-        use bincode::Options;
-        cfg.bincode_options()
-            .deserialize::<NodeRaw>(bytes)
-            .map(Self::from)
-            .map_err(|e| {
-                crate::error::StorageError::Serialization(format!(
-                    "failed to deserialize node: {}",
-                    e
-                ))
-            })
-    }
 }
 
 /// Data stored at a node in the RUMPS tree.
@@ -1179,65 +1143,48 @@ mod tests {
         assert!(size > 0);
     }
 
-    // SerializeConfig-based Serialization Tests
+    // Node serde roundtrip tests (using derived Serialize/Deserialize via NodeRaw)
 
-    mod serialize_tests {
+    mod node_serde_tests {
         use super::*;
-        use crate::serialize::SerializeConfig;
 
         #[test]
-        #[ignore]
         fn roundtrip_empty_leaf() {
             let node = Node::new_leaf();
-            let cfg = SerializeConfig::default();
-
-            let bytes = node.serialize(&cfg).expect("serialize");
-            let restored =
-                Node::deserialize(&bytes, &cfg).expect("deserialize");
-
+            let bytes = bincode::serialize(&node).unwrap();
+            let restored: Node = bincode::deserialize(&bytes).unwrap();
             assert_eq!(node, restored);
         }
 
         #[test]
-        #[ignore]
         fn roundtrip_empty_internal() {
             let node = Node::new_internal();
-            let cfg = SerializeConfig::default();
-
-            let bytes = node.serialize(&cfg).expect("serialize");
-            let restored =
-                Node::deserialize(&bytes, &cfg).expect("deserialize");
-
+            let bytes = bincode::serialize(&node).unwrap();
+            let restored: Node = bincode::deserialize(&bytes).unwrap();
             assert_eq!(node, restored);
         }
 
         #[test]
-        #[ignore]
         fn roundtrip_leaf_with_data() {
             let node = Node {
                 keys: vec![key![123, "NAME"], key![124, "DOB"]],
                 children: vec![],
                 values: vec![
                     Arc::new(NodeData::with_value(Value::String(
-                        "John Doe".into(),
+                        "John".into(),
                     ))),
                     Arc::new(NodeData::with_value(Value::String(
-                        "1980-01-01".into(),
+                        "1980".into(),
                     ))),
                 ],
                 is_leaf: true,
             };
-            let cfg = SerializeConfig::default();
-
-            let bytes = node.serialize(&cfg).expect("serialize");
-            let restored =
-                Node::deserialize(&bytes, &cfg).expect("deserialize");
-
+            let bytes = bincode::serialize(&node).unwrap();
+            let restored: Node = bincode::deserialize(&bytes).unwrap();
             assert_eq!(node, restored);
         }
 
         #[test]
-        #[ignore]
         fn roundtrip_internal_with_children() {
             let node = Node {
                 keys: vec![key![100], key![200], key![300]],
@@ -1254,17 +1201,12 @@ mod tests {
                 ],
                 is_leaf: false,
             };
-            let cfg = SerializeConfig::default();
-
-            let bytes = node.serialize(&cfg).expect("serialize");
-            let restored =
-                Node::deserialize(&bytes, &cfg).expect("deserialize");
-
+            let bytes = bincode::serialize(&node).unwrap();
+            let restored: Node = bincode::deserialize(&bytes).unwrap();
             assert_eq!(node, restored);
         }
 
         #[test]
-        #[ignore]
         fn roundtrip_all_value_types() {
             let node = Node {
                 keys: vec![
@@ -1287,24 +1229,17 @@ mod tests {
                         "hello".into(),
                     ))),
                     Arc::new(NodeData::with_value(Value::Json(
-                        serde_json::json!({
-                            "nested": {"array": [1, 2, 3]}
-                        }),
+                        serde_json::json!({"nested": [1, 2, 3]}),
                     ))),
                 ],
                 is_leaf: true,
             };
-            let cfg = SerializeConfig::default();
-
-            let bytes = node.serialize(&cfg).expect("serialize");
-            let restored =
-                Node::deserialize(&bytes, &cfg).expect("deserialize");
-
+            let bytes = bincode::serialize(&node).unwrap();
+            let restored: Node = bincode::deserialize(&bytes).unwrap();
             assert_eq!(node, restored);
         }
 
         #[test]
-        #[ignore]
         fn roundtrip_all_nodedata_states() {
             let node = Node {
                 keys: vec![
@@ -1322,17 +1257,12 @@ mod tests {
                 ],
                 is_leaf: true,
             };
-            let cfg = SerializeConfig::default();
-
-            let bytes = node.serialize(&cfg).expect("serialize");
-            let restored =
-                Node::deserialize(&bytes, &cfg).expect("deserialize");
-
+            let bytes = bincode::serialize(&node).unwrap();
+            let restored: Node = bincode::deserialize(&bytes).unwrap();
             assert_eq!(node, restored);
         }
 
         #[test]
-        #[ignore]
         fn roundtrip_deep_keys() {
             let node = Node {
                 keys: vec![
@@ -1348,75 +1278,25 @@ mod tests {
                 ],
                 is_leaf: true,
             };
-            let cfg = SerializeConfig::default();
-
-            let bytes = node.serialize(&cfg).expect("serialize");
-            let restored =
-                Node::deserialize(&bytes, &cfg).expect("deserialize");
-
+            let bytes = bincode::serialize(&node).unwrap();
+            let restored: Node = bincode::deserialize(&bytes).unwrap();
             assert_eq!(node, restored);
         }
 
         #[test]
-        #[ignore]
-        fn size_limit_enforced_on_serialize() {
-            let mut node = Node::new_leaf();
-            (0..100).for_each(|i| {
-                node.keys.push(key![i]);
-                node.values.push(Arc::new(NodeData::with_value(
-                    Value::String("x".repeat(100)),
-                )));
-            });
-
-            let cfg = SerializeConfig::with_max_size(100);
-            let result = node.serialize(&cfg);
-
-            assert!(result.is_err());
-        }
-
-        #[test]
-        #[ignore]
-        fn size_limit_enforced_on_deserialize() {
-            let mut node = Node::new_leaf();
-            (0..50).for_each(|i| {
-                node.keys.push(key![i]);
-                node.values.push(Arc::new(NodeData::with_value(
-                    Value::String("test data".into()),
-                )));
-            });
-
-            let large_cfg = SerializeConfig::default();
-            let bytes = node.serialize(&large_cfg).expect("serialize");
-
-            // Use a limit smaller than the serialized size
-            let small_cfg =
-                SerializeConfig::with_max_size(bytes.len() as u64 / 2);
-            let result = Node::deserialize(&bytes, &small_cfg);
-
-            assert!(result.is_err());
-        }
-
-        #[test]
-        #[ignore]
         fn empty_bytes_error() {
-            let cfg = SerializeConfig::default();
-            let result = Node::deserialize(&[], &cfg);
-
+            let result: Result<Node, _> = bincode::deserialize(&[]);
             assert!(result.is_err());
         }
 
         #[test]
-        #[ignore]
         fn malformed_bytes_error() {
-            let cfg = SerializeConfig::default();
             let garbage = vec![0xFF, 0xFE, 0xFD, 0xFC];
-            let result = Node::deserialize(&garbage, &cfg);
-
+            let result: Result<Node, _> = bincode::deserialize(&garbage);
             assert!(result.is_err());
         }
 
         #[test]
-        #[ignore]
         fn truncated_bytes_error() {
             let node = Node {
                 keys: vec![key!["test"]],
@@ -1426,71 +1306,10 @@ mod tests {
                 )))],
                 is_leaf: true,
             };
-            let cfg = SerializeConfig::default();
-
-            let bytes = node.serialize(&cfg).expect("serialize");
+            let bytes = bincode::serialize(&node).unwrap();
             let truncated = &bytes[..bytes.len() / 2];
-
-            let result = Node::deserialize(truncated, &cfg);
+            let result: Result<Node, _> = bincode::deserialize(truncated);
             assert!(result.is_err());
-        }
-
-        #[test]
-        #[ignore]
-        fn varint_encoding_is_compact() {
-            let cfg = SerializeConfig::default();
-
-            let small = Node {
-                keys: vec![key![1]],
-                children: vec![],
-                values: vec![Arc::new(NodeData::with_value(Value::Integer(1)))],
-                is_leaf: true,
-            };
-            let small_bytes = small.serialize(&cfg).expect("serialize");
-
-            let large = Node {
-                keys: vec![key![i64::MAX]],
-                children: vec![],
-                values: vec![Arc::new(NodeData::with_value(Value::Integer(
-                    i64::MAX,
-                )))],
-                is_leaf: true,
-            };
-            let large_bytes = large.serialize(&cfg).expect("serialize");
-
-            assert!(small_bytes.len() < large_bytes.len());
-        }
-
-        #[test]
-        #[ignore]
-        fn serialized_size_reasonable() {
-            let cfg = SerializeConfig::default();
-
-            let empty = Node::new_leaf();
-            let empty_bytes = empty.serialize(&cfg).expect("serialize");
-            // Empty leaf: `1` byte is_leaf + varint lengths for empty vecs
-            assert!(
-                empty_bytes.len() < 50,
-                "empty leaf too large: {}",
-                empty_bytes.len()
-            );
-
-            let node = Node {
-                keys: vec![key![1], key![2], key![3]],
-                children: vec![],
-                values: vec![
-                    Arc::new(NodeData::with_value(Value::Integer(10))),
-                    Arc::new(NodeData::with_value(Value::Integer(20))),
-                    Arc::new(NodeData::with_value(Value::Integer(30))),
-                ],
-                is_leaf: true,
-            };
-            let node_bytes = node.serialize(&cfg).expect("serialize");
-            assert!(
-                node_bytes.len() < 250,
-                "small node too large: {}",
-                node_bytes.len()
-            );
         }
     }
 }

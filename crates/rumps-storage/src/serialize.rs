@@ -1,74 +1,43 @@
-//! Serialization configuration for RUMPS storage nodes.
+//! Page size configuration for RUMPS storage.
 //!
-//! This module provides configuration for serializing/deserializing
-//! B-tree nodes to/from compact binary format using bincode.
+//! The page size is a compile-time constant that determines the maximum
+//! size of serialized B-tree nodes. This affects disk I/O alignment,
+//! node splitting thresholds, and cache efficiency.
 //!
-//! # Serialization Format
-//!
-//! Nodes are serialized using bincode with the following configuration:
-//! - **Endianness**: Little-endian (most common on modern hardware)
-//! - **Integer encoding**: Variable-length (Varint) for compact representation
-//! - **Limit**: Configurable maximum size to prevent oversized nodes
+//! To change the page size, set `RUMPS_PAGE_SIZE` env var at compile time:
+//! ```sh
+//! RUMPS_PAGE_SIZE=8192 cargo build
+//! ```
 
-use bincode::Options;
-
-/// Configuration for node serialization.
+/// Page size in bytes for B-tree node storage.
 ///
-/// Controls the bincode encoding options used when serializing and
-/// deserializing nodes. The defaults are optimized for compact storage
-/// and compatibility with disk-based page storage.
-#[derive(Debug, Clone)]
-pub(crate) struct SerializeConfig {
-    /// Maximum allowed serialized size in bytes.
-    ///
-    /// This prevents allocation of excessive memory when deserializing
-    /// potentially malformed data. Default is `64 * 1024` (`64KB`), which
-    /// accommodates typical page sizes with generous headroom.
-    pub(crate) max_size: u64,
-}
-
-impl Default for SerializeConfig {
-    fn default() -> Self {
-        Self {
-            // `64KB` max - generous for typical `4KB-16KB` pages
-            max_size: 64 * 1024,
-        }
+/// Common values:
+/// - `4096` (4KB) - typical OS page size, good default
+/// - `8192` (8KB) - PostgreSQL's default
+/// - `16384` (16KB) - MySQL/InnoDB's default
+///
+/// Set via `RUMPS_PAGE_SIZE` env var at compile time. Defaults to `4096`.
+/// Existing databases created with a different page size are incompatible.
+pub(crate) const PAGE_SIZE: usize = {
+    // SAFETY: build.rs guarantees this is set and valid
+    match usize::from_str_radix(env!("RUMPS_PAGE_SIZE"), 10) {
+        Ok(n) => n,
+        Err(_) => 4096,
     }
-}
-
-impl SerializeConfig {
-    /// Creates a new configuration with the specified max size.
-    pub(crate) fn with_max_size(max_size: u64) -> Self {
-        Self { max_size }
-    }
-
-    /// Returns bincode options configured for this serialization config.
-    ///
-    /// The options use:
-    /// - Little-endian byte order (most common on modern CPUs)
-    /// - Variable-length integer encoding (compact for small values)
-    /// - Size limit from `self.max_size`
-    pub(crate) fn bincode_options(&self) -> impl Options {
-        bincode::DefaultOptions::new()
-            .with_little_endian()
-            .with_varint_encoding()
-            .with_limit(self.max_size)
-    }
-}
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn config_default() {
-        let cfg = SerializeConfig::default();
-        assert_eq!(cfg.max_size, 64 * 1024);
+    fn page_size_is_power_of_two() {
+        assert!(PAGE_SIZE.is_power_of_two());
     }
 
     #[test]
-    fn config_with_max_size() {
-        let cfg = SerializeConfig::with_max_size(4096);
-        assert_eq!(cfg.max_size, 4096);
+    fn page_size_reasonable() {
+        assert!(PAGE_SIZE >= 512, "page size too small");
+        assert!(PAGE_SIZE <= 65536, "page size too large");
     }
 }
