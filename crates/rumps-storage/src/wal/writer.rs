@@ -19,7 +19,8 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Mutex;
 
 use super::format::{
-    FileHeader, RecordHeader, FILE_HEADER_SIZE, RECORD_HEADER_SIZE,
+    try_read_record_at, FileHeader, RecordHeader, FILE_HEADER_SIZE,
+    RECORD_HEADER_SIZE,
 };
 use super::WalRecord;
 use crate::error::{Result, StorageError};
@@ -228,61 +229,19 @@ impl WalWriter {
         file_size: u64,
     ) -> BoxFuture<'a, Result<u64>> {
         Box::pin(async move {
-            match Self::try_read_record(file, pos, file_size).await? {
-                Some((end, seq)) => {
-                    Self::scan_from(file, end, seq + 1, file_size).await
+            match try_read_record_at(file, pos, file_size).await? {
+                Some(raw) => {
+                    Self::scan_from(
+                        file,
+                        raw.end_pos,
+                        raw.header.seq + 1,
+                        file_size,
+                    )
+                    .await
                 }
                 None => Ok(next_seq),
             }
         })
-    }
-
-    /// Try to read one WAL record at `pos`.
-    ///
-    /// Returns:
-    /// - `Ok(Some((end, seq)))` on success
-    /// - `Ok(None)` on soft failure (incomplete record, I/O error)
-    /// - `Err(WalCorruption)` on checksum mismatch
-    async fn try_read_record(
-        file: &mut File,
-        pos: u64,
-        file_size: u64,
-    ) -> Result<Option<(u64, u64)>> {
-        let header_end = pos + RECORD_HEADER_SIZE as u64;
-
-        if header_end > file_size {
-            Ok(None) // Incomplete: header doesn't fit
-        } else {
-            file.seek(SeekFrom::Start(pos)).await?;
-
-            let mut hdr_buf = [0u8; RECORD_HEADER_SIZE];
-
-            match AsyncReadExt::read_exact(file, &mut hdr_buf).await {
-                Err(_) => Ok(None), // I/O error reading header
-                Ok(_) => {
-                    let hdr = RecordHeader::from_bytes(&hdr_buf);
-                    let end = pos + RECORD_HEADER_SIZE as u64 + hdr.len as u64;
-
-                    if end > file_size {
-                        Ok(None) // Incomplete: payload doesn't fit
-                    } else {
-                        let mut payload = vec![0u8; hdr.len as usize];
-
-                        match AsyncReadExt::read_exact(file, &mut payload).await
-                        {
-                            Err(_) => Ok(None), // I/O error reading payload
-                            Ok(_) if hdr.verify(&payload) => {
-                                Ok(Some((end, hdr.seq)))
-                            }
-                            Ok(_) => Err(StorageError::WalCorruption {
-                                seq: hdr.seq,
-                                reason: "checksum mismatch".into(),
-                            }),
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Create a new WAL file with the given first sequence number.

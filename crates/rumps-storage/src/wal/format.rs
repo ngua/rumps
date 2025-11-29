@@ -38,6 +38,11 @@
 //!
 //! The payload is the bincode-serialized `WalRecord`.
 
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+
+use crate::error::{Result, StorageError};
+
 /// Magic bytes identifying a RUMPS WAL file.
 pub(crate) const WAL_MAGIC: [u8; 4] = *b"RWAL";
 
@@ -158,6 +163,70 @@ impl RecordHeader {
     /// Verify the checksum matches the given payload.
     pub(crate) fn verify(&self, payload: &[u8]) -> bool {
         payload.len() == self.len as usize && crc32(payload) == self.checksum
+    }
+}
+
+/// Raw record data before deserialization.
+#[derive(Debug, Clone)]
+pub(crate) struct RawRecord {
+    /// The record header.
+    pub(crate) header: RecordHeader,
+    /// The raw payload bytes (not yet deserialized).
+    pub(crate) payload: Vec<u8>,
+    /// Position immediately after this record.
+    pub(crate) end_pos: u64,
+}
+
+/// Try to read a raw WAL record at the given position.
+///
+/// This is the shared low-level record reading logic used by both
+/// `WalWriter` (for scanning) and `WalReader` (for iteration).
+///
+/// # Returns
+///
+/// - `Ok(Some(raw))` on success
+/// - `Ok(None)` if record is incomplete (EOF)
+/// - `Err(WalCorruption)` on checksum mismatch
+pub(crate) async fn try_read_record_at(
+    file: &mut File,
+    pos: u64,
+    file_size: u64,
+) -> Result<Option<RawRecord>> {
+    let hdr_end = pos + RECORD_HEADER_SIZE as u64;
+
+    // Check if header fits
+    if hdr_end > file_size {
+        Ok(None) // EOF: header doesn't fit
+    } else {
+        file.seek(SeekFrom::Start(pos)).await?;
+
+        let mut hdr_buf = [0u8; RECORD_HEADER_SIZE];
+        AsyncReadExt::read_exact(file, &mut hdr_buf).await?;
+
+        let hdr = RecordHeader::from_bytes(&hdr_buf);
+        let end_pos = hdr_end + hdr.len as u64;
+
+        // Check if payload fits
+        if end_pos > file_size {
+            Ok(None) // EOF: payload doesn't fit
+        } else {
+            let mut payload = vec![0u8; hdr.len as usize];
+            AsyncReadExt::read_exact(file, &mut payload).await?;
+
+            // Verify checksum (hard error on mismatch)
+            if hdr.verify(&payload) {
+                Ok(Some(RawRecord {
+                    header: hdr,
+                    payload,
+                    end_pos,
+                }))
+            } else {
+                Err(StorageError::WalCorruption {
+                    seq: hdr.seq,
+                    reason: "checksum mismatch".into(),
+                })
+            }
+        }
     }
 }
 

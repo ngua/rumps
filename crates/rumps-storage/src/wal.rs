@@ -8,6 +8,7 @@
 //!
 //! - [`WalRecord`]: The different record types that can be written
 //! - [`WalWriter`]: Appends records to WAL files with configurable sync
+//! - [`WalReader`]: Reads records sequentially with checksum verification
 //! - [`SyncMode`]: When to sync writes to disk
 //!
 //! # Design: Incremental Kill Records
@@ -32,12 +33,14 @@
 //!    More complex, may be worth revisiting if performance requires it.
 
 mod format;
+mod reader;
 mod writer;
 
 pub(crate) use format::{
-    FileHeader, RecordHeader, FILE_HEADER_SIZE, RECORD_HEADER_SIZE, WAL_MAGIC,
-    WAL_VERSION,
+    try_read_record_at, FileHeader, RawRecord, RecordHeader, FILE_HEADER_SIZE,
+    RECORD_HEADER_SIZE, WAL_MAGIC, WAL_VERSION,
 };
+pub(crate) use reader::{WalEntry, WalReader, WalRecordStream};
 use rumps_types::{Key, Name};
 use serde::{Deserialize, Serialize};
 pub(crate) use writer::{SyncMode, WalWriter, WalWriterConfig};

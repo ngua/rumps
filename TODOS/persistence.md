@@ -469,7 +469,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Append records to WAL file
   - Flush/fsync on transaction commit (configurable sync policy)
   - Handle WAL file rotation when size exceeds threshold
-- [ ] Implement `WalReader`:
+- [x] Implement `WalReader`:
   - Read WAL records sequentially
   - Verify checksums
   - Parse records by type
