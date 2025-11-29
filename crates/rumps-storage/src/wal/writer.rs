@@ -68,6 +68,14 @@ impl Default for WalWriterConfig {
     }
 }
 
+/// Result of opening/creating a WAL file.
+struct OpenedWal {
+    file: File,
+    file_size: u64,
+    first_seq: u64,
+    next_seq: u64,
+}
+
 /// Internal mutable state of the WAL writer.
 struct WalWriterState {
     /// Current WAL file handle.
@@ -112,7 +120,7 @@ pub(crate) struct WalWriter {
     dir: PathBuf,
     /// Configuration.
     cfg: WalWriterConfig,
-    /// Mutable state. Callers wrap `WalWriter` in `Arc` for sharing.
+    /// Internally mutable state. Callers wrap `WalWriter` in `Arc` for sharing.
     state: Mutex<WalWriterState>,
 }
 
@@ -131,15 +139,14 @@ impl WalWriter {
         fs::create_dir_all(dir).await?;
 
         let path = dir.join("wal.log");
-        let (file, file_size, first_seq, next_seq) =
-            Self::open_or_create_file(&path).await?;
+        let opened = Self::open_or_create_file(&path).await?;
 
         let state = WalWriterState {
-            file,
+            file: opened.file,
             path,
-            file_size,
-            next_seq,
-            first_seq_in_file: first_seq,
+            file_size: opened.file_size,
+            next_seq: opened.next_seq,
+            first_seq_in_file: opened.first_seq,
         };
 
         Ok(Self {
@@ -150,9 +157,7 @@ impl WalWriter {
     }
 
     /// Open an existing WAL file or create a new one.
-    ///
-    /// Returns `(file, file_size, first_seq, next_seq)`.
-    async fn open_or_create_file(path: &Path) -> Result<(File, u64, u64, u64)> {
+    async fn open_or_create_file(path: &Path) -> Result<OpenedWal> {
         let exists = fs::try_exists(path).await.unwrap_or(false);
 
         if exists {
@@ -163,7 +168,7 @@ impl WalWriter {
     }
 
     /// Open an existing WAL file and determine `next_seq`.
-    async fn open_existing_file(path: &Path) -> Result<(File, u64, u64, u64)> {
+    async fn open_existing_file(path: &Path) -> Result<OpenedWal> {
         let mut file = OpenOptions::new()
             .read(true)
             .append(true)
@@ -195,62 +200,80 @@ impl WalWriter {
             // Seek to end for appending
             file.seek(SeekFrom::End(0)).await?;
 
-            Ok((file, file_size, hdr.first_seq, next_seq))
+            Ok(OpenedWal {
+                file,
+                file_size,
+                first_seq: hdr.first_seq,
+                next_seq,
+            })
         }
     }
 
-    /// Scan the WAL file to find the last valid sequence number.
-    ///
-    /// Returns `next_seq` (one past the last valid record).
+    /// Scan WAL to find `next_seq` (one past last valid record).
     async fn scan_for_last_seq(
         file: &mut File,
         first_seq: u64,
         file_size: u64,
     ) -> Result<u64> {
         let mut pos = FILE_HEADER_SIZE as u64;
-        let mut last_seq = first_seq;
+        let mut next_seq = first_seq;
 
-        while pos + RECORD_HEADER_SIZE as u64 <= file_size {
+        while let Some((end, seq)) =
+            Self::try_read_record(file, pos, file_size).await?
+        {
+            next_seq = seq + 1;
+            pos = end;
+        }
+
+        Ok(next_seq)
+    }
+
+    /// Try to read one WAL record at `pos`.
+    ///
+    /// Returns `Ok(Some((payload_end, seq)))` on success, `Ok(None)` on soft
+    /// failure (incomplete, I/O error, checksum mismatch).
+    async fn try_read_record(
+        file: &mut File,
+        pos: u64,
+        file_size: u64,
+    ) -> Result<Option<(u64, u64)>> {
+        let header_end = pos + RECORD_HEADER_SIZE as u64;
+
+        if header_end > file_size {
+            Ok(None)
+        } else {
             file.seek(SeekFrom::Start(pos)).await?;
 
             let mut hdr_buf = [0u8; RECORD_HEADER_SIZE];
-            match AsyncReadExt::read_exact(file, &mut hdr_buf).await {
-                Ok(_) => (),
-                Err(_) => break, // Partial read, stop here
+            let hdr_read = AsyncReadExt::read_exact(file, &mut hdr_buf).await;
+
+            let parsed = hdr_read
+                .ok()
+                .map(|_| {
+                    let hdr = RecordHeader::from_bytes(&hdr_buf);
+                    let end = pos + RECORD_HEADER_SIZE as u64 + hdr.len as u64;
+                    (hdr, end)
+                })
+                .filter(|(_, end)| *end <= file_size);
+
+            match parsed {
+                None => Ok(None),
+                Some((hdr, end)) => {
+                    let mut payload = vec![0u8; hdr.len as usize];
+                    let verified = AsyncReadExt::read_exact(file, &mut payload)
+                        .await
+                        .ok()
+                        .filter(|_| hdr.verify(&payload))
+                        .map(|_| (end, hdr.seq));
+
+                    Ok(verified)
+                }
             }
-
-            let rec_hdr = RecordHeader::from_bytes(&hdr_buf);
-
-            // Check if payload fits
-            let payload_end =
-                pos + RECORD_HEADER_SIZE as u64 + rec_hdr.len as u64;
-            if payload_end > file_size {
-                break; // Incomplete record
-            }
-
-            // Read and verify payload
-            let mut payload = vec![0u8; rec_hdr.len as usize];
-            match AsyncReadExt::read_exact(file, &mut payload).await {
-                Ok(_) => (),
-                Err(_) => break,
-            }
-
-            if !rec_hdr.verify(&payload) {
-                break; // Checksum mismatch, stop here
-            }
-
-            last_seq = rec_hdr.seq + 1;
-            pos = payload_end;
         }
-
-        Ok(last_seq)
     }
 
     /// Create a new WAL file with the given first sequence number.
-    async fn create_new_file(
-        path: &Path,
-        first_seq: u64,
-    ) -> Result<(File, u64, u64, u64)> {
+    async fn create_new_file(path: &Path, first_seq: u64) -> Result<OpenedWal> {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -263,8 +286,12 @@ impl WalWriter {
         file.write_all(&hdr.to_bytes()).await?;
         file.sync_all().await?;
 
-        let size = FILE_HEADER_SIZE as u64;
-        Ok((file, size, first_seq, first_seq))
+        Ok(OpenedWal {
+            file,
+            file_size: FILE_HEADER_SIZE as u64,
+            first_seq,
+            next_seq: first_seq,
+        })
     }
 
     /// Append a WAL record and return its sequence number.
@@ -336,14 +363,13 @@ impl WalWriter {
         fs::rename(&old_path, &archive_path).await?;
 
         // Create new file
-        let (file, file_size, first_seq, next_seq) =
-            Self::create_new_file(&old_path, state.next_seq).await?;
+        let opened = Self::create_new_file(&old_path, state.next_seq).await?;
 
-        state.file = file;
+        state.file = opened.file;
         state.path = old_path;
-        state.file_size = file_size;
-        state.first_seq_in_file = first_seq;
-        state.next_seq = next_seq;
+        state.file_size = opened.file_size;
+        state.first_seq_in_file = opened.first_seq;
+        state.next_seq = opened.next_seq;
 
         Ok(())
     }
