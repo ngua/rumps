@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use futures::future::BoxFuture;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Mutex;
@@ -215,17 +216,25 @@ impl WalWriter {
         first_seq: u64,
         file_size: u64,
     ) -> Result<u64> {
-        let mut pos = FILE_HEADER_SIZE as u64;
-        let mut next_seq = first_seq;
+        Self::scan_from(file, FILE_HEADER_SIZE as u64, first_seq, file_size)
+            .await
+    }
 
-        while let Some((end, seq)) =
-            Self::try_read_record(file, pos, file_size).await?
-        {
-            next_seq = seq + 1;
-            pos = end;
-        }
-
-        Ok(next_seq)
+    /// Recursive helper: scan from `pos`, tracking `next_seq`.
+    fn scan_from<'a>(
+        file: &'a mut File,
+        pos: u64,
+        next_seq: u64,
+        file_size: u64,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            match Self::try_read_record(file, pos, file_size).await? {
+                Some((end, seq)) => {
+                    Self::scan_from(file, end, seq + 1, file_size).await
+                }
+                None => Ok(next_seq),
+            }
+        })
     }
 
     /// Try to read one WAL record at `pos`.
