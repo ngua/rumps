@@ -4,6 +4,12 @@
 //! applied to the main data file. On crash recovery, uncommitted transactions
 //! can be rolled back and committed transactions can be replayed.
 //!
+//! # Components
+//!
+//! - [`WalRecord`]: The different record types that can be written
+//! - [`WalWriter`]: Appends records to WAL files with configurable sync
+//! - [`SyncMode`]: When to sync writes to disk
+//!
 //! # Design: Incremental Kill Records
 //!
 //! When a KILL operation removes a subtree (e.g., `KILL ^PATIENT(123)` which
@@ -26,14 +32,15 @@
 //!    More complex, may be worth revisiting if performance requires it.
 
 mod format;
+mod writer;
 
-#[allow(unused_imports)] // Will be used by WalWriter/WalReader
 pub(crate) use format::{
     FileHeader, RecordHeader, FILE_HEADER_SIZE, RECORD_HEADER_SIZE, WAL_MAGIC,
     WAL_VERSION,
 };
-use rumps_types::{Key, Name, Value};
+use rumps_types::{Key, Name};
 use serde::{Deserialize, Serialize};
+pub(crate) use writer::{SyncMode, WalWriter, WalWriterConfig};
 
 use crate::node::NodeData;
 use crate::transaction::TransactionId;
@@ -112,7 +119,7 @@ pub(crate) enum WalRecord {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use rumps_types::{global, key};
+    use rumps_types::{global, key, Value};
 
     use super::*;
 

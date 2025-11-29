@@ -333,7 +333,7 @@ pub struct FileStorageEngine {
 /// Storage configuration
 #[derive(Debug, Clone)]
 pub struct StorageConfig {
-    pub page_size: usize,        // Default: 4096
+    pub page_size: usize,        // Default: wal::format::PAGE_SIZE
     pub cache_size: usize,       // Max pages in cache
     pub sync_mode: SyncMode,     // When to fsync
     pub compression: bool,       // Enable compression

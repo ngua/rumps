@@ -465,7 +465,7 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - `RecordHeader` (20 bytes): CRC32 checksum, payload length, sequence number, flags
   - Payload: bincode-serialized `WalRecord`
   - CRC32 (IEEE polynomial) for corruption detection
-- [ ] Implement `WalWriter`:
+- [x] Implement `WalWriter`:
   - Append records to WAL file
   - Flush/fsync on transaction commit (configurable sync policy)
   - Handle WAL file rotation when size exceeds threshold
