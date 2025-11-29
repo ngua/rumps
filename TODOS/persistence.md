@@ -473,6 +473,27 @@ This plan focuses on the **storage layer** (Phases 1-7). The query layer will be
   - Read WAL records sequentially
   - Verify checksums
   - Parse records by type
+
+**Architecture: Reader → Writer Lifecycle**
+
+The WAL system enforces a single initialization path:
+
+```
+WalReader::open(dir)  →  iterate for recovery  →  reader.into_writer(cfg)
+```
+
+This design ensures:
+
+1. **Single source of truth**: The reader is the authority on file state. There's no separate "open for writing" path that might disagree about sequence numbers or file position.
+
+2. **No double-scanning**: The reader tracks position and sequence numbers as it iterates. Converting to a writer reuses this state without re-scanning.
+
+3. **Forced acknowledgment**: Callers must explicitly handle existing WAL records (even if just iterating to EOF) before writing new ones. This prevents accidentally ignoring recovery.
+
+4. **Clear lifecycle**: Read phase (recovery) → Write phase (runtime). No ambiguity about which operations are valid when.
+
+`WalWriter` has no public constructor; it can only be created via `WalReader::into_writer`.
+
 - [ ] Add WAL recovery logic:
   - Replay uncommitted transactions on startup
   - Handle partial writes (incomplete records)

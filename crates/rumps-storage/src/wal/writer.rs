@@ -1,26 +1,38 @@
 //! WAL writer for appending records and managing file rotation.
 //!
-//! The `WalWriter` handles:
-//! - Appending serialized `WalRecord`s to the WAL file
-//! - Flushing/syncing based on configurable `SyncMode`
-//! - Rotating WAL files when size exceeds a threshold
+//! # Construction
+//!
+//! `WalWriter` cannot be constructed directly. Instead, use the
+//! [`WalReader::into_writer`] method:
+//!
+//! ```ignore
+//! let mut reader = WalReader::open(dir).await?;
+//! while let Some(entry) = reader.next().await? {
+//!     // Handle recovery...
+//! }
+//! let writer = reader.into_writer(cfg).await?;
+//! ```
+//!
+//! See the [`reader`] module documentation for the rationale behind
+//! this design.
 //!
 //! # Thread Safety
 //!
 //! `WalWriter` uses `tokio::sync::Mutex` internally and is safe to share
 //! via `Arc<WalWriter>` across tasks.
+//!
+//! [`WalReader::into_writer`]: super::WalReader::into_writer
+//! [`reader`]: super::reader
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use futures::future::BoxFuture;
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use super::format::{
-    try_read_record_at, FileHeader, RecordHeader, FILE_HEADER_SIZE,
-    RECORD_HEADER_SIZE,
+    FileHeader, RecordHeader, FILE_HEADER_SIZE, RECORD_HEADER_SIZE,
 };
 use super::WalRecord;
 use crate::error::{Result, StorageError};
@@ -70,14 +82,6 @@ impl Default for WalWriterConfig {
     }
 }
 
-/// Result of opening/creating a WAL file.
-struct OpenedWal {
-    file: File,
-    file_size: u64,
-    first_seq: u64,
-    next_seq: u64,
-}
-
 /// Internal mutable state of the WAL writer.
 struct WalWriterState {
     /// Current WAL file handle.
@@ -94,29 +98,17 @@ struct WalWriterState {
 
 /// WAL writer that appends records and manages file rotation.
 ///
-/// # Example
+/// # Construction
+///
+/// This type cannot be constructed directly. Use [`WalReader::into_writer`]:
 ///
 /// ```ignore
-/// use rumps_storage::wal::{WalWriter, WalWriterConfig, SyncMode, WalRecord};
-/// use std::path::Path;
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let cfg = WalWriterConfig {
-///         sync_mode: SyncMode::OnCommit,
-///         max_file_size: 16 * 1024 * 1024, // 16 MiB
-///     };
-///     let writer = WalWriter::open(Path::new("./data/wal.log"), cfg).await?;
-///
-///     // Append a record
-///     let rec = WalRecord::TxnBegin { txn_id: 1.into() };
-///     let seq = writer.append(&rec).await?;
-///
-///     // Explicitly sync on commit
-///     writer.sync().await?;
-///     Ok(())
-/// }
+/// let reader = WalReader::open(dir).await?;
+/// // ... iterate for recovery ...
+/// let writer = reader.into_writer(cfg).await?;
 /// ```
+///
+/// [`WalReader::into_writer`]: super::WalReader::into_writer
 pub(crate) struct WalWriter {
     /// Directory containing WAL files.
     dir: PathBuf,
@@ -127,125 +119,47 @@ pub(crate) struct WalWriter {
 }
 
 impl WalWriter {
-    /// Open or create a WAL writer at the given directory.
+    /// Create a writer from a reader.
     ///
-    /// If a WAL file already exists, it will be opened for appending.
-    /// The `next_seq` continues from where it left off.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if the directory cannot be created or the file
-    /// cannot be opened.
-    pub(crate) async fn open(dir: &Path, cfg: WalWriterConfig) -> Result<Self> {
-        // Ensure directory exists
-        fs::create_dir_all(dir).await?;
+    /// This is called by `WalReader::into_writer` and should not be
+    /// used directly. It consumes the reader, reopens the file for
+    /// appending, and initializes writer state.
+    pub(super) async fn from_reader(
+        reader: super::WalReader,
+        cfg: WalWriterConfig,
+    ) -> Result<Self> {
+        // Close read-only handle
+        drop(reader.file);
 
-        let path = dir.join("wal.log");
-        let opened = Self::open_or_create_file(&path).await?;
+        // Reopen with append mode
+        let file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .open(&reader.path)
+            .await?;
 
         let state = WalWriterState {
-            file: opened.file,
-            path,
-            file_size: opened.file_size,
-            next_seq: opened.next_seq,
-            first_seq_in_file: opened.first_seq,
+            file,
+            path: reader.path,
+            file_size: reader.file_size,
+            next_seq: reader.next_seq,
+            first_seq_in_file: reader.first_seq,
         };
 
         Ok(Self {
-            dir: dir.to_path_buf(),
+            dir: reader.dir,
             cfg,
             state: Mutex::new(state),
         })
     }
 
-    /// Open an existing WAL file or create a new one.
-    async fn open_or_create_file(path: &Path) -> Result<OpenedWal> {
-        let exists = fs::try_exists(path).await.unwrap_or(false);
-
-        if exists {
-            Self::open_existing_file(path).await
-        } else {
-            Self::create_new_file(path, 0).await
-        }
-    }
-
-    /// Open an existing WAL file and determine `next_seq`.
-    async fn open_existing_file(path: &Path) -> Result<OpenedWal> {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .open(path)
-            .await?;
-
-        let file_size = file.metadata().await?.len();
-
-        // Need at least the file header
-        if file_size < FILE_HEADER_SIZE as u64 {
-            // Corrupt or empty file; recreate
-            drop(file);
-            Self::create_new_file(path, 0).await
-        } else {
-            // Read file header
-            file.seek(SeekFrom::Start(0)).await?;
-            let mut hdr_buf = [0u8; FILE_HEADER_SIZE];
-            AsyncReadExt::read_exact(&mut file, &mut hdr_buf).await?;
-
-            let hdr = FileHeader::from_bytes(&hdr_buf).ok_or_else(|| {
-                StorageError::InvalidOperation("Invalid WAL file header".into())
-            })?;
-
-            // Scan to find the last sequence number
-            let next_seq =
-                Self::scan_for_last_seq(&mut file, hdr.first_seq, file_size)
-                    .await?;
-
-            // Seek to end for appending
-            file.seek(SeekFrom::End(0)).await?;
-
-            Ok(OpenedWal {
-                file,
-                file_size,
-                first_seq: hdr.first_seq,
-                next_seq,
-            })
-        }
-    }
-
-    /// Scan WAL to find `next_seq` (one past last valid record).
-    async fn scan_for_last_seq(
-        file: &mut File,
-        first_seq: u64,
-        file_size: u64,
-    ) -> Result<u64> {
-        Self::scan_from(file, FILE_HEADER_SIZE as u64, first_seq, file_size)
-            .await
-    }
-
-    /// Recursive helper: scan from `pos`, tracking `next_seq`.
-    fn scan_from<'a>(
-        file: &'a mut File,
-        pos: u64,
-        next_seq: u64,
-        file_size: u64,
-    ) -> BoxFuture<'a, Result<u64>> {
-        Box::pin(async move {
-            match try_read_record_at(file, pos, file_size).await? {
-                Some(raw) => {
-                    Self::scan_from(
-                        file,
-                        raw.end_pos,
-                        raw.header.seq + 1,
-                        file_size,
-                    )
-                    .await
-                }
-                None => Ok(next_seq),
-            }
-        })
-    }
-
     /// Create a new WAL file with the given first sequence number.
-    async fn create_new_file(path: &Path, first_seq: u64) -> Result<OpenedWal> {
+    ///
+    /// Used internally for rotation.
+    async fn create_new_file(
+        path: &Path,
+        first_seq: u64,
+    ) -> Result<(File, u64)> {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -258,12 +172,7 @@ impl WalWriter {
         file.write_all(&hdr.to_bytes()).await?;
         file.sync_all().await?;
 
-        Ok(OpenedWal {
-            file,
-            file_size: FILE_HEADER_SIZE as u64,
-            first_seq,
-            next_seq: first_seq,
-        })
+        Ok((file, FILE_HEADER_SIZE as u64))
     }
 
     /// Append a WAL record and return its sequence number.
@@ -318,7 +227,7 @@ impl WalWriter {
 
     /// Rotate to a new WAL file.
     ///
-    /// The current file is renamed with a timestamp suffix,
+    /// The current file is renamed with a sequence range suffix,
     /// and a new file is created.
     async fn rotate_locked(&self, state: &mut WalWriterState) -> Result<()> {
         // Sync current file before rotation
@@ -335,13 +244,13 @@ impl WalWriter {
         fs::rename(&old_path, &archive_path).await?;
 
         // Create new file
-        let opened = Self::create_new_file(&old_path, state.next_seq).await?;
+        let (file, file_size) =
+            Self::create_new_file(&old_path, state.next_seq).await?;
 
-        state.file = opened.file;
+        state.file = file;
         state.path = old_path;
-        state.file_size = opened.file_size;
-        state.first_seq_in_file = opened.first_seq;
-        state.next_seq = opened.next_seq;
+        state.file_size = file_size;
+        state.first_seq_in_file = state.next_seq;
 
         Ok(())
     }
@@ -384,10 +293,19 @@ mod tests {
     use super::*;
     use crate::node::NodeData;
     use crate::transaction::TransactionId;
+    use crate::wal::WalReader;
+
+    /// Helper: open reader and convert to writer.
+    async fn open_writer(dir: &Path, cfg: WalWriterConfig) -> WalWriter {
+        let mut reader = WalReader::open(dir).await.expect("open reader");
+        // Drain any existing records
+        while reader.next().await.expect("next").is_some() {}
+        reader.into_writer(cfg).await.expect("into_writer")
+    }
 
     async fn temp_writer(cfg: WalWriterConfig) -> (WalWriter, TempDir) {
         let dir = TempDir::new().expect("temp dir");
-        let writer = WalWriter::open(dir.path(), cfg).await.expect("open");
+        let writer = open_writer(dir.path(), cfg).await;
         (writer, dir)
     }
 
@@ -442,9 +360,7 @@ mod tests {
         // Write some records
         {
             let writer =
-                WalWriter::open(dir.path(), WalWriterConfig::default())
-                    .await
-                    .expect("open");
+                open_writer(dir.path(), WalWriterConfig::default()).await;
             writer
                 .append(&WalRecord::TxnBegin {
                     txn_id: TransactionId::from(1),
@@ -463,9 +379,7 @@ mod tests {
         // Reopen and verify seq continues
         {
             let writer =
-                WalWriter::open(dir.path(), WalWriterConfig::default())
-                    .await
-                    .expect("reopen");
+                open_writer(dir.path(), WalWriterConfig::default()).await;
             assert_eq!(writer.next_seq().await, 2);
 
             let seq = writer
@@ -505,7 +419,7 @@ mod tests {
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .expect("read dir")
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains("-"))
+            .filter(|e| e.file_name().to_string_lossy().contains('-'))
             .collect();
 
         assert!(!entries.is_empty(), "Expected archived WAL file");
@@ -527,7 +441,7 @@ mod tests {
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .expect("read dir")
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains("-"))
+            .filter(|e| e.file_name().to_string_lossy().contains('-'))
             .collect();
 
         assert_eq!(entries.len(), 1);
