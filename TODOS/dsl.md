@@ -9,7 +9,7 @@ RUMPS is **not** a reimplementation of MUMPS, but rather a **declarative evoluti
 - Provides functional composition through pipeline operators
 - Ensures memory efficiency through lazy evaluation
 - Enables automatic parallelization and optimization
-- Maintains type safety (future enhancement)
+- Provides optional type annotations as runtime hints
 
 ## Naming Conventions
 
@@ -28,7 +28,7 @@ SET PATIENT_ID = 123
 ```
 
 **Reserved keywords** (cannot be used as variable names):
-`SET`, `GET`, `KILL`, `COLLECT`, `PROCEDURE`, `TRANSACTION`, `IF`, `ELSE`, `WHERE`, `SELECT`, `INTO`, `OUTPUT`, etc.
+`SET`, `GET`, `KILL`, `COLLECT`, `PROCEDURE`, `TRANSACTION`, `IF`, `ELSE`, `WHERE`, `SELECT`, `INTO`, `OUTPUT`, `INTO` etc.
 
 ### Train-Case Support
 
@@ -331,12 +331,12 @@ RUMPS provides comprehensive JSON operators for working with structured data, in
 
 ### Field Access Operators
 
-| Operator | Description                      | Example          | Result             |
-|----------|----------------------------------|------------------|--------------------|
-| `.`      | Get field (returns JSON)         | `data.name`      | `"John"` (as JSON) |
-| `..`     | Get field (returns text/scalar)  | `data..name`     | `John` (as string) |
-| `->`     | Get field by key (returns JSON)  | `data->"name"`   | `"John"` (as JSON) |
-| `->>`    | Get field by key (returns text)  | `data->>"name"`  | `John` (as string) |
+| Operator | Description                     | Example         | Result             |
+|----------|---------------------------------|-----------------|--------------------|
+| `.`      | Get field (returns JSON)        | `data.name`     | `"John"` (as JSON) |
+| `..`     | Get field (returns text/scalar) | `data..name`    | `John` (as string) |
+| `->`     | Get field by key (returns JSON) | `data->"name"`  | `"John"` (as JSON) |
+| `->>`    | Get field by key (returns text) | `data->>"name"` | `John` (as string) |
 
 #### Usage Examples
 ```rumps
@@ -359,11 +359,11 @@ SET first = items..0              ; a as string
 
 ### Path Navigation
 
-| Operator | Description                       | Example                  | Result             |
-|----------|-----------------------------------|--------------------------|--------------------|
-| `#>`     | Get value at path (returns JSON)  | `data #> ["addr", "city"]` | `"NYC"` (as JSON)  |
-| `#>>`    | Get value at path (returns text)  | `data #>> ["addr", "city"]` | `NYC` (as string)  |
-| `@`      | Path expression                   | `data@.addr.city`        | `"NYC"`            |
+| Operator | Description                      | Example                      | Result            |
+|----------|----------------------------------|------------------------------|-------------------|
+| `#>`     | Get value at path (returns JSON) | `data #> ["addr", "city"]`   | `"NYC"` (as JSON) |
+| `#>>`    | Get value at path (returns text) | `data #>> ["addr", "city"]`  | `NYC` (as string) |
+| `@`      | Path expression                  | `data@.addr.city`            | `"NYC"`           |
 
 #### Usage Examples
 ```rumps
@@ -419,11 +419,11 @@ IF arr @> [2, 3] {
 
 ### Key/Element Existence
 
-| Operator | Description    | Example                    | Result |
-|----------|----------------|----------------------------|--------|
-| `?`      | Key exists     | `data ? "name"`            | `true` |
+| Operator | Description    | Example                      | Result |
+|----------|----------------|------------------------------|--------|
+| `?`      | Key exists     | `data ? "name"`              | `true` |
 | `?\|`    | Any key exists | `data ?\| ["name", "alias"]` | `true` |
-| `?&`     | All keys exist | `data ?& ["name", "age"]`  | `true` |
+| `?&`     | All keys exist | `data ?& ["name", "age"]`    | `true` |
 
 #### Usage Examples
 ```rumps
@@ -455,10 +455,10 @@ IF arr ? 0 {
 
 ### Modification Operators
 
-| Operator | Description       | Example                 | Result              |
-|----------|-------------------|-------------------------|---------------------|
-| `\|\|`   | Concatenate/merge | `{"a":1} \|\| {"b":2}`  | `{"a":1, "b":2}`    |
-| `-`      | Delete key        | `{"a":1, "b":2} - "a"`  | `{"b":2}`           |
+| Operator | Description       | Example                   | Result               |
+|----------|-------------------|---------------------------|----------------------|
+| `\|\|`   | Concatenate/merge | `{"a":1} \|\| {"b":2}`    | `{"a":1, "b":2}`     |
+| `-`      | Delete key        | `{"a":1, "b":2} - "a"`    | `{"b":2}`            |
 | `#-`     | Delete at path    | `data #- ["addr", "zip"]` | (removes nested key) |
 
 #### Usage Examples
@@ -492,18 +492,18 @@ SET shorter = arr - "b"            ; Remove by value: ["a", "c"]
 
 The `Json` namespace provides functions for JSON manipulation:
 
-| Function                     | Description            | Example                              |
-|------------------------------|------------------------|--------------------------------------|
-| `Json.type(val)`             | Get JSON type          | `Json.type(42)` → `Json.Number`      |
-| `Json.keys(obj)`             | Get object keys        | `Json.keys({"a":1})` → `["a"]`       |
-| `Json.values(obj)`           | Get object values      | `Json.values({"a":1})` → `[1]`       |
-| `Json.length(val)`           | Get length             | `Json.length([1,2,3])` → `3`         |
-| `Json.parse(str)`            | Parse JSON string      | `Json.parse("{\"a\":1}")`            |
-| `Json.stringify(val)`        | Convert to JSON string | `Json.stringify({"a":1})`            |
-| `Json.set(obj, path, val)`   | Set value at path      | `Json.set(data, ["a"], 1)`           |
-| `Json.merge-deep(a, b)`      | Deep merge objects     | `Json.merge-deep(base, overlay)`     |
-| `Json.flatten(obj)`          | Flatten nested object  | `Json.flatten({"a":{"b":1}})`        |
-| `Json.unflatten(obj)`        | Unflatten object       | `Json.unflatten({"a.b":1})`          |
+| Function                   | Description            | Example                          |
+|----------------------------|------------------------|----------------------------------|
+| `Json.type(val)`           | Get JSON type          | `Json.type(42)` → `Json.Number`  |
+| `Json.keys(obj)`           | Get object keys        | `Json.keys({"a":1})` → `["a"]`   |
+| `Json.values(obj)`         | Get object values      | `Json.values({"a":1})` → `[1]`   |
+| `Json.length(val)`         | Get length             | `Json.length([1,2,3])` → `3`     |
+| `Json.parse(str)`          | Parse JSON string      | `Json.parse("{\"a\":1}")`        |
+| `Json.stringify(val)`      | Convert to JSON string | `Json.stringify({"a":1})`        |
+| `Json.set(obj, path, val)` | Set value at path      | `Json.set(data, ["a"], 1)`       |
+| `Json.merge-deep(a, b)`    | Deep merge objects     | `Json.merge-deep(base, overlay)` |
+| `Json.flatten(obj)`        | Flatten nested object  | `Json.flatten({"a":{"b":1}})`    |
+| `Json.unflatten(obj)`      | Unflatten object       | `Json.unflatten({"a.b":1})`      |
 
 #### Usage Examples
 ```rumps
@@ -761,96 +761,96 @@ SET result = MyUtils.double(21)  ; 42
 
 #### `String` — String operations
 
-| Function              | Description                    | Example                          |
-|-----------------------|--------------------------------|----------------------------------|
-| `String.length(s)`    | Get length                     | `String.length("hello")` → `5`   |
-| `String.upper(s)`     | Uppercase                      | `String.upper("hi")` → `"HI"`    |
-| `String.lower(s)`     | Lowercase                      | `String.lower("HI")` → `"hi"`    |
-| `String.trim(s)`      | Trim whitespace                | `String.trim("  x  ")` → `"x"`   |
-| `String.split(s, d)`  | Split by delimiter             | `String.split("a,b", ",")` → `["a", "b"]` |
-| `String.join(arr, d)` | Join with delimiter            | `String.join(["a", "b"], ",")` → `"a,b"` |
-| `String.slice(s, i, j)`| Substring                     | `String.slice("hello", 1, 3)` → `"el"` |
-| `String.contains(s, sub)` | Check substring            | `String.contains("hello", "ell")` → `true` |
-| `String.replace(s, old, new)` | Replace occurrences    | `String.replace("foo", "o", "a")` → `"faa"` |
+| Function                      | Description        | Example                                     |
+|-------------------------------|--------------------|---------------------------------------------|
+| `String.length(s)`            | Get length         | `String.length("hello")` → `5`              |
+| `String.upper(s)`             | Uppercase          | `String.upper("hi")` → `"HI"`               |
+| `String.lower(s)`             | Lowercase          | `String.lower("HI")` → `"hi"`               |
+| `String.trim(s)`              | Trim whitespace    | `String.trim("  x  ")` → `"x"`              |
+| `String.split(s, d)`          | Split by delimiter | `String.split("a,b", ",")` → `["a", "b"]`   |
+| `String.join(arr, d)`         | Join with delim    | `String.join(["a", "b"], ",")` → `"a,b"`    |
+| `String.slice(s, i, j)`       | Substring          | `String.slice("hello", 1, 3)` → `"el"`      |
+| `String.contains(s, sub)`     | Check substring    | `String.contains("hello", "ell")` → `true`  |
+| `String.replace(s, old, new)` | Replace occurs     | `String.replace("foo", "o", "a")` → `"faa"` |
 
 #### `Array` — Array operations
 
-| Function                | Description                  | Example                          |
-|-------------------------|------------------------------|----------------------------------|
-| `Array.length(arr)`     | Get length                   | `Array.length([1,2,3])` → `3`    |
-| `Array.push(arr, val)`  | Append element               | `Array.push([1,2], 3)` → `[1,2,3]` |
-| `Array.pop(arr)`        | Remove last                  | `Array.pop([1,2,3])` → `[1,2]`   |
-| `Array.head(arr)`       | First element                | `Array.head([1,2,3])` → `1`      |
-| `Array.tail(arr)`       | All but first                | `Array.tail([1,2,3])` → `[2,3]`  |
-| `Array.reverse(arr)`    | Reverse order                | `Array.reverse([1,2,3])` → `[3,2,1]` |
-| `Array.sort(arr)`       | Sort ascending               | `Array.sort([3,1,2])` → `[1,2,3]` |
-| `Array.concat(a, b)`    | Concatenate                  | `Array.concat([1], [2])` → `[1,2]` |
-| `Array.slice(arr, i, j)`| Subarray                     | `Array.slice([1,2,3,4], 1, 3)` → `[2,3]` |
-| `Array.contains(arr, v)`| Check membership             | `Array.contains([1,2,3], 2)` → `true` |
+| Function                 | Description      | Example                                  |
+|--------------------------|------------------|------------------------------------------|
+| `Array.length(arr)`      | Get length       | `Array.length([1,2,3])` → `3`            |
+| `Array.push(arr, val)`   | Append element   | `Array.push([1,2], 3)` → `[1,2,3]`       |
+| `Array.pop(arr)`         | Remove last      | `Array.pop([1,2,3])` → `[1,2]`           |
+| `Array.head(arr)`        | First element    | `Array.head([1,2,3])` → `1`              |
+| `Array.tail(arr)`        | All but first    | `Array.tail([1,2,3])` → `[2,3]`          |
+| `Array.reverse(arr)`     | Reverse order    | `Array.reverse([1,2,3])` → `[3,2,1]`     |
+| `Array.sort(arr)`        | Sort ascending   | `Array.sort([3,1,2])` → `[1,2,3]`        |
+| `Array.concat(a, b)`     | Concatenate      | `Array.concat([1], [2])` → `[1,2]`       |
+| `Array.slice(arr, i, j)` | Subarray         | `Array.slice([1,2,3,4], 1, 3)` → `[2,3]` |
+| `Array.contains(arr, v)` | Check membership | `Array.contains([1,2,3], 2)` → `true`    |
 
 #### `Map` — Map operations
 
-| Function                | Description                  | Example                          |
-|-------------------------|------------------------------|----------------------------------|
-| `Map.keys(m)`           | Get all keys                 | `Map.keys({a: 1})` → `["a"]`     |
-| `Map.values(m)`         | Get all values               | `Map.values({a: 1})` → `[1]`     |
-| `Map.has(m, k)`         | Check key exists             | `Map.has({a: 1}, "a")` → `true`  |
-| `Map.get(m, k)`         | Get value (Option)           | `Map.get({a: 1}, "a")` → `Some(1)` |
-| `Map.set(m, k, v)`      | Set key-value                | `Map.set({}, "a", 1)` → `{a: 1}` |
-| `Map.remove(m, k)`      | Remove key                   | `Map.remove({a: 1}, "a")` → `{}` |
-| `Map.merge(a, b)`       | Merge maps                   | `Map.merge({a: 1}, {b: 2})` → `{a: 1, b: 2}` |
+| Function           | Description      | Example                                  |
+|--------------------|------------------|------------------------------------------|
+| `Map.keys(m)`      | Get all keys     | `Map.keys({a: 1})` → `["a"]`             |
+| `Map.values(m)`    | Get all values   | `Map.values({a: 1})` → `[1]`             |
+| `Map.has(m, k)`    | Check key exists | `Map.has({a: 1}, "a")` → `true`          |
+| `Map.get(m, k)`    | Get value        | `Map.get({a: 1}, "a")` → `Some(1)`       |
+| `Map.set(m, k, v)` | Set key-value    | `Map.set({}, "a", 1)` → `{a: 1}`         |
+| `Map.remove(m, k)` | Remove key       | `Map.remove({a: 1}, "a")` → `{}`         |
+| `Map.merge(a, b)`  | Merge maps       | `Map.merge({a: 1}, {b: 2})` → `{a:1,b:2}`|
 
 #### `Math` — Mathematical operations
 
-| Function              | Description                    | Example                          |
-|-----------------------|--------------------------------|----------------------------------|
-| `Math.abs(x)`         | Absolute value                 | `Math.abs(-5)` → `5`             |
-| `Math.min(a, b)`      | Minimum                        | `Math.min(3, 7)` → `3`           |
-| `Math.max(a, b)`      | Maximum                        | `Math.max(3, 7)` → `7`           |
-| `Math.floor(x)`       | Floor                          | `Math.floor(3.7)` → `3`          |
-| `Math.ceil(x)`        | Ceiling                        | `Math.ceil(3.2)` → `4`           |
-| `Math.round(x)`       | Round                          | `Math.round(3.5)` → `4`          |
-| `Math.sqrt(x)`        | Square root                    | `Math.sqrt(16)` → `4.0`          |
-| `Math.pow(x, y)`      | Power                          | `Math.pow(2, 3)` → `8`           |
-| `Math.log(x)`         | Natural log                    | `Math.log(2.718)` → `~1.0`       |
-| `Math.sin(x)`         | Sine                           | `Math.sin(0)` → `0.0`            |
-| `Math.cos(x)`         | Cosine                         | `Math.cos(0)` → `1.0`            |
-| `Math.random()`       | Random 0-1                     | `Math.random()` → `0.xxxxx`      |
+| Function        | Description    | Example                    |
+|-----------------|----------------|----------------------------|
+| `Math.abs(x)`   | Absolute value | `Math.abs(-5)` → `5`       |
+| `Math.min(a,b)` | Minimum        | `Math.min(3, 7)` → `3`     |
+| `Math.max(a,b)` | Maximum        | `Math.max(3, 7)` → `7`     |
+| `Math.floor(x)` | Floor          | `Math.floor(3.7)` → `3`    |
+| `Math.ceil(x)`  | Ceiling        | `Math.ceil(3.2)` → `4`     |
+| `Math.round(x)` | Round          | `Math.round(3.5)` → `4`    |
+| `Math.sqrt(x)`  | Square root    | `Math.sqrt(16)` → `4.0`    |
+| `Math.pow(x,y)` | Power          | `Math.pow(2, 3)` → `8`     |
+| `Math.log(x)`   | Natural log    | `Math.log(2.718)` → `~1.0` |
+| `Math.sin(x)`   | Sine           | `Math.sin(0)` → `0.0`      |
+| `Math.cos(x)`   | Cosine         | `Math.cos(0)` → `1.0`      |
+| `Math.random()` | Random 0-1     | `Math.random()` → `0.xxx`  |
 
 #### `Option` — Option operations
 
-| Function                | Description                  | Example                          |
-|-------------------------|------------------------------|----------------------------------|
-| `Option.some(v)`        | Wrap value                   | `Option.some(42)` → `Some(42)`   |
-| `Option.none()`         | Empty option                 | `Option.none()` → `None`         |
-| `Option.is-some(o)`     | Check if Some                | `Option.is-some(Some(1))` → `true` |
-| `Option.is-none(o)`     | Check if None                | `Option.is-none(None)` → `true`  |
-| `Option.unwrap(o)`      | Get value or panic           | `Option.unwrap(Some(1))` → `1`   |
-| `Option.unwrap-or(o, d)`| Get value or default         | `Option.unwrap-or(None, 0)` → `0`|
-| `Option.map(o, f)`      | Transform if Some            | `Option.map(Some(1), double)` → `Some(2)` |
+| Function                 | Description          | Example                                   |
+|--------------------------|----------------------|-------------------------------------------|
+| `Option.some(v)`         | Wrap value           | `Option.some(42)` → `Some(42)`            |
+| `Option.none()`          | Empty option         | `Option.none()` → `None`                  |
+| `Option.is-some(o)`      | Check if Some        | `Option.is-some(Some(1))` → `true`        |
+| `Option.is-none(o)`      | Check if None        | `Option.is-none(None)` → `true`           |
+| `Option.unwrap(o)`       | Get value or panic   | `Option.unwrap(Some(1))` → `1`            |
+| `Option.unwrap-or(o, d)` | Get value or default | `Option.unwrap-or(None, 0)` → `0`         |
+| `Option.map(o, f)`       | Transform if Some    | `Option.map(Some(1), double)` → `Some(2)` |
 
 #### `Result` — Result operations
 
-| Function                  | Description                | Example                          |
-|---------------------------|----------------------------|----------------------------------|
-| `Result.ok(v)`            | Success value              | `Result.ok(42)` → `Ok(42)`       |
-| `Result.err(e)`           | Error value                | `Result.err("fail")` → `Err("fail")` |
-| `Result.is-ok(r)`         | Check if Ok                | `Result.is-ok(Ok(1))` → `true`   |
-| `Result.is-err(r)`        | Check if Err               | `Result.is-err(Err("x"))` → `true` |
-| `Result.unwrap(r)`        | Get value or panic         | `Result.unwrap(Ok(1))` → `1`     |
-| `Result.unwrap-or(r, d)`  | Get value or default       | `Result.unwrap-or(Err("x"), 0)` → `0` |
-| `Result.map(r, f)`        | Transform if Ok            | `Result.map(Ok(1), double)` → `Ok(2)` |
-| `Result.map-err(r, f)`    | Transform if Err           | `Result.map-err(Err("x"), upper)` |
+| Function                 | Description          | Example                                   |
+|--------------------------|----------------------|-------------------------------------------|
+| `Result.ok(v)`           | Success value        | `Result.ok(42)` → `Ok(42)`                |
+| `Result.err(e)`          | Error value          | `Result.err("fail")` → `Err("fail")`      |
+| `Result.is-ok(r)`        | Check if Ok          | `Result.is-ok(Ok(1))` → `true`            |
+| `Result.is-err(r)`       | Check if Err         | `Result.is-err(Err("x"))` → `true`        |
+| `Result.unwrap(r)`       | Get value or panic   | `Result.unwrap(Ok(1))` → `1`              |
+| `Result.unwrap-or(r, d)` | Get value or default | `Result.unwrap-or(Err("x"), 0)` → `0`     |
+| `Result.map(r, f)`       | Transform if Ok      | `Result.map(Ok(1), double)` → `Ok(2)`     |
+| `Result.map-err(r, f)`   | Transform if Err     | `Result.map-err(Err("x"), upper)` → `...` |
 
 #### `Io` — Input/Output (Future)
 
-| Function                | Description                  |
-|-------------------------|------------------------------|
-| `Io.read-file(path)`    | Read file contents           |
-| `Io.write-file(path, s)`| Write to file                |
-| `Io.stdin()`            | Read from stdin              |
-| `Io.print(s)`           | Print to stdout              |
-| `Io.eprint(s)`          | Print to stderr              |
+| Function                 | Description        |
+|--------------------------|--------------------|
+| `Io.read-file(path)`     | Read file contents |
+| `Io.write-file(path, s)` | Write to file      |
+| `Io.stdin()`             | Read from stdin    |
+| `Io.print(s)`            | Print to stdout    |
+| `Io.eprint(s)`           | Print to stderr    |
 
 ### Namespace Imports
 
@@ -884,40 +884,40 @@ Native types are the core RUMPS types with full type tracking.
 
 #### Primitives
 
-| Type     | Description                | Examples                    |
-|----------|----------------------------|-----------------------------|
-| `Null`   | Null/undefined value       | `null`                      |
-| `Bool`   | Boolean                    | `true`, `false`             |
-| `Int`    | Integer                    | `42`, `-7`, `0`             |
-| `Float`  | Floating-point number      | `3.14`, `-0.5`, `1e10`      |
-| `String` | Text string                | `"hello"`, `""`             |
+| Type     | Description           | Examples               |
+|----------|-----------------------|------------------------|
+| `Null`   | Null/undefined value  | `null`                 |
+| `Bool`   | Boolean               | `true`, `false`        |
+| `Int`    | Integer               | `42`, `-7`, `0`        |
+| `Float`  | Floating-point number | `3.14`, `-0.5`, `1e10` |
+| `String` | Text string           | `"hello"`, `""`        |
 
 #### Collections
 
-| Type            | Description                          | Examples                     |
-|-----------------|--------------------------------------|------------------------------|
-| `Array[T]`      | Typed array                          | `Array[Int]`, `Array[String]`|
-| `Map[K, V]`     | Key-value map                        | `Map[String, Int]`           |
-| `Set[T]`        | Unique value set                     | `Set[String]`                |
-| `Tuple[...]`    | Fixed heterogeneous collection       | `Tuple[Int, String, Bool]`   |
+| Type         | Description                    | Examples                      |
+|--------------|--------------------------------|-------------------------------|
+| `Array[T]`   | Typed array                    | `Array[Int]`, `Array[String]` |
+| `Map[K, V]`  | Key-value map                  | `Map[String, Int]`            |
+| `Set[T]`     | Unique value set               | `Set[String]`                 |
+| `Tuple[...]` | Fixed heterogeneous collection | `Tuple[Int, String, Bool]`    |
 
 #### Wrappers
 
-| Type            | Description                          | Examples                     |
-|-----------------|--------------------------------------|------------------------------|
-| `Option[T]`     | Nullable/optional value              | `Option[String]`             |
-| `Result[T, E]`  | Success or error                     | `Result[Int, String]`        |
+| Type           | Description             | Examples              |
+|----------------|-------------------------|-----------------------|
+| `Option[T]`    | Nullable/optional value | `Option[String]`      |
+| `Result[T, E]` | Success or error        | `Result[Int, String]` |
 
 #### Special
 
-| Type            | Description                          | Examples                     |
-|-----------------|--------------------------------------|------------------------------|
-| `Stream[T]`     | Lazy stream of `T`                   | `Stream[Key]`                |
-| `Proc[A, R]`    | Procedure `A -> R`                   | `Proc[Int, Int]`             |
-| `Key`           | Subscript key                        | `Key`                        |
-| `Global`        | Global variable reference            | `Global`                     |
-| `Local`         | Local variable reference             | `Local`                      |
-| `Type`          | Type value (reflection)              | `Type`                       |
+| Type         | Description                 | Examples         |
+|--------------|-----------------------------|------------------|
+| `Stream[T]`  | Lazy stream of `T`          | `Stream[Key]`    |
+| `Proc[A, R]` | Procedure `A -> R`          | `Proc[Int, Int]` |
+| `Key`        | Subscript key               | `Key`            |
+| `Global`     | Global variable reference   | `Global`         |
+| `Local`      | Local variable reference    | `Local`          |
+| `Type`       | Type value (reflection)     | `Type`           |
 
 #### Abstract
 
@@ -931,15 +931,15 @@ Native types are the core RUMPS types with full type tracking.
 
 JSON types represent dynamic data from parsing or external sources. They mirror JSON's structure but are distinct from native types.
 
-| Type          | Description                          | Native Equivalent            |
-|---------------|--------------------------------------|------------------------------|
-| `Json`        | Any JSON value                       | `Any`                        |
-| `Json.Null`   | JSON null                            | `Null`                       |
-| `Json.Bool`   | JSON boolean                         | `Bool`                       |
-| `Json.Number` | JSON number (no int/float distinction)| `Number`                    |
-| `Json.String` | JSON string                          | `String`                     |
-| `Json.Array`  | JSON array (heterogeneous)           | `Array[Json]`                |
-| `Json.Object` | JSON object (string keys)            | `Map[String, Json]`          |
+| Type          | Description                           | Native Equivalent   |
+|---------------|---------------------------------------|---------------------|
+| `Json`        | Any JSON value                        | `Any`               |
+| `Json.Null`   | JSON null                             | `Null`              |
+| `Json.Bool`   | JSON boolean                          | `Bool`              |
+| `Json.Number` | JSON number (no int/float distinction)| `Number`            |
+| `Json.String` | JSON string                           | `String`            |
+| `Json.Array`  | JSON array (heterogeneous)            | `Array[Json]`       |
+| `Json.Object` | JSON object (string keys)             | `Map[String, Json]` |
 
 ### Native vs JSON
 
@@ -967,20 +967,24 @@ SET out: Json = nums as Json
 
 ### Type Annotations
 
-Type annotations are optional but can be added to procedure arguments and return types:
+Type annotations are **optional hints** that the interpreter validates at runtime. RUMPS is an interpreted query language, not a compiled programming language—there is no static type checking. Annotations serve as:
+
+1. **Documentation** for procedure signatures
+2. **Runtime guards** that produce interpreter errors if violated
+3. **Self-describing contracts** for API boundaries
 
 ```rumps
-; Untyped (inferred)
+; Untyped (no runtime validation)
 PROCEDURE add (a, b) DO
   a + b
 END
 
-; Typed arguments
+; Typed arguments (runtime error if wrong type passed)
 PROCEDURE add (a: Int, b: Int) DO
   a + b
 END
 
-; Typed arguments and return
+; Typed arguments and return (validates both input and output)
 PROCEDURE add (a: Int, b: Int) -> Int DO
   a + b
 END
@@ -990,6 +994,8 @@ PROCEDURE process (data: Json.Object) -> Json.Array DO
   Json.values(data)
 END
 ```
+
+When a type annotation is violated, the interpreter raises a runtime error with a clear message indicating the expected vs actual type.
 
 ### Type Checking
 
@@ -1016,15 +1022,45 @@ IF t == Int OR t == Float { ... }
 
 ### Type Coercion
 
-Explicit conversion via type namespaces:
+RUMPS performs **automatic type coercion** wherever sensible, following these rules:
 
-| Function          | Description              | Example                     |
-|-------------------|--------------------------|-----------------------------|
-| `Int.from(val)`   | Convert to Int           | `Int.from("42")` → `42`     |
-| `Float.from(val)` | Convert to Float         | `Float.from("3.14")` → `3.14` |
-| `String.from(val)`| Convert to String        | `String.from(42)` → `"42"`  |
-| `Bool.from(val)`  | Convert to Bool          | `Bool.from(1)` → `true`     |
-| `Array.from(val)` | Wrap in Array            | `Array.from(1)` → `[1]`     |
+#### Automatic Coercions
+
+RUMPS takes a conservative approach to coercion: values can be coerced *into* strings, but not *out of* them. This avoids JavaScript-style surprises while remaining flexible.
+
+| Context                             | Coercion            | Example                       | Notes                    |
+|-------------------------------------|---------------------|-------------------------------|--------------------------|
+| Numeric operations (`+`, `-`, etc.) | Int ↔ Float         | `42 + 3.14` → `45.14`         | Promotes to Float        |
+| String concatenation (`++`)         | Any → String        | `"ID: " ++ 42` → `"ID: 42"`   | Always valid             |
+| Boolean context (`IF`, `AND`, `OR`) | Any → Truthy/falsy  | `IF count { ... }`            | See table below          |
+
+**What is NOT coerced:**
+
+| Expression     | Result        | Rationale                              |
+|----------------|---------------|----------------------------------------|
+| `"10" + 2`     | Runtime error | String not coerced to number           |
+| `"10" > 5`     | Runtime error | Use `Int.from("10") > 5` if intended   |
+| `"3.14" * 2`   | Runtime error | Explicit conversion required           |
+
+This is a deliberate departure from traditional MUMPS (where everything was stringly-typed) in favor of catching likely bugs.
+
+#### Truthy/Falsy Values
+
+| Falsy                                         | Truthy         |
+|-----------------------------------------------|----------------|
+| `null`, `false`, `0`, `0.0`, `""`, `[]`, `{}` | Everything else|
+
+#### Explicit Conversion
+
+When automatic coercion isn't appropriate or for clarity, use type namespaces:
+
+| Function           | Description      | Example                       |
+|--------------------|------------------|-------------------------------|
+| `Int.from(val)`    | Convert to Int   | `Int.from("42")` → `42`       |
+| `Float.from(val)`  | Convert to Float | `Float.from("3.14")` → `3.14` |
+| `String.from(val)` | Convert to String| `String.from(42)` → `"42"`    |
+| `Bool.from(val)`   | Convert to Bool  | `Bool.from(1)` → `true`       |
+| `Array.from(val)`  | Wrap in Array    | `Array.from(1)` → `[1]`       |
 
 Or use the `as` keyword for casting:
 
@@ -1032,6 +1068,8 @@ Or use the `as` keyword for casting:
 SET n = "42" as Int
 SET s = 3.14 as String
 ```
+
+**Note**: Failed coercions (e.g., `"hello" as Int`) produce runtime errors.
 
 ### Parameterized Type Examples
 
@@ -1090,7 +1128,7 @@ PROCEDURE admit (p: Patient) DO
 END
 ```
 
-**Open question**: How much static type checking to enforce at parse/compile time vs runtime?
+**Resolved**: All type checking is **runtime only**. RUMPS is an interpreted query language—type annotations are validated when code executes, not at parse time.
 
 ## Fundamental Primitive: COLLECT
 
@@ -1435,16 +1473,16 @@ TRANSACTION {
 
 ### Summary Table
 
-| Pattern | Traditional MUMPS | RUMPS DSL | Benefits |
-|---------|------------------|-----------|----------|
-| Simple iteration | `FOR SET I=$O(^D(I)) Q:I="" DO` | `COLLECT ^D` | Cleaner syntax |
-| Filtering | `IF` statements in loop body | `WHERE` / `FILTER` clauses | Declarative intent |
-| Counting | Manual counter variable | `COUNT INTO` | No state management |
-| First N items | Counter with `QUIT` | `TAKE n` | Clear intent |
-| Aggregation | Manual accumulator variables | `AGGREGATE` operations | Built-in operations |
-| Output | Multiple `WRITE` statements | `OUTPUT` with templates | Flexible formatting |
-| Parallel processing | Not available | `PARALLEL n` | Automatic optimization |
-| Error handling | Manual checks | Stream error propagation | Consistent handling |
+| Pattern             | Traditional MUMPS                | RUMPS DSL                 | Benefits               |
+|---------------------|----------------------------------|---------------------------|------------------------|
+| Simple iteration    | `FOR SET I=$O(^D(I)) Q:I="" DO`  | `COLLECT ^D`              | Cleaner syntax         |
+| Filtering           | `IF` statements in loop body     | `WHERE` / `FILTER`        | Declarative intent     |
+| Counting            | Manual counter variable          | `COUNT INTO`              | No state management    |
+| First N items       | Counter with `QUIT`              | `TAKE n`                  | Clear intent           |
+| Aggregation         | Manual accumulator variables     | `AGGREGATE` operations    | Built-in operations    |
+| Output              | Multiple `WRITE` statements      | `OUTPUT` with templates   | Flexible formatting    |
+| Parallel processing | Not available                    | `PARALLEL n`              | Automatic optimization |
+| Error handling      | Manual checks                    | Stream error propagation  | Consistent handling    |
 
 ### Detailed Pattern Comparison
 
@@ -1469,7 +1507,7 @@ The following table shows common MUMPS iteration patterns and their conceptual R
 3. **Automatic Optimization**: The runtime can optimize streaming, batching, and parallelization
 4. **Composable Operations**: Stream operations naturally chain together
 5. **Memory Efficient**: Lazy evaluation means data isn't loaded until needed
-6. **Type Safe**: Can be statically checked at compile time (future enhancement)
+6. **Type Hints**: Optional annotations validated at runtime for documentation and error catching
 
 ## Implementation Phases
 
@@ -1521,7 +1559,7 @@ The following table shows common MUMPS iteration patterns and their conceptual R
 ## Open Design Questions
 
 1. **Syntax Style**: Should we support both block form and pipeline form, or standardize on one?
-2. **Type System**: How much type inference vs explicit typing?
+2. ~~**Type System**: How much type inference vs explicit typing?~~ **Resolved**: No static type checking. Type annotations are optional runtime hints—validated when executed, producing interpreter errors if violated. Conservative automatic coercion (into strings, between numerics, but not from strings to numbers). A future "strict mode" may add optional parse-time validation for annotated procedures.
 3. **Error Handling**: How to handle errors in stream processing?
 4. **Transaction Integration**: How do streams interact with transaction boundaries?
 5. **Performance Hints**: Should we allow manual optimization hints?
@@ -1538,7 +1576,7 @@ These tasks should be completed after the storage engine implementation is finis
   - Consider user survey or prototype both to test ergonomics
   - Document decision rationale for future reference
 - [ ] **Define operator precedence**: Establish clear precedence rules for all operations
-- [ ] **Specify type coercion rules**: When and how automatic type conversion happens
+- [x] **Specify type coercion rules**: Conservative coercion — into strings and between numerics, but NOT from strings to numbers (see Type Coercion section)
 - [ ] **Design error handling semantics**: Define how errors propagate through streams
 - [ ] **Establish naming conventions**: Variable naming, function naming, constants
 
@@ -1614,13 +1652,15 @@ These tasks should be completed after the storage engine implementation is finis
 2. **Composable**: All operations should combine naturally
 3. **Lazy by Default**: Don't compute until needed
 4. **Memory Efficient**: Stream processing, not bulk loading
-5. **Type Safe**: Catch errors at compile/parse time when possible
-6. **Predictable**: No hidden side effects or surprising behavior
-7. **Performant**: Optimize automatically where possible
-8. **Debuggable**: Clear error messages and debugging tools
+5. **Runtime Type Hints**: Optional annotations validated at runtime with clear error messages
+6. **Automatic Coercion**: Implicit type conversions wherever sensible to reduce ceremony
+7. **Predictable**: No hidden side effects or surprising behavior
+8. **Performant**: Optimize automatically where possible
+9. **Debuggable**: Clear error messages and debugging tools
 
 ## Future Enhancements
 
+- **Strict Mode**: Optional parse-time validation when type annotations are present. When enabled, the interpreter would check annotated procedure signatures at definition time rather than call time, catching type mismatches earlier (useful for development/CI). This would not add static type inference—just validates that explicitly-annotated types are consistent.
 - **Pattern Matching**: Destructuring in SELECT clauses
 - **Window Functions**: Operations over sliding windows
 - **Time-based Operations**: Temporal queries and aggregations
@@ -1638,4 +1678,4 @@ These tasks should be completed after the storage engine implementation is finis
 
 ---
 
-Last Updated: 2025-11-25
+Last Updated: 2025-11-29
