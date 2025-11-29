@@ -22,13 +22,11 @@
 //! # Usage
 //!
 //! ```ignore
-//! let mut reader = WalReader::open(dir).await?;
-//! let result = recover(&mut reader).await?;
+//! let reader = WalReader::open(dir).await?;
+//! let (result, reader) = reader.recover().await?;
 //!
 //! // Apply committed operations to B-tree
-//! for op in result.committed_ops {
-//!     apply_op(&btree, op).await?;
-//! }
+//! result.committed_ops.iter().try_for_each(|op| apply_op(&btree, op))?;
 //!
 //! // Convert to writer for runtime
 //! let writer = reader.into_writer(cfg).await?;
@@ -37,10 +35,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use futures::future::BoxFuture;
 use rumps_types::{Key, Name};
 
-use super::reader::{WalEntry, WalReader};
+use super::reader::WalReader;
 use super::WalRecord;
 use crate::error::Result;
 use crate::node::NodeData;
@@ -112,96 +109,42 @@ pub(crate) struct RecoveryResult {
 
 /// Transaction state during recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TxnState {
-    /// Transaction is in progress (saw TxnBegin).
+pub(super) enum TxnState {
+    /// Transaction is in progress (saw `TxnBegin`).
     Pending,
-    /// Transaction committed (saw TxnCommit).
+    /// Transaction committed (saw `TxnCommit`).
     Committed,
-    /// Transaction aborted (saw TxnAbort).
+    /// Transaction aborted (saw `TxnAbort`).
     Aborted,
 }
 
 /// Buffered operation during recovery (before we know if txn commits).
 #[derive(Debug, Clone)]
-struct BufferedOp {
-    seq: u64,
-    op: WalOp,
+pub(super) struct BufferedOp {
+    pub(super) seq: u64,
+    pub(super) op: WalOp,
 }
 
 /// Accumulated state during recovery iteration.
+///
+/// Used internally by [`WalReader::recover`] to fold over WAL entries.
 #[derive(Debug, Default)]
-struct RecoveryAccum {
-    /// Transaction states: txn_id → state.
-    txn_states: HashMap<TransactionId, TxnState>,
+pub(super) struct RecoveryAccum {
+    /// Transaction states: `txn_id` → state.
+    pub(super) txn_states: HashMap<TransactionId, TxnState>,
     /// Buffered operations per transaction (until we know if it commits).
-    txn_ops: HashMap<TransactionId, Vec<BufferedOp>>,
+    pub(super) txn_ops: HashMap<TransactionId, Vec<BufferedOp>>,
     /// Last checkpoint sequence.
-    last_checkpoint_seq: Option<u64>,
+    pub(super) last_checkpoint_seq: Option<u64>,
     /// Count of processed records.
-    records_processed: u64,
+    pub(super) records_processed: u64,
+    /// Next sequence number (updated as we process entries).
+    pub(super) next_seq: u64,
 }
 
 impl RecoveryAccum {
-    /// Process a single WAL entry, returning the updated state.
-    fn process(mut self, entry: WalEntry) -> Self {
-        self.records_processed += 1;
-
-        match entry.record {
-            WalRecord::TxnBegin { txn_id } => {
-                self.txn_states.insert(txn_id, TxnState::Pending);
-                self.txn_ops.insert(txn_id, Vec::new());
-            }
-
-            WalRecord::TxnCommit { txn_id } => {
-                self.txn_states.insert(txn_id, TxnState::Committed);
-            }
-
-            WalRecord::TxnAbort { txn_id } => {
-                self.txn_states.insert(txn_id, TxnState::Aborted);
-                // Discard buffered ops for aborted transaction
-                self.txn_ops.remove(&txn_id);
-            }
-
-            WalRecord::Set {
-                txn_id,
-                name,
-                key,
-                old,
-                new,
-            } => {
-                self.txn_ops.entry(txn_id).or_default().push(BufferedOp {
-                    seq: entry.seq,
-                    op: WalOp::Set {
-                        name,
-                        key,
-                        old,
-                        new,
-                    },
-                });
-            }
-
-            WalRecord::KillEntry {
-                txn_id,
-                name,
-                key,
-                data,
-            } => {
-                self.txn_ops.entry(txn_id).or_default().push(BufferedOp {
-                    seq: entry.seq,
-                    op: WalOp::KillEntry { name, key, data },
-                });
-            }
-
-            WalRecord::Checkpoint { seq } => {
-                self.last_checkpoint_seq = Some(seq);
-            }
-        }
-
-        self
-    }
-
-    /// Convert accumulated state into a `RecoveryResult`.
-    fn into_result(mut self, next_seq: u64) -> RecoveryResult {
+    /// Convert accumulated state into a [`RecoveryResult`].
+    pub(super) fn into_result(mut self) -> RecoveryResult {
         // Collect committed operations
         let mut committed_ops: Vec<CommittedOp> = self
             .txn_states
@@ -239,48 +182,10 @@ impl RecoveryAccum {
             committed_ops,
             uncommitted_txns,
             last_checkpoint_seq: self.last_checkpoint_seq,
-            next_seq,
+            next_seq: self.next_seq,
             records_processed: self.records_processed,
         }
     }
-}
-
-/// Async recursive step for recovery iteration.
-fn recover_step<'a>(
-    reader: &'a mut WalReader,
-    accum: RecoveryAccum,
-) -> BoxFuture<'a, Result<RecoveryAccum>> {
-    Box::pin(async move {
-        match reader.next().await? {
-            None => Ok(accum),
-            Some(entry) => recover_step(reader, accum.process(entry)).await,
-        }
-    })
-}
-
-/// Recover from a WAL by reading all records and determining which
-/// operations should be replayed.
-///
-/// This function iterates through all records in the WAL via the reader.
-/// After calling this, the reader will be at EOF and can be converted
-/// to a writer via [`WalReader::into_writer`].
-///
-/// # Returns
-///
-/// A [`RecoveryResult`] containing:
-/// - Operations from committed transactions (to replay)
-/// - List of uncommitted transaction IDs (for logging/diagnostics)
-/// - Last checkpoint sequence number (if any)
-/// - Next sequence number
-///
-/// # Errors
-///
-/// Returns `Err` on I/O error or WAL corruption.
-///
-/// [`WalReader::into_writer`]: WalReader::into_writer
-pub(crate) async fn recover(reader: &mut WalReader) -> Result<RecoveryResult> {
-    let accum = recover_step(reader, RecoveryAccum::default()).await?;
-    Ok(accum.into_result(reader.next_seq()))
 }
 
 /// Convenience function to open a WAL and perform recovery.
@@ -297,9 +202,7 @@ pub(crate) async fn recover(reader: &mut WalReader) -> Result<RecoveryResult> {
 pub(crate) async fn recover_from_dir(
     dir: &Path,
 ) -> Result<(RecoveryResult, WalReader)> {
-    let mut reader = WalReader::open(dir).await?;
-    let result = recover(&mut reader).await?;
-    Ok((result, reader))
+    WalReader::open(dir).await?.recover().await
 }
 
 #[cfg(test)]

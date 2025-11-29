@@ -46,11 +46,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::future::BoxFuture;
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 
 use super::format::{try_read_record_at, FileHeader, FILE_HEADER_SIZE};
+use super::recovery::{RecoveryAccum, RecoveryResult};
 use super::{WalRecord, WalWriter, WalWriterConfig};
 use crate::error::{Result, StorageError};
 
@@ -204,7 +205,7 @@ impl WalReader {
     /// - `Ok(Some(entry))` on success
     /// - `Ok(None)` at EOF (no more complete records)
     /// - `Err(WalCorruption)` on checksum mismatch
-    /// - `Err(...)` on I/O or deserialization error
+    /// - `Err(_)` on I/O or deserialization error
     pub(crate) async fn next(&mut self) -> Result<Option<WalEntry>> {
         match try_read_record_at(&mut self.file, self.pos, self.file_size)
             .await?
@@ -255,14 +256,113 @@ impl WalReader {
     ///
     /// The stream yields `Result<WalEntry>` items until EOF or error.
     ///
-    /// **Note**: After using the stream, you cannot call `into_writer`
+    /// **Note**: After using the stream, you cannot call [`into_writer`]
     /// because the stream consumes ownership. If you need to convert
-    /// to a writer, use the `next()` method directly instead.
+    /// to a writer, use the [`next`] method directly instead.
+    ///
+    /// [`into_writer`]: WalReader::into_writer
+    /// [`next`]: WalReader::next
     pub(crate) fn into_stream(self) -> WalRecordStream {
         WalRecordStream {
             reader: Some(self),
             pending: None,
         }
+    }
+
+    /// Perform WAL recovery by reading all records and determining which
+    /// operations should be replayed.
+    ///
+    /// Consumes the reader, iterates through all records via stream fold,
+    /// and returns both the recovery result and `self` (for conversion
+    /// to a writer via [`into_writer`]).
+    ///
+    /// # Returns
+    ///
+    /// A tuple of:
+    /// - [`RecoveryResult`] containing committed operations to replay
+    /// - `Self`, positioned at EOF, ready for [`into_writer`]
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` on I/O error or WAL corruption.
+    ///
+    /// [`into_writer`]: WalReader::into_writer
+    pub(crate) async fn recover(self) -> Result<(RecoveryResult, Self)> {
+        use super::recovery::{BufferedOp, TxnState, WalOp};
+
+        /// Fold step: process one entry, return updated accumulator.
+        fn step(mut acc: RecoveryAccum, entry: WalEntry) -> RecoveryAccum {
+            acc.records_processed += 1;
+            acc.next_seq = entry.seq + 1;
+
+            match entry.record {
+                WalRecord::TxnBegin { txn_id } => {
+                    acc.txn_states.insert(txn_id, TxnState::Pending);
+                    acc.txn_ops.insert(txn_id, Vec::new());
+                }
+
+                WalRecord::TxnCommit { txn_id } => {
+                    acc.txn_states.insert(txn_id, TxnState::Committed);
+                }
+
+                WalRecord::TxnAbort { txn_id } => {
+                    acc.txn_states.insert(txn_id, TxnState::Aborted);
+                    acc.txn_ops.remove(&txn_id);
+                }
+
+                WalRecord::Set {
+                    txn_id,
+                    name,
+                    key,
+                    old,
+                    new,
+                } => {
+                    acc.txn_ops.entry(txn_id).or_default().push(BufferedOp {
+                        seq: entry.seq,
+                        op: WalOp::Set {
+                            name,
+                            key,
+                            old,
+                            new,
+                        },
+                    });
+                }
+
+                WalRecord::KillEntry {
+                    txn_id,
+                    name,
+                    key,
+                    data,
+                } => {
+                    acc.txn_ops.entry(txn_id).or_default().push(BufferedOp {
+                        seq: entry.seq,
+                        op: WalOp::KillEntry { name, key, data },
+                    });
+                }
+
+                WalRecord::Checkpoint { seq } => {
+                    acc.last_checkpoint_seq = Some(seq);
+                }
+            }
+
+            acc
+        }
+
+        let mut stream = self.into_stream();
+
+        let accum = (&mut stream)
+            .try_fold(RecoveryAccum::default(), |acc, entry| async move {
+                Ok(step(acc, entry))
+            })
+            .await?;
+
+        let reader = stream.into_reader().ok_or_else(|| {
+            StorageError::InvalidOperation(
+                "reader should be present after stream exhaustion".into(),
+            )
+        })?;
+
+        Ok((accum.into_result(), reader))
     }
 
     /// Seek to a specific position in the file.
@@ -326,10 +426,20 @@ impl Stream for WalRecordStream {
     }
 }
 
+impl WalRecordStream {
+    /// Extract the underlying reader after the stream is exhausted.
+    ///
+    /// Returns `Some(reader)` if the stream has finished (reached EOF),
+    /// `None` if there's a pending read operation.
+    pub(crate) fn into_reader(self) -> Option<WalReader> {
+        self.reader
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use futures::StreamExt;
+    use futures::TryStreamExt;
     use rumps_types::{global, key};
     use tempfile::TempDir;
 
@@ -350,13 +460,11 @@ mod tests {
     /// Helper to write records using reader→writer flow.
     async fn write_records(dir: &TempDir, recs: &[WalRecord]) {
         let writer = setup_writer(dir).await;
-        recs.iter()
-            .try_for_each(|rec| {
-                futures::executor::block_on(async {
-                    writer.append(rec).await.map(|_| ())
-                })
-            })
-            .expect("append all");
+        futures::future::try_join_all(
+            recs.iter().map(|rec| writer.append(rec)),
+        )
+        .await
+        .expect("append all");
         writer.sync().await.expect("sync");
     }
 
@@ -418,22 +526,18 @@ mod tests {
         ];
         write_records(&dir, &recs).await;
 
-        let mut reader = WalReader::open(dir.path()).await.expect("open");
+        let reader = WalReader::open(dir.path()).await.expect("open");
 
-        recs.iter()
-            .enumerate()
-            .try_for_each(|(i, expected)| {
-                futures::executor::block_on(async {
-                    let entry = reader.next().await?.expect("entry");
-                    assert_eq!(entry.seq, i as u64);
-                    assert_eq!(&entry.record, expected);
-                    Ok::<_, StorageError>(())
-                })
-            })
-            .expect("read all");
+        let entries: Vec<_> =
+            reader.into_stream().try_collect().await.expect("collect");
 
-        assert_eq!(reader.next_seq(), 3);
-        assert!(reader.next().await.expect("next").is_none());
+        assert_eq!(entries.len(), recs.len());
+        entries.iter().zip(recs.iter()).enumerate().for_each(
+            |(i, (entry, expected))| {
+                assert_eq!(entry.seq, i as u64);
+                assert_eq!(&entry.record, expected);
+            },
+        );
     }
 
     #[tokio::test]
@@ -497,15 +601,9 @@ mod tests {
         write_records(&dir, &recs).await;
 
         let reader = WalReader::open(dir.path()).await.expect("open");
-        let mut stream = reader.into_stream();
 
-        let entries: Vec<_> = futures::executor::block_on(async {
-            let mut v = vec![];
-            while let Some(entry) = stream.next().await {
-                v.push(entry.expect("entry"));
-            }
-            v
-        });
+        let entries: Vec<_> =
+            reader.into_stream().try_collect().await.expect("collect");
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries.get(0).unwrap().seq, 0);
@@ -542,17 +640,17 @@ mod tests {
         ];
         write_records(&dir, &recs).await;
 
-        let mut reader = WalReader::open(dir.path()).await.expect("open");
+        let reader = WalReader::open(dir.path()).await.expect("open");
 
-        recs.iter()
-            .try_for_each(|expected| {
-                futures::executor::block_on(async {
-                    let entry = reader.next().await?.expect("entry");
-                    assert_eq!(&entry.record, expected);
-                    Ok::<_, StorageError>(())
-                })
-            })
-            .expect("read all");
+        let entries: Vec<_> =
+            reader.into_stream().try_collect().await.expect("collect");
+
+        entries
+            .iter()
+            .zip(recs.iter())
+            .for_each(|(entry, expected)| {
+                assert_eq!(&entry.record, expected);
+            });
     }
 
     #[tokio::test]

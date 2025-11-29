@@ -42,21 +42,27 @@ use crate::error::{Result, StorageError};
 pub(crate) enum SyncMode {
     /// Sync on every write (slowest but safest).
     ///
-    /// Each `append` call is immediately flushed and synced to disk.
+    /// Each [`append`] call is immediately flushed and synced to disk.
     /// Maximum durability, minimum performance.
+    ///
+    /// [`append`]: WalWriter::append
     Immediate,
 
     /// Sync only on transaction commit.
     ///
-    /// Writes are buffered until `sync()` is explicitly called.
+    /// Writes are buffered until [`sync`] is explicitly called.
     /// Good balance of durability and performance.
+    ///
+    /// [`sync`]: WalWriter::sync
     #[default]
     OnCommit,
 
     /// Sync periodically at a specified interval.
     ///
-    /// A background task (managed externally) should call `sync()`
+    /// A background task (managed externally) should call [`sync`]
     /// at the specified interval. Until then, writes are buffered.
+    ///
+    /// [`sync`]: WalWriter::sync
     Periodic(Duration),
 }
 
@@ -69,7 +75,7 @@ pub(crate) struct WalWriterConfig {
     /// Maximum WAL file size in bytes before rotation.
     ///
     /// When the current file exceeds this threshold, a new file
-    /// is created. Default: 64 MiB.
+    /// is created. Default: `64` MiB.
     pub(crate) max_file_size: u64,
 }
 
@@ -478,16 +484,15 @@ mod tests {
             WalRecord::Checkpoint { seq: 100 },
         ];
 
-        recs.iter()
+        let seqs: Vec<u64> = futures::future::try_join_all(
+            recs.iter().map(|rec| writer.append(rec)),
+        )
+        .await
+        .expect("all appends succeed");
+
+        seqs.iter()
             .enumerate()
-            .try_for_each(|(i, rec)| {
-                futures::executor::block_on(async {
-                    let seq = writer.append(rec).await?;
-                    assert_eq!(seq, i as u64);
-                    Ok::<_, StorageError>(())
-                })
-            })
-            .expect("all appends succeed");
+            .for_each(|(i, seq)| assert_eq!(*seq, i as u64));
 
         writer.sync().await.expect("sync");
     }
