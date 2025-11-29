@@ -230,8 +230,10 @@ impl WalWriter {
 
     /// Try to read one WAL record at `pos`.
     ///
-    /// Returns `Ok(Some((payload_end, seq)))` on success, `Ok(None)` on soft
-    /// failure (incomplete, I/O error, checksum mismatch).
+    /// Returns:
+    /// - `Ok(Some((end, seq)))` on success
+    /// - `Ok(None)` on soft failure (incomplete record, I/O error)
+    /// - `Err(WalCorruption)` on checksum mismatch
     async fn try_read_record(
         file: &mut File,
         pos: u64,
@@ -240,33 +242,35 @@ impl WalWriter {
         let header_end = pos + RECORD_HEADER_SIZE as u64;
 
         if header_end > file_size {
-            Ok(None)
+            Ok(None) // Incomplete: header doesn't fit
         } else {
             file.seek(SeekFrom::Start(pos)).await?;
 
             let mut hdr_buf = [0u8; RECORD_HEADER_SIZE];
-            let hdr_read = AsyncReadExt::read_exact(file, &mut hdr_buf).await;
 
-            let parsed = hdr_read
-                .ok()
-                .map(|_| {
+            match AsyncReadExt::read_exact(file, &mut hdr_buf).await {
+                Err(_) => Ok(None), // I/O error reading header
+                Ok(_) => {
                     let hdr = RecordHeader::from_bytes(&hdr_buf);
                     let end = pos + RECORD_HEADER_SIZE as u64 + hdr.len as u64;
-                    (hdr, end)
-                })
-                .filter(|(_, end)| *end <= file_size);
 
-            match parsed {
-                None => Ok(None),
-                Some((hdr, end)) => {
-                    let mut payload = vec![0u8; hdr.len as usize];
-                    let verified = AsyncReadExt::read_exact(file, &mut payload)
-                        .await
-                        .ok()
-                        .filter(|_| hdr.verify(&payload))
-                        .map(|_| (end, hdr.seq));
+                    if end > file_size {
+                        Ok(None) // Incomplete: payload doesn't fit
+                    } else {
+                        let mut payload = vec![0u8; hdr.len as usize];
 
-                    Ok(verified)
+                        match AsyncReadExt::read_exact(file, &mut payload).await
+                        {
+                            Err(_) => Ok(None), // I/O error reading payload
+                            Ok(_) if hdr.verify(&payload) => {
+                                Ok(Some((end, hdr.seq)))
+                            }
+                            Ok(_) => Err(StorageError::WalCorruption {
+                                seq: hdr.seq,
+                                reason: "checksum mismatch".into(),
+                            }),
+                        }
+                    }
                 }
             }
         }

@@ -50,6 +50,15 @@ pub enum StorageError {
     /// Transaction error (for future)
     #[error("Transaction error: {0}")]
     Transaction(String),
+
+    /// WAL corruption detected (e.g., checksum mismatch).
+    #[error("WAL corruption at seq {seq}: {reason}")]
+    WalCorruption {
+        /// Sequence number of the corrupted record.
+        seq: u64,
+        /// Description of the corruption.
+        reason: String,
+    },
 }
 
 /// A specialized Result type for storage operations.
