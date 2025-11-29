@@ -494,10 +494,11 @@ This design ensures:
 
 `WalWriter` has no public constructor; it can only be created via `WalReader::into_writer`.
 
-- [ ] Add WAL recovery logic:
-  - Replay uncommitted transactions on startup
-  - Handle partial writes (incomplete records)
-  - Rebuild state from last checkpoint + WAL replay
+- [x] Add WAL recovery logic (`wal/recovery.rs`):
+  - [x] Replay committed transactions on startup via `recover()` / `recover_from_dir()`
+  - [x] Handle partial writes (incomplete records return `Ok(None)` at EOF)
+  - [x] Track uncommitted transactions (began but never committed/aborted)
+  - [x] Filter operations before last checkpoint
 - [ ] Implement WAL checkpointing:
   - Periodically flush dirty pages to disk
   - Write checkpoint record to WAL

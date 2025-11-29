@@ -34,6 +34,7 @@
 
 mod format;
 mod reader;
+mod recovery;
 mod writer;
 
 pub(crate) use format::{
@@ -41,6 +42,9 @@ pub(crate) use format::{
     RECORD_HEADER_SIZE, WAL_MAGIC, WAL_VERSION,
 };
 pub(crate) use reader::{WalEntry, WalReader, WalRecordStream};
+pub(crate) use recovery::{
+    recover, recover_from_dir, CommittedOp, RecoveryResult, WalOp,
+};
 use rumps_types::{Key, Name};
 use serde::{Deserialize, Serialize};
 pub(crate) use writer::{SyncMode, WalWriter, WalWriterConfig};
