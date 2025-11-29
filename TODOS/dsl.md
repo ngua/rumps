@@ -11,41 +11,54 @@ RUMPS is **not** a reimplementation of MUMPS, but rather a **declarative evoluti
 - Enables automatic parallelization and optimization
 - Maintains type safety (future enhancement)
 
-## Naming Convention: Train-Case
+## Naming Conventions
 
-RUMPS uses **train-case** (also known as kebab-case) for all identifiers:
+### Variables
+
+Variable names can use **any case** — uppercase, lowercase, camelCase, PascalCase, or train-case — as long as they don't conflict with reserved keywords:
 
 ```rumps
-; Namespaced builtins
-Json.parse, Json.stringify, Json.keys
-String.length, String.upper
-Math.sqrt, Math.abs
-
-; Variables
-SET my-var = 123
-SET patient-name = "John Doe"
-SET last-visit-date = Time.now()
+; All valid variable names
+SET COUNT = 0
+SET count = 0
+SET patientName = "John"
+SET PatientName = "John"
+SET patient-name = "John"
+SET PATIENT_ID = 123
 ```
 
-**Important**: Because `-` is used in identifiers, the subtraction operator **requires spaces**:
+**Reserved keywords** (cannot be used as variable names):
+`SET`, `GET`, `KILL`, `COLLECT`, `PROCEDURE`, `TRANSACTION`, `IF`, `ELSE`, `WHERE`, `SELECT`, `INTO`, `OUTPUT`, etc.
+
+### Train-Case Support
+
+RUMPS supports **train-case** (kebab-case) identifiers, which are common in Lisp-like languages:
+
+```rumps
+SET my-var = 123
+SET last-visit-date = Time.now()
+PROCEDURE compute-total (items) DO ... END
+```
+
+**Important**: Because `-` can appear in identifiers, the subtraction operator **requires spaces**:
 
 ```rumps
 ; Subtraction - spaces required
 SET result = total - tax        ; OK: subtraction
 SET diff = end-time - start-time  ; OK: subtraction of two train-case vars
 
-; Identifiers - no spaces
+; Identifiers - no spaces around hyphen
 SET my-var = 123                ; OK: train-case identifier
 
 ; Ambiguous - parse error
-SET x = a-b                     ; ERROR: ambiguous, use spaces for subtraction
+SET x = a-b                     ; ERROR: use spaces for subtraction
 ```
 
-This convention was chosen because:
-- Train-case is highly readable
-- It fits the "modern but readable" style of RUMPS
-- Common in DSLs (Lisp, Clojure, CSS, YAML, CLI tools)
-- Requiring spaces around operators improves code readability anyway
+### Namespaces and Types
+
+- **Namespaces**: PascalCase (`Json`, `String`, `Math`)
+- **Types**: PascalCase (`Int`, `String`, `Array[T]`, `Option[T]`)
+- **Namespace functions**: PascalCase.train-case (`Json.parse`, `String.split`, `Math.sqrt`)
 
 ## Transaction Blocks
 
