@@ -1526,9 +1526,7 @@ The following table shows common MUMPS iteration patterns and their conceptual R
 
 ### Phase 3: Parser and Interpreter
 - [ ] Design formal grammar (EBNF)
-- [ ] Implement lexer/tokenizer
-- [ ] Implement parser (recursive descent or parser combinator)
-  - Or just use `chumsky`? Worth investigating
+- [ ] Implement two-phase lexer → parser using `chumsky` (see Parser Architecture section)
 - [ ] Build AST representation
 - [ ] Implement interpreter that calls Rust storage layer
 
@@ -1595,8 +1593,7 @@ These tasks should be completed after the storage engine implementation is finis
 
 ### Parser Implementation
 - [ ] **Create prototype parser for basic COLLECT operations**
-  - Choose parsing approach (recursive descent, parser combinator, or parser generator)
-  - Implement tokenizer/lexer
+  - Implement two-phase lexer → parser using `chumsky` (see Parser Architecture section)
   - Parse basic COLLECT with WHERE and SELECT
   - Generate initial AST representation
   - Add error recovery and helpful error messages
@@ -1657,6 +1654,63 @@ These tasks should be completed after the storage engine implementation is finis
 7. **Predictable**: No hidden side effects or surprising behavior
 8. **Performant**: Optimize automatically where possible
 9. **Debuggable**: Clear error messages and debugging tools
+
+## Parser Architecture
+
+RUMPS uses a **two-phase lexer → parser** architecture built on the `chumsky` parser combinator library.
+
+### Why Two-Phase
+
+Single-pass parsing tends to become unwieldy for languages with:
+- Whitespace-sensitive constructs (train-case identifiers vs spaced subtraction)
+- Need to detect expression boundaries
+- Complex operator sets with shared prefixes
+
+A separate lexing phase handles these concerns cleanly, producing a token stream with spans that the parser then consumes.
+
+### Architecture
+
+```
+Source → Lexer (tokens + spans) → Parser (AST) → Interpreter
+              ↑                        ↑
+          chumsky                  chumsky
+```
+
+### Why Chumsky
+
+| Feature                    | Chumsky support                                           |
+|----------------------------|-----------------------------------------------------------|
+| Train-case identifiers     | Lexer handles `-` within idents vs spaced subtraction     |
+| Operator precedence        | `pratt` parser or manual precedence climbing              |
+| Good error messages        | Built-in error recovery, spans, and rich error types      |
+| JSON-like literals         | Recursive descent is natural for `{ }` / `[ ]`            |
+| Pipeline vs block forms    | Just grammar alternatives                                 |
+| Regex literals `/pattern/` | Custom token with dedicated lexer rule                    |
+
+If parsing becomes a performance bottleneck, rewrite it. Parser performance is rarely the bottleneck in practice for a query language.
+
+### Lexer Considerations
+
+**Train-case vs subtraction**: The rule "no spaces = identifier, spaces required for subtraction" means the lexer must be whitespace-aware when tokenizing `-`. If `-` has no surrounding whitespace and is followed by `[a-zA-Z]`, it's part of an identifier.
+
+**Operator ambiguity**: Several operators share prefixes (`>`, `>=`, `->>`, `->`, `#>`, `#>>`). Use longest-match and order token rules carefully.
+
+**String interpolation**: Template strings like `"Patient {id}: {name}"` can be:
+- Parsed as raw strings, with interpolation handled in a later pass, or
+- Tokenized into segments (`StringLit`, `Interpolation`, `StringLit`, ...) during lexing
+
+The former is simpler; the latter gives better error spans for malformed interpolations (**NOTE**: leaning towards latter for better errors).
+
+### Semantic Checks (Not Parsing Concerns)
+
+Some things that look like parsing issues are actually semantic:
+
+| Concern                               | Where handled                                  |
+|---------------------------------------|------------------------------------------------|
+| `"10" + 2` type error                 | Interpreter (AST just records `BinaryOp::Add`) |
+| Undefined variable                    | Interpreter                                    |
+| Type annotation mismatch              | Interpreter (or future strict mode)            |
+| Transaction required for global write | Interpreter                                    |
 
 ## Future Enhancements
 
