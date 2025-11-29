@@ -4,9 +4,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::{future, pin};
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use futures::{Stream, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name};
 use tokio::sync::RwLock;
@@ -933,14 +933,7 @@ impl BTree {
         cursor: Option<Key>,
         pred: &'a P,
         extract: &'a F,
-    ) -> pin::Pin<
-        Box<
-            dyn future::Future<
-                    Output = Option<(Result<T>, Option<Option<Key>>)>,
-                > + Send
-                + 'a,
-        >,
-    >
+    ) -> BoxFuture<'a, Option<(Result<T>, Option<Option<Key>>)>>
     where
         P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
@@ -967,14 +960,7 @@ impl BTree {
         data: Arc<NodeData>,
         pred: &'a P,
         extract: &'a F,
-    ) -> pin::Pin<
-        Box<
-            dyn future::Future<
-                    Output = Option<(Result<T>, Option<Option<Key>>)>,
-                > + Send
-                + 'a,
-        >,
-    >
+    ) -> BoxFuture<'a, Option<(Result<T>, Option<Option<Key>>)>>
     where
         P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
@@ -1004,9 +990,7 @@ impl BTree {
     fn find_leftmost_key<'a>(
         &'a self,
         node_id: NodeId,
-    ) -> pin::Pin<
-        Box<dyn future::Future<Output = Result<Option<Key>>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<Option<Key>>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
 
@@ -1045,9 +1029,7 @@ impl BTree {
         &'a self,
         node_id: NodeId,
         target: &'a Key,
-    ) -> pin::Pin<
-        Box<dyn future::Future<Output = Result<Option<Key>>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<Option<Key>>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
 
@@ -1447,13 +1429,7 @@ impl BTree {
         &'a self,
         node_id: NodeId,
         key: &'a Key,
-    ) -> pin::Pin<
-        Box<
-            dyn future::Future<Output = Result<Option<Arc<NodeData>>>>
-                + Send
-                + 'a,
-        >,
-    > {
+    ) -> BoxFuture<'a, Result<Option<Arc<NodeData>>>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
 
@@ -1626,8 +1602,7 @@ impl BTree {
         &'a self,
         node_id: NodeId,
         prefix: &'a Key,
-    ) -> pin::Pin<Box<dyn future::Future<Output = Result<Vec<Key>>> + Send + 'a>>
-    {
+    ) -> BoxFuture<'a, Result<Vec<Key>>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
 
@@ -1696,8 +1671,7 @@ impl BTree {
         node_id: NodeId,
         key: &'a Key,
         ancestors: Vec<(NodeId, usize)>,
-    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
-    {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
 
@@ -1802,13 +1776,7 @@ impl BTree {
     fn find_predecessor<'a>(
         &'a self,
         node_id: NodeId,
-    ) -> pin::Pin<
-        Box<
-            dyn future::Future<Output = Result<(Key, Arc<NodeData>)>>
-                + Send
-                + 'a,
-        >,
-    > {
+    ) -> BoxFuture<'a, Result<(Key, Arc<NodeData>)>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
             if node.is_leaf {
@@ -1841,8 +1809,7 @@ impl BTree {
         name: &'a Name,
         node_id: NodeId,
         mut ancestors: Vec<(NodeId, usize)>,
-    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
-    {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
             let min_keys = self.min_degree - 1;
@@ -2263,8 +2230,7 @@ impl BTree {
         &'a self,
         node_id: NodeId,
         prefix: &'a Key,
-    ) -> pin::Pin<Box<dyn future::Future<Output = Result<bool>> + Send + 'a>>
-    {
+    ) -> BoxFuture<'a, Result<bool>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
 
@@ -2319,8 +2285,7 @@ impl BTree {
         node_id: NodeId,
         key: &'a Key,
         value: rumps_types::Value,
-    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
-    {
+    ) -> BoxFuture<'a, Result<()>> {
         self.insert_non_full_with_data(
             node_id,
             key,
@@ -2346,8 +2311,7 @@ impl BTree {
         node_id: NodeId,
         key: &'a Key,
         data: NodeData,
-    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
-    {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
 
@@ -2483,8 +2447,7 @@ impl BTree {
         node_id: NodeId,
         key: &'a Key,
         flag: bool,
-    ) -> pin::Pin<Box<dyn future::Future<Output = Result<()>> + Send + 'a>>
-    {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let node = self.load_node(node_id).await?;
             let pos = node.keys.binary_search(key).unwrap_or_else(|p| p);
