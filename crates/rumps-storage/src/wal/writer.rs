@@ -32,9 +32,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use super::files::WalFileInfo;
-use super::format::{
-    FileHeader, RecordHeader, FILE_HEADER_SIZE, RECORD_HEADER_SIZE,
-};
+use super::format::{FileHeader, RecordHeader};
 use super::{WalRecord, WalSequence};
 use crate::error::{Result, StorageError};
 
@@ -215,7 +213,7 @@ impl WalWriter {
         file.write_all(&hdr.to_bytes()).await?;
         file.sync_all().await?;
 
-        Ok((file, FILE_HEADER_SIZE as u64))
+        Ok((file, FileHeader::SIZE as u64))
     }
 
     /// Append a WAL record and return its sequence number.
@@ -235,7 +233,7 @@ impl WalWriter {
         let mut state = self.state.lock().await;
 
         // Check if rotation is needed
-        let rec_size = RECORD_HEADER_SIZE as u64 + payload.len() as u64;
+        let rec_size = RecordHeader::SIZE as u64 + payload.len() as u64;
         if state.file_size + rec_size > self.cfg.max_file_size {
             self.rotate_locked(&mut state).await?;
         }
@@ -441,7 +439,7 @@ mod tests {
 
         let wal_path = dir.path().join("wal.log");
         assert!(wal_path.exists());
-        assert_eq!(writer.file_size().await, FILE_HEADER_SIZE as u64);
+        assert_eq!(writer.file_size().await, FileHeader::SIZE as u64);
         assert_eq!(writer.next_seq().await, WalSequence::ZERO);
     }
 
@@ -574,7 +572,7 @@ mod tests {
 
         // New file should have seq = 1
         assert_eq!(writer.next_seq().await, WalSequence::from(1));
-        assert_eq!(writer.file_size().await, FILE_HEADER_SIZE as u64);
+        assert_eq!(writer.file_size().await, FileHeader::SIZE as u64);
     }
 
     #[tokio::test]
@@ -714,7 +712,7 @@ mod tests {
         assert_eq!(archives.len(), 1);
 
         // New file should start fresh
-        assert_eq!(writer.file_size().await, FILE_HEADER_SIZE as u64);
+        assert_eq!(writer.file_size().await, FileHeader::SIZE as u64);
 
         // Next seq should be 3
         assert_eq!(writer.next_seq().await, WalSequence::from(3));

@@ -507,8 +507,8 @@ This design ensures:
   - [x] `parse_archived_wal_name()` parses `wal.{first}-{last}.log` format
   - [x] Tests for checkpoint write/rotate, archive cleanup, recovery integration
   - Note: Page flushing is a no-op until PageCache is implemented (Phase 4.2)
-- [ ] Add tests for WAL write/read round-trip
-- [ ] Add tests for crash recovery scenarios
+- [x] Add tests for WAL write/read round-trip (`reads_single_record`, `reads_multiple_records`, `all_record_types`, `reopen_continues_seq`)
+- [x] Add tests for crash recovery scenarios (`partial_write_at_eof_ignored`, `uncommitted_transaction_reported`, `detects_checksum_corruption`, `interleaved_transactions`)
 
 ### 4.2 Page-Based Storage
 - [x] Define `PAGE_SIZE` constant (done in Phase 3.1 via `page.rs`)

@@ -44,25 +44,9 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use super::WalSequence;
 use crate::error::{Result, StorageError};
 
-/// Magic bytes identifying a RUMPS WAL file.
-pub(crate) const WAL_MAGIC: [u8; 4] = *b"RWAL";
-
-/// Current WAL format version.
-pub(crate) const WAL_VERSION: u16 = 1;
-
-/// Size of the file header in bytes.
-pub(crate) const FILE_HEADER_SIZE: usize = 16;
-
-/// Size of a record header in bytes.
-pub(crate) const RECORD_HEADER_SIZE: usize = 20;
-
 /// WAL file header, written once at the start of each WAL file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FileHeader {
-    /// Magic bytes (`b"RWAL"`).
-    pub(crate) magic: [u8; 4],
-    /// Format version.
-    pub(crate) version: u16,
     /// Reserved flags.
     pub(crate) flags: u16,
     /// Sequence number of the first record in this file.
@@ -70,11 +54,20 @@ pub(crate) struct FileHeader {
 }
 
 impl FileHeader {
+    /// Magic bytes identifying a RUMPS WAL file.
+    pub(crate) const MAGIC: [u8; 4] = *b"RWAL";
+
+    /// Current WAL format version.
+    pub(crate) const VERSION: u16 = 1;
+
+    /// Size of the file header in bytes.
+    pub(crate) const SIZE: usize = 16;
+}
+
+impl FileHeader {
     /// Create a new file header with the given first sequence number.
     pub(crate) fn new(first_seq: WalSequence) -> Self {
         Self {
-            magic: WAL_MAGIC,
-            version: WAL_VERSION,
             flags: 0,
             first_seq,
         }
@@ -83,9 +76,9 @@ impl FileHeader {
     /// Read a file header from a WAL file path.
     pub(crate) async fn read(path: &std::path::Path) -> Result<Self> {
         let mut file = tokio::fs::File::open(path).await?;
-        let mut buf = [0u8; FILE_HEADER_SIZE];
+        let mut buf = [0u8; Self::SIZE];
 
-        // `read_exact` either reads exactly `FILE_HEADER_SIZE` bytes or errors
+        // `read_exact` either reads exactly `Self::SIZE` bytes or errors
         AsyncReadExt::read_exact(&mut file, &mut buf)
             .await
             .map_err(|_| StorageError::WalCorruption {
@@ -103,33 +96,28 @@ impl FileHeader {
     }
 
     /// Serialize the header to bytes.
-    pub(crate) fn to_bytes(self) -> [u8; FILE_HEADER_SIZE] {
-        let mut buf = [0u8; FILE_HEADER_SIZE];
-        buf[0..4].copy_from_slice(&self.magic);
-        buf[4..6].copy_from_slice(&self.version.to_le_bytes());
+    pub(crate) fn to_bytes(self) -> [u8; Self::SIZE] {
+        let mut buf = [0u8; Self::SIZE];
+        buf[0..4].copy_from_slice(&Self::MAGIC);
+        buf[4..6].copy_from_slice(&Self::VERSION.to_le_bytes());
         buf[6..8].copy_from_slice(&self.flags.to_le_bytes());
         buf[8..16].copy_from_slice(&(*self.first_seq).to_le_bytes());
         buf
     }
 
     /// Deserialize from bytes. Returns `None` if magic/version mismatch.
-    pub(crate) fn from_bytes(buf: &[u8; FILE_HEADER_SIZE]) -> Option<Self> {
+    pub(crate) fn from_bytes(buf: &[u8; Self::SIZE]) -> Option<Self> {
         let magic: [u8; 4] = buf[0..4].try_into().ok()?;
-        (magic == WAL_MAGIC).then_some(())?;
+        (magic == Self::MAGIC).then_some(())?;
 
         let version = u16::from_le_bytes(buf[4..6].try_into().ok()?);
-        (version == WAL_VERSION).then_some(())?;
+        (version == Self::VERSION).then_some(())?;
 
         let flags = u16::from_le_bytes(buf[6..8].try_into().ok()?);
         let first_seq =
             WalSequence::from(u64::from_le_bytes(buf[8..16].try_into().ok()?));
 
-        Some(Self {
-            magic,
-            version,
-            flags,
-            first_seq,
-        })
+        Some(Self { flags, first_seq })
     }
 }
 
@@ -147,6 +135,9 @@ pub(crate) struct RecordHeader {
 }
 
 impl RecordHeader {
+    /// Size of a record header in bytes.
+    pub(crate) const SIZE: usize = 20;
+
     /// Create a new record header for the given payload.
     pub(crate) fn new(seq: WalSequence, payload: &[u8]) -> Self {
         Self {
@@ -158,8 +149,8 @@ impl RecordHeader {
     }
 
     /// Serialize the header to bytes.
-    pub(crate) fn to_bytes(self) -> [u8; RECORD_HEADER_SIZE] {
-        let mut buf = [0u8; RECORD_HEADER_SIZE];
+    pub(crate) fn to_bytes(self) -> [u8; Self::SIZE] {
+        let mut buf = [0u8; Self::SIZE];
         buf[0..4].copy_from_slice(&self.checksum.to_le_bytes());
         buf[4..8].copy_from_slice(&self.len.to_le_bytes());
         buf[8..16].copy_from_slice(&(*self.seq).to_le_bytes());
@@ -172,10 +163,10 @@ impl RecordHeader {
     /// # Safety note
     ///
     /// The `unwrap()` calls below are infallible because `buf` is a fixed-size
-    /// array of exactly `RECORD_HEADER_SIZE` (20) bytes, and each slice is
-    /// exactly the size needed for the corresponding integer type.
+    /// array of exactly `Self::SIZE` (`20`) bytes, and each slice is exactly
+    /// the size needed for the corresponding integer type.
     #[allow(clippy::unwrap_used)]
-    pub(crate) fn from_bytes(buf: &[u8; RECORD_HEADER_SIZE]) -> Self {
+    pub(crate) fn from_bytes(buf: &[u8; Self::SIZE]) -> Self {
         Self {
             checksum: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
             len: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
@@ -218,7 +209,7 @@ pub(crate) async fn try_read_record_at(
     pos: u64,
     file_size: u64,
 ) -> Result<Option<RawRecord>> {
-    let hdr_end = pos + RECORD_HEADER_SIZE as u64;
+    let hdr_end = pos + RecordHeader::SIZE as u64;
 
     // Check if header fits
     if hdr_end > file_size {
@@ -226,7 +217,7 @@ pub(crate) async fn try_read_record_at(
     } else {
         file.seek(SeekFrom::Start(pos)).await?;
 
-        let mut hdr_buf = [0u8; RECORD_HEADER_SIZE];
+        let mut hdr_buf = [0u8; RecordHeader::SIZE];
         AsyncReadExt::read_exact(file, &mut hdr_buf).await?;
 
         let hdr = RecordHeader::from_bytes(&hdr_buf);
@@ -324,15 +315,15 @@ mod tests {
 
     #[test]
     fn header_sizes_correct() {
-        assert_eq!(FILE_HEADER_SIZE, 16);
-        assert_eq!(RECORD_HEADER_SIZE, 20);
+        assert_eq!(FileHeader::SIZE, 16);
+        assert_eq!(RecordHeader::SIZE, 20);
         assert_eq!(
             FileHeader::new(WalSequence::ZERO).to_bytes().len(),
-            FILE_HEADER_SIZE
+            FileHeader::SIZE
         );
         assert_eq!(
             RecordHeader::new(WalSequence::ZERO, b"").to_bytes().len(),
-            RECORD_HEADER_SIZE
+            RecordHeader::SIZE
         );
     }
 }

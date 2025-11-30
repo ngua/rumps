@@ -51,7 +51,7 @@ use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 
 use super::files::WalFileInfo;
-use super::format::{try_read_record_at, FileHeader, FILE_HEADER_SIZE};
+use super::format::{try_read_record_at, FileHeader};
 use super::recovery::{RecoveryAccum, RecoveryResult};
 use super::{WalRecord, WalSequence, WalWriter, WalWriterConfig};
 use crate::error::{Result, StorageError};
@@ -160,7 +160,7 @@ impl WalReader {
             path: first_path,
             file: Some(file),
             file_size,
-            pos: FILE_HEADER_SIZE as u64,
+            pos: FileHeader::SIZE as u64,
             first_seq,
             next_seq: first_seq,
         })
@@ -173,13 +173,13 @@ impl WalReader {
         let file_size = file.metadata().await?.len();
 
         // Validate file has at least a header
-        if file_size < FILE_HEADER_SIZE as u64 {
+        if file_size < FileHeader::SIZE as u64 {
             Err(StorageError::InvalidOperation(
                 "WAL file too small for header".into(),
             ))
         } else {
             // Read and validate file header
-            let mut hdr_buf = [0u8; FILE_HEADER_SIZE];
+            let mut hdr_buf = [0u8; FileHeader::SIZE];
             file.read_exact(&mut hdr_buf).await?;
 
             let hdr = FileHeader::from_bytes(&hdr_buf).ok_or_else(|| {
@@ -208,7 +208,7 @@ impl WalReader {
         file.sync_all().await?;
 
         // Seek back to after header for reading
-        file.seek(SeekFrom::Start(FILE_HEADER_SIZE as u64)).await?;
+        file.seek(SeekFrom::Start(FileHeader::SIZE as u64)).await?;
 
         let file_info = WalFileInfo {
             path: path.clone(),
@@ -223,8 +223,8 @@ impl WalReader {
             current_idx: 0,
             path,
             file: Some(file),
-            file_size: FILE_HEADER_SIZE as u64,
-            pos: FILE_HEADER_SIZE as u64,
+            file_size: FileHeader::SIZE as u64,
+            pos: FileHeader::SIZE as u64,
             first_seq: WalSequence::ZERO,
             next_seq: WalSequence::ZERO,
         })
@@ -334,7 +334,7 @@ impl WalReader {
                 self.path = next_info.path;
                 self.file = Some(file);
                 self.file_size = file_size;
-                self.pos = FILE_HEADER_SIZE as u64;
+                self.pos = FileHeader::SIZE as u64;
                 self.first_seq = first_seq;
 
                 Ok(true)
