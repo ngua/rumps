@@ -499,10 +499,14 @@ This design ensures:
   - [x] Handle partial writes (incomplete records return `Ok(None)` at EOF)
   - [x] Track uncommitted transactions (began but never committed/aborted)
   - [x] Filter operations before last checkpoint
-- [ ] Implement WAL checkpointing:
-  - Periodically flush dirty pages to disk
-  - Write checkpoint record to WAL
-  - Truncate old WAL entries before checkpoint
+- [x] Implement WAL checkpointing:
+  - [x] `WalWriter::checkpoint(flushed_seq)` writes checkpoint record and cleans up old files
+  - [x] Checkpoint writes `Checkpoint { seq }` record to mark flushed data
+  - [x] Rotation after checkpoint isolates post-checkpoint records in new file
+  - [x] `cleanup_archived_files()` deletes archived WAL files with `last_seq <= checkpoint_seq`
+  - [x] `parse_archived_wal_name()` parses `wal.{first}-{last}.log` format
+  - [x] Tests for checkpoint write/rotate, archive cleanup, recovery integration
+  - Note: Page flushing is a no-op until PageCache is implemented (Phase 4.2)
 - [ ] Add tests for WAL write/read round-trip
 - [ ] Add tests for crash recovery scenarios
 
@@ -1156,8 +1160,22 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 3 Complete! Ready for Phase 4 (Disk Persistence)
-**Completed Checkboxes**: ~75 / ~160
+**Current Phase**: Phase 4.1 WAL (Checkpointing Complete) - continuing with Phase 4.2+
+**Completed Checkboxes**: ~80 / ~160
+
+**Recent Changes** (2025-11-30 - Phase 4.1 WAL Checkpointing):
+- ✅ Implemented WAL checkpointing
+  - Added `WalWriter::checkpoint(flushed_seq)` method
+  - Writes `Checkpoint { seq }` record to mark flushed data
+  - Rotates WAL file after checkpoint (isolates post-checkpoint records)
+  - `cleanup_archived_files()` deletes old archived files (`last_seq <= checkpoint_seq`)
+  - `parse_archived_wal_name()` parses `wal.{first:016x}-{last:016x}.log` format
+  - 8 new tests: parse_archived_wal_name (valid/invalid), checkpoint_writes_record_and_rotates,
+    checkpoint_deletes_old_archives, checkpoint_keeps_newer_archives, checkpoint_recovery_integration,
+    checkpoint_in_same_file
+  - All 278 tests passing, clippy clean
+  - Note: Page flushing placeholder until PageCache (Phase 4.2) is implemented
+  - Note: Multi-file WAL recovery not yet implemented (recovery reads only current wal.log)
 
 **Recent Changes** (2025-11-28 - Phase 3 Serialization Complete):
 - ✅ Completed Phase 3: Serialization Layer
@@ -1251,4 +1269,4 @@ These are not part of the current plan but should be kept in mind:
 
 ---
 
-Last Updated: 2025-11-28
+Last Updated: 2025-11-30

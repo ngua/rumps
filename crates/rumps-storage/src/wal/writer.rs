@@ -288,6 +288,103 @@ impl WalWriter {
     pub(crate) fn max_file_size(&self) -> u64 {
         self.cfg.max_file_size
     }
+
+    /// Perform a WAL checkpoint.
+    ///
+    /// Checkpointing is a two-phase process:
+    /// 1. Write a `Checkpoint` record to mark the point where all prior
+    ///    operations have been flushed to the main data file
+    /// 2. Delete archived WAL files that are entirely before the checkpoint
+    ///
+    /// # Arguments
+    ///
+    /// * `flushed_seq` - The sequence number up to which all data has been
+    ///   flushed to the main data file. Operations with `seq <= flushed_seq`
+    ///   no longer need to be replayed during recovery.
+    ///
+    /// # Rotation
+    ///
+    /// After writing the checkpoint, the current WAL file is rotated so
+    /// the checkpoint begins a new file. This makes it easier to delete
+    /// old files: any archived file whose `last_seq <= flushed_seq` can
+    /// be safely removed.
+    ///
+    /// # Returns
+    ///
+    /// The sequence number of the checkpoint record itself.
+    pub(crate) async fn checkpoint(&self, flushed_seq: u64) -> Result<u64> {
+        // Write checkpoint record
+        let checkpoint_rec_seq = self
+            .append(&WalRecord::Checkpoint { seq: flushed_seq })
+            .await?;
+
+        // Sync to ensure checkpoint is durable
+        self.sync().await?;
+
+        // Rotate to start fresh file
+        self.rotate().await?;
+
+        // Clean up old archived files
+        self.cleanup_archived_files(flushed_seq).await?;
+
+        Ok(checkpoint_rec_seq)
+    }
+
+    /// Delete archived WAL files that are entirely before the checkpoint.
+    ///
+    /// Archived files are named `wal.{first_seq:016x}-{last_seq:016x}.log`.
+    /// Any file where `last_seq <= checkpoint_seq` can be safely deleted.
+    async fn cleanup_archived_files(&self, checkpoint_seq: u64) -> Result<()> {
+        let mut entries = fs::read_dir(&self.dir).await?;
+
+        // Collect files to delete (can't delete while iterating)
+        let mut to_delete = Vec::new();
+
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            // Parse archived file names: wal.{first:016x}-{last:016x}.log
+            if let Some(last_seq) = parse_archived_wal_name(&name_str) {
+                if last_seq <= checkpoint_seq {
+                    to_delete.push(entry.path());
+                }
+            }
+        }
+
+        // Delete old files
+        futures::future::try_join_all(to_delete.iter().map(fs::remove_file))
+            .await?;
+
+        Ok(())
+    }
+
+    /// Get the directory containing WAL files.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+}
+
+/// Parse an archived WAL filename and extract the last sequence number.
+///
+/// Archived files are named `wal.{first_seq:016x}-{last_seq:016x}.log`.
+/// Returns `Some(last_seq)` if the name matches, `None` otherwise.
+fn parse_archived_wal_name(name: &str) -> Option<u64> {
+    // Expected format: wal.0000000000000000-0000000000000001.log
+    let name = name.strip_prefix("wal.")?;
+    let name = name.strip_suffix(".log")?;
+
+    // Split on '-' to get first and last seq
+    let mut parts = name.split('-');
+    let _first = parts.next()?;
+    let last = parts.next()?;
+
+    // Ensure no extra parts
+    if parts.next().is_some() {
+        None
+    } else {
+        u64::from_str_radix(last, 16).ok()
+    }
 }
 
 #[cfg(test)]
@@ -556,5 +653,364 @@ mod tests {
         assert_eq!(sorted.len(), 10);
         assert_eq!(*sorted.first().unwrap(), 0);
         assert_eq!(*sorted.last().unwrap(), 9);
+    }
+
+    #[test]
+    fn parse_archived_wal_name_valid() {
+        // Standard format
+        let name = "wal.0000000000000000-0000000000000005.log";
+        assert_eq!(super::parse_archived_wal_name(name), Some(5));
+
+        // Higher sequence numbers
+        let name = "wal.0000000000000010-00000000000000ff.log";
+        assert_eq!(super::parse_archived_wal_name(name), Some(0xff));
+
+        // Large values
+        let name = "wal.0000000000000000-ffffffffffffffff.log";
+        assert_eq!(super::parse_archived_wal_name(name), Some(u64::MAX));
+    }
+
+    #[test]
+    fn parse_archived_wal_name_invalid() {
+        // Active file
+        assert_eq!(super::parse_archived_wal_name("wal.log"), None);
+
+        // Wrong extension
+        assert_eq!(
+            super::parse_archived_wal_name(
+                "wal.0000000000000000-0000000000000005.txt"
+            ),
+            None
+        );
+
+        // Missing parts
+        assert_eq!(
+            super::parse_archived_wal_name("wal.0000000000000000.log"),
+            None
+        );
+
+        // Too many parts
+        assert_eq!(
+            super::parse_archived_wal_name(
+                "wal.0000000000000000-0000000000000005-extra.log"
+            ),
+            None
+        );
+
+        // Not a WAL file
+        assert_eq!(super::parse_archived_wal_name("data.db"), None);
+
+        // Invalid hex
+        assert_eq!(
+            super::parse_archived_wal_name(
+                "wal.0000000000000000-ghijklmnopqrstuv.log"
+            ),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_writes_record_and_rotates() {
+        let (writer, dir) = temp_writer(WalWriterConfig::default()).await;
+
+        // Write some records
+        writer
+            .append(&WalRecord::TxnBegin {
+                txn_id: TransactionId::from(1),
+            })
+            .await
+            .expect("append"); // seq 0
+        writer
+            .append(&WalRecord::TxnCommit {
+                txn_id: TransactionId::from(1),
+            })
+            .await
+            .expect("append"); // seq 1
+
+        // Checkpoint at seq 1 (covering the commit)
+        let cp_seq = writer.checkpoint(1).await.expect("checkpoint");
+        assert_eq!(cp_seq, 2); // Checkpoint record is seq 2
+
+        // Verify rotation happened (archived file should exist)
+        let archives: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains('-'))
+            .collect();
+        assert_eq!(archives.len(), 1);
+
+        // New file should start fresh
+        assert_eq!(writer.file_size().await, FILE_HEADER_SIZE as u64);
+
+        // Next seq should be 3
+        assert_eq!(writer.next_seq().await, 3);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_deletes_old_archives() {
+        let (writer, dir) = temp_writer(WalWriterConfig::default()).await;
+
+        // Create first batch of records and rotate
+        writer
+            .append(&WalRecord::TxnBegin {
+                txn_id: TransactionId::from(1),
+            })
+            .await
+            .expect("append"); // seq 0
+        writer
+            .append(&WalRecord::TxnCommit {
+                txn_id: TransactionId::from(1),
+            })
+            .await
+            .expect("append"); // seq 1
+        writer.rotate().await.expect("rotate");
+        // Archive 1: seqs 0-1
+
+        // Create second batch and rotate
+        writer
+            .append(&WalRecord::TxnBegin {
+                txn_id: TransactionId::from(2),
+            })
+            .await
+            .expect("append"); // seq 2
+        writer
+            .append(&WalRecord::TxnCommit {
+                txn_id: TransactionId::from(2),
+            })
+            .await
+            .expect("append"); // seq 3
+        writer.rotate().await.expect("rotate");
+        // Archive 2: seqs 2-3
+
+        // Create third batch
+        writer
+            .append(&WalRecord::TxnBegin {
+                txn_id: TransactionId::from(3),
+            })
+            .await
+            .expect("append"); // seq 4
+        writer
+            .append(&WalRecord::TxnCommit {
+                txn_id: TransactionId::from(3),
+            })
+            .await
+            .expect("append"); // seq 5
+
+        // Should have 2 archives before checkpoint
+        let archives_before: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains('-'))
+            .collect();
+        assert_eq!(archives_before.len(), 2);
+
+        // Checkpoint at seq 3 (should delete first archive with seqs 0-1)
+        writer.checkpoint(3).await.expect("checkpoint");
+
+        // Now: archive with seqs 0-1 should be deleted
+        //      archive with seqs 2-3 should be deleted (last_seq 3 <= 3)
+        //      archive with checkpoint record should exist
+        let archives_after: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains('-'))
+            .collect();
+        // Only the newly rotated archive (from checkpoint) should remain
+        assert_eq!(archives_after.len(), 1);
+
+        // Verify the remaining archive contains the checkpoint
+        let remaining = archives_after.first().unwrap();
+        let name = remaining.file_name().to_string_lossy().to_string();
+        // The checkpoint record is at seq 6, so archive should end there
+        assert!(
+            name.contains("-0000000000000006"),
+            "Expected archive to end at seq 6, got: {name}"
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_keeps_newer_archives() {
+        let (writer, dir) = temp_writer(WalWriterConfig::default()).await;
+
+        // Create records and rotate multiple times
+        (0..3).for_each(|_| {});
+        writer
+            .append(&WalRecord::TxnBegin {
+                txn_id: TransactionId::from(1),
+            })
+            .await
+            .expect("append"); // seq 0
+        writer.rotate().await.expect("rotate");
+        // Archive 1: seq 0
+
+        writer
+            .append(&WalRecord::TxnBegin {
+                txn_id: TransactionId::from(2),
+            })
+            .await
+            .expect("append"); // seq 1
+        writer.rotate().await.expect("rotate");
+        // Archive 2: seq 1
+
+        writer
+            .append(&WalRecord::TxnBegin {
+                txn_id: TransactionId::from(3),
+            })
+            .await
+            .expect("append"); // seq 2
+
+        // Checkpoint at seq 0 (only delete first archive)
+        writer.checkpoint(0).await.expect("checkpoint");
+
+        // Count archives (should be 2: seq 1 archive + checkpoint archive)
+        let archives: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains('-'))
+            .collect();
+        assert_eq!(archives.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_recovery_integration() {
+        use crate::wal::{recover_from_dir, WalOp};
+
+        let dir = TempDir::new().expect("temp dir");
+
+        // First session: write and checkpoint
+        {
+            let writer =
+                open_writer(dir.path(), WalWriterConfig::default()).await;
+
+            // Transaction 1
+            writer
+                .append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(1),
+                })
+                .await
+                .expect("append"); // seq 0
+            writer
+                .append(&WalRecord::Set {
+                    txn_id: TransactionId::from(1),
+                    name: global!("OLD"),
+                    key: key![1],
+                    old: None,
+                    new: NodeData::new(Some(1i64.into()), false),
+                })
+                .await
+                .expect("append"); // seq 1
+            writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(1),
+                })
+                .await
+                .expect("append"); // seq 2
+
+            // Checkpoint at seq 2
+            writer.checkpoint(2).await.expect("checkpoint"); // seq 3
+
+            // Transaction 2 (after checkpoint)
+            writer
+                .append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(2),
+                })
+                .await
+                .expect("append"); // seq 4
+            writer
+                .append(&WalRecord::Set {
+                    txn_id: TransactionId::from(2),
+                    name: global!("NEW"),
+                    key: key![2],
+                    old: None,
+                    new: NodeData::new(Some(2i64.into()), false),
+                })
+                .await
+                .expect("append"); // seq 5
+            writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(2),
+                })
+                .await
+                .expect("append"); // seq 6
+
+            writer.sync().await.expect("sync");
+        }
+
+        // Recovery only reads the current wal.log file, which contains txn2.
+        // The checkpoint record is in the archived file (created by rotation).
+        // Note: Multi-file WAL recovery is not yet implemented - this test
+        // verifies that post-checkpoint transactions are properly isolated
+        // in the new WAL file.
+        let (result, _) = recover_from_dir(dir.path()).await.expect("recover");
+
+        // Should see txn2's operation
+        assert_eq!(result.committed_ops.len(), 1);
+
+        let op = result.committed_ops.first().unwrap();
+        assert_eq!(op.txn_id, TransactionId::from(2));
+        assert!(
+            matches!(op.op, WalOp::Set { ref name, .. } if name == &global!("NEW"))
+        );
+
+        // Checkpoint is in the archived file, not the current wal.log.
+        // Once multi-file recovery is implemented, this will return Some(2).
+        assert!(result.last_checkpoint_seq.is_none());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_in_same_file() {
+        // Test checkpoint record visible when not followed by rotation
+        use crate::wal::recover_from_dir;
+
+        let dir = TempDir::new().expect("temp dir");
+
+        {
+            let writer =
+                open_writer(dir.path(), WalWriterConfig::default()).await;
+
+            // Transaction 1 (before checkpoint seq)
+            writer
+                .append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(1),
+                })
+                .await
+                .expect("append"); // seq 0
+            writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(1),
+                })
+                .await
+                .expect("append"); // seq 1
+
+            // Manually write checkpoint without using the checkpoint() method
+            // (which rotates). This tests the recovery checkpoint filtering.
+            writer
+                .append(&WalRecord::Checkpoint { seq: 1 })
+                .await
+                .expect("append"); // seq 2
+
+            // Transaction 2 (after checkpoint seq)
+            writer
+                .append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(2),
+                })
+                .await
+                .expect("append"); // seq 3
+            writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(2),
+                })
+                .await
+                .expect("append"); // seq 4
+
+            writer.sync().await.expect("sync");
+        }
+
+        let (result, _) = recover_from_dir(dir.path()).await.expect("recover");
+
+        // Checkpoint seq=1 filters out txn1's ops (but txn1 had no Set ops)
+        // Both txns have no Set ops, so committed_ops should be empty
+        assert!(result.committed_ops.is_empty());
+        assert_eq!(result.last_checkpoint_seq, Some(1));
     }
 }
