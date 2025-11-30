@@ -402,3 +402,333 @@ mod tests {
         assert_eq!(b, 2u64.into());
     }
 }
+
+/// Benchmark suite for WAL operations.
+#[cfg(feature = "bench")]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+pub mod benches {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
+    use rumps_types::{global, key};
+    use tempfile::TempDir;
+    use tokio::runtime::Runtime;
+
+    use super::*;
+    use crate::node::NodeData;
+
+    /// Create a SET record with a payload of approximately `size` bytes.
+    fn make_set_record(txn_id: u64, size: usize) -> WalRecord {
+        let val = "x".repeat(size);
+        WalRecord::Set {
+            txn_id: txn_id.into(),
+            name: global!("BENCH"),
+            key: key![txn_id as i64],
+            old: None,
+            new: NodeData::new(Some(val.into()), false),
+        }
+    }
+
+    /// Benchmark steady-state append throughput (no fsync).
+    ///
+    /// Measures raw append performance with setup amortized out.
+    fn bench_append_throughput(c: &mut Criterion) {
+        let rt = Runtime::new().unwrap();
+        let mut group = c.benchmark_group("wal_append");
+        group.throughput(Throughput::Elements(1));
+
+        // Small record (TxnBegin ~12 bytes)
+        group.bench_function("small", |b| {
+            let dir = TempDir::new().unwrap();
+            let writer = rt.block_on(async {
+                let reader = WalReader::open(dir.path()).await.unwrap();
+                reader
+                    .into_writer(WalWriterConfig {
+                        sync_mode: writer::SyncMode::OnCommit,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+            });
+            let counter = AtomicU64::new(0);
+
+            b.iter(|| {
+                let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                rt.block_on(async {
+                    let rec = WalRecord::TxnBegin {
+                        txn_id: txn_id.into(),
+                    };
+                    writer.append(&rec).await.unwrap();
+                })
+            });
+        });
+
+        // Medium record (~100 bytes payload)
+        group.bench_function("medium_100B", |b| {
+            let dir = TempDir::new().unwrap();
+            let writer = rt.block_on(async {
+                let reader = WalReader::open(dir.path()).await.unwrap();
+                reader
+                    .into_writer(WalWriterConfig {
+                        sync_mode: writer::SyncMode::OnCommit,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+            });
+            let counter = AtomicU64::new(0);
+
+            b.iter(|| {
+                let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                rt.block_on(async {
+                    let rec = make_set_record(txn_id, 100);
+                    writer.append(&rec).await.unwrap();
+                })
+            });
+        });
+
+        // Large record (~1KB payload)
+        group.bench_function("large_1KB", |b| {
+            let dir = TempDir::new().unwrap();
+            let writer = rt.block_on(async {
+                let reader = WalReader::open(dir.path()).await.unwrap();
+                reader
+                    .into_writer(WalWriterConfig {
+                        sync_mode: writer::SyncMode::OnCommit,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+            });
+            let counter = AtomicU64::new(0);
+
+            b.iter(|| {
+                let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                rt.block_on(async {
+                    let rec = make_set_record(txn_id, 1024);
+                    writer.append(&rec).await.unwrap();
+                })
+            });
+        });
+
+        group.finish();
+    }
+
+    /// Benchmark transaction commit with fsync.
+    ///
+    /// This is the realistic "durable write" scenario: append + sync.
+    fn bench_commit_with_sync(c: &mut Criterion) {
+        let rt = Runtime::new().unwrap();
+        let mut group = c.benchmark_group("wal_commit_sync");
+        group.sample_size(50); // Fewer samples, fsync is slow
+        group.measurement_time(Duration::from_secs(10));
+
+        group.bench_function("single_op_txn", |b| {
+            let dir = TempDir::new().unwrap();
+            let writer = rt.block_on(async {
+                let reader = WalReader::open(dir.path()).await.unwrap();
+                reader
+                    .into_writer(WalWriterConfig::default())
+                    .await
+                    .unwrap()
+            });
+            let counter = AtomicU64::new(0);
+
+            b.iter(|| {
+                let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                rt.block_on(async {
+                    writer
+                        .append(&WalRecord::TxnBegin {
+                            txn_id: txn_id.into(),
+                        })
+                        .await
+                        .unwrap();
+                    writer.append(&make_set_record(txn_id, 64)).await.unwrap();
+                    writer
+                        .append(&WalRecord::TxnCommit {
+                            txn_id: txn_id.into(),
+                        })
+                        .await
+                        .unwrap();
+                    writer.sync().await.unwrap();
+                })
+            });
+        });
+
+        group.finish();
+    }
+
+    /// Benchmark batched transactions (amortize sync cost).
+    ///
+    /// Shows benefit of batching multiple operations before sync.
+    fn bench_batched_commits(c: &mut Criterion) {
+        let rt = Runtime::new().unwrap();
+        let mut group = c.benchmark_group("wal_batch_commit");
+        group.sample_size(30);
+        group.measurement_time(Duration::from_secs(10));
+
+        [5, 10, 50].iter().copied().for_each(|ops_per_txn| {
+            group.throughput(Throughput::Elements(ops_per_txn as u64));
+            group.bench_with_input(
+                BenchmarkId::new("ops", ops_per_txn),
+                &ops_per_txn,
+                |b, &ops| {
+                    let dir = TempDir::new().unwrap();
+                    let writer = rt.block_on(async {
+                        let reader = WalReader::open(dir.path()).await.unwrap();
+                        reader
+                            .into_writer(WalWriterConfig::default())
+                            .await
+                            .unwrap()
+                    });
+                    let counter = AtomicU64::new(0);
+
+                    b.iter(|| {
+                        let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                        rt.block_on(async {
+                            writer
+                                .append(&WalRecord::TxnBegin {
+                                    txn_id: txn_id.into(),
+                                })
+                                .await
+                                .unwrap();
+
+                            (0..ops).for_each(|i| {
+                                let rec = make_set_record(
+                                    txn_id * 1000 + i as u64,
+                                    64,
+                                );
+                                rt.block_on(writer.append(&rec)).unwrap();
+                            });
+
+                            writer
+                                .append(&WalRecord::TxnCommit {
+                                    txn_id: txn_id.into(),
+                                })
+                                .await
+                                .unwrap();
+                            writer.sync().await.unwrap();
+                        })
+                    });
+                },
+            );
+        });
+
+        group.finish();
+    }
+
+    /// Benchmark WAL recovery (reading all records).
+    fn bench_recovery(c: &mut Criterion) {
+        let rt = Runtime::new().unwrap();
+        let mut group = c.benchmark_group("wal_recovery");
+
+        [100, 1000, 10000].iter().copied().for_each(|count| {
+            group.throughput(Throughput::Elements(count as u64));
+            group.bench_with_input(
+                BenchmarkId::from_parameter(count),
+                &count,
+                |b, &count| {
+                    // Setup: create WAL with records
+                    let dir = TempDir::new().unwrap();
+                    rt.block_on(async {
+                        let reader = WalReader::open(dir.path()).await.unwrap();
+                        let writer = reader
+                            .into_writer(WalWriterConfig::default())
+                            .await
+                            .unwrap();
+
+                        (0..count as u64).for_each(|i| {
+                            let rec = make_set_record(i, 64);
+                            rt.block_on(writer.append(&rec)).unwrap();
+                        });
+                        writer.sync().await.unwrap();
+                    });
+
+                    // Benchmark: read all records
+                    b.iter(|| {
+                        rt.block_on(async {
+                            let mut reader =
+                                WalReader::open(dir.path()).await.unwrap();
+                            let mut n = 0u64;
+                            while reader.next().await.unwrap().is_some() {
+                                n += 1;
+                            }
+                            n
+                        })
+                    });
+                },
+            );
+        });
+
+        group.finish();
+    }
+
+    /// Benchmark file rotation overhead.
+    ///
+    /// Uses small file size to force frequent rotations.
+    fn bench_rotation(c: &mut Criterion) {
+        let rt = Runtime::new().unwrap();
+        let mut group = c.benchmark_group("wal_rotation");
+        group.throughput(Throughput::Elements(100));
+
+        group.bench_function("100_records_small_files", |b| {
+            b.iter_batched(
+                || TempDir::new().unwrap(),
+                |dir| {
+                    rt.block_on(async {
+                        let reader = WalReader::open(dir.path()).await.unwrap();
+                        let writer = reader
+                            .into_writer(WalWriterConfig {
+                                max_file_size: 512, // Force rotation every ~4 records
+                                sync_mode: writer::SyncMode::OnCommit,
+                            })
+                            .await
+                            .unwrap();
+
+                        (0..100u64).for_each(|i| {
+                            let rec = make_set_record(i, 64);
+                            rt.block_on(writer.append(&rec)).unwrap();
+                        });
+                    })
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        group.finish();
+    }
+
+    /// Benchmark serialization overhead (bincode).
+    fn bench_serialization(c: &mut Criterion) {
+        let mut group = c.benchmark_group("wal_serialize");
+
+        let small = WalRecord::TxnBegin { txn_id: 1.into() };
+        let medium = make_set_record(1, 100);
+        let large = make_set_record(1, 1024);
+
+        group.bench_function("small", |b| {
+            b.iter(|| bincode::serialize(&small).unwrap())
+        });
+
+        group.bench_function("medium_100B", |b| {
+            b.iter(|| bincode::serialize(&medium).unwrap())
+        });
+
+        group.bench_function("large_1KB", |b| {
+            b.iter(|| bincode::serialize(&large).unwrap())
+        });
+
+        group.finish();
+    }
+
+    /// Main entry point for all WAL benchmarks.
+    pub fn run_benchmarks(c: &mut Criterion) {
+        bench_append_throughput(c);
+        bench_commit_with_sync(c);
+        bench_batched_commits(c);
+        bench_recovery(c);
+        bench_rotation(c);
+        bench_serialization(c);
+    }
+}

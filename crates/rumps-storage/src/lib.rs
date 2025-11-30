@@ -24,7 +24,11 @@ pub(crate) mod transaction;
 pub(crate) mod wal;
 
 #[cfg(feature = "bench")]
-pub use btree::benches;
+pub mod benches {
+    //! Benchmark modules for storage components.
+    pub use crate::btree::benches as btree;
+    pub use crate::wal::benches as wal;
+}
 pub use error::{Result, StorageError};
 pub use rumps_types::DataStatus;
 pub use transaction::TransactionContext;
