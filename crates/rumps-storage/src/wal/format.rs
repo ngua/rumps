@@ -80,13 +80,35 @@ impl FileHeader {
         }
     }
 
+    /// Read a file header from a WAL file path.
+    pub(crate) async fn read(path: &std::path::Path) -> Result<Self> {
+        let mut file = tokio::fs::File::open(path).await?;
+        let mut buf = [0u8; FILE_HEADER_SIZE];
+
+        // `read_exact` either reads exactly `FILE_HEADER_SIZE` bytes or errors
+        AsyncReadExt::read_exact(&mut file, &mut buf)
+            .await
+            .map_err(|_| StorageError::WalCorruption {
+                seq: 0,
+                reason: format!("truncated header in {}", path.display()),
+            })
+            .and_then(|_| {
+                Self::from_bytes(&buf).ok_or_else(|| {
+                    StorageError::WalCorruption {
+                        seq: 0,
+                        reason: format!("invalid header in {}", path.display()),
+                    }
+                })
+            })
+    }
+
     /// Serialize the header to bytes.
     pub(crate) fn to_bytes(self) -> [u8; FILE_HEADER_SIZE] {
         let mut buf = [0u8; FILE_HEADER_SIZE];
         buf[0..4].copy_from_slice(&self.magic);
         buf[4..6].copy_from_slice(&self.version.to_le_bytes());
         buf[6..8].copy_from_slice(&self.flags.to_le_bytes());
-        buf[8..16].copy_from_slice(&self.first_seq.get().to_le_bytes());
+        buf[8..16].copy_from_slice(&(*self.first_seq).to_le_bytes());
         buf
     }
 
@@ -100,7 +122,7 @@ impl FileHeader {
 
         let flags = u16::from_le_bytes(buf[6..8].try_into().ok()?);
         let first_seq =
-            WalSequence::new(u64::from_le_bytes(buf[8..16].try_into().ok()?));
+            WalSequence::from(u64::from_le_bytes(buf[8..16].try_into().ok()?));
 
         Some(Self {
             magic,
@@ -140,7 +162,7 @@ impl RecordHeader {
         let mut buf = [0u8; RECORD_HEADER_SIZE];
         buf[0..4].copy_from_slice(&self.checksum.to_le_bytes());
         buf[4..8].copy_from_slice(&self.len.to_le_bytes());
-        buf[8..16].copy_from_slice(&self.seq.get().to_le_bytes());
+        buf[8..16].copy_from_slice(&(*self.seq).to_le_bytes());
         buf[16..20].copy_from_slice(&self.flags.to_le_bytes());
         buf
     }
@@ -157,7 +179,7 @@ impl RecordHeader {
         Self {
             checksum: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
             len: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
-            seq: WalSequence::new(u64::from_le_bytes(
+            seq: WalSequence::from(u64::from_le_bytes(
                 buf[8..16].try_into().unwrap(),
             )),
             flags: u32::from_le_bytes(buf[16..20].try_into().unwrap()),
@@ -226,7 +248,7 @@ pub(crate) async fn try_read_record_at(
                 }))
             } else {
                 Err(StorageError::WalCorruption {
-                    seq: hdr.seq.get(),
+                    seq: *hdr.seq,
                     reason: "checksum mismatch".into(),
                 })
             }
@@ -246,7 +268,7 @@ mod tests {
 
     #[test]
     fn file_header_roundtrip() {
-        let hdr = FileHeader::new(WalSequence::new(12345));
+        let hdr = FileHeader::new(WalSequence::from(12345));
         let bytes = hdr.to_bytes();
         let decoded = FileHeader::from_bytes(&bytes);
         assert_eq!(decoded, Some(hdr));
@@ -269,7 +291,7 @@ mod tests {
     #[test]
     fn record_header_roundtrip() {
         let payload = b"hello world";
-        let hdr = RecordHeader::new(WalSequence::new(42), payload);
+        let hdr = RecordHeader::new(WalSequence::from(42), payload);
         let bytes = hdr.to_bytes();
         let decoded = RecordHeader::from_bytes(&bytes);
         assert_eq!(decoded, hdr);
@@ -279,7 +301,7 @@ mod tests {
     #[test]
     fn record_header_detects_corruption() {
         let payload = b"hello world";
-        let hdr = RecordHeader::new(WalSequence::new(42), payload);
+        let hdr = RecordHeader::new(WalSequence::from(42), payload);
         let corrupted = b"hello worLd"; // one byte changed
         assert!(!hdr.verify(corrupted));
     }
@@ -287,7 +309,7 @@ mod tests {
     #[test]
     fn record_header_detects_truncation() {
         let payload = b"hello world";
-        let hdr = RecordHeader::new(WalSequence::new(42), payload);
+        let hdr = RecordHeader::new(WalSequence::from(42), payload);
         let truncated = b"hello";
         assert!(!hdr.verify(truncated));
     }

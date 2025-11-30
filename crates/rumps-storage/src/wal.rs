@@ -36,20 +36,86 @@ mod files;
 mod format;
 mod reader;
 mod recovery;
-mod sequence;
 mod writer;
+
+use std::fmt::{self, Display};
+use std::ops::Deref;
 
 pub(crate) use reader::WalReader;
 // Used by tests in submodules
 #[allow(unused_imports)]
 pub(crate) use recovery::{recover_from_dir, WalOp};
 use rumps_types::{Key, Name};
-pub(crate) use sequence::WalSequence;
 use serde::{Deserialize, Serialize};
 pub(crate) use writer::{WalWriter, WalWriterConfig};
 
 use crate::node::NodeData;
 use crate::transaction::TransactionId;
+
+/// A WAL sequence number - monotonically increasing across all WAL files.
+///
+/// Sequence numbers uniquely identify each record in the WAL and are used to:
+/// - Order records for replay during recovery
+/// - Detect gaps in the WAL (indicating corruption or missing files)
+/// - Determine which archived files can be safely deleted after checkpointing
+///
+/// The sequence is formatted as 16-digit hex for consistency with archive filenames.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Serialize,
+    Deserialize
+)]
+#[repr(transparent)]
+pub(crate) struct WalSequence(u64);
+
+impl WalSequence {
+    /// The zero sequence number (start of a fresh WAL).
+    pub const ZERO: Self = Self(0);
+
+    /// Get the next sequence number.
+    pub fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+
+    /// Saturating subtraction - returns `ZERO` if result would underflow.
+    pub fn saturating_sub(self, n: u64) -> Self {
+        Self(self.0.saturating_sub(n))
+    }
+}
+
+impl Deref for WalSequence {
+    type Target = u64;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<u64> for WalSequence {
+    fn from(n: u64) -> Self {
+        Self(n)
+    }
+}
+
+impl From<WalSequence> for u64 {
+    fn from(seq: WalSequence) -> Self {
+        seq.0
+    }
+}
+
+impl Display for WalSequence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:016x}", self.0)
+    }
+}
 
 /// A record in the Write-Ahead Log.
 ///
@@ -203,7 +269,7 @@ mod tests {
     #[test]
     fn checkpoint_roundtrip() {
         let rec = WalRecord::Checkpoint {
-            seq: WalSequence::new(12345),
+            seq: WalSequence::from(12345),
         };
         let bytes = bincode::serialize(&rec).expect("serialize");
         let decoded: WalRecord =
@@ -241,7 +307,7 @@ mod tests {
         let txn_begin = WalRecord::TxnBegin { txn_id: 1.into() };
         let txn_commit = WalRecord::TxnCommit { txn_id: 1.into() };
         let checkpoint = WalRecord::Checkpoint {
-            seq: WalSequence::new(1),
+            seq: WalSequence::from(1),
         };
         let set_minimal = WalRecord::Set {
             txn_id: 1.into(),
@@ -283,5 +349,56 @@ mod tests {
         // Set/KillEntry have more fields, but minimal versions should be bounded
         assert!(sizes[3].1 <= 64, "Set too large: {}", sizes[3].1);
         assert!(sizes[4].1 <= 64, "KillEntry too large: {}", sizes[4].1);
+    }
+
+    // WalSequence tests
+
+    #[test]
+    fn seq_zero_constant() {
+        assert_eq!(*WalSequence::ZERO, 0);
+    }
+
+    #[test]
+    fn seq_from_and_deref() {
+        let seq: WalSequence = 42u64.into();
+        assert_eq!(*seq, 42);
+    }
+
+    #[test]
+    fn seq_next_increments() {
+        let seq: WalSequence = 10u64.into();
+        assert_eq!(*seq.next(), 11);
+    }
+
+    #[test]
+    fn seq_saturating_sub() {
+        let seq: WalSequence = 10u64.into();
+        assert_eq!(*seq.saturating_sub(3), 7);
+        assert_eq!(
+            WalSequence::from(5u64).saturating_sub(10),
+            WalSequence::ZERO
+        );
+    }
+
+    #[test]
+    fn seq_display_hex() {
+        assert_eq!(format!("{}", WalSequence::ZERO), "0000000000000000");
+        assert_eq!(
+            format!("{}", WalSequence::from(255u64)),
+            "00000000000000ff"
+        );
+        assert_eq!(
+            format!("{}", WalSequence::from(u64::MAX)),
+            "ffffffffffffffff"
+        );
+    }
+
+    #[test]
+    fn seq_ordering() {
+        let a: WalSequence = 1u64.into();
+        let b: WalSequence = 2u64.into();
+        assert!(a < b);
+        assert!(b > a);
+        assert_eq!(b, 2u64.into());
     }
 }

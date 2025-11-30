@@ -490,7 +490,7 @@ mod tests {
         // Seqs should be 2 and 4 (the txn 1 ops)
         let seqs: Vec<WalSequence> =
             result.committed_ops.iter().map(|op| op.seq).collect();
-        assert_eq!(seqs, vec![WalSequence::new(2), WalSequence::new(4)]);
+        assert_eq!(seqs, vec![WalSequence::from(2), WalSequence::from(4)]);
     }
 
     #[tokio::test]
@@ -523,7 +523,7 @@ mod tests {
             // Checkpoint at seq 10 (covers all ops so far)
             writer
                 .append(&WalRecord::Checkpoint {
-                    seq: WalSequence::new(10),
+                    seq: WalSequence::from(10),
                 })
                 .await
                 .expect("append"); // seq 3
@@ -590,7 +590,7 @@ mod tests {
         assert!(result.committed_ops.is_empty()); // All were before checkpoint seq 10
 
         assert!(result.last_checkpoint_seq.is_some());
-        assert_eq!(result.last_checkpoint_seq.unwrap(), WalSequence::new(10));
+        assert_eq!(result.last_checkpoint_seq.unwrap(), WalSequence::from(10));
     }
 
     #[tokio::test]
@@ -623,7 +623,7 @@ mod tests {
             // Checkpoint - covers ops up to seq 2
             writer
                 .append(&WalRecord::Checkpoint {
-                    seq: WalSequence::new(2),
+                    seq: WalSequence::from(2),
                 })
                 .await
                 .expect("append"); // seq 3
@@ -659,7 +659,7 @@ mod tests {
 
         let op = result.committed_ops.first().unwrap();
         assert_eq!(op.txn_id, 2.into());
-        assert_eq!(op.seq, WalSequence::new(5));
+        assert_eq!(op.seq, WalSequence::from(5));
     }
 
     #[tokio::test]
@@ -768,7 +768,7 @@ mod tests {
         let (result, reader) =
             recover_from_dir(dir.path()).await.expect("recover");
 
-        assert_eq!(result.next_seq, WalSequence::new(2));
+        assert_eq!(result.next_seq, WalSequence::from(2));
 
         // Can convert reader to writer
         let writer = reader
@@ -780,7 +780,7 @@ mod tests {
             .append(&WalRecord::TxnBegin { txn_id: 2.into() })
             .await
             .expect("append");
-        assert_eq!(seq, WalSequence::new(2));
+        assert_eq!(seq, WalSequence::from(2));
     }
 
     #[tokio::test]
@@ -844,9 +844,9 @@ mod tests {
         assert_eq!(
             seqs,
             vec![
-                WalSequence::new(1),
-                WalSequence::new(2),
-                WalSequence::new(3)
+                WalSequence::from(1),
+                WalSequence::from(2),
+                WalSequence::from(3)
             ]
         );
     }

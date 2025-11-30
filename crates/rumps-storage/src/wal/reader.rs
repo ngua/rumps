@@ -50,7 +50,7 @@ use futures::{Stream, TryStreamExt};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 
-use super::files::{discover_wal_files, WalFileInfo};
+use super::files::WalFileInfo;
 use super::format::{try_read_record_at, FileHeader, FILE_HEADER_SIZE};
 use super::recovery::{RecoveryAccum, RecoveryResult};
 use super::{WalRecord, WalSequence, WalWriter, WalWriterConfig};
@@ -126,7 +126,7 @@ impl WalReader {
         fs::create_dir_all(dir).await?;
 
         // Discover all WAL files
-        let files = discover_wal_files(dir).await?;
+        let files = WalFileInfo::discover(dir).await?;
 
         if files.is_empty() {
             // Fresh database - create new wal.log
@@ -319,7 +319,7 @@ impl WalReader {
             // Validate sequence continuity
             if next_info.first_seq != self.next_seq {
                 Err(StorageError::WalCorruption {
-                    seq: next_info.first_seq.get(),
+                    seq: *next_info.first_seq,
                     reason: format!(
                         "sequence gap: expected {}, found {}",
                         self.next_seq, next_info.first_seq
@@ -627,7 +627,7 @@ mod tests {
         let entry = reader.next().await.expect("next").expect("entry");
         assert_eq!(entry.seq, WalSequence::ZERO);
         assert_eq!(entry.record, rec);
-        assert_eq!(reader.next_seq(), WalSequence::new(1));
+        assert_eq!(reader.next_seq(), WalSequence::from(1));
 
         assert!(reader.next().await.expect("next").is_none());
     }
@@ -660,7 +660,7 @@ mod tests {
         assert_eq!(entries.len(), recs.len());
         entries.iter().zip(recs.iter()).enumerate().for_each(
             |(i, (entry, expected))| {
-                assert_eq!(entry.seq, WalSequence::new(i as u64));
+                assert_eq!(entry.seq, WalSequence::from(i as u64));
                 assert_eq!(&entry.record, expected);
             },
         );
@@ -694,7 +694,7 @@ mod tests {
 
             // Read all records
             while reader.next().await.expect("next").is_some() {}
-            assert_eq!(reader.next_seq(), WalSequence::new(2));
+            assert_eq!(reader.next_seq(), WalSequence::from(2));
 
             // Convert to writer and append more
             let writer = reader
@@ -708,8 +708,8 @@ mod tests {
                 })
                 .await
                 .expect("append");
-            assert_eq!(seq, WalSequence::new(2));
-            assert_eq!(writer.next_seq().await, WalSequence::new(3));
+            assert_eq!(seq, WalSequence::from(2));
+            assert_eq!(writer.next_seq().await, WalSequence::from(3));
         }
     }
 
@@ -733,7 +733,7 @@ mod tests {
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries.get(0).unwrap().seq, WalSequence::ZERO);
-        assert_eq!(entries.get(1).unwrap().seq, WalSequence::new(1));
+        assert_eq!(entries.get(1).unwrap().seq, WalSequence::from(1));
     }
 
     #[tokio::test]
@@ -763,7 +763,7 @@ mod tests {
                 txn_id: TransactionId::from(2),
             },
             WalRecord::Checkpoint {
-                seq: WalSequence::new(100),
+                seq: WalSequence::from(100),
             },
         ];
         write_records(&dir, &recs).await;
@@ -811,7 +811,7 @@ mod tests {
         // Seek back and re-read
         reader.seek(pos_after_first).await.expect("seek");
         let entry = reader.next().await.expect("next").expect("entry");
-        assert_eq!(entry.seq, WalSequence::new(1));
+        assert_eq!(entry.seq, WalSequence::from(1));
     }
 
     #[tokio::test]
@@ -979,7 +979,7 @@ mod tests {
 
         // Verify sequence numbers are in order 0..6
         entries.iter().enumerate().for_each(|(i, entry)| {
-            assert_eq!(entry.seq, WalSequence::new(i as u64));
+            assert_eq!(entry.seq, WalSequence::from(i as u64));
         });
     }
 
@@ -1019,7 +1019,7 @@ mod tests {
 
             // Checkpoint and rotate (puts checkpoint in archive)
             writer
-                .checkpoint(WalSequence::new(2))
+                .checkpoint(WalSequence::from(2))
                 .await
                 .expect("checkpoint"); // seq 3, then rotate
 
@@ -1062,6 +1062,6 @@ mod tests {
         );
 
         // Should have found the checkpoint
-        assert_eq!(result.last_checkpoint_seq, Some(WalSequence::new(2)));
+        assert_eq!(result.last_checkpoint_seq, Some(WalSequence::from(2)));
     }
 }
