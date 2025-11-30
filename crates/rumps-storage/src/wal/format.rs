@@ -41,6 +41,7 @@
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 
+use super::WalSequence;
 use crate::error::{Result, StorageError};
 
 /// Magic bytes identifying a RUMPS WAL file.
@@ -65,12 +66,12 @@ pub(crate) struct FileHeader {
     /// Reserved flags.
     pub(crate) flags: u16,
     /// Sequence number of the first record in this file.
-    pub(crate) first_seq: u64,
+    pub(crate) first_seq: WalSequence,
 }
 
 impl FileHeader {
     /// Create a new file header with the given first sequence number.
-    pub(crate) fn new(first_seq: u64) -> Self {
+    pub(crate) fn new(first_seq: WalSequence) -> Self {
         Self {
             magic: WAL_MAGIC,
             version: WAL_VERSION,
@@ -85,7 +86,7 @@ impl FileHeader {
         buf[0..4].copy_from_slice(&self.magic);
         buf[4..6].copy_from_slice(&self.version.to_le_bytes());
         buf[6..8].copy_from_slice(&self.flags.to_le_bytes());
-        buf[8..16].copy_from_slice(&self.first_seq.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.first_seq.get().to_le_bytes());
         buf
     }
 
@@ -98,7 +99,8 @@ impl FileHeader {
         (version == WAL_VERSION).then_some(())?;
 
         let flags = u16::from_le_bytes(buf[6..8].try_into().ok()?);
-        let first_seq = u64::from_le_bytes(buf[8..16].try_into().ok()?);
+        let first_seq =
+            WalSequence::new(u64::from_le_bytes(buf[8..16].try_into().ok()?));
 
         Some(Self {
             magic,
@@ -117,14 +119,14 @@ pub(crate) struct RecordHeader {
     /// Length of the payload in bytes.
     pub(crate) len: u32,
     /// Monotonically increasing sequence number.
-    pub(crate) seq: u64,
+    pub(crate) seq: WalSequence,
     /// Reserved flags (currently unused).
     pub(crate) flags: u32,
 }
 
 impl RecordHeader {
     /// Create a new record header for the given payload.
-    pub(crate) fn new(seq: u64, payload: &[u8]) -> Self {
+    pub(crate) fn new(seq: WalSequence, payload: &[u8]) -> Self {
         Self {
             checksum: crc32(payload),
             len: payload.len() as u32,
@@ -138,7 +140,7 @@ impl RecordHeader {
         let mut buf = [0u8; RECORD_HEADER_SIZE];
         buf[0..4].copy_from_slice(&self.checksum.to_le_bytes());
         buf[4..8].copy_from_slice(&self.len.to_le_bytes());
-        buf[8..16].copy_from_slice(&self.seq.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.seq.get().to_le_bytes());
         buf[16..20].copy_from_slice(&self.flags.to_le_bytes());
         buf
     }
@@ -155,7 +157,9 @@ impl RecordHeader {
         Self {
             checksum: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
             len: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
-            seq: u64::from_le_bytes(buf[8..16].try_into().unwrap()),
+            seq: WalSequence::new(u64::from_le_bytes(
+                buf[8..16].try_into().unwrap(),
+            )),
             flags: u32::from_le_bytes(buf[16..20].try_into().unwrap()),
         }
     }
@@ -222,7 +226,7 @@ pub(crate) async fn try_read_record_at(
                 }))
             } else {
                 Err(StorageError::WalCorruption {
-                    seq: hdr.seq,
+                    seq: hdr.seq.get(),
                     reason: "checksum mismatch".into(),
                 })
             }
@@ -242,7 +246,7 @@ mod tests {
 
     #[test]
     fn file_header_roundtrip() {
-        let hdr = FileHeader::new(12345);
+        let hdr = FileHeader::new(WalSequence::new(12345));
         let bytes = hdr.to_bytes();
         let decoded = FileHeader::from_bytes(&bytes);
         assert_eq!(decoded, Some(hdr));
@@ -250,14 +254,14 @@ mod tests {
 
     #[test]
     fn file_header_rejects_bad_magic() {
-        let mut bytes = FileHeader::new(0).to_bytes();
+        let mut bytes = FileHeader::new(WalSequence::ZERO).to_bytes();
         bytes[0] = b'X';
         assert_eq!(FileHeader::from_bytes(&bytes), None);
     }
 
     #[test]
     fn file_header_rejects_bad_version() {
-        let mut bytes = FileHeader::new(0).to_bytes();
+        let mut bytes = FileHeader::new(WalSequence::ZERO).to_bytes();
         bytes[4] = 99; // wrong version
         assert_eq!(FileHeader::from_bytes(&bytes), None);
     }
@@ -265,7 +269,7 @@ mod tests {
     #[test]
     fn record_header_roundtrip() {
         let payload = b"hello world";
-        let hdr = RecordHeader::new(42, payload);
+        let hdr = RecordHeader::new(WalSequence::new(42), payload);
         let bytes = hdr.to_bytes();
         let decoded = RecordHeader::from_bytes(&bytes);
         assert_eq!(decoded, hdr);
@@ -275,7 +279,7 @@ mod tests {
     #[test]
     fn record_header_detects_corruption() {
         let payload = b"hello world";
-        let hdr = RecordHeader::new(42, payload);
+        let hdr = RecordHeader::new(WalSequence::new(42), payload);
         let corrupted = b"hello worLd"; // one byte changed
         assert!(!hdr.verify(corrupted));
     }
@@ -283,7 +287,7 @@ mod tests {
     #[test]
     fn record_header_detects_truncation() {
         let payload = b"hello world";
-        let hdr = RecordHeader::new(42, payload);
+        let hdr = RecordHeader::new(WalSequence::new(42), payload);
         let truncated = b"hello";
         assert!(!hdr.verify(truncated));
     }
@@ -300,9 +304,12 @@ mod tests {
     fn header_sizes_correct() {
         assert_eq!(FILE_HEADER_SIZE, 16);
         assert_eq!(RECORD_HEADER_SIZE, 20);
-        assert_eq!(FileHeader::new(0).to_bytes().len(), FILE_HEADER_SIZE);
         assert_eq!(
-            RecordHeader::new(0, b"").to_bytes().len(),
+            FileHeader::new(WalSequence::ZERO).to_bytes().len(),
+            FILE_HEADER_SIZE
+        );
+        assert_eq!(
+            RecordHeader::new(WalSequence::ZERO, b"").to_bytes().len(),
             RECORD_HEADER_SIZE
         );
     }

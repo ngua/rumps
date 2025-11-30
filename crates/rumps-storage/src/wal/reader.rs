@@ -50,42 +50,54 @@ use futures::{Stream, TryStreamExt};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 
+use super::files::{discover_wal_files, WalFileInfo};
 use super::format::{try_read_record_at, FileHeader, FILE_HEADER_SIZE};
 use super::recovery::{RecoveryAccum, RecoveryResult};
-use super::{WalRecord, WalWriter, WalWriterConfig};
+use super::{WalRecord, WalSequence, WalWriter, WalWriterConfig};
 use crate::error::{Result, StorageError};
 
 /// A parsed WAL record with its metadata.
 #[derive(Debug, Clone)]
 pub(crate) struct WalEntry {
     /// The sequence number of this record.
-    pub(crate) seq: u64,
+    pub(crate) seq: WalSequence,
     /// The deserialized record.
     pub(crate) record: WalRecord,
 }
 
-/// WAL reader that iterates over records sequentially.
+/// WAL reader that iterates over records sequentially across multiple files.
 ///
 /// This is the **only** way to initialize WAL access. After iterating
 /// through existing records (for recovery), call [`into_writer`] to
 /// convert to a [`WalWriter`] for appending new records.
 ///
+/// The reader automatically handles file transitions when reading across
+/// archived files and the active `wal.log`.
+///
 /// [`into_writer`]: WalReader::into_writer
 pub(crate) struct WalReader {
-    /// Directory containing the WAL file.
+    /// Directory containing WAL files.
     pub(super) dir: PathBuf,
-    /// Path to the WAL file.
+
+    // Multi-file tracking
+    /// All discovered WAL files in sequence order.
+    pub(super) files: Vec<WalFileInfo>,
+    /// Index of current file in `files`.
+    current_idx: usize,
+
+    // Current file state (may be None if no files)
+    /// Path to the current WAL file.
     pub(super) path: PathBuf,
     /// File handle (read-only).
-    pub(super) file: File,
+    pub(super) file: Option<File>,
     /// File size in bytes (cached at open).
     pub(super) file_size: u64,
     /// Current read position.
     pos: u64,
     /// First sequence number in this file.
-    pub(super) first_seq: u64,
+    pub(super) first_seq: WalSequence,
     /// Next sequence number (updated as we read).
-    pub(super) next_seq: u64,
+    pub(super) next_seq: WalSequence,
 }
 
 impl WalReader {
@@ -93,6 +105,9 @@ impl WalReader {
     ///
     /// This is the single entry point for WAL initialization. After reading
     /// existing records, call [`into_writer`] to begin writing.
+    ///
+    /// Discovers all WAL files (archived and active) and reads them in
+    /// sequence order. The reader automatically handles file transitions.
     ///
     /// # Arguments
     ///
@@ -102,95 +117,121 @@ impl WalReader {
     ///
     /// Returns `Err` if:
     /// - The directory cannot be created
-    /// - The file exists but has an invalid header
+    /// - WAL files have sequence gaps (corruption)
+    /// - A file exists but has an invalid header
     ///
     /// [`into_writer`]: WalReader::into_writer
     pub(crate) async fn open(dir: &Path) -> Result<Self> {
         // Ensure directory exists
         fs::create_dir_all(dir).await?;
 
-        let path = dir.join("wal.log");
-        let exists = fs::try_exists(&path).await.unwrap_or(false);
+        // Discover all WAL files
+        let files = discover_wal_files(dir).await?;
 
-        if exists {
-            Self::open_existing(dir, &path).await
+        if files.is_empty() {
+            // Fresh database - create new wal.log
+            Self::create_new(dir).await
         } else {
-            Self::create_new(dir, &path).await
+            // Open first file for multi-file reading
+            Self::open_multi_file(dir, files).await
         }
     }
 
-    /// Open an existing WAL file.
-    async fn open_existing(dir: &Path, path: &Path) -> Result<Self> {
-        if !path.starts_with(dir) {
+    /// Open for multi-file reading.
+    async fn open_multi_file(
+        dir: &Path,
+        files: Vec<WalFileInfo>,
+    ) -> Result<Self> {
+        // Open first file
+        let first_path = files
+            .first()
+            .ok_or_else(|| {
+                StorageError::InvalidOperation("no WAL files".into())
+            })?
+            .path
+            .clone();
+
+        let (file, file_size, first_seq) = Self::open_file(&first_path).await?;
+
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            files,
+            current_idx: 0,
+            path: first_path,
+            file: Some(file),
+            file_size,
+            pos: FILE_HEADER_SIZE as u64,
+            first_seq,
+            next_seq: first_seq,
+        })
+    }
+
+    /// Open a single WAL file for reading.
+    async fn open_file(path: &Path) -> Result<(File, u64, WalSequence)> {
+        let mut file = OpenOptions::new().read(true).open(path).await?;
+
+        let file_size = file.metadata().await?.len();
+
+        // Validate file has at least a header
+        if file_size < FILE_HEADER_SIZE as u64 {
             Err(StorageError::InvalidOperation(
-                "WAL path is not a child of directory".into(),
+                "WAL file too small for header".into(),
             ))
         } else {
-            let mut file = OpenOptions::new().read(true).open(path).await?;
+            // Read and validate file header
+            let mut hdr_buf = [0u8; FILE_HEADER_SIZE];
+            file.read_exact(&mut hdr_buf).await?;
 
-            let file_size = file.metadata().await?.len();
+            let hdr = FileHeader::from_bytes(&hdr_buf).ok_or_else(|| {
+                StorageError::InvalidOperation("Invalid WAL file header".into())
+            })?;
 
-            // Validate file has at least a header
-            if file_size < FILE_HEADER_SIZE as u64 {
-                Err(StorageError::InvalidOperation(
-                    "WAL file too small for header".into(),
-                ))
-            } else {
-                // Read and validate file header
-                let mut hdr_buf = [0u8; FILE_HEADER_SIZE];
-                file.read_exact(&mut hdr_buf).await?;
-
-                let hdr =
-                    FileHeader::from_bytes(&hdr_buf).ok_or_else(|| {
-                        StorageError::InvalidOperation(
-                            "Invalid WAL file header".into(),
-                        )
-                    })?;
-
-                Ok(Self {
-                    dir: dir.to_path_buf(),
-                    path: path.to_path_buf(),
-                    file,
-                    file_size,
-                    pos: FILE_HEADER_SIZE as u64,
-                    first_seq: hdr.first_seq,
-                    next_seq: hdr.first_seq,
-                })
-            }
+            Ok((file, file_size, hdr.first_seq))
         }
     }
 
-    /// Create a new WAL file.
-    async fn create_new(dir: &Path, path: &Path) -> Result<Self> {
+    /// Create a new WAL file (fresh database).
+    async fn create_new(dir: &Path) -> Result<Self> {
+        let path = dir.join("wal.log");
+
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
-            .open(path)
+            .open(&path)
             .await?;
 
         // Write file header
-        let hdr = FileHeader::new(0);
+        let hdr = FileHeader::new(WalSequence::ZERO);
         file.write_all(&hdr.to_bytes()).await?;
         file.sync_all().await?;
 
         // Seek back to after header for reading
         file.seek(SeekFrom::Start(FILE_HEADER_SIZE as u64)).await?;
 
+        let file_info = WalFileInfo {
+            path: path.clone(),
+            first_seq: WalSequence::ZERO,
+            last_seq: None,
+            is_active: true,
+        };
+
         Ok(Self {
             dir: dir.to_path_buf(),
-            path: path.to_path_buf(),
-            file,
+            files: vec![file_info],
+            current_idx: 0,
+            path,
+            file: Some(file),
             file_size: FILE_HEADER_SIZE as u64,
             pos: FILE_HEADER_SIZE as u64,
-            first_seq: 0,
-            next_seq: 0,
+            first_seq: WalSequence::ZERO,
+            next_seq: WalSequence::ZERO,
         })
     }
 
     /// Get the first sequence number in this WAL file.
-    pub(crate) fn first_seq(&self) -> u64 {
+    pub(crate) fn first_seq(&self) -> WalSequence {
         self.first_seq
     }
 
@@ -199,7 +240,7 @@ impl WalReader {
     /// This is updated as records are read via [`next`].
     ///
     /// [`next`]: WalReader::next
-    pub(crate) fn next_seq(&self) -> u64 {
+    pub(crate) fn next_seq(&self) -> WalSequence {
         self.next_seq
     }
 
@@ -212,30 +253,91 @@ impl WalReader {
     ///
     /// Returns:
     /// - `Ok(Some(entry))` on success
-    /// - `Ok(None)` at EOF (no more complete records)
+    /// - `Ok(None)` at EOF (no more complete records in any file)
     /// - `Err(WalCorruption)` on checksum mismatch
     /// - `Err(_)` on I/O or deserialization error
-    pub(crate) async fn next(&mut self) -> Result<Option<WalEntry>> {
-        match try_read_record_at(&mut self.file, self.pos, self.file_size)
-            .await?
-        {
-            None => Ok(None),
-            Some(raw) => {
-                let record: WalRecord = bincode::deserialize(&raw.payload)
-                    .map_err(|e| {
-                        StorageError::Serialization(format!(
-                            "WAL record at seq {}: {e}",
-                            raw.header.seq
-                        ))
-                    })?;
+    ///
+    /// Automatically advances to the next file when the current one is exhausted.
+    pub(crate) fn next(&mut self) -> BoxFuture<'_, Result<Option<WalEntry>>> {
+        Box::pin(async move {
+            let file = match self.file.as_mut() {
+                Some(f) => f,
+                None => return Ok(None), // No files at all
+            };
 
-                self.pos = raw.end_pos;
-                self.next_seq = raw.header.seq + 1;
+            match try_read_record_at(file, self.pos, self.file_size).await? {
+                Some(raw) => {
+                    let record: WalRecord = bincode::deserialize(&raw.payload)
+                        .map_err(|e| {
+                            StorageError::Serialization(format!(
+                                "WAL record at seq {}: {e}",
+                                raw.header.seq
+                            ))
+                        })?;
 
-                Ok(Some(WalEntry {
-                    seq: raw.header.seq,
-                    record,
-                }))
+                    self.pos = raw.end_pos;
+                    self.next_seq = raw.header.seq.next();
+
+                    Ok(Some(WalEntry {
+                        seq: raw.header.seq,
+                        record,
+                    }))
+                }
+                None => {
+                    // EOF - try to advance to next file
+                    if self.advance_to_next_file().await? {
+                        // Recurse to read from next file
+                        self.next().await
+                    } else {
+                        // No more files
+                        Ok(None)
+                    }
+                }
+            }
+        })
+    }
+
+    /// Advance to the next WAL file in sequence.
+    ///
+    /// Returns `true` if successfully opened next file, `false` if no more files.
+    async fn advance_to_next_file(&mut self) -> Result<bool> {
+        let next_idx = self.current_idx + 1;
+
+        if next_idx >= self.files.len() {
+            Ok(false) // No more files
+        } else {
+            let next_info = self
+                .files
+                .get(next_idx)
+                .ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "next file index out of bounds".into(),
+                    )
+                })?
+                .clone();
+
+            // Validate sequence continuity
+            if next_info.first_seq != self.next_seq {
+                Err(StorageError::WalCorruption {
+                    seq: next_info.first_seq.get(),
+                    reason: format!(
+                        "sequence gap: expected {}, found {}",
+                        self.next_seq, next_info.first_seq
+                    ),
+                })
+            } else {
+                // Open next file
+                let (file, file_size, first_seq) =
+                    Self::open_file(&next_info.path).await?;
+
+                self.current_idx = next_idx;
+                self.path = next_info.path;
+                self.file = Some(file);
+                self.file_size = file_size;
+                self.pos = FILE_HEADER_SIZE as u64;
+                self.first_seq = first_seq;
+
+                Ok(true)
             }
         }
     }
@@ -249,7 +351,10 @@ impl WalReader {
     ///
     /// You should iterate through all existing records before calling
     /// this method. The writer's sequence numbers continue from the
-    /// last record read (or 0 for an empty/new WAL).
+    /// last record read (or `0` for an empty/new WAL).
+    ///
+    /// If there's no active `wal.log` (only archived files), a new one
+    /// is created continuing from the last sequence number.
     ///
     /// # Errors
     ///
@@ -259,6 +364,11 @@ impl WalReader {
         cfg: WalWriterConfig,
     ) -> Result<WalWriter> {
         WalWriter::from_reader(self, cfg).await
+    }
+
+    /// Check if there's an active `wal.log` file.
+    pub(crate) fn has_active_file(&self) -> bool {
+        self.files.iter().any(|f| f.is_active)
     }
 
     /// Convert this reader into an async stream of entries.
@@ -302,7 +412,7 @@ impl WalReader {
         /// Fold step: process one entry, return updated accumulator.
         fn step(mut acc: RecoveryAccum, entry: WalEntry) -> RecoveryAccum {
             acc.records_processed += 1;
-            acc.next_seq = entry.seq + 1;
+            acc.next_seq = entry.seq.next();
 
             match entry.record {
                 WalRecord::TxnBegin { txn_id } => {
@@ -382,8 +492,13 @@ impl WalReader {
     /// should be the start of a record (after the file header).
     pub(crate) async fn seek(&mut self, pos: u64) -> Result<()> {
         self.pos = pos;
-        self.file.seek(SeekFrom::Start(pos)).await?;
-        Ok(())
+        match self.file.as_mut() {
+            Some(f) => {
+                f.seek(SeekFrom::Start(pos)).await?;
+                Ok(())
+            }
+            None => Err(StorageError::InvalidOperation("no file open".into())),
+        }
     }
 
     /// Get the current read position.
@@ -486,8 +601,8 @@ mod tests {
 
         let wal_path = dir.path().join("wal.log");
         assert!(wal_path.exists());
-        assert_eq!(reader.first_seq(), 0);
-        assert_eq!(reader.next_seq(), 0);
+        assert_eq!(reader.first_seq(), WalSequence::ZERO);
+        assert_eq!(reader.next_seq(), WalSequence::ZERO);
     }
 
     #[tokio::test]
@@ -496,7 +611,7 @@ mod tests {
         let mut reader = WalReader::open(dir.path()).await.expect("open");
 
         assert!(reader.next().await.expect("next").is_none());
-        assert_eq!(reader.next_seq(), 0);
+        assert_eq!(reader.next_seq(), WalSequence::ZERO);
     }
 
     #[tokio::test]
@@ -510,9 +625,9 @@ mod tests {
         let mut reader = WalReader::open(dir.path()).await.expect("open");
 
         let entry = reader.next().await.expect("next").expect("entry");
-        assert_eq!(entry.seq, 0);
+        assert_eq!(entry.seq, WalSequence::ZERO);
         assert_eq!(entry.record, rec);
-        assert_eq!(reader.next_seq(), 1);
+        assert_eq!(reader.next_seq(), WalSequence::new(1));
 
         assert!(reader.next().await.expect("next").is_none());
     }
@@ -545,7 +660,7 @@ mod tests {
         assert_eq!(entries.len(), recs.len());
         entries.iter().zip(recs.iter()).enumerate().for_each(
             |(i, (entry, expected))| {
-                assert_eq!(entry.seq, i as u64);
+                assert_eq!(entry.seq, WalSequence::new(i as u64));
                 assert_eq!(&entry.record, expected);
             },
         );
@@ -579,7 +694,7 @@ mod tests {
 
             // Read all records
             while reader.next().await.expect("next").is_some() {}
-            assert_eq!(reader.next_seq(), 2);
+            assert_eq!(reader.next_seq(), WalSequence::new(2));
 
             // Convert to writer and append more
             let writer = reader
@@ -593,8 +708,8 @@ mod tests {
                 })
                 .await
                 .expect("append");
-            assert_eq!(seq, 2);
-            assert_eq!(writer.next_seq().await, 3);
+            assert_eq!(seq, WalSequence::new(2));
+            assert_eq!(writer.next_seq().await, WalSequence::new(3));
         }
     }
 
@@ -617,8 +732,8 @@ mod tests {
             reader.into_stream().try_collect().await.expect("collect");
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries.get(0).unwrap().seq, 0);
-        assert_eq!(entries.get(1).unwrap().seq, 1);
+        assert_eq!(entries.get(0).unwrap().seq, WalSequence::ZERO);
+        assert_eq!(entries.get(1).unwrap().seq, WalSequence::new(1));
     }
 
     #[tokio::test]
@@ -647,7 +762,9 @@ mod tests {
             WalRecord::TxnAbort {
                 txn_id: TransactionId::from(2),
             },
-            WalRecord::Checkpoint { seq: 100 },
+            WalRecord::Checkpoint {
+                seq: WalSequence::new(100),
+            },
         ];
         write_records(&dir, &recs).await;
 
@@ -694,11 +811,13 @@ mod tests {
         // Seek back and re-read
         reader.seek(pos_after_first).await.expect("seek");
         let entry = reader.next().await.expect("next").expect("entry");
-        assert_eq!(entry.seq, 1);
+        assert_eq!(entry.seq, WalSequence::new(1));
     }
 
     #[tokio::test]
-    async fn rejects_invalid_file() {
+    async fn skips_invalid_file() {
+        // Invalid/corrupted files are skipped during discovery.
+        // A new valid file is created.
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("wal.log");
 
@@ -707,20 +826,26 @@ mod tests {
             .await
             .expect("write");
 
-        let result = WalReader::open(dir.path()).await;
-        assert!(result.is_err());
+        // Discovery skips invalid file, creates new one
+        let reader = WalReader::open(dir.path()).await.expect("open");
+        assert_eq!(reader.first_seq(), WalSequence::ZERO);
+        assert_eq!(reader.next_seq(), WalSequence::ZERO);
     }
 
     #[tokio::test]
-    async fn rejects_truncated_header() {
+    async fn skips_truncated_header() {
+        // Truncated files are skipped during discovery.
+        // A new valid file is created.
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("wal.log");
 
         // Write partial header
         tokio::fs::write(&path, b"RWAL").await.expect("write");
 
-        let result = WalReader::open(dir.path()).await;
-        assert!(result.is_err());
+        // Discovery skips truncated file, creates new one
+        let reader = WalReader::open(dir.path()).await.expect("open");
+        assert_eq!(reader.first_seq(), WalSequence::ZERO);
+        assert_eq!(reader.next_seq(), WalSequence::ZERO);
     }
 
     #[tokio::test]
@@ -776,5 +901,167 @@ mod tests {
 
         let result = reader.next().await;
         assert!(matches!(result, Err(StorageError::WalCorruption { .. })));
+    }
+
+    #[tokio::test]
+    async fn reads_across_multiple_files() {
+        // Test reading records from archived files + active file.
+        let dir = TempDir::new().expect("temp dir");
+
+        // Write records, rotate, write more, rotate, write more
+        {
+            let writer = setup_writer(&dir).await;
+
+            // First batch (seqs 0, 1)
+            writer
+                .append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(1),
+                })
+                .await
+                .expect("append");
+            writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(1),
+                })
+                .await
+                .expect("append");
+            writer.rotate().await.expect("rotate");
+            // Archive 1: seqs 0-1
+
+            // Second batch (seqs 2, 3)
+            writer
+                .append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(2),
+                })
+                .await
+                .expect("append");
+            writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(2),
+                })
+                .await
+                .expect("append");
+            writer.rotate().await.expect("rotate");
+            // Archive 2: seqs 2-3
+
+            // Third batch in active file (seqs 4, 5)
+            writer
+                .append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(3),
+                })
+                .await
+                .expect("append");
+            writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(3),
+                })
+                .await
+                .expect("append");
+
+            writer.sync().await.expect("sync");
+        }
+
+        // Verify 2 archives + 1 active file
+        let archives: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains('-'))
+            .collect();
+        assert_eq!(archives.len(), 2);
+
+        // Now read all records across all files
+        let reader = WalReader::open(dir.path()).await.expect("open");
+        let entries: Vec<_> =
+            reader.into_stream().try_collect().await.expect("collect");
+
+        // Should have 6 records total
+        assert_eq!(entries.len(), 6);
+
+        // Verify sequence numbers are in order 0..6
+        entries.iter().enumerate().for_each(|(i, entry)| {
+            assert_eq!(entry.seq, WalSequence::new(i as u64));
+        });
+    }
+
+    #[tokio::test]
+    async fn recovery_finds_checkpoint_in_archive() {
+        // Test that checkpoint records in archived files are discovered.
+        use crate::wal::recover_from_dir;
+
+        let dir = TempDir::new().expect("temp dir");
+
+        {
+            let writer = setup_writer(&dir).await;
+
+            // Transaction before checkpoint
+            writer
+                .append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(1),
+                })
+                .await
+                .expect("append"); // seq 0
+            writer
+                .append(&WalRecord::Set {
+                    txn_id: TransactionId::from(1),
+                    name: global!("OLD"),
+                    key: key![1],
+                    old: None,
+                    new: NodeData::new(Some(1i64.into()), false),
+                })
+                .await
+                .expect("append"); // seq 1
+            writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(1),
+                })
+                .await
+                .expect("append"); // seq 2
+
+            // Checkpoint and rotate (puts checkpoint in archive)
+            writer
+                .checkpoint(WalSequence::new(2))
+                .await
+                .expect("checkpoint"); // seq 3, then rotate
+
+            // Transaction after checkpoint
+            writer
+                .append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(2),
+                })
+                .await
+                .expect("append"); // seq 4
+            writer
+                .append(&WalRecord::Set {
+                    txn_id: TransactionId::from(2),
+                    name: global!("NEW"),
+                    key: key![2],
+                    old: None,
+                    new: NodeData::new(Some(2i64.into()), false),
+                })
+                .await
+                .expect("append"); // seq 5
+            writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(2),
+                })
+                .await
+                .expect("append"); // seq 6
+
+            writer.sync().await.expect("sync");
+        }
+
+        let (result, _) = recover_from_dir(dir.path()).await.expect("recover");
+
+        // Checkpoint at seq 2 means ops with seq <= 2 are filtered
+        // Txn 1's Set is at seq 1, filtered out
+        // Txn 2's Set is at seq 5, included
+        assert_eq!(result.committed_ops.len(), 1);
+        assert_eq!(
+            result.committed_ops.first().unwrap().txn_id,
+            TransactionId::from(2)
+        );
+
+        // Should have found the checkpoint
+        assert_eq!(result.last_checkpoint_seq, Some(WalSequence::new(2)));
     }
 }

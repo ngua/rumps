@@ -34,7 +34,7 @@ use tokio::sync::Mutex;
 use super::format::{
     FileHeader, RecordHeader, FILE_HEADER_SIZE, RECORD_HEADER_SIZE,
 };
-use super::WalRecord;
+use super::{WalRecord, WalSequence};
 use crate::error::{Result, StorageError};
 
 /// When to sync WAL data to disk.
@@ -97,9 +97,9 @@ struct WalWriterState {
     /// Current file size in bytes.
     file_size: u64,
     /// Next sequence number to assign.
-    next_seq: u64,
+    next_seq: WalSequence,
     /// First sequence number in the current file.
-    first_seq_in_file: u64,
+    first_seq_in_file: WalSequence,
 }
 
 /// WAL writer that appends records and manages file rotation.
@@ -130,33 +130,69 @@ impl WalWriter {
     /// This is called by `WalReader::into_writer` and should not be
     /// used directly. It consumes the reader, reopens the file for
     /// appending, and initializes writer state.
+    ///
+    /// If only archived files exist (no active `wal.log`), a new one
+    /// is created continuing from the reader's next sequence number.
     pub(super) async fn from_reader(
         reader: super::WalReader,
         cfg: WalWriterConfig,
     ) -> Result<Self> {
-        // Close read-only handle
-        drop(reader.file);
+        let has_active = reader.files.iter().any(|f| f.is_active);
 
-        // Reopen with append mode
-        let file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .open(&reader.path)
-            .await?;
+        if has_active {
+            // Close read-only handle
+            drop(reader.file);
 
-        let state = WalWriterState {
-            file,
-            path: reader.path,
-            file_size: reader.file_size,
-            next_seq: reader.next_seq,
-            first_seq_in_file: reader.first_seq,
-        };
+            // Reopen with append mode
+            let file = OpenOptions::new()
+                .read(true)
+                .append(true)
+                .open(&reader.path)
+                .await?;
 
-        Ok(Self {
-            dir: reader.dir,
-            cfg,
-            state: Mutex::new(state),
-        })
+            let state = WalWriterState {
+                file,
+                path: reader.path,
+                file_size: reader.file_size,
+                next_seq: reader.next_seq,
+                first_seq_in_file: reader.first_seq,
+            };
+
+            Ok(Self {
+                dir: reader.dir,
+                cfg,
+                state: Mutex::new(state),
+            })
+        } else {
+            // Only archives exist - create new wal.log
+            let path = reader.dir.join("wal.log");
+            let first_seq = reader.next_seq;
+
+            let (file, file_size) =
+                Self::create_new_file(&path, first_seq).await?;
+
+            // Reopen in append mode
+            drop(file);
+            let file = OpenOptions::new()
+                .read(true)
+                .append(true)
+                .open(&path)
+                .await?;
+
+            let state = WalWriterState {
+                file,
+                path,
+                file_size,
+                next_seq: first_seq,
+                first_seq_in_file: first_seq,
+            };
+
+            Ok(Self {
+                dir: reader.dir,
+                cfg,
+                state: Mutex::new(state),
+            })
+        }
     }
 
     /// Create a new WAL file with the given first sequence number.
@@ -164,7 +200,7 @@ impl WalWriter {
     /// Used internally for rotation.
     async fn create_new_file(
         path: &Path,
-        first_seq: u64,
+        first_seq: WalSequence,
     ) -> Result<(File, u64)> {
         let mut file = OpenOptions::new()
             .write(true)
@@ -190,7 +226,7 @@ impl WalWriter {
     ///
     /// If appending would exceed `max_file_size`, the current file
     /// is rotated first.
-    pub(crate) async fn append(&self, rec: &WalRecord) -> Result<u64> {
+    pub(crate) async fn append(&self, rec: &WalRecord) -> Result<WalSequence> {
         let payload = bincode::serialize(rec).map_err(|e| {
             StorageError::Serialization(format!("WAL record: {e}"))
         })?;
@@ -211,7 +247,7 @@ impl WalWriter {
         state.file.write_all(&payload).await?;
 
         state.file_size += rec_size;
-        state.next_seq += 1;
+        state.next_seq = state.next_seq.next();
 
         // Sync if immediate mode
         if self.cfg.sync_mode == SyncMode::Immediate {
@@ -243,8 +279,8 @@ impl WalWriter {
         let old_path = state.path.clone();
         let new_name = format!(
             "wal.{:016x}-{:016x}.log",
-            state.first_seq_in_file,
-            state.next_seq.saturating_sub(1)
+            state.first_seq_in_file.get(),
+            state.next_seq.saturating_sub(1).get()
         );
         let archive_path = self.dir.join(new_name);
         fs::rename(&old_path, &archive_path).await?;
@@ -275,7 +311,7 @@ impl WalWriter {
     }
 
     /// Get the next sequence number that will be assigned.
-    pub(crate) async fn next_seq(&self) -> u64 {
+    pub(crate) async fn next_seq(&self) -> WalSequence {
         self.state.lock().await.next_seq
     }
 
@@ -312,7 +348,10 @@ impl WalWriter {
     /// # Returns
     ///
     /// The sequence number of the checkpoint record itself.
-    pub(crate) async fn checkpoint(&self, flushed_seq: u64) -> Result<u64> {
+    pub(crate) async fn checkpoint(
+        &self,
+        flushed_seq: WalSequence,
+    ) -> Result<WalSequence> {
         // Write checkpoint record
         let checkpoint_rec_seq = self
             .append(&WalRecord::Checkpoint { seq: flushed_seq })
@@ -334,7 +373,10 @@ impl WalWriter {
     ///
     /// Archived files are named `wal.{first_seq:016x}-{last_seq:016x}.log`.
     /// Any file where `last_seq <= checkpoint_seq` can be safely deleted.
-    async fn cleanup_archived_files(&self, checkpoint_seq: u64) -> Result<()> {
+    async fn cleanup_archived_files(
+        &self,
+        checkpoint_seq: WalSequence,
+    ) -> Result<()> {
         let mut entries = fs::read_dir(&self.dir).await?;
 
         // Collect files to delete (can't delete while iterating)
@@ -369,7 +411,7 @@ impl WalWriter {
 ///
 /// Archived files are named `wal.{first_seq:016x}-{last_seq:016x}.log`.
 /// Returns `Some(last_seq)` if the name matches, `None` otherwise.
-fn parse_archived_wal_name(name: &str) -> Option<u64> {
+fn parse_archived_wal_name(name: &str) -> Option<WalSequence> {
     // Expected format: wal.0000000000000000-0000000000000001.log
     let name = name.strip_prefix("wal.")?;
     let name = name.strip_suffix(".log")?;
@@ -383,7 +425,7 @@ fn parse_archived_wal_name(name: &str) -> Option<u64> {
     if parts.next().is_some() {
         None
     } else {
-        u64::from_str_radix(last, 16).ok()
+        u64::from_str_radix(last, 16).ok().map(WalSequence::new)
     }
 }
 
@@ -419,7 +461,7 @@ mod tests {
         let wal_path = dir.path().join("wal.log");
         assert!(wal_path.exists());
         assert_eq!(writer.file_size().await, FILE_HEADER_SIZE as u64);
-        assert_eq!(writer.next_seq().await, 0);
+        assert_eq!(writer.next_seq().await, WalSequence::ZERO);
     }
 
     #[tokio::test]
@@ -436,9 +478,9 @@ mod tests {
         let seq1 = writer.append(&rec1).await.expect("append");
         let seq2 = writer.append(&rec2).await.expect("append");
 
-        assert_eq!(seq1, 0);
-        assert_eq!(seq2, 1);
-        assert_eq!(writer.next_seq().await, 2);
+        assert_eq!(seq1, WalSequence::ZERO);
+        assert_eq!(seq2, WalSequence::new(1));
+        assert_eq!(writer.next_seq().await, WalSequence::new(2));
     }
 
     #[tokio::test]
@@ -483,7 +525,7 @@ mod tests {
         {
             let writer =
                 open_writer(dir.path(), WalWriterConfig::default()).await;
-            assert_eq!(writer.next_seq().await, 2);
+            assert_eq!(writer.next_seq().await, WalSequence::new(2));
 
             let seq = writer
                 .append(&WalRecord::TxnBegin {
@@ -491,7 +533,7 @@ mod tests {
                 })
                 .await
                 .expect("append");
-            assert_eq!(seq, 2);
+            assert_eq!(seq, WalSequence::new(2));
         }
     }
 
@@ -550,7 +592,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
 
         // New file should have seq = 1
-        assert_eq!(writer.next_seq().await, 1);
+        assert_eq!(writer.next_seq().await, WalSequence::new(1));
         assert_eq!(writer.file_size().await, FILE_HEADER_SIZE as u64);
     }
 
@@ -578,10 +620,12 @@ mod tests {
             WalRecord::TxnCommit {
                 txn_id: TransactionId::from(1),
             },
-            WalRecord::Checkpoint { seq: 100 },
+            WalRecord::Checkpoint {
+                seq: WalSequence::new(100),
+            },
         ];
 
-        let seqs: Vec<u64> = futures::future::try_join_all(
+        let seqs: Vec<WalSequence> = futures::future::try_join_all(
             recs.iter().map(|rec| writer.append(rec)),
         )
         .await
@@ -589,7 +633,7 @@ mod tests {
 
         seqs.iter()
             .enumerate()
-            .for_each(|(i, seq)| assert_eq!(*seq, i as u64));
+            .for_each(|(i, seq)| assert_eq!(*seq, WalSequence::new(i as u64)));
 
         writer.sync().await.expect("sync");
     }
@@ -640,7 +684,7 @@ mod tests {
             })
             .collect();
 
-        let seqs: Vec<u64> = futures::future::join_all(handles)
+        let seqs: Vec<WalSequence> = futures::future::join_all(handles)
             .await
             .into_iter()
             .map(|r| r.expect("join"))
@@ -651,23 +695,32 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(sorted.len(), 10);
-        assert_eq!(*sorted.first().unwrap(), 0);
-        assert_eq!(*sorted.last().unwrap(), 9);
+        assert_eq!(*sorted.first().unwrap(), WalSequence::ZERO);
+        assert_eq!(*sorted.last().unwrap(), WalSequence::new(9));
     }
 
     #[test]
     fn parse_archived_wal_name_valid() {
         // Standard format
         let name = "wal.0000000000000000-0000000000000005.log";
-        assert_eq!(super::parse_archived_wal_name(name), Some(5));
+        assert_eq!(
+            super::parse_archived_wal_name(name),
+            Some(WalSequence::new(5))
+        );
 
         // Higher sequence numbers
         let name = "wal.0000000000000010-00000000000000ff.log";
-        assert_eq!(super::parse_archived_wal_name(name), Some(0xff));
+        assert_eq!(
+            super::parse_archived_wal_name(name),
+            Some(WalSequence::new(0xff))
+        );
 
         // Large values
         let name = "wal.0000000000000000-ffffffffffffffff.log";
-        assert_eq!(super::parse_archived_wal_name(name), Some(u64::MAX));
+        assert_eq!(
+            super::parse_archived_wal_name(name),
+            Some(WalSequence::new(u64::MAX))
+        );
     }
 
     #[test]
@@ -728,8 +781,11 @@ mod tests {
             .expect("append"); // seq 1
 
         // Checkpoint at seq 1 (covering the commit)
-        let cp_seq = writer.checkpoint(1).await.expect("checkpoint");
-        assert_eq!(cp_seq, 2); // Checkpoint record is seq 2
+        let cp_seq = writer
+            .checkpoint(WalSequence::new(1))
+            .await
+            .expect("checkpoint");
+        assert_eq!(cp_seq, WalSequence::new(2)); // Checkpoint record is seq 2
 
         // Verify rotation happened (archived file should exist)
         let archives: Vec<_> = std::fs::read_dir(dir.path())
@@ -743,7 +799,7 @@ mod tests {
         assert_eq!(writer.file_size().await, FILE_HEADER_SIZE as u64);
 
         // Next seq should be 3
-        assert_eq!(writer.next_seq().await, 3);
+        assert_eq!(writer.next_seq().await, WalSequence::new(3));
     }
 
     #[tokio::test]
@@ -805,7 +861,10 @@ mod tests {
         assert_eq!(archives_before.len(), 2);
 
         // Checkpoint at seq 3 (should delete first archive with seqs 0-1)
-        writer.checkpoint(3).await.expect("checkpoint");
+        writer
+            .checkpoint(WalSequence::new(3))
+            .await
+            .expect("checkpoint");
 
         // Now: archive with seqs 0-1 should be deleted
         //      archive with seqs 2-3 should be deleted (last_seq 3 <= 3)
@@ -860,7 +919,10 @@ mod tests {
             .expect("append"); // seq 2
 
         // Checkpoint at seq 0 (only delete first archive)
-        writer.checkpoint(0).await.expect("checkpoint");
+        writer
+            .checkpoint(WalSequence::ZERO)
+            .await
+            .expect("checkpoint");
 
         // Count archives (should be 2: seq 1 archive + checkpoint archive)
         let archives: Vec<_> = std::fs::read_dir(dir.path())
@@ -907,7 +969,10 @@ mod tests {
                 .expect("append"); // seq 2
 
             // Checkpoint at seq 2
-            writer.checkpoint(2).await.expect("checkpoint"); // seq 3
+            writer
+                .checkpoint(WalSequence::new(2))
+                .await
+                .expect("checkpoint"); // seq 3
 
             // Transaction 2 (after checkpoint)
             writer
@@ -936,14 +1001,11 @@ mod tests {
             writer.sync().await.expect("sync");
         }
 
-        // Recovery only reads the current wal.log file, which contains txn2.
-        // The checkpoint record is in the archived file (created by rotation).
-        // Note: Multi-file WAL recovery is not yet implemented - this test
-        // verifies that post-checkpoint transactions are properly isolated
-        // in the new WAL file.
+        // Multi-file recovery reads both the archived file (containing the
+        // checkpoint and txn1) and the active wal.log (containing txn2).
         let (result, _) = recover_from_dir(dir.path()).await.expect("recover");
 
-        // Should see txn2's operation
+        // Should see txn2's operation (txn1 is filtered by the checkpoint)
         assert_eq!(result.committed_ops.len(), 1);
 
         let op = result.committed_ops.first().unwrap();
@@ -952,9 +1014,8 @@ mod tests {
             matches!(op.op, WalOp::Set { ref name, .. } if name == &global!("NEW"))
         );
 
-        // Checkpoint is in the archived file, not the current wal.log.
-        // Once multi-file recovery is implemented, this will return Some(2).
-        assert!(result.last_checkpoint_seq.is_none());
+        // Checkpoint is found in the archived file
+        assert_eq!(result.last_checkpoint_seq, Some(WalSequence::new(2)));
     }
 
     #[tokio::test]
@@ -985,7 +1046,9 @@ mod tests {
             // Manually write checkpoint without using the checkpoint() method
             // (which rotates). This tests the recovery checkpoint filtering.
             writer
-                .append(&WalRecord::Checkpoint { seq: 1 })
+                .append(&WalRecord::Checkpoint {
+                    seq: WalSequence::new(1),
+                })
                 .await
                 .expect("append"); // seq 2
 
@@ -1011,6 +1074,6 @@ mod tests {
         // Checkpoint seq=1 filters out txn1's ops (but txn1 had no Set ops)
         // Both txns have no Set ops, so committed_ops should be empty
         assert!(result.committed_ops.is_empty());
-        assert_eq!(result.last_checkpoint_seq, Some(1));
+        assert_eq!(result.last_checkpoint_seq, Some(WalSequence::new(1)));
     }
 }

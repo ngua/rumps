@@ -32,22 +32,21 @@
 //! 3. **Hybrid**: Small subtrees inline, large ones split or use references.
 //!    More complex, may be worth revisiting if performance requires it.
 
+mod files;
 mod format;
 mod reader;
 mod recovery;
+mod sequence;
 mod writer;
 
-pub(crate) use format::{
-    try_read_record_at, FileHeader, RawRecord, RecordHeader, FILE_HEADER_SIZE,
-    RECORD_HEADER_SIZE, WAL_MAGIC, WAL_VERSION,
-};
-pub(crate) use reader::{WalEntry, WalReader, WalRecordStream};
-pub(crate) use recovery::{
-    recover_from_dir, CommittedOp, RecoveryResult, WalOp,
-};
+pub(crate) use reader::WalReader;
+// Used by tests in submodules
+#[allow(unused_imports)]
+pub(crate) use recovery::{recover_from_dir, WalOp};
 use rumps_types::{Key, Name};
+pub(crate) use sequence::WalSequence;
 use serde::{Deserialize, Serialize};
-pub(crate) use writer::{SyncMode, WalWriter, WalWriterConfig};
+pub(crate) use writer::{WalWriter, WalWriterConfig};
 
 use crate::node::NodeData;
 use crate::transaction::TransactionId;
@@ -116,7 +115,7 @@ pub(crate) enum WalRecord {
     /// data file. WAL entries before this checkpoint can be discarded.
     Checkpoint {
         /// Monotonically increasing checkpoint sequence number.
-        seq: u64,
+        seq: WalSequence,
     },
 }
 
@@ -203,7 +202,9 @@ mod tests {
 
     #[test]
     fn checkpoint_roundtrip() {
-        let rec = WalRecord::Checkpoint { seq: 12345 };
+        let rec = WalRecord::Checkpoint {
+            seq: WalSequence::new(12345),
+        };
         let bytes = bincode::serialize(&rec).expect("serialize");
         let decoded: WalRecord =
             bincode::deserialize(&bytes).expect("deserialize");
@@ -239,7 +240,9 @@ mod tests {
         // Check bincode encoding overhead for each variant
         let txn_begin = WalRecord::TxnBegin { txn_id: 1.into() };
         let txn_commit = WalRecord::TxnCommit { txn_id: 1.into() };
-        let checkpoint = WalRecord::Checkpoint { seq: 1 };
+        let checkpoint = WalRecord::Checkpoint {
+            seq: WalSequence::new(1),
+        };
         let set_minimal = WalRecord::Set {
             txn_id: 1.into(),
             name: global!("X"),

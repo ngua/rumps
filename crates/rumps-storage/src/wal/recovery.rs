@@ -38,7 +38,7 @@ use std::path::Path;
 use rumps_types::{Key, Name};
 
 use super::reader::WalReader;
-use super::WalRecord;
+use super::WalSequence;
 use crate::error::Result;
 use crate::node::NodeData;
 use crate::transaction::TransactionId;
@@ -47,7 +47,7 @@ use crate::transaction::TransactionId;
 #[derive(Debug, Clone)]
 pub(crate) struct CommittedOp {
     /// WAL sequence number.
-    pub(crate) seq: u64,
+    pub(crate) seq: WalSequence,
     /// Transaction that performed this operation.
     pub(crate) txn_id: TransactionId,
     /// The operation.
@@ -98,10 +98,10 @@ pub(crate) struct RecoveryResult {
     ///
     /// Operations before this checkpoint have already been flushed
     /// to the main data file.
-    pub(crate) last_checkpoint_seq: Option<u64>,
+    pub(crate) last_checkpoint_seq: Option<WalSequence>,
 
     /// Next sequence number after all recovered records.
-    pub(crate) next_seq: u64,
+    pub(crate) next_seq: WalSequence,
 
     /// Total records processed during recovery.
     pub(crate) records_processed: u64,
@@ -121,7 +121,7 @@ pub(super) enum TxnState {
 /// Buffered operation during recovery (before we know if txn commits).
 #[derive(Debug, Clone)]
 pub(super) struct BufferedOp {
-    pub(super) seq: u64,
+    pub(super) seq: WalSequence,
     pub(super) op: WalOp,
 }
 
@@ -135,11 +135,11 @@ pub(super) struct RecoveryAccum {
     /// Buffered operations per transaction (until we know if it commits).
     pub(super) txn_ops: HashMap<TransactionId, Vec<BufferedOp>>,
     /// Last checkpoint sequence.
-    pub(super) last_checkpoint_seq: Option<u64>,
+    pub(super) last_checkpoint_seq: Option<WalSequence>,
     /// Count of processed records.
     pub(super) records_processed: u64,
     /// Next sequence number (updated as we process entries).
-    pub(super) next_seq: u64,
+    pub(super) next_seq: WalSequence,
 }
 
 impl RecoveryAccum {
@@ -211,6 +211,7 @@ mod tests {
     use rumps_types::{global, key};
     use tempfile::TempDir;
 
+    use super::super::WalRecord;
     use super::*;
     use crate::wal::{WalWriter, WalWriterConfig};
 
@@ -233,7 +234,7 @@ mod tests {
         assert!(result.committed_ops.is_empty());
         assert!(result.uncommitted_txns.is_empty());
         assert!(result.last_checkpoint_seq.is_none());
-        assert_eq!(result.next_seq, 0);
+        assert_eq!(result.next_seq, WalSequence::ZERO);
         assert_eq!(result.records_processed, 0);
     }
 
@@ -410,7 +411,7 @@ mod tests {
         assert_eq!(result.committed_ops.len(), 2);
 
         // Should be in sequence order
-        let seqs: Vec<u64> =
+        let seqs: Vec<WalSequence> =
             result.committed_ops.iter().map(|op| op.seq).collect();
         assert!(seqs.windows(2).all(|w| w[0] < w[1]));
     }
@@ -487,9 +488,9 @@ mod tests {
         assert!(result.committed_ops.iter().all(|op| op.txn_id == 1.into()));
 
         // Seqs should be 2 and 4 (the txn 1 ops)
-        let seqs: Vec<u64> =
+        let seqs: Vec<WalSequence> =
             result.committed_ops.iter().map(|op| op.seq).collect();
-        assert_eq!(seqs, vec![2, 4]);
+        assert_eq!(seqs, vec![WalSequence::new(2), WalSequence::new(4)]);
     }
 
     #[tokio::test]
@@ -521,7 +522,9 @@ mod tests {
 
             // Checkpoint at seq 10 (covers all ops so far)
             writer
-                .append(&WalRecord::Checkpoint { seq: 10 })
+                .append(&WalRecord::Checkpoint {
+                    seq: WalSequence::new(10),
+                })
                 .await
                 .expect("append"); // seq 3
 
@@ -587,7 +590,7 @@ mod tests {
         assert!(result.committed_ops.is_empty()); // All were before checkpoint seq 10
 
         assert!(result.last_checkpoint_seq.is_some());
-        assert_eq!(result.last_checkpoint_seq.unwrap(), 10);
+        assert_eq!(result.last_checkpoint_seq.unwrap(), WalSequence::new(10));
     }
 
     #[tokio::test]
@@ -619,7 +622,9 @@ mod tests {
 
             // Checkpoint - covers ops up to seq 2
             writer
-                .append(&WalRecord::Checkpoint { seq: 2 })
+                .append(&WalRecord::Checkpoint {
+                    seq: WalSequence::new(2),
+                })
                 .await
                 .expect("append"); // seq 3
 
@@ -654,7 +659,7 @@ mod tests {
 
         let op = result.committed_ops.first().unwrap();
         assert_eq!(op.txn_id, 2.into());
-        assert_eq!(op.seq, 5);
+        assert_eq!(op.seq, WalSequence::new(5));
     }
 
     #[tokio::test]
@@ -763,7 +768,7 @@ mod tests {
         let (result, reader) =
             recover_from_dir(dir.path()).await.expect("recover");
 
-        assert_eq!(result.next_seq, 2);
+        assert_eq!(result.next_seq, WalSequence::new(2));
 
         // Can convert reader to writer
         let writer = reader
@@ -775,7 +780,7 @@ mod tests {
             .append(&WalRecord::TxnBegin { txn_id: 2.into() })
             .await
             .expect("append");
-        assert_eq!(seq, 2);
+        assert_eq!(seq, WalSequence::new(2));
     }
 
     #[tokio::test]
@@ -834,8 +839,15 @@ mod tests {
         assert_eq!(result.committed_ops.len(), 3);
 
         // Verify sequence order
-        let seqs: Vec<u64> =
+        let seqs: Vec<WalSequence> =
             result.committed_ops.iter().map(|op| op.seq).collect();
-        assert_eq!(seqs, vec![1, 2, 3]);
+        assert_eq!(
+            seqs,
+            vec![
+                WalSequence::new(1),
+                WalSequence::new(2),
+                WalSequence::new(3)
+            ]
+        );
     }
 }
