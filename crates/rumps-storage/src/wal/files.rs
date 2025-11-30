@@ -12,16 +12,24 @@ use super::WalSequence;
 use crate::error::{Result, StorageError};
 
 /// Metadata for a single WAL file.
+///
+/// For archived files, `last_seq` is `Some(seq)`. For the active `wal.log`,
+/// `last_seq` is `None` (unknown until fully scanned).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WalFileInfo {
     /// Path to the WAL file.
     pub(crate) path: PathBuf,
     /// First sequence number in this file.
     pub(crate) first_seq: WalSequence,
-    /// Last sequence number (known for archives only).
+    /// Last sequence number (`Some` for archives, `None` for active file).
     pub(crate) last_seq: Option<WalSequence>,
-    /// Whether this is the active `wal.log` file.
-    pub(crate) is_active: bool,
+}
+
+impl WalFileInfo {
+    /// Whether this is the active `wal.log` file (vs an archived file).
+    pub(crate) fn is_active(&self) -> bool {
+        self.last_seq.is_none()
+    }
 }
 
 impl WalFileInfo {
@@ -47,7 +55,6 @@ impl WalFileInfo {
                 path,
                 first_seq: WalSequence::from(first_seq),
                 last_seq: Some(WalSequence::from(last_seq)),
-                is_active: false,
             })
         }
     }
@@ -58,7 +65,6 @@ impl WalFileInfo {
             path,
             first_seq,
             last_seq: None,
-            is_active: true,
         }
     }
 
@@ -179,7 +185,7 @@ mod tests {
             let info = info.unwrap();
             assert_eq!(info.first_seq, *first);
             assert_eq!(info.last_seq, Some(*last));
-            assert!(!info.is_active);
+            assert!(!info.is_active());
         });
     }
 
@@ -219,7 +225,7 @@ mod tests {
 
         let files = WalFileInfo::discover(dir.path()).await.expect("discover");
         assert_eq!(files.len(), 1);
-        assert!(files.first().unwrap().is_active);
+        assert!(files.first().unwrap().is_active());
         assert_eq!(files.first().unwrap().first_seq, WalSequence::from(10));
     }
 
@@ -296,7 +302,7 @@ mod tests {
 
         let files = WalFileInfo::discover(dir.path()).await.expect("discover");
         assert_eq!(files.len(), 2);
-        assert!(!files.first().unwrap().is_active);
-        assert!(files.get(1).unwrap().is_active);
+        assert!(!files.first().unwrap().is_active());
+        assert!(files.get(1).unwrap().is_active());
     }
 }

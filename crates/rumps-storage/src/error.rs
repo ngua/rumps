@@ -59,6 +59,14 @@ pub enum StorageError {
         /// Description of the corruption.
         reason: String,
     },
+
+    /// WAL file has invalid magic bytes.
+    #[error("WAL invalid magic")]
+    WalInvalidMagic,
+
+    /// WAL file has unsupported version.
+    #[error("WAL unsupported version: {0}")]
+    WalUnsupportedVersion(u16),
 }
 
 /// A specialized Result type for storage operations.

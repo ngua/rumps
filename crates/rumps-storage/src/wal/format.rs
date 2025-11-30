@@ -75,24 +75,17 @@ impl FileHeader {
 
     /// Read a file header from a WAL file path.
     pub(crate) async fn read(path: &std::path::Path) -> Result<Self> {
-        let mut file = tokio::fs::File::open(path).await?;
+        let mut file = File::open(path).await?;
         let mut buf = [0u8; Self::SIZE];
 
-        // `read_exact` either reads exactly `Self::SIZE` bytes or errors
         AsyncReadExt::read_exact(&mut file, &mut buf)
             .await
             .map_err(|_| StorageError::WalCorruption {
                 seq: 0,
                 reason: format!("truncated header in {}", path.display()),
-            })
-            .and_then(|_| {
-                Self::from_bytes(&buf).ok_or_else(|| {
-                    StorageError::WalCorruption {
-                        seq: 0,
-                        reason: format!("invalid header in {}", path.display()),
-                    }
-                })
-            })
+            })?;
+
+        Self::from_bytes(&buf)
     }
 
     /// Serialize the header to bytes.
@@ -105,19 +98,35 @@ impl FileHeader {
         buf
     }
 
-    /// Deserialize from bytes. Returns `None` if magic/version mismatch.
-    pub(crate) fn from_bytes(buf: &[u8; Self::SIZE]) -> Option<Self> {
-        let magic: [u8; 4] = buf[0..4].try_into().ok()?;
-        (magic == Self::MAGIC).then_some(())?;
+    /// Deserialize from bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WalInvalidMagic` or `WalUnsupportedVersion` on mismatch.
+    pub(crate) fn from_bytes(buf: &[u8; Self::SIZE]) -> Result<Self> {
+        // SAFETY: slice lengths match array sizes exactly
+        #[allow(clippy::unwrap_used)]
+        let magic: [u8; 4] = buf[0..4].try_into().unwrap();
+        (magic == Self::MAGIC)
+            .then_some(())
+            .ok_or(StorageError::WalInvalidMagic)?;
 
-        let version = u16::from_le_bytes(buf[4..6].try_into().ok()?);
-        (version == Self::VERSION).then_some(())?;
+        // SAFETY: slice lengths match array sizes exactly
+        #[allow(clippy::unwrap_used)]
+        let version = u16::from_le_bytes(buf[4..6].try_into().unwrap());
+        (version == Self::VERSION)
+            .then_some(())
+            .ok_or(StorageError::WalUnsupportedVersion(version))?;
 
-        let flags = u16::from_le_bytes(buf[6..8].try_into().ok()?);
-        let first_seq =
-            WalSequence::from(u64::from_le_bytes(buf[8..16].try_into().ok()?));
+        // SAFETY: slice lengths match array sizes exactly
+        #[allow(clippy::unwrap_used)]
+        let flags = u16::from_le_bytes(buf[6..8].try_into().unwrap());
+        #[allow(clippy::unwrap_used)]
+        let first_seq = WalSequence::from(u64::from_le_bytes(
+            buf[8..16].try_into().unwrap(),
+        ));
 
-        Some(Self { flags, first_seq })
+        Ok(Self { flags, first_seq })
     }
 }
 
@@ -141,7 +150,7 @@ impl RecordHeader {
     /// Create a new record header for the given payload.
     pub(crate) fn new(seq: WalSequence, payload: &[u8]) -> Self {
         Self {
-            checksum: crc32(payload),
+            checksum: crc32fast::hash(payload),
             len: payload.len() as u32,
             seq,
             flags: 0,
@@ -179,7 +188,8 @@ impl RecordHeader {
 
     /// Verify the checksum matches the given payload.
     pub(crate) fn verify(&self, payload: &[u8]) -> bool {
-        payload.len() == self.len as usize && crc32(payload) == self.checksum
+        payload.len() == self.len as usize
+            && crc32fast::hash(payload) == self.checksum
     }
 }
 
@@ -247,11 +257,6 @@ pub(crate) async fn try_read_record_at(
     }
 }
 
-/// Compute CRC32 checksum (IEEE polynomial).
-fn crc32(data: &[u8]) -> u32 {
-    crc32fast::hash(data)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -261,22 +266,28 @@ mod tests {
     fn file_header_roundtrip() {
         let hdr = FileHeader::new(WalSequence::from(12345));
         let bytes = hdr.to_bytes();
-        let decoded = FileHeader::from_bytes(&bytes);
-        assert_eq!(decoded, Some(hdr));
+        let decoded = FileHeader::from_bytes(&bytes).expect("valid header");
+        assert_eq!(decoded, hdr);
     }
 
     #[test]
     fn file_header_rejects_bad_magic() {
         let mut bytes = FileHeader::new(WalSequence::ZERO).to_bytes();
         bytes[0] = b'X';
-        assert_eq!(FileHeader::from_bytes(&bytes), None);
+        assert!(matches!(
+            FileHeader::from_bytes(&bytes),
+            Err(StorageError::WalInvalidMagic)
+        ));
     }
 
     #[test]
     fn file_header_rejects_bad_version() {
         let mut bytes = FileHeader::new(WalSequence::ZERO).to_bytes();
         bytes[4] = 99; // wrong version
-        assert_eq!(FileHeader::from_bytes(&bytes), None);
+        assert!(matches!(
+            FileHeader::from_bytes(&bytes),
+            Err(StorageError::WalUnsupportedVersion(99))
+        ));
     }
 
     #[test]
@@ -308,9 +319,9 @@ mod tests {
     #[test]
     fn crc32_known_values() {
         // Empty string
-        assert_eq!(crc32(b""), 0x0000_0000);
+        assert_eq!(crc32fast::hash(b""), 0x0000_0000);
         // "123456789" has well-known CRC32 = 0xCBF43926
-        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32fast::hash(b"123456789"), 0xCBF4_3926);
     }
 
     #[test]

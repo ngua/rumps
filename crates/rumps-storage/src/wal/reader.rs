@@ -109,10 +109,6 @@ impl WalReader {
     /// Discovers all WAL files (archived and active) and reads them in
     /// sequence order. The reader automatically handles file transitions.
     ///
-    /// # Arguments
-    ///
-    /// * `dir` - Directory containing (or to contain) the WAL file
-    ///
     /// # Errors
     ///
     /// Returns `Err` if:
@@ -182,9 +178,7 @@ impl WalReader {
             let mut hdr_buf = [0u8; FileHeader::SIZE];
             file.read_exact(&mut hdr_buf).await?;
 
-            let hdr = FileHeader::from_bytes(&hdr_buf).ok_or_else(|| {
-                StorageError::InvalidOperation("Invalid WAL file header".into())
-            })?;
+            let hdr = FileHeader::from_bytes(&hdr_buf)?;
 
             Ok((file, file_size, hdr.first_seq))
         }
@@ -213,8 +207,7 @@ impl WalReader {
         let file_info = WalFileInfo {
             path: path.clone(),
             first_seq: WalSequence::ZERO,
-            last_seq: None,
-            is_active: true,
+            last_seq: None, // Active file
         };
 
         Ok(Self {
@@ -285,8 +278,10 @@ impl WalReader {
                 }
                 None => {
                     // EOF - try to advance to next file
-                    if self.advance_to_next_file().await? {
-                        // Recurse to read from next file
+                    let prev_idx = self.current_idx;
+                    self.try_open_next_file().await?;
+                    if self.current_idx > prev_idx {
+                        // Opened a new file, recurse to read from it
                         self.next().await
                     } else {
                         // No more files
@@ -297,14 +292,16 @@ impl WalReader {
         })
     }
 
-    /// Advance to the next WAL file in sequence.
+    /// Try to open the next WAL file in sequence.
     ///
-    /// Returns `true` if successfully opened next file, `false` if no more files.
-    async fn advance_to_next_file(&mut self) -> Result<bool> {
+    /// On success, updates internal state to point to the new file.
+    /// If no more files exist, state is unchanged (caller should check
+    /// if `current_idx` changed).
+    async fn try_open_next_file(&mut self) -> Result<()> {
         let next_idx = self.current_idx + 1;
 
         if next_idx >= self.files.len() {
-            Ok(false) // No more files
+            Ok(()) // No more files - state unchanged
         } else {
             let next_info = self
                 .files
@@ -337,7 +334,7 @@ impl WalReader {
                 self.pos = FileHeader::SIZE as u64;
                 self.first_seq = first_seq;
 
-                Ok(true)
+                Ok(())
             }
         }
     }
@@ -368,7 +365,7 @@ impl WalReader {
 
     /// Check if there's an active `wal.log` file.
     pub(crate) fn has_active_file(&self) -> bool {
-        self.files.iter().any(|f| f.is_active)
+        self.files.iter().any(WalFileInfo::is_active)
     }
 
     /// Convert this reader into an async stream of entries.

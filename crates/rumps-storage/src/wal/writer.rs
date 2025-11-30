@@ -136,7 +136,7 @@ impl WalWriter {
         reader: super::WalReader,
         cfg: WalWriterConfig,
     ) -> Result<Self> {
-        let has_active = reader.files.iter().any(|f| f.is_active);
+        let has_active = reader.files.iter().any(WalFileInfo::is_active);
 
         if has_active {
             // Close read-only handle
