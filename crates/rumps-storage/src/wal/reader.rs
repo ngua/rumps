@@ -121,33 +121,42 @@ impl WalReader {
 
     /// Open an existing WAL file.
     async fn open_existing(dir: &Path, path: &Path) -> Result<Self> {
-        let mut file = OpenOptions::new().read(true).open(path).await?;
-
-        let file_size = file.metadata().await?.len();
-
-        // Validate file has at least a header
-        if file_size < FILE_HEADER_SIZE as u64 {
+        if !path.starts_with(dir) {
             Err(StorageError::InvalidOperation(
-                "WAL file too small for header".into(),
+                "WAL path is not a child of directory".into(),
             ))
         } else {
-            // Read and validate file header
-            let mut hdr_buf = [0u8; FILE_HEADER_SIZE];
-            file.read_exact(&mut hdr_buf).await?;
+            let mut file = OpenOptions::new().read(true).open(path).await?;
 
-            let hdr = FileHeader::from_bytes(&hdr_buf).ok_or_else(|| {
-                StorageError::InvalidOperation("Invalid WAL file header".into())
-            })?;
+            let file_size = file.metadata().await?.len();
 
-            Ok(Self {
-                dir: dir.to_path_buf(),
-                path: path.to_path_buf(),
-                file,
-                file_size,
-                pos: FILE_HEADER_SIZE as u64,
-                first_seq: hdr.first_seq,
-                next_seq: hdr.first_seq,
-            })
+            // Validate file has at least a header
+            if file_size < FILE_HEADER_SIZE as u64 {
+                Err(StorageError::InvalidOperation(
+                    "WAL file too small for header".into(),
+                ))
+            } else {
+                // Read and validate file header
+                let mut hdr_buf = [0u8; FILE_HEADER_SIZE];
+                file.read_exact(&mut hdr_buf).await?;
+
+                let hdr =
+                    FileHeader::from_bytes(&hdr_buf).ok_or_else(|| {
+                        StorageError::InvalidOperation(
+                            "Invalid WAL file header".into(),
+                        )
+                    })?;
+
+                Ok(Self {
+                    dir: dir.to_path_buf(),
+                    path: path.to_path_buf(),
+                    file,
+                    file_size,
+                    pos: FILE_HEADER_SIZE as u64,
+                    first_seq: hdr.first_seq,
+                    next_seq: hdr.first_seq,
+                })
+            }
         }
     }
 
@@ -356,6 +365,8 @@ impl WalReader {
             })
             .await?;
 
+        // This should never be invalid, but I've banned `expect` and I'm not
+        // backing down! :)
         let reader = stream.into_reader().ok_or_else(|| {
             StorageError::InvalidOperation(
                 "reader should be present after stream exhaustion".into(),
