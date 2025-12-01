@@ -160,11 +160,11 @@ Benchmark results from `cargo bench -p rumps-storage --features bench --bench wa
 
 ### Append Throughput (no fsync)
 
-| Record Size  | Time    | Throughput    |
-|--------------|---------|---------------|
-| Small (~12B) | ~6.6 µs | ~150K ops/sec |
-| Medium (100B)| ~7.2 µs | ~139K ops/sec |
-| Large (1KB)  | ~7.8 µs | ~128K ops/sec |
+| Record Size   | Time     | Throughput    |
+|---------------|----------|---------------|
+| Small (~12B)  | ~6.1 µs  | ~163K ops/sec |
+| Medium (100B) | ~6.9 µs  | ~146K ops/sec |
+| Large (1KB)   | ~7.7 µs  | ~129K ops/sec |
 
 The ~6-8 µs overhead is dominated by:
 - Channel send/receive overhead (mpsc + oneshot)
@@ -173,46 +173,54 @@ The ~6-8 µs overhead is dominated by:
 
 ### Serialization Overhead
 
-| Size  | Time    |
-|-------|---------|
-| Small | ~16 ns  |
-| 100B  | ~250 ns |
-| 1KB   | ~432 ns |
+| Size  | Time     |
+|-------|----------|
+| Small | ~17 ns   |
+| 100B  | ~237 ns  |
+| 1KB   | ~373 ns  |
 
 Serialization is <5% of append time - bincode is not a bottleneck.
 
+### Commit with Sync
+
+A single-operation transaction (begin + set + commit + fsync) takes ~33 µs, yielding ~30K durable writes/sec for a single caller.
+
 ### Group Commit Effectiveness
 
-The key benefit of the channel-based design is concurrent sync batching:
+The key benefit of the channel-based design is concurrent sync batching. Each task does append + sync; the background task batches concurrent `sync()` calls into a single `fsync()`:
 
-| Concurrent Tasks | Total Time | Throughput | Sequential Would Be | Speedup |
-|------------------|------------|------------|---------------------|---------|
-|                1 |     26 µs  |     39K/s  |              26 µs  |      1x |
-|                4 |     87 µs  |     46K/s  |             104 µs  |     ~3x |
-|                8 |    168 µs  |     48K/s  |             208 µs  |     ~3x |
-|               16 |    369 µs  |     43K/s  |             416 µs  |   ~2.8x |
-|               32 |    716 µs  |     45K/s  |             832 µs  |   ~2.9x |
+| Concurrent Tasks | Total Time | Sequential Would Be | Speedup |
+|------------------|------------|---------------------|---------|
+|                1 |    161 µs  |             161 µs  |      1x |
+|                4 |    204 µs  |             644 µs  |   ~3.2x |
+|                8 |    210 µs  |           1,288 µs  |   ~6.1x |
+|               16 |    264 µs  |           2,576 µs  |   ~9.8x |
+|               32 |    323 µs  |           5,152 µs  |    ~16x |
 
 **Why this matters**: Without group commit, each transaction's `sync()` blocks on `fsync()`. With N concurrent transactions, you'd do N separate fsyncs. With group commit, concurrent syncs are batched - the background task collects all pending `Sync` commands via `try_recv()` and issues one `fsync()` for the batch.
 
-On the benchmarked ZFS system (fast SSD), group commit provides ~3x speedup. On slower storage:
+The speedup scales with concurrency because the fsync cost is amortized across all waiting tasks. At 32 concurrent tasks, we see ~16x speedup over sequential execution.
+
+On slower storage the benefits are even more pronounced:
 - **HDD (5-15ms fsync)**: 32 sequential syncs = 160-480ms; batched = 5-15ms → **10-30x speedup**
 - **SSD without write cache (0.5-2ms fsync)**: 32 sequential = 16-64ms; batched = 0.5-2ms → **32x speedup**
-
-Throughput remains constant (~43-48K ops/sec) regardless of concurrency - this is the signature of effective batching.
 
 ### Batched Writes
 
 In addition to group commit, the background task batches pending append commands via `try_recv()` and combines them into a single `write_all()` syscall, reducing per-record overhead.
 
-### Comparison to Established Databases
+### Comparison to Mutex-Based Approach
 
-| Database                 | Durable writes/sec |
-|--------------------------|-------------------:|
-| SQLite (WAL mode, sync)  |            10-50K  |
-| PostgreSQL (sync commit) |             5-20K  |
-| RUMPS (single caller)    |              ~31K  |
-| RUMPS (32 concurrent)    |              ~45K  |
+The channel-based design was benchmarked against a previous Mutex-based implementation:
+
+| Benchmark                    | Channel   | Mutex     | Improvement |
+|------------------------------|-----------|-----------|-------------|
+| Append (small, no sync)      | 6.1 µs    | 10.7 µs   | 1.74x       |
+| Append (medium, no sync)     | 6.9 µs    | 11.7 µs   | 1.71x       |
+| Append (large, no sync)      | 7.7 µs    | 11.9 µs   | 1.54x       |
+| Commit with sync             | 33 µs     | 41 µs     | 1.25x       |
+
+The channel approach wins because there's no lock contention on the hot path - appends go through an mpsc channel, and batching happens naturally in the background task.
 
 *Note: Benchmarks run on ZFS with SSD. Real spinning disks take 5-15ms per fsync; SSDs typically 0.1-2ms.*
 
