@@ -706,7 +706,15 @@ mod tests {
                 .await
                 .expect("append");
             assert_eq!(seq, WalSequence::from(2));
-            assert_eq!(writer.next_seq().await, WalSequence::from(3));
+
+            // Verify next append gets seq 3
+            let seq2 = writer
+                .append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::from(2),
+                })
+                .await
+                .expect("append");
+            assert_eq!(seq2, WalSequence::from(3));
         }
     }
 

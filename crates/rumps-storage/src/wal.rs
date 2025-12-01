@@ -411,6 +411,7 @@ pub mod benches {
     use std::time::Duration;
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
+    use futures::stream::StreamExt;
     use rumps_types::{global, key};
     use tempfile::TempDir;
     use tokio::runtime::Runtime;
@@ -594,13 +595,19 @@ pub mod benches {
                                 .await
                                 .unwrap();
 
-                            (0..ops).for_each(|i| {
-                                let rec = make_set_record(
-                                    txn_id * 1000 + i as u64,
-                                    64,
-                                );
-                                rt.block_on(writer.append(&rec)).unwrap();
-                            });
+                            // Sequential appends within the transaction
+                            futures::stream::iter(0..ops as u64)
+                                .for_each(|i| {
+                                    let w = &writer;
+                                    async move {
+                                        let rec = make_set_record(
+                                            txn_id * 1000 + i,
+                                            64,
+                                        );
+                                        w.append(&rec).await.unwrap();
+                                    }
+                                })
+                                .await;
 
                             writer
                                 .append(&WalRecord::TxnCommit {
@@ -638,10 +645,15 @@ pub mod benches {
                             .await
                             .unwrap();
 
-                        (0..count as u64).for_each(|i| {
-                            let rec = make_set_record(i, 64);
-                            rt.block_on(writer.append(&rec)).unwrap();
-                        });
+                        futures::stream::iter(0..count as u64)
+                            .for_each(|i| {
+                                let w = &writer;
+                                async move {
+                                    let rec = make_set_record(i, 64);
+                                    w.append(&rec).await.unwrap();
+                                }
+                            })
+                            .await;
                         writer.sync().await.unwrap();
                     });
 
@@ -686,10 +698,15 @@ pub mod benches {
                             .await
                             .unwrap();
 
-                        (0..100u64).for_each(|i| {
-                            let rec = make_set_record(i, 64);
-                            rt.block_on(writer.append(&rec)).unwrap();
-                        });
+                        futures::stream::iter(0..100u64)
+                            .for_each(|i| {
+                                let w = &writer;
+                                async move {
+                                    let rec = make_set_record(i, 64);
+                                    w.append(&rec).await.unwrap();
+                                }
+                            })
+                            .await;
                     })
                 },
                 BatchSize::SmallInput,
@@ -722,6 +739,63 @@ pub mod benches {
         group.finish();
     }
 
+    /// Benchmark concurrent sync (group commit effectiveness).
+    ///
+    /// Spawns N tasks that each append a record and call sync().
+    /// With group commit, these should complete faster than N sequential syncs.
+    fn bench_concurrent_sync(c: &mut Criterion) {
+        use std::sync::Arc;
+
+        let rt = Runtime::new().unwrap();
+        let mut group = c.benchmark_group("wal_concurrent_sync");
+        group.sample_size(20);
+        group.measurement_time(Duration::from_secs(15));
+
+        [1, 4, 8, 16, 32].iter().copied().for_each(|concurrency| {
+            group.throughput(Throughput::Elements(concurrency as u64));
+            group.bench_with_input(
+                BenchmarkId::new("tasks", concurrency),
+                &concurrency,
+                |b, &n| {
+                    let dir = TempDir::new().unwrap();
+                    let writer = Arc::new(rt.block_on(async {
+                        let reader = WalReader::open(dir.path()).await.unwrap();
+                        reader
+                            .into_writer(WalWriterConfig::default())
+                            .await
+                            .unwrap()
+                    }));
+                    let counter = AtomicU64::new(0);
+
+                    b.iter(|| {
+                        rt.block_on(async {
+                            // Spawn n concurrent tasks, each doing append + sync
+                            let handles: Vec<_> = (0..n)
+                                .map(|_| {
+                                    let w = Arc::clone(&writer);
+                                    let id =
+                                        counter.fetch_add(1, Ordering::Relaxed);
+                                    tokio::spawn(async move {
+                                        w.append(&WalRecord::TxnBegin {
+                                            txn_id: id.into(),
+                                        })
+                                        .await
+                                        .unwrap();
+                                        w.sync().await.unwrap();
+                                    })
+                                })
+                                .collect();
+
+                            futures::future::join_all(handles).await;
+                        })
+                    });
+                },
+            );
+        });
+
+        group.finish();
+    }
+
     /// Main entry point for all WAL benchmarks.
     pub fn run_benchmarks(c: &mut Criterion) {
         bench_append_throughput(c);
@@ -730,5 +804,6 @@ pub mod benches {
         bench_recovery(c);
         bench_rotation(c);
         bench_serialization(c);
+        bench_concurrent_sync(c);
     }
 }

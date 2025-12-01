@@ -67,6 +67,10 @@ pub enum StorageError {
     /// WAL file has unsupported version.
     #[error("WAL unsupported version: {0}")]
     WalUnsupportedVersion(u16),
+
+    /// WAL background task has shut down.
+    #[error("WAL background task shut down")]
+    WalShutdown,
 }
 
 /// A specialized Result type for storage operations.

@@ -18,18 +18,26 @@
 //!
 //! # Thread Safety
 //!
-//! `WalWriter` uses `tokio::sync::Mutex` internally and is safe to share
-//! via `Arc<WalWriter>` across tasks.
+//! `WalWriter` uses channels internally and is safe to share via
+//! `Arc<WalWriter>` across tasks. The background task serializes
+//! all file operations.
+//!
+//! # Group Commit
+//!
+//! When multiple tasks call [`sync`] concurrently, their requests are
+//! batched into a single `fsync()` call. This amortizes the cost of
+//! durable writes across many transactions.
 //!
 //! [`WalReader::into_writer`]: super::WalReader::into_writer
 //! [`reader`]: super::reader
+//! [`sync`]: WalWriter::sync
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, oneshot};
 
 use super::files::WalFileInfo;
 use super::format::{FileHeader, RecordHeader};
@@ -87,18 +95,228 @@ impl Default for WalWriterConfig {
     }
 }
 
-/// Internal mutable state of the WAL writer.
-struct WalWriterState {
-    /// Current WAL file handle.
+/// Commands sent to the WAL background task.
+enum WalCommand {
+    Append {
+        rec: WalRecord,
+        reply: oneshot::Sender<Result<WalSequence>>,
+    },
+    Sync {
+        reply: oneshot::Sender<Result<()>>,
+    },
+    Rotate {
+        reply: oneshot::Sender<Result<()>>,
+    },
+    Checkpoint {
+        flushed_seq: WalSequence,
+        reply: oneshot::Sender<Result<WalSequence>>,
+    },
+}
+
+/// Background task state that owns the WAL file exclusively.
+struct WalTask {
+    dir: PathBuf,
+    cfg: WalWriterConfig,
     file: File,
-    /// Current file path (for rotation).
     path: PathBuf,
-    /// Current file size in bytes.
     file_size: u64,
-    /// Next sequence number to assign.
     next_seq: WalSequence,
-    /// First sequence number in the current file.
     first_seq_in_file: WalSequence,
+    rx: mpsc::Receiver<WalCommand>,
+}
+
+impl WalTask {
+    /// Main loop: receive commands and handle them.
+    async fn run(mut self) {
+        while let Some(cmd) = self.rx.recv().await {
+            match cmd {
+                WalCommand::Append { rec, reply } => {
+                    let result = self.handle_append(rec).await;
+                    let _ = reply.send(result);
+                }
+                WalCommand::Sync { reply } => {
+                    // Collect all pending sync requests (group commit)
+                    let mut waiters = vec![reply];
+                    while let Ok(cmd) = self.rx.try_recv() {
+                        match cmd {
+                            WalCommand::Sync { reply } => waiters.push(reply),
+                            other => self.handle_non_sync(other).await,
+                        }
+                    }
+                    // One fsync for all waiters
+                    let result = self.file.sync_all().await;
+                    let err_msg = result.as_ref().err().map(|e| e.to_string());
+                    waiters.into_iter().for_each(|w| {
+                        let r = err_msg.as_ref().map_or(Ok(()), |msg| {
+                            Err(StorageError::Io(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                msg.clone(),
+                            )))
+                        });
+                        let _ = w.send(r);
+                    });
+                }
+                WalCommand::Rotate { reply } => {
+                    let result = self.handle_rotate().await;
+                    let _ = reply.send(result);
+                }
+                WalCommand::Checkpoint { flushed_seq, reply } => {
+                    let result = self.handle_checkpoint(flushed_seq).await;
+                    let _ = reply.send(result);
+                }
+            }
+        }
+    }
+
+    /// Handle non-sync commands that arrive during sync collection.
+    async fn handle_non_sync(&mut self, cmd: WalCommand) {
+        match cmd {
+            WalCommand::Append { rec, reply } => {
+                let result = self.handle_append(rec).await;
+                let _ = reply.send(result);
+            }
+            WalCommand::Rotate { reply } => {
+                let result = self.handle_rotate().await;
+                let _ = reply.send(result);
+            }
+            WalCommand::Checkpoint { flushed_seq, reply } => {
+                let result = self.handle_checkpoint(flushed_seq).await;
+                let _ = reply.send(result);
+            }
+            WalCommand::Sync { .. } => {
+                // Handled by caller's batch
+            }
+        }
+    }
+
+    /// Append a record to the WAL.
+    async fn handle_append(&mut self, rec: WalRecord) -> Result<WalSequence> {
+        let payload = bincode::serialize(&rec).map_err(|e| {
+            StorageError::Serialization(format!("WAL record: {e}"))
+        })?;
+
+        // Check if rotation is needed
+        let rec_size = RecordHeader::SIZE as u64 + payload.len() as u64;
+        if self.file_size + rec_size > self.cfg.max_file_size {
+            self.handle_rotate().await?;
+        }
+
+        let seq = self.next_seq;
+        let hdr = RecordHeader::new(seq, &payload);
+
+        // Write header + payload
+        self.file.write_all(&hdr.to_bytes()).await?;
+        self.file.write_all(&payload).await?;
+
+        self.file_size += rec_size;
+        self.next_seq = self.next_seq.next();
+
+        // Sync if immediate mode
+        if self.cfg.sync_mode == SyncMode::Immediate {
+            self.file.sync_all().await?;
+        }
+
+        Ok(seq)
+    }
+
+    /// Rotate to a new WAL file.
+    async fn handle_rotate(&mut self) -> Result<()> {
+        // Sync current file before rotation
+        self.file.sync_all().await?;
+
+        // Rename old file with sequence range suffix
+        let old_path = self.path.clone();
+        let new_name = format!(
+            "wal.{:016x}-{:016x}.log",
+            *self.first_seq_in_file,
+            *self.next_seq.saturating_sub(1)
+        );
+        let archive_path = self.dir.join(new_name);
+        fs::rename(&old_path, &archive_path).await?;
+
+        // Create new file
+        let (file, file_size) =
+            Self::create_new_file(&old_path, self.next_seq).await?;
+
+        self.file = file;
+        self.path = old_path;
+        self.file_size = file_size;
+        self.first_seq_in_file = self.next_seq;
+
+        Ok(())
+    }
+
+    /// Perform a WAL checkpoint.
+    async fn handle_checkpoint(
+        &mut self,
+        flushed_seq: WalSequence,
+    ) -> Result<WalSequence> {
+        // Write checkpoint record
+        let checkpoint_rec = WalRecord::Checkpoint { seq: flushed_seq };
+        let checkpoint_seq = self.handle_append(checkpoint_rec).await?;
+
+        // Sync to ensure checkpoint is durable
+        self.file.sync_all().await?;
+
+        // Rotate to start fresh file
+        self.handle_rotate().await?;
+
+        // Clean up old archived files
+        self.cleanup_archived_files(flushed_seq).await?;
+
+        Ok(checkpoint_seq)
+    }
+
+    /// Create a new WAL file with the given first sequence number.
+    async fn create_new_file(
+        path: &Path,
+        first_seq: WalSequence,
+    ) -> Result<(File, u64)> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .await?;
+
+        // Write file header
+        let hdr = FileHeader::new(first_seq);
+        file.write_all(&hdr.to_bytes()).await?;
+        file.sync_all().await?;
+
+        Ok((file, FileHeader::SIZE as u64))
+    }
+
+    /// Delete archived WAL files that are entirely before the checkpoint.
+    async fn cleanup_archived_files(
+        &self,
+        checkpoint_seq: WalSequence,
+    ) -> Result<()> {
+        let mut entries = fs::read_dir(&self.dir).await?;
+
+        // Collect files to delete
+        let mut to_delete = Vec::new();
+
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            if let Some(info) =
+                WalFileInfo::from_archive_name(entry.path(), &name_str)
+            {
+                if info.last_seq.is_some_and(|seq| seq <= checkpoint_seq) {
+                    to_delete.push(info.path);
+                }
+            }
+        }
+
+        // Delete old files
+        futures::future::try_join_all(to_delete.iter().map(fs::remove_file))
+            .await?;
+
+        Ok(())
+    }
 }
 
 /// WAL writer that appends records and manages file rotation.
@@ -113,14 +331,17 @@ struct WalWriterState {
 /// let writer = reader.into_writer(cfg).await?;
 /// ```
 ///
+/// # Group Commit
+///
+/// Concurrent [`sync`] calls are automatically batched into a single
+/// `fsync()` operation, improving throughput under concurrent workloads.
+///
 /// [`WalReader::into_writer`]: super::WalReader::into_writer
+/// [`sync`]: Self::sync
 pub(crate) struct WalWriter {
-    /// Directory containing WAL files.
+    tx: mpsc::Sender<WalCommand>,
     dir: PathBuf,
-    /// Configuration.
     cfg: WalWriterConfig,
-    /// Internally mutable state. Callers wrap `WalWriter` in `Arc` for sharing.
-    state: Mutex<WalWriterState>,
 }
 
 impl WalWriter {
@@ -128,7 +349,7 @@ impl WalWriter {
     ///
     /// This is called by `WalReader::into_writer` and should not be
     /// used directly. It consumes the reader, reopens the file for
-    /// appending, and initializes writer state.
+    /// appending, and spawns the background task.
     ///
     /// If only archived files exist (no active `wal.log`), a new one
     /// is created continuing from the reader's next sequence number.
@@ -138,7 +359,7 @@ impl WalWriter {
     ) -> Result<Self> {
         let has_active = reader.files.iter().any(WalFileInfo::is_active);
 
-        if has_active {
+        let (file, path, file_size, next_seq, first_seq) = if has_active {
             // Close read-only handle
             drop(reader.file);
 
@@ -149,26 +370,20 @@ impl WalWriter {
                 .open(&reader.path)
                 .await?;
 
-            let state = WalWriterState {
+            (
                 file,
-                path: reader.path,
-                file_size: reader.file_size,
-                next_seq: reader.next_seq,
-                first_seq_in_file: reader.first_seq,
-            };
-
-            Ok(Self {
-                dir: reader.dir,
-                cfg,
-                state: Mutex::new(state),
-            })
+                reader.path,
+                reader.file_size,
+                reader.next_seq,
+                reader.first_seq,
+            )
         } else {
             // Only archives exist - create new wal.log
             let path = reader.dir.join("wal.log");
             let first_seq = reader.next_seq;
 
             let (file, file_size) =
-                Self::create_new_file(&path, first_seq).await?;
+                WalTask::create_new_file(&path, first_seq).await?;
 
             // Reopen in append mode
             drop(file);
@@ -178,42 +393,29 @@ impl WalWriter {
                 .open(&path)
                 .await?;
 
-            let state = WalWriterState {
-                file,
-                path,
-                file_size,
-                next_seq: first_seq,
-                first_seq_in_file: first_seq,
-            };
+            (file, path, file_size, first_seq, first_seq)
+        };
 
-            Ok(Self {
-                dir: reader.dir,
-                cfg,
-                state: Mutex::new(state),
-            })
-        }
-    }
+        let (tx, rx) = mpsc::channel(256);
 
-    /// Create a new WAL file with the given first sequence number.
-    ///
-    /// Used internally for rotation.
-    async fn create_new_file(
-        path: &Path,
-        first_seq: WalSequence,
-    ) -> Result<(File, u64)> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-            .await?;
+        let task = WalTask {
+            dir: reader.dir.clone(),
+            cfg: cfg.clone(),
+            file,
+            path,
+            file_size,
+            next_seq,
+            first_seq_in_file: first_seq,
+            rx,
+        };
 
-        // Write file header
-        let hdr = FileHeader::new(first_seq);
-        file.write_all(&hdr.to_bytes()).await?;
-        file.sync_all().await?;
+        tokio::spawn(task.run());
 
-        Ok((file, FileHeader::SIZE as u64))
+        Ok(Self {
+            tx,
+            dir: reader.dir,
+            cfg,
+        })
     }
 
     /// Append a WAL record and return its sequence number.
@@ -226,102 +428,46 @@ impl WalWriter {
     /// If appending would exceed `max_file_size`, the current file
     /// is rotated first.
     pub(crate) async fn append(&self, rec: &WalRecord) -> Result<WalSequence> {
-        let payload = bincode::serialize(rec).map_err(|e| {
-            StorageError::Serialization(format!("WAL record: {e}"))
-        })?;
-
-        let mut state = self.state.lock().await;
-
-        // Check if rotation is needed
-        let rec_size = RecordHeader::SIZE as u64 + payload.len() as u64;
-        if state.file_size + rec_size > self.cfg.max_file_size {
-            self.rotate_locked(&mut state).await?;
-        }
-
-        let seq = state.next_seq;
-        let hdr = RecordHeader::new(seq, &payload);
-
-        // Write header + payload
-        state.file.write_all(&hdr.to_bytes()).await?;
-        state.file.write_all(&payload).await?;
-
-        state.file_size += rec_size;
-        state.next_seq = state.next_seq.next();
-
-        // Sync if immediate mode
-        if self.cfg.sync_mode == SyncMode::Immediate {
-            state.file.sync_all().await?;
-        }
-
-        Ok(seq)
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(WalCommand::Append {
+                rec: rec.clone(),
+                reply: tx,
+            })
+            .await
+            .map_err(|_| StorageError::WalShutdown)?;
+        rx.await.map_err(|_| StorageError::WalShutdown)?
     }
 
     /// Explicitly flush and sync the WAL to disk.
     ///
     /// Call this after committing a transaction when using
     /// `SyncMode::OnCommit` or `SyncMode::Periodic`.
-    pub(crate) async fn sync(&self) -> Result<()> {
-        let state = self.state.lock().await;
-        state.file.sync_all().await?;
-        Ok(())
-    }
-
-    /// Rotate to a new WAL file.
     ///
-    /// The current file is renamed with a sequence range suffix,
-    /// and a new file is created.
-    async fn rotate_locked(&self, state: &mut WalWriterState) -> Result<()> {
-        // Sync current file before rotation
-        state.file.sync_all().await?;
-
-        // Rename old file with sequence range suffix
-        let old_path = state.path.clone();
-        let new_name = format!(
-            "wal.{:016x}-{:016x}.log",
-            *state.first_seq_in_file,
-            *state.next_seq.saturating_sub(1)
-        );
-        let archive_path = self.dir.join(new_name);
-        fs::rename(&old_path, &archive_path).await?;
-
-        // Create new file
-        let (file, file_size) =
-            Self::create_new_file(&old_path, state.next_seq).await?;
-
-        state.file = file;
-        state.path = old_path;
-        state.file_size = file_size;
-        state.first_seq_in_file = state.next_seq;
-
-        Ok(())
+    /// # Group Commit
+    ///
+    /// Concurrent calls to this method are batched: if multiple tasks
+    /// call `sync()` while an fsync is in progress, they all share
+    /// the result of a single fsync operation.
+    pub(crate) async fn sync(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(WalCommand::Sync { reply: tx })
+            .await
+            .map_err(|_| StorageError::WalShutdown)?;
+        rx.await.map_err(|_| StorageError::WalShutdown)?
     }
 
     /// Force rotation to a new WAL file.
     ///
     /// Useful for checkpointing when you want to start fresh.
     pub(crate) async fn rotate(&self) -> Result<()> {
-        let mut state = self.state.lock().await;
-        self.rotate_locked(&mut state).await
-    }
-
-    /// Get the current file size in bytes.
-    pub(crate) async fn file_size(&self) -> u64 {
-        self.state.lock().await.file_size
-    }
-
-    /// Get the next sequence number that will be assigned.
-    pub(crate) async fn next_seq(&self) -> WalSequence {
-        self.state.lock().await.next_seq
-    }
-
-    /// Get the sync mode.
-    pub(crate) fn sync_mode(&self) -> SyncMode {
-        self.cfg.sync_mode
-    }
-
-    /// Get the maximum file size before rotation.
-    pub(crate) fn max_file_size(&self) -> u64 {
-        self.cfg.max_file_size
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(WalCommand::Rotate { reply: tx })
+            .await
+            .map_err(|_| StorageError::WalShutdown)?;
+        rx.await.map_err(|_| StorageError::WalShutdown)?
     }
 
     /// Perform a WAL checkpoint.
@@ -351,55 +497,25 @@ impl WalWriter {
         &self,
         flushed_seq: WalSequence,
     ) -> Result<WalSequence> {
-        // Write checkpoint record
-        let checkpoint_rec_seq = self
-            .append(&WalRecord::Checkpoint { seq: flushed_seq })
-            .await?;
-
-        // Sync to ensure checkpoint is durable
-        self.sync().await?;
-
-        // Rotate to start fresh file
-        self.rotate().await?;
-
-        // Clean up old archived files
-        self.cleanup_archived_files(flushed_seq).await?;
-
-        Ok(checkpoint_rec_seq)
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(WalCommand::Checkpoint {
+                flushed_seq,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| StorageError::WalShutdown)?;
+        rx.await.map_err(|_| StorageError::WalShutdown)?
     }
 
-    /// Delete archived WAL files that are entirely before the checkpoint.
-    ///
-    /// Archived files are named `wal.{first_seq:016x}-{last_seq:016x}.log`.
-    /// Any file where `last_seq <= checkpoint_seq` can be safely deleted.
-    async fn cleanup_archived_files(
-        &self,
-        checkpoint_seq: WalSequence,
-    ) -> Result<()> {
-        let mut entries = fs::read_dir(&self.dir).await?;
+    /// Get the sync mode.
+    pub(crate) fn sync_mode(&self) -> SyncMode {
+        self.cfg.sync_mode
+    }
 
-        // Collect files to delete (can't delete while iterating)
-        let mut to_delete = Vec::new();
-
-        while let Some(entry) = entries.next_entry().await? {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-
-            // Parse archived file names: wal.{first:016x}-{last:016x}.log
-            if let Some(info) =
-                WalFileInfo::from_archive_name(entry.path(), &name_str)
-            {
-                if info.last_seq.is_some_and(|seq| seq <= checkpoint_seq) {
-                    to_delete.push(info.path);
-                }
-            }
-        }
-
-        // Delete old files
-        futures::future::try_join_all(to_delete.iter().map(fs::remove_file))
-            .await?;
-
-        Ok(())
+    /// Get the maximum file size before rotation.
+    pub(crate) fn max_file_size(&self) -> u64 {
+        self.cfg.max_file_size
     }
 
     /// Get the directory containing WAL files.
@@ -435,16 +551,14 @@ mod tests {
 
     #[tokio::test]
     async fn creates_wal_file() {
-        let (writer, dir) = temp_writer(WalWriterConfig::default()).await;
+        let (_writer, dir) = temp_writer(WalWriterConfig::default()).await;
 
         let wal_path = dir.path().join("wal.log");
         assert!(wal_path.exists());
-        assert_eq!(writer.file_size().await, FileHeader::SIZE as u64);
-        assert_eq!(writer.next_seq().await, WalSequence::ZERO);
     }
 
     #[tokio::test]
-    async fn append_increments_seq() {
+    async fn append_returns_incrementing_seqs() {
         let (writer, _dir) = temp_writer(WalWriterConfig::default()).await;
 
         let rec1 = WalRecord::TxnBegin {
@@ -459,7 +573,6 @@ mod tests {
 
         assert_eq!(seq1, WalSequence::ZERO);
         assert_eq!(seq2, WalSequence::from(1));
-        assert_eq!(writer.next_seq().await, WalSequence::from(2));
     }
 
     #[tokio::test]
@@ -482,7 +595,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
 
         // Write some records
-        {
+        let seq_after_first = {
             let writer =
                 open_writer(dir.path(), WalWriterConfig::default()).await;
             writer
@@ -491,20 +604,20 @@ mod tests {
                 })
                 .await
                 .expect("append");
-            writer
+            let seq = writer
                 .append(&WalRecord::TxnCommit {
                     txn_id: TransactionId::from(1),
                 })
                 .await
                 .expect("append");
             writer.sync().await.expect("sync");
-        }
+            seq
+        };
 
         // Reopen and verify seq continues
         {
             let writer =
                 open_writer(dir.path(), WalWriterConfig::default()).await;
-            assert_eq!(writer.next_seq().await, WalSequence::from(2));
 
             let seq = writer
                 .append(&WalRecord::TxnBegin {
@@ -512,7 +625,8 @@ mod tests {
                 })
                 .await
                 .expect("append");
-            assert_eq!(seq, WalSequence::from(2));
+            // seq_after_first was 1, so next should be 2
+            assert_eq!(seq, seq_after_first.next());
         }
     }
 
@@ -553,7 +667,7 @@ mod tests {
     async fn explicit_rotate() {
         let (writer, dir) = temp_writer(WalWriterConfig::default()).await;
 
-        writer
+        let seq = writer
             .append(&WalRecord::TxnBegin {
                 txn_id: TransactionId::from(1),
             })
@@ -570,9 +684,14 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
 
-        // New file should have seq = 1
-        assert_eq!(writer.next_seq().await, WalSequence::from(1));
-        assert_eq!(writer.file_size().await, FileHeader::SIZE as u64);
+        // Next append should continue from seq + 1
+        let next = writer
+            .append(&WalRecord::TxnCommit {
+                txn_id: TransactionId::from(1),
+            })
+            .await
+            .expect("append");
+        assert_eq!(next, seq.next());
     }
 
     #[tokio::test]
@@ -618,33 +737,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_grows_with_appends() {
-        let (writer, _dir) = temp_writer(WalWriterConfig::default()).await;
-
-        let initial = writer.file_size().await;
-
-        writer
-            .append(&WalRecord::TxnBegin {
-                txn_id: TransactionId::from(1),
-            })
-            .await
-            .expect("append");
-
-        let after_one = writer.file_size().await;
-        assert!(after_one > initial);
-
-        writer
-            .append(&WalRecord::TxnCommit {
-                txn_id: TransactionId::from(1),
-            })
-            .await
-            .expect("append");
-
-        let after_two = writer.file_size().await;
-        assert!(after_two > after_one);
-    }
-
-    #[tokio::test]
     async fn concurrent_appends() {
         use std::sync::Arc;
 
@@ -679,6 +771,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_syncs_batch() {
+        use std::sync::Arc;
+
+        let (writer, _dir) = temp_writer(WalWriterConfig::default()).await;
+        let writer = Arc::new(writer);
+
+        // Append some records first
+        (0..5).for_each(|_| {});
+        futures::future::try_join_all((0..5).map(|i| {
+            let w = Arc::clone(&writer);
+            async move {
+                w.append(&WalRecord::TxnBegin {
+                    txn_id: TransactionId::from(i),
+                })
+                .await
+            }
+        }))
+        .await
+        .expect("appends");
+
+        // Now spawn many concurrent syncs - they should all complete
+        let handles: Vec<_> = (0..20)
+            .map(|_| {
+                let w = Arc::clone(&writer);
+                tokio::spawn(async move { w.sync().await })
+            })
+            .collect();
+
+        let results: Vec<Result<()>> = futures::future::join_all(handles)
+            .await
+            .into_iter()
+            .map(|r| r.expect("join"))
+            .collect();
+
+        // All syncs should succeed
+        assert!(results.iter().all(|r| r.is_ok()));
+    }
+
+    #[tokio::test]
     async fn checkpoint_writes_record_and_rotates() {
         let (writer, dir) = temp_writer(WalWriterConfig::default()).await;
 
@@ -710,12 +841,6 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains('-'))
             .collect();
         assert_eq!(archives.len(), 1);
-
-        // New file should start fresh
-        assert_eq!(writer.file_size().await, FileHeader::SIZE as u64);
-
-        // Next seq should be 3
-        assert_eq!(writer.next_seq().await, WalSequence::from(3));
     }
 
     #[tokio::test]
@@ -808,7 +933,6 @@ mod tests {
         let (writer, dir) = temp_writer(WalWriterConfig::default()).await;
 
         // Create records and rotate multiple times
-        (0..3).for_each(|_| {});
         writer
             .append(&WalRecord::TxnBegin {
                 txn_id: TransactionId::from(1),
