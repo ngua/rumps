@@ -131,21 +131,38 @@ impl WalTask {
         while let Some(cmd) = self.rx.recv().await {
             match cmd {
                 WalCommand::Append { rec, reply } => {
-                    let result = self.handle_append(rec).await;
-                    let _ = reply.send(result);
+                    // Collect pending appends for batched write
+                    let mut batch = vec![(rec, reply)];
+
+                    while let Ok(cmd) = self.rx.try_recv() {
+                        match cmd {
+                            WalCommand::Append { rec, reply } => {
+                                batch.push((rec, reply));
+                            }
+                            other => {
+                                // Handle non-append, then continue collecting
+                                self.handle_non_append(other).await;
+                            }
+                        }
+                    }
+
+                    self.handle_append_batch(batch).await;
                 }
                 WalCommand::Sync { reply } => {
                     // Collect all pending sync requests (group commit)
                     let mut waiters = vec![reply];
+
                     while let Ok(cmd) = self.rx.try_recv() {
                         match cmd {
                             WalCommand::Sync { reply } => waiters.push(reply),
-                            other => self.handle_non_sync(other).await,
+                            other => self.handle_non_append(other).await,
                         }
                     }
+
                     // One fsync for all waiters
                     let result = self.file.sync_all().await;
                     let err_msg = result.as_ref().err().map(|e| e.to_string());
+
                     waiters.into_iter().for_each(|w| {
                         let r = err_msg.as_ref().map_or(Ok(()), |msg| {
                             Err(StorageError::Io(std::io::Error::new(
@@ -168,12 +185,16 @@ impl WalTask {
         }
     }
 
-    /// Handle non-sync commands that arrive during sync collection.
-    async fn handle_non_sync(&mut self, cmd: WalCommand) {
+    /// Handle non-append commands that arrive during batch collection.
+    async fn handle_non_append(&mut self, cmd: WalCommand) {
         match cmd {
-            WalCommand::Append { rec, reply } => {
-                let result = self.handle_append(rec).await;
-                let _ = reply.send(result);
+            WalCommand::Append { .. } => {
+                // Handled by caller's batch
+            }
+            WalCommand::Sync { reply } => {
+                // Flush and sync immediately
+                let result = self.file.sync_all().await;
+                let _ = reply.send(result.map_err(StorageError::from));
             }
             WalCommand::Rotate { reply } => {
                 let result = self.handle_rotate().await;
@@ -183,38 +204,159 @@ impl WalTask {
                 let result = self.handle_checkpoint(flushed_seq).await;
                 let _ = reply.send(result);
             }
-            WalCommand::Sync { .. } => {
-                // Handled by caller's batch
+        }
+    }
+
+    /// Append a batch of records to the WAL with a single write syscall.
+    async fn handle_append_batch(
+        &mut self,
+        batch: Vec<(WalRecord, oneshot::Sender<Result<WalSequence>>)>,
+    ) {
+        // Serialize all records into a single buffer
+        let mut buf =
+            Vec::with_capacity(batch.len() * (RecordHeader::SIZE + 256));
+        let mut offsets = Vec::with_capacity(batch.len());
+
+        // First pass: serialize all records, track header offsets
+        let serialization_result: Result<()> =
+            batch.iter().try_fold((), |_, (rec, _)| {
+                let hdr_offset = buf.len();
+                buf.resize(buf.len() + RecordHeader::SIZE, 0);
+
+                bincode::serialize_into(&mut buf, rec).map_err(|e| {
+                    StorageError::Serialization(format!("WAL record: {e}"))
+                })?;
+
+                offsets.push(hdr_offset);
+                Ok(())
+            });
+
+        // If serialization failed, send error to all waiters
+        if let Err(e) = serialization_result {
+            let err_msg = e.to_string();
+            batch.into_iter().for_each(|(_, reply)| {
+                let _ = reply
+                    .send(Err(StorageError::Serialization(err_msg.clone())));
+            });
+        } else {
+            // Check if rotation is needed before writing batch
+            let batch_size = buf.len() as u64;
+            if self.file_size + batch_size > self.cfg.max_file_size {
+                if let Err(e) = self.handle_rotate().await {
+                    let err_msg = e.to_string();
+                    batch.into_iter().for_each(|(_, reply)| {
+                        let _ = reply.send(Err(StorageError::Io(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                err_msg.clone(),
+                            ),
+                        )));
+                    });
+                } else {
+                    self.finish_batch_write(batch, buf, offsets).await;
+                }
+            } else {
+                self.finish_batch_write(batch, buf, offsets).await;
             }
         }
     }
 
-    /// Append a record to the WAL.
-    async fn handle_append(&mut self, rec: WalRecord) -> Result<WalSequence> {
-        let payload = bincode::serialize(&rec).map_err(|e| {
+    /// Finish writing a batch after serialization and rotation checks.
+    async fn finish_batch_write(
+        &mut self,
+        batch: Vec<(WalRecord, oneshot::Sender<Result<WalSequence>>)>,
+        mut buf: Vec<u8>,
+        offsets: Vec<usize>,
+    ) {
+        // Second pass: fill in headers with checksums and sequence numbers
+        let seqs: Vec<WalSequence> = offsets
+            .iter()
+            .map(|&hdr_offset| {
+                let payload_start = hdr_offset + RecordHeader::SIZE;
+                let payload_end = offsets
+                    .iter()
+                    .find(|&&o| o > hdr_offset)
+                    .copied()
+                    .unwrap_or(buf.len());
+                let payload = &buf[payload_start..payload_end];
+
+                let seq = self.next_seq;
+                let hdr = RecordHeader::new(seq, payload);
+                buf[hdr_offset..payload_start].copy_from_slice(&hdr.to_bytes());
+
+                self.next_seq = self.next_seq.next();
+                seq
+            })
+            .collect();
+
+        // Single write syscall for entire batch
+        let write_result = self.file.write_all(&buf).await;
+
+        if let Err(e) = write_result {
+            let err_msg = e.to_string();
+            batch.into_iter().for_each(|(_, reply)| {
+                let _ = reply.send(Err(StorageError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    err_msg.clone(),
+                ))));
+            });
+        } else {
+            self.file_size += buf.len() as u64;
+
+            // Sync if immediate mode
+            let sync_result = if self.cfg.sync_mode == SyncMode::Immediate {
+                self.file.sync_all().await
+            } else {
+                Ok(())
+            };
+
+            if let Err(e) = sync_result {
+                let err_msg = e.to_string();
+                batch.into_iter().for_each(|(_, reply)| {
+                    let _ =
+                        reply.send(Err(StorageError::Io(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            err_msg.clone(),
+                        ))));
+                });
+            } else {
+                // Reply to all with their sequence numbers
+                batch.into_iter().zip(seqs).for_each(|((_, reply), seq)| {
+                    let _ = reply.send(Ok(seq));
+                });
+            }
+        }
+    }
+
+    /// Append a single record (used internally, e.g., for checkpoints).
+    async fn append_one(&mut self, rec: &WalRecord) -> Result<WalSequence> {
+        // Reserve space for header, serialize payload directly after
+        let mut buf = Vec::with_capacity(RecordHeader::SIZE + 256);
+        buf.resize(RecordHeader::SIZE, 0);
+
+        bincode::serialize_into(&mut buf, rec).map_err(|e| {
             StorageError::Serialization(format!("WAL record: {e}"))
         })?;
 
+        let payload = &buf[RecordHeader::SIZE..];
+
         // Check if rotation is needed
-        let rec_size = RecordHeader::SIZE as u64 + payload.len() as u64;
+        let rec_size = buf.len() as u64;
         if self.file_size + rec_size > self.cfg.max_file_size {
             self.handle_rotate().await?;
         }
 
         let seq = self.next_seq;
-        let hdr = RecordHeader::new(seq, &payload);
+        let hdr = RecordHeader::new(seq, payload);
 
-        // Write header + payload
-        self.file.write_all(&hdr.to_bytes()).await?;
-        self.file.write_all(&payload).await?;
+        // Fill in header at start of buffer
+        buf[0..RecordHeader::SIZE].copy_from_slice(&hdr.to_bytes());
+
+        // Single write syscall for header + payload
+        self.file.write_all(&buf).await?;
 
         self.file_size += rec_size;
         self.next_seq = self.next_seq.next();
-
-        // Sync if immediate mode
-        if self.cfg.sync_mode == SyncMode::Immediate {
-            self.file.sync_all().await?;
-        }
 
         Ok(seq)
     }
@@ -253,7 +395,7 @@ impl WalTask {
     ) -> Result<WalSequence> {
         // Write checkpoint record
         let checkpoint_rec = WalRecord::Checkpoint { seq: flushed_seq };
-        let checkpoint_seq = self.handle_append(checkpoint_rec).await?;
+        let checkpoint_seq = self.append_one(&checkpoint_rec).await?;
 
         // Sync to ensure checkpoint is durable
         self.file.sync_all().await?;
