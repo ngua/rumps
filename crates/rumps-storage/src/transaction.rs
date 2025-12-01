@@ -43,6 +43,7 @@
 //! ```
 
 use std::fmt;
+use std::ops::Deref;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -62,7 +63,7 @@ use serde::{Deserialize, Serialize};
 /// let txn2 = TransactionId::from(2);
 ///
 /// assert!(txn1 < txn2);
-/// assert_eq!(u64::from(txn1), 1);
+/// assert_eq!(*txn1, 1);
 /// ```
 #[derive(
     Debug,
@@ -80,7 +81,7 @@ pub(crate) struct TransactionId(u64);
 
 impl fmt::Display for TransactionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Txn({})", self.0)
+        write!(f, "Txn({})", **self)
     }
 }
 
@@ -92,7 +93,15 @@ impl From<u64> for TransactionId {
 
 impl From<TransactionId> for u64 {
     fn from(id: TransactionId) -> Self {
-        id.0
+        *id
+    }
+}
+
+impl Deref for TransactionId {
+    type Target = u64;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

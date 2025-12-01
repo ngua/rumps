@@ -32,6 +32,7 @@
 //! This allows reading many entries in a single disk operation rather than
 //! requiring one I/O per hierarchy level as a trie would.
 
+use std::ops::Deref;
 use std::sync::Arc;
 use std::{fmt, iter};
 
@@ -79,7 +80,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// // Create a node ID from a page offset
 /// let node_id = NodeId::from(42u64);
-/// assert_eq!(u64::from(node_id), 42);
+/// assert_eq!(*node_id, 42);
 /// ```
 #[repr(transparent)]
 #[derive(
@@ -104,13 +105,21 @@ impl From<u64> for NodeId {
 
 impl From<NodeId> for u64 {
     fn from(id: NodeId) -> Self {
-        id.0
+        *id
+    }
+}
+
+impl Deref for NodeId {
+    type Target = u64;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
 impl fmt::Display for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Node({})", self.0)
+        write!(f, "Node({})", **self)
     }
 }
 
