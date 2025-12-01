@@ -757,18 +757,19 @@ pub mod benches {
                 BenchmarkId::new("tasks", concurrency),
                 &concurrency,
                 |b, &n| {
-                    let dir = TempDir::new().unwrap();
-                    let writer = Arc::new(rt.block_on(async {
-                        let reader = WalReader::open(dir.path()).await.unwrap();
-                        reader
-                            .into_writer(WalWriterConfig::default())
-                            .await
-                            .unwrap()
-                    }));
-                    let counter = AtomicU64::new(0);
-
                     b.iter(|| {
                         rt.block_on(async {
+                            let dir = TempDir::new().unwrap();
+                            let writer = Arc::new({
+                                let reader =
+                                    WalReader::open(dir.path()).await.unwrap();
+                                reader
+                                    .into_writer(WalWriterConfig::default())
+                                    .await
+                                    .unwrap()
+                            });
+                            let counter = AtomicU64::new(0);
+
                             // Spawn n concurrent tasks, each doing append + sync
                             let handles: Vec<_> = (0..n)
                                 .map(|_| {
@@ -787,7 +788,10 @@ pub mod benches {
                                 .collect();
 
                             futures::future::join_all(handles).await;
-                        })
+
+                            // Gracefully shut down before dropping TempDir
+                            writer.request_shutdown().await.unwrap();
+                        });
                     });
                 },
             );

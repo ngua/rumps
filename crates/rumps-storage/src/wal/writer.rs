@@ -111,6 +111,10 @@ enum WalCommand {
         flushed_seq: WalSequence,
         reply: oneshot::Sender<Result<WalSequence>>,
     },
+    /// Graceful shutdown - sync and exit.
+    Shutdown {
+        reply: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// Background task state that owns the WAL file exclusively.
@@ -129,6 +133,8 @@ impl WalTask {
     /// Main loop: receive commands and handle them.
     async fn run(mut self) {
         while let Some(cmd) = self.rx.recv().await {
+            let mut should_exit = matches!(cmd, WalCommand::Shutdown { .. });
+
             match cmd {
                 WalCommand::Append { rec, reply } => {
                     // Collect pending appends for batched write
@@ -140,8 +146,9 @@ impl WalTask {
                                 batch.push((rec, reply));
                             }
                             other => {
-                                // Handle non-append, then continue collecting
-                                self.handle_non_append(other).await;
+                                // Handle non-append, check for shutdown
+                                should_exit =
+                                    self.handle_non_append(other).await;
                             }
                         }
                     }
@@ -155,7 +162,10 @@ impl WalTask {
                     while let Ok(cmd) = self.rx.try_recv() {
                         match cmd {
                             WalCommand::Sync { reply } => waiters.push(reply),
-                            other => self.handle_non_append(other).await,
+                            other => {
+                                should_exit =
+                                    self.handle_non_append(other).await;
+                            }
                         }
                     }
 
@@ -165,8 +175,7 @@ impl WalTask {
 
                     waiters.into_iter().for_each(|w| {
                         let r = err_msg.as_ref().map_or(Ok(()), |msg| {
-                            Err(StorageError::Io(std::io::Error::new(
-                                std::io::ErrorKind::Other,
+                            Err(StorageError::Io(std::io::Error::other(
                                 msg.clone(),
                             )))
                         });
@@ -181,28 +190,55 @@ impl WalTask {
                     let result = self.handle_checkpoint(flushed_seq).await;
                     let _ = reply.send(result);
                 }
+                WalCommand::Shutdown { reply } => {
+                    // Sync and exit
+                    let result =
+                        self.file.sync_all().await.map_err(StorageError::from);
+                    let _ = reply.send(result);
+                }
+            }
+
+            if should_exit {
+                // Exit loop after handling shutdown
+                self.rx.close();
             }
         }
     }
 
     /// Handle non-append commands that arrive during batch collection.
-    async fn handle_non_append(&mut self, cmd: WalCommand) {
+    ///
+    /// Returns `true` if the task should exit after this command.
+    async fn handle_non_append(&mut self, cmd: WalCommand) -> bool {
         match cmd {
-            WalCommand::Append { .. } => {
-                // Handled by caller's batch
+            WalCommand::Append { rec, reply } => {
+                // Append arrived while handling another command type (e.g. Sync).
+                // Must process it immediately to avoid dropping the reply channel.
+                let result = self.append_one(&rec).await;
+                let _ = reply.send(result);
+                false
             }
             WalCommand::Sync { reply } => {
                 // Flush and sync immediately
                 let result = self.file.sync_all().await;
                 let _ = reply.send(result.map_err(StorageError::from));
+                false
             }
             WalCommand::Rotate { reply } => {
                 let result = self.handle_rotate().await;
                 let _ = reply.send(result);
+                false
             }
             WalCommand::Checkpoint { flushed_seq, reply } => {
                 let result = self.handle_checkpoint(flushed_seq).await;
                 let _ = reply.send(result);
+                false
+            }
+            WalCommand::Shutdown { reply } => {
+                // Sync and signal exit
+                let result =
+                    self.file.sync_all().await.map_err(StorageError::from);
+                let _ = reply.send(result);
+                true
             }
         }
     }
@@ -246,10 +282,7 @@ impl WalTask {
                     let err_msg = e.to_string();
                     batch.into_iter().for_each(|(_, reply)| {
                         let _ = reply.send(Err(StorageError::Io(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                err_msg.clone(),
-                            ),
+                            std::io::Error::other(err_msg.clone()),
                         )));
                     });
                 } else {
@@ -295,10 +328,9 @@ impl WalTask {
         if let Err(e) = write_result {
             let err_msg = e.to_string();
             batch.into_iter().for_each(|(_, reply)| {
-                let _ = reply.send(Err(StorageError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    err_msg.clone(),
-                ))));
+                let _ = reply.send(Err(StorageError::Io(
+                    std::io::Error::other(err_msg.clone()),
+                )));
             });
         } else {
             self.file_size += buf.len() as u64;
@@ -313,11 +345,9 @@ impl WalTask {
             if let Err(e) = sync_result {
                 let err_msg = e.to_string();
                 batch.into_iter().for_each(|(_, reply)| {
-                    let _ =
-                        reply.send(Err(StorageError::Io(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            err_msg.clone(),
-                        ))));
+                    let _ = reply.send(Err(StorageError::Io(
+                        std::io::Error::other(err_msg.clone()),
+                    )));
                 });
             } else {
                 // Reply to all with their sequence numbers
@@ -478,10 +508,18 @@ impl WalTask {
 /// Concurrent [`sync`] calls are automatically batched into a single
 /// `fsync()` operation, improving throughput under concurrent workloads.
 ///
+/// # Shutdown
+///
+/// Call [`shutdown`] for graceful termination. This ensures all pending
+/// writes are synced and the background task exits cleanly. Dropping
+/// without calling `shutdown` will abort the background task.
+///
 /// [`WalReader::into_writer`]: super::WalReader::into_writer
 /// [`sync`]: Self::sync
+/// [`shutdown`]: Self::shutdown
 pub(crate) struct WalWriter {
     tx: mpsc::Sender<WalCommand>,
+    task_handle: tokio::task::JoinHandle<()>,
     dir: PathBuf,
     cfg: WalWriterConfig,
 }
@@ -551,10 +589,11 @@ impl WalWriter {
             rx,
         };
 
-        tokio::spawn(task.run());
+        let task_handle = tokio::spawn(task.run());
 
         Ok(Self {
             tx,
+            task_handle,
             dir: reader.dir,
             cfg,
         })
@@ -663,6 +702,38 @@ impl WalWriter {
     /// Get the directory containing WAL files.
     pub(crate) fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Request graceful shutdown of the WAL writer.
+    ///
+    /// This syncs all pending writes and signals the background task to exit.
+    /// After calling this, all operations will fail with `WalShutdown`.
+    ///
+    /// This method does NOT wait for the background task to fully exit.
+    /// Use [`shutdown`] if you need to wait for complete termination.
+    ///
+    /// [`shutdown`]: Self::shutdown
+    pub(crate) async fn request_shutdown(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(WalCommand::Shutdown { reply: tx })
+            .await
+            .map_err(|_| StorageError::WalShutdown)?;
+        rx.await.map_err(|_| StorageError::WalShutdown)?
+    }
+
+    /// Gracefully shut down the WAL writer and wait for completion.
+    ///
+    /// This syncs all pending writes and waits for the background task to
+    /// fully exit. After shutdown, all operations will fail with `WalShutdown`.
+    ///
+    /// Call this before dropping the writer to ensure clean termination.
+    /// If not called, the background task will be aborted on drop.
+    pub(crate) async fn shutdown(self) -> Result<()> {
+        self.request_shutdown().await?;
+        // Wait for task to fully exit
+        let _ = self.task_handle.await;
+        Ok(())
     }
 }
 
