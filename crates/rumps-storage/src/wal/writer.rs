@@ -117,6 +117,23 @@ enum WalCommand {
     },
 }
 
+/// Signal from command handlers indicating whether the task should continue or exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskSignal {
+    Continue,
+    Shutdown,
+}
+
+impl TaskSignal {
+    /// Combine two signals - `Shutdown` takes precedence.
+    fn or(self, other: Self) -> Self {
+        match self {
+            Self::Shutdown => Self::Shutdown,
+            Self::Continue => other,
+        }
+    }
+}
+
 /// Background task state that owns the WAL file exclusively.
 struct WalTask {
     dir: PathBuf,
@@ -133,112 +150,124 @@ impl WalTask {
     /// Main loop: receive commands and handle them.
     async fn run(mut self) {
         while let Some(cmd) = self.rx.recv().await {
-            let mut should_exit = matches!(cmd, WalCommand::Shutdown { .. });
+            let signal = self.handle_cmd(cmd).await;
 
-            match cmd {
-                WalCommand::Append { rec, reply } => {
-                    // Collect pending appends for batched write
-                    let mut batch = vec![(rec, reply)];
-
-                    while let Ok(cmd) = self.rx.try_recv() {
-                        match cmd {
-                            WalCommand::Append { rec, reply } => {
-                                batch.push((rec, reply));
-                            }
-                            other => {
-                                // Handle non-append, check for shutdown
-                                should_exit =
-                                    self.handle_non_append(other).await;
-                            }
-                        }
-                    }
-
-                    self.handle_append_batch(batch).await;
-                }
-                WalCommand::Sync { reply } => {
-                    // Collect all pending sync requests (group commit)
-                    let mut waiters = vec![reply];
-
-                    while let Ok(cmd) = self.rx.try_recv() {
-                        match cmd {
-                            WalCommand::Sync { reply } => waiters.push(reply),
-                            other => {
-                                should_exit =
-                                    self.handle_non_append(other).await;
-                            }
-                        }
-                    }
-
-                    // One fsync for all waiters
-                    let result = self.file.sync_all().await;
-                    let err_msg = result.as_ref().err().map(|e| e.to_string());
-
-                    waiters.into_iter().for_each(|w| {
-                        let r = err_msg.as_ref().map_or(Ok(()), |msg| {
-                            Err(StorageError::Io(std::io::Error::other(
-                                msg.clone(),
-                            )))
-                        });
-                        let _ = w.send(r);
-                    });
-                }
-                WalCommand::Rotate { reply } => {
-                    let result = self.handle_rotate().await;
-                    let _ = reply.send(result);
-                }
-                WalCommand::Checkpoint { flushed_seq, reply } => {
-                    let result = self.handle_checkpoint(flushed_seq).await;
-                    let _ = reply.send(result);
-                }
-                WalCommand::Shutdown { reply } => {
-                    // Sync and exit
-                    let result =
-                        self.file.sync_all().await.map_err(StorageError::from);
-                    let _ = reply.send(result);
-                }
-            }
-
-            if should_exit {
-                // Exit loop after handling shutdown
-                self.rx.close();
+            match signal {
+                TaskSignal::Continue => {}
+                TaskSignal::Shutdown => self.rx.close(),
             }
         }
     }
 
-    /// Handle non-append commands that arrive during batch collection.
-    ///
-    /// Returns `true` if the task should exit after this command.
-    async fn handle_non_append(&mut self, cmd: WalCommand) -> bool {
+    /// Dispatch a command and return whether to continue or shutdown.
+    async fn handle_cmd(&mut self, cmd: WalCommand) -> TaskSignal {
         match cmd {
             WalCommand::Append { rec, reply } => {
-                // Append arrived while handling another command type (e.g. Sync).
-                // Must process it immediately to avoid dropping the reply channel.
-                let result = self.append_one(&rec).await;
-                let _ = reply.send(result);
-                false
+                self.handle_append_batched(rec, reply).await
             }
-            WalCommand::Sync { reply } => {
-                // Flush and sync immediately
-                let result = self.file.sync_all().await;
-                let _ = reply.send(result.map_err(StorageError::from));
-                false
-            }
+            WalCommand::Sync { reply } => self.handle_sync_batched(reply).await,
             WalCommand::Rotate { reply } => {
                 let result = self.handle_rotate().await;
                 let _ = reply.send(result);
-                false
+                TaskSignal::Continue
             }
             WalCommand::Checkpoint { flushed_seq, reply } => {
                 let result = self.handle_checkpoint(flushed_seq).await;
                 let _ = reply.send(result);
-                false
+                TaskSignal::Continue
             }
             WalCommand::Shutdown { reply } => {
-                // Sync and signal exit
                 let result =
                     self.file.sync_all().await.map_err(StorageError::from);
                 let _ = reply.send(result);
-                true
+                TaskSignal::Shutdown
+            }
+        }
+    }
+
+    /// Handle an append command, batching any pending appends via `try_recv`.
+    async fn handle_append_batched(
+        &mut self,
+        rec: WalRecord,
+        reply: oneshot::Sender<Result<WalSequence>>,
+    ) -> TaskSignal {
+        let mut batch = vec![(rec, reply)];
+        let mut signal = TaskSignal::Continue;
+
+        while let Ok(cmd) = self.rx.try_recv() {
+            match cmd {
+                WalCommand::Append { rec, reply } => batch.push((rec, reply)),
+                other => {
+                    signal = signal.or(self.handle_interleaved(other).await)
+                }
+            }
+        }
+
+        self.handle_append_batch(batch).await;
+        signal
+    }
+
+    /// Handle a sync command, batching any pending syncs via `try_recv` (group commit).
+    async fn handle_sync_batched(
+        &mut self,
+        reply: oneshot::Sender<Result<()>>,
+    ) -> TaskSignal {
+        let mut waiters = vec![reply];
+        let mut signal = TaskSignal::Continue;
+
+        while let Ok(cmd) = self.rx.try_recv() {
+            match cmd {
+                WalCommand::Sync { reply } => waiters.push(reply),
+                other => {
+                    signal = signal.or(self.handle_interleaved(other).await)
+                }
+            }
+        }
+
+        // One fsync for all waiters
+        let result = self.file.sync_all().await;
+        let err_msg = result.as_ref().err().map(|e| e.to_string());
+
+        waiters.into_iter().for_each(|w| {
+            let r = err_msg.as_ref().map_or(Ok(()), |msg| {
+                Err(StorageError::Io(std::io::Error::other(msg.clone())))
+            });
+            let _ = w.send(r);
+        });
+
+        signal
+    }
+
+    /// Handle commands that arrive interleaved during batch collection.
+    async fn handle_interleaved(&mut self, cmd: WalCommand) -> TaskSignal {
+        match cmd {
+            WalCommand::Append { rec, reply } => {
+                // Append arrived while batching another command type.
+                // Must process immediately to avoid dropping the reply channel.
+                let result = self.append_one(&rec).await;
+                let _ = reply.send(result);
+                TaskSignal::Continue
+            }
+            WalCommand::Sync { reply } => {
+                let result = self.file.sync_all().await;
+                let _ = reply.send(result.map_err(StorageError::from));
+                TaskSignal::Continue
+            }
+            WalCommand::Rotate { reply } => {
+                let result = self.handle_rotate().await;
+                let _ = reply.send(result);
+                TaskSignal::Continue
+            }
+            WalCommand::Checkpoint { flushed_seq, reply } => {
+                let result = self.handle_checkpoint(flushed_seq).await;
+                let _ = reply.send(result);
+                TaskSignal::Continue
+            }
+            WalCommand::Shutdown { reply } => {
+                let result =
+                    self.file.sync_all().await.map_err(StorageError::from);
+                let _ = reply.send(result);
+                TaskSignal::Shutdown
             }
         }
     }
