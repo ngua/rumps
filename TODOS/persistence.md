@@ -513,8 +513,8 @@ This design ensures:
 ### 4.2 Page-Based Storage
 - [x] Define `PAGE_SIZE` constant (done in Phase 3.1 via `page.rs`)
 - [x] Create `crates/rumps-storage/src/page.rs` module (done in Phase 3.1)
-- [ ] Define `PageId` type (u64 offset into file)
-- [ ] Implement `PageCache` struct:
+- [x] Define `PageId` type (u64 offset into file)
+- [x] Implement `PageCache` struct:
   - LRU cache of pages in memory
   - Dirty page tracking
   - Flush mechanism
