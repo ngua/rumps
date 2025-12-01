@@ -13,6 +13,7 @@ The `has_descendants` flag enables three essential MUMPS operations:
    - `1`: Has value only (leaf node)
    - `10`: Has descendants only (intermediate node)
    - `11`: Has both value and descendants
+   - **NOTE**: RUMPS returns a native Rust `enum` for these states; numerical values above are for compat only
 
 2. **`$ORDER(key)`** - Navigates the hierarchy correctly:
    - Needs to know whether to descend into children or skip to next sibling
