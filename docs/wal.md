@@ -211,14 +211,14 @@ In addition to group commit, the background task batches pending append commands
 
 ### Comparison to Mutex-Based Approach
 
-The channel-based design was benchmarked against a previous Mutex-based implementation:
+The current channel-based design was compared against an earlier `WalWriter` implementation that used a `Mutex` to serialize access. The Mutex values below were measured at the time of that implementation and may not reflect identical test conditions; they are presented for rough comparison only.
 
-| Benchmark                    | Channel   | Mutex     | Improvement |
-|------------------------------|-----------|-----------|-------------|
-| Append (small, no sync)      | 6.1 µs    | 10.7 µs   | 1.74x       |
-| Append (medium, no sync)     | 6.9 µs    | 11.7 µs   | 1.71x       |
-| Append (large, no sync)      | 7.7 µs    | 11.9 µs   | 1.54x       |
-| Commit with sync             | 33 µs     | 41 µs     | 1.25x       |
+| Benchmark                    | Channel   | Mutex (old impl) | Improvement |
+|------------------------------|-----------|------------------|-------------|
+| Append (small, no sync)      | 6.1 µs    | ~10.7 µs         | ~1.7x       |
+| Append (medium, no sync)     | 6.9 µs    | ~11.7 µs         | ~1.7x       |
+| Append (large, no sync)      | 7.7 µs    | ~11.9 µs         | ~1.5x       |
+| Commit with sync             | 33 µs     | ~41 µs           | ~1.2x       |
 
 The channel approach wins because there's no lock contention on the hot path - appends go through an mpsc channel, and batching happens naturally in the background task.
 
