@@ -555,19 +555,62 @@ This design ensures:
   - `async fn allocate(&self) -> Result<NodeId>` - get free page
   - `async fn deallocate(&self, id: NodeId) -> Result<()>` - mark page as free
   - `async fn flush(&self) -> Result<()>` - flush dirty pages to disk
+#### 4.3.1 Superblock and Multi-Page Bitmap
+- [x] Define `Superblock` struct in `engine.rs`:
+  ```rust
+  struct Superblock {
+      version: u32,
+      flags: u64,
+      total_pages: u64,
+      bitmap_page_count: u64,
+      bitmap_page_ids: Vec<PageId>,  // max 500
+  }
+  ```
+- [x] Implement `Superblock::serialize() -> [u8; PAGE_SIZE]` with CRC32 checksum
+- [x] Implement `Superblock::deserialize(&[u8]) -> Result<Self>` with checksum validation
+- [x] Update `PageAllocator` to track multiple reserved pages (not just page 0)
+- [x] Add `PageAllocator::extend_capacity(bits: usize)` for bitmap growth
+- [x] Add `PageAllocator::reserved_pages() -> Vec<PageId>` accessor
+- [x] Update `FileStorageEngine::create()`:
+  - Create superblock with initial bitmap page at page 1
+  - Mark pages 0 and 1 as reserved/allocated
+- [x] Update `FileStorageEngine::open()`:
+  - Read and validate superblock (supports both v1 and v2 formats)
+  - Load all bitmap pages, concatenate into `PageAllocator`
+- [x] Update `FileStorageEngine::allocate()`:
+  - `ensure_bitmap_capacity()` checks if growth needed before allocation
+  - `grow_bitmap()` allocates new bitmap page if capacity exhausted
+- [x] Update `FileStorageEngine::flush()`:
+  - `flush_metadata()` writes all bitmap pages
+  - Updates and writes superblock with checksum
+- [x] Add tests for:
+  - Superblock serialization round-trip (`superblock_serialize_deserialize_roundtrip`)
+  - Adding bitmap pages (`superblock_add_bitmap_page`)
+  - Invalid magic fails (`superblock_invalid_magic_fails`)
+  - Checksum validation failure (`superblock_checksum_mismatch_fails`)
+  - v2 superblock created on `create()` (`create_uses_v2_superblock`)
+  - Superblock preserved across open/close (`create_then_open_preserves_superblock`)
+  - Reserved pages for superblock and bitmap (`allocate_reserves_superblock_and_bitmap`)
+
+### 4.3.2 AsyncStorageEngine Implementation (Part 2)
 - [ ] Add WAL-aware methods:
   - `async fn begin_transaction() -> TransactionId`
   - `async fn log_operation(txn_id, operation)` - append to WAL
-  - `async fn commit_transaction(txn_id)` - write commit record, fsync WAL
+  - `async fn commit_transaction(txn_id)` - write commit record, call `wal.sync()` based on `SyncMode`
   - `async fn abort_transaction(txn_id)` - write abort record
+- [ ] Integrate WAL sync based on `SyncMode`:
+  - `SyncMode::Immediate` - `sync()` called after every `append()`
+  - `SyncMode::OnCommit` (default) - `sync()` called in `commit_transaction()` after commit record
+  - `SyncMode::Periodic(Duration)` - spawn background task that calls `sync()` at interval
 
 ### 4.4 Global Management
 - [ ] Define `GlobalRegistry` struct:
   - Map from global name strings to root `PageId` (only persists `Name::Global`)
-  - Store in header page (page 0)
+  - Stored in superblock reserved area (bytes 4032-4087) or separate registry page
+- [ ] Implement `GlobalRegistry::serialize/deserialize`
 - [ ] Implement `GlobalRegistry::register(name: String, root: PageId)`
 - [ ] Implement `GlobalRegistry::get_root(name: &str) -> Option<PageId>`
-- [ ] Serialize/deserialize global registry to/from page 0
+- [ ] Integrate with `Superblock` - add `registry_root: Option<PageId>` field if registry outgrows superblock
 - [ ] Add tests for multi-global persistence
 - [ ] Add tests verifying Local variables are NOT persisted
 
@@ -1160,8 +1203,23 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 4.1 WAL (Checkpointing Complete) - continuing with Phase 4.2+
-**Completed Checkboxes**: ~80 / ~160
+**Current Phase**: Phase 4.4 Global Management
+**Completed Checkboxes**: ~95 / ~170
+
+**Recent Changes** (2025-12-02 - Phase 4.3.1 Superblock COMPLETE):
+- ✅ Implemented Superblock and Multi-Page Bitmap system
+  - `Superblock` struct with serialize/deserialize and CRC32 checksum
+  - Supports up to 500 bitmap pages (~62 TB at 4KB page size)
+  - `PageAllocator` updated for multiple reserved pages
+  - `extend_capacity()`, `add_reserved()`, `reserved_pages()`, `is_reserved()` methods
+  - `FileStorageEngine::create()` writes v2 superblock + first bitmap page
+  - `FileStorageEngine::open()` supports both v1 (inline) and v2 (superblock) formats
+  - `ensure_bitmap_capacity()` and `grow_bitmap()` for automatic bitmap growth
+  - `flush_metadata()` writes bitmap pages and updates superblock
+  - 7 new superblock tests, all 372 tests passing, clippy clean
+- ✅ Replaced manual `Bitmap` implementation with `bitvec` crate wrapper
+  - Added `bitvec = "1.0"` dependency
+  - `Bitmap` is now a transparent newtype: `struct Bitmap(BitVec<u64, Lsb0>)`
 
 **Recent Changes** (2025-11-30 - Phase 4.1 WAL Checkpointing):
 - ✅ Implemented WAL checkpointing
@@ -1269,4 +1327,4 @@ These are not part of the current plan but should be kept in mind:
 
 ---
 
-Last Updated: 2025-12-01
+Last Updated: 2025-12-02

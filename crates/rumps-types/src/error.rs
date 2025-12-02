@@ -25,6 +25,10 @@ pub enum Error {
     #[error("cannot free page 0 (reserved header page)")]
     CannotFreeHeaderPage,
 
+    /// Cannot free a reserved page (superblock or bitmap page).
+    #[error("cannot free reserved page {0}")]
+    CannotFreeReservedPage(u64),
+
     /// Invalid bitmap data (e.g., empty bitmap during recovery).
     #[error("invalid bitmap: must have at least one word")]
     InvalidBitmap,

@@ -116,6 +116,9 @@ impl From<rumps_types::Error> for StorageError {
             rumps_types::Error::PageNumberOverflow(n) => {
                 Self::InvalidOperation(format!("page number {n} overflows"))
             }
+            rumps_types::Error::CannotFreeReservedPage(n) => {
+                Self::InvalidOperation(format!("cannot free reserved page {n}"))
+            }
         }
     }
 }

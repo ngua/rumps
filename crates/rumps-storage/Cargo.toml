@@ -43,6 +43,7 @@ dead_code = "allow"
 
 [lints.clippy]
 obfuscated_if_else = "allow"
+option_map_unit_fn = "allow"
 type_complexity = "allow"
 use_self = "warn"
 unwrap_used = "deny"

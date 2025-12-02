@@ -339,7 +339,7 @@ struct PageAllocatorState {
 ///
 /// Uses a compact bitmap representation where each bit indicates whether
 /// a page is allocated (`1`) or free (`0`). Page 0 is always reserved
-/// for the file header.
+/// for the superblock, and additional pages (bitmap pages) may be reserved.
 ///
 /// # Thread Safety
 ///
@@ -360,6 +360,9 @@ pub(crate) struct PageAllocator {
 
     /// Maximum number of pages that can be allocated. `None` means unlimited.
     max_pages: Option<u64>,
+
+    /// Reserved pages that cannot be freed (superblock + bitmap pages).
+    reserved: RwLock<HashSet<u64>>,
 }
 
 impl PageAllocator {
@@ -378,23 +381,40 @@ impl PageAllocator {
 
     /// Create a new allocator with a maximum page limit.
     ///
-    /// Page 0 is automatically marked as allocated (reserved for header).
+    /// Page 0 is automatically marked as allocated (reserved for superblock).
     /// If `initial_pages` is 0, defaults to 64 pages.
     pub(crate) fn with_limit(
         initial_pages: u64,
         max_pages: Option<u64>,
     ) -> Self {
+        Self::with_reserved(initial_pages, max_pages, &[0])
+    }
+
+    /// Create a new allocator with initial reserved pages.
+    ///
+    /// All pages in `reserved` are marked as allocated and cannot be freed.
+    /// Page 0 should always be included (superblock).
+    pub(crate) fn with_reserved(
+        initial_pages: u64,
+        max_pages: Option<u64>,
+        reserved: &[u64],
+    ) -> Self {
         let mut bitmap = Bitmap::new(initial_pages as usize);
-        // Reserve page 0 for header (Bitmap::new guarantees capacity >= 64).
-        bitmap.set(0);
+        let reserved_set: HashSet<u64> = reserved.iter().copied().collect();
+
+        // Mark all reserved pages as allocated
+        reserved.iter().for_each(|&page_num| {
+            bitmap.set_with_extend(page_num as usize);
+        });
 
         Self {
             state: RwLock::new(PageAllocatorState {
                 bitmap,
-                allocated: 1, // page 0 is allocated
+                allocated: reserved_set.len() as u64,
                 search_hint: 0,
             }),
             max_pages,
+            reserved: RwLock::new(reserved_set),
         }
     }
 
@@ -403,9 +423,13 @@ impl PageAllocator {
     /// Used during crash recovery to restore the allocation state.
     /// Returns an error if the bitmap is empty (must have at least one word
     /// for the reserved header page).
+    ///
+    /// The `reserved` slice should contain page numbers that cannot be freed
+    /// (superblock at 0 + any bitmap pages).
     pub(crate) fn from_bytes(
         bytes: &[u8],
         max_pages: Option<u64>,
+        reserved: &[u64],
     ) -> Result<Self> {
         Bitmap::from_bytes(bytes).map_or(Err(Error::InvalidBitmap), |bitmap| {
             let allocated = bitmap.count_ones();
@@ -416,6 +440,7 @@ impl PageAllocator {
                     search_hint: 0,
                 }),
                 max_pages,
+                reserved: RwLock::new(reserved.iter().copied().collect()),
             })
         })
     }
@@ -467,16 +492,23 @@ impl PageAllocator {
     /// Free a previously allocated page.
     ///
     /// Returns an error if:
-    /// - The page is page 0 (reserved header page)
+    /// - The page is reserved (superblock or bitmap page)
     /// - The page is beyond the bitmap bounds
     /// - The page is not currently allocated
     pub(crate) async fn free(&self, id: PageId) -> Result<()> {
         let page_num = id.page_num();
 
-        // Prevent freeing the reserved header page
-        if page_num == 0 {
-            Err(Error::CannotFreeHeaderPage)
+        // Prevent freeing reserved pages (superblock + bitmap pages)
+        let reserved = self.reserved.read().await;
+        if reserved.contains(&page_num) {
+            // Use specific error for page 0, generic for others
+            if page_num == 0 {
+                Err(Error::CannotFreeHeaderPage)
+            } else {
+                Err(Error::CannotFreeReservedPage(page_num))
+            }
         } else {
+            drop(reserved);
             let idx = page_num as usize;
             let mut state = self.state.write().await;
 
@@ -554,6 +586,36 @@ impl PageAllocator {
     pub(crate) async fn free_count(&self) -> u64 {
         let state = self.state.read().await;
         (state.bitmap.capacity() as u64).saturating_sub(state.allocated)
+    }
+
+    /// Add a page to the reserved set.
+    ///
+    /// Reserved pages cannot be freed. This is used when allocating new
+    /// bitmap pages that must remain protected.
+    pub(crate) async fn add_reserved(&self, page_num: u64) {
+        self.reserved.write().await.insert(page_num);
+    }
+
+    /// Get the set of reserved page numbers.
+    pub(crate) async fn reserved_pages(&self) -> Vec<u64> {
+        let reserved = self.reserved.read().await;
+        let mut pages: Vec<_> = reserved.iter().copied().collect();
+        pages.sort_unstable();
+        pages
+    }
+
+    /// Check if a page is reserved (cannot be freed).
+    pub(crate) async fn is_reserved(&self, page_num: u64) -> bool {
+        self.reserved.read().await.contains(&page_num)
+    }
+
+    /// Extend the bitmap capacity to hold at least `min_pages` pages.
+    ///
+    /// If current capacity already exceeds `min_pages`, this is a no-op.
+    /// Capacity is rounded up to the nearest 64-page boundary.
+    pub(crate) async fn extend_capacity(&self, min_pages: u64) {
+        let mut state = self.state.write().await;
+        state.bitmap.ensure_capacity(min_pages as usize);
     }
 }
 
@@ -1625,7 +1687,7 @@ mod tests {
         alloc.free(p2).await.unwrap();
 
         let bytes = alloc.to_bytes().await;
-        let restored = PageAllocator::from_bytes(&bytes, None).unwrap();
+        let restored = PageAllocator::from_bytes(&bytes, None, &[0]).unwrap();
 
         assert_eq!(
             restored.allocated_count().await,
@@ -1788,7 +1850,7 @@ mod tests {
     #[tokio::test]
     async fn allocator_from_bytes_empty_bitmap() {
         let empty: &[u8] = &[];
-        let err = PageAllocator::from_bytes(empty, None).unwrap_err();
+        let err = PageAllocator::from_bytes(empty, None, &[0]).unwrap_err();
         assert!(matches!(err, Error::InvalidBitmap));
     }
 
@@ -1842,7 +1904,7 @@ mod tests {
         let mut bytes = vec![0u8; 15];
         bytes[0] = 1; // Mark page 0 as allocated
 
-        let alloc = PageAllocator::from_bytes(&bytes, None).unwrap();
+        let alloc = PageAllocator::from_bytes(&bytes, None, &[0]).unwrap();
 
         // Should only have 64 pages (1 word), partial bytes ignored
         assert_eq!(alloc.capacity().await, 64);
@@ -1855,7 +1917,7 @@ mod tests {
         let mut bytes = vec![0u8; 16];
         bytes[0] = 0b11; // Pages 0 and 1 allocated
 
-        let alloc = PageAllocator::from_bytes(&bytes, None).unwrap();
+        let alloc = PageAllocator::from_bytes(&bytes, None, &[0]).unwrap();
 
         assert_eq!(alloc.capacity().await, 128);
         assert_eq!(alloc.allocated_count().await, 2);
@@ -1876,6 +1938,99 @@ mod tests {
 
         // Count should not change
         assert_eq!(alloc.allocated_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn allocator_with_reserved_pages() {
+        // Create allocator with pages 0, 5, 10 reserved
+        let alloc = PageAllocator::with_reserved(64, None, &[0, 5, 10]);
+
+        // All reserved pages should be allocated
+        assert!(alloc.is_allocated(PageId::from_page_num(0).unwrap()).await);
+        assert!(alloc.is_allocated(PageId::from_page_num(5).unwrap()).await);
+        assert!(alloc.is_allocated(PageId::from_page_num(10).unwrap()).await);
+        assert_eq!(alloc.allocated_count().await, 3);
+
+        // First allocation should skip reserved pages
+        let p1 = alloc.allocate().await.unwrap();
+        assert_eq!(p1.page_num(), 1);
+
+        let p2 = alloc.allocate().await.unwrap();
+        assert_eq!(p2.page_num(), 2);
+    }
+
+    #[tokio::test]
+    async fn allocator_cannot_free_reserved_page() {
+        let alloc = PageAllocator::with_reserved(64, None, &[0, 5, 10]);
+
+        // Cannot free any reserved page
+        let err = alloc
+            .free(PageId::from_page_num(5).unwrap())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::CannotFreeReservedPage(5)));
+
+        let err = alloc
+            .free(PageId::from_page_num(10).unwrap())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::CannotFreeReservedPage(10)));
+
+        // Page 0 returns specific error
+        let err = alloc
+            .free(PageId::from_page_num(0).unwrap())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::CannotFreeHeaderPage));
+    }
+
+    #[tokio::test]
+    async fn allocator_add_reserved() {
+        let alloc = PageAllocator::new(64);
+
+        // Allocate a page
+        let p = alloc.allocate().await.unwrap();
+        assert!(alloc.is_allocated(p).await);
+
+        // Add it to reserved set
+        alloc.add_reserved(p.page_num()).await;
+
+        // Now it cannot be freed
+        let err = alloc.free(p).await.unwrap_err();
+        assert!(matches!(err, Error::CannotFreeReservedPage(_)));
+    }
+
+    #[tokio::test]
+    async fn allocator_reserved_pages() {
+        let alloc = PageAllocator::with_reserved(64, None, &[0, 10, 5]);
+
+        let reserved = alloc.reserved_pages().await;
+        assert_eq!(reserved, vec![0, 5, 10]); // sorted
+    }
+
+    #[tokio::test]
+    async fn allocator_is_reserved() {
+        let alloc = PageAllocator::with_reserved(64, None, &[0, 5]);
+
+        assert!(alloc.is_reserved(0).await);
+        assert!(alloc.is_reserved(5).await);
+        assert!(!alloc.is_reserved(1).await);
+        assert!(!alloc.is_reserved(10).await);
+    }
+
+    #[tokio::test]
+    async fn allocator_extend_capacity() {
+        let alloc = PageAllocator::new(64);
+
+        assert_eq!(alloc.capacity().await, 64);
+
+        // Extend to 200 pages (rounds up to 256)
+        alloc.extend_capacity(200).await;
+        assert!(alloc.capacity().await >= 200);
+
+        // Extending to smaller does nothing
+        alloc.extend_capacity(50).await;
+        assert!(alloc.capacity().await >= 200);
     }
 
     #[tokio::test]
