@@ -3,6 +3,12 @@
 //! This crate implements the B-tree-backed persistent storage system
 //! for MUMPS-style globals with disk persistence.
 //!
+//! # Platform Requirements
+//!
+//! RUMPS requires a 64-bit platform. The storage layer uses `u64` page
+//! identifiers throughout, and 32-bit platforms would require pervasive
+//! bounds checking and truncation handling.
+//!
 //! # Async-First Design
 //!
 //! All APIs are async from the start to support future disk I/O without
@@ -15,6 +21,9 @@
 //! Operations use interior mutability via `RwLock` for concurrent access.
 
 #![warn(missing_docs)]
+
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!("RUMPS requires a 64-bit platform (usize must be 64 bits)");
 
 pub(crate) mod btree;
 pub(crate) mod error;
