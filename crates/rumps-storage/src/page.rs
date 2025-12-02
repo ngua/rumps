@@ -664,6 +664,7 @@ impl PageCache {
     /// If `dirty` is `true`, the page is marked as needing flush.
     /// If `dirty` is `false`, any previous dirty status is cleared.
     /// Returns the evicted page (with dirty status) if the cache was at capacity.
+    #[must_use = "dirty evicted pages must be flushed to disk"]
     pub(crate) async fn put(
         &self,
         id: PageId,

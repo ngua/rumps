@@ -325,9 +325,10 @@ impl FileStorageEngine {
                 let (recovery, reader) =
                     WalReader::open(&wal_dir).await?.recover().await?;
 
-                // TODO: Apply recovery.committed_ops to page cache/data file
-                // Uncommitted transactions are automatically discarded
-                let _ = recovery.uncommitted_txns; // explicitly drop
+                // TODO(Phase 4.4): Apply recovery.committed_ops to page cache/data file
+                // This should be implemented when adding `AsyncStorageEngine` trait impl.
+                // Uncommitted transactions are automatically discarded.
+                let _ = recovery.uncommitted_txns;
 
                 // Convert reader to writer
                 let wal = reader.into_writer(cfg.wal_config.clone()).await?;
