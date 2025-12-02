@@ -171,11 +171,13 @@ enum ClearBitResult {
 /// Compact bitmap for tracking allocated/free status of pages.
 ///
 /// Each bit represents one page: `1` = allocated, `0` = free.
-/// Internally stored as `Vec<u64>` where each word tracks 64 pages.
+/// Internally stored as `BitVec<u64, Lsb0>` where each word tracks 64 pages.
+///
+/// Wraps [`bitvec::vec::BitVec`] with a compatible serialization format
+/// (little-endian `u64` words) and additional methods for page allocation.
 #[derive(Debug, Clone)]
-struct Bitmap {
-    words: Vec<u64>,
-}
+#[repr(transparent)]
+struct Bitmap(bitvec::vec::BitVec<u64, bitvec::order::Lsb0>);
 
 impl Bitmap {
     /// Bits per word.
@@ -186,52 +188,51 @@ impl Bitmap {
     /// Rounds up to the nearest word boundary. Minimum capacity is 64 bits.
     fn new(bits: usize) -> Self {
         let bits = bits.max(Self::BITS_PER_WORD);
-        let words = bits.div_ceil(Self::BITS_PER_WORD);
-        Self {
-            words: vec![0u64; words],
-        }
+        let rounded = bits.div_ceil(Self::BITS_PER_WORD) * Self::BITS_PER_WORD;
+        Self(bitvec::bitvec![u64, bitvec::order::Lsb0; 0; rounded])
     }
 
     /// Restore a bitmap from serialized bytes.
     ///
-    /// Returns `None` if bytes is empty or not a multiple of 8.
+    /// Returns `None` if bytes is empty. Partial words (trailing bytes
+    /// not aligned to 8) are ignored.
     fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        (!bytes.is_empty()).then(|| Self {
-            words: bytes
+        (!bytes.is_empty()).then(|| {
+            let words: Vec<u64> = bytes
                 .chunks_exact(8)
                 .map(|chunk| {
-                    // SAFETY: `chunks_exact(8)` guarantees exactly 8 bytes per chunk.
+                    // SAFETY: `chunks_exact(8)` guarantees exactly 8 bytes.
                     #[allow(clippy::unwrap_used)]
                     u64::from_le_bytes(chunk.try_into().unwrap())
                 })
-                .collect(),
+                .collect();
+            Self(bitvec::vec::BitVec::from_vec(words))
         })
     }
 
-    /// Serialize the bitmap to bytes.
+    /// Serialize the bitmap to bytes (little-endian `u64` words).
     fn to_bytes(&self) -> Vec<u8> {
-        self.words.iter().flat_map(|w| w.to_le_bytes()).collect()
+        self.0
+            .as_raw_slice()
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect()
     }
 
     /// Check if the bit at `idx` is set.
     ///
     /// Returns `None` if `idx` is out of bounds.
     fn get(&self, idx: usize) -> Option<bool> {
-        let (word_idx, bit_idx) =
-            (idx / Self::BITS_PER_WORD, idx % Self::BITS_PER_WORD);
-        self.words.get(word_idx).map(|&w| (w & (1 << bit_idx)) != 0)
+        self.0.get(idx).map(|b| *b)
     }
 
     /// Set the bit at `idx`.
     ///
     /// Returns whether the bit was already set, or `None` if out of bounds.
     fn set(&mut self, idx: usize) -> Option<SetBitResult> {
-        let (word_idx, bit_idx) =
-            (idx / Self::BITS_PER_WORD, idx % Self::BITS_PER_WORD);
-        self.words.get_mut(word_idx).map(|word| {
-            let mask = 1 << bit_idx;
-            let was_set = (*word & mask) != 0;
-            *word |= mask;
+        self.0.get_mut(idx).map(|mut bit| {
+            let was_set = *bit;
+            *bit = true;
             if was_set {
                 SetBitResult::WasSet
             } else {
@@ -254,21 +255,17 @@ impl Bitmap {
     ///
     /// Returns whether the bit was set, or `OutOfBounds` if `idx` is invalid.
     fn clear(&mut self, idx: usize) -> ClearBitResult {
-        let (word_idx, bit_idx) =
-            (idx / Self::BITS_PER_WORD, idx % Self::BITS_PER_WORD);
-        self.words.get_mut(word_idx).map_or(
-            ClearBitResult::OutOfBounds,
-            |word| {
-                let mask = 1 << bit_idx;
-                let was_set = (*word & mask) != 0;
-                *word &= !mask;
+        self.0
+            .get_mut(idx)
+            .map_or(ClearBitResult::OutOfBounds, |mut bit| {
+                let was_set = *bit;
+                *bit = false;
                 if was_set {
                     ClearBitResult::WasSet
                 } else {
                     ClearBitResult::WasUnset
                 }
-            },
-        )
+            })
     }
 
     /// Find the first free (unset) bit starting from `hint`, wrapping around.
@@ -276,17 +273,15 @@ impl Bitmap {
     /// Returns `Some((idx, word_idx))` with the bit index and word index,
     /// or `None` if all bits are set.
     fn find_free_from(&self, hint: usize) -> Option<(usize, usize)> {
-        let len = self.words.len();
+        let words = self.0.as_raw_slice();
+        let len = words.len();
         let hint = hint.min(len.saturating_sub(1));
 
         (hint..len).chain(0..hint).find_map(|word_idx| {
-            self.words
-                .get(word_idx)
-                .filter(|&&w| w != u64::MAX)
-                .map(|&w| {
-                    let bit_idx = w.trailing_ones() as usize;
-                    (word_idx * Self::BITS_PER_WORD + bit_idx, word_idx)
-                })
+            words.get(word_idx).filter(|&&w| w != u64::MAX).map(|&w| {
+                let bit_idx = w.trailing_ones() as usize;
+                (word_idx * Self::BITS_PER_WORD + bit_idx, word_idx)
+            })
         })
     }
 
@@ -295,8 +290,9 @@ impl Bitmap {
     /// Returns the word index for `idx`.
     fn ensure_capacity(&mut self, idx: usize) -> usize {
         let word_idx = idx / Self::BITS_PER_WORD;
-        if word_idx >= self.words.len() {
-            self.words.resize(word_idx + 1, 0);
+        let needed = (word_idx + 1) * Self::BITS_PER_WORD;
+        if needed > self.0.len() {
+            self.0.resize(needed, false);
         }
         word_idx
     }
@@ -305,24 +301,25 @@ impl Bitmap {
     ///
     /// Returns the bit index of the newly set bit.
     fn extend_and_set_first(&mut self) -> usize {
-        let word_idx = self.words.len();
-        self.words.push(1);
-        word_idx * Self::BITS_PER_WORD
+        let bit_idx = self.0.len();
+        self.0.resize(bit_idx + Self::BITS_PER_WORD, false);
+        self.0.set(bit_idx, true);
+        bit_idx
     }
 
     /// Total number of bits the bitmap can track.
     fn capacity(&self) -> usize {
-        self.words.len() * Self::BITS_PER_WORD
+        self.0.len()
     }
 
     /// Count the number of set bits.
     fn count_ones(&self) -> u64 {
-        self.words.iter().map(|w| w.count_ones() as u64).sum()
+        self.0.count_ones() as u64
     }
 
     /// Number of words in the bitmap.
     fn word_count(&self) -> usize {
-        self.words.len()
+        self.0.as_raw_slice().len()
     }
 }
 
