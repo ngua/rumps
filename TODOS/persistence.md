@@ -524,36 +524,36 @@ This design ensures:
   - Reclaim pages on node deletion
 
 ### 4.3 AsyncStorageEngine Implementation
-- [ ] Create `crates/rumps-storage/src/engine.rs` module
-- [ ] Define `AsyncStorageEngine` trait:
+- [x] Create `crates/rumps-storage/src/engine.rs` module
+- [x] Define `AsyncStorageEngine` trait:
   ```rust
   #[async_trait]
   pub trait AsyncStorageEngine: Send + Sync {
-      async fn read_node(&self, id: NodeId) -> Result<Node>;
-      async fn write_node(&self, id: NodeId, node: &Node) -> Result<()>;
-      async fn allocate_page(&self) -> Result<NodeId>;
-      async fn deallocate_page(&self, id: NodeId) -> Result<()>;
+      async fn read(&self, id: NodeId) -> Result<Node>;
+      async fn write(&self, id: NodeId, node: &Node) -> Result<()>;
+      async fn allocate(&self) -> Result<NodeId>;
+      async fn deallocate(&self, id: NodeId) -> Result<()>;
       async fn flush(&self) -> Result<()>;
       async fn metadata(&self) -> StorageMetadata;
   }
   ```
-- [ ] Implement `FileStorageEngine` struct:
+- [x] Implement `FileStorageEngine` struct:
   - `data_file: Arc<RwLock<tokio::fs::File>>` - async file handle
   - `wal: Arc<WalWriter>` - write-ahead log
   - `cache: Arc<PageCache>` - LRU page cache
   - `page_allocator: Arc<PageAllocator>` - free page management
   - `config: StorageConfig` - configuration (page size, cache size, sync mode)
-- [ ] Implement `FileStorageEngine::open(path: &Path, config: StorageConfig) -> Result<Self>`:
+- [x] Implement `FileStorageEngine::open(path: &Path, config: StorageConfig) -> Result<Self>`:
   - Open data file with async I/O
   - Initialize page cache and allocator
   - Open WAL file
   - Run WAL recovery if needed
-- [ ] Implement `FileStorageEngine::create(path: &Path, config: StorageConfig) -> Result<Self>`
-- [ ] Implement async storage methods:
-  - `async fn read_node(&self, id: NodeId) -> Result<Node>` - read from disk
-  - `async fn write_node(&self, id: NodeId, node: &Node) -> Result<()>` - write to WAL + cache
-  - `async fn allocate_page(&self) -> Result<NodeId>` - get free page
-  - `async fn deallocate_page(&self, id: NodeId) -> Result<()>` - mark page as free
+- [x] Implement `FileStorageEngine::create(path: &Path, config: StorageConfig) -> Result<Self>`
+- [x] Implement async storage methods:
+  - `async fn read(&self, id: NodeId) -> Result<Node>` - read from disk
+  - `async fn write(&self, id: NodeId, node: &Node) -> Result<()>` - write to WAL + cache
+  - `async fn allocate(&self) -> Result<NodeId>` - get free page
+  - `async fn deallocate(&self, id: NodeId) -> Result<()>` - mark page as free
   - `async fn flush(&self) -> Result<()>` - flush dirty pages to disk
 - [ ] Add WAL-aware methods:
   - `async fn begin_transaction() -> TransactionId`
@@ -565,7 +565,7 @@ This design ensures:
 - [ ] Define `GlobalRegistry` struct:
   - Map from global name strings to root `PageId` (only persists `Name::Global`)
   - Store in header page (page 0)
-- [ ] Implement `GlobalRegistry::register_global(name: String, root: PageId)`
+- [ ] Implement `GlobalRegistry::register(name: String, root: PageId)`
 - [ ] Implement `GlobalRegistry::get_root(name: &str) -> Option<PageId>`
 - [ ] Serialize/deserialize global registry to/from page 0
 - [ ] Add tests for multi-global persistence

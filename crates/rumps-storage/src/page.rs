@@ -108,6 +108,23 @@ impl PageId {
     pub(crate) fn is_header(self) -> bool {
         self.0 == 0
     }
+
+    /// Get the byte offset for I/O operations.
+    pub(crate) fn byte_offset(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<crate::node::NodeId> for PageId {
+    fn from(id: crate::node::NodeId) -> Self {
+        Self(u64::from(id) * PAGE_SIZE as u64)
+    }
+}
+
+impl From<PageId> for crate::node::NodeId {
+    fn from(id: PageId) -> Self {
+        Self::from(id.page_num())
+    }
 }
 
 impl Deref for PageId {
@@ -847,7 +864,7 @@ impl std::fmt::Debug for PageCache {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, unused_must_use)]
 mod tests {
     use rumps_types::{Error, Key};
 
