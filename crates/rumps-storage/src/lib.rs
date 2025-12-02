@@ -26,6 +26,7 @@
 compile_error!("RUMPS requires a 64-bit platform (usize must be 64 bits)");
 
 pub(crate) mod btree;
+pub(crate) mod engine;
 pub(crate) mod error;
 pub(crate) mod node;
 pub(crate) mod page;
