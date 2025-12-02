@@ -28,6 +28,10 @@ pub enum Error {
     /// Invalid bitmap data (e.g., empty bitmap during recovery).
     #[error("invalid bitmap: must have at least one word")]
     InvalidBitmap,
+
+    /// Page number too large (would overflow byte offset calculation).
+    #[error("page number {0} overflows byte offset calculation")]
+    PageNumberOverflow(u64),
 }
 
 /// Result type alias for RUMPS operations.

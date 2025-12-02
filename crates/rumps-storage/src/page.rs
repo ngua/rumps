@@ -82,27 +82,30 @@ pub(crate) struct PageId(u64);
 
 impl PageId {
     /// Reserved page ID for the file header/metadata.
-    pub const HEADER: Self = Self(0);
+    pub(crate) const HEADER: Self = Self(0);
 
     /// Create a `PageId` from a page number (not byte offset).
     ///
     /// Page `n` starts at byte offset `n * PAGE_SIZE`.
-    pub fn from_page_num(n: u64) -> Self {
-        Self(n * PAGE_SIZE as u64)
+    /// Returns an error if `n * PAGE_SIZE` would overflow.
+    pub(crate) fn from_page_num(n: u64) -> Result<Self> {
+        n.checked_mul(PAGE_SIZE as u64)
+            .map(Self)
+            .ok_or(Error::PageNumberOverflow(n))
     }
 
     /// Get the page number (0-indexed).
-    pub fn page_num(self) -> u64 {
+    pub(crate) fn page_num(self) -> u64 {
         self.0 / PAGE_SIZE as u64
     }
 
     /// Get the byte offset in the data file.
-    pub fn offset(self) -> u64 {
+    pub(crate) fn offset(self) -> u64 {
         self.0
     }
 
     /// Check if this is the header page.
-    pub fn is_header(self) -> bool {
+    pub(crate) fn is_header(self) -> bool {
         self.0 == 0
     }
 }
@@ -129,20 +132,200 @@ impl From<PageId> for u64 {
 }
 
 // ----------------------------------------------------------------------------
+// Bitmap
+// ----------------------------------------------------------------------------
+
+/// Result of setting a bit in the bitmap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetBitResult {
+    /// Bit was `0`, now `1`.
+    WasUnset,
+    /// Bit was already `1`.
+    WasSet,
+}
+
+/// Result of clearing a bit in the bitmap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClearBitResult {
+    /// Bit was `1`, now `0`.
+    WasSet,
+    /// Bit was already `0`.
+    WasUnset,
+    /// Index out of bounds.
+    OutOfBounds,
+}
+
+/// Compact bitmap for tracking allocated/free status of pages.
+///
+/// Each bit represents one page: `1` = allocated, `0` = free.
+/// Internally stored as `Vec<u64>` where each word tracks 64 pages.
+#[derive(Debug, Clone)]
+struct Bitmap {
+    words: Vec<u64>,
+}
+
+impl Bitmap {
+    /// Bits per word.
+    const BITS_PER_WORD: usize = 64;
+
+    /// Create a new bitmap with capacity for at least `bits` bits.
+    ///
+    /// Rounds up to the nearest word boundary. Minimum capacity is 64 bits.
+    fn new(bits: usize) -> Self {
+        let bits = bits.max(Self::BITS_PER_WORD);
+        let words = bits.div_ceil(Self::BITS_PER_WORD);
+        Self {
+            words: vec![0u64; words],
+        }
+    }
+
+    /// Restore a bitmap from serialized bytes.
+    ///
+    /// Returns `None` if bytes is empty or not a multiple of 8.
+    fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        (!bytes.is_empty()).then(|| Self {
+            words: bytes
+                .chunks_exact(8)
+                .map(|chunk| {
+                    // SAFETY: `chunks_exact(8)` guarantees exactly 8 bytes per chunk.
+                    #[allow(clippy::unwrap_used)]
+                    u64::from_le_bytes(chunk.try_into().unwrap())
+                })
+                .collect(),
+        })
+    }
+
+    /// Serialize the bitmap to bytes.
+    fn to_bytes(&self) -> Vec<u8> {
+        self.words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    /// Check if the bit at `idx` is set.
+    ///
+    /// Returns `None` if `idx` is out of bounds.
+    fn get(&self, idx: usize) -> Option<bool> {
+        let (word_idx, bit_idx) =
+            (idx / Self::BITS_PER_WORD, idx % Self::BITS_PER_WORD);
+        self.words.get(word_idx).map(|&w| (w & (1 << bit_idx)) != 0)
+    }
+
+    /// Set the bit at `idx`.
+    ///
+    /// Returns whether the bit was already set, or `None` if out of bounds.
+    fn set(&mut self, idx: usize) -> Option<SetBitResult> {
+        let (word_idx, bit_idx) =
+            (idx / Self::BITS_PER_WORD, idx % Self::BITS_PER_WORD);
+        self.words.get_mut(word_idx).map(|word| {
+            let mask = 1 << bit_idx;
+            let was_set = (*word & mask) != 0;
+            *word |= mask;
+            if was_set {
+                SetBitResult::WasSet
+            } else {
+                SetBitResult::WasUnset
+            }
+        })
+    }
+
+    /// Set the bit at `idx`, after ensuring capacity.
+    ///
+    /// Extends the bitmap if necessary.
+    fn set_with_extend(&mut self, idx: usize) -> SetBitResult {
+        self.ensure_capacity(idx);
+        // SAFETY: ensure_capacity guarantees idx is in bounds
+        #[allow(clippy::unwrap_used)]
+        self.set(idx).unwrap()
+    }
+
+    /// Clear the bit at `idx`.
+    ///
+    /// Returns whether the bit was set, or `OutOfBounds` if `idx` is invalid.
+    fn clear(&mut self, idx: usize) -> ClearBitResult {
+        let (word_idx, bit_idx) =
+            (idx / Self::BITS_PER_WORD, idx % Self::BITS_PER_WORD);
+        self.words.get_mut(word_idx).map_or(
+            ClearBitResult::OutOfBounds,
+            |word| {
+                let mask = 1 << bit_idx;
+                let was_set = (*word & mask) != 0;
+                *word &= !mask;
+                if was_set {
+                    ClearBitResult::WasSet
+                } else {
+                    ClearBitResult::WasUnset
+                }
+            },
+        )
+    }
+
+    /// Find the first free (unset) bit starting from `hint`, wrapping around.
+    ///
+    /// Returns `Some((idx, word_idx))` with the bit index and word index,
+    /// or `None` if all bits are set.
+    fn find_free_from(&self, hint: usize) -> Option<(usize, usize)> {
+        let len = self.words.len();
+        let hint = hint.min(len.saturating_sub(1));
+
+        (hint..len).chain(0..hint).find_map(|word_idx| {
+            self.words
+                .get(word_idx)
+                .filter(|&&w| w != u64::MAX)
+                .map(|&w| {
+                    let bit_idx = w.trailing_ones() as usize;
+                    (word_idx * Self::BITS_PER_WORD + bit_idx, word_idx)
+                })
+        })
+    }
+
+    /// Ensure the bitmap can hold bit `idx`, extending if necessary.
+    ///
+    /// Returns the word index for `idx`.
+    fn ensure_capacity(&mut self, idx: usize) -> usize {
+        let word_idx = idx / Self::BITS_PER_WORD;
+        if word_idx >= self.words.len() {
+            self.words.resize(word_idx + 1, 0);
+        }
+        word_idx
+    }
+
+    /// Extend the bitmap by one word and set bit 0 of that word.
+    ///
+    /// Returns the bit index of the newly set bit.
+    fn extend_and_set_first(&mut self) -> usize {
+        let word_idx = self.words.len();
+        self.words.push(1);
+        word_idx * Self::BITS_PER_WORD
+    }
+
+    /// Total number of bits the bitmap can track.
+    fn capacity(&self) -> usize {
+        self.words.len() * Self::BITS_PER_WORD
+    }
+
+    /// Count the number of set bits.
+    fn count_ones(&self) -> u64 {
+        self.words.iter().map(|w| w.count_ones() as u64).sum()
+    }
+
+    /// Number of words in the bitmap.
+    fn word_count(&self) -> usize {
+        self.words.len()
+    }
+}
+
+// ----------------------------------------------------------------------------
 // PageAllocator
 // ----------------------------------------------------------------------------
 
 /// Mutable state for the page allocator, protected by `RwLock`.
 struct PageAllocatorState {
-    /// Bitmap where bit N indicates whether page N is allocated.
-    /// Each `u64` tracks 64 pages. Bit 0 of word 0 = page 0, etc.
-    bitmap: Vec<u64>,
+    /// Bitmap tracking allocated pages.
+    bitmap: Bitmap,
 
-    /// Number of currently allocated pages.
+    /// Number of currently allocated pages (cached for O(1) lookup).
     allocated: u64,
 
-    /// Hint for where to start searching for free pages.
-    /// Updated after each allocation to avoid rescanning from the start.
+    /// Hint for where to start searching for free pages (word index).
     search_hint: usize,
 }
 
@@ -174,14 +357,16 @@ pub(crate) struct PageAllocator {
 }
 
 impl PageAllocator {
-    /// Bits per word in the bitmap.
-    const BITS_PER_WORD: usize = 64;
+    /// Maximum trackable pages (defense against memory exhaustion from crafted `PageId`).
+    ///
+    /// At 4KB pages, `2^52` pages = ~16 petabytes, far beyond any realistic use.
+    const MAX_TRACKABLE_PAGES: u64 = 1 << 52;
 
     /// Create a new allocator with the given initial capacity (in pages).
     ///
     /// Page 0 is automatically marked as allocated (reserved for header).
     /// If `initial_pages` is 0, defaults to 64 pages.
-    pub fn new(initial_pages: u64) -> Self {
+    pub(crate) fn new(initial_pages: u64) -> Self {
         Self::with_limit(initial_pages, None)
     }
 
@@ -189,14 +374,13 @@ impl PageAllocator {
     ///
     /// Page 0 is automatically marked as allocated (reserved for header).
     /// If `initial_pages` is 0, defaults to 64 pages.
-    pub fn with_limit(initial_pages: u64, max_pages: Option<u64>) -> Self {
-        let pages = (initial_pages as usize).max(Self::BITS_PER_WORD);
-        let words = pages.div_ceil(Self::BITS_PER_WORD);
-        let mut bitmap = vec![0u64; words];
-
-        // Reserve page 0 for header.
-        // SAFETY: `words >= 1` because `pages >= 64` and `words = ceil(pages/64)`.
-        bitmap[0] |= 1;
+    pub(crate) fn with_limit(
+        initial_pages: u64,
+        max_pages: Option<u64>,
+    ) -> Self {
+        let mut bitmap = Bitmap::new(initial_pages as usize);
+        // Reserve page 0 for header (Bitmap::new guarantees capacity >= 64).
+        bitmap.set(0);
 
         Self {
             state: RwLock::new(PageAllocatorState {
@@ -213,21 +397,12 @@ impl PageAllocator {
     /// Used during crash recovery to restore the allocation state.
     /// Returns an error if the bitmap is empty (must have at least one word
     /// for the reserved header page).
-    pub fn from_bytes(bytes: &[u8], max_pages: Option<u64>) -> Result<Self> {
-        let bitmap: Vec<u64> = bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                // `chunks_exact(8)` guarantees exactly 8 bytes, so this cannot fail.
-                #[allow(clippy::unwrap_used)]
-                u64::from_le_bytes(chunk.try_into().unwrap())
-            })
-            .collect();
-
-        if bitmap.is_empty() {
-            Err(Error::InvalidBitmap)
-        } else {
-            let allocated = bitmap.iter().map(|w| w.count_ones() as u64).sum();
-
+    pub(crate) fn from_bytes(
+        bytes: &[u8],
+        max_pages: Option<u64>,
+    ) -> Result<Self> {
+        Bitmap::from_bytes(bytes).map_or(Err(Error::InvalidBitmap), |bitmap| {
+            let allocated = bitmap.count_ones();
             Ok(Self {
                 state: RwLock::new(PageAllocatorState {
                     bitmap,
@@ -236,57 +411,51 @@ impl PageAllocator {
                 }),
                 max_pages,
             })
-        }
+        })
     }
 
     /// Serialize the bitmap to bytes for persistence.
-    pub async fn to_bytes(&self) -> Vec<u8> {
-        let state = self.state.read().await;
-        state.bitmap.iter().flat_map(|w| w.to_le_bytes()).collect()
+    pub(crate) async fn to_bytes(&self) -> Vec<u8> {
+        self.state.read().await.bitmap.to_bytes()
     }
 
     /// Allocate a free page and return its ID.
     ///
     /// Returns an error if the page limit has been reached.
-    pub async fn allocate(&self) -> Result<PageId> {
+    pub(crate) async fn allocate(&self) -> Result<PageId> {
         let mut state = self.state.write().await;
 
         // Check limit (inside lock to prevent races)
         if let Some(max) = self.max_pages {
             if state.allocated >= max {
-                return Err(Error::PageLimitExceeded(max));
+                Err(Error::PageLimitExceeded(max))
+            } else {
+                Self::allocate_inner(&mut state)
             }
+        } else {
+            Self::allocate_inner(&mut state)
         }
+    }
 
-        let len = state.bitmap.len();
-        let hint = state.search_hint.min(len.saturating_sub(1));
-
-        // Search from hint to end, then wrap around
-        let found = (hint..len).chain(0..hint).find_map(|i| {
-            state
-                .bitmap
-                .get(i)
-                .and_then(|&w| find_free_bit(w).map(|bit| (i, bit)))
-        });
-
-        let page_num = found
-            .map(|(word_idx, bit_idx)| {
-                // SAFETY: `word_idx` came from `i` in `0..len` where `len = bitmap.len()`.
-                state.bitmap[word_idx] |= 1 << bit_idx;
+    /// Inner allocation logic (extracted to avoid duplication in the limit check branches).
+    fn allocate_inner(state: &mut PageAllocatorState) -> Result<PageId> {
+        let page_num = state
+            .bitmap
+            .find_free_from(state.search_hint)
+            .map(|(bit_idx, word_idx)| {
+                state.bitmap.set(bit_idx);
                 state.search_hint = word_idx;
-                word_idx * Self::BITS_PER_WORD + bit_idx as usize
+                bit_idx
             })
             .unwrap_or_else(|| {
-                // No free pages in current bitmap - extend it
-                let new_word_idx = state.bitmap.len();
-                state.bitmap.push(1);
-                state.search_hint = new_word_idx;
-                new_word_idx * Self::BITS_PER_WORD
+                // No free pages - extend bitmap
+                let bit_idx = state.bitmap.extend_and_set_first();
+                state.search_hint = state.bitmap.word_count() - 1;
+                bit_idx
             });
 
         state.allocated += 1;
-
-        Ok(PageId::from_page_num(page_num as u64))
+        PageId::from_page_num(page_num as u64)
     }
 
     /// Free a previously allocated page.
@@ -295,38 +464,32 @@ impl PageAllocator {
     /// - The page is page 0 (reserved header page)
     /// - The page is beyond the bitmap bounds
     /// - The page is not currently allocated
-    pub async fn free(&self, id: PageId) -> Result<()> {
+    pub(crate) async fn free(&self, id: PageId) -> Result<()> {
         let page_num = id.page_num();
 
         // Prevent freeing the reserved header page
         if page_num == 0 {
-            return Err(Error::CannotFreeHeaderPage);
-        }
+            Err(Error::CannotFreeHeaderPage)
+        } else {
+            let idx = page_num as usize;
+            let mut state = self.state.write().await;
 
-        let word_idx = (page_num as usize) / Self::BITS_PER_WORD;
-        let bit_idx = (page_num as usize) % Self::BITS_PER_WORD;
-
-        let mut state = self.state.write().await;
-
-        // Check preconditions immutably to avoid borrow conflicts
-        let is_valid = state
-            .bitmap
-            .get(word_idx)
-            .map(|&word| (word & (1 << bit_idx)) != 0);
-
-        match is_valid {
-            None => Err(Error::PageOutOfBounds(page_num)),
-            Some(false) => Err(Error::PageNotAllocated(page_num)),
-            Some(true) => {
-                // SAFETY: `is_valid` being `Some(true)` means `word_idx` is in bounds
-                state.bitmap[word_idx] &= !(1 << bit_idx);
-                state.allocated = state.allocated.saturating_sub(1);
-
-                // Update hint if this page is before current hint
-                if word_idx < state.search_hint {
-                    state.search_hint = word_idx;
+            match state.bitmap.clear(idx) {
+                ClearBitResult::OutOfBounds => {
+                    Err(Error::PageOutOfBounds(page_num))
                 }
-                Ok(())
+                ClearBitResult::WasUnset => {
+                    Err(Error::PageNotAllocated(page_num))
+                }
+                ClearBitResult::WasSet => {
+                    state.allocated = state.allocated.saturating_sub(1);
+                    // Update hint if this page is before current hint
+                    let word_idx = idx / Bitmap::BITS_PER_WORD;
+                    if word_idx < state.search_hint {
+                        state.search_hint = word_idx;
+                    }
+                    Ok(())
+                }
             }
         }
     }
@@ -334,63 +497,57 @@ impl PageAllocator {
     /// Check if a page is currently allocated.
     ///
     /// Returns `false` for pages beyond the current bitmap bounds.
-    pub async fn is_allocated(&self, id: PageId) -> bool {
-        let page_num = id.page_num() as usize;
-        let word_idx = page_num / Self::BITS_PER_WORD;
-        let bit_idx = page_num % Self::BITS_PER_WORD;
-
-        let state = self.state.read().await;
-
-        state
-            .bitmap
-            .get(word_idx)
-            .map(|&word| (word & (1 << bit_idx)) != 0)
-            .unwrap_or(false)
+    pub(crate) async fn is_allocated(&self, id: PageId) -> bool {
+        let idx = id.page_num() as usize;
+        self.state.read().await.bitmap.get(idx).unwrap_or(false)
     }
 
     /// Mark a specific page as allocated.
     ///
     /// Used during recovery to rebuild allocation state from WAL.
     ///
+    /// Returns an error for pages beyond [`Self::MAX_TRACKABLE_PAGES`]
+    /// to prevent memory exhaustion from malformed/malicious `PageId` values.
+    ///
     /// **Note**: This method ignores `max_pages` limit, as recovery must
     /// restore the exact state from the WAL regardless of current limits.
-    pub async fn mark_allocated(&self, id: PageId) -> MarkAllocatedResult {
-        let page_num = id.page_num() as usize;
-        let word_idx = page_num / Self::BITS_PER_WORD;
-        let bit_idx = page_num % Self::BITS_PER_WORD;
+    pub(crate) async fn mark_allocated(
+        &self,
+        id: PageId,
+    ) -> Result<MarkAllocatedResult> {
+        let page_num = id.page_num();
 
-        let mut state = self.state.write().await;
-
-        // Extend if needed
-        if word_idx >= state.bitmap.len() {
-            state.bitmap.resize(word_idx + 1, 0);
-        }
-
-        // SAFETY: after resize, `bitmap.len() >= word_idx + 1`, so `word_idx` is in bounds.
-        if (state.bitmap[word_idx] & (1 << bit_idx)) == 0 {
-            state.bitmap[word_idx] |= 1 << bit_idx;
-            state.allocated += 1;
-            MarkAllocatedResult::NewlyAllocated
+        // Reject absurdly large page numbers to prevent memory exhaustion.
+        if page_num >= Self::MAX_TRACKABLE_PAGES {
+            Err(Error::PageOutOfBounds(page_num))
         } else {
-            MarkAllocatedResult::AlreadyAllocated
+            let idx = page_num as usize;
+            let mut state = self.state.write().await;
+
+            Ok(match state.bitmap.set_with_extend(idx) {
+                SetBitResult::WasUnset => {
+                    state.allocated += 1;
+                    MarkAllocatedResult::NewlyAllocated
+                }
+                SetBitResult::WasSet => MarkAllocatedResult::AlreadyAllocated,
+            })
         }
     }
 
     /// Get the number of allocated pages.
-    pub async fn allocated_count(&self) -> u64 {
+    pub(crate) async fn allocated_count(&self) -> u64 {
         self.state.read().await.allocated
     }
 
     /// Get the total capacity (number of pages the bitmap can track).
-    pub async fn capacity(&self) -> u64 {
-        (self.state.read().await.bitmap.len() * Self::BITS_PER_WORD) as u64
+    pub(crate) async fn capacity(&self) -> u64 {
+        self.state.read().await.bitmap.capacity() as u64
     }
 
     /// Get the number of free pages.
-    pub async fn free_count(&self) -> u64 {
+    pub(crate) async fn free_count(&self) -> u64 {
         let state = self.state.read().await;
-        let capacity = (state.bitmap.len() * Self::BITS_PER_WORD) as u64;
-        capacity.saturating_sub(state.allocated)
+        (state.bitmap.capacity() as u64).saturating_sub(state.allocated)
     }
 }
 
@@ -400,11 +557,6 @@ impl std::fmt::Debug for PageAllocator {
             .field("max_pages", &self.max_pages)
             .finish_non_exhaustive()
     }
-}
-
-/// Find the index of the first zero bit in a word, or `None` if all bits are set.
-fn find_free_bit(word: u64) -> Option<u32> {
-    (word != u64::MAX).then(|| word.trailing_ones())
 }
 
 /// A cached page entry.
@@ -427,26 +579,26 @@ pub(crate) enum MarkDirtyResult {
 #[derive(Debug, Clone)]
 pub(crate) struct EvictedPage {
     /// The page ID.
-    pub id: PageId,
+    pub(crate) id: PageId,
     /// The node data.
-    pub node: Arc<Node>,
+    pub(crate) node: Arc<Node>,
     /// Whether the page was dirty (needs flushing).
-    pub dirty: bool,
+    pub(crate) dirty: bool,
 }
 
 /// Statistics for the page cache.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PageCacheStats {
     /// Number of cache hits.
-    pub hits: u64,
+    pub(crate) hits: u64,
     /// Number of cache misses.
-    pub misses: u64,
+    pub(crate) misses: u64,
     /// Number of pages written (marked dirty).
-    pub writes: u64,
+    pub(crate) writes: u64,
     /// Number of pages flushed to disk.
-    pub flushes: u64,
+    pub(crate) flushes: u64,
     /// Number of pages evicted from cache.
-    pub evictions: u64,
+    pub(crate) evictions: u64,
 }
 
 /// LRU cache for B-tree node pages with dirty tracking.
@@ -480,7 +632,7 @@ impl PageCache {
     /// Create a new page cache with the given capacity (number of pages).
     ///
     /// If `capacity` is `0`, defaults to `1`.
-    pub fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         let cap = capacity.max(1);
         // SAFETY: `cap` is at least 1 due to `max(1)` above.
         #[allow(clippy::unwrap_used)]
@@ -497,7 +649,7 @@ impl PageCache {
     ///
     /// Returns `None` if the page is not in cache (cache miss).
     /// Updates LRU order on hit.
-    pub async fn get(&self, id: PageId) -> Option<Arc<Node>> {
+    pub(crate) async fn get(&self, id: PageId) -> Option<Arc<Node>> {
         let mut cache = self.cache.write().await;
         let mut stats = self.stats.write().await;
 
@@ -518,7 +670,7 @@ impl PageCache {
     /// If `dirty` is `true`, the page is marked as needing flush.
     /// If `dirty` is `false`, any previous dirty status is cleared.
     /// Returns the evicted page (with dirty status) if the cache was at capacity.
-    pub async fn put(
+    pub(crate) async fn put(
         &self,
         id: PageId,
         node: Node,
@@ -563,7 +715,7 @@ impl PageCache {
     }
 
     /// Mark a page as dirty (needs flush).
-    pub async fn mark_dirty(&self, id: PageId) -> MarkDirtyResult {
+    pub(crate) async fn mark_dirty(&self, id: PageId) -> MarkDirtyResult {
         let cache = self.cache.read().await;
         let mut dirty_set = self.dirty_set.write().await;
         let mut stats = self.stats.write().await;
@@ -580,7 +732,7 @@ impl PageCache {
     /// Get all dirty pages.
     ///
     /// Returns a list of `(PageId, Node)` pairs for pages that need flushing.
-    pub async fn dirty_pages(&self) -> Vec<(PageId, Arc<Node>)> {
+    pub(crate) async fn dirty_pages(&self) -> Vec<(PageId, Arc<Node>)> {
         let cache = self.cache.read().await;
         let dirty_set = self.dirty_set.read().await;
 
@@ -596,7 +748,7 @@ impl PageCache {
     ///
     /// Call this after successfully writing pages to disk.
     /// Only increments flush stats for pages that were actually dirty.
-    pub async fn mark_flushed(&self, ids: &[PageId]) {
+    pub(crate) async fn mark_flushed(&self, ids: &[PageId]) {
         let mut dirty_set = self.dirty_set.write().await;
         let mut stats = self.stats.write().await;
 
@@ -608,24 +760,24 @@ impl PageCache {
     }
 
     /// Clear the dirty flag for a specific page.
-    pub async fn mark_clean(&self, id: PageId) {
+    pub(crate) async fn mark_clean(&self, id: PageId) {
         self.dirty_set.write().await.remove(&id);
     }
 
     /// Check if a page is dirty.
-    pub async fn is_dirty(&self, id: PageId) -> bool {
+    pub(crate) async fn is_dirty(&self, id: PageId) -> bool {
         self.dirty_set.read().await.contains(&id)
     }
 
     /// Get the number of dirty pages.
-    pub async fn dirty_count(&self) -> usize {
+    pub(crate) async fn dirty_count(&self) -> usize {
         self.dirty_set.read().await.len()
     }
 
     /// Remove a page from the cache.
     ///
     /// Returns the removed page if it was in cache.
-    pub async fn remove(&self, id: PageId) -> Option<Arc<Node>> {
+    pub(crate) async fn remove(&self, id: PageId) -> Option<Arc<Node>> {
         let mut cache = self.cache.write().await;
         let mut dirty_set = self.dirty_set.write().await;
 
@@ -637,7 +789,7 @@ impl PageCache {
     ///
     /// Returns all dirty pages that were discarded, allowing the caller to
     /// flush them if needed.
-    pub async fn clear(&self) -> Vec<(PageId, Arc<Node>)> {
+    pub(crate) async fn clear(&self) -> Vec<(PageId, Arc<Node>)> {
         let mut cache = self.cache.write().await;
         let mut dirty_set = self.dirty_set.write().await;
 
@@ -655,32 +807,32 @@ impl PageCache {
     }
 
     /// Get the number of pages in cache.
-    pub async fn len(&self) -> usize {
+    pub(crate) async fn len(&self) -> usize {
         self.cache.read().await.len()
     }
 
     /// Check if the cache is empty.
-    pub async fn is_empty(&self) -> bool {
+    pub(crate) async fn is_empty(&self) -> bool {
         self.cache.read().await.is_empty()
     }
 
     /// Get the cache capacity.
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         self.capacity
     }
 
     /// Get cache statistics.
-    pub async fn stats(&self) -> PageCacheStats {
+    pub(crate) async fn stats(&self) -> PageCacheStats {
         self.stats.read().await.clone()
     }
 
     /// Reset cache statistics.
-    pub async fn reset_stats(&self) {
+    pub(crate) async fn reset_stats(&self) {
         *self.stats.write().await = PageCacheStats::default();
     }
 
     /// Calculate the hit rate (0.0 to 1.0).
-    pub async fn hit_rate(&self) -> f64 {
+    pub(crate) async fn hit_rate(&self) -> f64 {
         let stats = self.stats.read().await;
         let total = stats.hits + stats.misses;
         if total == 0 {
@@ -719,15 +871,15 @@ mod tests {
 
     #[test]
     fn page_id_from_page_num() {
-        let id = PageId::from_page_num(0);
+        let id = PageId::from_page_num(0).unwrap();
         assert_eq!(id.offset(), 0);
         assert_eq!(id.page_num(), 0);
 
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
         assert_eq!(id.offset(), PAGE_SIZE as u64);
         assert_eq!(id.page_num(), 1);
 
-        let id = PageId::from_page_num(10);
+        let id = PageId::from_page_num(10).unwrap();
         assert_eq!(id.offset(), 10 * PAGE_SIZE as u64);
         assert_eq!(id.page_num(), 10);
     }
@@ -736,7 +888,7 @@ mod tests {
     fn page_id_header() {
         assert!(PageId::HEADER.is_header());
         assert_eq!(PageId::HEADER.offset(), 0);
-        assert!(!PageId::from_page_num(1).is_header());
+        assert!(!PageId::from_page_num(1).unwrap().is_header());
     }
 
     #[test]
@@ -762,7 +914,7 @@ mod tests {
     #[tokio::test]
     async fn cache_basic_get_put() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
         let node = make_node(1);
 
         assert!(cache.get(id).await.is_none());
@@ -776,7 +928,7 @@ mod tests {
     #[tokio::test]
     async fn cache_dirty_tracking() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
         let node = make_node(1);
 
         // Insert clean
@@ -798,7 +950,7 @@ mod tests {
     #[tokio::test]
     async fn cache_insert_dirty() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
         let node = make_node(1);
 
         cache.put(id, node, true).await;
@@ -813,24 +965,24 @@ mod tests {
 
         // Insert some clean and some dirty
         cache
-            .put(PageId::from_page_num(1), make_node(1), false)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
             .await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), true)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), true)
             .await;
         cache
-            .put(PageId::from_page_num(3), make_node(3), false)
+            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
             .await;
         cache
-            .put(PageId::from_page_num(4), make_node(4), true)
+            .put(PageId::from_page_num(4).unwrap(), make_node(4), true)
             .await;
 
         let dirty = cache.dirty_pages().await;
         assert_eq!(dirty.len(), 2);
 
         let ids: HashSet<_> = dirty.iter().map(|(id, _)| *id).collect();
-        assert!(ids.contains(&PageId::from_page_num(2)));
-        assert!(ids.contains(&PageId::from_page_num(4)));
+        assert!(ids.contains(&PageId::from_page_num(2).unwrap()));
+        assert!(ids.contains(&PageId::from_page_num(4).unwrap()));
     }
 
     #[tokio::test]
@@ -838,25 +990,28 @@ mod tests {
         let cache = PageCache::new(10);
 
         cache
-            .put(PageId::from_page_num(1), make_node(1), true)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
             .await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), true)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), true)
             .await;
         cache
-            .put(PageId::from_page_num(3), make_node(3), true)
+            .put(PageId::from_page_num(3).unwrap(), make_node(3), true)
             .await;
 
         assert_eq!(cache.dirty_count().await, 3);
 
         cache
-            .mark_flushed(&[PageId::from_page_num(1), PageId::from_page_num(3)])
+            .mark_flushed(&[
+                PageId::from_page_num(1).unwrap(),
+                PageId::from_page_num(3).unwrap(),
+            ])
             .await;
 
         assert_eq!(cache.dirty_count().await, 1);
-        assert!(cache.is_dirty(PageId::from_page_num(2)).await);
-        assert!(!cache.is_dirty(PageId::from_page_num(1)).await);
-        assert!(!cache.is_dirty(PageId::from_page_num(3)).await);
+        assert!(cache.is_dirty(PageId::from_page_num(2).unwrap()).await);
+        assert!(!cache.is_dirty(PageId::from_page_num(1).unwrap()).await);
+        assert!(!cache.is_dirty(PageId::from_page_num(3).unwrap()).await);
     }
 
     #[tokio::test]
@@ -865,29 +1020,29 @@ mod tests {
 
         // Fill cache
         cache
-            .put(PageId::from_page_num(1), make_node(1), false)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
             .await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), false)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
             .await;
         cache
-            .put(PageId::from_page_num(3), make_node(3), false)
+            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
             .await;
 
         assert_eq!(cache.len().await, 3);
 
         // This should evict page 1 (LRU)
         let evicted = cache
-            .put(PageId::from_page_num(4), make_node(4), false)
+            .put(PageId::from_page_num(4).unwrap(), make_node(4), false)
             .await;
 
         assert!(evicted.is_some());
         let ev = evicted.unwrap();
-        assert_eq!(ev.id, PageId::from_page_num(1));
+        assert_eq!(ev.id, PageId::from_page_num(1).unwrap());
         assert!(!ev.dirty);
 
-        assert!(cache.get(PageId::from_page_num(1)).await.is_none());
-        assert!(cache.get(PageId::from_page_num(4)).await.is_some());
+        assert!(cache.get(PageId::from_page_num(1).unwrap()).await.is_none());
+        assert!(cache.get(PageId::from_page_num(4).unwrap()).await.is_some());
     }
 
     #[tokio::test]
@@ -895,30 +1050,30 @@ mod tests {
         let cache = PageCache::new(3);
 
         cache
-            .put(PageId::from_page_num(1), make_node(1), false)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
             .await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), false)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
             .await;
         cache
-            .put(PageId::from_page_num(3), make_node(3), false)
+            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
             .await;
 
         // Access page 1 to make it recently used
-        cache.get(PageId::from_page_num(1)).await;
+        cache.get(PageId::from_page_num(1).unwrap()).await;
 
         // Now page 2 should be LRU
         let evicted = cache
-            .put(PageId::from_page_num(4), make_node(4), false)
+            .put(PageId::from_page_num(4).unwrap(), make_node(4), false)
             .await;
 
-        assert_eq!(evicted.unwrap().id, PageId::from_page_num(2));
+        assert_eq!(evicted.unwrap().id, PageId::from_page_num(2).unwrap());
     }
 
     #[tokio::test]
     async fn cache_remove() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
 
         cache.put(id, make_node(1), true).await;
         assert!(cache.get(id).await.is_some());
@@ -935,10 +1090,10 @@ mod tests {
         let cache = PageCache::new(10);
 
         cache
-            .put(PageId::from_page_num(1), make_node(1), true)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
             .await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), false)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
             .await;
 
         assert_eq!(cache.len().await, 2);
@@ -951,13 +1106,13 @@ mod tests {
 
         // Should return the dirty page that was discarded
         assert_eq!(discarded.len(), 1);
-        assert_eq!(discarded[0].0, PageId::from_page_num(1));
+        assert_eq!(discarded[0].0, PageId::from_page_num(1).unwrap());
     }
 
     #[tokio::test]
     async fn cache_stats() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
 
         // Miss
         cache.get(id).await;
@@ -978,7 +1133,7 @@ mod tests {
     #[tokio::test]
     async fn cache_hit_rate() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
 
         // Empty cache, no operations
         assert_eq!(cache.hit_rate().await, 0.0);
@@ -1004,7 +1159,7 @@ mod tests {
     #[tokio::test]
     async fn cache_update_existing() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
 
         cache.put(id, make_node(1), false).await;
 
@@ -1020,7 +1175,7 @@ mod tests {
     #[tokio::test]
     async fn cache_mark_dirty_nonexistent() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
 
         assert_eq!(cache.mark_dirty(id).await, MarkDirtyResult::NotInCache);
     }
@@ -1031,26 +1186,26 @@ mod tests {
 
         // Insert a dirty page
         cache
-            .put(PageId::from_page_num(1), make_node(1), true)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
             .await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), false)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
             .await;
 
         // Evict page 1 (dirty)
         let evicted = cache
-            .put(PageId::from_page_num(3), make_node(3), false)
+            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
             .await;
 
         let ev = evicted.unwrap();
-        assert_eq!(ev.id, PageId::from_page_num(1));
+        assert_eq!(ev.id, PageId::from_page_num(1).unwrap());
         assert!(ev.dirty); // Should indicate the evicted page was dirty
     }
 
     #[tokio::test]
     async fn cache_put_clean_clears_dirty() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
 
         // Insert as dirty
         cache.put(id, make_node(1), true).await;
@@ -1070,16 +1225,16 @@ mod tests {
 
         // Can insert one page
         cache
-            .put(PageId::from_page_num(1), make_node(1), false)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
             .await;
         assert_eq!(cache.len().await, 1);
 
         // Second insert should evict the first
         let evicted = cache
-            .put(PageId::from_page_num(2), make_node(2), false)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
             .await;
         assert!(evicted.is_some());
-        assert_eq!(evicted.unwrap().id, PageId::from_page_num(1));
+        assert_eq!(evicted.unwrap().id, PageId::from_page_num(1).unwrap());
         assert_eq!(cache.len().await, 1);
     }
 
@@ -1088,14 +1243,14 @@ mod tests {
         let cache = PageCache::new(10);
 
         cache
-            .put(PageId::from_page_num(1), make_node(1), true)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
             .await;
 
         // Flush both existing and non-existing pages
         cache
             .mark_flushed(&[
-                PageId::from_page_num(1),
-                PageId::from_page_num(999), // doesn't exist
+                PageId::from_page_num(1).unwrap(),
+                PageId::from_page_num(999).unwrap(), // doesn't exist
             ])
             .await;
 
@@ -1109,7 +1264,7 @@ mod tests {
         let cache = PageCache::new(10);
 
         // Explicit test that get on non-existent page returns None
-        let result = cache.get(PageId::from_page_num(999)).await;
+        let result = cache.get(PageId::from_page_num(999).unwrap()).await;
         assert!(result.is_none());
 
         // Stats should show a miss
@@ -1122,8 +1277,8 @@ mod tests {
     async fn cache_put_update_at_capacity_no_eviction() {
         let cache = PageCache::new(2);
 
-        let id1 = PageId::from_page_num(1);
-        let id2 = PageId::from_page_num(2);
+        let id1 = PageId::from_page_num(1).unwrap();
+        let id2 = PageId::from_page_num(2).unwrap();
 
         // Fill cache
         cache.put(id1, make_node(1), false).await;
@@ -1144,7 +1299,7 @@ mod tests {
     #[tokio::test]
     async fn cache_put_same_page_twice() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
 
         cache.put(id, make_node(1), true).await;
         cache.put(id, make_node(2), false).await;
@@ -1159,7 +1314,7 @@ mod tests {
     #[tokio::test]
     async fn cache_mark_dirty_already_dirty() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
 
         cache.put(id, make_node(1), true).await;
         assert!(cache.is_dirty(id).await);
@@ -1177,21 +1332,21 @@ mod tests {
     async fn cache_mark_flushed_empty_slice() {
         let cache = PageCache::new(10);
         cache
-            .put(PageId::from_page_num(1), make_node(1), true)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
             .await;
 
         // Flush with empty slice - should be no-op
         cache.mark_flushed(&[]).await;
 
         // Original page should still be dirty
-        assert!(cache.is_dirty(PageId::from_page_num(1)).await);
+        assert!(cache.is_dirty(PageId::from_page_num(1).unwrap()).await);
         assert_eq!(cache.stats().await.flushes, 0);
     }
 
     #[tokio::test]
     async fn cache_mark_flushed_duplicate_in_slice() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
         cache.put(id, make_node(1), true).await;
 
         // Flush same page twice in one call
@@ -1207,7 +1362,7 @@ mod tests {
         let cache = PageCache::new(10);
 
         // Remove page that doesn't exist
-        let result = cache.remove(PageId::from_page_num(999)).await;
+        let result = cache.remove(PageId::from_page_num(999).unwrap()).await;
         assert!(result.is_none());
     }
 
@@ -1226,10 +1381,10 @@ mod tests {
 
         // Add only clean pages
         cache
-            .put(PageId::from_page_num(1), make_node(1), false)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
             .await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), false)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
             .await;
 
         assert_eq!(cache.len().await, 2);
@@ -1247,10 +1402,10 @@ mod tests {
 
         // Add only clean pages
         cache
-            .put(PageId::from_page_num(1), make_node(1), false)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
             .await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), false)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
             .await;
 
         let dirty = cache.dirty_pages().await;
@@ -1261,15 +1416,15 @@ mod tests {
     async fn cache_is_dirty_after_eviction() {
         let cache = PageCache::new(2);
 
-        let id1 = PageId::from_page_num(1);
+        let id1 = PageId::from_page_num(1).unwrap();
         cache.put(id1, make_node(1), true).await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), false)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
             .await;
 
         // Evict id1 (dirty)
         cache
-            .put(PageId::from_page_num(3), make_node(3), false)
+            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
             .await;
 
         // Evicted page should not be in dirty set
@@ -1281,18 +1436,18 @@ mod tests {
         let cache = PageCache::new(2);
 
         cache
-            .put(PageId::from_page_num(1), make_node(1), false)
+            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
             .await;
         cache
-            .put(PageId::from_page_num(2), make_node(2), false)
+            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
             .await;
 
         // This should evict
         cache
-            .put(PageId::from_page_num(3), make_node(3), false)
+            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
             .await;
         cache
-            .put(PageId::from_page_num(4), make_node(4), false)
+            .put(PageId::from_page_num(4).unwrap(), make_node(4), false)
             .await;
 
         let stats = cache.stats().await;
@@ -1302,7 +1457,7 @@ mod tests {
     #[tokio::test]
     async fn cache_remove_dirty_page() {
         let cache = PageCache::new(10);
-        let id = PageId::from_page_num(1);
+        let id = PageId::from_page_num(1).unwrap();
 
         cache.put(id, make_node(1), true).await;
         assert!(cache.is_dirty(id).await);
@@ -1399,7 +1554,7 @@ mod tests {
         let alloc = PageAllocator::new(64);
 
         assert!(alloc.is_allocated(PageId::HEADER).await);
-        assert!(!alloc.is_allocated(PageId::from_page_num(1)).await);
+        assert!(!alloc.is_allocated(PageId::from_page_num(1).unwrap()).await);
 
         let p = alloc.allocate().await.unwrap();
         assert!(alloc.is_allocated(p).await);
@@ -1412,18 +1567,18 @@ mod tests {
     async fn allocator_mark_allocated() {
         let alloc = PageAllocator::new(64);
 
-        let id = PageId::from_page_num(42);
+        let id = PageId::from_page_num(42).unwrap();
 
         // Mark as allocated
         assert_eq!(
-            alloc.mark_allocated(id).await,
+            alloc.mark_allocated(id).await.unwrap(),
             MarkAllocatedResult::NewlyAllocated
         );
         assert!(alloc.is_allocated(id).await);
 
         // Mark again - should indicate already allocated
         assert_eq!(
-            alloc.mark_allocated(id).await,
+            alloc.mark_allocated(id).await.unwrap(),
             MarkAllocatedResult::AlreadyAllocated
         );
     }
@@ -1433,13 +1588,21 @@ mod tests {
         let alloc = PageAllocator::new(64);
 
         // Mark a page beyond current capacity
-        let id = PageId::from_page_num(100);
+        let id = PageId::from_page_num(100).unwrap();
         assert_eq!(
-            alloc.mark_allocated(id).await,
+            alloc.mark_allocated(id).await.unwrap(),
             MarkAllocatedResult::NewlyAllocated
         );
         assert!(alloc.is_allocated(id).await);
         assert!(alloc.capacity().await >= 101);
+    }
+
+    #[test]
+    fn page_id_from_page_num_overflow() {
+        // Page number that would overflow when multiplied by PAGE_SIZE
+        let huge = u64::MAX / PAGE_SIZE as u64 + 1;
+        let err = PageId::from_page_num(huge).unwrap_err();
+        assert!(matches!(err, Error::PageNumberOverflow(_)));
     }
 
     #[tokio::test]
@@ -1465,13 +1628,38 @@ mod tests {
     }
 
     #[test]
-    fn find_free_bit_works() {
-        assert_eq!(super::find_free_bit(0), Some(0));
-        assert_eq!(super::find_free_bit(1), Some(1));
-        assert_eq!(super::find_free_bit(0b111), Some(3));
-        assert_eq!(super::find_free_bit(0b1011), Some(2));
-        assert_eq!(super::find_free_bit(u64::MAX), None);
-        assert_eq!(super::find_free_bit(u64::MAX - 1), Some(0));
+    fn bitmap_find_free() {
+        // All zeros - first free is bit 0
+        let bm = Bitmap::new(64);
+        assert_eq!(bm.find_free_from(0), Some((0, 0)));
+
+        // Bit 0 set - first free is bit 1
+        let mut bm = Bitmap::new(64);
+        bm.set(0);
+        assert_eq!(bm.find_free_from(0), Some((1, 0)));
+
+        // First 3 bits set - first free is bit 3
+        let mut bm = Bitmap::new(64);
+        bm.set(0);
+        bm.set(1);
+        bm.set(2);
+        assert_eq!(bm.find_free_from(0), Some((3, 0)));
+
+        // Bits 0,1,3 set (gap at 2) - first free is bit 2
+        let mut bm = Bitmap::new(64);
+        bm.set(0);
+        bm.set(1);
+        bm.set(3);
+        assert_eq!(bm.find_free_from(0), Some((2, 0)));
+    }
+
+    #[test]
+    fn bitmap_all_set_returns_none() {
+        let mut bm = Bitmap::new(64);
+        (0..64).for_each(|i| {
+            bm.set(i);
+        });
+        assert_eq!(bm.find_free_from(0), None);
     }
 
     #[tokio::test]
@@ -1514,7 +1702,7 @@ mod tests {
         let alloc = PageAllocator::new(64);
 
         // Try to free a page that was never allocated
-        let id = PageId::from_page_num(10);
+        let id = PageId::from_page_num(10).unwrap();
         let err = alloc.free(id).await.unwrap_err();
 
         assert!(matches!(err, Error::PageNotAllocated(10)));
@@ -1538,7 +1726,7 @@ mod tests {
         let alloc = PageAllocator::new(64);
 
         // Try to free a page beyond the bitmap capacity
-        let id = PageId::from_page_num(1000);
+        let id = PageId::from_page_num(1000).unwrap();
         let err = alloc.free(id).await.unwrap_err();
 
         assert!(matches!(err, Error::PageOutOfBounds(1000)));
@@ -1598,7 +1786,7 @@ mod tests {
     #[tokio::test]
     async fn allocator_cannot_free_page_zero() {
         let alloc = PageAllocator::new(64);
-        let page_zero = PageId::from_page_num(0);
+        let page_zero = PageId::from_page_num(0).unwrap();
         let err = alloc.free(page_zero).await.unwrap_err();
         assert!(matches!(err, Error::CannotFreeHeaderPage));
     }
@@ -1662,9 +1850,9 @@ mod tests {
 
         assert_eq!(alloc.capacity().await, 128);
         assert_eq!(alloc.allocated_count().await, 2);
-        assert!(alloc.is_allocated(PageId::from_page_num(0)).await);
-        assert!(alloc.is_allocated(PageId::from_page_num(1)).await);
-        assert!(!alloc.is_allocated(PageId::from_page_num(2)).await);
+        assert!(alloc.is_allocated(PageId::from_page_num(0).unwrap()).await);
+        assert!(alloc.is_allocated(PageId::from_page_num(1).unwrap()).await);
+        assert!(!alloc.is_allocated(PageId::from_page_num(2).unwrap()).await);
     }
 
     #[tokio::test]
@@ -1673,7 +1861,7 @@ mod tests {
 
         // Page 0 is already allocated
         assert_eq!(
-            alloc.mark_allocated(PageId::HEADER).await,
+            alloc.mark_allocated(PageId::HEADER).await.unwrap(),
             MarkAllocatedResult::AlreadyAllocated
         );
 
@@ -1686,7 +1874,11 @@ mod tests {
         let alloc = PageAllocator::new(64);
 
         // Page way beyond capacity should return false, not panic
-        assert!(!alloc.is_allocated(PageId::from_page_num(10000)).await);
+        assert!(
+            !alloc
+                .is_allocated(PageId::from_page_num(10000).unwrap())
+                .await
+        );
     }
 
     #[tokio::test]

@@ -518,7 +518,7 @@ This design ensures:
   - LRU cache of pages in memory
   - Dirty page tracking
   - Flush mechanism
-- [ ] Implement `PageAllocator`:
+- [x] Implement `PageAllocator`:
   - Track free pages (bitmap or free list)
   - Allocate new pages on demand
   - Reclaim pages on node deletion
