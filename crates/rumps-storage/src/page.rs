@@ -131,10 +131,6 @@ impl From<PageId> for u64 {
     }
 }
 
-// ----------------------------------------------------------------------------
-// Bitmap
-// ----------------------------------------------------------------------------
-
 /// Result of setting a bit in the bitmap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SetBitResult {
@@ -312,10 +308,6 @@ impl Bitmap {
         self.words.len()
     }
 }
-
-// ----------------------------------------------------------------------------
-// PageAllocator
-// ----------------------------------------------------------------------------
 
 /// Mutable state for the page allocator, protected by `RwLock`.
 struct PageAllocatorState {
@@ -615,8 +607,10 @@ pub(crate) struct PageCacheStats {
 /// # Eviction
 ///
 /// When the cache reaches capacity, the least-recently-used page is evicted.
-/// If the evicted page is dirty, it must be flushed before eviction (the caller
-/// is responsible for handling this via the `evict_dirty` callback).
+/// The [`put`] method returns an [`EvictedPage`] if eviction occurred; the
+/// caller is responsible for flushing dirty evicted pages to disk.
+///
+/// [`put`]: Self::put
 pub(crate) struct PageCache {
     /// LRU cache of pages.
     cache: RwLock<LruCache<PageId, CachedPage>>,

@@ -39,9 +39,20 @@ pub enum StorageError {
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
 
-    /// I/O error (for future disk operations)
+    /// I/O error with context.
+    #[error("I/O error during {op} on {path}: {source}")]
+    Io {
+        /// Operation that failed.
+        op: String,
+        /// Path involved.
+        path: std::path::PathBuf,
+        /// Underlying I/O error.
+        source: std::io::Error,
+    },
+
+    /// Generic I/O error (without context).
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    IoGeneric(#[from] std::io::Error),
 
     /// Serialization error
     #[error("Serialization error: {0}")]
@@ -77,3 +88,34 @@ pub enum StorageError {
 ///
 /// This is a convenience type alias that fixes the error type to [`StorageError`].
 pub type Result<T> = std::result::Result<T, StorageError>;
+
+impl From<rumps_types::Error> for StorageError {
+    fn from(e: rumps_types::Error) -> Self {
+        match e {
+            rumps_types::Error::NotImplemented => {
+                Self::InvalidOperation("not yet implemented".into())
+            }
+            rumps_types::Error::PageOutOfBounds(n) => {
+                Self::InvalidOperation(format!("page {n} is out of bounds"))
+            }
+            rumps_types::Error::PageNotAllocated(n) => {
+                Self::InvalidOperation(format!("page {n} is not allocated"))
+            }
+            rumps_types::Error::PageLimitExceeded(n) => {
+                Self::MemoryLimitExceeded {
+                    used: n as usize,
+                    limit: n as usize,
+                }
+            }
+            rumps_types::Error::CannotFreeHeaderPage => {
+                Self::InvalidOperation("cannot free header page".into())
+            }
+            rumps_types::Error::InvalidBitmap => {
+                Self::InvalidOperation("invalid bitmap".into())
+            }
+            rumps_types::Error::PageNumberOverflow(n) => {
+                Self::InvalidOperation(format!("page number {n} overflows"))
+            }
+        }
+    }
+}
