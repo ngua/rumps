@@ -126,7 +126,7 @@ impl Superblock {
     const MAGIC: [u8; 4] = *b"RUMP";
 
     /// Current superblock version.
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 1;
 
     /// Maximum number of bitmap pages.
     pub(crate) const MAX_BITMAP_PAGES: usize = 500;
