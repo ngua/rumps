@@ -68,14 +68,50 @@ impl GlobalRegistry {
         }
     }
 
+    /// Calculate the serialized size of an entry with the given name.
+    ///
+    /// Entry format: 2 bytes (name length) + N bytes (name) + 8 bytes (PageId).
+    pub(crate) const fn entry_size(name_len: usize) -> usize {
+        2 + name_len + 8
+    }
+
+    /// Total bytes currently used by entries in this page.
+    pub(crate) fn used_bytes(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|e| Self::entry_size(e.name.len()))
+            .sum()
+    }
+
+    /// Check if this page has room for a new entry with the given name.
+    ///
+    /// Returns `true` if the entry would fit, `false` if this page is full.
+    pub(crate) fn can_insert(&self, name: &str) -> bool {
+        // Check if entry already exists (update doesn't need extra space)
+        self.entries.iter().any(|e| e.name == name)
+            || self.used_bytes() + Self::entry_size(name.len())
+                <= Self::MAX_ENTRIES_BYTES
+    }
+
+    /// Check if this page is empty (has no entries).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Number of entries in this page.
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     /// Look up a global's root page by name.
     pub(crate) fn get(&self, name: &str) -> Option<PageId> {
         self.entries.iter().find(|e| e.name == name).map(|e| e.root)
     }
 
-    /// Insert or update a global's root page.
+    /// Insert or update a global's root page in this page only.
     ///
-    /// Returns `Err` if the entry would exceed page capacity.
+    /// Returns `Err(StorageError::RegistryPageFull)` if the entry would exceed
+    /// page capacity. The caller should handle chaining in that case.
     pub(crate) fn insert(&mut self, name: String, root: PageId) -> Result<()> {
         // Check if exists → update
         let existing = self.entries.iter_mut().find(|e| e.name == name);
@@ -86,27 +122,33 @@ impl GlobalRegistry {
                 Ok(())
             }
             None => {
-                // Check capacity (entry size = 2 + name.len() + 8)
-                let entry_size = 2 + name.len() + 8;
-                let current_size: usize =
-                    self.entries.iter().map(|e| 2 + e.name.len() + 8).sum();
-
-                if current_size + entry_size > Self::MAX_ENTRIES_BYTES {
-                    Err(StorageError::InvalidOperation(
-                        "registry page full, chaining not yet implemented"
-                            .into(),
-                    ))
-                } else {
+                if self.can_insert(&name) {
                     self.entries.push(RegistryEntry { name, root });
                     Ok(())
+                } else {
+                    Err(StorageError::RegistryPageFull)
                 }
             }
         }
     }
 
+    /// Insert unconditionally (for internal use when we know there's space).
+    /// Caller must ensure `can_insert(name)` is `true`.
+    pub(crate) fn insert_unchecked(&mut self, name: String, root: PageId) {
+        self.entries.push(RegistryEntry { name, root });
+    }
+
     /// Remove a global from the registry.
     pub(crate) fn remove(&mut self, name: &str) {
         self.entries.retain(|e| e.name != name);
+    }
+
+    /// Iterate over all entries in this single registry page.
+    ///
+    /// For iterating across a chain of registry pages, use
+    /// `FileStorageEngine::registry_entries()` instead.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, PageId)> {
+        self.entries.iter().map(|e| (e.name.as_str(), e.root))
     }
 
     /// Serialize to a page-sized buffer with checksum.
@@ -343,5 +385,134 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("checksum mismatch"));
+    }
+
+    // ========== Tests for chaining helper methods ==========
+
+    #[test]
+    fn entry_size_calculation() {
+        // Entry: 2 bytes (len) + name + 8 bytes (PageId)
+        assert_eq!(GlobalRegistry::entry_size(0), 10);
+        assert_eq!(GlobalRegistry::entry_size(7), 17); // "PATIENT" = 7 chars
+        assert_eq!(GlobalRegistry::entry_size(100), 110);
+    }
+
+    #[test]
+    fn used_bytes_empty() {
+        let reg = GlobalRegistry::new();
+        assert_eq!(reg.used_bytes(), 0);
+    }
+
+    #[test]
+    fn used_bytes_with_entries() {
+        let mut reg = GlobalRegistry::new();
+        reg.insert("ABC".into(), PageId::from(1)).unwrap(); // 2 + 3 + 8 = 13
+        reg.insert("DEFGH".into(), PageId::from(2)).unwrap(); // 2 + 5 + 8 = 15
+
+        assert_eq!(reg.used_bytes(), 28);
+    }
+
+    #[test]
+    fn can_insert_empty() {
+        let reg = GlobalRegistry::new();
+        assert!(reg.can_insert("PATIENT"));
+        assert!(reg.can_insert("A")); // 2 + 1 + 8 = 11 bytes, fits easily
+    }
+
+    #[test]
+    fn can_insert_existing_always_true() {
+        let mut reg = GlobalRegistry::new();
+        reg.insert("PATIENT".into(), PageId::from(100)).unwrap();
+
+        // Existing entry update doesn't need extra space
+        assert!(reg.can_insert("PATIENT"));
+    }
+
+    #[test]
+    fn can_insert_full_page() {
+        let mut reg = GlobalRegistry::new();
+
+        // Fill the page with maximum entries
+        // MAX_ENTRIES_BYTES = 4070
+        // Each entry with "G_NNN" name (5 chars) = 2 + 5 + 8 = 15 bytes
+        // 4070 / 15 ≈ 271 entries
+        let mut i = 0u64;
+        while reg.can_insert(&format!("G_{i:03}")) {
+            reg.insert_unchecked(format!("G_{i:03}"), PageId::from(i));
+            i += 1;
+        }
+
+        // Page should be full now
+        assert!(!reg.can_insert(&format!("G_{i:03}")));
+        // But existing entry should still work
+        assert!(reg.can_insert("G_000"));
+
+        // Verify we got ~270 entries
+        assert!(i >= 250, "expected at least 250 entries, got {i}");
+    }
+
+    #[test]
+    fn insert_returns_page_full_error() {
+        let mut reg = GlobalRegistry::new();
+
+        // Fill the page
+        let mut i = 0u64;
+        while reg.can_insert(&format!("G_{i:03}")) {
+            reg.insert_unchecked(format!("G_{i:03}"), PageId::from(i));
+            i += 1;
+        }
+
+        // Next insert should fail
+        let result = reg.insert("NEW_GLOBAL".into(), PageId::from(999));
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            crate::error::StorageError::RegistryPageFull
+        ));
+    }
+
+    #[test]
+    fn is_empty_and_len() {
+        let mut reg = GlobalRegistry::new();
+        assert!(reg.is_empty());
+        assert_eq!(reg.len(), 0);
+
+        reg.insert("A".into(), PageId::from(1)).unwrap();
+        assert!(!reg.is_empty());
+        assert_eq!(reg.len(), 1);
+
+        reg.insert("B".into(), PageId::from(2)).unwrap();
+        assert_eq!(reg.len(), 2);
+
+        reg.remove("A");
+        assert_eq!(reg.len(), 1);
+
+        reg.remove("B");
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn iter_entries() {
+        let mut reg = GlobalRegistry::new();
+        reg.insert("PATIENT".into(), PageId::from(100)).unwrap();
+        reg.insert("ORDER".into(), PageId::from(200)).unwrap();
+
+        let entries: Vec<_> = reg.iter().collect();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.contains(&("PATIENT", PageId::from(100))));
+        assert!(entries.contains(&("ORDER", PageId::from(200))));
+    }
+
+    #[test]
+    fn next_page_serialization() {
+        let mut reg = GlobalRegistry::new();
+        reg.insert("TEST".into(), PageId::from(50)).unwrap();
+        reg.next_page = Some(PageId::from(999));
+
+        let buf = reg.serialize();
+        let restored = GlobalRegistry::deserialize(&buf).unwrap();
+
+        assert_eq!(restored.next_page, Some(PageId::from(999)));
+        assert_eq!(restored.get("TEST"), Some(PageId::from(50)));
     }
 }

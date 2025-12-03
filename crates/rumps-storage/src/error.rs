@@ -82,6 +82,12 @@ pub enum StorageError {
     /// WAL background task has shut down.
     #[error("WAL background task shut down")]
     WalShutdown,
+
+    /// A single registry page is full and cannot accept more entries.
+    ///
+    /// This is an internal error used to signal that chaining is needed.
+    #[error("Registry page full")]
+    RegistryPageFull,
 }
 
 /// A specialized Result type for storage operations.

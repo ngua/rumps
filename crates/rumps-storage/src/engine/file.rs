@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::TryStreamExt;
-use tokio::fs::{File, OpenOptions};
+use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio::sync::RwLock;
 
@@ -81,8 +81,12 @@ pub(crate) struct FileStorageEngine {
     /// Database metadata (page size, creation time, etc.).
     metadata: RwLock<MetadataPage>,
 
-    /// Global name → root page registry.
-    registry: RwLock<GlobalRegistry>,
+    /// Global name to page registry chain.
+    ///
+    /// Stores all registry pages in order: `[(page_id, registry_page), ...]`.
+    /// The first element corresponds to `superblock.registry_root`.
+    /// Each registry page's `next_page` field points to the next in the chain.
+    registry_chain: RwLock<Vec<(PageId, GlobalRegistry)>>,
 
     /// Configuration settings.
     cfg: StorageConfig,
@@ -202,25 +206,20 @@ impl FileStorageEngine {
                     meta
                 }
                 None => {
-                    // Legacy DB without metadata page - create default
+                    // DB without metadata page - create default
                     MetadataPage::new(3)
                 }
             };
 
-            // Load registry page
-            let registry = match superblock.registry_root {
+            // Load registry chain (follows next_page links)
+            let registry_chain = match superblock.registry_root {
                 Some(pid) => {
-                    let buf = Self::read_page_at(
-                        &mut file,
-                        pid.byte_offset(),
-                        &data_path,
-                    )
-                    .await?;
-                    GlobalRegistry::deserialize(&buf)?
+                    Self::load_registry_chain(&mut file, pid, &data_path)
+                        .await?
                 }
                 None => {
-                    // Legacy DB without registry page - create empty
-                    GlobalRegistry::new()
+                    // DB without registry - create empty chain
+                    Vec::new()
                 }
             };
 
@@ -246,12 +245,302 @@ impl FileStorageEngine {
                 single_indirect: RwLock::new(indirect.single),
                 double_indirect: RwLock::new(indirect.double),
                 metadata: RwLock::new(metadata),
-                registry: RwLock::new(registry),
+                registry_chain: RwLock::new(registry_chain),
                 cfg,
                 data_dir: dir.to_path_buf(),
             })
         }
     }
+
+    /// Create a new database.
+    ///
+    /// Creates the data directory, initializes a fresh data file with
+    /// superblock and bitmap pages, and sets up a new WAL. Fails if the
+    /// directory already contains a database.
+    ///
+    /// # Layout
+    ///
+    /// - Page 0: Superblock (metadata + bitmap page IDs)
+    /// - Page 1: First bitmap page
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The directory already exists with a data file
+    /// - Directory creation fails
+    /// - File creation fails
+    pub(crate) async fn create(dir: &Path, cfg: StorageConfig) -> Result<Self> {
+        use tokio::io::AsyncWriteExt;
+
+        let data_path = dir.join(Self::DATA_FILE_NAME);
+        let wal_dir = dir.join(Self::WAL_DIR_NAME);
+
+        // Create directories
+        fs::create_dir_all(dir)
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "create data directory".into(),
+                path: dir.to_path_buf(),
+                source: e,
+            })?;
+
+        fs::create_dir_all(&wal_dir)
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "create WAL directory".into(),
+                path: wal_dir.clone(),
+                source: e,
+            })?;
+
+        // Fail if data file already exists
+        if data_path.exists() {
+            Err(StorageError::InvalidOperation(format!(
+                "database already exists at {}",
+                data_path.display()
+            )))
+        } else {
+            // Reserve pages: 0=superblock, 1=bitmap, 2=metadata, 3=registry
+            let first_bm_page = PageId::from_page_num(1)?;
+            let metadata_page_id = PageId::from_page_num(2)?;
+            let registry_page_id = PageId::from_page_num(3)?;
+
+            let page_alloc = PageAllocator::new(64, cfg.max_pages);
+
+            // Serialize bitmap to page 1
+            let bm_data = page_alloc.to_bytes().await;
+            let copy_len = bm_data.len().min(page::PAGE_SIZE);
+            let mut bm_page = vec![0u8; page::PAGE_SIZE];
+            bm_page
+                .get_mut(..copy_len)
+                .map(|s| s.copy_from_slice(&bm_data[..copy_len]));
+
+            // Create metadata page (page 2)
+            let metadata = MetadataPage::new(3); // default min_degree = 3
+            let meta_data = metadata.serialize();
+
+            // Create registry page (page 3)
+            let registry = GlobalRegistry::new();
+            let reg_data = registry.serialize();
+            let registry_chain = vec![(registry_page_id, registry)];
+
+            // Create superblock (page 0) with pointers to metadata & registry
+            let mut superblock = Superblock::new(first_bm_page, 4); // 4 pages allocated
+            superblock.metadata_root = Some(metadata_page_id);
+            superblock.registry_root = Some(registry_page_id);
+            let sb_data = superblock.serialize();
+
+            // Write pages to data file
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&data_path)
+                .await
+                .map_err(|e| StorageError::Io {
+                    op: "create data file".into(),
+                    path: data_path.clone(),
+                    source: e,
+                })?;
+
+            // Page 0: superblock
+            file.write_all(&sb_data)
+                .await
+                .map_err(|e| StorageError::Io {
+                    op: "write superblock".into(),
+                    path: data_path.clone(),
+                    source: e,
+                })?;
+
+            // Page 1: first bitmap page
+            file.write_all(&bm_page)
+                .await
+                .map_err(|e| StorageError::Io {
+                    op: "write bitmap page".into(),
+                    path: data_path.clone(),
+                    source: e,
+                })?;
+
+            // Page 2: metadata page
+            file.write_all(&meta_data)
+                .await
+                .map_err(|e| StorageError::Io {
+                    op: "write metadata page".into(),
+                    path: data_path.clone(),
+                    source: e,
+                })?;
+
+            // Page 3: registry page
+            file.write_all(&reg_data)
+                .await
+                .map_err(|e| StorageError::Io {
+                    op: "write registry page".into(),
+                    path: data_path.clone(),
+                    source: e,
+                })?;
+
+            file.sync_all().await.map_err(|e| StorageError::Io {
+                op: "sync data file".into(),
+                path: data_path,
+                source: e,
+            })?;
+
+            // Create fresh WAL (open handles empty dir)
+            let reader = WalReader::open(&wal_dir).await?;
+            let wal = reader.into_writer(cfg.wal_config.clone()).await?;
+
+            // Create page cache
+            let cache = PageCache::new(cfg.cache_size);
+
+            Ok(Self {
+                data_file: Arc::new(RwLock::new(file)),
+                wal: Arc::new(wal),
+                cache: Arc::new(cache),
+                page_alloc: Arc::new(page_alloc),
+                superblock: RwLock::new(superblock),
+                single_indirect: RwLock::new(None),
+                double_indirect: RwLock::new(None),
+                metadata: RwLock::new(metadata),
+                registry_chain: RwLock::new(registry_chain),
+                cfg,
+                data_dir: dir.to_path_buf(),
+            })
+        }
+    }
+}
+
+#[async_trait]
+impl AsyncStorageEngine for FileStorageEngine {
+    async fn read(&self, id: NodeId) -> Result<Node> {
+        let page_id = PageId::from(id);
+
+        // Check cache first
+        if let Some(cached) = self.cache.get(page_id).await {
+            Ok((*cached).clone())
+        } else {
+            // Cache miss - read from disk
+            let offset = page_id.byte_offset();
+            let mut buf = vec![0u8; page::PAGE_SIZE];
+            let mut file = self.data_file.write().await;
+
+            file.seek(SeekFrom::Start(offset)).await.map_err(|e| {
+                StorageError::Io {
+                    op: "seek for read".into(),
+                    path: self.data_dir.join(Self::DATA_FILE_NAME),
+                    source: e,
+                }
+            })?;
+            file.read_exact(&mut buf)
+                .await
+                .map_err(|e| StorageError::Io {
+                    op: "read page".into(),
+                    path: self.data_dir.join(Self::DATA_FILE_NAME),
+                    source: e,
+                })?;
+            drop(file);
+
+            // Deserialize
+            let node: Node = bincode::deserialize(&buf).map_err(|e| {
+                StorageError::InvalidOperation(format!("deserialize node: {e}"))
+            })?;
+
+            // Add to cache (clean, since it came from disk)
+            let evicted = self.cache.put(page_id, node.clone(), false).await;
+
+            // Handle evicted dirty page
+            if let Some(ev) = evicted {
+                if ev.dirty {
+                    self.write_page_to_disk(ev.id, &ev.node).await?;
+                }
+            }
+
+            Ok(node)
+        }
+    }
+
+    async fn write(&self, id: NodeId, node: &Node) -> Result<()> {
+        let page_id = PageId::from(id);
+
+        // Put in cache as dirty
+        let evicted = self.cache.put(page_id, node.clone(), true).await;
+
+        // Handle evicted dirty page
+        if let Some(ev) = evicted {
+            if ev.dirty {
+                self.write_page_to_disk(ev.id, &ev.node).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn allocate(&self) -> Result<NodeId> {
+        // Ensure we have capacity for another page (may grow bitmap if needed)
+        self.ensure_bitmap_capacity().await?;
+        Ok(NodeId::from(self.page_alloc.allocate().await?))
+    }
+
+    async fn deallocate(&self, id: NodeId) -> Result<()> {
+        let page_id = PageId::from(id);
+
+        // Remove from cache if present
+        self.cache.remove(page_id).await;
+
+        // Free in allocator
+        self.page_alloc.free(page_id).await?;
+
+        Ok(())
+    }
+
+    async fn flush(&self) -> Result<()> {
+        // Get all dirty pages
+        let dirty = self.cache.dirty_pages().await;
+
+        // Write each dirty page to disk
+        // (sequential for now; could parallelize with FuturesUnordered)
+        let ids: Vec<_> = dirty
+            .iter()
+            .map(|(id, node)| async move {
+                self.write_page_to_disk(*id, node).await.map(|_| *id)
+            })
+            .collect::<futures::stream::FuturesUnordered<_>>()
+            .try_collect()
+            .await?;
+
+        // Mark all as flushed
+        self.cache.mark_flushed(&ids).await;
+
+        // Write bitmap pages and superblock (v2 format only)
+        self.flush_metadata().await?;
+
+        // Write registry chain pages
+        self.flush_registry_chain().await?;
+
+        // Sync data file
+        let file = self.data_file.read().await;
+
+        file.sync_all().await.map_err(|e| StorageError::Io {
+            op: "sync data file".into(),
+            path: self.data_dir.join(Self::DATA_FILE_NAME),
+            source: e,
+        })?;
+
+        Ok(())
+    }
+
+    async fn metadata(&self) -> StorageMetadata {
+        StorageMetadata {
+            allocated_pages: self.page_alloc.allocated_count().await,
+            free_pages: self.page_alloc.free_count().await,
+            cached_pages: self.cache.len().await,
+            dirty_pages: self.cache.dirty_count().await,
+            cache_hit_rate: self.cache.hit_rate().await,
+            data_dir: self.data_dir.clone(),
+        }
+    }
+}
+
+impl FileStorageEngine {
+    // ========== Private Helpers for open() ==========
 
     /// Load superblock and bitmap pages (including indirect pages).
     ///
@@ -437,290 +726,42 @@ impl FileStorageEngine {
         Ok(buf)
     }
 
-    /// Create a new database.
+    /// Load the entire registry chain by following `next_page` links.
     ///
-    /// Creates the data directory, initializes a fresh data file with
-    /// superblock and bitmap pages, and sets up a new WAL. Fails if the
-    /// directory already contains a database.
-    ///
-    /// # Layout
-    ///
-    /// - Page 0: Superblock (metadata + bitmap page IDs)
-    /// - Page 1: First bitmap page
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The directory already exists with a data file
-    /// - Directory creation fails
-    /// - File creation fails
-    pub(crate) async fn create(dir: &Path, cfg: StorageConfig) -> Result<Self> {
-        use tokio::io::AsyncWriteExt;
+    /// Returns a vector of `(PageId, GlobalRegistry)` pairs in chain order.
+    fn load_registry_chain<'a>(
+        file: &'a mut File,
+        start_pid: PageId,
+        path: &'a Path,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<Vec<(PageId, GlobalRegistry)>>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let buf =
+                Self::read_page_at(file, start_pid.byte_offset(), path).await?;
+            let reg = GlobalRegistry::deserialize(&buf)?;
 
-        let data_path = dir.join(Self::DATA_FILE_NAME);
-        let wal_dir = dir.join(Self::WAL_DIR_NAME);
-
-        // Create directories
-        tokio::fs::create_dir_all(dir)
-            .await
-            .map_err(|e| StorageError::Io {
-                op: "create data directory".into(),
-                path: dir.to_path_buf(),
-                source: e,
-            })?;
-
-        tokio::fs::create_dir_all(&wal_dir).await.map_err(|e| {
-            StorageError::Io {
-                op: "create WAL directory".into(),
-                path: wal_dir.clone(),
-                source: e,
-            }
-        })?;
-
-        // Fail if data file already exists
-        if data_path.exists() {
-            Err(StorageError::InvalidOperation(format!(
-                "database already exists at {}",
-                data_path.display()
-            )))
-        } else {
-            // Reserve pages: 0=superblock, 1=bitmap, 2=metadata, 3=registry
-            let first_bm_page = PageId::from_page_num(1)?;
-            let metadata_page_id = PageId::from_page_num(2)?;
-            let registry_page_id = PageId::from_page_num(3)?;
-
-            let page_alloc = PageAllocator::new(64, cfg.max_pages);
-
-            // Serialize bitmap to page 1
-            let bm_data = page_alloc.to_bytes().await;
-            let copy_len = bm_data.len().min(page::PAGE_SIZE);
-            let mut bm_page = vec![0u8; page::PAGE_SIZE];
-            bm_page
-                .get_mut(..copy_len)
-                .map(|s| s.copy_from_slice(&bm_data[..copy_len]));
-
-            // Create metadata page (page 2)
-            let metadata = MetadataPage::new(3); // default min_degree = 3
-            let meta_data = metadata.serialize();
-
-            // Create registry page (page 3)
-            let registry = GlobalRegistry::new();
-            let reg_data = registry.serialize();
-
-            // Create superblock (page 0) with pointers to metadata & registry
-            let mut superblock = Superblock::new(first_bm_page, 4); // 4 pages allocated
-            superblock.metadata_root = Some(metadata_page_id);
-            superblock.registry_root = Some(registry_page_id);
-            let sb_data = superblock.serialize();
-
-            // Write pages to data file
-            let mut file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(&data_path)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "create data file".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            // Page 0: superblock
-            file.write_all(&sb_data)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "write superblock".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            // Page 1: first bitmap page
-            file.write_all(&bm_page)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "write bitmap page".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            // Page 2: metadata page
-            file.write_all(&meta_data)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "write metadata page".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            // Page 3: registry page
-            file.write_all(&reg_data)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "write registry page".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            file.sync_all().await.map_err(|e| StorageError::Io {
-                op: "sync data file".into(),
-                path: data_path,
-                source: e,
-            })?;
-
-            // Create fresh WAL (open handles empty dir)
-            let reader = WalReader::open(&wal_dir).await?;
-            let wal = reader.into_writer(cfg.wal_config.clone()).await?;
-
-            // Create page cache
-            let cache = PageCache::new(cfg.cache_size);
-
-            Ok(Self {
-                data_file: Arc::new(RwLock::new(file)),
-                wal: Arc::new(wal),
-                cache: Arc::new(cache),
-                page_alloc: Arc::new(page_alloc),
-                superblock: RwLock::new(superblock),
-                single_indirect: RwLock::new(None),
-                double_indirect: RwLock::new(None),
-                metadata: RwLock::new(metadata),
-                registry: RwLock::new(registry),
-                cfg,
-                data_dir: dir.to_path_buf(),
-            })
-        }
-    }
-}
-
-#[async_trait]
-impl AsyncStorageEngine for FileStorageEngine {
-    async fn read(&self, id: NodeId) -> Result<Node> {
-        let page_id = PageId::from(id);
-
-        // Check cache first
-        if let Some(cached) = self.cache.get(page_id).await {
-            Ok((*cached).clone())
-        } else {
-            // Cache miss - read from disk
-            let offset = page_id.byte_offset();
-            let mut buf = vec![0u8; page::PAGE_SIZE];
-            let mut file = self.data_file.write().await;
-
-            file.seek(SeekFrom::Start(offset)).await.map_err(|e| {
-                StorageError::Io {
-                    op: "seek for read".into(),
-                    path: self.data_dir.join(Self::DATA_FILE_NAME),
-                    source: e,
-                }
-            })?;
-            file.read_exact(&mut buf)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "read page".into(),
-                    path: self.data_dir.join(Self::DATA_FILE_NAME),
-                    source: e,
-                })?;
-            drop(file);
-
-            // Deserialize
-            let node: Node = bincode::deserialize(&buf).map_err(|e| {
-                StorageError::InvalidOperation(format!("deserialize node: {e}"))
-            })?;
-
-            // Add to cache (clean, since it came from disk)
-            let evicted = self.cache.put(page_id, node.clone(), false).await;
-
-            // Handle evicted dirty page
-            if let Some(ev) = evicted {
-                if ev.dirty {
-                    self.write_page_to_disk(ev.id, &ev.node).await?;
+            match reg.next_page {
+                None => Ok(vec![(start_pid, reg)]),
+                Some(next_pid) => {
+                    let mut rest =
+                        Self::load_registry_chain(file, next_pid, path).await?;
+                    // Prepend this page at the front
+                    let mut result = vec![(start_pid, reg)];
+                    result.append(&mut rest);
+                    Ok(result)
                 }
             }
-
-            Ok(node)
-        }
+        })
     }
 
-    async fn write(&self, id: NodeId, node: &Node) -> Result<()> {
-        let page_id = PageId::from(id);
+    // ========== Private Helpers for write operations ==========
 
-        // Put in cache as dirty
-        let evicted = self.cache.put(page_id, node.clone(), true).await;
-
-        // Handle evicted dirty page
-        if let Some(ev) = evicted {
-            if ev.dirty {
-                self.write_page_to_disk(ev.id, &ev.node).await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn allocate(&self) -> Result<NodeId> {
-        // Ensure we have capacity for another page (may grow bitmap if needed)
-        self.ensure_bitmap_capacity().await?;
-        Ok(NodeId::from(self.page_alloc.allocate().await?))
-    }
-
-    async fn deallocate(&self, id: NodeId) -> Result<()> {
-        let page_id = PageId::from(id);
-
-        // Remove from cache if present
-        self.cache.remove(page_id).await;
-
-        // Free in allocator
-        self.page_alloc.free(page_id).await?;
-
-        Ok(())
-    }
-
-    async fn flush(&self) -> Result<()> {
-        // Get all dirty pages
-        let dirty = self.cache.dirty_pages().await;
-
-        // Write each dirty page to disk
-        // (sequential for now; could parallelize with FuturesUnordered)
-        let ids: Vec<_> = dirty
-            .iter()
-            .map(|(id, node)| async move {
-                self.write_page_to_disk(*id, node).await.map(|_| *id)
-            })
-            .collect::<futures::stream::FuturesUnordered<_>>()
-            .try_collect()
-            .await?;
-
-        // Mark all as flushed
-        self.cache.mark_flushed(&ids).await;
-
-        // Write bitmap pages and superblock (v2 format only)
-        self.flush_metadata().await?;
-
-        // Sync data file
-        let file = self.data_file.read().await;
-
-        file.sync_all().await.map_err(|e| StorageError::Io {
-            op: "sync data file".into(),
-            path: self.data_dir.join(Self::DATA_FILE_NAME),
-            source: e,
-        })?;
-
-        Ok(())
-    }
-
-    async fn metadata(&self) -> StorageMetadata {
-        StorageMetadata {
-            allocated_pages: self.page_alloc.allocated_count().await,
-            free_pages: self.page_alloc.free_count().await,
-            cached_pages: self.cache.len().await,
-            dirty_pages: self.cache.dirty_count().await,
-            cache_hit_rate: self.cache.hit_rate().await,
-            data_dir: self.data_dir.clone(),
-        }
-    }
-}
-
-impl FileStorageEngine {
     /// Write a page to disk at its designated offset.
     async fn write_page_to_disk(&self, id: PageId, node: &Node) -> Result<()> {
         use tokio::io::AsyncWriteExt;
@@ -1258,14 +1299,287 @@ impl FileStorageEngine {
 
         Ok(())
     }
+
+    // ========== Registry Chain Operations ==========
+
+    /// Look up a global's root page by name across the entire registry chain.
+    pub(crate) async fn registry_get(&self, name: &str) -> Option<PageId> {
+        let chain = self.registry_chain.read().await;
+        chain.iter().find_map(|(_, reg)| reg.get(name))
+    }
+
+    /// Insert or update a global's root page in the registry chain.
+    ///
+    /// If the entry exists in any page, it is updated. Otherwise, the entry
+    /// is inserted into the first page with available space. If all pages are
+    /// full, a new page is allocated and appended to the chain.
+    pub(crate) async fn registry_insert(
+        &self,
+        name: String,
+        root: PageId,
+    ) -> Result<()> {
+        let mut chain = self.registry_chain.write().await;
+
+        // First, check if the name exists in any page (update case)
+        let existing_idx =
+            chain.iter().position(|(_, reg)| reg.get(&name).is_some());
+
+        match existing_idx {
+            Some(idx) => {
+                // Update existing entry
+                chain
+                    .get_mut(idx)
+                    .map(|(_, reg)| reg.insert(name.clone(), root))
+                    .transpose()?
+                    .ok_or_else(|| {
+                        StorageError::InvalidOperation(
+                            "registry chain index out of bounds".into(),
+                        )
+                    })
+            }
+            None => {
+                // Find first page with space for a new entry
+                let has_space_idx =
+                    chain.iter().position(|(_, reg)| reg.can_insert(&name));
+
+                match has_space_idx {
+                    Some(idx) => chain
+                        .get_mut(idx)
+                        .map(|(_, reg)| {
+                            reg.insert_unchecked(name.clone(), root)
+                        })
+                        .ok_or_else(|| {
+                            StorageError::InvalidOperation(
+                                "registry chain index out of bounds".into(),
+                            )
+                        }),
+                    None => {
+                        // All pages full - need to allocate a new one
+                        drop(chain);
+                        self.registry_chain_extend(name, root).await
+                    }
+                }
+            }
+        }
+    }
+
+    /// Allocate a new registry page and append it to the chain.
+    ///
+    /// Note: Unlike the initial registry page (page 3), dynamically allocated
+    /// registry pages are NOT marked as reserved. This allows them to be freed
+    /// when the chain is compacted.
+    ///
+    /// This function handles the race condition where another thread may have
+    /// already inserted the entry or extended the chain while we were allocating.
+    async fn registry_chain_extend(
+        &self,
+        name: String,
+        root: PageId,
+    ) -> Result<()> {
+        // Allocate a new page for the registry (before acquiring lock)
+        // Note: We do NOT mark this as reserved so it can be freed on compaction
+        let new_pid = self.page_alloc.allocate().await?;
+
+        // Initialize the page on disk
+        self.initialize_page(new_pid).await?;
+
+        // Re-acquire the lock and check if another thread beat us
+        let mut chain = self.registry_chain.write().await;
+
+        // Race condition check #1: Entry may now exist (another thread inserted it)
+        let existing_idx =
+            chain.iter().position(|(_, reg)| reg.get(&name).is_some());
+
+        if let Some(idx) = existing_idx {
+            // Another thread inserted this entry - just update it and free our page
+            drop(chain);
+            self.page_alloc.free(new_pid).await?;
+            let mut chain = self.registry_chain.write().await;
+            chain
+                .get_mut(idx)
+                .map(|(_, reg)| reg.insert(name.clone(), root))
+                .transpose()?
+                .ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "registry chain index out of bounds".into(),
+                    )
+                })
+        } else {
+            // Race condition check #2: Space may now exist (another thread extended)
+            let has_space_idx =
+                chain.iter().position(|(_, reg)| reg.can_insert(&name));
+
+            match has_space_idx {
+                Some(idx) => {
+                    // Space found in existing page - use it and free our page
+                    chain.get_mut(idx).map(|(_, reg)| {
+                        reg.insert_unchecked(name.clone(), root)
+                    });
+                    drop(chain);
+                    self.page_alloc
+                        .free(new_pid)
+                        .await
+                        .map_err(StorageError::from)
+                }
+                None => {
+                    // No existing space - use our newly allocated page
+                    let mut new_reg = GlobalRegistry::new();
+                    new_reg.insert_unchecked(name, root);
+
+                    // Update the previous last page's next_page pointer
+                    chain
+                        .last_mut()
+                        .map(|(_, reg)| reg.next_page = Some(new_pid));
+
+                    // Append the new page
+                    chain.push((new_pid, new_reg));
+
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// Remove a global from the registry chain.
+    ///
+    /// Searches all pages for the entry and removes it. If a page becomes
+    /// empty after removal (and it's not the first page), it is unlinked
+    /// from the chain and deallocated.
+    pub(crate) async fn registry_remove(&self, name: &str) -> Result<()> {
+        let mut chain = self.registry_chain.write().await;
+
+        // Find which page contains the entry
+        let containing_idx =
+            chain.iter().position(|(_, reg)| reg.get(name).is_some());
+
+        match containing_idx {
+            None => Ok(()), // Entry doesn't exist, nothing to do
+            Some(idx) => {
+                // Remove from the page
+                chain.get_mut(idx).map(|(_, reg)| reg.remove(name));
+
+                // Check if page is now empty and can be compacted
+                // (Don't compact the first page, even if empty)
+                let should_compact = idx > 0
+                    && chain.get(idx).is_some_and(|(_, reg)| reg.is_empty());
+
+                if should_compact {
+                    // Get the page to remove and its ID
+                    let (removed_pid, removed_reg) =
+                        chain.get(idx).cloned().ok_or_else(|| {
+                            StorageError::InvalidOperation(
+                                "registry chain index out of bounds".into(),
+                            )
+                        })?;
+
+                    // Update previous page's next_page pointer to skip this one
+                    chain.get_mut(idx - 1).map(|(_, prev_reg)| {
+                        prev_reg.next_page = removed_reg.next_page;
+                    });
+
+                    // Remove from chain
+                    chain.remove(idx);
+
+                    // Deallocate the page
+                    drop(chain);
+                    self.page_alloc.free(removed_pid).await?;
+                }
+
+                Ok(())
+            }
+        }
+    }
+
+    /// Iterate over all entries in the registry chain.
+    ///
+    /// Returns an iterator over `(name, root_page_id)` pairs.
+    pub(crate) async fn registry_entries(&self) -> Vec<(String, PageId)> {
+        let chain = self.registry_chain.read().await;
+        chain
+            .iter()
+            .flat_map(|(_, reg)| {
+                reg.entries.iter().map(|e| (e.name.clone(), e.root))
+            })
+            .collect()
+    }
+
+    /// Flush the entire registry chain to disk.
+    async fn flush_registry_chain(&self) -> Result<()> {
+        let chain = self.registry_chain.read().await;
+        let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
+
+        // Write each registry page
+        Self::write_registry_pages(&self.data_file, &chain, &data_path).await
+    }
+
+    /// Write registry pages recursively.
+    fn write_registry_pages<'a>(
+        file: &'a RwLock<File>,
+        pages: &'a [(PageId, GlobalRegistry)],
+        path: &'a Path,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            match pages.split_first() {
+                None => Ok(()),
+                Some(((pid, reg), rest)) => {
+                    let buf = reg.serialize();
+                    Self::write_page_at(file, pid.byte_offset(), &buf, path)
+                        .await?;
+                    Self::write_registry_pages(file, rest, path).await
+                }
+            }
+        })
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use futures::stream::{self, StreamExt};
     use tempfile::TempDir;
 
     use super::*;
+
+    // ========== Test Helpers ==========
+
+    /// Fills the first registry page with entries until full.
+    ///
+    /// Inserts entries named `"G{i:03}"` with root `PageId::from(i)`.
+    /// Returns the number of entries inserted.
+    async fn fill_first_registry_page(engine: &FileStorageEngine) -> usize {
+        let mut count = 0usize;
+        while let Some(()) = try_insert_registry_entry(engine, count).await {
+            count += 1;
+        }
+        count
+    }
+
+    /// Tries to insert a single registry entry if the first page has space.
+    ///
+    /// Returns `Some(())` if inserted, `None` if page is full.
+    async fn try_insert_registry_entry(
+        engine: &FileStorageEngine,
+        i: usize,
+    ) -> Option<()> {
+        let name = format!("G{i:03}");
+        let can_fit = {
+            let chain = engine.registry_chain.read().await;
+            chain
+                .first()
+                .map_or(false, |(_, reg)| reg.can_insert(&name))
+        };
+        if can_fit {
+            engine
+                .registry_insert(name, PageId::from(i as u64))
+                .await
+                .unwrap();
+            Some(())
+        } else {
+            None
+        }
+    }
 
     #[tokio::test]
     async fn open_nonexistent_dir_fails() {
@@ -1453,8 +1767,9 @@ mod tests {
         assert_eq!(meta.version, 1);
         assert_eq!(meta.min_degree, 3);
 
-        let reg = engine.registry.read().await;
-        assert!(reg.entries.is_empty());
+        let chain = engine.registry_chain.read().await;
+        assert_eq!(chain.len(), 1);
+        assert!(chain.first().map_or(true, |(_, r)| r.entries.is_empty()));
     }
 
     #[test]
@@ -1683,5 +1998,451 @@ mod tests {
             "Test passed! Allocated {} pages, single-indirect working.",
             reopened_count
         );
+    }
+
+    // ========== Registry Chaining Integration Tests ==========
+
+    #[tokio::test]
+    async fn registry_insert_and_get_single_page() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        let engine =
+            FileStorageEngine::create(&db_path, StorageConfig::default())
+                .await
+                .expect("create");
+
+        // Insert a few globals
+        engine
+            .registry_insert("PATIENT".into(), PageId::from(100))
+            .await
+            .expect("insert PATIENT");
+        engine
+            .registry_insert("ORDER".into(), PageId::from(200))
+            .await
+            .expect("insert ORDER");
+        engine
+            .registry_insert("USER".into(), PageId::from(300))
+            .await
+            .expect("insert USER");
+
+        // Verify we can get them back
+        assert_eq!(
+            engine.registry_get("PATIENT").await,
+            Some(PageId::from(100))
+        );
+        assert_eq!(engine.registry_get("ORDER").await, Some(PageId::from(200)));
+        assert_eq!(engine.registry_get("USER").await, Some(PageId::from(300)));
+        assert_eq!(engine.registry_get("NONEXISTENT").await, None);
+    }
+
+    #[tokio::test]
+    async fn registry_insert_update_existing() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        let engine =
+            FileStorageEngine::create(&db_path, StorageConfig::default())
+                .await
+                .expect("create");
+
+        engine
+            .registry_insert("PATIENT".into(), PageId::from(100))
+            .await
+            .expect("insert");
+        engine
+            .registry_insert("PATIENT".into(), PageId::from(999))
+            .await
+            .expect("update");
+
+        assert_eq!(
+            engine.registry_get("PATIENT").await,
+            Some(PageId::from(999))
+        );
+
+        // Should still be only one entry
+        let entries = engine.registry_entries().await;
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn registry_remove_entry() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        let engine =
+            FileStorageEngine::create(&db_path, StorageConfig::default())
+                .await
+                .expect("create");
+
+        engine
+            .registry_insert("A".into(), PageId::from(1))
+            .await
+            .unwrap();
+        engine
+            .registry_insert("B".into(), PageId::from(2))
+            .await
+            .unwrap();
+        engine
+            .registry_insert("C".into(), PageId::from(3))
+            .await
+            .unwrap();
+
+        engine.registry_remove("B").await.unwrap();
+
+        assert_eq!(engine.registry_get("A").await, Some(PageId::from(1)));
+        assert_eq!(engine.registry_get("B").await, None);
+        assert_eq!(engine.registry_get("C").await, Some(PageId::from(3)));
+    }
+
+    #[tokio::test]
+    async fn registry_entries_iteration() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        let engine =
+            FileStorageEngine::create(&db_path, StorageConfig::default())
+                .await
+                .expect("create");
+
+        engine
+            .registry_insert("PATIENT".into(), PageId::from(100))
+            .await
+            .unwrap();
+        engine
+            .registry_insert("ORDER".into(), PageId::from(200))
+            .await
+            .unwrap();
+
+        let entries = engine.registry_entries().await;
+        assert_eq!(entries.len(), 2);
+        assert!(entries.contains(&("PATIENT".into(), PageId::from(100))));
+        assert!(entries.contains(&("ORDER".into(), PageId::from(200))));
+    }
+
+    #[tokio::test]
+    async fn registry_persist_and_reopen() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        // Create and populate
+        {
+            let engine =
+                FileStorageEngine::create(&db_path, StorageConfig::default())
+                    .await
+                    .expect("create");
+
+            engine
+                .registry_insert("GLOBAL1".into(), PageId::from(100))
+                .await
+                .unwrap();
+            engine
+                .registry_insert("GLOBAL2".into(), PageId::from(200))
+                .await
+                .unwrap();
+
+            engine.flush().await.expect("flush");
+        }
+
+        // Reopen and verify
+        {
+            let engine =
+                FileStorageEngine::open(&db_path, StorageConfig::default())
+                    .await
+                    .expect("open");
+
+            assert_eq!(
+                engine.registry_get("GLOBAL1").await,
+                Some(PageId::from(100))
+            );
+            assert_eq!(
+                engine.registry_get("GLOBAL2").await,
+                Some(PageId::from(200))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_chain_overflow_to_second_page() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        let engine =
+            FileStorageEngine::create(&db_path, StorageConfig::default())
+                .await
+                .expect("create");
+
+        // Fill the first page until it can't accept any more entries.
+        // Each entry "G{i:03}" = 5 chars = 2 + 5 + 8 = 15 bytes.
+        // MAX_ENTRIES_BYTES = 4070, so ~270 entries fit.
+        let num_first_page = fill_first_registry_page(&engine).await;
+
+        // Verify chain has only 1 page so far
+        {
+            let chain = engine.registry_chain.read().await;
+            assert_eq!(
+                chain.len(),
+                1,
+                "expected 1 page with {num_first_page} entries"
+            );
+        }
+
+        // Add one more entry - should trigger chain extension
+        engine
+            .registry_insert("OVERFLOW".into(), PageId::from(9999))
+            .await
+            .expect("insert overflow");
+
+        // Verify chain now has 2 pages
+        {
+            let chain = engine.registry_chain.read().await;
+            assert_eq!(chain.len(), 2, "expected 2 pages after overflow");
+
+            // Check first page has next_page set
+            assert!(chain[0].1.next_page.is_some());
+            // Check second page's ID matches first page's next_page
+            assert_eq!(chain[0].1.next_page, Some(chain[1].0));
+        }
+
+        // Verify we can get entries from both pages
+        assert_eq!(engine.registry_get("G000").await, Some(PageId::from(0)));
+        assert_eq!(
+            engine.registry_get("OVERFLOW").await,
+            Some(PageId::from(9999))
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_chain_persist_multiple_pages() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        // Create, fill, and persist
+        let first_page_count = {
+            let engine =
+                FileStorageEngine::create(&db_path, StorageConfig::default())
+                    .await
+                    .expect("create");
+
+            // Fill first page until it's full
+            let count = fill_first_registry_page(&engine).await;
+
+            // Add overflow entry
+            engine
+                .registry_insert("OVERFLOW".into(), PageId::from(9999))
+                .await
+                .unwrap();
+
+            engine.flush().await.expect("flush");
+            count
+        };
+
+        // Reopen and verify chain is loaded correctly
+        {
+            let engine =
+                FileStorageEngine::open(&db_path, StorageConfig::default())
+                    .await
+                    .expect("open");
+
+            // Check chain length
+            {
+                let chain = engine.registry_chain.read().await;
+                assert_eq!(chain.len(), 2, "expected 2 pages after reopen");
+            }
+
+            // Check entries from both pages
+            assert_eq!(
+                engine.registry_get("G000").await,
+                Some(PageId::from(0))
+            );
+            // Check last entry that fit in first page
+            let last_name = format!("G{:03}", first_page_count - 1);
+            assert_eq!(
+                engine.registry_get(&last_name).await,
+                Some(PageId::from(first_page_count as u64 - 1))
+            );
+            assert_eq!(
+                engine.registry_get("OVERFLOW").await,
+                Some(PageId::from(9999))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_remove_from_second_page() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        let engine =
+            FileStorageEngine::create(&db_path, StorageConfig::default())
+                .await
+                .expect("create");
+
+        // Fill first page until it's full
+        fill_first_registry_page(&engine).await;
+
+        // Add entries to second page
+        engine
+            .registry_insert("OVERFLOW1".into(), PageId::from(1001))
+            .await
+            .unwrap();
+        engine
+            .registry_insert("OVERFLOW2".into(), PageId::from(1002))
+            .await
+            .unwrap();
+
+        // Remove entry from second page
+        engine.registry_remove("OVERFLOW1").await.unwrap();
+
+        assert_eq!(engine.registry_get("OVERFLOW1").await, None);
+        assert_eq!(
+            engine.registry_get("OVERFLOW2").await,
+            Some(PageId::from(1002))
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_remove_compacts_empty_page() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        let engine =
+            FileStorageEngine::create(&db_path, StorageConfig::default())
+                .await
+                .expect("create");
+
+        // Fill first page until it's full
+        fill_first_registry_page(&engine).await;
+
+        // Add single entry to second page
+        engine
+            .registry_insert("ONLY_ENTRY".into(), PageId::from(9999))
+            .await
+            .unwrap();
+
+        // Verify chain has 2 pages
+        {
+            let chain = engine.registry_chain.read().await;
+            assert_eq!(chain.len(), 2);
+        }
+
+        // Remove the only entry from second page
+        engine.registry_remove("ONLY_ENTRY").await.unwrap();
+
+        // Page should be compacted (removed from chain)
+        {
+            let chain = engine.registry_chain.read().await;
+            assert_eq!(chain.len(), 1, "empty page should be compacted");
+            assert!(
+                chain[0].1.next_page.is_none(),
+                "first page next_page should be cleared"
+            );
+        }
+
+        // Entry should be gone
+        assert_eq!(engine.registry_get("ONLY_ENTRY").await, None);
+
+        // First page entries should still work
+        assert_eq!(engine.registry_get("G000").await, Some(PageId::from(0)));
+    }
+
+    #[tokio::test]
+    async fn registry_stress_many_globals() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        let engine =
+            FileStorageEngine::create(&db_path, StorageConfig::default())
+                .await
+                .expect("create");
+
+        // Insert 1000 globals (will need ~4 pages)
+        let eng = &engine;
+        stream::iter(0usize..1000)
+            .for_each(|i| async move {
+                let name = format!("GLOBAL_{i:04}");
+                eng.registry_insert(name, PageId::from(i as u64))
+                    .await
+                    .unwrap();
+            })
+            .await;
+
+        // Verify chain has multiple pages
+        let chain_len = {
+            let chain = engine.registry_chain.read().await;
+            chain.len()
+        };
+        assert!(chain_len >= 3, "expected at least 3 pages, got {chain_len}");
+
+        // Verify we can get all entries
+        let eng = &engine;
+        stream::iter(0usize..1000)
+            .for_each(|j| async move {
+                let name = format!("GLOBAL_{j:04}");
+                let result = eng.registry_get(&name).await;
+                assert_eq!(
+                    result,
+                    Some(PageId::from(j as u64)),
+                    "failed to get {name}"
+                );
+            })
+            .await;
+
+        // Verify total entries count
+        let entries = engine.registry_entries().await;
+        assert_eq!(entries.len(), 1000);
+    }
+
+    #[tokio::test]
+    async fn registry_stress_persist_and_reopen() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("testdb");
+
+        let num_globals = 500usize;
+
+        // Create and populate
+        {
+            let engine =
+                FileStorageEngine::create(&db_path, StorageConfig::default())
+                    .await
+                    .expect("create");
+
+            let eng = &engine;
+            stream::iter(0..num_globals)
+                .for_each(|i| async move {
+                    let name = format!("G_{i:04}");
+                    eng.registry_insert(name, PageId::from(i as u64))
+                        .await
+                        .unwrap();
+                })
+                .await;
+
+            engine.flush().await.expect("flush");
+        }
+
+        // Reopen and verify
+        {
+            let engine =
+                FileStorageEngine::open(&db_path, StorageConfig::default())
+                    .await
+                    .expect("open");
+
+            let entries = engine.registry_entries().await;
+            assert_eq!(entries.len(), num_globals);
+
+            // Spot check a few entries
+            assert_eq!(
+                engine.registry_get("G_0000").await,
+                Some(PageId::from(0))
+            );
+            assert_eq!(
+                engine.registry_get("G_0250").await,
+                Some(PageId::from(250))
+            );
+            assert_eq!(
+                engine.registry_get("G_0499").await,
+                Some(PageId::from(499))
+            );
+        }
     }
 }
