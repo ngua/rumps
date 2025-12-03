@@ -88,16 +88,18 @@ pub(crate) struct StorageMetadata {
 /// # Layout
 ///
 /// ```text
-/// Offset   Size     Field
-/// 0        4        Magic ("RUMP")
-/// 4        4        Version (2)
-/// 8        8        Flags (reserved, must be 0)
-/// 16       8        Total allocated page count (cached)
-/// 24       8        Bitmap page count (N)
-/// 32       8×500    Bitmap page IDs [PageId; 500]
-/// 4032     56       Reserved (future use)
-/// 4088     4        Checksum (CRC32 of bytes 0..4088)
-/// 4092     4        Padding
+// ┌─────────────────────────────────────────────────────────────┐
+// │ Offset   Size     Field                                     │
+// ├─────────────────────────────────────────────────────────────┤
+// │ 0        4        Magic ("RUMP")                            │
+// │ 4        4        Version (2)                               │
+// │ 8        8        Flags (reserved, must be 0)               │
+// │ 16       8        Total allocated page count (cached)       │
+// │ 24       8        Bitmap page count (N)                     │
+// │ 32       8×500    Bitmap page IDs [PageId; 500]             │
+// │ 4032     56       Reserved (future: GlobalRegistry root)    │
+// │ 4088     8        Checksum (CRC64 of bytes 0..4088)         │
+// └─────────────────────────────────────────────────────────────┘
 /// ```
 #[derive(Debug, Clone)]
 pub(crate) struct Superblock {
@@ -663,13 +665,12 @@ impl FileStorageEngine {
         } else {
             // Reserve pages: 0 = superblock, 1 = first bitmap page
             let first_bm_page = PageId::from_page_num(1)?;
-            let page_alloc =
-                PageAllocator::with_reserved(64, cfg.max_pages, &[0, 1]);
-
+            let page_alloc = PageAllocator::new(64, cfg.max_pages, &[0, 1]);
             // Serialize bitmap to page 1
             let bm_data = page_alloc.to_bytes().await;
-            let mut bm_page = vec![0u8; page::PAGE_SIZE];
             let copy_len = bm_data.len().min(page::PAGE_SIZE);
+            let mut bm_page = vec![0u8; page::PAGE_SIZE];
+
             bm_page
                 .get_mut(..copy_len)
                 .map(|s| s.copy_from_slice(&bm_data[..copy_len]));
