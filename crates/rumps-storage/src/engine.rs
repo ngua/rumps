@@ -2880,4 +2880,232 @@ mod tests {
             sb.add_direct_bitmap_page(PageId::from_page_num(401).unwrap());
         assert!(result.is_err());
     }
+
+    #[test]
+    fn collect_all_bitmap_ids_direct_only() {
+        let mut sb = Superblock::new(PageId::from_page_num(1).unwrap(), 100);
+        sb.add_direct_bitmap_page(PageId::from_page_num(2).unwrap())
+            .unwrap();
+        sb.add_direct_bitmap_page(PageId::from_page_num(3).unwrap())
+            .unwrap();
+
+        let ids = FileStorageEngine::collect_all_bitmap_ids(&sb, None, None);
+
+        assert_eq!(ids.len(), 3);
+        assert_eq!(ids[0].page_num(), 1);
+        assert_eq!(ids[1].page_num(), 2);
+        assert_eq!(ids[2].page_num(), 3);
+    }
+
+    #[test]
+    fn collect_all_bitmap_ids_with_single_indirect() {
+        let mut sb = Superblock::new(PageId::from_page_num(1).unwrap(), 100);
+        sb.add_direct_bitmap_page(PageId::from_page_num(2).unwrap())
+            .unwrap();
+
+        let mut single = IndirectPage::new();
+        single.push(PageId::from_page_num(100).unwrap()).unwrap();
+        single.push(PageId::from_page_num(101).unwrap()).unwrap();
+
+        let ids =
+            FileStorageEngine::collect_all_bitmap_ids(&sb, Some(&single), None);
+
+        assert_eq!(ids.len(), 4);
+        assert_eq!(ids[0].page_num(), 1);
+        assert_eq!(ids[1].page_num(), 2);
+        assert_eq!(ids[2].page_num(), 100);
+        assert_eq!(ids[3].page_num(), 101);
+    }
+
+    #[test]
+    fn collect_all_bitmap_ids_with_double_indirect() {
+        let sb = Superblock::new(PageId::from_page_num(1).unwrap(), 100);
+
+        let mut single = IndirectPage::new();
+        single.push(PageId::from_page_num(100).unwrap()).unwrap();
+
+        // Double-indirect: main page points to sub-indirect pages
+        let mut sub1 = IndirectPage::new();
+        sub1.push(PageId::from_page_num(200).unwrap()).unwrap();
+        sub1.push(PageId::from_page_num(201).unwrap()).unwrap();
+
+        let mut sub2 = IndirectPage::new();
+        sub2.push(PageId::from_page_num(300).unwrap()).unwrap();
+
+        // The main double-indirect page (entries are sub-indirect page IDs)
+        let mut double_main = IndirectPage::new();
+        double_main
+            .push(PageId::from_page_num(50).unwrap())
+            .unwrap(); // sub1's page
+        double_main
+            .push(PageId::from_page_num(51).unwrap())
+            .unwrap(); // sub2's page
+
+        let double = (double_main, vec![sub1, sub2]);
+
+        let ids = FileStorageEngine::collect_all_bitmap_ids(
+            &sb,
+            Some(&single),
+            Some(&double),
+        );
+
+        // direct (1) + single (100) + double sub1 (200, 201) + double sub2 (300)
+        assert_eq!(ids.len(), 5);
+        assert_eq!(ids[0].page_num(), 1);
+        assert_eq!(ids[1].page_num(), 100);
+        assert_eq!(ids[2].page_num(), 200);
+        assert_eq!(ids[3].page_num(), 201);
+        assert_eq!(ids[4].page_num(), 300);
+    }
+
+    // ---- Expensive integration test for indirect bitmap allocation ----
+    //
+    // Run with: cargo test -p rumps-storage single_indirect_allocation -- --ignored --nocapture
+    //
+    // Requirements:
+    // - ~50 GB free disk space (sparse file, actual usage depends on filesystem)
+    // - Less than one minute to minutes to run (allocates ~13M pages)
+    //   - NOTE: On 1TB ZFS SSD, run time is 19.13s
+
+    #[tokio::test]
+    #[ignore = "expensive: ~50GB sparse file, potentially several minutes to run"]
+    async fn single_indirect_allocation_and_roundtrip() {
+        use std::time::Instant;
+
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("large_db");
+
+        // Each bitmap page tracks PAGE_SIZE * 8 = 32,768 pages
+        // We have 400 direct bitmap slots
+        // To trigger single-indirect, we need to exceed 400 bitmap pages
+        // That means allocating > 400 * 32,768 = 13,107,200 pages
+        let bits_per_bm_page = page::PAGE_SIZE * 8;
+        let target_pages =
+            Superblock::MAX_DIRECT_BITMAP_PAGES * bits_per_bm_page + 1000;
+
+        println!(
+            "Target: {} pages (~{} GB sparse file)",
+            target_pages,
+            (target_pages * page::PAGE_SIZE) / (1024 * 1024 * 1024)
+        );
+
+        // Create database
+        let engine =
+            FileStorageEngine::create(&db_path, StorageConfig::default())
+                .await
+                .expect("create");
+
+        let start = Instant::now();
+        let mut last_report = 0usize;
+
+        // Allocate pages until we exceed direct bitmap capacity
+        // Note: pages 0-3 are reserved (superblock, bitmap, metadata, registry)
+        // and first bitmap page is already allocated
+        let mut allocated = 0usize;
+        while allocated < target_pages {
+            engine.allocate().await.expect("allocate");
+            allocated += 1;
+
+            // Progress report every 1M pages
+            if allocated / 1_000_000 > last_report {
+                last_report = allocated / 1_000_000;
+                let elapsed = start.elapsed().as_secs();
+                println!(
+                    "  Allocated {}M pages in {}s ({} pages/sec)",
+                    last_report,
+                    elapsed,
+                    if elapsed > 0 {
+                        allocated as u64 / elapsed
+                    } else {
+                        0
+                    }
+                );
+            }
+        }
+
+        println!(
+            "Allocation complete: {} pages in {:?}",
+            allocated,
+            start.elapsed()
+        );
+
+        // Verify single-indirect is now set
+        {
+            let sb = engine.superblock.read().await;
+            assert!(
+                sb.single_indirect.is_some(),
+                "single_indirect should be set after allocating {} pages",
+                allocated
+            );
+            assert_eq!(
+                sb.direct_bitmap_ids.len(),
+                Superblock::MAX_DIRECT_BITMAP_PAGES,
+                "should have exactly {} direct bitmap pages",
+                Superblock::MAX_DIRECT_BITMAP_PAGES
+            );
+            println!(
+                "Superblock: {} direct bitmap pages, single_indirect = {:?}",
+                sb.direct_bitmap_ids.len(),
+                sb.single_indirect
+            );
+        }
+
+        // Verify single-indirect page has entries
+        {
+            let si = engine.single_indirect.read().await;
+            assert!(si.is_some(), "single_indirect page should exist");
+            let si_len = si.as_ref().unwrap().len();
+            assert!(si_len > 0, "single_indirect should have entries");
+            println!("Single-indirect page has {} entries", si_len);
+        }
+
+        // Flush to disk
+        engine.flush().await.expect("flush");
+        drop(engine);
+
+        println!("Reopening database...");
+
+        // Reopen and verify
+        let engine =
+            FileStorageEngine::open(&db_path, StorageConfig::default())
+                .await
+                .expect("reopen");
+
+        {
+            let sb = engine.superblock.read().await;
+            assert!(
+                sb.single_indirect.is_some(),
+                "single_indirect should persist after reopen"
+            );
+            assert_eq!(
+                sb.direct_bitmap_ids.len(),
+                Superblock::MAX_DIRECT_BITMAP_PAGES
+            );
+        }
+
+        {
+            let si = engine.single_indirect.read().await;
+            assert!(si.is_some());
+            println!(
+                "After reopen: single_indirect has {} entries",
+                si.as_ref().unwrap().len()
+            );
+        }
+
+        // Verify allocated count matches
+        let reopened_count = engine.page_alloc.allocated_count().await;
+        // +4 for reserved pages (superblock, first bitmap, metadata, registry)
+        // plus additional bitmap pages allocated during growth
+        assert!(
+            reopened_count >= allocated as u64,
+            "allocated count {} should be >= {}",
+            reopened_count,
+            allocated
+        );
+
+        println!(
+            "Test passed! Allocated {} pages, single-indirect working.",
+            reopened_count
+        );
+    }
 }
