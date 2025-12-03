@@ -87,34 +87,56 @@ pub(crate) struct StorageMetadata {
 ///
 /// # Layout
 ///
+/// The superblock uses a filesystem-style indirect block scheme to support
+/// databases up to ~32 TiB. Direct slots hold up to 400 bitmap page IDs.
+/// When more are needed, single-indirect and double-indirect pages provide
+/// additional capacity.
+///
 /// ```text
-// ┌─────────────────────────────────────────────────────────────┐
-// │ Offset   Size     Field                                     │
-// ├─────────────────────────────────────────────────────────────┤
-// │ 0        4        Magic ("RUMP")                            │
-// │ 4        4        Version (2)                               │
-// │ 8        8        Flags (reserved, must be 0)               │
-// │ 16       8        Total allocated page count (cached)       │
-// │ 24       8        Bitmap page count (N)                     │
-// │ 32       8×500    Bitmap page IDs [PageId; 500]             │
-// │ 4032     8        Metadata page ID (0 = none)               │
-// │ 4040     8        Registry page ID (0 = none)               │
-// │ 4048     40       Reserved (future use)                     │
-// │ 4088     8        Checksum (CRC32 of bytes 0..4088)         │
-// └─────────────────────────────────────────────────────────────┘
+/// ┌─────────────────────────────────────────────────────────────┐
+/// │ Offset   Size     Field                                     │
+/// ├─────────────────────────────────────────────────────────────┤
+/// │ 0        4        Magic ("RUMP")                            │
+/// │ 4        4        Version (1)                               │
+/// │ 8        8        Flags (reserved, must be 0)               │
+/// │ 16       8        Total allocated page count (cached)       │
+/// │ 24       8        Direct bitmap count (N ≤ 400)             │
+/// │ 32       3200     Direct bitmap page IDs [PageId; 400]      │
+/// │ 3232     8        Single-indirect bitmap page (0 = none)    │
+/// │ 3240     8        Double-indirect bitmap page (0 = none)    │
+/// │ 3248     8        Metadata page ID (0 = none)               │
+/// │ 3256     8        Registry page ID (0 = none)               │
+/// │ 3264     816      Reserved                                  │
+/// │ 4080     8        Checksum (CRC32 of bytes 0..4080)         │
+/// └─────────────────────────────────────────────────────────────┘
 /// ```
+///
+/// # Capacity
+///
+/// | Level             | Bitmap Pages   | Data Size   |
+/// |-------------------|----------------|-------------|
+/// | 400 direct        | 400            | ~50 GiB     |
+/// | 1 single-indirect | 512            | ~64 GiB     |
+/// | 1 double-indirect | 262,144        | ~32 TiB     |
+/// | **Total**         | ~263,000       | **~32 TiB** |
+/// |-------------------|----------------|-------------|
+///
 #[derive(Debug, Clone)]
 pub(crate) struct Superblock {
-    /// Format version (currently 2).
+    /// Format version (currently 1).
     pub(crate) version: u32,
     /// Flags (reserved, must be 0).
     pub(crate) flags: u64,
     /// Cached count of total allocated pages.
     pub(crate) total_pages: u64,
-    /// Number of bitmap pages in use.
-    pub(crate) bitmap_page_count: u64,
-    /// Page IDs of bitmap pages (up to 500).
-    pub(crate) bitmap_page_ids: Vec<PageId>,
+    /// Number of direct bitmap pages in use (`<= 400`).
+    pub(crate) direct_bitmap_count: u64,
+    /// Page IDs of direct bitmap pages (up to 400).
+    pub(crate) direct_bitmap_ids: Vec<PageId>,
+    /// Single-indirect page (holds up to 512 bitmap page IDs).
+    pub(crate) single_indirect: Option<PageId>,
+    /// Double-indirect page (holds up to 512 indirect page IDs).
+    pub(crate) double_indirect: Option<PageId>,
     /// Page ID of the metadata page (`None` = not yet allocated).
     pub(crate) metadata_root: Option<PageId>,
     /// Page ID of the global registry page (`None` = not yet allocated).
@@ -128,8 +150,11 @@ impl Superblock {
     /// Current superblock version.
     const VERSION: u32 = 1;
 
-    /// Maximum number of bitmap pages.
-    pub(crate) const MAX_BITMAP_PAGES: usize = 500;
+    /// Maximum number of direct bitmap pages.
+    pub(crate) const MAX_DIRECT_BITMAP_PAGES: usize = 400;
+
+    /// Number of `PageId` entries per indirect page (`PAGE_SIZE / 8`).
+    pub(crate) const INDIRECT_ENTRIES_PER_PAGE: usize = page::PAGE_SIZE / 8;
 
     // Layout offsets
     const OFF_MAGIC: usize = 0;
@@ -138,20 +163,24 @@ impl Superblock {
     const OFF_TOTAL_PAGES: usize = 16;
     const OFF_BITMAP_COUNT: usize = 24;
     const OFF_BITMAP_IDS: usize = 32;
-    const OFF_METADATA_ROOT: usize = 32 + 8 * Self::MAX_BITMAP_PAGES; // 4032
-    const OFF_REGISTRY_ROOT: usize = Self::OFF_METADATA_ROOT + 8; // 4040
-    const OFF_RESERVED: usize = Self::OFF_REGISTRY_ROOT + 8; // 4048
-    const OFF_CHECKSUM: usize = 4088;
+    const OFF_SINGLE_INDIRECT: usize = 32 + 8 * Self::MAX_DIRECT_BITMAP_PAGES; // 3232
+    const OFF_DOUBLE_INDIRECT: usize = Self::OFF_SINGLE_INDIRECT + 8; // 3240
+    const OFF_METADATA_ROOT: usize = Self::OFF_DOUBLE_INDIRECT + 8; // 3248
+    const OFF_REGISTRY_ROOT: usize = Self::OFF_METADATA_ROOT + 8; // 3256
+    const OFF_RESERVED: usize = Self::OFF_REGISTRY_ROOT + 8; // 3264
+    const OFF_CHECKSUM: usize = 4080;
     const SIZE: usize = 4096;
 
-    /// Create a new superblock with a single bitmap page.
+    /// Create a new superblock with a single direct bitmap page.
     pub(crate) fn new(first_bitmap_page: PageId, total_pages: u64) -> Self {
         Self {
             version: Self::VERSION,
             flags: 0,
             total_pages,
-            bitmap_page_count: 1,
-            bitmap_page_ids: vec![first_bitmap_page],
+            direct_bitmap_count: 1,
+            direct_bitmap_ids: vec![first_bitmap_page],
+            single_indirect: None,
+            double_indirect: None,
             metadata_root: None,
             registry_root: None,
         }
@@ -177,20 +206,32 @@ impl Superblock {
         buf.get_mut(Self::OFF_TOTAL_PAGES..Self::OFF_BITMAP_COUNT)
             .map(|s| s.copy_from_slice(&self.total_pages.to_le_bytes()));
 
-        // Bitmap page count
+        // Direct bitmap page count
         buf.get_mut(Self::OFF_BITMAP_COUNT..Self::OFF_BITMAP_IDS)
-            .map(|s| s.copy_from_slice(&self.bitmap_page_count.to_le_bytes()));
+            .map(|s| {
+                s.copy_from_slice(&self.direct_bitmap_count.to_le_bytes())
+            });
 
-        // Bitmap page IDs
-        self.bitmap_page_ids
+        // Direct bitmap page IDs
+        self.direct_bitmap_ids
             .iter()
-            .take(Self::MAX_BITMAP_PAGES)
+            .take(Self::MAX_DIRECT_BITMAP_PAGES)
             .enumerate()
             .for_each(|(i, &pid)| {
                 let off = Self::OFF_BITMAP_IDS + i * 8;
                 buf.get_mut(off..off + 8)
                     .map(|s| s.copy_from_slice(&u64::from(pid).to_le_bytes()));
             });
+
+        // Single-indirect (0 = None)
+        let single_val = self.single_indirect.map_or(0u64, u64::from);
+        buf.get_mut(Self::OFF_SINGLE_INDIRECT..Self::OFF_DOUBLE_INDIRECT)
+            .map(|s| s.copy_from_slice(&single_val.to_le_bytes()));
+
+        // Double-indirect (0 = None)
+        let double_val = self.double_indirect.map_or(0u64, u64::from);
+        buf.get_mut(Self::OFF_DOUBLE_INDIRECT..Self::OFF_METADATA_ROOT)
+            .map(|s| s.copy_from_slice(&double_val.to_le_bytes()));
 
         // Metadata root (0 = None)
         let meta_val = self.metadata_root.map_or(0u64, u64::from);
@@ -202,7 +243,7 @@ impl Superblock {
         buf.get_mut(Self::OFF_REGISTRY_ROOT..Self::OFF_RESERVED)
             .map(|s| s.copy_from_slice(&reg_val.to_le_bytes()));
 
-        // CRC32 checksum of bytes 0..4088
+        // CRC32 checksum of bytes 0..4080
         let crc = crc32fast::hash(buf.get(..Self::OFF_CHECKSUM).unwrap_or(&[]));
         buf.get_mut(Self::OFF_CHECKSUM..Self::OFF_CHECKSUM + 4)
             .map(|s| s.copy_from_slice(&crc.to_le_bytes()));
@@ -282,20 +323,29 @@ impl Superblock {
         let version = read_u32(Self::OFF_VERSION)?;
         let flags = read_u64(Self::OFF_FLAGS)?;
         let total_pages = read_u64(Self::OFF_TOTAL_PAGES)?;
-        let bitmap_page_count = read_u64(Self::OFF_BITMAP_COUNT)?;
+        let direct_bitmap_count = read_u64(Self::OFF_BITMAP_COUNT)?;
 
-        if bitmap_page_count > Self::MAX_BITMAP_PAGES as u64 {
+        if direct_bitmap_count > Self::MAX_DIRECT_BITMAP_PAGES as u64 {
             Err(StorageError::InvalidOperation(format!(
-                "bitmap_page_count {bitmap_page_count} exceeds max {}",
-                Self::MAX_BITMAP_PAGES
+                "direct_bitmap_count {direct_bitmap_count} exceeds max {}",
+                Self::MAX_DIRECT_BITMAP_PAGES
             )))
         } else {
-            let bitmap_page_ids = (0..bitmap_page_count as usize)
+            let direct_bitmap_ids = (0..direct_bitmap_count as usize)
                 .map(|i| {
                     let off = Self::OFF_BITMAP_IDS + i * 8;
                     read_u64(off).map(PageId::from)
                 })
                 .collect::<Result<Vec<_>>>()?;
+
+            // Read single/double indirect pointers (0 = None)
+            let single_val = read_u64(Self::OFF_SINGLE_INDIRECT)?;
+            let double_val = read_u64(Self::OFF_DOUBLE_INDIRECT)?;
+
+            let single_indirect =
+                (single_val != 0).then(|| PageId::from(single_val));
+            let double_indirect =
+                (double_val != 0).then(|| PageId::from(double_val));
 
             // Read metadata and registry roots (0 = None)
             let meta_val = read_u64(Self::OFF_METADATA_ROOT)?;
@@ -308,27 +358,167 @@ impl Superblock {
                 version,
                 flags,
                 total_pages,
-                bitmap_page_count,
-                bitmap_page_ids,
+                direct_bitmap_count,
+                direct_bitmap_ids,
+                single_indirect,
+                double_indirect,
                 metadata_root,
                 registry_root,
             })
         }
     }
 
-    /// Add a new bitmap page ID.
+    /// Add a new direct bitmap page ID.
     ///
-    /// Returns `Err` if already at maximum capacity.
-    pub(crate) fn add_bitmap_page(&mut self, pid: PageId) -> Result<()> {
-        if self.bitmap_page_ids.len() >= Self::MAX_BITMAP_PAGES {
+    /// Returns `Err` if already at maximum direct capacity.
+    /// For indirect pages, use [`Self::set_single_indirect`] or [`Self::set_double_indirect`].
+    pub(crate) fn add_direct_bitmap_page(&mut self, pid: PageId) -> Result<()> {
+        if self.direct_bitmap_ids.len() >= Self::MAX_DIRECT_BITMAP_PAGES {
             Err(StorageError::InvalidOperation(format!(
-                "cannot add bitmap page: already at max {}",
-                Self::MAX_BITMAP_PAGES
+                "cannot add direct bitmap page: already at max {}",
+                Self::MAX_DIRECT_BITMAP_PAGES
             )))
         } else {
-            self.bitmap_page_ids.push(pid);
-            self.bitmap_page_count += 1;
+            self.direct_bitmap_ids.push(pid);
+            self.direct_bitmap_count += 1;
             Ok(())
+        }
+    }
+
+    /// Set the single-indirect page pointer.
+    pub(crate) fn set_single_indirect(&mut self, pid: PageId) {
+        self.single_indirect = Some(pid);
+    }
+
+    /// Set the double-indirect page pointer.
+    pub(crate) fn set_double_indirect(&mut self, pid: PageId) {
+        self.double_indirect = Some(pid);
+    }
+
+    /// Returns true if we can add more bitmap pages via direct slots or indirect pages.
+    pub(crate) fn can_add_bitmap_page(&self) -> bool {
+        // Can always add if direct slots available
+        self.direct_bitmap_ids.len() < Self::MAX_DIRECT_BITMAP_PAGES
+            // Or if single-indirect not set yet (we can create it)
+            || self.single_indirect.is_none()
+            // Or if double-indirect not set yet (we can create it)
+            || self.double_indirect.is_none()
+        // Otherwise, indirect pages might have room (caller needs to check)
+    }
+
+    /// Get all reserved page numbers that this superblock tracks.
+    ///
+    /// This includes superblock itself (0), all direct bitmap pages,
+    /// and indirect page pointers. Caller must also check indirect page
+    /// contents for additional reserved pages.
+    pub(crate) fn reserved_page_nums(&self) -> Vec<u64> {
+        std::iter::once(0u64)
+            .chain(self.direct_bitmap_ids.iter().map(|pid| pid.page_num()))
+            .chain(self.single_indirect.iter().map(|pid| pid.page_num()))
+            .chain(self.double_indirect.iter().map(|pid| pid.page_num()))
+            .collect()
+    }
+}
+
+/// Indirect page holding `PageId` entries for bitmap pages (or further indirection).
+///
+/// Each indirect page holds `PAGE_SIZE / 8 = 512` entries (at 4KB page size).
+/// Used for both single-indirect (points to bitmap pages) and double-indirect
+/// (points to single-indirect pages).
+///
+/// # Layout
+///
+/// ```text
+/// ┌─────────────────────────────────────────────────────────────┐
+/// │ 512 × 8-byte PageId entries (or fewer if not all used)      │
+/// │ Entry value 0 = empty slot (no page)                        │
+/// └─────────────────────────────────────────────────────────────┘
+/// ```
+#[derive(Debug, Clone)]
+pub(crate) struct IndirectPage {
+    /// Page IDs stored in this indirect page.
+    /// Length <= `Superblock::INDIRECT_ENTRIES_PER_PAGE`.
+    pub(crate) entries: Vec<PageId>,
+}
+
+impl IndirectPage {
+    /// Create a new empty indirect page.
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Create an indirect page from a list of page IDs.
+    pub(crate) fn from_entries(entries: Vec<PageId>) -> Self {
+        Self { entries }
+    }
+
+    /// Number of entries in this page.
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if the page is empty.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Check if the page is full.
+    pub(crate) fn is_full(&self) -> bool {
+        self.entries.len() >= Superblock::INDIRECT_ENTRIES_PER_PAGE
+    }
+
+    /// Add an entry if not full. Returns `Err` if full.
+    pub(crate) fn push(&mut self, pid: PageId) -> Result<()> {
+        if self.is_full() {
+            Err(StorageError::InvalidOperation(
+                "indirect page is full".into(),
+            ))
+        } else {
+            self.entries.push(pid);
+            Ok(())
+        }
+    }
+
+    /// Serialize to a page-sized buffer.
+    pub(crate) fn serialize(&self) -> [u8; page::PAGE_SIZE] {
+        let mut buf = [0u8; page::PAGE_SIZE];
+
+        self.entries
+            .iter()
+            .take(Superblock::INDIRECT_ENTRIES_PER_PAGE)
+            .enumerate()
+            .for_each(|(i, &pid)| {
+                let off = i * 8;
+                buf.get_mut(off..off + 8)
+                    .map(|s| s.copy_from_slice(&u64::from(pid).to_le_bytes()));
+            });
+
+        buf
+    }
+
+    /// Deserialize from a page-sized buffer.
+    ///
+    /// Reads entries until a zero (empty slot) is encountered.
+    pub(crate) fn deserialize(buf: &[u8]) -> Result<Self> {
+        if buf.len() < page::PAGE_SIZE {
+            Err(StorageError::InvalidOperation(
+                "indirect page buffer too small".into(),
+            ))
+        } else {
+            let entries = (0..Superblock::INDIRECT_ENTRIES_PER_PAGE)
+                .filter_map(|i| {
+                    let off = i * 8;
+                    buf.get(off..off + 8)
+                        .and_then(|s| s.try_into().ok())
+                        .map(u64::from_le_bytes)
+                })
+                .take_while(|&v| v != 0)
+                .map(PageId::from)
+                .collect();
+
+            Ok(Self { entries })
         }
     }
 }
@@ -856,6 +1046,12 @@ pub(crate) trait AsyncStorageEngine: Send + Sync {
     async fn metadata(&self) -> StorageMetadata;
 }
 
+/// Indirect page data loaded from disk during superblock loading.
+struct LoadedIndirectPages {
+    single: Option<IndirectPage>,
+    double: Option<(IndirectPage, Vec<IndirectPage>)>,
+}
+
 /// File-based storage engine with WAL and page cache.
 ///
 /// `FileStorageEngine` persists B-tree nodes to disk using:
@@ -900,6 +1096,15 @@ pub(crate) struct FileStorageEngine {
 
     /// Superblock containing metadata and bitmap page locations.
     superblock: RwLock<Superblock>,
+
+    /// Single-indirect page contents (bitmap page IDs).
+    /// `None` if no single-indirect page is allocated.
+    single_indirect: RwLock<Option<IndirectPage>>,
+
+    /// Double-indirect page contents (indirect page IDs + their contents).
+    /// Outer Option is None if no double-indirect page is allocated.
+    /// Inner Vec contains the indirect pages pointed to by double-indirect.
+    double_indirect: RwLock<Option<(IndirectPage, Vec<IndirectPage>)>>,
 
     /// Database metadata (page size, creation time, etc.).
     metadata: RwLock<MetadataPage>,
@@ -1005,9 +1210,9 @@ impl FileStorageEngine {
                     source: e,
                 })?;
 
-            // Parse superblock and load bitmap pages
+            // Parse superblock and load bitmap pages (including indirect)
             // (Superblock::deserialize validates magic and checksum)
-            let (page_alloc, superblock) =
+            let (page_alloc, superblock, indirect) =
                 Self::load_superblock(&mut file, &hdr, &cfg, &data_path)
                     .await?;
 
@@ -1066,6 +1271,8 @@ impl FileStorageEngine {
                 cache: Arc::new(cache),
                 page_alloc: Arc::new(page_alloc),
                 superblock: RwLock::new(superblock),
+                single_indirect: RwLock::new(indirect.single),
+                double_indirect: RwLock::new(indirect.double),
                 metadata: RwLock::new(metadata),
                 registry: RwLock::new(registry),
                 cfg,
@@ -1074,29 +1281,138 @@ impl FileStorageEngine {
         }
     }
 
-    /// Load superblock and bitmap pages.
+    /// Load superblock and bitmap pages (including indirect pages).
+    ///
+    /// Returns `(allocator, superblock, single_indirect, double_indirect)`.
     async fn load_superblock(
         file: &mut File,
         hdr: &[u8],
         cfg: &StorageConfig,
         data_path: &Path,
-    ) -> Result<(PageAllocator, Superblock)> {
+    ) -> Result<(PageAllocator, Superblock, LoadedIndirectPages)> {
         let superblock = Superblock::deserialize(hdr)?;
 
-        // Read all bitmap pages and concatenate
-        let bm_data =
-            Self::read_pages(file, &superblock.bitmap_page_ids, data_path)
+        // Resolve all bitmap page IDs (direct + indirect)
+        let (bm_page_ids, reserved, indirect_pages) =
+            Self::resolve_bitmap_pages_full(file, &superblock, data_path)
                 .await?;
 
-        // Build reserved pages: superblock (0) + all bitmap pages
-        let reserved: Vec<u64> = std::iter::once(0)
-            .chain(superblock.bitmap_page_ids.iter().map(|pid| pid.page_num()))
-            .collect();
+        // Read all bitmap pages and concatenate
+        let bm_data = Self::read_pages(file, &bm_page_ids, data_path).await?;
 
         let page_alloc =
             PageAllocator::from_bytes(&bm_data, cfg.max_pages, &reserved)?;
 
-        Ok((page_alloc, superblock))
+        Ok((page_alloc, superblock, indirect_pages))
+    }
+
+    /// Resolve all bitmap page IDs from direct slots and indirect pages.
+    ///
+    /// Returns `(bitmap_page_ids, reserved_page_nums, indirect_pages)` where
+    /// reserved includes superblock, all bitmap pages, and all indirect pages.
+    async fn resolve_bitmap_pages_full(
+        file: &mut File,
+        sb: &Superblock,
+        path: &Path,
+    ) -> Result<(Vec<PageId>, Vec<u64>, LoadedIndirectPages)> {
+        // Start with direct bitmap pages
+        let mut bm_ids: Vec<PageId> = sb.direct_bitmap_ids.clone();
+        let mut reserved: Vec<u64> = sb.reserved_page_nums();
+
+        // Single-indirect: read indirect page, extract bitmap page IDs
+        let single_indirect = match sb.single_indirect {
+            Some(single_pid) => {
+                let buf =
+                    Self::read_page_at(file, single_pid.byte_offset(), path)
+                        .await?;
+                let indirect = IndirectPage::deserialize(&buf)?;
+
+                // Add single-indirect bitmap pages to reserved and bm_ids
+                indirect.entries.iter().for_each(|&pid| {
+                    reserved.push(pid.page_num());
+                    bm_ids.push(pid);
+                });
+
+                Some(indirect)
+            }
+            None => None,
+        };
+
+        // Double-indirect: read indirect page, then each sub-indirect page
+        let double_indirect = match sb.double_indirect {
+            Some(double_pid) => {
+                let buf =
+                    Self::read_page_at(file, double_pid.byte_offset(), path)
+                        .await?;
+                let double_page = IndirectPage::deserialize(&buf)?;
+
+                // Read each sub-indirect page
+                let sub_pages = Self::load_double_indirect_entries(
+                    file,
+                    &double_page.entries,
+                    path,
+                    &mut bm_ids,
+                    &mut reserved,
+                )
+                .await?;
+
+                Some((double_page, sub_pages))
+            }
+            None => None,
+        };
+
+        let indirect = LoadedIndirectPages {
+            single: single_indirect,
+            double: double_indirect,
+        };
+
+        Ok((bm_ids, reserved, indirect))
+    }
+
+    /// Load double-indirect entries recursively.
+    fn load_double_indirect_entries<'a>(
+        file: &'a mut File,
+        entries: &'a [PageId],
+        path: &'a Path,
+        bm_ids: &'a mut Vec<PageId>,
+        reserved: &'a mut Vec<u64>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<IndirectPage>>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            match entries.split_first() {
+                None => Ok(Vec::new()),
+                Some((&sub_pid, rest)) => {
+                    // This entry is a sub-indirect page within double-indirect
+                    reserved.push(sub_pid.page_num());
+
+                    let buf =
+                        Self::read_page_at(file, sub_pid.byte_offset(), path)
+                            .await?;
+                    let sub_page = IndirectPage::deserialize(&buf)?;
+
+                    // Add all bitmap pages from this indirect page
+                    sub_page.entries.iter().for_each(|&pid| {
+                        reserved.push(pid.page_num());
+                        bm_ids.push(pid);
+                    });
+
+                    let mut rest_pages = Self::load_double_indirect_entries(
+                        file, rest, path, bm_ids, reserved,
+                    )
+                    .await?;
+
+                    // Prepend this page
+                    let mut result = vec![sub_page];
+                    result.append(&mut rest_pages);
+                    Ok(result)
+                }
+            }
+        })
     }
 
     /// Read multiple pages and concatenate their contents.
@@ -1293,6 +1609,8 @@ impl FileStorageEngine {
                 cache: Arc::new(cache),
                 page_alloc: Arc::new(page_alloc),
                 superblock: RwLock::new(superblock),
+                single_indirect: RwLock::new(None),
+                double_indirect: RwLock::new(None),
                 metadata: RwLock::new(metadata),
                 registry: RwLock::new(registry),
                 cfg,
@@ -1470,19 +1788,32 @@ impl FileStorageEngine {
         Ok(())
     }
 
-    /// Flush metadata (bitmap pages + superblock) to disk.
+    /// Flush metadata (bitmap pages + indirect pages + superblock) to disk.
     ///
-    /// This writes the page allocator bitmap to the designated bitmap pages
-    /// and updates the superblock with the current total page count.
+    /// This writes the page allocator bitmap to all designated bitmap pages
+    /// (direct + indirect) and updates the superblock with current total pages.
     async fn flush_metadata(&self) -> Result<()> {
-        let bm_page_ids = self.superblock.read().await.bitmap_page_ids.clone();
+        let superblock = self.superblock.read().await;
+        let single_indirect = self.single_indirect.read().await;
+        let double_indirect = self.double_indirect.read().await;
+
+        // Collect all bitmap page IDs in order
+        let bm_page_ids = Self::collect_all_bitmap_ids(
+            &superblock,
+            single_indirect.as_ref(),
+            double_indirect.as_ref(),
+        );
+        drop(single_indirect);
+        drop(double_indirect);
+        drop(superblock);
+
         let bm_data = self.page_alloc.to_bytes().await;
         let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
 
         // Prepare bitmap page buffers: (PageId, page-sized buffer)
-        let bm_pages: Vec<_> = bm_page_ids
+        let bm_pages: Vec<(PageId, Vec<u8>)> = bm_page_ids
             .iter()
-            .zip((0..).map(|i| i * page::PAGE_SIZE))
+            .zip((0usize..).map(|i| i * page::PAGE_SIZE))
             .take_while(|(_, off)| *off < bm_data.len())
             .map(|(&pid, off)| {
                 let end = (off + page::PAGE_SIZE).min(bm_data.len());
@@ -1497,6 +1828,9 @@ impl FileStorageEngine {
         // Write bitmap pages sequentially
         Self::write_pages(&self.data_file, &bm_pages, &data_path).await?;
 
+        // Write indirect pages if present
+        self.flush_indirect_pages(&data_path).await?;
+
         // Update and write superblock
         let mut superblock = self.superblock.write().await;
         superblock.total_pages = self.page_alloc.allocated_count().await;
@@ -1504,6 +1838,100 @@ impl FileStorageEngine {
         drop(superblock);
 
         Self::write_page_at(&self.data_file, 0, &sb_data, &data_path).await
+    }
+
+    /// Collect all bitmap page IDs from direct slots and indirect pages.
+    fn collect_all_bitmap_ids(
+        sb: &Superblock,
+        si: Option<&IndirectPage>,
+        di: Option<&(IndirectPage, Vec<IndirectPage>)>,
+    ) -> Vec<PageId> {
+        let mut ids = sb.direct_bitmap_ids.clone();
+
+        // Add single-indirect entries
+        si.iter()
+            .for_each(|p| ids.extend(p.entries.iter().copied()));
+
+        // Add double-indirect entries (each sub-indirect page's entries)
+        di.iter().for_each(|(_, subs)| {
+            subs.iter().for_each(|sub| {
+                ids.extend(sub.entries.iter().copied());
+            });
+        });
+
+        ids
+    }
+
+    /// Flush indirect pages to disk.
+    async fn flush_indirect_pages(&self, data_path: &Path) -> Result<()> {
+        let superblock = self.superblock.read().await;
+        let single_indirect = self.single_indirect.read().await;
+        let double_indirect = self.double_indirect.read().await;
+
+        // Write single-indirect page if present
+        if let (Some(single_pid), Some(single_page)) =
+            (superblock.single_indirect, single_indirect.as_ref())
+        {
+            let buf = single_page.serialize();
+            Self::write_page_at(
+                &self.data_file,
+                single_pid.byte_offset(),
+                &buf,
+                data_path,
+            )
+            .await?;
+        }
+
+        // Write double-indirect page and sub-pages if present
+        if let (Some(double_pid), Some((double_page, sub_pages))) =
+            (superblock.double_indirect, double_indirect.as_ref())
+        {
+            // Write the double-indirect page itself
+            let double_buf = double_page.serialize();
+            Self::write_page_at(
+                &self.data_file,
+                double_pid.byte_offset(),
+                &double_buf,
+                data_path,
+            )
+            .await?;
+
+            // Write each sub-indirect page
+            Self::write_sub_indirect_pages(
+                &self.data_file,
+                &double_page.entries,
+                sub_pages,
+                data_path,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Write sub-indirect pages recursively.
+    fn write_sub_indirect_pages<'a>(
+        file: &'a RwLock<File>,
+        pids: &'a [PageId],
+        pages: &'a [IndirectPage],
+        path: &'a Path,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            match (pids.split_first(), pages.split_first()) {
+                (Some((&pid, rest_pids)), Some((page, rest_pages))) => {
+                    let buf = page.serialize();
+                    Self::write_page_at(file, pid.byte_offset(), &buf, path)
+                        .await?;
+                    Self::write_sub_indirect_pages(
+                        file, rest_pids, rest_pages, path,
+                    )
+                    .await
+                }
+                _ => Ok(()),
+            }
+        })
     }
 
     /// Write a sequence of pages to disk.
@@ -1553,18 +1981,29 @@ impl FileStorageEngine {
     /// Ensure the bitmap has capacity for at least one more page allocation.
     ///
     /// If the current bitmap pages are nearly full, allocates a new bitmap
-    /// page and adds it to the superblock. This prevents the allocator from
-    /// running out of capacity to track new pages.
+    /// page and adds it to the superblock (or indirect pages). This prevents
+    /// the allocator from running out of capacity to track new pages.
     async fn ensure_bitmap_capacity(&self) -> Result<()> {
         let superblock = self.superblock.read().await;
+        let single_indirect = self.single_indirect.read().await;
+        let double_indirect = self.double_indirect.read().await;
         let allocated = self.page_alloc.allocated_count().await;
+
+        // Count total bitmap pages across direct + indirect
+        let direct_count = superblock.direct_bitmap_count as usize;
+        let single_count = single_indirect.as_ref().map_or(0, |p| p.len());
+        let double_count = double_indirect
+            .as_ref()
+            .map_or(0, |(_, subs)| subs.iter().map(|s| s.len()).sum());
+        let total_bm_pages = direct_count + single_count + double_count;
+
+        drop(single_indirect);
+        drop(double_indirect);
+        drop(superblock);
 
         // Each bitmap page can track PAGE_SIZE * 8 pages
         let bits_per_page = page::PAGE_SIZE * 8;
-        let max_capacity =
-            superblock.bitmap_page_count as usize * bits_per_page;
-
-        drop(superblock);
+        let max_capacity = total_bm_pages * bits_per_page;
 
         // If we're near capacity (within 10 pages), grow the bitmap
         if allocated + 10 >= max_capacity as u64 {
@@ -1574,59 +2013,278 @@ impl FileStorageEngine {
         }
     }
 
-    /// Allocate a new bitmap page and add it to the superblock.
+    /// Allocate a new bitmap page and add it to the appropriate location.
+    ///
+    /// Allocation priority:
+    /// 1. Direct slots in superblock (up to 400)
+    /// 2. Single-indirect page (up to 512)
+    /// 3. Double-indirect pages (up to 512 × 512)
     async fn grow_bitmap(&self) -> Result<()> {
+        let superblock = self.superblock.read().await;
+        let can_use_direct = superblock.direct_bitmap_ids.len()
+            < Superblock::MAX_DIRECT_BITMAP_PAGES;
+        drop(superblock);
+
+        if can_use_direct {
+            // Add to direct slots
+            self.grow_bitmap_direct().await
+        } else {
+            // Need to use indirect pages
+            self.grow_bitmap_indirect().await
+        }
+    }
+
+    /// Add a bitmap page to direct slots.
+    async fn grow_bitmap_direct(&self) -> Result<()> {
         use tokio::io::AsyncWriteExt;
 
-        // Check if we've reached the max bitmap pages
-        let superblock = self.superblock.read().await;
-        if superblock.bitmap_page_ids.len() >= Superblock::MAX_BITMAP_PAGES {
-            drop(superblock);
-            Err(StorageError::MemoryLimitExceeded {
-                used: Superblock::MAX_BITMAP_PAGES,
-                limit: Superblock::MAX_BITMAP_PAGES,
-            })
-        } else {
-            drop(superblock);
+        // Allocate a new page for the bitmap
+        let new_bm_page = self.page_alloc.allocate().await?;
 
-            // Allocate a new page for the bitmap (this uses existing capacity)
-            let new_bm_page = self.page_alloc.allocate().await?;
+        // Mark it as reserved so it can't be freed
+        self.page_alloc.add_reserved(new_bm_page.page_num()).await;
 
-            // Mark it as reserved so it can't be freed
-            self.page_alloc.add_reserved(new_bm_page.page_num()).await;
+        // Extend the allocator capacity
+        let bits_per_page = page::PAGE_SIZE * 8;
+        let new_capacity =
+            self.page_alloc.capacity().await + bits_per_page as u64;
+        self.page_alloc.extend_capacity(new_capacity).await;
 
-            // Extend the allocator capacity
-            let bits_per_page = page::PAGE_SIZE * 8;
-            let new_capacity =
-                self.page_alloc.capacity().await + bits_per_page as u64;
-            self.page_alloc.extend_capacity(new_capacity).await;
+        // Add to superblock
+        let mut superblock = self.superblock.write().await;
+        superblock.add_direct_bitmap_page(new_bm_page)?;
+        drop(superblock);
 
-            // Add to superblock
-            let mut superblock = self.superblock.write().await;
-            superblock.add_bitmap_page(new_bm_page)?;
-            drop(superblock);
+        // Initialize the new bitmap page with zeros
+        let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
+        let mut file = self.data_file.write().await;
+        let zeros = vec![0u8; page::PAGE_SIZE];
 
-            // Initialize the new bitmap page with zeros
-            let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
-            let mut file = self.data_file.write().await;
-            let zeros = vec![0u8; page::PAGE_SIZE];
-
-            file.seek(SeekFrom::Start(new_bm_page.byte_offset()))
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "seek to new bitmap page".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            file.write_all(&zeros).await.map_err(|e| StorageError::Io {
-                op: "initialize bitmap page".into(),
-                path: data_path,
+        file.seek(SeekFrom::Start(new_bm_page.byte_offset()))
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "seek to new bitmap page".into(),
+                path: data_path.clone(),
                 source: e,
             })?;
 
-            Ok(())
+        file.write_all(&zeros).await.map_err(|e| StorageError::Io {
+            op: "initialize bitmap page".into(),
+            path: data_path,
+            source: e,
+        })?;
+
+        Ok(())
+    }
+
+    /// Add a bitmap page to indirect slots.
+    async fn grow_bitmap_indirect(&self) -> Result<()> {
+        let superblock = self.superblock.read().await;
+        let mut single_indirect = self.single_indirect.write().await;
+        let single_not_exists = superblock.single_indirect.is_none();
+        drop(superblock);
+
+        let bits_per_page = page::PAGE_SIZE * 8;
+
+        match single_indirect.as_mut() {
+            None if single_not_exists => {
+                // Create single-indirect page
+                let single_page_id = self.page_alloc.allocate().await?;
+                self.page_alloc
+                    .add_reserved(single_page_id.page_num())
+                    .await;
+
+                // Allocate the actual bitmap page
+                let new_bm_page = self.page_alloc.allocate().await?;
+                self.page_alloc.add_reserved(new_bm_page.page_num()).await;
+
+                // Extend capacity
+                let new_capacity =
+                    self.page_alloc.capacity().await + bits_per_page as u64;
+                self.page_alloc.extend_capacity(new_capacity).await;
+
+                // Create indirect page with the new bitmap page
+                let mut new_single = IndirectPage::new();
+                new_single.push(new_bm_page)?;
+                *single_indirect = Some(new_single);
+
+                // Update superblock
+                let mut superblock = self.superblock.write().await;
+                superblock.set_single_indirect(single_page_id);
+                drop(superblock);
+                drop(single_indirect);
+
+                // Initialize pages with zeros
+                self.initialize_page(new_bm_page).await?;
+                self.initialize_page(single_page_id).await
+            }
+            Some(page) if !page.is_full() => {
+                // Add to existing single-indirect
+                let new_bm_page = self.page_alloc.allocate().await?;
+                self.page_alloc.add_reserved(new_bm_page.page_num()).await;
+
+                // Extend capacity
+                let new_capacity =
+                    self.page_alloc.capacity().await + bits_per_page as u64;
+                self.page_alloc.extend_capacity(new_capacity).await;
+
+                // Add to indirect page
+                page.push(new_bm_page)?;
+                drop(single_indirect);
+
+                // Initialize the new bitmap page
+                self.initialize_page(new_bm_page).await
+            }
+            _ => {
+                // Single-indirect is full (or inconsistent state), need double-indirect
+                drop(single_indirect);
+                self.grow_bitmap_double_indirect().await
+            }
         }
+    }
+
+    /// Add a bitmap page via double-indirect.
+    async fn grow_bitmap_double_indirect(&self) -> Result<()> {
+        let superblock = self.superblock.read().await;
+        let mut double_indirect = self.double_indirect.write().await;
+
+        let double_exists = superblock.double_indirect.is_some();
+        drop(superblock);
+
+        let bits_per_page = page::PAGE_SIZE * 8;
+
+        if !double_exists {
+            // Create double-indirect structure from scratch
+            let double_page_id = self.page_alloc.allocate().await?;
+            self.page_alloc
+                .add_reserved(double_page_id.page_num())
+                .await;
+
+            let sub_page_id = self.page_alloc.allocate().await?;
+            self.page_alloc.add_reserved(sub_page_id.page_num()).await;
+
+            let new_bm_page = self.page_alloc.allocate().await?;
+            self.page_alloc.add_reserved(new_bm_page.page_num()).await;
+
+            // Extend capacity
+            let new_cap =
+                self.page_alloc.capacity().await + bits_per_page as u64;
+            self.page_alloc.extend_capacity(new_cap).await;
+
+            // Create sub-indirect with the bitmap page
+            let mut sub_indirect = IndirectPage::new();
+            sub_indirect.push(new_bm_page)?;
+
+            // Create double-indirect with the sub-indirect
+            let mut double_page = IndirectPage::new();
+            double_page.push(sub_page_id)?;
+
+            *double_indirect = Some((double_page, vec![sub_indirect]));
+
+            // Update superblock
+            let mut superblock = self.superblock.write().await;
+            superblock.set_double_indirect(double_page_id);
+            drop(superblock);
+            drop(double_indirect);
+
+            // Initialize all pages
+            self.initialize_page(double_page_id).await?;
+            self.initialize_page(sub_page_id).await?;
+            self.initialize_page(new_bm_page).await
+        } else {
+            // Double-indirect exists, check sub-indirects
+            let (double_page, sub_pages): &mut (
+                IndirectPage,
+                Vec<IndirectPage>,
+            ) = double_indirect.as_mut().ok_or_else(|| {
+                StorageError::InvalidOperation(
+                    "double_indirect mismatch".into(),
+                )
+            })?;
+
+            let last_sub_full =
+                sub_pages.last().is_none_or(IndirectPage::is_full);
+
+            if !last_sub_full {
+                // Add bitmap to last sub-indirect
+                let new_bm_page = self.page_alloc.allocate().await?;
+                self.page_alloc.add_reserved(new_bm_page.page_num()).await;
+
+                let new_cap =
+                    self.page_alloc.capacity().await + bits_per_page as u64;
+                self.page_alloc.extend_capacity(new_cap).await;
+
+                sub_pages
+                    .last_mut()
+                    .ok_or_else(|| {
+                        StorageError::InvalidOperation(
+                            "no sub-indirect pages".into(),
+                        )
+                    })?
+                    .push(new_bm_page)?;
+
+                drop(double_indirect);
+                self.initialize_page(new_bm_page).await
+            } else if !double_page.is_full() {
+                // Create new sub-indirect
+                let sub_page_id = self.page_alloc.allocate().await?;
+                self.page_alloc.add_reserved(sub_page_id.page_num()).await;
+
+                let new_bm_page = self.page_alloc.allocate().await?;
+                self.page_alloc.add_reserved(new_bm_page.page_num()).await;
+
+                let new_cap =
+                    self.page_alloc.capacity().await + bits_per_page as u64;
+                self.page_alloc.extend_capacity(new_cap).await;
+
+                // Create new sub-indirect with bitmap
+                let mut new_sub = IndirectPage::new();
+                new_sub.push(new_bm_page)?;
+
+                double_page.push(sub_page_id)?;
+                sub_pages.push(new_sub);
+
+                drop(double_indirect);
+
+                self.initialize_page(sub_page_id).await?;
+                self.initialize_page(new_bm_page).await
+            } else {
+                // Both double-indirect and all sub-indirects are full
+                let max = Superblock::MAX_DIRECT_BITMAP_PAGES
+                    + Superblock::INDIRECT_ENTRIES_PER_PAGE
+                    + Superblock::INDIRECT_ENTRIES_PER_PAGE
+                        * Superblock::INDIRECT_ENTRIES_PER_PAGE;
+                Err(StorageError::MemoryLimitExceeded {
+                    used: max,
+                    limit: max,
+                })
+            }
+        }
+    }
+
+    /// Initialize a page with zeros on disk.
+    async fn initialize_page(&self, pid: PageId) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
+        let mut file = self.data_file.write().await;
+        let zeros = vec![0u8; page::PAGE_SIZE];
+
+        file.seek(SeekFrom::Start(pid.byte_offset()))
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "seek to initialize page".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+
+        file.write_all(&zeros).await.map_err(|e| StorageError::Io {
+            op: "initialize page".into(),
+            path: data_path,
+            source: e,
+        })?;
+
+        Ok(())
     }
 }
 
@@ -1755,13 +2413,13 @@ mod tests {
         assert_eq!(restored.version, Superblock::VERSION);
         assert_eq!(restored.flags, 0);
         assert_eq!(restored.total_pages, 100);
-        assert_eq!(restored.bitmap_page_count, 1);
-        assert_eq!(restored.bitmap_page_ids.len(), 1);
-        assert_eq!(restored.bitmap_page_ids[0].page_num(), 1);
+        assert_eq!(restored.direct_bitmap_count, 1);
+        assert_eq!(restored.direct_bitmap_ids.len(), 1);
+        assert_eq!(restored.direct_bitmap_ids[0].page_num(), 1);
     }
 
     #[test]
-    fn superblock_add_bitmap_page() {
+    fn superblock_add_direct_bitmap_page() {
         let first_bm = PageId::from_page_num(1).unwrap();
         let mut sb = Superblock::new(first_bm, 100);
 
@@ -1769,13 +2427,13 @@ mod tests {
         let p2 = PageId::from_page_num(50).unwrap();
         let p3 = PageId::from_page_num(100).unwrap();
 
-        sb.add_bitmap_page(p2).unwrap();
-        sb.add_bitmap_page(p3).unwrap();
+        sb.add_direct_bitmap_page(p2).unwrap();
+        sb.add_direct_bitmap_page(p3).unwrap();
 
-        assert_eq!(sb.bitmap_page_count, 3);
-        assert_eq!(sb.bitmap_page_ids.len(), 3);
-        assert_eq!(sb.bitmap_page_ids[1].page_num(), 50);
-        assert_eq!(sb.bitmap_page_ids[2].page_num(), 100);
+        assert_eq!(sb.direct_bitmap_count, 3);
+        assert_eq!(sb.direct_bitmap_ids.len(), 3);
+        assert_eq!(sb.direct_bitmap_ids[1].page_num(), 50);
+        assert_eq!(sb.direct_bitmap_ids[2].page_num(), 100);
     }
 
     #[test]
@@ -1826,9 +2484,9 @@ mod tests {
 
         // Parse as superblock
         let sb = Superblock::deserialize(&buf).unwrap();
-        assert_eq!(sb.version, 2);
-        assert_eq!(sb.bitmap_page_count, 1);
-        assert_eq!(sb.bitmap_page_ids[0].page_num(), 1);
+        assert_eq!(sb.version, Superblock::VERSION);
+        assert_eq!(sb.direct_bitmap_count, 1);
+        assert_eq!(sb.direct_bitmap_ids[0].page_num(), 1);
     }
 
     #[tokio::test]
@@ -1844,8 +2502,8 @@ mod tests {
                     .expect("create should succeed");
 
             let sb = engine.superblock.read().await;
-            assert_eq!(sb.version, 2);
-            assert_eq!(sb.bitmap_page_count, 1);
+            assert_eq!(sb.version, Superblock::VERSION);
+            assert_eq!(sb.direct_bitmap_count, 1);
         }
 
         // Reopen
@@ -1856,8 +2514,8 @@ mod tests {
                     .expect("open should succeed");
 
             let sb = engine.superblock.read().await;
-            assert_eq!(sb.version, 2);
-            assert_eq!(sb.bitmap_page_count, 1);
+            assert_eq!(sb.version, Superblock::VERSION);
+            assert_eq!(sb.direct_bitmap_count, 1);
         }
     }
 
@@ -1881,8 +2539,6 @@ mod tests {
         let node_id = engine.allocate().await.unwrap();
         assert_eq!(u64::from(node_id), 4);
     }
-
-    // ---- MetadataPage tests ----
 
     #[test]
     fn metadata_page_serialize_deserialize_roundtrip() {
@@ -1943,8 +2599,6 @@ mod tests {
             .to_string()
             .contains("page size mismatch"));
     }
-
-    // ---- GlobalRegistry tests ----
 
     #[test]
     fn registry_serialize_deserialize_empty() {
@@ -2053,5 +2707,177 @@ mod tests {
 
         let reg = engine.registry.read().await;
         assert!(reg.entries.is_empty());
+    }
+
+    #[test]
+    fn indirect_page_new_is_empty() {
+        let page = IndirectPage::new();
+        assert!(page.is_empty());
+        assert!(!page.is_full());
+        assert_eq!(page.len(), 0);
+    }
+
+    #[test]
+    fn indirect_page_serialize_deserialize_roundtrip() {
+        let mut page = IndirectPage::new();
+        page.push(PageId::from_page_num(10).unwrap()).unwrap();
+        page.push(PageId::from_page_num(20).unwrap()).unwrap();
+        page.push(PageId::from_page_num(30).unwrap()).unwrap();
+
+        let buf = page.serialize();
+        let restored = IndirectPage::deserialize(&buf).expect("deserialize");
+
+        assert_eq!(restored.len(), 3);
+        assert_eq!(restored.entries[0].page_num(), 10);
+        assert_eq!(restored.entries[1].page_num(), 20);
+        assert_eq!(restored.entries[2].page_num(), 30);
+    }
+
+    #[test]
+    fn indirect_page_deserialize_stops_at_zero() {
+        // Create a buffer with 2 valid entries followed by zeros
+        // Values are byte offsets, so page 100 = offset 100 * PAGE_SIZE
+        let offset1 = 100u64 * page::PAGE_SIZE as u64;
+        let offset2 = 200u64 * page::PAGE_SIZE as u64;
+
+        let mut buf = [0u8; page::PAGE_SIZE];
+        buf[0..8].copy_from_slice(&offset1.to_le_bytes());
+        buf[8..16].copy_from_slice(&offset2.to_le_bytes());
+        // bytes 16..24 are zeros (end of entries)
+
+        let page = IndirectPage::deserialize(&buf).expect("deserialize");
+        assert_eq!(page.len(), 2);
+        assert_eq!(page.entries[0].page_num(), 100);
+        assert_eq!(page.entries[1].page_num(), 200);
+    }
+
+    #[test]
+    fn indirect_page_push_until_full() {
+        let mut page = IndirectPage::new();
+
+        // Fill the page
+        (0..Superblock::INDIRECT_ENTRIES_PER_PAGE).for_each(|i| {
+            page.push(PageId::from_page_num(i as u64 + 1).unwrap())
+                .unwrap();
+        });
+
+        assert!(page.is_full());
+        assert_eq!(page.len(), Superblock::INDIRECT_ENTRIES_PER_PAGE);
+
+        // Next push should fail
+        let result = page.push(PageId::from_page_num(9999).unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn indirect_page_from_entries() {
+        let entries = vec![
+            PageId::from_page_num(5).unwrap(),
+            PageId::from_page_num(10).unwrap(),
+            PageId::from_page_num(15).unwrap(),
+        ];
+        let page = IndirectPage::from_entries(entries);
+
+        assert_eq!(page.len(), 3);
+        assert!(!page.is_empty());
+        assert!(!page.is_full());
+    }
+
+    #[test]
+    fn superblock_with_single_indirect() {
+        let first_bm = PageId::from_page_num(1).unwrap();
+        let mut sb = Superblock::new(first_bm, 100);
+
+        // Set single-indirect pointer
+        let single_pid = PageId::from_page_num(500).unwrap();
+        sb.set_single_indirect(single_pid);
+
+        // Serialize and deserialize
+        let buf = sb.serialize();
+        let restored = Superblock::deserialize(&buf).unwrap();
+
+        assert_eq!(restored.single_indirect, Some(single_pid));
+        assert!(restored.double_indirect.is_none());
+    }
+
+    #[test]
+    fn superblock_with_double_indirect() {
+        let first_bm = PageId::from_page_num(1).unwrap();
+        let mut sb = Superblock::new(first_bm, 100);
+
+        // Set both indirect pointers
+        let single_pid = PageId::from_page_num(500).unwrap();
+        let double_pid = PageId::from_page_num(600).unwrap();
+        sb.set_single_indirect(single_pid);
+        sb.set_double_indirect(double_pid);
+
+        let buf = sb.serialize();
+        let restored = Superblock::deserialize(&buf).unwrap();
+
+        assert_eq!(restored.single_indirect, Some(single_pid));
+        assert_eq!(restored.double_indirect, Some(double_pid));
+    }
+
+    #[test]
+    fn superblock_reserved_page_nums_includes_indirect() {
+        let first_bm = PageId::from_page_num(1).unwrap();
+        let mut sb = Superblock::new(first_bm, 100);
+
+        // Add more direct bitmap pages
+        sb.add_direct_bitmap_page(PageId::from_page_num(2).unwrap())
+            .unwrap();
+
+        // Set indirect pointers
+        sb.set_single_indirect(PageId::from_page_num(500).unwrap());
+        sb.set_double_indirect(PageId::from_page_num(600).unwrap());
+
+        let reserved = sb.reserved_page_nums();
+
+        // Should include: superblock (0), bitmap pages (1, 2), indirect pages (500, 600)
+        assert!(reserved.contains(&0));
+        assert!(reserved.contains(&1));
+        assert!(reserved.contains(&2));
+        assert!(reserved.contains(&500));
+        assert!(reserved.contains(&600));
+        assert_eq!(reserved.len(), 5);
+    }
+
+    #[test]
+    fn superblock_can_add_bitmap_page_with_indirect_available() {
+        let first_bm = PageId::from_page_num(1).unwrap();
+        let sb = Superblock::new(first_bm, 100);
+
+        // Fresh superblock can add more
+        assert!(sb.can_add_bitmap_page());
+    }
+
+    #[test]
+    fn superblock_direct_limit_is_400() {
+        assert_eq!(Superblock::MAX_DIRECT_BITMAP_PAGES, 400);
+    }
+
+    #[test]
+    fn superblock_indirect_entries_is_512() {
+        // PAGE_SIZE / 8 = 512 for 4KB pages
+        assert_eq!(Superblock::INDIRECT_ENTRIES_PER_PAGE, page::PAGE_SIZE / 8);
+    }
+
+    #[test]
+    fn superblock_add_direct_fails_at_400() {
+        let first_bm = PageId::from_page_num(1).unwrap();
+        let mut sb = Superblock::new(first_bm, 100);
+
+        // Add 399 more to reach 400 total
+        (2..=400).for_each(|i| {
+            sb.add_direct_bitmap_page(PageId::from_page_num(i).unwrap())
+                .unwrap();
+        });
+
+        assert_eq!(sb.direct_bitmap_ids.len(), 400);
+
+        // Next should fail
+        let result =
+            sb.add_direct_bitmap_page(PageId::from_page_num(401).unwrap());
+        assert!(result.is_err());
     }
 }
