@@ -649,51 +649,88 @@ To reach SQLite-level capacity (~16-32 TiB), we use need to use filesystem-style
   - [x] `Superblock` with indirect pointers (4 tests)
   - [x] Single-indirect allocation + round-trip (`#[ignore]` - ~50GB, run manually)
 
-#### 4.3.2.2 GlobalRegistry Chaining
+#### 4.3.2.2 GlobalRegistry Chaining ✅ COMPLETE
 
-The `GlobalRegistry` has a `next_page` field but chaining is not implemented.
-Current limit is ~200-370 globals per page depending on name length.
+The `GlobalRegistry` has a `next_page` field for chaining when a single page
+cannot hold all global entries. Each page can hold ~290 entries with short names.
 
-**Implementation Tasks:**
+**Architecture: On-Disk vs In-Memory Representation**
 
-- [ ] Update `GlobalRegistry::insert()`:
-  - If current page full AND `next_page.is_none()`:
-    - Allocate new registry page via `PageAllocator`
-    - Set `self.next_page = Some(new_page_id)`
-    - Create new `GlobalRegistry` for overflow, insert entry there
-  - If current page full AND `next_page.is_some()`:
-    - Load next page, recursively insert
-  - Track if any page in chain was modified (for flush)
-- [ ] Update `GlobalRegistry::get()`:
-  - Search current page entries
-  - If not found AND `next_page.is_some()`: load next page, search recursively
-- [ ] Update `GlobalRegistry::remove()`:
-  - Search and remove from correct page in chain
-  - Optionally compact: if a page becomes empty, unlink and deallocate
-- [ ] Add `GlobalRegistry::iter()` or `all_entries()`:
-  - Iterate across all pages in chain
-  - Useful for debugging and migration
-- [ ] Update `FileStorageEngine` to handle registry chain:
-  - `load_registry()`: follow `next_page` links, build complete registry
-  - `flush_registry()`: write all modified pages in chain
-- [ ] Add tests:
-  - Insert more globals than fit in one page
-  - Lookup global in second page of chain
-  - Remove global from middle of chain
-  - Reopen DB with chained registry, verify all globals present
-  - Stress test: 1000+ globals with varied name lengths
+The `next_page` field is **only used for on-disk serialization**. Callers never
+follow the chain manually—the `FileStorageEngine` abstracts this away entirely:
+
+```text
+On-Disk Format:                         In-Memory (`FileStorageEngine`):
+┌──────────────────┐                    ┌─────────────────────────────────────┐
+│ Registry Page 3  │                    │ registry_chain: Vec<(PageId, Reg)>  │
+│  entries: [...]  │                    │                                     │
+│  next_page: 42 ──┼───┐                │  [(3, Reg{entries, next:42}),       │
+└──────────────────┘   │                │   (42, Reg{entries, next:99}),      │
+                       ▼                │   (99, Reg{entries, next:None})]    │
+┌──────────────────┐                    │                                     │
+│ Registry Page 42 │                    └─────────────────────────────────────┘
+│  entries: [...]  │
+│  next_page: 99 ──┼───┐                Callers use these methods (chain-unaware):
+└──────────────────┘   │                • registry_get(name) → Option<PageId>
+                       ▼                • registry_insert(name, root) → Result<()>
+┌──────────────────┐                    • registry_remove(name)
+│ Registry Page 99 │                    • registry_entries() → Vec<(name, root)>
+│  entries: [...]  │
+│  next_page: None │
+└──────────────────┘
+```
+
+**Lifecycle:**
+1. **Startup** (`open()`): `load_registry_chain()` follows all `next_page` links,
+   building the in-memory `Vec<(PageId, GlobalRegistry)>`
+2. **Runtime**: All operations work on the `Vec`—no disk I/O, no link-following
+3. **Flush** (`flush()`): `flush_registry_chain()` writes all pages back to disk
+   with correct `next_page` pointers reconstructed from the `Vec` order
+
+**Implementation Summary:**
+
+- [x] Added `GlobalRegistry` helper methods:
+  - `entry_size()`, `used_bytes()`, `can_insert()`, `is_empty()`, `len()`
+  - `insert_unchecked()` for internal use when space is guaranteed
+  - `iter()` for iterating entries in a single page
+- [x] Updated `FileStorageEngine` struct:
+  - Changed `registry: RwLock<GlobalRegistry>` to `registry_chain: RwLock<Vec<(PageId, GlobalRegistry)>>`
+- [x] Implemented `load_registry_chain()`:
+  - Recursive async function that follows `next_page` links
+  - Returns complete chain as `Vec<(PageId, GlobalRegistry)>`
+- [x] Implemented `registry_insert()`:
+  - Searches for existing entry (update case) or first page with space
+  - Calls `registry_chain_extend()` when all pages are full
+- [x] Implemented `registry_chain_extend()`:
+  - Allocates new page (not marked as reserved, so it can be freed on compaction)
+  - Updates previous tail's `next_page` pointer
+  - Appends new page to chain
+- [x] Implemented `registry_get()`:
+  - Searches all pages in chain using `find_map`
+- [x] Implemented `registry_remove()`:
+  - Removes entry from correct page
+  - Compacts empty pages (except first page) by unlinking and freeing
+- [x] Implemented `registry_entries()`:
+  - Returns all `(name, root)` pairs across the chain
+- [x] Implemented `flush_registry_chain()`:
+  - Writes all registry pages to disk
+  - Called as part of `flush()`
+- [x] Added tests (14 new tests):
+  - Single page operations: insert/get, update, remove, iteration
+  - Persist and reopen
+  - Chain overflow to second page
+  - Persist multiple pages and reopen
+  - Remove from second page
+  - Compact empty page
+  - Stress test: 1000+ globals
+  - Stress test: persist and reopen with 500+ globals
 
 #### 4.3.2.3 Migration Notes
 
 Since we haven't released, no migration is needed. The superblock format simply changes:
 - Version stays at 1
 - Layout changes (fewer direct slots, add indirect pointers)
-- Existing test databases will need to be recreated
-
-If we had released, we would need:
-- Version bump to 2
-- `open()` to detect v1 vs v2 and handle accordingly
-- Migration tool to upgrade v1 → v2
+- There are no test databases to recreate
 
 ### 4.3.3 AsyncStorageEngine Implementation (Part 2)
 - [ ] Add WAL-aware methods:
@@ -716,27 +753,181 @@ If we had released, we would need:
 - [x] Implement `GlobalRegistry::remove(name: &str)`
 - [x] Integrate with `Superblock` - added `registry_root: Option<PageId>` field
 - [x] Add tests for registry serialization round-trip
-- [ ] Add tests for multi-global persistence (with actual B-tree integration)
-- [ ] Add tests verifying Local variables are NOT persisted
 
-### 4.5 BTree Persistence Integration
-- [ ] Update `BTree` struct to support disk persistence:
-  - Add `storage: Option<Arc<dyn AsyncStorageEngine>>` field
-  - Add `DiskNodeAllocator` that delegates to storage engine
+### 4.5 BTree Refactor & Database Layer
+
+**Architecture Decision**: `BTree` operates purely on `NodeId`s—it has no knowledge
+of variable names or the registry. Namespace management (name→root mapping) is
+handled by `Database`. See `TODOS/btree-root-architecture-options.md` for rationale.
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Database                       BTree                    FileStorageEngine  │
+│  ────────                       ─────                    ─────────────────  │
+│                                                                             │
+│  roots: BTreeMap<Name, NodeId>  nodes: HashMap<NodeId, Node>   PageCache    │
+│  (lazy-loaded from registry)    (no names, no roots!)          WAL          │
+│         │                              │                       registry     │
+│         │ lookup/create root           │ load/save nodes                    │
+│         ▼                              ▼                                    │
+│    ┌─────────┐                   ┌───────────┐                              │
+│    │ NodeId  │ ───────────────── │  BTree    │ ◄────────── storage.read()   │
+│    └─────────┘                   │  methods  │ ─────────── storage.write()  │
+│                                  └───────────┘                              │
+│                                                                             │
+│  Database calls:                 BTree methods (root-based):                │
+│  • registry_get(name)            • get_at(root, key)                        │
+│  • registry_insert(name, root)   • set_at(root, key, val)                   │
+│  • registry_remove(name)         • kill_at(root, key)                       │
+│                                  • create_tree() → NodeId                   │
+│                                  • delete_tree(root)                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 4.5.1 Create Database Layer (namespace management only)
+
+**New file**: `crates/rumps-storage/src/database.rs`
+
+The `Database` layer owns namespace management with **lazy-loading** from registry.
+Transaction support and full MUMPS operations are deferred to Phase 5.
+
+```rust
+pub struct Database {
+    /// Name → root NodeId mapping (lazy-loaded cache).
+    roots: RwLock<BTreeMap<Name, NodeId>>,
+
+    /// The underlying B-tree (operates on NodeIds only).
+    btree: Arc<BTree>,
+
+    /// Optional persistent storage (None = in-memory only).
+    storage: Option<Arc<FileStorageEngine>>,
+}
+```
+
+- [ ] Create `database.rs` module with `Database` struct
+- [ ] Implement `Database::in_memory() -> Result<Self>`:
+  - Create `BTree` with `IncrementingAllocator`
+  - Empty `roots` map, no storage
+- [ ] Implement lazy root loading (core namespace logic):
+  ```rust
+  impl Database {
+      /// Look up root, lazy-loading from registry if needed.
+      async fn get_root(&self, name: &Name) -> Result<Option<NodeId>> {
+          // 1. Check in-memory cache
+          // 2. If Global + storage: lazy-load via registry_get()
+          // 3. Cache result for future lookups
+      }
+
+      /// Get or create root for a name (for SET operations).
+      async fn ensure_root(&self, name: &Name) -> Result<NodeId> {
+          // 1. Try get_root()
+          // 2. If None: btree.create_tree(), cache, registry_insert() if Global
+      }
+
+      /// Remove a root (for KILL entire variable).
+      async fn remove_root(&self, name: &Name) -> Result<()> {
+          // 1. Remove from cache
+          // 2. If Global + storage: registry_remove()
+      }
+  }
+  ```
+- [ ] Implement `Database::open(path)` and `Database::create(path)` (deferred to 4.6)
+
+#### 4.5.2 Refactor BTree API (remove roots, use root-based methods)
+
+- [ ] Remove `roots: RwLock<BTreeMap<Name, NodeId>>` field from `BTree`
+- [ ] Rename all public methods from name-based to root-based:
+
+  | Current Method | New Method | Notes |
+  |----------------|------------|-------|
+  | `get(&Name, &Key)` | `get_at(NodeId, &Key)` | Remove name lookup |
+  | `set(&Name, &Key, Value, &Ctx)` | `set_at(NodeId, &Key, Value, &Ctx)` | Remove name lookup |
+  | `kill(&Name, &Key, &Ctx)` | `kill_at(NodeId, &Key, &Ctx)` | Remove name lookup |
+  | `data(&Name, &Key)` | `data_at(NodeId, &Key)` | Remove name lookup |
+  | `order(&Name, Option<&Key>)` | `order_at(NodeId, Option<&Key>)` | Remove name lookup |
+  | `collects(...)` | `collects_at(...)` | Remove name lookup |
+
+- [ ] Add tree lifecycle methods:
+  ```rust
+  impl BTree {
+      /// Create a new empty tree, returning its root NodeId.
+      pub async fn create_tree(&self) -> Result<NodeId>;
+
+      /// Delete an entire tree, deallocating all nodes. Returns node count.
+      pub async fn delete_tree(&self, root: NodeId) -> Result<usize>;
+  }
+  ```
+- [ ] Remove helper methods that reference `roots`:
+  - `get_or_create_root()` → DELETE
+  - Any method accessing `self.roots` → refactor or delete
+
+#### 4.5.3 Rewrite BTree Tests
+
+All ~90 BTree tests must be updated to use the new root-based API:
+
+```rust
+// BEFORE (name-based)
+let btree = BTree::new(3).unwrap();
+let name = Name::Global("TEST".into());
+btree.set(&name, &key, val, &ctx).await?;
+let v = btree.get(&name, &key).await?;
+
+// AFTER (root-based)
+let btree = BTree::new(3).unwrap();
+let root = btree.create_tree().await?;
+btree.set_at(root, &key, val, &ctx).await?;
+let v = btree.get_at(root, &key).await?;
+```
+
+Tests that move to `Database` layer:
+- Namespace separation (`Global` vs `Local`)
+- Registry persistence tests
+
+#### 4.5.4 Add Database Tests (namespace management only)
+
+- [ ] Test `in_memory()` creates empty Database
+- [ ] Test `get_root()` returns `None` for unknown names
+- [ ] Test `ensure_root()` creates tree and caches root
+- [ ] Test `ensure_root()` returns cached root on second call
+- [ ] Test `remove_root()` removes from cache
+- [ ] Test `Global("X")` and `Local("X")` have separate roots
+
+Full MUMPS operation tests (get/set/kill/data/order) are in Phase 5.
+
+#### 4.5.5 Rewrite BTree Benchmarks
+
+The existing benchmarks use the old name-based API and must be updated:
+
+- [ ] Update `benches/btree_bench.rs` to use root-based API:
+  ```rust
+  // BEFORE
+  btree.set(&name, &key, val, &ctx).await?;
+  btree.get(&name, &key).await?;
+
+  // AFTER
+  let root = btree.create_tree().await?;
+  btree.set_at(root, &key, val, &ctx).await?;
+  btree.get_at(root, &key).await?;
+  ```
+- [ ] Remove `Name` from benchmark setup (just use `NodeId` directly)
+- [ ] Add new benchmark for `create_tree()` / `delete_tree()` lifecycle
+
+### 4.6 BTree Disk Persistence
+
+- [ ] Add `storage: Option<Arc<FileStorageEngine>>` field to `BTree`
 - [ ] Implement `BTree::with_storage(min_degree, storage) -> Result<Self>`:
   - Initialize with storage engine
   - Use `DiskNodeAllocator` instead of `IncrementingAllocator`
-  - Load root nodes from disk for existing database
+  - **Note**: Does NOT load roots (that's `Database`'s job)
 - [ ] Update node access methods for cache + disk:
   - `async fn load_node(&self, id: NodeId) -> Result<Node>`:
-    - Check cache first (`nodes` HashMap)
-    - Load from disk if miss (only for `Name::Global`)
-    - Keep `Name::Local` entirely in memory
+    - Check `nodes` cache first
+    - Load from `storage.read(id)` if cache miss
     - Add to cache with LRU eviction
   - `async fn save_node(&self, id: NodeId, node: Node) -> Result<()>`:
     - Update cache
-    - Write to WAL + disk (only for `Name::Global`)
-- [ ] Integrate WAL with all write operations:
+    - Write via `storage.write(id, node)`
+- [ ] Integrate WAL with write operations:
   - All modifications logged to WAL first
   - Writes marked dirty in page cache
   - Actual disk writes happen on flush/checkpoint
@@ -750,13 +941,17 @@ If we had released, we would need:
 
 ## Phase 5: Transaction-Based Public API
 
-**Transaction Model**: ALL writes to globals must occur within explicit transactions. Locals can be modified freely outside transactions.
+**Prerequisites**: `Database` struct exists from Phase 4.5 with namespace management
+(`get_root`, `ensure_root`, `remove_root`). `BTree` uses root-based methods (`get_at`,
+`set_at`, etc.). This phase adds MUMPS operations and transaction support.
 
-**Concurrency Model**: The public API will be async with snapshot isolation for reads and exclusive locks for transaction commits.
+**Transaction Model**: ALL writes to globals must occur within explicit transactions.
+Locals can be modified freely outside transactions.
+
+**Concurrency Model**: The public API will be async with snapshot isolation for reads
+and exclusive locks for transaction commits.
 
 ### Two-Layer Public API Architecture
-
-The public API has **two layers** above the internal `BTree`:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -774,24 +969,24 @@ The public API has **two layers** above the internal `BTree`:
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  Layer 1: Database                                                      │
-│  ─────────────────                                                      │
-│  • Main entry point for users                                           │
+│  Database (from Phase 4.5, extended here)                               │
+│  ────────────────────────────────────────                               │
+│  • Owns namespace: roots map + lazy-loading from registry               │
 │  • Holds Arc<BTree> + Arc<TransactionManager>                           │
 │  • Provides transaction closure API: db.transaction(...)                │
 │  • Direct methods for reads (any namespace) and local writes            │
 │  • Rejects global writes outside transactions                           │
 │                                                                         │
-│  Methods:                                                               │
-│  • get(), data(), order(), collects() → delegate to BTree w/ context    │
-│  • set(), kill() → for locals only; globals require Transaction         │
-│  • transaction(), transaction_with() → create Transaction scope         │
+│  From Phase 4.5:    Added in Phase 5:                                   │
+│  • get_root()       • get(), set(), kill(), data(), order(), collects() │
+│  • ensure_root()    • transaction(), transaction_with()                 │
+│  • remove_root()    • TransactionManager integration                    │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  Layer 2: Transaction                                                   │
-│  ────────────────────                                                   │
+│  Transaction                                                            │
+│  ───────────                                                            │
 │  • Used inside db.transaction(|txn| ...) closures                       │
 │  • Buffers writes until commit                                          │
 │  • Provides snapshot isolation for reads                                │
@@ -808,28 +1003,30 @@ The public API has **two layers** above the internal `BTree`:
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  Internal: BTree                                                        │
-│  ───────────────                                                        │
-│  • Low-level B-tree operations                                          │
+│  BTree (refactored in Phase 4.5)                                        │
+│  ───────────────────────────────                                        │
+│  • Operates on NodeIds only—no Name awareness                           │
 │  • All methods accept TransactionContext parameter                      │
-│  • Phase 2 implementations ignore context (added for future-proofing)   │
-│  • Phase 5.4 retrofits context usage for isolation/buffering            │
 │                                                                         │
-│  Methods:                                                               │
-│  • set(name, key, value, &ctx)                                          │
-│  • get(name, key, Option<&ctx>)                                         │
-│  • kill(name, key, &ctx)                                                │
-│  • data(name, key, Option<&ctx>)                                        │
-│  • order(name, key, Option<&ctx>)                                       │
-│  • collects(name, start, predicate, extract, Option<&ctx>)              │
+│  Methods (root-based):                                                  │
+│  • get_at(root, key, Option<&ctx>)                                      │
+│  • set_at(root, key, value, &ctx)                                       │
+│  • kill_at(root, key, &ctx)                                             │
+│  • data_at(root, key, Option<&ctx>)                                     │
+│  • order_at(root, Option<key>, Option<&ctx>)                            │
+│  • collects_at(root, start, predicate, extract, Option<&ctx>)           │
+│  • create_tree() → NodeId                                               │
+│  • delete_tree(root)                                                    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key Insight**: `Transaction` and `Database` expose the same method names (`get`, `set`, `kill`, etc.), but:
+**Key Insight**: `Transaction` and `Database` expose the same method names (`get`,
+`set`, `kill`, etc.), but:
 - `Database` methods are for **direct access** (reads anywhere, writes to locals only)
 - `Transaction` methods are for **transactional access** (buffers writes, provides isolation)
 
-Both ultimately delegate to `BTree` methods, but with different `TransactionContext` configurations.
+Both use `Database.get_root()`/`ensure_root()` for namespace resolution, then delegate
+to `BTree.*_at()` methods with different `TransactionContext` configurations.
 
 ### 5.1 Transaction Infrastructure
 - [ ] Add `tokio` dependency to `rumps-storage/Cargo.toml`
@@ -981,62 +1178,56 @@ Both ultimately delegate to `BTree` methods, but with different `TransactionCont
   - `commit() -> Result<()>` - validate, write to WAL, apply changes
   - `rollback()` - discard buffered writes
 - [ ] Implement `Transaction` MUMPS operation methods (used inside `db.transaction(|txn| ...)` closures):
+
+  **Delegation pattern**: `Transaction` holds `db: Database` and delegates to it:
+  ```
+  txn.get(name, key)
+    → check txn.writes buffer
+    → check txn.deleted_subtrees
+    → self.db.get_root(name)  ← namespace resolution via Database
+    → self.db.btree.get_at(root, key, ctx)  ← tree operation via BTree
+  ```
+
   - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`:
     - Check `self.writes` buffer first for pending `WriteOp::Set`
     - Check `self.deleted_subtrees` for pending kills (return `None` if deleted)
-    - Fall back to `self.db.btree.get(name, key, Some(&self.context))` using snapshot
+    - Resolve name→root via `self.db.get_root(name)` (uses snapshot)
+    - Delegate to `self.db.btree.get_at(root, key, Some(&self.context))`
     - Track key in `self.read_set` (for Serializable isolation)
   - `async fn set(&mut self, name: &Name, key: &Key, value: Value) -> Result<()>`:
     - Buffer write in `self.writes` as `WriteOp::Set(NodeData { value: Some(value), ... })`
-    - Do NOT call `BTree::set` yet (deferred until commit)
+    - Do NOT call `btree.set_at()` yet (deferred until commit)
     - Update `self.ops_count`
   - `async fn kill(&mut self, name: &Name, key: &Key) -> Result<()>`:
     - Buffer deletion in `self.writes` as `WriteOp::KillSubtree`
     - Track in `self.deleted_subtrees` for read consistency
-    - Do NOT call `BTree::kill` yet (deferred until commit)
+    - Do NOT call `btree.kill_at()` yet (deferred until commit)
   - `async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus>`:
     - Check write buffer and deleted subtrees first
-    - Fall back to `self.db.btree.data(name, key, Some(&self.context))`
+    - Resolve name→root, fall back to `btree.data_at(root, key, Some(&self.context))`
     - Combine buffered state with snapshot state
   - `async fn order(&self, name: &Name, after: Option<&Key>) -> Result<Option<Key>>`:
     - Must merge snapshot iteration with buffered writes
     - Buffered sets may insert new keys; buffered kills may remove keys
-    - Fall back to `self.db.btree.order(name, after, Some(&self.context))`
+    - Resolve name→root, fall back to `btree.order_at(root, after, Some(&self.context))`
   - `fn collects<P, F, T>(&self, name: &Name, start: Option<&Key>, pred: P, ext: F) -> impl Stream`:
     - Stream must reflect buffered writes + snapshot
-    - Delegates to `self.db.btree.collects(...)` with buffer overlay
+    - Resolve name→root, delegates to `btree.collects_at(...)` with buffer overlay
   - **Note**: These methods have the same signatures as `Database` methods but different semantics (buffering vs direct)
 
-### 5.2 Async Database Handle
-- [ ] Create `crates/rumps-storage/src/database.rs` module
-- [ ] Define `Database` struct as main entry point:
-  ```rust
-  pub struct Database {
-      btree: Arc<BTree>,
-      transaction_manager: Arc<TransactionManager>,
-  }
+### 5.2 Extend Database with MUMPS Operations & Transactions
 
-  impl Clone for Database {
-      fn clone(&self) -> Self {
-          Self {
-              btree: Arc::clone(&self.btree),
-              transaction_manager: Arc::clone(&self.transaction_manager),
-          }
-      }
-  }
-  ```
-  - Uses `Arc<BTree>` for thread-safe sharing
-  - B-tree handles both `Name::Global` (persistent) and `Name::Local` (ephemeral)
-  - Transaction manager coordinates concurrent transactions
-  - **Important**: Database implements `Clone` by cloning the Arc fields, making it cheap to clone
-  - This pattern allows passing `&Database` to APIs while enabling cheap cloning when needed (e.g., for storing in Transaction)
-  - Common pattern in async Rust (similar to `reqwest::Client`, `sqlx::Pool`, etc.)
-- [ ] Implement `Database::open(path: &Path) -> Result<Self>`:
-  - Create `FileStorageEngine` with config
-  - Initialize `BTree::with_storage(min_degree, storage)`
-  - Wrap in Arc for sharing
-- [ ] Implement `Database::create(path: &Path) -> Result<Self>`
-- [ ] Implement `Database::in_memory() -> Result<Self>` for testing
+**Note**: `Database` struct already exists from Phase 4.5 with namespace management
+(`roots`, `get_root()`, `ensure_root()`, `remove_root()`). This section adds
+transaction support and MUMPS operations.
+
+- [ ] Add `transaction_manager: Arc<TransactionManager>` field to `Database`
+- [ ] Implement `Clone` for `Database` (clone Arc fields)
+- [ ] Implement `Database::open(path)` and `Database::create(path)`:
+  - Open/create `FileStorageEngine`
+  - Create `BTree::with_storage(min_degree, storage)`
+  - Initialize `TransactionManager`
+  - `roots` starts empty (lazy-loaded via `get_root()`)
 - [ ] Implement transaction API:
   - Simple default transaction:
     ```rust
@@ -1103,29 +1294,28 @@ Both ultimately delegate to `BTree` methods, but with different `TransactionCont
 - [ ] Implement `Database` MUMPS operation methods (direct access, no write buffering):
   - **Read operations** (work with or without active transaction):
     - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`:
-      - Delegates to `self.btree.get(name, key, None)` (no transaction context)
-      - Works for both globals and locals
+      - Resolve name→root via `self.get_root(name)`
+      - If root exists: `self.btree.get_at(root, key, None)`
+      - If no root: return `Ok(None)`
     - `async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus>`:
-      - Delegates to `self.btree.data(name, key, None)`
+      - Resolve name→root, delegate to `btree.data_at(root, key, None)`
     - `async fn order(&self, name: &Name, after: Option<&Key>) -> Result<Option<Key>>`:
-      - Delegates to `self.btree.order(name, after, None)`
+      - Resolve name→root, delegate to `btree.order_at(root, after, None)`
     - `fn collects<P, F, T>(&self, ...) -> impl Stream`:
-      - Delegates to `self.btree.collects(..., None)`
-      - Public `Database` API exposes `&Option<Value>` (hides `NodeData` internals)
+      - Resolve name→root, delegate to `btree.collects_at(..., None)`
   - **Write operations** (locals only; globals require `Transaction`):
     - `async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()>`:
-      - If `name` is `Name::Global(...)`: return `Err(StorageError::GlobalRequiresTransaction)`
-      - If `name` is `Name::Local(...)`: create ephemeral context, delegate to `self.btree.set(name, key, value, &ctx)`
+      - If `Name::Global`: return `Err(StorageError::GlobalRequiresTransaction)`
+      - If `Name::Local`: `ensure_root(name)` then `btree.set_at(root, key, value, &ctx)`
     - `async fn kill(&self, name: &Name, key: &Key) -> Result<()>`:
-      - If `name` is `Name::Global(...)`: return `Err(StorageError::GlobalRequiresTransaction)`
-      - If `name` is `Name::Local(...)`: create ephemeral context, delegate to `self.btree.kill(name, key, &ctx)`
-  - **Note**: Unlike `Transaction` methods, `Database` methods do NOT buffer writes—they apply immediately (for locals) or reject (for globals)
+      - If `Name::Global`: return `Err(StorageError::GlobalRequiresTransaction)`
+      - If `Name::Local` + empty key: `remove_root(name)` + `btree.delete_tree(root)`
+      - If `Name::Local` + non-empty key: `get_root(name)` then `btree.kill_at(root, key, &ctx)`
+  - **Note**: `Database` methods apply immediately (locals) or reject (globals)
 - [ ] Enforce transaction rules:
-  - Writes to `Name::Global` MUST be in transaction (return error otherwise)
+  - Writes to `Name::Global` MUST be in transaction
   - `Name::Local` modifications work outside transactions
-    - Creates temporary transaction context internally for locals
-    - Note: Locals still need a transaction context internally (`BTree::set`) but the Database API handles this transparently
-  - GET/DATA/ORDER can work with or without transactions
+  - GET/DATA/ORDER work with or without transactions
 
 ### 5.3 API Documentation
 - [ ] Add rustdoc comments to all public types
@@ -1150,42 +1340,41 @@ Both ultimately delegate to `BTree` methods, but with different `TransactionCont
 
 ### 5.4 Adding Transaction Awareness to B-Tree Primitives
 
-This section covers updating the Phase 2 B-tree primitives (SET, GET, KILL, DATA, ORDER) to use the `TransactionContext` parameter that was added for future-proofing.
+This section covers updating the B-tree primitives to use the `TransactionContext`
+parameter. Note: Methods are now root-based (`*_at`) after the Phase 4.5 refactor.
 
-**Note**: Phase 2 implementations intentionally ignore `TransactionContext`. This section adds the actual transaction awareness.
+**Note**: Phase 2/4.5 implementations ignore `TransactionContext`. This adds awareness.
 
-- [ ] Update `BTree::set()` to use transaction context:
+- [ ] Update `BTree::set_at()` to use transaction context:
   - Check transaction isolation level from `ctx.isolation_level`
   - Track write operations in transaction context (for conflict detection)
   - Use transaction timestamp for MVCC ordering (future enhancement)
   - Buffer writes for atomic commit (coordinate with `Transaction` struct)
-- [ ] Update `BTree::get()` to use transaction context when provided:
+- [ ] Update `BTree::get_at()` to use transaction context when provided:
   - Implement snapshot isolation: reads see database state as of `ctx.start_timestamp`
   - Check buffered writes in transaction before reading committed data
   - Return most recent visible version based on transaction timestamp
-- [ ] Update `BTree::kill()` to use transaction context:
+- [ ] Update `BTree::kill_at()` to use transaction context:
   - Track deletion operations in transaction context
   - Buffer deletions for atomic commit
   - Update transaction write set
-- [ ] Update `BTree::data()` to use transaction context when provided:
+- [ ] Update `BTree::data_at()` to use transaction context when provided:
   - Apply snapshot isolation to DATA checks
   - Consider buffered writes when determining node status
-  - Return status based on transaction's view of data
-- [ ] Update `BTree::order()` to use transaction context when provided:
+- [ ] Update `BTree::order_at()` to use transaction context when provided:
   - Apply snapshot isolation to iteration
   - Skip uncommitted writes from other transactions
   - Include buffered writes from current transaction in iteration order
-- [ ] Update `BTree::collects()` to use transaction context when provided:
+- [ ] Update `BTree::collects_at()` to use transaction context when provided:
   - Ensure stream sees consistent snapshot throughout iteration
-  - Apply same snapshot isolation rules as individual operations
 - [ ] Add tests for transaction isolation:
-  - Test that reads within transaction don't see uncommitted writes from other transactions
-  - Test that reads within transaction DO see own buffered writes
-  - Test that concurrent transactions maintain isolation
+  - Reads within transaction don't see uncommitted writes from other transactions
+  - Reads within transaction DO see own buffered writes
+  - Concurrent transactions maintain isolation
 - [ ] Add tests for write buffering:
-  - Test that writes are buffered, not immediately visible
-  - Test that commit makes all writes visible atomically
-  - Test that rollback discards all buffered writes
+  - Writes are buffered, not immediately visible
+  - Commit makes all writes visible atomically
+  - Rollback discards all buffered writes
 
 ---
 
@@ -1308,8 +1497,26 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 4.5 BTree Persistence Integration
-**Completed Checkboxes**: ~105 / ~170
+**Current Phase**: Phase 4.5 BTree Refactor & Database Layer
+**Next Up**: 4.5.1 Create Database (namespace mgmt), 4.5.2 Refactor BTree API
+**Completed Checkboxes**: ~120 / ~180
+
+**Recent Changes** (2025-12-03 - Phase 4.3.2.2 GlobalRegistry Chaining COMPLETE):
+- ✅ Implemented `GlobalRegistry` chaining for unlimited globals
+  - Added helper methods: `entry_size()`, `used_bytes()`, `can_insert()`, `is_empty()`, `len()`, `iter()`
+  - Changed `FileStorageEngine.registry` to `registry_chain: Vec<(PageId, GlobalRegistry)>`
+  - Implemented `load_registry_chain()` with recursive async following `next_page` links
+  - Implemented `registry_insert()` with automatic chain extension when full
+  - Implemented `registry_get()` searching across all pages
+  - Implemented `registry_remove()` with compaction of empty pages
+  - Implemented `registry_entries()` for iterating all entries
+  - Implemented `flush_registry_chain()` to persist all pages
+- ✅ Added 14 new tests for registry chaining
+  - Basic operations (insert/get/update/remove/iteration)
+  - Chain overflow and persistence across reopen
+  - Page compaction when entries removed
+  - Stress tests with 500-1000 globals
+- All 420 tests passing, clippy clean
 
 **Recent Changes** (2025-12-03 - Phase 4.4 Global Management COMPLETE):
 - ✅ Added `MetadataPage` struct for database configuration
