@@ -1,5 +1,7 @@
 # RUMPS Persistent Storage Implementation Plan
 
+**IMPORTANT NOTE**: For _all_ file formats (e.g. WAL, superblocks, etc...) DO NOT increment version numbers. We have not finished the DB yet!
+
 This document tracks the implementation of Goal 1: Create a MUMPS-style binary tree storage system with persistent B-tree-backed globals.
 
 ## Core Principles
@@ -557,34 +559,8 @@ This design ensures:
   - `async fn flush(&self) -> Result<()>` - flush dirty pages to disk
 #### 4.3.1 Superblock, Metadata Page, and Global Registry
 - [x] Define `Superblock` struct in `engine.rs`:
-  ```rust
-  struct Superblock {
-      version: u32,              // Now version 2
-      flags: u64,
-      total_pages: u64,
-      bitmap_page_count: u64,
-      bitmap_page_ids: Vec<PageId>,  // max 500
-      metadata_root: Option<PageId>, // Points to MetadataPage
-      registry_root: Option<PageId>, // Points to GlobalRegistry
-  }
-  ```
 - [x] Define `MetadataPage` struct for database configuration:
-  ```rust
-  struct MetadataPage {
-      version: u32,           // Metadata format version
-      created_at: u64,        // Unix timestamp
-      page_size: u32,         // Must match runtime
-      min_degree: u16,        // B-tree parameter
-      last_checkpoint: u64,   // Last checkpoint seq
-  }
-  ```
 - [x] Define `GlobalRegistry` struct for global name → root mappings:
-  ```rust
-  struct GlobalRegistry {
-      entries: Vec<RegistryEntry>,  // Variable-length name + PageId
-      next_page: Option<PageId>,    // For chaining if full
-  }
-  ```
 - [x] Implement `Superblock::serialize() -> [u8; PAGE_SIZE]` with CRC32 checksum
 - [x] Implement `Superblock::deserialize(&[u8]) -> Result<Self>` with checksum validation
 - [x] Update `PageAllocator` to track multiple reserved pages (not just page 0)
@@ -596,7 +572,7 @@ This design ensures:
   - Mark pages 0-3 as reserved/allocated
   - Update superblock with `metadata_root` and `registry_root` pointers
 - [x] Update `FileStorageEngine::open()`:
-  - Read and validate superblock (supports both v1 and v2 formats)
+  - Read and validate superblock
   - Load all bitmap pages, concatenate into `PageAllocator`
   - Load metadata page and validate runtime compatibility
   - Load registry page
@@ -611,11 +587,115 @@ This design ensures:
   - Adding bitmap pages (`superblock_add_bitmap_page`)
   - Invalid magic fails (`superblock_invalid_magic_fails`)
   - Checksum validation failure (`superblock_checksum_mismatch_fails`)
-  - v2 superblock created on `create()` (`create_uses_v2_superblock`)
+  - Superblock created on `create()` (`create_uses_superblock`)
   - Superblock preserved across open/close (`create_then_open_preserves_superblock`)
   - Reserved pages for superblock and bitmap (`allocate_reserves_superblock_and_bitmap`)
 
-### 4.3.2 AsyncStorageEngine Implementation (Part 2)
+### 4.3.2 Scalable Storage: Indirect Bitmaps and Registry Chaining
+
+**Problem**: Current design limits database to ~62.5 GiB and ~200-370 globals.
+
+| Constraint   | Current Limit | Target (SQLite-level) |
+|--------------|---------------|-----------------------|
+| Max DB size  | 62.5 GiB      | ~32 TiB               |
+| Max globals  | ~200-370      | Unlimited (chained)   |
+| Bitmap pages | 500 direct    | 400 direct + indirect |
+
+**Note**: Superblock version remains **1** (not yet released, can overwrite format).
+
+#### 4.3.2.1 Indirect Bitmap Pages
+
+The superblock currently stores up to 500 direct bitmap page IDs. Each bitmap page
+tracks `PAGE_SIZE × 8` pages (32,768 at 4KB). This gives `500 × 32,768 = 16.4M pages = 62.5 GiB`.
+
+To reach SQLite-level capacity (~16-32 TiB), we use need to use filesystem-style indirect blocks.
+
+**Implementation Tasks:**
+
+- [x] Update `Superblock` struct (**still version 1**):
+- [x] Update `Superblock` constants:
+  - `MAX_DIRECT_BITMAP_PAGES = 400` (reduced from 500 to make room)
+  - `INDIRECT_ENTRIES_PER_PAGE = PAGE_SIZE / 8 = 512`
+  - `OFF_SINGLE_INDIRECT = 3232`
+  - `OFF_DOUBLE_INDIRECT = 3240`
+  - `OFF_METADATA_ROOT = 3248`
+  - `OFF_REGISTRY_ROOT = 3256`
+  - `OFF_CHECKSUM = 4080` (moved from 4088)
+- [x] Update `Superblock::serialize()` / `deserialize()` for new layout
+- [x] Add `IndirectPage` struct:
+- [x] Implement `IndirectPage::serialize()` / `deserialize()`
+- [x] Update `FileStorageEngine::load_superblock()`:
+  - Load direct bitmap pages as before
+  - If `single_indirect.is_some()`: load indirect page, then load all referenced bitmap pages
+  - If `double_indirect.is_some()`: load double-indirect, then each indirect, then bitmap pages
+  - Concatenate all bitmap data for `PageAllocator`
+- [x] Update `FileStorageEngine::grow_bitmap()`:
+  - If direct slots available: add to `direct_bitmap_ids`
+  - Else if single-indirect has room: add to single-indirect page
+  - Else if double-indirect has room: add to double-indirect chain
+  - Else: return `Err(StorageError::MaxBitmapCapacity)`
+- [x] Add helper: `resolve_bitmap_pages(&self) -> Result<Vec<PageId>>`:
+  - Returns all bitmap page IDs in order (direct + indirect + double-indirect)
+  - Used by both `load_superblock` and `flush_metadata`
+  - Implemented as `collect_all_bitmap_ids()` and `resolve_bitmap_pages_full()`
+- [x] Update `FileStorageEngine::flush_metadata()`:
+  - Write all bitmap pages
+  - Write indirect pages if used
+  - Write updated superblock
+- [x] Add tests:
+  - [x] Direct bitmap allocation (existing tests still pass)
+  - [x] `collect_all_bitmap_ids()` returns correct order (3 tests)
+  - [x] `IndirectPage` serialization/deserialization (5 tests)
+  - [x] `Superblock` with indirect pointers (4 tests)
+  - [x] Single-indirect allocation + round-trip (`#[ignore]` - ~50GB, run manually)
+
+#### 4.3.2.2 GlobalRegistry Chaining
+
+The `GlobalRegistry` has a `next_page` field but chaining is not implemented.
+Current limit is ~200-370 globals per page depending on name length.
+
+**Implementation Tasks:**
+
+- [ ] Update `GlobalRegistry::insert()`:
+  - If current page full AND `next_page.is_none()`:
+    - Allocate new registry page via `PageAllocator`
+    - Set `self.next_page = Some(new_page_id)`
+    - Create new `GlobalRegistry` for overflow, insert entry there
+  - If current page full AND `next_page.is_some()`:
+    - Load next page, recursively insert
+  - Track if any page in chain was modified (for flush)
+- [ ] Update `GlobalRegistry::get()`:
+  - Search current page entries
+  - If not found AND `next_page.is_some()`: load next page, search recursively
+- [ ] Update `GlobalRegistry::remove()`:
+  - Search and remove from correct page in chain
+  - Optionally compact: if a page becomes empty, unlink and deallocate
+- [ ] Add `GlobalRegistry::iter()` or `all_entries()`:
+  - Iterate across all pages in chain
+  - Useful for debugging and migration
+- [ ] Update `FileStorageEngine` to handle registry chain:
+  - `load_registry()`: follow `next_page` links, build complete registry
+  - `flush_registry()`: write all modified pages in chain
+- [ ] Add tests:
+  - Insert more globals than fit in one page
+  - Lookup global in second page of chain
+  - Remove global from middle of chain
+  - Reopen DB with chained registry, verify all globals present
+  - Stress test: 1000+ globals with varied name lengths
+
+#### 4.3.2.3 Migration Notes
+
+Since we haven't released, no migration is needed. The superblock format simply changes:
+- Version stays at 1
+- Layout changes (fewer direct slots, add indirect pointers)
+- Existing test databases will need to be recreated
+
+If we had released, we would need:
+- Version bump to 2
+- `open()` to detect v1 vs v2 and handle accordingly
+- Migration tool to upgrade v1 → v2
+
+### 4.3.3 AsyncStorageEngine Implementation (Part 2)
 - [ ] Add WAL-aware methods:
   - `async fn begin_transaction() -> TransactionId`
   - `async fn log_operation(txn_id, operation)` - append to WAL
@@ -1241,7 +1321,7 @@ These are not part of the current plan but should be kept in mind:
   - ~4070 bytes for entries per page (~200 globals at average 20 bytes/entry)
   - Supports chaining via `next_page` pointer (not yet implemented)
   - Methods: `new()`, `get()`, `insert()`, `remove()`, `serialize()`, `deserialize()`
-- ✅ Updated `Superblock` to version 2 with new pointers:
+- ✅ Updated `Superblock` with metadata/registry pointers:
   - `metadata_root: Option<PageId>` at offset 4032
   - `registry_root: Option<PageId>` at offset 4040
 - ✅ Updated `FileStorageEngine::create()`:
@@ -1255,11 +1335,10 @@ These are not part of the current plan but should be kept in mind:
 **Recent Changes** (2025-12-02 - Phase 4.3.1 Superblock COMPLETE):
 - ✅ Implemented Superblock and Multi-Page Bitmap system
   - `Superblock` struct with serialize/deserialize and CRC32 checksum
-  - Supports up to 500 bitmap pages (~62 TB at 4KB page size)
+  - Supports up to 500 bitmap pages (~62 GiB at 4KB page size)
   - `PageAllocator` updated for multiple reserved pages
   - `extend_capacity()`, `add_reserved()`, `reserved_pages()`, `is_reserved()` methods
-  - `FileStorageEngine::create()` writes v2 superblock + first bitmap page
-  - `FileStorageEngine::open()` supports both v1 (inline) and v2 (superblock) formats
+  - `FileStorageEngine::create()` writes superblock + first bitmap page
   - `ensure_bitmap_capacity()` and `grow_bitmap()` for automatic bitmap growth
   - `flush_metadata()` writes bitmap pages and updates superblock
   - 7 new superblock tests, all 372 tests passing, clippy clean
