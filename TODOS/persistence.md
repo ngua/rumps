@@ -555,15 +555,34 @@ This design ensures:
   - `async fn allocate(&self) -> Result<NodeId>` - get free page
   - `async fn deallocate(&self, id: NodeId) -> Result<()>` - mark page as free
   - `async fn flush(&self) -> Result<()>` - flush dirty pages to disk
-#### 4.3.1 Superblock and Multi-Page Bitmap
+#### 4.3.1 Superblock, Metadata Page, and Global Registry
 - [x] Define `Superblock` struct in `engine.rs`:
   ```rust
   struct Superblock {
-      version: u32,
+      version: u32,              // Now version 2
       flags: u64,
       total_pages: u64,
       bitmap_page_count: u64,
       bitmap_page_ids: Vec<PageId>,  // max 500
+      metadata_root: Option<PageId>, // Points to MetadataPage
+      registry_root: Option<PageId>, // Points to GlobalRegistry
+  }
+  ```
+- [x] Define `MetadataPage` struct for database configuration:
+  ```rust
+  struct MetadataPage {
+      version: u32,           // Metadata format version
+      created_at: u64,        // Unix timestamp
+      page_size: u32,         // Must match runtime
+      min_degree: u16,        // B-tree parameter
+      last_checkpoint: u64,   // Last checkpoint seq
+  }
+  ```
+- [x] Define `GlobalRegistry` struct for global name → root mappings:
+  ```rust
+  struct GlobalRegistry {
+      entries: Vec<RegistryEntry>,  // Variable-length name + PageId
+      next_page: Option<PageId>,    // For chaining if full
   }
   ```
 - [x] Implement `Superblock::serialize() -> [u8; PAGE_SIZE]` with CRC32 checksum
@@ -573,10 +592,14 @@ This design ensures:
 - [x] Add `PageAllocator::reserved_pages() -> Vec<PageId>` accessor
 - [x] Update `FileStorageEngine::create()`:
   - Create superblock with initial bitmap page at page 1
-  - Mark pages 0 and 1 as reserved/allocated
+  - Create metadata page at page 2, registry page at page 3
+  - Mark pages 0-3 as reserved/allocated
+  - Update superblock with `metadata_root` and `registry_root` pointers
 - [x] Update `FileStorageEngine::open()`:
   - Read and validate superblock (supports both v1 and v2 formats)
   - Load all bitmap pages, concatenate into `PageAllocator`
+  - Load metadata page and validate runtime compatibility
+  - Load registry page
 - [x] Update `FileStorageEngine::allocate()`:
   - `ensure_bitmap_capacity()` checks if growth needed before allocation
   - `grow_bitmap()` allocates new bitmap page if capacity exhausted
@@ -604,14 +627,16 @@ This design ensures:
   - `SyncMode::Periodic(Duration)` - spawn background task that calls `sync()` at interval
 
 ### 4.4 Global Management
-- [ ] Define `GlobalRegistry` struct:
+- [x] Define `GlobalRegistry` struct:
   - Map from global name strings to root `PageId` (only persists `Name::Global`)
-  - Stored in superblock reserved area (bytes 4032-4087) or separate registry page
-- [ ] Implement `GlobalRegistry::serialize/deserialize`
-- [ ] Implement `GlobalRegistry::register(name: String, root: PageId)`
-- [ ] Implement `GlobalRegistry::get_root(name: &str) -> Option<PageId>`
-- [ ] Integrate with `Superblock` - add `registry_root: Option<PageId>` field if registry outgrows superblock
-- [ ] Add tests for multi-global persistence
+  - Stored in separate registry page (page 3 by default), with chaining support
+- [x] Implement `GlobalRegistry::serialize/deserialize`
+- [x] Implement `GlobalRegistry::insert(name: String, root: PageId)` (register/update)
+- [x] Implement `GlobalRegistry::get(name: &str) -> Option<PageId>`
+- [x] Implement `GlobalRegistry::remove(name: &str)`
+- [x] Integrate with `Superblock` - added `registry_root: Option<PageId>` field
+- [x] Add tests for registry serialization round-trip
+- [ ] Add tests for multi-global persistence (with actual B-tree integration)
 - [ ] Add tests verifying Local variables are NOT persisted
 
 ### 4.5 BTree Persistence Integration
@@ -1203,8 +1228,29 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 4.4 Global Management
-**Completed Checkboxes**: ~95 / ~170
+**Current Phase**: Phase 4.5 BTree Persistence Integration
+**Completed Checkboxes**: ~105 / ~170
+
+**Recent Changes** (2025-12-03 - Phase 4.4 Global Management COMPLETE):
+- ✅ Added `MetadataPage` struct for database configuration
+  - Fields: `version`, `created_at`, `page_size`, `min_degree`, `last_checkpoint`
+  - Serialize/deserialize with CRC32 checksum and magic validation
+  - Runtime validation ensures page size matches compiled binary
+- ✅ Added `GlobalRegistry` struct for global name → root page mapping
+  - Variable-length entries: (name_len, name_bytes, root_page_id)
+  - ~4070 bytes for entries per page (~200 globals at average 20 bytes/entry)
+  - Supports chaining via `next_page` pointer (not yet implemented)
+  - Methods: `new()`, `get()`, `insert()`, `remove()`, `serialize()`, `deserialize()`
+- ✅ Updated `Superblock` to version 2 with new pointers:
+  - `metadata_root: Option<PageId>` at offset 4032
+  - `registry_root: Option<PageId>` at offset 4040
+- ✅ Updated `FileStorageEngine::create()`:
+  - Now allocates 4 pages: superblock (0), bitmap (1), metadata (2), registry (3)
+- ✅ Updated `FileStorageEngine::open()`:
+  - Loads metadata page and validates runtime compatibility
+  - Loads registry page (or creates defaults for legacy DBs without these pages)
+- ✅ Added 12 new tests for MetadataPage and GlobalRegistry
+- All 384 tests passing, clippy clean
 
 **Recent Changes** (2025-12-02 - Phase 4.3.1 Superblock COMPLETE):
 - ✅ Implemented Superblock and Multi-Page Bitmap system
@@ -1327,4 +1373,4 @@ These are not part of the current plan but should be kept in mind:
 
 ---
 
-Last Updated: 2025-12-02
+Last Updated: 2025-12-03

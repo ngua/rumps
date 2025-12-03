@@ -371,19 +371,23 @@ impl PageAllocator {
     /// At 4KB pages, `2^52` pages = ~16 petabytes, far beyond any realistic use.
     const MAX_TRACKABLE_PAGES: u64 = 1 << 52;
 
-    /// Create a new allocator with initial capacity and reserved pages.
+    /// Create a new allocator for a fresh database.
+    ///
+    /// Reserves pages 0-3 (superblock, bitmap, metadata, registry) as allocated
+    /// and non-freeable. If `initial_bits` is 0, defaults to 64 bits.
+    pub(crate) fn new(initial_bits: u64, max_pages: Option<u64>) -> Self {
+        Self::with_reserved(initial_bits, max_pages, &[0, 1, 2, 3])
+    }
+
+    /// Create allocator with custom reserved pages.
     ///
     /// All pages in `reserved` are marked as allocated and cannot be freed.
-    /// For file-backed storage, this should include page 0 (superblock) and
-    /// page 1 (first bitmap page).
-    ///
-    /// If `initial_pages` is 0, defaults to 64 pages.
-    pub(crate) fn new(
-        initial_pages: u64,
+    fn with_reserved(
+        initial_bits: u64,
         max_pages: Option<u64>,
         reserved: &[u64],
     ) -> Self {
-        let mut bitmap = Bitmap::new(initial_pages as usize);
+        let mut bitmap = Bitmap::new(initial_bits as usize);
         let reserved_set: HashSet<u64> = reserved.iter().copied().collect();
 
         // Mark all reserved pages as allocated
@@ -1529,7 +1533,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_new_reserves_page_zero() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         assert!(alloc.is_allocated(PageId::HEADER).await);
         assert_eq!(alloc.allocated_count().await, 1);
@@ -1537,7 +1541,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_allocate_sequential() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Page 0 is reserved, so first allocation should be page 1
         let p1 = alloc.allocate().await.unwrap();
@@ -1554,7 +1558,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_free_and_reuse() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         let p1 = alloc.allocate().await.unwrap();
         let p2 = alloc.allocate().await.unwrap();
@@ -1579,7 +1583,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_extends_bitmap() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         assert_eq!(alloc.capacity().await, 64);
 
@@ -1606,7 +1610,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_is_allocated() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         assert!(alloc.is_allocated(PageId::HEADER).await);
         assert!(!alloc.is_allocated(PageId::from_page_num(1).unwrap()).await);
@@ -1620,7 +1624,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_mark_allocated() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         let id = PageId::from_page_num(42).unwrap();
 
@@ -1640,7 +1644,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_mark_allocated_extends() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Mark a page beyond current capacity
         let id = PageId::from_page_num(100).unwrap();
@@ -1662,7 +1666,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_serialization_roundtrip() {
-        let alloc = PageAllocator::new(128, None, &[0]);
+        let alloc = PageAllocator::with_reserved(128, None, &[0]);
 
         // Allocate some pages
         let p1 = alloc.allocate().await.unwrap();
@@ -1719,7 +1723,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_free_count() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Initially 63 free (page 0 reserved)
         assert_eq!(alloc.free_count().await, 63);
@@ -1734,7 +1738,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_search_hint_optimization() {
-        let alloc = PageAllocator::new(128, None, &[0]);
+        let alloc = PageAllocator::with_reserved(128, None, &[0]);
 
         // Allocate pages 1-10
         let pages: Vec<_> =
@@ -1754,7 +1758,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_free_not_allocated() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Try to free a page that was never allocated
         let id = PageId::from_page_num(10).unwrap();
@@ -1765,7 +1769,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_free_double_free() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         let p = alloc.allocate().await.unwrap();
         alloc.free(p).await.unwrap();
@@ -1778,7 +1782,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_free_out_of_bounds() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Try to free a page beyond the bitmap capacity
         let id = PageId::from_page_num(1000).unwrap();
@@ -1790,7 +1794,7 @@ mod tests {
     #[tokio::test]
     async fn allocator_limit_exceeded() {
         // Limit of 5 pages total (including reserved page 0)
-        let alloc = PageAllocator::new(64, Some(5), &[0]);
+        let alloc = PageAllocator::with_reserved(64, Some(5), &[0]);
 
         // Can allocate 4 more pages (page 0 is already allocated)
         alloc.allocate().await.unwrap(); // page 1
@@ -1807,7 +1811,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_limit_with_free_reuse() {
-        let alloc = PageAllocator::new(64, Some(5), &[0]);
+        let alloc = PageAllocator::with_reserved(64, Some(5), &[0]);
 
         let _p1 = alloc.allocate().await.unwrap();
         let p2 = alloc.allocate().await.unwrap();
@@ -1840,7 +1844,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_cannot_free_page_zero() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
         let page_zero = PageId::from_page_num(0).unwrap();
         let err = alloc.free(page_zero).await.unwrap_err();
         assert!(matches!(err, Error::CannotFreeHeaderPage));
@@ -1849,7 +1853,7 @@ mod tests {
     #[tokio::test]
     async fn allocator_limit_one_only_header() {
         // Limit of 1 means only page 0 (header) can exist
-        let alloc = PageAllocator::new(64, Some(1), &[0]);
+        let alloc = PageAllocator::with_reserved(64, Some(1), &[0]);
 
         // Already at limit (page 0 is reserved)
         assert_eq!(alloc.allocated_count().await, 1);
@@ -1861,7 +1865,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_reuses_from_beginning_after_free_all() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Allocate several pages
         let p1 = alloc.allocate().await.unwrap();
@@ -1912,7 +1916,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_mark_allocated_page_zero() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Page 0 is already allocated
         assert_eq!(
@@ -1927,7 +1931,7 @@ mod tests {
     #[tokio::test]
     async fn allocator_with_reserved_pages() {
         // Create allocator with pages 0, 5, 10 reserved
-        let alloc = PageAllocator::new(64, None, &[0, 5, 10]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0, 5, 10]);
 
         // All reserved pages should be allocated
         assert!(alloc.is_allocated(PageId::from_page_num(0).unwrap()).await);
@@ -1945,7 +1949,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_cannot_free_reserved_page() {
-        let alloc = PageAllocator::new(64, None, &[0, 5, 10]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0, 5, 10]);
 
         // Cannot free any reserved page
         let err = alloc
@@ -1970,7 +1974,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_add_reserved() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Allocate a page
         let p = alloc.allocate().await.unwrap();
@@ -1986,7 +1990,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_reserved_pages() {
-        let alloc = PageAllocator::new(64, None, &[0, 10, 5]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0, 10, 5]);
 
         let reserved = alloc.reserved_pages().await;
         assert_eq!(reserved, vec![0, 5, 10]); // sorted
@@ -1994,7 +1998,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_is_reserved() {
-        let alloc = PageAllocator::new(64, None, &[0, 5]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0, 5]);
 
         assert!(alloc.is_reserved(0).await);
         assert!(alloc.is_reserved(5).await);
@@ -2004,7 +2008,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_extend_capacity() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         assert_eq!(alloc.capacity().await, 64);
 
@@ -2019,7 +2023,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_is_allocated_beyond_bounds() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Page way beyond capacity should return false, not panic
         assert!(
@@ -2031,7 +2035,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_counts_after_free_all() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Allocate all 63 available pages (64 - 1 for header)
         let pages: Vec<_> =
@@ -2053,7 +2057,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocator_fill_word_then_extend() {
-        let alloc = PageAllocator::new(64, None, &[0]);
+        let alloc = PageAllocator::with_reserved(64, None, &[0]);
 
         // Allocate all 63 pages in first word
         let _pages: Vec<_> =
