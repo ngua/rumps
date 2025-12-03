@@ -804,11 +804,11 @@ pub struct Database {
 }
 ```
 
-- [ ] Create `database.rs` module with `Database` struct
-- [ ] Implement `Database::in_memory() -> Result<Self>`:
+- [x] Create `database.rs` module with `Database` struct
+- [x] Implement `Database::in_memory() -> Result<Self>`:
   - Create `BTree` with `IncrementingAllocator`
   - Empty `roots` map, no storage
-- [ ] Implement lazy root loading (core namespace logic):
+- [x] Implement lazy root loading (core namespace logic):
   ```rust
   impl Database {
       /// Look up root, lazy-loading from registry if needed.
@@ -831,12 +831,11 @@ pub struct Database {
       }
   }
   ```
-- [ ] Implement `Database::open(path)` and `Database::create(path)` (deferred to 4.6)
 
 #### 4.5.2 Refactor BTree API (remove roots, use root-based methods)
 
-- [ ] Remove `roots: RwLock<BTreeMap<Name, NodeId>>` field from `BTree`
-- [ ] Rename all public methods from name-based to root-based:
+- [x] Remove `roots: RwLock<BTreeMap<Name, NodeId>>` field from `BTree`
+- [x] Rename all public methods from name-based to root-based:
 
   | Current Method | New Method | Notes |
   |----------------|------------|-------|
@@ -847,7 +846,7 @@ pub struct Database {
   | `order(&Name, Option<&Key>)` | `order_at(NodeId, Option<&Key>)` | Remove name lookup |
   | `collects(...)` | `collects_at(...)` | Remove name lookup |
 
-- [ ] Add tree lifecycle methods:
+- [x] Add tree lifecycle methods:
   ```rust
   impl BTree {
       /// Create a new empty tree, returning its root NodeId.
@@ -857,9 +856,9 @@ pub struct Database {
       pub async fn delete_tree(&self, root: NodeId) -> Result<usize>;
   }
   ```
-- [ ] Remove helper methods that reference `roots`:
-  - `get_or_create_root()` → DELETE
-  - Any method accessing `self.roots` → refactor or delete
+- [x] Remove helper methods that reference `roots`:
+  - `get_or_create_root()` → DELETE (never existed)
+  - Any method accessing `self.roots` → refactor or delete (none found)
 
 #### 4.5.3 Rewrite BTree Tests
 
@@ -883,37 +882,35 @@ Tests that move to `Database` layer:
 - Namespace separation (`Global` vs `Local`)
 - Registry persistence tests
 
-#### 4.5.4 Add Database Tests (namespace management only)
+#### 4.5.4 Add Database Tests (namespace management only) ✅ COMPLETE
 
-- [ ] Test `in_memory()` creates empty Database
-- [ ] Test `get_root()` returns `None` for unknown names
-- [ ] Test `ensure_root()` creates tree and caches root
-- [ ] Test `ensure_root()` returns cached root on second call
-- [ ] Test `remove_root()` removes from cache
-- [ ] Test `Global("X")` and `Local("X")` have separate roots
+- [x] Test `in_memory()` creates empty Database - `in_memory_creates_empty_database`
+- [x] Test `get_root()` returns `None` for unknown names - `get_root_returns_none_for_unknown`
+- [x] Test `ensure_root()` creates tree and caches root - `ensure_root_creates_and_caches`
+- [x] Test `ensure_root()` returns cached root on second call - `ensure_root_returns_cached_on_second_call`
+- [x] Test `remove_root()` removes from cache - `remove_root_removes_from_cache`
+- [x] Test `Global("X")` and `Local("X")` have separate roots - `global_and_local_have_separate_roots`
+- [x] Test `update_root()` changes mapping - `update_root_changes_mapping`
 
 Full MUMPS operation tests (get/set/kill/data/order) are in Phase 5.
 
-#### 4.5.5 Rewrite BTree Benchmarks
+#### 4.5.5 Rewrite BTree Benchmarks ✅ COMPLETE
 
-The existing benchmarks use the old name-based API and must be updated:
+The existing benchmarks use root-based API:
 
-- [ ] Update `benches/btree_bench.rs` to use root-based API:
-  ```rust
-  // BEFORE
-  btree.set(&name, &key, val, &ctx).await?;
-  btree.get(&name, &key).await?;
+- [x] Update `benches/btree_bench.rs` to use root-based API
+- [x] Remove `Name` from benchmark setup (uses `NodeId` directly)
+- [x] Add new benchmark for `create_tree()` / `delete_tree()` lifecycle
 
-  // AFTER
-  let root = btree.create_tree().await?;
-  btree.set_at(root, &key, val, &ctx).await?;
-  btree.get_at(root, &key).await?;
-  ```
-- [ ] Remove `Name` from benchmark setup (just use `NodeId` directly)
-- [ ] Add new benchmark for `create_tree()` / `delete_tree()` lifecycle
+**Benchmarks implemented** (in `btree/tests.rs` → `benches::run_benchmarks`):
+- `btree_create_delete_tree` - Tree lifecycle operations
+- `btree_set_at_sequential` - Sequential SET with 100 keys
+- `btree_get_at_existing` - GET on existing key
+- `btree_delete_tree_populated` - Delete tree with 50 keys
 
 ### 4.6 BTree Disk Persistence
 
+- [ ] Implement `Database::open(path)` and `Database::create(path)` 
 - [ ] Add `storage: Option<Arc<FileStorageEngine>>` field to `BTree`
 - [ ] Implement `BTree::with_storage(min_degree, storage) -> Result<Self>`:
   - Initialize with storage engine
@@ -1497,9 +1494,23 @@ These are not part of the current plan but should be kept in mind:
 ## Progress Tracking
 
 **Status**: In Progress
-**Current Phase**: Phase 4.5 BTree Refactor & Database Layer
-**Next Up**: 4.5.1 Create Database (namespace mgmt), 4.5.2 Refactor BTree API
-**Completed Checkboxes**: ~120 / ~180
+**Current Phase**: Phase 4.5 BTree Refactor & Database Layer - COMPLETE
+**Next Up**: Phase 4.6 BTree Disk Persistence
+**Completed Checkboxes**: ~130 / ~180
+
+**Recent Changes** (2025-12-03 - Phase 4.5 BTree Refactor & Database Layer COMPLETE):
+- ✅ Phase 4.5.1: Created `Database` layer with namespace management
+  - `Database::in_memory()`, `with_btree()` constructors
+  - `get_root()`, `ensure_root()`, `remove_root()`, `update_root()` methods
+  - Lazy-loading from registry (stub for Phase 4.6)
+- ✅ Phase 4.5.2: Refactored BTree to root-based API
+  - All methods now use `NodeId` root parameter (`get_at`, `set_at`, `kill_at`, etc.)
+  - Added `create_tree()` and `delete_tree()` lifecycle methods
+  - Removed all `roots` field and name-based methods from BTree
+- ✅ Phase 4.5.3: All BTree tests updated to use root-based API
+- ✅ Phase 4.5.4: Added 7 Database tests for namespace management
+- ✅ Phase 4.5.5: Rewrote BTree benchmarks with 4 benchmarks using root-based API
+- All 318 tests passing, clippy clean
 
 **Recent Changes** (2025-12-03 - Phase 4.3.2.2 GlobalRegistry Chaining COMPLETE):
 - ✅ Implemented `GlobalRegistry` chaining for unlimited globals

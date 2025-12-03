@@ -2,13 +2,13 @@
 #![allow(dead_code)]
 #![allow(clippy::only_used_in_recursion)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures::{Stream, TryStreamExt};
-use rumps_types::{DataStatus, Key, Name};
+use rumps_types::{DataStatus, Key};
 use tokio::sync::RwLock;
 
 use crate::error::{Result, StorageError};
@@ -86,9 +86,9 @@ impl NodeAllocator for IncrementingAllocator {
 
 /// In-memory B-tree storage for RUMPS database.
 ///
-/// This structure manages the hierarchical storage of both persistent globals
-/// (`^NAME`) and ephemeral locals (`NAME`). All operations are async to support
-/// future disk persistence without API changes.
+/// This structure manages the hierarchical storage of B-tree nodes. It operates
+/// purely on `NodeId`s—namespace management (mapping variable names to roots)
+/// is handled by the `Database` layer.
 ///
 /// # B-tree Properties
 ///
@@ -101,11 +101,14 @@ impl NodeAllocator for IncrementingAllocator {
 ///
 /// # Design Decisions
 ///
-/// ## `BTreeMap` for roots
-/// Variable names are stored in a `BTreeMap` to support ordered iteration,
-/// enabling MUMPS `$ORDER` semantics over variable names themselves.
+/// ## Root-Based API
+///
+/// All operations take a `root: NodeId` parameter instead of a `Name`. The
+/// `Database` layer is responsible for mapping names to root `NodeId`s and
+/// updating the mapping when tree operations change the root (splits/merges).
 ///
 /// ## `RwLock<HashMap>` for nodes
+///
 /// Nodes are stored in an async-aware `RwLock<HashMap>` because:
 /// - `NodeId`s are arbitrary internal references (like page IDs)
 /// - Logical ordering is maintained by the tree structure, not `NodeId` values
@@ -114,34 +117,6 @@ impl NodeAllocator for IncrementingAllocator {
 ///
 /// In Phase 2-3, this is pure in-memory storage. In Phase 4, it becomes
 /// a page cache with lazy loading from disk.
-///
-/// # Scalability Considerations
-///
-/// ## Root Index Design
-///
-/// The root index (`roots: RwLock<BTreeMap<Name, NodeId>>`) keeps all variable
-/// names in memory. This design assumes the typical MUMPS deployment pattern:
-///
-/// **Typical**: Hundreds of globals, each with millions of child records
-/// - Example: `^PATIENT` with 5 million patient records
-/// - Example: `^ORDER` with 10 million order records
-/// - Root index: ~100-500 variable names (~20KB in memory)
-///
-/// **Not Typical**: Millions of distinct globals
-/// - This would require gigabytes of memory just for root names
-/// - Would create lock contention on the single `RwLock`
-///
-/// Real-world MUMPS deployments (hospitals, banks, etc.) follow the "hundreds
-/// of globals" pattern, where the data volume comes from deep hierarchical
-/// subscripting within each global, not from proliferating global names.
-///
-/// ## When This Design Breaks Down
-///
-/// If you need millions of distinct globals, you would need:
-/// - Hierarchical root index (disk-backed B-tree of variable names)
-/// - Sharding/partitioning of the namespace
-/// - Lazy loading of root mappings with an LRU cache
-/// - Granular locking (lock striping or optimistic concurrency)
 ///
 /// # Thread Safety
 ///
@@ -157,25 +132,18 @@ impl NodeAllocator for IncrementingAllocator {
 ///
 /// # tokio_test::block_on(async {
 /// // Create a B-tree with minimum degree 3
-/// // (nodes will have `2-5` keys)
 /// let btree = Arc::new(BTree::new(3)?);
 /// assert_eq!(btree.min_degree(), 3);
-/// assert_eq!(btree.node_count().await, 0);
 ///
-/// // Use default configuration (`min_degree = 3`)
-/// let btree = Arc::new(BTree::default());
-/// assert_eq!(btree.min_degree(), 3);
+/// // Create an empty tree and get its root
+/// let root = btree.create_tree().await?;
+///
+/// // Operations use root-based API
+/// let new_root = btree.set_at(root, &key, value, &ctx).await?;
 /// # Ok::<(), rumps_storage::StorageError>(())
 /// # });
 /// ```
 pub(crate) struct BTree {
-    /// Maps variable names to root nodes (maintains sorted order).
-    ///
-    /// This `BTreeMap` enables ordered iteration over variable names,
-    /// supporting MUMPS `$ORDER` semantics. Both `Global` and `Local`
-    /// variables are stored in the same map with consistent ordering.
-    roots: RwLock<BTreeMap<Name, NodeId>>,
-
     /// Async-aware node storage pool.
     ///
     /// In Phase 2-3, this holds all nodes in memory. In Phase 4, it becomes
@@ -236,86 +204,83 @@ impl Default for BTree {
 
 /// MUMPS primitive operations (`SET`, `GET`, `KILL`, `DATA`, `ORDER`).
 ///
-/// Public API - All write operations require a `TransactionContext`.
-/// Read operations can optionally use a `TransactionContext` for snapshot isolation.
+/// Root-based API - All operations take a `root: NodeId` parameter.
+/// Write operations may return a new root if the tree structure changes.
 impl BTree {
-    /// Sets a value in the tree at the specified variable name and key.
+    /// Sets a value at the specified key in the tree rooted at `root`.
     ///
-    /// **Requires a transaction context.** All writes to globals must occur within transactions.
+    /// Returns the (possibly new) root `NodeId`. The root may change if
+    /// the tree grows due to node splitting.
+    ///
+    /// **Requires a transaction context.** All writes to globals must
+    /// occur within transactions.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// use rumps_storage::{BTree, TransactionContext};
-    /// use rumps_types::{Name, Key, Value, TransactionId, TransactionTimestamp};
-    ///
-    /// # tokio_test::block_on(async {
-    /// let btree = BTree::new(3)?;
-    /// let txn = TransactionContext::new(
-    ///     TransactionId::from(1),
-    ///     TransactionTimestamp::from(100),
-    /// );
-    ///
-    /// let name = Name::global("PATIENT");
-    /// let key = key![123];
-    /// btree.set(&name, &key, "John Doe".into(), &txn).await?;
-    /// # Ok::<(), rumps_storage::StorageError>(())
-    /// # });
+    /// let new_root = btree.set_at(root, &key, "John Doe".into(), &ctx).await?;
+    /// // Update the root in the Database layer if it changed
+    /// if new_root != root {
+    ///     db.update_root(&name, new_root).await;
+    /// }
     /// ```
-    pub(crate) async fn set(
+    pub(crate) async fn set_at(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
         value: rumps_types::Value,
         _ctx: &crate::TransactionContext,
-    ) -> Result<()> {
+    ) -> Result<NodeId> {
         // TODO Phase 5: Use transaction context for snapshot isolation
-        // and buffered writes (e.g., write to transaction buffer instead
-        // of directly to tree). For now, we just delegate to `set_internal()`.
-        self.set_internal(name, key, NodeData::with_value(value))
+        self.set_internal(root, key, NodeData::with_value(value))
             .await
     }
 
-    /// Gets a value from the tree.
+    /// Gets a value from the tree rooted at `root`.
     ///
     /// Optional transaction context for snapshot isolation (Phase 5).
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let value = btree.get(&name, &key, None).await?;
+    /// let value = btree.get_at(root, &key, None).await?;
     /// ```
-    pub(crate) async fn get(
+    pub(crate) async fn get_at(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<Option<rumps_types::Value>> {
-        // TODO Phase 5: If `txn` is `Some`, use snapshot isolation
-        self.get_internal(name, key)
+        // TODO Phase 5: If `ctx` is `Some`, use snapshot isolation
+        self.get_internal(root, key)
             .await
             .map(|opt| opt.and_then(|data| data.value.clone()))
     }
 
-    /// Deletes a key and all its descendants from the tree.
+    /// Deletes a key and all its descendants from the tree rooted at `root`.
     ///
-    /// **Requires a transaction context.** All writes to globals must occur within transactions.
+    /// Returns the (possibly new) root `NodeId`, or `None` if the tree
+    /// became empty after the deletion.
+    ///
+    /// **Requires a transaction context.** All writes to globals must
+    /// occur within transactions.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// btree.kill(&name, &key, &txn).await?;
+    /// match btree.kill_at(root, &key, &ctx).await? {
+    ///     Some(new_root) => db.update_root(&name, new_root).await,
+    ///     None => db.remove_root(&name).await,
+    /// }
     /// ```
-    pub(crate) async fn kill(
+    pub(crate) async fn kill_at(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
         _ctx: &crate::TransactionContext,
-    ) -> Result<()> {
+    ) -> Result<Option<NodeId>> {
         // TODO Phase 5: Use transaction context for snapshot isolation
-        // and buffered writes (e.g., write to transaction buffer instead
-        // of directly to tree). For now, we just delegate to `kill_internal()`.
-        self.kill_internal(name, key).await
+        self.kill_internal(root, key).await
     }
 
     /// Checks the data status of a node (MUMPS `$DATA`).
@@ -326,16 +291,16 @@ impl BTree {
     /// # Examples
     ///
     /// ```ignore
-    /// let status = btree.data(&name, &key, None).await?;
+    /// let status = btree.data_at(root, &key, None).await?;
     /// ```
-    pub(crate) async fn data(
+    pub(crate) async fn data_at(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<DataStatus> {
         // Phase 5.4 will add transaction snapshot isolation here
-        self.data_internal(name, key).await
+        self.data_internal(root, key).await
     }
 
     /// Returns the next key in lexicographic order (MUMPS `$ORDER`).
@@ -345,16 +310,16 @@ impl BTree {
     /// # Examples
     ///
     /// ```ignore
-    /// let next_key = btree.order(&name, Some(&key), None).await?;
+    /// let next_key = btree.order_at(root, Some(&key), None).await?;
     /// ```
-    pub(crate) async fn order(
+    pub(crate) async fn order_at(
         &self,
-        name: &Name,
+        root: NodeId,
         after: Option<&Key>,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<Option<Key>> {
         // Phase 5.4 will add transaction snapshot isolation here
-        self.order_internal(name, after).await
+        self.order_internal(root, after).await
     }
 
     /// Creates a stream of key-value pairs from the tree (RUMPS `$COLLECT`).
@@ -378,40 +343,18 @@ impl BTree {
     ///
     /// # Arguments
     ///
-    /// * `name` - The global or local variable name
+    /// * `root` - Root `NodeId` of the tree
     /// * `start` - Optional starting key (`None` starts from beginning)
-    /// * `predicate` - Function that determines whether to include entries
+    /// * `pred` - Function that determines whether to include entries
     /// * `extract` - Function that transforms entries into output type
     /// * `ctx` - Optional transaction context for snapshot isolation
     ///
     /// # Returns
     ///
     /// A `Stream` that yields `Result<T>` for each matching entry.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use futures::StreamExt;
-    ///
-    /// // Collect all patient names as a stream
-    /// let mut names = btree.collects(
-    ///     &Name::Global("PATIENT".into()),
-    ///     None,
-    ///     |key, _| key.len() == 2, // Only 2-level keys
-    ///     |key, data| data.value.clone().map(|v| (key.clone(), v)),
-    ///     None,
-    /// );
-    ///
-    /// while let Some(result) = names.next().await {
-    ///     match result {
-    ///         Ok((key, value)) => println!("{:?} = {:?}", key, value),
-    ///         Err(e) => eprintln!("Error: {}", e),
-    ///     }
-    /// }
-    /// ```
-    pub(crate) fn collects<'a, P, F, T>(
+    pub(crate) fn collects_at<'a, P, F, T>(
         &'a self,
-        name: &'a Name,
+        root: NodeId,
         start: Option<&'a Key>,
         pred: P,
         extract: F,
@@ -423,18 +366,18 @@ impl BTree {
         T: Send + 'a,
     {
         // Phase 5.4 will add transaction snapshot isolation here
-        self.collects_internal(name, start, pred, extract)
+        self.collects_internal(root, start, pred, extract)
     }
 
     /// Collects all matching entries into a `Vec`.
     ///
-    /// Convenience wrapper around `collects` that consumes the entire stream.
-    /// Use `collects` directly for large datasets to avoid loading everything
+    /// Convenience wrapper around `collects_at` that consumes the entire stream.
+    /// Use `collects_at` directly for large datasets to avoid loading everything
     /// into memory.
     ///
     /// # Arguments
     ///
-    /// * `name` - The variable name (global or local)
+    /// * `root` - Root `NodeId` of the tree
     /// * `start` - Optional key to start iteration after (exclusive)
     /// * `pred` - Predicate returning `true` to include entry, `false` to skip
     /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
@@ -443,9 +386,9 @@ impl BTree {
     /// # Returns
     ///
     /// A `Vec<T>` containing all extracted values from matching entries.
-    pub(crate) async fn collects_vec<P, F, T>(
+    pub(crate) async fn collects_vec_at<P, F, T>(
         &self,
-        name: &Name,
+        root: NodeId,
         start: Option<&Key>,
         pred: P,
         extract: F,
@@ -456,8 +399,7 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
         T: Send,
     {
-        use futures::TryStreamExt;
-        self.collects(name, start, pred, extract, ctx)
+        self.collects_at(root, start, pred, extract, ctx)
             .try_collect()
             .await
     }
@@ -487,7 +429,6 @@ impl BTree {
     pub(crate) fn new(min_degree: usize) -> Result<Self> {
         if min_degree >= 2 {
             Ok(Self {
-                roots: RwLock::new(BTreeMap::new()),
                 nodes: RwLock::new(HashMap::new()),
                 allocator: Arc::new(IncrementingAllocator::new()),
                 min_degree,
@@ -524,6 +465,88 @@ impl BTree {
         let mut btree = Self::new(min_degree)?;
         btree.max_memory_bytes = max_memory_bytes;
         Ok(btree)
+    }
+
+    /// Creates a new empty tree and returns its root `NodeId`.
+    ///
+    /// This allocates an empty leaf node that serves as the root of a new tree.
+    /// The `Database` layer should call this when creating a new variable.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let root = btree.create_tree().await?;
+    /// // Now use `root` with `set_at()`, `get_at()`, etc.
+    /// ```
+    pub(crate) async fn create_tree(&self) -> Result<NodeId> {
+        let id = self.allocator.allocate().await?;
+        let node = Node::new_leaf();
+
+        {
+            let mut nodes = self.nodes.write().await;
+            nodes.insert(id, node);
+        }
+
+        {
+            let mut stats = self.stats.write().await;
+            stats.node_count += 1;
+            stats.height = 1;
+        }
+
+        Ok(id)
+    }
+
+    /// Deletes an entire tree rooted at `root`, deallocating all nodes.
+    ///
+    /// Returns the number of nodes that were deallocated. After this call,
+    /// the `root` `NodeId` is invalid and must not be used.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let freed = btree.delete_tree(root).await?;
+    /// println!("Freed {} nodes", freed);
+    /// ```
+    pub(crate) async fn delete_tree(&self, root: NodeId) -> Result<usize> {
+        self.delete_subtree(root).await
+    }
+
+    /// Recursively deletes a subtree rooted at `node_id`.
+    fn delete_subtree<'a>(
+        &'a self,
+        node_id: NodeId,
+    ) -> BoxFuture<'a, Result<usize>> {
+        Box::pin(async move {
+            match self.nodes.write().await.remove(&node_id) {
+                None => Ok(0), // Node doesn't exist - silently return 0
+                Some(node) => {
+                    self.allocator.deallocate(node_id).await?;
+
+                    // If internal node, recursively delete children
+                    let child_counts = if node.is_leaf {
+                        0
+                    } else {
+                        let counts = futures::future::try_join_all(
+                            node.children
+                                .iter()
+                                .map(|&c| self.delete_subtree(c)),
+                        )
+                        .await?;
+                        counts.into_iter().sum()
+                    };
+
+                    // Update stats
+                    {
+                        let mut stats = self.stats.write().await;
+                        stats.node_count = stats.node_count.saturating_sub(1);
+                        stats.key_count =
+                            stats.key_count.saturating_sub(node.keys.len());
+                    }
+
+                    Ok(1 + child_counts)
+                }
+            }
+        })
     }
 
     /// Returns the minimum degree of this B-tree.
@@ -668,35 +691,21 @@ impl BTree {
     /// `has_descendants` flags is much cheaper with `Arc::clone()` than
     /// cloning the entire `NodeData`.
     ///
-    /// The public `get()` method extracts the value by cloning the
+    /// The public `get_at()` method extracts the value by cloning the
     /// `Option<Value>` from the `Arc`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Internal use only
-    /// let arc_data = btree.get_internal(&name, &key).await?;
-    /// if let Some(data) = arc_data {
-    ///     println!("has_descendants: {}", data.has_descendants);
-    ///     println!("value: {:?}", data.value);
-    /// }
-    /// ```
     // Internal method for tests/benchmarks - not part of public API
     async fn get_internal(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
     ) -> Result<Option<Arc<NodeData>>> {
-        match self.roots.read().await.get(name).copied() {
-            None => Ok(None),
-            Some(root_id) => self.search_from_node(root_id, key).await,
-        }
+        self.search_from_node(root, key).await
     }
 
     /// Internal SET operation that accepts `NodeData` directly.
     ///
-    /// This method is used internally for maintaining hierarchical semantics,
-    /// particularly when creating ancestor nodes with `has_descendants = true`.
+    /// Returns the (possibly new) root `NodeId`. The root may change if
+    /// the tree grows due to node splitting.
     ///
     /// # Behavior for Existing Keys - Idempotent Merge
     ///
@@ -704,79 +713,70 @@ impl BTree {
     /// - `has_descendants`: Performs OR operation (if either old or new is `true`, result is `true`)
     /// - `value`: Takes new value if provided, otherwise keeps old value
     ///
-    /// **Why idempotent merge is required:**
-    /// - Multiple child insertions can race to create the same ancestor node
-    /// - Each insertion must be able to set `has_descendants = true` independently
-    /// - The operation must be safe regardless of the order or concurrency
-    /// - Once `has_descendants = true` is set, it cannot be accidentally cleared
-    ///
     /// This ensures that:
     /// 1. Setting `has_descendants = true` is permanent (can't be undone by another set)
     /// 2. Concurrent ancestor creation is safe (multiple operations can set same ancestor)
     /// 3. User can update values without losing `has_descendants` flag
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Create an intermediate node (no value, only descendants)
-    /// btree.set_internal(&name, &ancestor_key, NodeData::with_descendants()).await?;
-    ///
-    /// // Later, add a value to the same node (preserves has_descendants)
-    /// btree.set_internal(&name, &ancestor_key, NodeData::with_value(value)).await?;
-    /// // Result: NodeData { value: Some(value), has_descendants: true }
-    /// ```
     // Internal method for tests/benchmarks - not part of public API
     async fn set_internal(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
         data: NodeData,
-    ) -> Result<()> {
+    ) -> Result<NodeId> {
         // Ensure all ancestors exist with `has_descendants = true`
         // This is part of the core MUMPS hierarchical semantics
-        self.ensure_ancestors(name, key).await?;
+        let root = self.ensure_ancestors(root, key).await?;
 
         // Delegate to raw insertion (no hierarchy management)
-        self.set_node(name, key, data).await
+        self.set_at_node(root, key, data).await
     }
 
     /// Internal KILL operation that deletes a key and all its descendants.
+    ///
+    /// Returns the (possibly new) root `NodeId`, or `None` if the tree
+    /// became empty after the deletion.
     ///
     /// This method implements MUMPS `KILL` semantics:
     /// 1. Deletes the specified key (if it exists)
     /// 2. Deletes all descendants (keys that start with the given key as prefix)
     /// 3. Updates ancestor `has_descendants` flags
     /// 4. Handles tree rebalancing (node merging when underfull)
-    ///
-    /// # Algorithm
-    ///
-    /// 1. Collect all keys that match the prefix (the key itself and all descendants)
-    /// 2. Delete each key from the tree
-    /// 3. After all deletions, update ancestor `has_descendants` flags
-    /// 4. Remove empty ancestor nodes (nodes with no value and no descendants)
     // Internal method for tests/benchmarks - not part of public API
-    async fn kill_internal(&self, name: &Name, key: &Key) -> Result<()> {
+    async fn kill_internal(
+        &self,
+        root: NodeId,
+        key: &Key,
+    ) -> Result<Option<NodeId>> {
         // Step 1: Collect all keys to delete (the key and its descendants)
         let mut keys_to_delete =
-            self.collect_keys_with_prefix(name, key).await?;
+            self.collect_keys_with_prefix(root, key).await?;
 
         if keys_to_delete.is_empty() {
-            Ok(())
+            Ok(Some(root))
         } else {
             // Step 2: Delete each key from the tree
             // We delete in reverse order (deepest first) to minimize rebalancing
             keys_to_delete
                 .sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| b.cmp(a)));
 
-            // Delete each key
-            futures::stream::iter(
+            // Use fold to process deletions sequentially, tracking root changes
+            let final_root = futures::stream::iter(
                 keys_to_delete.iter().map(Ok::<_, StorageError>),
             )
-            .try_for_each(|k| self.delete_key(name, k))
+            .try_fold(Some(root), |cur_root, k| async move {
+                match cur_root {
+                    None => Ok(None),
+                    Some(r) => self.delete_key(r, k).await,
+                }
+            })
             .await?;
 
             // Step 3: Update ancestor has_descendants flags
-            self.update_ancestors_after_kill(name, key).await
+            match final_root {
+                None => Ok(None),
+                Some(r) => self.update_ancestors_after_kill(r, key).await,
+            }
         }
     }
 
@@ -789,10 +789,10 @@ impl BTree {
     /// - `Both` (11): Node has both value and descendants
     async fn data_internal(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
     ) -> Result<DataStatus> {
-        self.get_internal(name, key).await.map(|opt| {
+        self.get_internal(root, key).await.map(|opt| {
             opt.map_or(DataStatus::NoData, |nd| {
                 match (nd.value.is_some(), nd.has_descendants) {
                     (false, false) => DataStatus::NoData,
@@ -806,9 +806,6 @@ impl BTree {
 
     /// Internal ORDER operation returning the next key in lexicographic order.
     ///
-    /// Given a variable name and an optional key, returns the next key in
-    /// sorted order. This implements MUMPS `$ORDER` semantics at the storage layer.
-    ///
     /// # Returns
     ///
     /// * `Ok(Some(key))` - The next key in lexicographic order
@@ -818,23 +815,14 @@ impl BTree {
     ///
     /// 1. If `after` is `None`, return the leftmost (smallest) key
     /// 2. Otherwise, find the smallest key strictly greater than `after`
-    ///
-    /// This involves B-tree traversal that may cross between leaf nodes.
     async fn order_internal(
         &self,
-        name: &Name,
+        root: NodeId,
         after: Option<&Key>,
     ) -> Result<Option<Key>> {
-        let roots = self.roots.read().await;
-        match roots.get(name).copied() {
-            None => Ok(None),
-            Some(root_id) => {
-                drop(roots);
-                match after {
-                    None => self.find_leftmost_key(root_id).await,
-                    Some(key) => self.find_successor_key(root_id, key).await,
-                }
-            }
+        match after {
+            None => self.find_leftmost_key(root).await,
+            Some(key) => self.find_successor_key(root, key).await,
         }
     }
 
@@ -844,7 +832,7 @@ impl BTree {
     ///
     /// # Arguments
     ///
-    /// * `name` - The variable name (global or local)
+    /// * `root` - Root `NodeId` of the tree
     /// * `after` - The key to start after, or `None` to get the first entry
     ///
     /// # Returns
@@ -854,13 +842,13 @@ impl BTree {
     /// * `Err(...)` - Error during traversal
     async fn get_next_internal(
         &self,
-        name: &Name,
+        root: NodeId,
         after: Option<&Key>,
     ) -> Result<Option<(Key, Arc<NodeData>)>> {
-        match self.order_internal(name, after).await? {
+        match self.order_internal(root, after).await? {
             None => Ok(None),
             Some(key) => self
-                .get_internal(name, &key)
+                .get_internal(root, &key)
                 .await
                 .map(|opt| opt.map(|data| (key, data))),
         }
@@ -871,15 +859,6 @@ impl BTree {
     /// Creates a stream that iterates over tree entries in lexicographic order,
     /// filtering by predicate and transforming with extract function.
     ///
-    /// # Algorithm
-    ///
-    /// Uses `futures::stream::unfold` with recursive async helper:
-    /// 1. Start from `start` key or beginning of tree
-    /// 2. For each iteration, use `get_next_internal` to get next key + data
-    /// 3. Apply predicate - if `false`, recurse to skip entry
-    /// 4. Apply extract - yield `Some(T)` results, recurse on `None`
-    /// 5. End when `get_next_internal` returns `None`
-    ///
     /// # Stream Semantics
     ///
     /// - **Lazy**: Entries are fetched on-demand as the stream is consumed
@@ -887,7 +866,7 @@ impl BTree {
     /// - **Cancellable**: Dropping the stream stops iteration immediately
     fn collects_internal<'a, P, F, T>(
         &'a self,
-        name: &'a Name,
+        root: NodeId,
         start: Option<&'a Key>,
         pred: P,
         extract: F,
@@ -913,7 +892,7 @@ impl BTree {
                 // `None` state means stream is exhausted
                 let cursor = state?;
                 self.collects_find_next(
-                    name,
+                    root,
                     cursor,
                     pred.as_ref(),
                     extract.as_ref(),
@@ -924,12 +903,9 @@ impl BTree {
     }
 
     /// Recursive helper for `collects_internal` that finds the next matching entry.
-    ///
-    /// Returns `Some((item, next_state))` when a matching entry is found,
-    /// or `None` when iteration is exhausted.
     fn collects_find_next<'a, P, F, T>(
         &'a self,
-        name: &'a Name,
+        root: NodeId,
         cursor: Option<Key>,
         pred: &'a P,
         extract: &'a F,
@@ -941,11 +917,11 @@ impl BTree {
     {
         Box::pin(async move {
             // Get next key and data in one call
-            match self.get_next_internal(name, cursor.as_ref()).await {
+            match self.get_next_internal(root, cursor.as_ref()).await {
                 Ok(None) => None,               // No more entries - end stream
                 Err(e) => Some((Err(e), None)), // Yield error and end stream
                 Ok(Some((key, data))) => {
-                    self.collects_apply_filters(name, key, data, pred, extract)
+                    self.collects_apply_filters(root, key, data, pred, extract)
                         .await
                 }
             }
@@ -955,7 +931,7 @@ impl BTree {
     /// Apply predicate and extract for `collects_find_next`.
     fn collects_apply_filters<'a, P, F, T>(
         &'a self,
-        name: &'a Name,
+        root: NodeId,
         key: Key,
         data: Arc<NodeData>,
         pred: &'a P,
@@ -972,13 +948,13 @@ impl BTree {
                     Some(val) => Some((Ok(val), Some(Some(key)))),
                     None => {
                         // Extract returned None - recurse to skip
-                        self.collects_find_next(name, Some(key), pred, extract)
+                        self.collects_find_next(root, Some(key), pred, extract)
                             .await
                     }
                 }
             } else {
                 // Predicate returned false - recurse to skip
-                self.collects_find_next(name, Some(key), pred, extract)
+                self.collects_find_next(root, Some(key), pred, extract)
                     .await
             }
         })
@@ -1469,113 +1445,65 @@ impl BTree {
     /// `ensure_ancestors()`. It's used internally by both `set_internal()`
     /// (after ensuring ancestors) and by `ensure_ancestors()` itself.
     ///
+    /// Returns the (possibly new) root `NodeId`. The root may change if the
+    /// tree grows due to node splitting.
+    ///
     /// # Behavior for Existing Keys - Idempotent Merge
     ///
     /// If the key already exists, this method MERGES the `NodeData`:
     /// - `has_descendants`: Performs OR operation (if either old or new is `true`, result is `true`)
     /// - `value`: Takes new value if provided, otherwise keeps old value
-    async fn set_node(
+    async fn set_at_node(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
         data: NodeData,
-    ) -> Result<()> {
-        // Look up the root node ID for this variable name
-        let roots = self.roots.read().await;
-        let root_id = roots.get(name).copied();
-        drop(roots);
+    ) -> Result<NodeId> {
+        // Check if root is full and needs splitting
+        let root_node = self.load_node(root).await?;
+        let max_keys = 2 * self.min_degree - 1;
 
-        match root_id {
-            None => {
-                // Variable doesn't exist - create a new leaf root with the NodeData
-                let new_id = self.allocator.allocate().await?;
-                let root = Node {
-                    keys: vec![key.clone()],
-                    children: vec![],
-                    values: vec![Arc::new(data)],
-                    is_leaf: true,
-                };
+        let new_root = if root_node.keys.len() == max_keys {
+            // Root is full, split it and create a new root
+            let (med_key, med_val, right_id) = self.split_node(root).await?;
 
-                // Insert the new root into storage
-                {
-                    let mut nodes = self.nodes.write().await;
-                    nodes.insert(new_id, root);
-                }
+            // Create new root with the median
+            let new_root_id = self.allocator.allocate().await?;
+            let new_root_node = Node {
+                keys: vec![med_key],
+                children: vec![root, right_id],
+                values: vec![Arc::clone(&med_val)],
+                is_leaf: false,
+            };
 
-                // Register the root in the roots map
-                {
-                    let mut roots = self.roots.write().await;
-                    roots.insert(name.clone(), new_id);
-                }
-
-                // Update statistics
-                {
-                    let mut stats = self.stats.write().await;
-                    stats.node_count += 1;
-                    stats.key_count += 1;
-                    stats.height = 1;
-                }
-
-                Ok(())
+            // Insert new root
+            {
+                let mut nodes = self.nodes.write().await;
+                nodes.insert(new_root_id, new_root_node);
             }
-            Some(root_id) => {
-                // Variable exists - navigate tree and insert
-                // Check if root is full and needs splitting
-                let root = self.load_node(root_id).await?;
-                let max_keys = 2 * self.min_degree - 1;
 
-                let new_root_id = match root.keys.len() {
-                    n if n == max_keys => {
-                        // Root is full, split it and create a new root
-                        let (med_key, med_val, right_id) =
-                            self.split_node(root_id).await?;
-
-                        // Create new root with the median
-                        let new_root_id = self.allocator.allocate().await?;
-                        let new_root = Node {
-                            keys: vec![med_key],
-                            children: vec![root_id, right_id],
-                            values: vec![Arc::clone(&med_val)],
-                            is_leaf: false,
-                        };
-
-                        // Insert new root
-                        {
-                            let mut nodes = self.nodes.write().await;
-                            nodes.insert(new_root_id, new_root);
-                        }
-
-                        // Update root reference
-                        {
-                            let mut roots = self.roots.write().await;
-                            roots.insert(name.clone(), new_root_id);
-                        }
-
-                        // Update height
-                        {
-                            let mut stats = self.stats.write().await;
-                            stats.height += 1;
-                            stats.node_count += 1;
-                        }
-
-                        new_root_id
-                    }
-                    _ => root_id,
-                };
-
-                // Insert into the non-full root using NodeData
-                self.insert_non_full_with_data(new_root_id, key, data)
-                    .await?;
-
-                // Update key count statistics
-                {
-                    let mut stats = self.stats.write().await;
-                    stats.key_count += 1;
-                }
-
-                Ok(())
+            // Update height
+            {
+                let mut stats = self.stats.write().await;
+                stats.height += 1;
+                stats.node_count += 1;
             }
+
+            new_root_id
+        } else {
+            root
+        };
+
+        // Insert into the non-full root using NodeData
+        self.insert_non_full_with_data(new_root, key, data).await?;
+
+        // Update key count statistics
+        {
+            let mut stats = self.stats.write().await;
+            stats.key_count += 1;
         }
+
+        Ok(new_root)
     }
 
     /// Collects all keys that start with the given prefix.
@@ -1584,17 +1512,10 @@ impl BTree {
     /// that have the prefix as their starting subscripts.
     async fn collect_keys_with_prefix(
         &self,
-        name: &Name,
+        root: NodeId,
         prefix: &Key,
     ) -> Result<Vec<Key>> {
-        let roots = self.roots.read().await;
-        match roots.get(name).copied() {
-            None => Ok(vec![]),
-            Some(root_id) => {
-                drop(roots);
-                self.collect_keys_from_node(root_id, prefix).await
-            }
-        }
+        self.collect_keys_from_node(root, prefix).await
     }
 
     /// Recursively collects keys from a node that match the prefix.
@@ -1641,33 +1562,31 @@ impl BTree {
 
     /// Deletes a single key from the tree.
     ///
+    /// Returns the (possibly new) root `NodeId`, or `None` if the tree became
+    /// empty after deletion.
+    ///
     /// This handles the B-tree deletion algorithm:
     /// 1. Find the key in the tree
     /// 2. If in a leaf, remove it directly
     /// 3. If in an internal node, replace with predecessor/successor
     /// 4. Rebalance if node becomes underfull
-    async fn delete_key(&self, name: &Name, key: &Key) -> Result<()> {
-        let roots = self.roots.read().await;
-        match roots.get(name).copied() {
-            None => Ok(()), // Nothing to delete
-            Some(root_id) => {
-                drop(roots);
-                self.delete_key_from_node(name, root_id, key, vec![])
-                    .await?;
+    async fn delete_key(
+        &self,
+        root: NodeId,
+        key: &Key,
+    ) -> Result<Option<NodeId>> {
+        self.delete_key_from_node(root, key, vec![]).await?;
 
-                // Check if root is now empty and shrink tree if needed
-                self.shrink_root_if_needed(name).await
-            }
-        }
+        // Check if root is now empty and shrink tree if needed
+        self.check_and_shrink_root(root).await
     }
 
-    /// Recursively deletes a key from a subtree rooted at node_id.
+    /// Recursively deletes a key from a subtree rooted at `node_id`.
     ///
     /// `ancestors` is the chain from root to parent: `[(grandparent, idx), (parent, idx)]`
     /// This allows us to propagate rebalancing upward through the tree.
     fn delete_key_from_node<'a>(
         &'a self,
-        name: &'a Name,
         node_id: NodeId,
         key: &'a Key,
         ancestors: Vec<(NodeId, usize)>,
@@ -1692,8 +1611,7 @@ impl BTree {
                             let mut stats = self.stats.write().await;
                             stats.key_count = stats.key_count.saturating_sub(1);
                         }
-                        self.rebalance_with_ancestors(name, node_id, ancestors)
-                            .await
+                        self.rebalance_with_ancestors(node_id, ancestors).await
                     } else {
                         // Case 2: Key is in an internal node - replace with predecessor
                         let left_child =
@@ -1735,7 +1653,6 @@ impl BTree {
                         let mut child_ancestors = ancestors;
                         child_ancestors.push((node_id, pos));
                         self.delete_key_from_node(
-                            name,
                             left_child,
                             &pred_key,
                             child_ancestors,
@@ -1760,7 +1677,6 @@ impl BTree {
                         let mut child_ancestors = ancestors;
                         child_ancestors.push((node_id, pos));
                         self.delete_key_from_node(
-                            name,
                             child_id,
                             key,
                             child_ancestors,
@@ -1806,7 +1722,6 @@ impl BTree {
     /// Rebalances a node if underfull, propagating fixes up the ancestor chain.
     fn rebalance_with_ancestors<'a>(
         &'a self,
-        name: &'a Name,
         node_id: NodeId,
         mut ancestors: Vec<(NodeId, usize)>,
     ) -> BoxFuture<'a, Result<()>> {
@@ -1823,10 +1738,8 @@ impl BTree {
                         self.fix_underfull_node(parent_id, child_idx).await?;
                     // If we merged, parent lost a key - check if parent needs fixing
                     if merged {
-                        self.rebalance_with_ancestors(
-                            name, parent_id, ancestors,
-                        )
-                        .await
+                        self.rebalance_with_ancestors(parent_id, ancestors)
+                            .await
                     } else {
                         Ok(())
                     }
@@ -2080,74 +1993,59 @@ impl BTree {
         Ok(())
     }
 
-    /// Shrinks the tree if root is empty after deletion.
-    async fn shrink_root_if_needed(&self, name: &Name) -> Result<()> {
-        let roots = self.roots.read().await;
-        let root_id = roots.get(name).copied();
-        drop(roots);
+    /// Checks if root is empty after deletion and shrinks tree if needed.
+    ///
+    /// Returns the (possibly new) root `NodeId`, or `None` if the tree became
+    /// empty (root was an empty leaf).
+    async fn check_and_shrink_root(
+        &self,
+        root: NodeId,
+    ) -> Result<Option<NodeId>> {
+        let root_node = self.load_node(root).await?;
 
-        match root_id {
-            None => Ok(()),
-            Some(root_id) => {
-                let root = self.load_node(root_id).await?;
-
-                // If root has no keys but has one child, promote that child
-                match (
-                    root.keys.is_empty(),
-                    root.is_leaf,
-                    root.children.first().copied(),
-                ) {
-                    (true, false, Some(new_root_id)) => {
-                        // Promote the only child to be the new root
-                        {
-                            let mut roots = self.roots.write().await;
-                            roots.insert(name.clone(), new_root_id);
-                        }
-
-                        // Deallocate old root
-                        {
-                            let mut nodes = self.nodes.write().await;
-                            nodes.remove(&root_id);
-                        }
-                        self.allocator.deallocate(root_id).await?;
-
-                        // Update height
-                        {
-                            let mut stats = self.stats.write().await;
-                            stats.height = stats.height.saturating_sub(1);
-                            stats.node_count =
-                                stats.node_count.saturating_sub(1);
-                        }
-
-                        Ok(())
-                    }
-                    (true, true, _) => {
-                        // Root is empty leaf - remove the variable entirely
-                        {
-                            let mut roots = self.roots.write().await;
-                            roots.remove(name);
-                        }
-
-                        // Deallocate the root node
-                        {
-                            let mut nodes = self.nodes.write().await;
-                            nodes.remove(&root_id);
-                        }
-                        self.allocator.deallocate(root_id).await?;
-
-                        // Update stats
-                        {
-                            let mut stats = self.stats.write().await;
-                            stats.height = 0;
-                            stats.node_count =
-                                stats.node_count.saturating_sub(1);
-                        }
-
-                        Ok(())
-                    }
-                    _ => Ok(()),
+        // If root has no keys but has one child, promote that child
+        match (
+            root_node.keys.is_empty(),
+            root_node.is_leaf,
+            root_node.children.first().copied(),
+        ) {
+            (true, false, Some(new_root)) => {
+                // Promote the only child to be the new root
+                // Deallocate old root
+                {
+                    let mut nodes = self.nodes.write().await;
+                    nodes.remove(&root);
                 }
+                self.allocator.deallocate(root).await?;
+
+                // Update height
+                {
+                    let mut stats = self.stats.write().await;
+                    stats.height = stats.height.saturating_sub(1);
+                    stats.node_count = stats.node_count.saturating_sub(1);
+                }
+
+                Ok(Some(new_root))
             }
+            (true, true, _) => {
+                // Root is empty leaf - tree is now empty
+                // Deallocate the root node
+                {
+                    let mut nodes = self.nodes.write().await;
+                    nodes.remove(&root);
+                }
+                self.allocator.deallocate(root).await?;
+
+                // Update stats
+                {
+                    let mut stats = self.stats.write().await;
+                    stats.height = 0;
+                    stats.node_count = stats.node_count.saturating_sub(1);
+                }
+
+                Ok(None)
+            }
+            _ => Ok(Some(root)),
         }
     }
 
@@ -2156,49 +2054,57 @@ impl BTree {
     /// For each ancestor of the killed key, checks if it still has any descendants.
     /// If not, sets `has_descendants` to `false`. If the ancestor has no value and
     /// no descendants, it is removed entirely.
+    ///
+    /// Returns the (possibly new) root `NodeId`, or `None` if the tree became empty.
     async fn update_ancestors_after_kill(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
-    ) -> Result<()> {
-        use futures::stream::{self, TryStreamExt};
-
+    ) -> Result<Option<NodeId>> {
         // Process ancestors from deepest to shallowest
         let mut ancestors = key.ancestors();
-
         ancestors.reverse();
 
-        stream::iter(ancestors.into_iter().map(Ok::<_, StorageError>))
-            .try_for_each(|anc_key| async move {
-                match self.get_internal(name, &anc_key).await? {
-                    None => Ok(()), // Ancestor doesn't exist, nothing to update
-                    Some(data) => {
-                        // Check if ancestor still has any descendants
-                        let has_desc =
-                            self.has_any_descendants(name, &anc_key).await?;
+        // Use fold to track root changes through ancestor processing
+        futures::stream::iter(ancestors.into_iter().map(Ok::<_, StorageError>))
+            .try_fold(Some(root), |cur_root, anc_key| async move {
+                match cur_root {
+                    None => Ok(None),
+                    Some(r) => {
+                        match self.get_internal(r, &anc_key).await? {
+                            None => Ok(Some(r)), // Ancestor doesn't exist
+                            Some(data) => {
+                                // Check if ancestor still has any descendants
+                                let has_desc = self
+                                    .has_any_descendants(r, &anc_key)
+                                    .await?;
 
-                        match (has_desc, data.value.is_some()) {
-                            (true, _) => {
-                                // Still has descendants, ensure flag is set
-                                if data.has_descendants {
-                                    Ok(())
-                                } else {
-                                    self.update_descendants_flag(
-                                        name, &anc_key, true,
-                                    )
-                                    .await
+                                match (has_desc, data.value.is_some()) {
+                                    (true, _) => {
+                                        // Still has descendants, ensure flag is set
+                                        if data.has_descendants {
+                                            Ok(Some(r))
+                                        } else {
+                                            self.update_descendants_flag(
+                                                r, &anc_key, true,
+                                            )
+                                            .await?;
+                                            Ok(Some(r))
+                                        }
+                                    }
+                                    (false, true) => {
+                                        // No descendants but has value - update flag
+                                        self.update_descendants_flag(
+                                            r, &anc_key, false,
+                                        )
+                                        .await?;
+                                        Ok(Some(r))
+                                    }
+                                    (false, false) => {
+                                        // No descendants and no value - remove the node
+                                        self.delete_key(r, &anc_key).await
+                                    }
                                 }
-                            }
-                            (false, true) => {
-                                // No descendants but has value - update flag
-                                self.update_descendants_flag(
-                                    name, &anc_key, false,
-                                )
-                                .await
-                            }
-                            (false, false) => {
-                                // No descendants and no value - remove the node
-                                self.delete_key(name, &anc_key).await
                             }
                         }
                     }
@@ -2212,17 +2118,10 @@ impl BTree {
     /// Returns `true` if there exists any key `K'` where `K'.starts_with(key)` and `K' != key`.
     async fn has_any_descendants(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
     ) -> Result<bool> {
-        let roots = self.roots.read().await;
-        match roots.get(name).copied() {
-            None => Ok(false),
-            Some(root_id) => {
-                drop(roots);
-                self.check_descendants_from_node(root_id, key).await
-            }
-        }
+        self.check_descendants_from_node(root, key).await
     }
 
     /// Recursively checks if any key with the given prefix exists (excluding exact match).
@@ -2415,30 +2314,20 @@ impl BTree {
     /// Updates the `has_descendants` flag for an existing key.
     ///
     /// This is used when an ancestor already exists but needs its flag updated.
-    /// Uses `set_internal()` with merged `NodeData` to preserve existing values.
     ///
     /// # Errors
     ///
     /// Returns an error if the key doesn't exist.
     async fn update_descendants_flag(
         &self,
-        name: &Name,
+        root: NodeId,
         key: &Key,
         flag: bool,
     ) -> Result<()> {
         // Find the node containing this key and update directly.
-        // We can't use `set_node()` because its OR merge semantics prevent
+        // We can't use `set_at_node()` because its OR merge semantics prevent
         // setting `has_descendants` to `false`.
-        let roots = self.roots.read().await;
-        let root_id = roots.get(name).copied().ok_or_else(|| {
-            StorageError::InvalidOperation(format!(
-                "Cannot update `has_descendants` flag: variable {:?} not found",
-                name
-            ))
-        })?;
-        drop(roots);
-
-        self.update_flag_in_node(root_id, key, flag).await
+        self.update_flag_in_node(root, key, flag).await
     }
 
     /// Recursively finds and updates the `has_descendants` flag for a key.
@@ -2496,10 +2385,13 @@ impl BTree {
     /// hierarchical structure. For each ancestor that doesn't exist, it
     /// creates an intermediate node (no value, only descendants).
     ///
+    /// Returns the (possibly new) root `NodeId`. The root may change if
+    /// ancestors are created and cause tree growth.
+    ///
     /// # Thread Safety
     ///
     /// This method is safe for concurrent execution. If multiple operations
-    /// try to create the same ancestor, `set_internal()` will merge the
+    /// try to create the same ancestor, `set_at_node()` will merge the
     /// `NodeData` using OR semantics on `has_descendants`, making the operation
     /// idempotent.
     ///
@@ -2507,37 +2399,42 @@ impl BTree {
     ///
     /// ```ignore
     /// // Before inserting Key([1, 2, 3])
-    /// ensure_ancestors(&name, &key![1, 2, 3]).await?;
+    /// let root = ensure_ancestors(root, &key![1, 2, 3]).await?;
     /// // Creates: Key([1]) and Key([1, 2]) with has_descendants=true
     /// ```
-    async fn ensure_ancestors(&self, name: &Name, key: &Key) -> Result<()> {
-        use futures::stream::{self, TryStreamExt};
-
+    async fn ensure_ancestors(
+        &self,
+        root: NodeId,
+        key: &Key,
+    ) -> Result<NodeId> {
         let ancestors = key.ancestors();
 
         // Process each ancestor from root to leaf sequentially
-        // Convert iterator to TryStream by mapping items to Ok
-        stream::iter(
+        // Use fold to track root changes through ancestor creation
+        futures::stream::iter(
             ancestors
                 .into_iter()
                 .map(Ok::<_, crate::error::StorageError>),
         )
-        .try_for_each(|ancestor_key| async move {
-            match self.get_internal(name, &ancestor_key).await? {
+        .try_fold(root, |cur_root, ancestor_key| async move {
+            match self.get_internal(cur_root, &ancestor_key).await? {
                 Some(node_data) => {
                     // Ancestor exists - update has_descendants if needed
                     if !node_data.has_descendants {
-                        self.update_descendants_flag(name, &ancestor_key, true)
-                            .await
-                    } else {
-                        Ok(())
+                        self.update_descendants_flag(
+                            cur_root,
+                            &ancestor_key,
+                            true,
+                        )
+                        .await?;
                     }
+                    Ok(cur_root)
                 }
                 None => {
                     // Ancestor doesn't exist - create intermediate node
-                    // Use set_node to avoid recursive ensure_ancestors call
-                    self.set_node(
-                        name,
+                    // Use set_at_node to avoid recursive ensure_ancestors call
+                    self.set_at_node(
+                        cur_root,
                         &ancestor_key,
                         NodeData::with_descendants(),
                     )
