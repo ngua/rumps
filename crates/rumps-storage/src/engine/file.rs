@@ -16,7 +16,7 @@ use super::{
 use crate::error::{Result, StorageError};
 use crate::node::{Node, NodeId};
 use crate::page::{self, PageAllocator, PageCache, PageId};
-use crate::wal::{WalReader, WalWriter};
+use crate::wal::{WalReader, WalRecord, WalSequence, WalWriter};
 
 /// Indirect page data loaded from disk during superblock loading.
 struct LoadedIndirectPages {
@@ -457,13 +457,13 @@ impl AsyncStorageEngine for FileStorageEngine {
         }
     }
 
-    async fn write(&self, id: NodeId, node: &Node) -> Result<()> {
+    async fn mark_dirty(&self, id: NodeId, node: &Node) -> Result<()> {
         let page_id = PageId::from(id);
 
         // Put in cache as dirty
         let evicted = self.cache.put(page_id, node.clone(), true).await;
 
-        // Handle evicted dirty page
+        // Handle evicted dirty page - write to disk
         if let Some(ev) = evicted {
             if ev.dirty {
                 self.write_page_to_disk(ev.id, &ev.node).await?;
@@ -1501,6 +1501,28 @@ impl FileStorageEngine {
                 reg.entries.iter().map(|e| (e.name.clone(), e.root))
             })
             .collect()
+    }
+
+    /// Append a record to the Write-Ahead Log.
+    ///
+    /// This is called by the Database layer to log logical operations (SET,
+    /// KILL) before they are applied to the in-memory B-tree. The WAL ensures
+    /// crash recovery and durability.
+    ///
+    /// Returns the WAL sequence number for the appended record.
+    pub(crate) async fn wal_append(
+        &self,
+        rec: &WalRecord,
+    ) -> Result<WalSequence> {
+        self.wal.append(rec).await
+    }
+
+    /// Flush and sync the Write-Ahead Log to disk.
+    ///
+    /// This is called during transaction commit to ensure all WAL records
+    /// are durably written to disk before the commit is acknowledged.
+    pub(crate) async fn wal_sync(&self) -> Result<()> {
+        self.wal.sync().await
     }
 
     /// Flush the entire registry chain to disk.

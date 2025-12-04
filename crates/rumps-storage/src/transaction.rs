@@ -79,6 +79,14 @@ use serde::{Deserialize, Serialize};
 )]
 pub(crate) struct TransactionId(u64);
 
+impl TransactionId {
+    /// The implicit transaction ID used for Phase 4.6.
+    ///
+    /// Until Phase 5 implements full multi-transaction support, all operations
+    /// use this single implicit transaction ID for WAL logging.
+    pub(crate) const IMPLICIT: Self = Self(0);
+}
+
 impl fmt::Display for TransactionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Txn({})", **self)

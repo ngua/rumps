@@ -21,10 +21,8 @@ mod allocator;
 mod cache;
 mod id;
 
-pub(crate) use allocator::{MarkAllocatedResult, PageAllocator};
-pub(crate) use cache::{
-    EvictedPage, MarkDirtyResult, PageCache, PageCacheStats,
-};
+pub(crate) use allocator::PageAllocator;
+pub(crate) use cache::PageCache;
 pub(crate) use id::PageId;
 
 /// Page size in bytes for B-tree node storage.

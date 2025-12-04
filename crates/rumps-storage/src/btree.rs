@@ -589,24 +589,23 @@ impl BTree {
         }
     }
 
-    /// Saves a node to cache and optionally disk.
+    /// Saves a node to the in-memory cache and marks it dirty.
     ///
-    /// Updates the in-memory cache first, then writes to storage if configured.
-    /// For disk-backed trees, the node is written to the WAL and marked dirty.
+    /// **BTree is purely in-memory** - it does NOT write to disk directly.
+    /// Disk writes happen during checkpoint/flush at the Database layer.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if WAL write fails or the page cannot be allocated.
+    /// For disk-backed trees, the page is marked dirty in the storage cache.
+    /// For in-memory trees, just updates the node map.
     async fn save_node(&self, id: NodeId, node: Node) -> Result<()> {
-        // Update cache
+        // Update in-memory cache
         {
             let mut nodes = self.nodes.write().await;
             nodes.insert(id, node.clone());
         }
 
-        // Write to disk if storage is configured
+        // Mark dirty in storage cache (if configured)
         if let Some(storage) = self.storage.as_ref() {
-            storage.write(id, &node).await?;
+            storage.mark_dirty(id, &node).await?;
         }
 
         Ok(())
@@ -827,8 +826,9 @@ impl BTree {
     ///
     /// The public `get_at()` method extracts the value by cloning the
     /// `Option<Value>` from the `Arc`.
-    // Internal method for tests/benchmarks - not part of public API
-    async fn get_internal(
+    ///
+    /// This is pub(crate) so Database can use it to get full NodeData for WAL logging.
+    pub(crate) async fn get_internal(
         &self,
         root: NodeId,
         key: &Key,

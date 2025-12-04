@@ -30,7 +30,7 @@ pub(crate) use config::{StorageConfig, StorageMetadata};
 pub(crate) use file::FileStorageEngine;
 pub(crate) use indirect::IndirectPage;
 pub(crate) use metadata::MetadataPage;
-pub(crate) use registry::{GlobalRegistry, RegistryEntry};
+pub(crate) use registry::GlobalRegistry;
 pub(crate) use superblock::Superblock;
 
 use crate::error::Result;
@@ -59,15 +59,13 @@ pub(crate) trait AsyncStorageEngine: Send + Sync {
     /// Returns [`StorageError::NodeNotFound`] if the node doesn't exist.
     async fn read(&self, id: NodeId) -> Result<Node>;
 
-    /// Write a node to storage.
+    /// Mark a node as dirty in the page cache.
     ///
-    /// The node is written to the WAL and marked dirty in the cache.
-    /// Actual disk write happens on flush/checkpoint.
+    /// This is called by BTree after modifying a node in memory.
+    /// The dirty page will be written to disk during flush/checkpoint.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if WAL write fails or the page cannot be allocated.
-    async fn write(&self, id: NodeId, node: &Node) -> Result<()>;
+    /// **Does NOT write to disk or WAL** - just marks the cache entry dirty.
+    async fn mark_dirty(&self, id: NodeId, node: &Node) -> Result<()>;
 
     /// Allocate a new page for a node.
     ///

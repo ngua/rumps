@@ -908,39 +908,152 @@ The existing benchmarks use root-based API:
 - `btree_get_at_existing` - GET on existing key
 - `btree_delete_tree_populated` - Delete tree with 50 keys
 
-### 4.6 BTree Disk Persistence
+### 4.6 Database Layer Persistence & WAL Integration
 
-- [ ] Implement `Database::open(path)` and `Database::create(path)` 
-- [ ] Add `storage: Option<Arc<FileStorageEngine>>` field to `BTree`
-- [ ] Implement `BTree::with_storage(min_degree, storage) -> Result<Self>`:
+**Architecture Decision**: WAL logging happens at the `Database` layer, NOT `BTree`.
+The `BTree` operates purely in-memory and only marks pages dirty. The `Database` layer:
+- Logs logical operations (SET, KILL) to WAL with variable `Name` context
+- Coordinates WAL sync and page flush on commit
+- Handles crash recovery by replaying WAL records
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Database Layer (Name-aware, logical operations)                        │
+│ • set(name, key, val):                                                  │
+│   1. Get old value via btree.get_internal(root, key)                   │
+│   2. Log WalRecord::Set {name, key, old, new} to WAL (write-ahead!)    │
+│   3. Call btree.set_at(root, key, val, &ctx)                           │
+│   4. Update root if changed                                            │
+│                                                                         │
+│ • kill(name, key):                                                      │
+│   1. Collect all entries to delete via btree.collects_at()             │
+│   2. Log WalRecord::KillEntry {name, key, data} for each (write-ahead!)│
+│   3. Call btree.kill_at(root, key, &ctx)                               │
+│   4. Update or remove root                                             │
+│                                                                         │
+│ • flush():                                                              │
+│   1. Log WalRecord::TxnCommit {txn_id} to WAL                          │
+│   2. Call storage.wal_sync() (durability!)                             │
+│   3. Call storage.flush() to write dirty pages                         │
+└───────────────────────────┬─────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ BTree Layer (NodeId-only, in-memory tree operations)                   │
+│ • set_at(root, key, val, &ctx):                                         │
+│   - Modifies in-memory tree structure                                   │
+│   - Calls save_node() for modified nodes                                │
+│                                                                         │
+│ • save_node(id, node):                                                  │
+│   - Updates self.nodes in-memory cache                                  │
+│   - Calls storage.mark_dirty(id, node) if storage exists                │
+│   - NEVER writes to disk or WAL directly                                │
+└───────────────────────────┬─────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Storage Layer (Physical persistence)                                   │
+│ • mark_dirty(id, node): Updates cache, marks dirty                     │
+│ • wal_append(record): Appends logical record to WAL                    │
+│ • wal_sync(): Syncs WAL to disk (fsync)                                │
+│ • flush(): Writes all dirty pages to data file                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 4.6.1 BTree Persistence (In-Memory + Mark Dirty Only) ✅ COMPLETE
+
+- [x] Add `storage: Option<Arc<dyn AsyncStorageEngine>>` field to `BTree`
+- [x] Implement `BTree::with_storage(min_degree, storage) -> Result<Self>`:
   - Initialize with storage engine
-  - Use `DiskNodeAllocator` instead of `IncrementingAllocator`
-  - **Note**: Does NOT load roots (that's `Database`'s job)
-- [ ] Update node access methods for cache + disk:
-  - `async fn load_node(&self, id: NodeId) -> Result<Node>`:
+  - Use `DiskNodeAllocator` (delegates to storage)
+  - **Note**: Does NOT load roots or write to disk
+- [x] Update node access methods:
+  - [x] `load_node(&self, id: NodeId) -> Result<Node>`:
     - Check `nodes` cache first
     - Load from `storage.read(id)` if cache miss
-    - Add to cache with LRU eviction
-  - `async fn save_node(&self, id: NodeId, node: Node) -> Result<()>`:
-    - Update cache
-    - Write via `storage.write(id, node)`
-- [ ] Integrate WAL with write operations:
-  - All modifications logged to WAL first
-  - Writes marked dirty in page cache
-  - Actual disk writes happen on flush/checkpoint
-- [ ] Add checkpoint/flush logic:
-  - `async fn checkpoint(&self) -> Result<()>` - flush dirty pages
-  - Periodic background checkpointing task
-  - Write checkpoint record to WAL
-- [ ] Add `async fn close(self) -> Result<()>` - flush and close storage
+    - Add to cache (LRU eviction handled by storage layer)
+  - [x] `save_node(&self, id: NodeId, node: Node) -> Result<()>`:
+    - Update in-memory `nodes` cache
+    - Call `storage.mark_dirty(id, node)` (NOT `storage.write()`)
+    - **Does NOT write to disk or WAL** - just marks dirty
+- [x] Make `get_internal()` pub(crate) so Database can read old values for WAL
+
+#### 4.6.2 Storage Engine WAL Interface ✅ COMPLETE
+
+- [x] Rename `AsyncStorageEngine::write()` → `mark_dirty()`:
+  - Update signature and documentation
+  - Clarify that it only marks cache entry dirty
+  - Evicted dirty pages written to disk during eviction
+- [x] Add `FileStorageEngine::wal_append(&WalRecord) -> Result<WalSequence>`:
+  - Called by Database to log logical operations
+  - Returns sequence number for the appended record
+- [x] Add `FileStorageEngine::wal_sync() -> Result<()>`:
+  - Called by Database during flush/commit
+  - Ensures WAL is durably written (fsync)
+
+#### 4.6.3 Database Layer MUMPS Operations with WAL ✅ COMPLETE
+
+- [x] Implement `Database::create(path)` - creates new persistent database
+- [x] Implement `Database::open(path)` - opens existing database with recovery
+- [x] Add `Database::recover(&self, path)` - internal recovery method:
+  - Call `WalReader::open(&wal_dir).recover()`
+  - Replay committed operations from `recovery.committed_ops`
+  - For each `WalOp::Set`: apply via `btree.set_at()`, update root
+  - For each `WalOp::KillEntry`: apply via `btree.kill_at()`, update root
+- [x] Implement `Database::set(name, key, val)`:
+  - Get old value via `btree.get_internal()` for undo log
+  - Log `WalRecord::Set {txn_id, name, key, old, new}` to WAL (write-ahead!)
+  - Call `btree.set_at(root, key, val, &ctx)` to modify tree
+  - Update root if changed
+- [x] Implement `Database::kill(name, key)`:
+  - Collect all entries to delete via `btree.collects_at()`
+  - Log `WalRecord::KillEntry {txn_id, name, key, data}` for each entry
+  - Call `btree.kill_at(root, key, &ctx)` to delete subtree
+  - Update or remove root
+- [x] Implement `Database::get(name, key)` - read-only, no WAL
+- [x] Implement `Database::data(name, key)` - read-only, no WAL
+- [x] Implement `Database::order(name, after)` - read-only, no WAL
+- [x] Implement `Database::collects(name, start, pred, extract)` - read-only, no WAL
+- [x] Update `Database::flush()`:
+  - Log `WalRecord::TxnCommit {txn_id}` to WAL
+  - Call `storage.wal_sync()` to ensure durability
+  - Call `storage.flush()` to write dirty pages to disk
+- [x] Implement `Database::close(self)` - flush and close storage
+
+**Note**: All operations currently use `TransactionId::IMPLICIT` - Phase 5 will add
+proper multi-transaction support with user-provided transaction contexts.
+
+#### 4.6.4 Integration Tests ✅ COMPLETE
+
+- [x] Test `Database::create()` and `Database::open()` with persistence
+  - `disk_persistence_create_and_reopen` - basic create/reopen cycle
+  - `disk_persistence_multiple_globals` - multiple globals persist correctly
+- [x] Test full CRUD cycle with WAL logging:
+  - `database_operations_with_wal` - comprehensive test:
+    - SET multiple keys with WAL logging
+    - GET verifies values
+    - DATA checks node status
+    - KILL removes subtree with WAL logging
+    - flush() writes commit + syncs WAL
+    - Reopen and verify persistence via WAL recovery
 
 ---
 
-## Phase 5: Transaction-Based Public API
+## Phase 5: Multi-Transaction Support & Isolation
 
-**Prerequisites**: `Database` struct exists from Phase 4.5 with namespace management
-(`get_root`, `ensure_root`, `remove_root`). `BTree` uses root-based methods (`get_at`,
-`set_at`, etc.). This phase adds MUMPS operations and transaction support.
+**Prerequisites**:
+- Phase 4.6 is complete with `Database` providing MUMPS operations (`get`, `set`, `kill`,
+  `data`, `order`, `collects`)
+- WAL logging with `TransactionId::IMPLICIT` for all writes
+- WAL recovery replays committed operations on `open()`
+- `BTree` uses root-based methods and marks pages dirty
+
+**What Phase 5 Adds**: Replace the single implicit transaction with proper multi-transaction
+support including:
+- Concurrent transactions with snapshot isolation
+- Write buffering and conflict detection
+- Transaction API: `db.transaction(|txn| async { ... })`
+- Explicit transaction contexts replacing `TransactionId::IMPLICIT`
 
 **Transaction Model**: ALL writes to globals must occur within explicit transactions.
 Locals can be modified freely outside transactions.
@@ -966,7 +1079,7 @@ and exclusive locks for transaction commits.
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  Database (from Phase 4.5, extended here)                               │
+│  Database (from Phase 4.6, extended here)                               │
 │  ────────────────────────────────────────                               │
 │  • Owns namespace: roots map + lazy-loading from registry               │
 │  • Holds Arc<BTree> + Arc<TransactionManager>                           │
@@ -974,10 +1087,10 @@ and exclusive locks for transaction commits.
 │  • Direct methods for reads (any namespace) and local writes            │
 │  • Rejects global writes outside transactions                           │
 │                                                                         │
-│  From Phase 4.5:    Added in Phase 5:                                   │
-│  • get_root()       • get(), set(), kill(), data(), order(), collects() │
-│  • ensure_root()    • transaction(), transaction_with()                 │
-│  • remove_root()    • TransactionManager integration                    │
+│  From Phase 4.6:               Added in Phase 5:                        │
+│  • get(), set(), kill()        • transaction(), transaction_with()      │
+│  • data(), order(), collects() • TransactionManager integration         │
+│  • flush() with WAL logging    • Reject global writes outside txn       │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -1172,8 +1285,39 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
   ```
 - [ ] Implement transaction lifecycle methods:
   - `begin()` - create transaction, get snapshot
-  - `commit() -> Result<()>` - validate, write to WAL, apply changes
-  - `rollback()` - discard buffered writes
+  - `commit() -> Result<()>` - validate conflicts, then apply buffered writes:
+    ```rust
+    async fn commit(self) -> Result<()> {
+        // 1. Validate no conflicts (check read/write sets against other txns)
+        self.validate_no_conflicts()?;
+
+        // 2. Apply all buffered writes by delegating to Database methods
+        //    (Database handles WAL logging)
+        for ((name, key), write_op) in self.writes {
+            match write_op {
+                WriteOp::Set(data) => {
+                    let val = data.value.unwrap();
+                    // Database.set() logs to WAL and calls btree.set_at()
+                    self.db.set_with_txn_id(&name, &key, val, self.id).await?;
+                }
+                WriteOp::KillSubtree => {
+                    // Database.kill() logs to WAL and calls btree.kill_at()
+                    self.db.kill_with_txn_id(&name, &key, self.id).await?;
+                }
+                _ => {}
+            }
+        }
+
+        // 3. Flush: writes TxnCommit record, syncs WAL, flushes dirty pages
+        self.db.flush().await?;
+
+        // 4. Unregister transaction from manager
+        self.db.transaction_manager.complete(self.id).await?;
+
+        Ok(())
+    }
+    ```
+  - `rollback()` - discard buffered writes, unregister from manager
 - [ ] Implement `Transaction` MUMPS operation methods (used inside `db.transaction(|txn| ...)` closures):
 
   **Delegation pattern**: `Transaction` holds `db: Database` and delegates to it:
@@ -1212,11 +1356,13 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
     - Resolve name→root, delegates to `btree.collects_at(...)` with buffer overlay
   - **Note**: These methods have the same signatures as `Database` methods but different semantics (buffering vs direct)
 
-### 5.2 Extend Database with MUMPS Operations & Transactions
+### 5.2 Add Multi-Transaction Support to Database
 
-**Note**: `Database` struct already exists from Phase 4.5 with namespace management
-(`roots`, `get_root()`, `ensure_root()`, `remove_root()`). This section adds
-transaction support and MUMPS operations.
+**Note**: `Database` already has MUMPS operations (`get`, `set`, `kill`, etc.) from
+Phase 4.6 with WAL logging using `TransactionId::IMPLICIT`. This section adds:
+- Multi-transaction coordinator (`TransactionManager`)
+- Transaction-based API (`db.transaction(...)`)
+- Protection: Reject global writes outside transactions
 
 - [ ] Add `transaction_manager: Arc<TransactionManager>` field to `Database`
 - [ ] Implement `Clone` for `Database` (clone Arc fields)
@@ -1288,27 +1434,23 @@ transaction support and MUMPS operations.
         Ok(())
     }).await?;
     ```
-- [ ] Implement `Database` MUMPS operation methods (direct access, no write buffering):
-  - **Read operations** (work with or without active transaction):
-    - `async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>`:
-      - Resolve name→root via `self.get_root(name)`
-      - If root exists: `self.btree.get_at(root, key, None)`
-      - If no root: return `Ok(None)`
-    - `async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus>`:
-      - Resolve name→root, delegate to `btree.data_at(root, key, None)`
-    - `async fn order(&self, name: &Name, after: Option<&Key>) -> Result<Option<Key>>`:
-      - Resolve name→root, delegate to `btree.order_at(root, after, None)`
-    - `fn collects<P, F, T>(&self, ...) -> impl Stream`:
-      - Resolve name→root, delegate to `btree.collects_at(..., None)`
-  - **Write operations** (locals only; globals require `Transaction`):
+- [ ] Update existing `Database` MUMPS operations to enforce transaction requirements:
+  - **Read operations** (already implemented in Phase 4.6, no changes needed):
+    - `get()`, `data()`, `order()`, `collects()` work as-is
+    - Can be called inside or outside transactions
+  - **Write operations** (ADD transaction check to existing Phase 4.6 implementations):
     - `async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()>`:
-      - If `Name::Global`: return `Err(StorageError::GlobalRequiresTransaction)`
-      - If `Name::Local`: `ensure_root(name)` then `btree.set_at(root, key, value, &ctx)`
+      - **ADD**: If `Name::Global`: check `TransactionManager` for active transaction
+        - If no active transaction: return `Err(StorageError::GlobalRequiresTransaction)`
+        - If transaction active: proceed with existing Phase 4.6 logic (WAL + set)
+      - If `Name::Local`: existing logic works as-is (no WAL, direct set)
     - `async fn kill(&self, name: &Name, key: &Key) -> Result<()>`:
-      - If `Name::Global`: return `Err(StorageError::GlobalRequiresTransaction)`
-      - If `Name::Local` + empty key: `remove_root(name)` + `btree.delete_tree(root)`
-      - If `Name::Local` + non-empty key: `get_root(name)` then `btree.kill_at(root, key, &ctx)`
-  - **Note**: `Database` methods apply immediately (locals) or reject (globals)
+      - **ADD**: If `Name::Global`: check `TransactionManager` for active transaction
+        - If no active transaction: return `Err(StorageError::GlobalRequiresTransaction)`
+        - If transaction active: proceed with existing Phase 4.6 logic (WAL + kill)
+      - If `Name::Local`: existing logic works as-is
+  - **Note**: Phase 4.6 already implements WAL logging in `set()`/`kill()`. Phase 5 adds
+    the transaction check and replaces `TransactionId::IMPLICIT` with actual transaction IDs
 - [ ] Enforce transaction rules:
   - Writes to `Name::Global` MUST be in transaction
   - `Name::Local` modifications work outside transactions
@@ -1335,43 +1477,45 @@ transaction support and MUMPS operations.
   - Conflict resolution at commit time
   - Using `tokio::spawn` for parallel transactions
 
-### 5.4 Adding Transaction Awareness to B-Tree Primitives
+### 5.4 Transaction Context Usage (Minimal BTree Changes)
 
-This section covers updating the B-tree primitives to use the `TransactionContext`
-parameter. Note: Methods are now root-based (`*_at`) after the Phase 4.5 refactor.
+**Architecture Note**: BTree remains simple - it only marks pages dirty. Transaction
+buffering happens at the `Transaction` layer, and WAL logging happens at the `Database`
+layer. The `TransactionContext` parameter exists primarily for:
+1. Tracking which transaction ID made changes (for future MVCC)
+2. Potential future snapshot isolation at BTree level
 
-**Note**: Phase 2/4.5 implementations ignore `TransactionContext`. This adds awareness.
+**Current Phase 5 Scope**: BTree keeps its Phase 4.6 behavior:
+- `set_at()`, `kill_at()` modify tree immediately and mark pages dirty via `storage.mark_dirty()`
+- `get_at()`, `data_at()`, `order_at()`, `collects_at()` read committed state
+- `TransactionContext` parameter is accepted but minimally used (stores `txn_id` only)
 
-- [ ] Update `BTree::set_at()` to use transaction context:
-  - Check transaction isolation level from `ctx.isolation_level`
-  - Track write operations in transaction context (for conflict detection)
-  - Use transaction timestamp for MVCC ordering (future enhancement)
-  - Buffer writes for atomic commit (coordinate with `Transaction` struct)
-- [ ] Update `BTree::get_at()` to use transaction context when provided:
-  - Implement snapshot isolation: reads see database state as of `ctx.start_timestamp`
-  - Check buffered writes in transaction before reading committed data
-  - Return most recent visible version based on transaction timestamp
-- [ ] Update `BTree::kill_at()` to use transaction context:
-  - Track deletion operations in transaction context
-  - Buffer deletions for atomic commit
-  - Update transaction write set
-- [ ] Update `BTree::data_at()` to use transaction context when provided:
-  - Apply snapshot isolation to DATA checks
-  - Consider buffered writes when determining node status
-- [ ] Update `BTree::order_at()` to use transaction context when provided:
-  - Apply snapshot isolation to iteration
-  - Skip uncommitted writes from other transactions
-  - Include buffered writes from current transaction in iteration order
-- [ ] Update `BTree::collects_at()` to use transaction context when provided:
-  - Ensure stream sees consistent snapshot throughout iteration
-- [ ] Add tests for transaction isolation:
-  - Reads within transaction don't see uncommitted writes from other transactions
-  - Reads within transaction DO see own buffered writes
-  - Concurrent transactions maintain isolation
-- [ ] Add tests for write buffering:
-  - Writes are buffered, not immediately visible
+This is sufficient because:
+- **Write buffering** happens in `Transaction.writes: HashMap<(Name, Key), WriteOp>`
+- **WAL logging** happens in `Database.set()`/`kill()` before calling `btree.*_at()`
+- **Snapshot isolation** for reads is handled by `Transaction` checking its write buffer
+
+**Future MVCC Enhancement** (Post-Phase 5):
+When full MVCC is added later, BTree will:
+- Store version chains in nodes (multiple versions per key)
+- Use `ctx.start_timestamp` to select visible version
+- Use `ctx.id` to track which transaction created each version
+
+**Phase 5 Tasks**:
+- [ ] Verify BTree methods accept `TransactionContext` (already done in Phase 4.6)
+- [ ] Add `TransactionManager` to coordinate active transactions
+- [ ] Transaction commit flow:
+  1. Validate no conflicts (check read/write sets)
+  2. For each buffered write in `txn.writes`:
+     - Call `db.set(name, key, val)` with `txn.id` → logs to WAL + calls `btree.set_at()`
+     - Or `db.kill(name, key)` with `txn.id` → logs to WAL + calls `btree.kill_at()`
+  3. Call `db.flush()` → writes commit record + syncs WAL
+- [ ] Add tests for transaction semantics:
+  - Writes inside transaction are buffered (not visible to other transactions)
+  - Reads inside transaction see own buffered writes
   - Commit makes all writes visible atomically
   - Rollback discards all buffered writes
+  - Concurrent transactions don't interfere
 
 ---
 
@@ -1396,7 +1540,16 @@ parameter. Note: Methods are now root-based (`*_at`) after the Phase 4.5 refacto
   - Very large values
   - Deep nesting (many subscript levels)
 
-### 6.2b Transaction Tests
+### 6.2b WAL & Recovery Tests (Phase 4.6)
+- [x] Basic WAL integration test exists: `database_operations_with_wal`
+- [ ] Test WAL recovery after simulated crash (kill process mid-operation)
+- [ ] Test WAL recovery with multiple transactions
+- [ ] Test WAL checkpointing and archive cleanup
+- [ ] Test corrupted WAL file handling
+- [ ] Test WAL replay applies operations in correct order
+- [ ] Verify dirty pages are written on flush
+
+### 6.2c Transaction Tests (Phase 5)
 - [ ] Create `crates/rumps-storage/tests/transaction_tests.rs`
 - [ ] Test transaction commit writes to WAL and applies changes
 - [ ] Test transaction rollback discards all changes
@@ -1407,7 +1560,7 @@ parameter. Note: Methods are now root-based (`*_at`) after the Phase 4.5 refacto
 - [ ] Test WAL recovery replays committed transactions correctly
 - [ ] Test WAL recovery ignores aborted transactions
 
-### 6.2c Concurrency Tests
+### 6.2d Concurrency Tests
 - [ ] Create `crates/rumps-storage/tests/concurrency_tests.rs`
 - [ ] Test concurrent transactions (multiple writers)
 - [ ] Test concurrent reads during active transactions (snapshot isolation)

@@ -355,9 +355,6 @@ pub enum SyncMode {
 
 ```rust
 pub struct BTree {
-    /// Maps variable names to root nodes
-    roots: RwLock<BTreeMap<Name, NodeId>>,
-
     /// In-memory node cache (Phase 2-3: all nodes, Phase 4: LRU cache)
     nodes: RwLock<HashMap<NodeId, Node>>,
 
@@ -383,7 +380,6 @@ impl BTree {
         let allocator = Arc::new(DiskNodeAllocator::new(storage.clone()));
 
         Ok(Self {
-            roots: RwLock::new(BTreeMap::new()),
             nodes: RwLock::new(HashMap::new()),
             storage: Some(storage),
             allocator,
@@ -396,27 +392,29 @@ impl BTree {
     /// Load a node (from cache or disk)
     async fn load_node(&self, id: NodeId) -> Result<Node> {
         // Check cache first
-        {
-            let nodes = self.nodes.read().await;
-            if let Some(node) = nodes.get(&id) {
-                return Ok(node.clone());
-            }
-        }
+        let nodes = self.nodes.read().await;
 
-        // Load from disk if storage is configured
-        if let Some(storage) = &self.storage {
-            let node = storage.read_node(id).await?;
-
-            // Add to cache
-            let mut nodes = self.nodes.write().await;
-            nodes.insert(id, node.clone());
-
-            // TODO: Implement LRU eviction if cache is full
-
-            Ok(node)
+        if let Some(node) = nodes.get(&id) {
+            Ok(node.clone())
         } else {
-            Err(StorageError::NodeNotFound(id))
+          drop(nodes);
+
+          // Load from disk if storage is configured
+          if let Some(storage) = &self.storage {
+              let node = storage.read_node(id).await?;
+  
+              // Add to cache
+              let mut nodes = self.nodes.write().await;
+              nodes.insert(id, node.clone());
+  
+              // TODO: Implement LRU eviction if cache is full
+  
+              Ok(node)
+          } else {
+              Err(StorageError::NodeNotFound(id))
+          }
         }
+
     }
 
     /// Save a node (to cache and optionally disk)

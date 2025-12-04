@@ -26,13 +26,18 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use rumps_types::Name;
+use futures::stream::{self, Stream, StreamExt, TryStreamExt};
+use rumps_types::{DataStatus, Key, Name, Value};
 use tokio::sync::RwLock;
 
 use crate::btree::BTree;
 use crate::engine::{AsyncStorageEngine, FileStorageEngine, StorageConfig};
 use crate::error::Result;
-use crate::node::NodeId;
+use crate::node::{NodeData, NodeId};
+use crate::transaction::{
+    TransactionContext, TransactionId, TransactionTimestamp,
+};
+use crate::wal::{WalOp, WalReader, WalRecord};
 
 /// Database providing namespace management over a B-tree.
 ///
@@ -127,8 +132,8 @@ impl Database {
 
     /// Opens an existing persistent database from the specified path.
     ///
-    /// Loads the database from disk. Globals are lazy-loaded from the
-    /// registry on first access.
+    /// Loads the database from disk, runs WAL recovery, and replays committed
+    /// operations. Globals are lazy-loaded from the registry on first access.
     ///
     /// # Examples
     ///
@@ -146,16 +151,102 @@ impl Database {
             Arc::clone(&storage) as Arc<dyn crate::engine::AsyncStorageEngine>,
         )?);
 
-        Ok(Self {
+        let db = Self {
             roots: RwLock::new(BTreeMap::new()),
             btree,
-            storage: Some(storage),
-        })
+            storage: Some(Arc::clone(&storage)),
+        };
+
+        // Run WAL recovery and replay committed operations
+        db.recover(path.as_ref()).await?;
+
+        Ok(db)
     }
 
     /// Returns the underlying B-tree.
     pub(crate) fn btree(&self) -> Arc<BTree> {
         Arc::clone(&self.btree)
+    }
+
+    /// Runs WAL recovery and replays committed operations.
+    ///
+    /// This is called during `open()` to bring the database to a consistent
+    /// state after a crash or unclean shutdown.
+    async fn recover(&self, path: &Path) -> Result<()> {
+        let wal_dir = path.join("wal");
+
+        // Run WAL recovery
+        let (recovery, _reader) =
+            WalReader::open(&wal_dir).await?.recover().await?;
+
+        // Apply committed operations
+        stream::iter(recovery.committed_ops.iter().map(Ok))
+            .try_for_each(|committed_op| async move {
+                match &committed_op.op {
+                    WalOp::Set {
+                        name,
+                        key,
+                        new,
+                        old: _,
+                    } => {
+                        // Ensure root exists
+                        let root = self.ensure_root(name).await?;
+
+                        // Create transaction context
+                        let ctx = TransactionContext::new(
+                            committed_op.txn_id,
+                            TransactionTimestamp::from(0),
+                        );
+
+                        // Apply set operation (value from new NodeData)
+                        let new_val = new.value.clone().ok_or_else(|| {
+                            crate::error::StorageError::InvalidConfiguration(
+                                "Set operation in WAL has no value".into(),
+                            )
+                        })?;
+                        let new_root =
+                            self.btree.set_at(root, key, new_val, &ctx).await?;
+
+                        // Update root if changed
+                        if new_root != root {
+                            self.update_root(name, new_root).await?;
+                        }
+
+                        Ok(())
+                    }
+                    WalOp::KillEntry { name, key, data: _ } => {
+                        let opt_root = self.get_root(name).await?;
+                        match opt_root {
+                            Some(root) => {
+                                // Create transaction context
+                                let ctx = TransactionContext::new(
+                                    committed_op.txn_id,
+                                    TransactionTimestamp::from(0),
+                                );
+
+                                // Apply kill operation
+                                let opt_new_root =
+                                    self.btree.kill_at(root, key, &ctx).await?;
+
+                                // Update or remove root
+                                match opt_new_root {
+                                    Some(new_root) if new_root != root => {
+                                        self.update_root(name, new_root).await
+                                    }
+                                    None => {
+                                        self.remove_root(name).await.map(|_| ())
+                                    }
+                                    _ => Ok(()),
+                                }
+                            }
+                            None => Ok(()), // No root = nothing to kill
+                        }
+                    }
+                }
+            })
+            .await?;
+
+        Ok(())
     }
 
     /// Looks up the root `NodeId` for a variable name.
@@ -260,9 +351,9 @@ impl Database {
         let removed = self.roots.write().await.remove(name);
 
         // For globals with storage, remove from registry
-        if let (Name::Global(g), Some(_storage)) = (name, self.storage.as_ref())
+        if let (Name::Global(g), Some(storage)) = (name, self.storage.as_ref())
         {
-            self.storage.as_ref().unwrap().registry_remove(g).await?;
+            storage.registry_remove(g).await?;
         }
 
         Ok(removed)
@@ -298,10 +389,293 @@ impl Database {
         self.roots.read().await.len()
     }
 
+    /// Sets a value in the database with WAL logging.
+    ///
+    /// For persistent globals, this:
+    /// 1. Reads the old value for WAL undo log
+    /// 2. Writes a SET record to the WAL (write-ahead!)
+    /// 3. Modifies the in-memory B-tree
+    /// 4. Updates the root if it changed
+    ///
+    /// For in-memory databases and locals, only step 3 happens (no WAL).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// db.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Bob")).await?;
+    /// ```
+    pub(crate) async fn set(
+        &self,
+        name: &Name,
+        key: &Key,
+        val: Value,
+    ) -> Result<()> {
+        // Ensure root exists
+        let root = self.ensure_root(name).await?;
+
+        // Get old value for WAL (only for globals with storage)
+        let old_data = {
+            let opt_arc = self.btree.get_internal(root, key).await?;
+            opt_arc.map(|arc| (*arc).clone())
+        };
+
+        // Log to WAL before modifying tree (write-ahead!)
+        if let (Name::Global(_), Some(storage)) = (name, self.storage.as_ref())
+        {
+            storage
+                .wal_append(&WalRecord::Set {
+                    // TODO Phase 5: Replace with actual transaction ID from context
+                    txn_id: TransactionId::IMPLICIT,
+                    name: name.clone(),
+                    key: key.clone(),
+                    old: old_data,
+                    new: NodeData::with_value(val.clone()),
+                })
+                .await?;
+        }
+
+        // Create transaction context for BTree operation
+        // TODO Phase 5: Replace with actual transaction context from user
+        let ctx = TransactionContext::new(
+            TransactionId::IMPLICIT,
+            TransactionTimestamp::from(0),
+        );
+
+        // Modify in-memory tree
+        let new_root = self.btree.set_at(root, key, val, &ctx).await?;
+
+        // Update root if it changed
+        if new_root != root {
+            self.update_root(name, new_root).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Deletes a key and all its descendants from the database with WAL logging.
+    ///
+    /// For persistent globals, this:
+    /// 1. Collects all entries that will be deleted (key + descendants)
+    /// 2. Writes a KillEntry record to WAL for each deleted entry (write-ahead!)
+    /// 3. Deletes from the in-memory B-tree
+    /// 4. Updates or removes the root
+    ///
+    /// For in-memory databases and locals, only step 3 happens (no WAL).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// db.kill(&global!("PATIENT"), &key![123]).await?;
+    /// ```
+    pub(crate) async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
+        let opt_root = self.get_root(name).await?;
+        match opt_root {
+            None => Ok(()), // No root = nothing to delete
+            Some(root) => {
+                // Collect all entries to be deleted for WAL logging
+                let to_delete = match (name, self.storage.as_ref()) {
+                    (Name::Global(_), Some(_)) => {
+                        let mut entries = Vec::new();
+
+                        // First, check if the key itself has data
+                        if let Some(arc_data) =
+                            self.btree.get_internal(root, key).await?
+                        {
+                            entries.push((key.clone(), (*arc_data).clone()));
+                        }
+
+                        // Then collect all descendants
+                        let descendants: Vec<(Key, NodeData)> = self
+                            .btree
+                            .collects_at(
+                                root,
+                                Some(key),
+                                |k, _| k.starts_with(key),
+                                |k, data| Some((k.clone(), data.clone())),
+                                None,
+                            )
+                            .collect::<Vec<_>>()
+                            .await
+                            .into_iter()
+                            .collect::<Result<Vec<_>>>()?;
+
+                        entries.extend(descendants);
+                        Some(entries)
+                    }
+                    _ => None, // Locals or in-memory - no WAL
+                };
+
+                // Log to WAL before deleting (write-ahead!)
+                if let (Some(entries), Some(storage)) =
+                    (to_delete, self.storage.as_ref())
+                {
+                    stream::iter(entries.iter().map(Ok))
+                        .try_for_each(|(k, data)| async move {
+                            storage
+                                .wal_append(&WalRecord::KillEntry {
+                                    // TODO Phase 5: Replace with actual transaction ID from context
+                                    txn_id: TransactionId::IMPLICIT,
+                                    name: name.clone(),
+                                    key: k.clone(),
+                                    data: data.clone(),
+                                })
+                                .await
+                                .map(|_| ())
+                        })
+                        .await?;
+                }
+
+                // Create transaction context for BTree operation
+                // TODO Phase 5: Replace with actual transaction context from user
+                let ctx = TransactionContext::new(
+                    TransactionId::IMPLICIT,
+                    TransactionTimestamp::from(0),
+                );
+
+                // Delete from in-memory tree
+                let opt_new_root = self.btree.kill_at(root, key, &ctx).await?;
+
+                // Update or remove root
+                match opt_new_root {
+                    Some(new_root) if new_root != root => {
+                        self.update_root(name, new_root).await
+                    }
+                    None => self.remove_root(name).await.map(|_| ()),
+                    _ => Ok(()), // Root unchanged
+                }
+            }
+        }
+    }
+
+    /// Gets a value from the database (read-only, no WAL logging).
+    ///
+    /// Returns `None` if the variable or key doesn't exist.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
+    /// ```
+    pub(crate) async fn get(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> Result<Option<Value>> {
+        let opt_root = self.get_root(name).await?;
+        match opt_root {
+            Some(root) => self.btree.get_at(root, key, None).await,
+            None => Ok(None),
+        }
+    }
+
+    /// Checks the data status of a node (MUMPS `$DATA`).
+    ///
+    /// Returns information about whether a node has a value and/or descendants.
+    /// Read-only operation - no WAL logging.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let status = db.data(&global!("PATIENT"), &key![123]).await?;
+    /// ```
+    pub(crate) async fn data(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> Result<DataStatus> {
+        let opt_root = self.get_root(name).await?;
+        match opt_root {
+            Some(root) => self.btree.data_at(root, key, None).await,
+            None => Ok(DataStatus::NoData),
+        }
+    }
+
+    /// Returns the next key in lexicographic order (MUMPS `$ORDER`).
+    ///
+    /// Pass `None` as `after` to get the first key. Returns `None` when
+    /// there are no more keys. Read-only operation - no WAL logging.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Get first key
+    /// let first = db.order(&global!("PATIENT"), None).await?;
+    ///
+    /// // Get next key after [123]
+    /// let next = db.order(&global!("PATIENT"), Some(&key![123])).await?;
+    /// ```
+    pub(crate) async fn order(
+        &self,
+        name: &Name,
+        after: Option<&Key>,
+    ) -> Result<Option<Key>> {
+        let opt_root = self.get_root(name).await?;
+        match opt_root {
+            Some(root) => self.btree.order_at(root, after, None).await,
+            None => Ok(None),
+        }
+    }
+
+    /// Creates a stream of entries from the tree (RUMPS `$COLLECT`).
+    ///
+    /// This is a RUMPS extension providing stream-based iteration.
+    /// The stream yields entries that match the predicate, transformed
+    /// by the extract function. Read-only operation - no WAL logging.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - Predicate: `(&Key, &NodeData) -> bool` (include if `true`)
+    /// * `F` - Extract: `(&Key, &NodeData) -> Option<T>` (transform entry)
+    /// * `T` - Output type yielded by the stream
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use futures::stream::StreamExt;
+    ///
+    /// let stream = db.collects(
+    ///     &global!("PATIENT"),
+    ///     None,
+    ///     |key, _| key.len() == 2,  // Only keys with 2 subscripts
+    ///     |key, data| data.value.clone(),  // Extract value
+    /// ).await?;
+    ///
+    /// while let Some(value) = stream.next().await {
+    ///     let v = value?;
+    ///     println!("Value: {:?}", v);
+    /// }
+    /// ```
+    pub(crate) async fn collects<'a, P, F, T>(
+        &'a self,
+        name: &'a Name,
+        start: Option<&'a Key>,
+        pred: P,
+        extract: F,
+    ) -> Result<impl Stream<Item = Result<T>> + Send + 'a>
+    where
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        let opt_root = self.get_root(name).await?;
+        let s = match opt_root {
+            Some(root) => self
+                .btree
+                .collects_at(root, start, pred, extract, None)
+                .boxed(),
+            None => stream::empty().boxed(),
+        };
+        Ok(s)
+    }
+
     /// Flushes all dirty pages and metadata to disk.
     ///
-    /// For persistent databases, this ensures all pending writes are
-    /// committed to disk. For in-memory databases, this is a no-op.
+    /// For persistent databases, this:
+    /// 1. Writes a TxnCommit record to the WAL
+    /// 2. Syncs the WAL to disk (durability!)
+    /// 3. Flushes all dirty pages to the data file
+    ///
+    /// For in-memory databases, this is a no-op.
     ///
     /// # Examples
     ///
@@ -310,6 +684,18 @@ impl Database {
     /// ```
     pub(crate) async fn flush(&self) -> Result<()> {
         if let Some(storage) = self.storage.as_ref() {
+            // Write commit record to WAL
+            // TODO Phase 5: Replace with actual transaction ID from context
+            storage
+                .wal_append(&WalRecord::TxnCommit {
+                    txn_id: TransactionId::IMPLICIT,
+                })
+                .await?;
+
+            // Sync WAL to disk (durability!)
+            storage.wal_sync().await?;
+
+            // Flush dirty pages to data file
             storage.flush().await?;
         }
         Ok(())
@@ -495,6 +881,80 @@ mod tests {
             assert_eq!(
                 db.get_root(&global!("VAR3")).await.unwrap(),
                 Some(root3)
+            );
+
+            db.close().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn database_operations_with_wal() {
+        use rumps_types::{key, Value};
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create database and perform operations
+        {
+            let db = Database::create(&db_path).await.unwrap();
+            let name = global!("PATIENT");
+
+            // SET operations
+            db.set(&name, &key![1, "NAME"], Value::from("Alice"))
+                .await
+                .unwrap();
+            db.set(&name, &key![1, "AGE"], Value::from(30))
+                .await
+                .unwrap();
+            db.set(&name, &key![2, "NAME"], Value::from("Bob"))
+                .await
+                .unwrap();
+
+            // Verify GET
+            assert_eq!(
+                db.get(&name, &key![1, "NAME"]).await.unwrap(),
+                Some(Value::from("Alice"))
+            );
+            assert_eq!(
+                db.get(&name, &key![1, "AGE"]).await.unwrap(),
+                Some(Value::from(30))
+            );
+
+            // Verify DATA
+            let status = db.data(&name, &key![1]).await.unwrap();
+            assert_eq!(status, DataStatus::HasDescendants);
+
+            // KILL operation
+            db.kill(&name, &key![1]).await.unwrap();
+
+            // Verify deletion
+            assert_eq!(db.get(&name, &key![1, "NAME"]).await.unwrap(), None);
+            assert_eq!(db.get(&name, &key![1, "AGE"]).await.unwrap(), None);
+
+            // Verify patient 2 still exists
+            assert_eq!(
+                db.get(&name, &key![2, "NAME"]).await.unwrap(),
+                Some(Value::from("Bob"))
+            );
+
+            // Flush (writes TxnCommit + syncs WAL)
+            db.flush().await.unwrap();
+            db.close().await.unwrap();
+        }
+
+        // Reopen and verify persistence
+        {
+            let db = Database::open(&db_path).await.unwrap();
+            let name = global!("PATIENT");
+
+            // Patient 1 should be deleted
+            assert_eq!(db.get(&name, &key![1, "NAME"]).await.unwrap(), None);
+
+            // Patient 2 should still exist
+            assert_eq!(
+                db.get(&name, &key![2, "NAME"]).await.unwrap(),
+                Some(Value::from("Bob"))
             );
 
             db.close().await.unwrap();
