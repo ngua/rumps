@@ -732,16 +732,35 @@ Since we haven't released, no migration is needed. The superblock format simply 
 - Layout changes (fewer direct slots, add indirect pointers)
 - There are no test databases to recreate
 
-### 4.3.3 AsyncStorageEngine Implementation (Part 2)
-- [ ] Add WAL-aware methods:
-  - `async fn begin_transaction() -> TransactionId`
-  - `async fn log_operation(txn_id, operation)` - append to WAL
-  - `async fn commit_transaction(txn_id)` - write commit record, call `wal.sync()` based on `SyncMode`
-  - `async fn abort_transaction(txn_id)` - write abort record
-- [ ] Integrate WAL sync based on `SyncMode`:
-  - `SyncMode::Immediate` - `sync()` called after every `append()`
-  - `SyncMode::OnCommit` (default) - `sync()` called in `commit_transaction()` after commit record
-  - `SyncMode::Periodic(Duration)` - spawn background task that calls `sync()` at interval
+### 4.3.3 AsyncStorageEngine Implementation (Part 2) - OBSOLETE
+
+**This section is obsolete** due to architectural clarification in Phase 4.6.
+
+**Original plan** (incorrect): Add transaction management methods to `AsyncStorageEngine`:
+- `begin_transaction()`, `commit_transaction()`, `abort_transaction()`
+- Transaction-aware WAL methods
+
+**Correct architecture** (implemented in Phase 4.6):
+- Storage provides **low-level WAL interface**: `wal_append(record)`, `wal_sync()`
+- **Database layer** manages transactions and logs operations with `Name` context
+- Storage doesn't know about transaction lifecycle - that's Database's responsibility
+
+**Why this is correct**:
+- WAL records need variable `Name`s (like `^PATIENT`) for meaningful recovery
+- Only Database has both Names and transaction context
+- Storage just provides durable append + sync primitives
+
+**What was implemented instead**:
+- `FileStorageEngine::wal_append(&WalRecord)` - Database logs logical ops
+- `FileStorageEngine::wal_sync()` - Database calls during flush/commit
+- See Phase 4.6.2 for actual implementation
+
+**Sync Mode handling** (moved to Phase 5):
+- `SyncMode` enum exists in `WalWriterConfig` with three modes:
+  - `Immediate`: WalWriter syncs after each append automatically
+  - `OnCommit` (default): Database calls `wal_sync()` during transaction commit/flush
+  - `Periodic(Duration)`: External background task calls `sync()` at intervals
+- Phase 5 Transaction commit respects configured mode (see Phase 5.4)
 
 ### 4.4 Global Management
 - [x] Define `GlobalRegistry` struct:
@@ -768,11 +787,11 @@ handled by `Database`. See `TODOS/btree-root-architecture-options.md` for ration
 │  roots: BTreeMap<Name, NodeId>  nodes: HashMap<NodeId, Node>   PageCache    │
 │  (lazy-loaded from registry)    (no names, no roots!)          WAL          │
 │         │                              │                       registry     │
-│         │ lookup/create root           │ load/save nodes                    │
+│         │ lookup/create root           │ load/mark dirty                    │
 │         ▼                              ▼                                    │
 │    ┌─────────┐                   ┌───────────┐                              │
-│    │ NodeId  │ ───────────────── │  BTree    │ ◄────────── storage.read()   │
-│    └─────────┘                   │  methods  │ ─────────── storage.write()  │
+│    │ NodeId  │ ───────────────── │  BTree    │ ◄──────── storage.read()     │
+│    └─────────┘                   │  methods  │ ────────► storage.mark_dirty()│
 │                                  └───────────┘                              │
 │                                                                             │
 │  Database calls:                 BTree methods (root-based):                │
@@ -866,13 +885,13 @@ All ~90 BTree tests must be updated to use the new root-based API:
 
 ```rust
 // BEFORE (name-based)
-let btree = BTree::new(3).unwrap();
+let btree = BTreeBuilder::default().min_degree(3).build().unwrap();
 let name = Name::Global("TEST".into());
 btree.set(&name, &key, val, &ctx).await?;
 let v = btree.get(&name, &key).await?;
 
 // AFTER (root-based)
-let btree = BTree::new(3).unwrap();
+let btree = BTreeBuilder::default().min_degree(3).build().unwrap();
 let root = btree.create_tree().await?;
 btree.set_at(root, &key, val, &ctx).await?;
 let v = btree.get_at(root, &key).await?;
@@ -1140,8 +1159,7 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
 
 ### 5.1 Transaction Infrastructure
 - [ ] Add `tokio` dependency to `rumps-storage/Cargo.toml`
-- [ ] Create `crates/rumps-storage/src/transaction.rs` module
-- [ ] Define `TransactionBuilder` struct:
+- [ ] Define `TransactionBuilder` struct in `crates/rumps-storage/src/transaction.rs` module:
   ```rust
   pub struct TransactionBuilder {
       isolation: IsolationLevel,
@@ -1293,20 +1311,22 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
 
         // 2. Apply all buffered writes by delegating to Database methods
         //    (Database handles WAL logging)
-        for ((name, key), write_op) in self.writes {
-            match write_op {
-                WriteOp::Set(data) => {
-                    let val = data.value.unwrap();
-                    // Database.set() logs to WAL and calls btree.set_at()
-                    self.db.set_with_txn_id(&name, &key, val, self.id).await?;
+        stream::iter(self.writes)
+            .try_for_each(|((name, key), write_op)| async move {
+                match write_op {
+                    WriteOp::Set(data) => {
+                        let val = data.value.unwrap();
+                        // Database.set() logs to WAL and calls btree.set_at()
+                        self.db.set_with_txn_id(&name, &key, val, self.id).await
+                    }
+                    WriteOp::KillSubtree => {
+                        // Database.kill() logs to WAL and calls btree.kill_at()
+                        self.db.kill_with_txn_id(&name, &key, self.id).await
+                    }
+                    _ => Ok(()),
                 }
-                WriteOp::KillSubtree => {
-                    // Database.kill() logs to WAL and calls btree.kill_at()
-                    self.db.kill_with_txn_id(&name, &key, self.id).await?;
-                }
-                _ => {}
-            }
-        }
+            })
+            .await?;
 
         // 3. Flush: writes TxnCommit record, syncs WAL, flushes dirty pages
         self.db.flush().await?;
@@ -1368,7 +1388,7 @@ Phase 4.6 with WAL logging using `TransactionId::IMPLICIT`. This section adds:
 - [ ] Implement `Clone` for `Database` (clone Arc fields)
 - [ ] Implement `Database::open(path)` and `Database::create(path)`:
   - Open/create `FileStorageEngine`
-  - Create `BTree::with_storage(min_degree, storage)`
+  - Create `BTreeBuilder::default().storage(storage).build()`
   - Initialize `TransactionManager`
   - `roots` starts empty (lazy-loaded via `get_root()`)
 - [ ] Implement transaction API:
@@ -1510,12 +1530,20 @@ When full MVCC is added later, BTree will:
      - Call `db.set(name, key, val)` with `txn.id` → logs to WAL + calls `btree.set_at()`
      - Or `db.kill(name, key)` with `txn.id` → logs to WAL + calls `btree.kill_at()`
   3. Call `db.flush()` → writes commit record + syncs WAL
+     - **Important**: Respect configured `SyncMode`:
+       - `SyncMode::OnCommit` (default): Call `storage.wal_sync()` in `flush()`
+       - `SyncMode::Immediate`: Already handled by WalWriter (syncs on each append)
+       - `SyncMode::Periodic`: Background task calls `sync()` at intervals, `flush()` just logs commit record
 - [ ] Add tests for transaction semantics:
   - Writes inside transaction are buffered (not visible to other transactions)
   - Reads inside transaction see own buffered writes
   - Commit makes all writes visible atomically
   - Rollback discards all buffered writes
   - Concurrent transactions don't interfere
+- [ ] Add tests for SyncMode behavior:
+  - Verify `OnCommit` syncs during flush (current implementation)
+  - Verify `Immediate` syncs after each WAL append
+  - Verify `Periodic` requires external sync task
 
 ---
 

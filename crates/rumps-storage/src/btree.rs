@@ -220,27 +220,106 @@ pub(crate) struct BTree {
     stats: RwLock<BTreeStats>,
 }
 
-impl Default for BTree {
-    /// Creates a B-tree with default minimum degree of `3`.
+/// Builder for constructing `BTree` instances.
+///
+/// This is the only way to create a `BTree`. Use the builder pattern to configure
+/// the tree before calling `build()`.
+///
+/// # Examples
+///
+/// ```ignore
+/// // In-memory tree with defaults (min_degree=3)
+/// let btree = BTreeBuilder::default().build()?;
+///
+/// // In-memory tree with custom degree
+/// let btree = BTreeBuilder::default()
+///     .min_degree(5)
+///     .build()?;
+///
+/// // Disk-backed tree
+/// let btree = BTreeBuilder::default()
+///     .min_degree(3)
+///     .storage(storage_engine)
+///     .build()?;
+///
+/// // Tree with memory limit
+/// let btree = BTreeBuilder::default()
+///     .max_memory_bytes(10_000_000)
+///     .build()?;
+/// ```
+#[derive(Default)]
+pub(crate) struct BTreeBuilder {
+    min_degree: Option<usize>,
+    storage: Option<Arc<dyn engine::AsyncStorageEngine>>,
+    max_memory_bytes: Option<usize>,
+}
+
+impl BTreeBuilder {
+    /// Sets the minimum degree `t` of the B-tree.
     ///
-    /// This provides a good balance between tree height and node utilization:
-    /// - Nodes contain `2-5` keys
-    /// - Internal nodes have `3-6` children
+    /// Nodes (except root) contain `t-1` to `2t-1` keys.
+    /// Internal nodes (except root) have `t` to `2t` children.
     ///
-    /// # Examples
+    /// Default: `3` (nodes contain 2-5 keys, internal nodes have 3-6 children).
     ///
-    /// ```ignore
-    /// use rumps_storage::BTree;
+    /// # Panics
     ///
-    /// # tokio_test::block_on(async {
-    /// let btree = BTree::default();
-    /// assert_eq!(btree.min_degree(), 3);
-    /// assert_eq!(btree.node_count().await, 0);
-    /// # });
-    /// ```
-    #[allow(clippy::expect_used)]
-    fn default() -> Self {
-        Self::new(3).expect("Default configuration is valid")
+    /// Will return an error from `build()` if `min_degree < 2`.
+    pub(crate) const fn min_degree(mut self, deg: usize) -> Self {
+        self.min_degree = Some(deg);
+        self
+    }
+
+    /// Sets the storage engine for disk persistence.
+    ///
+    /// When set, the tree becomes disk-backed with lazy-loading and page caching.
+    /// When `None` (default), the tree operates entirely in memory.
+    pub(crate) fn storage(
+        mut self,
+        s: Arc<dyn engine::AsyncStorageEngine>,
+    ) -> Self {
+        self.storage = Some(s);
+        self
+    }
+
+    /// Sets an optional memory limit in bytes.
+    ///
+    /// When set, operations will fail if memory usage exceeds this limit.
+    /// Default: `None` (unlimited).
+    pub(crate) const fn max_memory_bytes(mut self, bytes: usize) -> Self {
+        self.max_memory_bytes = Some(bytes);
+        self
+    }
+
+    /// Builds the `BTree` with the configured settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `min_degree < 2`.
+    pub(crate) fn build(self) -> Result<BTree> {
+        let min_degree = self.min_degree.unwrap_or(3);
+
+        if min_degree < 2 {
+            Err(StorageError::InvalidConfiguration(
+                "min_degree must be >= 2".to_string(),
+            ))
+        } else {
+            let allocator: Arc<dyn NodeAllocator> = match &self.storage {
+                Some(storage) => {
+                    Arc::new(DiskNodeAllocator::new(Arc::clone(storage)))
+                }
+                None => Arc::new(IncrementingAllocator::new()),
+            };
+
+            Ok(BTree {
+                nodes: RwLock::new(HashMap::new()),
+                storage: self.storage,
+                allocator,
+                min_degree,
+                max_memory_bytes: self.max_memory_bytes,
+                stats: RwLock::new(BTreeStats::default()),
+            })
+        }
     }
 }
 
@@ -273,14 +352,20 @@ impl BTree {
         value: rumps_types::Value,
         _ctx: &crate::TransactionContext,
     ) -> Result<NodeId> {
-        // TODO Phase 5: Use transaction context for snapshot isolation
+        // NOTE: BTree doesn't implement transaction logic. Phase 5 snapshot isolation
+        // happens at the Transaction layer (write buffering + read-from-buffer-first).
+        // Context is accepted for metadata only (stores txn_id for future MVCC).
+        //
+        // Future MVCC: Will store version chains (multiple versions per key) and use
+        // ctx.start_timestamp to determine which version to overwrite/update.
         self.set_internal(root, key, NodeData::with_value(value))
             .await
     }
 
     /// Gets a value from the tree rooted at `root`.
     ///
-    /// Optional transaction context for snapshot isolation (Phase 5).
+    /// Always reads committed state. Optional transaction context is for metadata
+    /// only (Phase 5 snapshot isolation happens at Transaction layer).
     ///
     /// # Examples
     ///
@@ -293,7 +378,13 @@ impl BTree {
         key: &Key,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<Option<rumps_types::Value>> {
-        // TODO Phase 5: If `ctx` is `Some`, use snapshot isolation
+        // NOTE: BTree always reads committed state. Phase 5 snapshot isolation happens
+        // at Transaction layer (Transaction.get() checks write buffer first, then calls
+        // this).
+        //
+        // Future MVCC: Will store version chains and use ctx.start_timestamp to select
+        // the most recent version visible to the transaction (filter out versions created
+        // after start_timestamp or by uncommitted transactions).
         self.get_internal(root, key)
             .await
             .map(|opt| opt.and_then(|data| data.value.clone()))
@@ -304,8 +395,8 @@ impl BTree {
     /// Returns the (possibly new) root `NodeId`, or `None` if the tree
     /// became empty after the deletion.
     ///
-    /// **Requires a transaction context.** All writes to globals must
-    /// occur within transactions.
+    /// Modifies committed state directly. Transaction context is for metadata
+    /// only (Phase 5 write buffering happens at Transaction layer).
     ///
     /// # Examples
     ///
@@ -321,14 +412,20 @@ impl BTree {
         key: &Key,
         _ctx: &crate::TransactionContext,
     ) -> Result<Option<NodeId>> {
-        // TODO Phase 5: Use transaction context for snapshot isolation
+        // NOTE: BTree modifies committed state directly. Phase 5 buffering happens at
+        // Transaction layer (Transaction.kill() buffers, commit applies via db.kill()).
+        // Context accepted for metadata only (stores txn_id for future MVCC).
+        //
+        // Future MVCC: Will mark versions as deleted (tombstones) with ctx.txn_id and
+        // timestamp rather than physically removing them immediately. Vacuum process will
+        // clean up versions no longer visible to any active transaction.
         self.kill_internal(root, key).await
     }
 
     /// Checks the data status of a node (MUMPS `$DATA`).
     ///
     /// Returns information about whether a node has a value and/or descendants.
-    /// Optional transaction context for snapshot isolation (Phase 5).
+    /// Always reads committed state. Transaction context for metadata only.
     ///
     /// # Examples
     ///
@@ -341,13 +438,14 @@ impl BTree {
         key: &Key,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<DataStatus> {
-        // Phase 5.4 will add transaction snapshot isolation here
+        // NOTE: Phase 5 snapshot isolation at Transaction layer (checks write buffer).
+        // Future MVCC: Will use ctx.start_timestamp to select visible version.
         self.data_internal(root, key).await
     }
 
     /// Returns the next key in lexicographic order (MUMPS `$ORDER`).
     ///
-    /// Optional transaction context for snapshot isolation (Phase 5).
+    /// Always reads committed state. Transaction context for metadata only.
     ///
     /// # Examples
     ///
@@ -360,7 +458,8 @@ impl BTree {
         after: Option<&Key>,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<Option<Key>> {
-        // Phase 5.4 will add transaction snapshot isolation here
+        // NOTE: Phase 5 snapshot isolation at Transaction layer (merges write buffer
+        // with committed state). Future MVCC: Will filter visible versions by timestamp.
         self.order_internal(root, after).await
     }
 
@@ -370,7 +469,7 @@ impl BTree {
     /// stream-based iteration over tree entries. The stream yields entries
     /// that match the predicate, transformed by the extract function.
     ///
-    /// Optional transaction context for snapshot isolation (Phase 5).
+    /// Always reads committed state. Transaction context for metadata only.
     ///
     /// # Type Parameters
     ///
@@ -449,107 +548,6 @@ impl BTree {
 
 // Public utilities
 impl BTree {
-    /// Creates a new empty B-tree with the specified minimum degree.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `min_degree < 2` (invalid B-tree configuration).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rumps_storage::BTree;
-    /// use std::sync::Arc;
-    ///
-    /// # tokio_test::block_on(async {
-    /// let btree = Arc::new(BTree::new(3)?);
-    /// assert_eq!(btree.min_degree(), 3);
-    /// assert_eq!(btree.node_count().await, 0);
-    /// # Ok::<(), rumps_storage::StorageError>(())
-    /// # });
-    /// ```
-    pub(crate) fn new(min_degree: usize) -> Result<Self> {
-        if min_degree >= 2 {
-            Ok(Self {
-                nodes: RwLock::new(HashMap::new()),
-                storage: None,
-                allocator: Arc::new(IncrementingAllocator::new()),
-                min_degree,
-                max_memory_bytes: None,
-                stats: RwLock::new(BTreeStats::default()),
-            })
-        } else {
-            Err(StorageError::InvalidConfiguration(
-                "min_degree must be >= 2".to_string(),
-            ))
-        }
-    }
-
-    /// Creates a new B-tree with custom configuration.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rumps_storage::BTree;
-    /// use std::sync::Arc;
-    ///
-    /// # tokio_test::block_on(async {
-    /// // Create with 10MB memory limit
-    /// let btree = Arc::new(BTree::with_config(3, Some(10_000_000))?);
-    /// assert_eq!(btree.min_degree(), 3);
-    /// assert!(btree.has_memory_limit());
-    /// # Ok::<(), rumps_storage::StorageError>(())
-    /// # });
-    /// ```
-    pub(crate) fn with_config(
-        min_degree: usize,
-        max_memory_bytes: Option<usize>,
-    ) -> Result<Self> {
-        let mut btree = Self::new(min_degree)?;
-        btree.max_memory_bytes = max_memory_bytes;
-        Ok(btree)
-    }
-
-    /// Creates a disk-backed B-tree with the specified storage engine.
-    ///
-    /// Uses `DiskNodeAllocator` to delegate node allocation to the storage
-    /// engine, which manages page allocation via a free list or bitmap.
-    ///
-    /// **Note**: This constructor does NOT load roots from the registry—that's
-    /// the `Database` layer's responsibility.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rumps_storage::{BTree, FileStorageEngine, StorageConfig};
-    /// use std::sync::Arc;
-    ///
-    /// # tokio_test::block_on(async {
-    /// let storage = Arc::new(FileStorageEngine::create("./data", StorageConfig::default()).await?);
-    /// let btree = BTree::with_storage(3, storage)?;
-    /// # Ok::<(), rumps_storage::StorageError>(())
-    /// # });
-    /// ```
-    pub(crate) fn with_storage(
-        min_degree: usize,
-        storage: Arc<dyn engine::AsyncStorageEngine>,
-    ) -> Result<Self> {
-        if min_degree < 2 {
-            Err(StorageError::InvalidConfiguration(
-                "min_degree must be >= 2".to_string(),
-            ))
-        } else {
-            Ok(Self {
-                nodes: RwLock::new(HashMap::new()),
-                storage: Some(Arc::clone(&storage)),
-                allocator: Arc::new(DiskNodeAllocator::new(storage)),
-                min_degree,
-                max_memory_bytes: None,
-                stats: RwLock::new(BTreeStats::default()),
-            })
-        }
-    }
-
     /// Loads a node from cache or disk.
     ///
     /// First checks the in-memory `nodes` cache. On cache miss, loads from

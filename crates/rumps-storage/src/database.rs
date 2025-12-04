@@ -30,7 +30,7 @@ use futures::stream::{self, Stream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name, Value};
 use tokio::sync::RwLock;
 
-use crate::btree::BTree;
+use crate::btree::{BTree, BTreeBuilder};
 use crate::engine::{AsyncStorageEngine, FileStorageEngine, StorageConfig};
 use crate::error::Result;
 use crate::node::{NodeData, NodeId};
@@ -88,7 +88,7 @@ impl Database {
     /// let db = Database::in_memory()?;
     /// ```
     pub(crate) fn in_memory() -> Result<Self> {
-        Self::with_btree(Arc::new(BTree::new(3)?))
+        Self::with_btree(Arc::new(BTreeBuilder::default().build()?))
     }
 
     /// Creates a database with a custom B-tree.
@@ -118,10 +118,12 @@ impl Database {
                 .await?,
         );
 
-        let btree = Arc::new(BTree::with_storage(
-            3,
-            Arc::clone(&storage) as Arc<dyn crate::engine::AsyncStorageEngine>,
-        )?);
+        let btree = Arc::new(
+            BTreeBuilder::default()
+                .storage(Arc::clone(&storage)
+                    as Arc<dyn crate::engine::AsyncStorageEngine>)
+                .build()?,
+        );
 
         Ok(Self {
             roots: RwLock::new(BTreeMap::new()),
@@ -146,10 +148,12 @@ impl Database {
                 .await?,
         );
 
-        let btree = Arc::new(BTree::with_storage(
-            3,
-            Arc::clone(&storage) as Arc<dyn crate::engine::AsyncStorageEngine>,
-        )?);
+        let btree = Arc::new(
+            BTreeBuilder::default()
+                .storage(Arc::clone(&storage)
+                    as Arc<dyn crate::engine::AsyncStorageEngine>)
+                .build()?,
+        );
 
         let db = Self {
             roots: RwLock::new(BTreeMap::new()),
@@ -693,6 +697,11 @@ impl Database {
                 .await?;
 
             // Sync WAL to disk (durability!)
+            // TODO Phase 5: Check storage.config.sync_mode:
+            //   - OnCommit (default): call wal_sync() here
+            //   - Immediate: already synced by WalWriter on each append
+            //   - Periodic: skip sync here, external task handles it
+            // For Phase 4.6 with IMPLICIT transaction, always sync (OnCommit behavior).
             storage.wal_sync().await?;
 
             // Flush dirty pages to data file

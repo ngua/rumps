@@ -14,21 +14,21 @@ mod tests {
 
     #[test]
     fn test_btree_new() {
-        let btree = BTree::new(3);
+        let btree = BTreeBuilder::default().min_degree(3).build();
         assert!(btree.is_ok());
         assert_eq!(btree.unwrap().min_degree(), 3);
     }
 
     #[test]
     fn test_btree_new_min_degree_2() {
-        let btree = BTree::new(2);
+        let btree = BTreeBuilder::default().min_degree(2).build();
         assert!(btree.is_ok());
         assert_eq!(btree.unwrap().min_degree(), 2);
     }
 
     #[test]
     fn test_btree_new_invalid_min_degree_zero() {
-        let btree = BTree::new(0);
+        let btree = BTreeBuilder::default().min_degree(0).build();
         assert!(btree.is_err());
         match btree {
             Err(StorageError::InvalidConfiguration(msg)) => {
@@ -40,7 +40,7 @@ mod tests {
 
     #[test]
     fn test_btree_new_invalid_min_degree_one() {
-        let btree = BTree::new(1);
+        let btree = BTreeBuilder::default().min_degree(1).build();
         assert!(btree.is_err());
         match btree {
             Err(StorageError::InvalidConfiguration(msg)) => {
@@ -52,33 +52,37 @@ mod tests {
 
     #[test]
     fn test_btree_default() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
         assert_eq!(btree.min_degree(), 3);
     }
 
     #[tokio::test]
     async fn test_btree_initial_state() {
-        let btree = BTree::new(4).unwrap();
+        let btree = BTreeBuilder::default().min_degree(4).build().unwrap();
         assert_eq!(btree.node_count().await, 0);
         assert_eq!(btree.allocator.peek_next().await, NodeId::from(0));
     }
 
     #[tokio::test]
     async fn test_btree_node_count() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
         assert_eq!(btree.node_count().await, 0);
     }
 
     #[tokio::test]
     async fn test_btree_with_memory_limit() {
-        let btree = BTree::with_config(3, Some(1_000_000)).unwrap();
+        let btree = BTreeBuilder::default()
+            .min_degree(3)
+            .max_memory_bytes(1_000_000)
+            .build()
+            .unwrap();
         assert!(btree.has_memory_limit());
         assert_eq!(btree.min_degree(), 3);
     }
 
     #[tokio::test]
     async fn test_btree_stats() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
         let stats = btree.stats().await;
         assert_eq!(stats.node_count, 0);
         assert_eq!(stats.key_count, 0);
@@ -89,7 +93,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_readers() {
-        let btree = Arc::new(BTree::default());
+        let btree = Arc::new(BTreeBuilder::default().build().unwrap());
 
         let handles = (0..10)
             .map(|_| {
@@ -109,7 +113,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_writer_blocks_readers() {
-        let btree = Arc::new(BTree::default());
+        let btree = Arc::new(BTreeBuilder::default().build().unwrap());
 
         let write_guard = btree.nodes.write().await;
 
@@ -129,7 +133,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_tree() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
         let root = btree.create_tree().await.unwrap();
 
         assert_eq!(btree.node_count().await, 1);
@@ -144,7 +148,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_multiple_trees() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
 
         let root1 = btree.create_tree().await.unwrap();
         let root2 = btree.create_tree().await.unwrap();
@@ -158,7 +162,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_tree() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
         let root = btree.create_tree().await.unwrap();
 
         // Insert some data to create more nodes
@@ -182,7 +186,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_node_not_found() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
         let node_id = NodeId::from(42);
 
         let result = btree.find_node(node_id).await;
@@ -197,7 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_node_exists() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
 
         let node_id = NodeId::from(1);
         let test_node = Node::new_leaf();
@@ -216,7 +220,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_split_node_leaf() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
 
         let node_id = NodeId::from(100);
         let node = Node {
@@ -260,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_nodes_leaf() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
 
         let left_id = NodeId::from(100);
         let right_id = NodeId::from(101);
@@ -316,7 +320,7 @@ mod tests {
 
         #[tokio::test]
         async fn empty_tree_returns_none() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let result = btree.get_internal(root, &key![123]).await.unwrap();
@@ -325,7 +329,7 @@ mod tests {
 
         #[tokio::test]
         async fn exact_match() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
             let value = Value::String("test".into());
 
@@ -345,7 +349,7 @@ mod tests {
 
         #[tokio::test]
         async fn nonexistent_key() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -387,7 +391,7 @@ mod tests {
 
         #[tokio::test]
         async fn multiple_keys() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -446,7 +450,7 @@ mod tests {
 
         #[tokio::test]
         async fn nested_keys() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -474,7 +478,7 @@ mod tests {
 
         #[tokio::test]
         async fn after_tree_splits() {
-            let btree = Arc::new(BTree::default()); // min_degree=3, max_keys=5
+            let btree = Arc::new(BTreeBuilder::default().build().unwrap()); // min_degree=3, max_keys=5
             let root = btree.create_tree().await.unwrap();
 
             let keys_to_insert = [10i64, 20, 30, 40, 50, 60, 70, 80];
@@ -521,7 +525,7 @@ mod tests {
 
         #[tokio::test]
         async fn creates_ancestors() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -558,7 +562,7 @@ mod tests {
 
         #[tokio::test]
         async fn update_existing_key() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -586,7 +590,7 @@ mod tests {
 
         #[tokio::test]
         async fn preserves_has_descendants_on_update() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             // Create a node with descendants
@@ -623,7 +627,9 @@ mod tests {
 
         #[tokio::test]
         async fn causes_tree_growth() {
-            let btree = Arc::new(BTree::new(2).unwrap()); // Small degree to trigger splits
+            let btree = Arc::new(
+                BTreeBuilder::default().min_degree(2).build().unwrap(),
+            ); // Small degree to trigger splits
             let root = btree.create_tree().await.unwrap();
 
             let initial_height = btree.stats().await.height;
@@ -668,7 +674,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_single_key() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -699,7 +705,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_with_descendants() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             // Create: [1], [1,2], [1,2,3]
@@ -757,7 +763,7 @@ mod tests {
 
         #[tokio::test]
         async fn kill_nonexistent_key() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -786,7 +792,7 @@ mod tests {
 
         #[tokio::test]
         async fn no_data() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let status = btree.data_internal(root, &key![1]).await.unwrap();
@@ -795,7 +801,7 @@ mod tests {
 
         #[tokio::test]
         async fn has_value_only() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -813,7 +819,7 @@ mod tests {
 
         #[tokio::test]
         async fn has_descendants_only() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             // Create child - parent will have has_descendants but no value
@@ -832,7 +838,7 @@ mod tests {
 
         #[tokio::test]
         async fn has_both() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             // Create child first
@@ -866,7 +872,7 @@ mod tests {
 
         #[tokio::test]
         async fn empty_tree() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let result = btree.order_internal(root, None).await.unwrap();
@@ -875,7 +881,7 @@ mod tests {
 
         #[tokio::test]
         async fn first_key() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -901,7 +907,7 @@ mod tests {
 
         #[tokio::test]
         async fn successor() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -940,7 +946,7 @@ mod tests {
 
         #[tokio::test]
         async fn end_of_iteration() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
@@ -959,7 +965,7 @@ mod tests {
 
         #[tokio::test]
         async fn iterate_all() {
-            let btree = Arc::new(BTree::default());
+            let btree = Arc::new(BTreeBuilder::default().build().unwrap());
             let root = btree.create_tree().await.unwrap();
 
             let keys = [5i64, 15, 25, 35, 45];
@@ -1028,7 +1034,7 @@ mod tests {
 
         #[tokio::test]
         async fn empty_tree() {
-            let btree = BTree::default();
+            let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
             let results: Vec<Value> = btree
@@ -1047,7 +1053,7 @@ mod tests {
 
         #[tokio::test]
         async fn collect_all() {
-            let btree = Arc::new(BTree::default());
+            let btree = Arc::new(BTreeBuilder::default().build().unwrap());
             let root = btree.create_tree().await.unwrap();
 
             let r = futures::stream::iter(1..=5i64)
@@ -1081,7 +1087,7 @@ mod tests {
 
         #[tokio::test]
         async fn filter_predicate() {
-            let btree = Arc::new(BTree::default());
+            let btree = Arc::new(BTreeBuilder::default().build().unwrap());
             let root = btree.create_tree().await.unwrap();
 
             let r = futures::stream::iter(1..=10i64)
@@ -1129,7 +1135,7 @@ mod tests {
 
     #[tokio::test]
     async fn stress_many_keys() {
-        let btree = Arc::new(BTree::default());
+        let btree = Arc::new(BTreeBuilder::default().build().unwrap());
         let root = btree.create_tree().await.unwrap();
 
         let num_keys = 100i64;
@@ -1168,7 +1174,7 @@ mod tests {
 
     #[tokio::test]
     async fn stress_nested_keys() {
-        let btree = Arc::new(BTree::default());
+        let btree = Arc::new(BTreeBuilder::default().build().unwrap());
         let root = btree.create_tree().await.unwrap();
 
         // Create deeply nested structure
@@ -1204,7 +1210,7 @@ mod tests {
 
     #[tokio::test]
     async fn two_separate_trees() {
-        let btree = BTree::default();
+        let btree = BTreeBuilder::default().build().unwrap();
 
         let root1 = btree.create_tree().await.unwrap();
         let root2 = btree.create_tree().await.unwrap();
@@ -1249,7 +1255,7 @@ pub mod benches {
     use rumps_types::{key, Value};
     use tokio::runtime::Runtime;
 
-    use crate::btree::BTree;
+    use crate::btree::{BTree, BTreeBuilder};
     use crate::node::NodeData;
 
     /// Runs all B-tree benchmarks.
@@ -1275,7 +1281,7 @@ pub mod benches {
         c.bench_function("btree_set_at_sequential", |b| {
             b.iter_batched(
                 || {
-                    let btree = BTree::default();
+                    let btree = BTreeBuilder::default().build().unwrap();
                     let root = rt.block_on(btree.create_tree()).unwrap();
                     (btree, root)
                 },
@@ -1306,7 +1312,7 @@ pub mod benches {
 
         // Benchmark: GET on existing key using root-based API
         c.bench_function("btree_get_at_existing", |b| {
-            let btree = Arc::new(BTree::default());
+            let btree = Arc::new(BTreeBuilder::default().build().unwrap());
             let root = rt.block_on(async {
                 let root = btree.create_tree().await.unwrap();
                 (0..100i64)
@@ -1338,7 +1344,7 @@ pub mod benches {
         c.bench_function("btree_delete_tree_populated", |b| {
             b.iter_batched(
                 || {
-                    let btree = BTree::default();
+                    let btree = BTreeBuilder::default().build().unwrap();
                     let root = rt.block_on(async {
                         let root = btree.create_tree().await.unwrap();
                         (0..50i64)

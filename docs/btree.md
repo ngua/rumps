@@ -43,43 +43,109 @@ The solution is the `has_descendants` flag stored alongside each value. When you
 
 ---
 
-## Architecture: Database and BTree Layers
+## Architecture: Three-Layer Design
 
-RUMPS separates concerns between two layers:
+RUMPS uses a **three-layer architecture** that separates logical operations, tree structure, and physical persistence:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  Database                       BTree                    FileStorageEngine  │
-│  ────────                       ─────                    ─────────────────  │
+│  DATABASE LAYER (Name-aware, logical operations, WAL coordination)          │
+│  ───────────────────────────────────────────────────────────────────────    │
 │                                                                             │
-│  roots: BTreeMap<Name, NodeId>  nodes: HashMap<NodeId, Node>   PageCache    │
-│  (lazy-loaded from registry)    (no names, no roots!)          WAL          │
-│         │                              │                       registry     │
-│         │ lookup/create root           │ load/save nodes                    │
-│         ▼                              ▼                                    │
-│    ┌─────────┐                   ┌───────────┐                              │
-│    │ NodeId  │ ───────────────── │  BTree    │ ◄────────── storage.read()   │
-│    └─────────┘                   │  *_at()   │ ─────────── storage.write()  │
-│                                  └───────────┘                              │
+│  • Maps Name → NodeId via roots: BTreeMap<Name, NodeId>                     │
+│  • Lazy-loads global roots from on-disk registry                            │
+│  • Logs logical WAL records with variable Names (SET, KILL)                 │
+│  • Coordinates transaction commits and recovery                             │
 │                                                                             │
-│  Database calls:                 BTree methods (root-based):                │
-│  • get_root(name)                • get_at(root, key)                        │
-│  • ensure_root(name)             • set_at(root, key, val) → new_root        │
-│  • update_root(name, root)       • kill_at(root, key) → Option<new_root>    │
-│  • remove_root(name)             • create_tree() → NodeId                   │
-│                                  • delete_tree(root)                        │
+│  MUMPS Operations (with WAL logging for globals):                           │
+│  • set(name, key, val):                                                     │
+│      1. Get old value via btree.get_internal() for undo log                 │
+│      2. Log WalRecord::Set {name, key, old, new} (write-ahead!)             │
+│      3. Call btree.set_at(root, key, val) to modify tree                    │
+│      4. Update root if changed via update_root()                            │
+│  • kill(name, key): Similar flow with WalRecord::KillEntry                  │
+│  • flush(): Logs TxnCommit, syncs WAL, flushes dirty pages                  │
+│  • get(name, key): Read-only, no WAL                                        │
+│                                                                             │
+│  Namespace Management:                                                      │
+│  • get_root(name) → Option<NodeId>                                          │
+│  • ensure_root(name) → NodeId (creates if needed)                           │
+│  • update_root(name, new_root) (after tree structure changes)               │
+│  • remove_root(name) (removes from cache + registry)                        │
+└─────────────────────────────┬───────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BTREE LAYER (NodeId-only, pure tree operations, NO WAL knowledge)          │
+│  ─────────────────────────────────────────────────────────────────          │
+│                                                                             │
+│  • Operates ONLY on NodeIds - no Name awareness whatsoever                  │
+│  • Maintains in-memory tree structure in nodes: HashMap<NodeId, Node>       │
+│  • Modifies tree and marks pages dirty - NEVER writes to disk or WAL        │
+│                                                                             │
+│  Root-Based API:                                                            │
+│  • get_at(root, key) → Option<Value>                                        │
+│  • set_at(root, key, val) → new_root (may split, change root)               │
+│  • kill_at(root, key) → Option<new_root> (may merge, empty tree)            │
+│  • data_at(root, key) → DataStatus                                          │
+│  • order_at(root, after) → Option<Key>                                      │
+│  • collects_at(root, start, pred, extract) → Stream                         │
+│  • create_tree() → NodeId (allocate empty tree)                             │
+│  • delete_tree(root) → count (deallocate all nodes)                         │
+│                                                                             │
+│  Node Persistence:                                                          │
+│  • load_node(id): Check cache, load from storage.read() on miss             │
+│  • save_node(id, node): Update cache + storage.mark_dirty() (NO write!)     │
+└─────────────────────────────┬───────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STORAGE LAYER (Physical I/O, WAL files, page cache)                        │
+│  ──────────────────────────────────────────────────────                     │
+│                                                                             │
+│  FileStorageEngine provides:                                                │
+│  • Page cache with LRU eviction                                             │
+│  • Global registry (name → root PageId) with chaining                       │
+│  • Write-Ahead Log for durability                                           │
+│  • Bitmap allocator for page allocation                                     │
+│                                                                             │
+│  BTree Interface:                                                           │
+│  • read(id) → Node (load from disk/cache)                                   │
+│  • mark_dirty(id, node) (updates cache, marks dirty - no immediate write)   │
+│  • allocate() → PageId                                                      │
+│  • deallocate(id)                                                           │
+│                                                                             │
+│  Database Interface (WAL operations):                                       │
+│  • wal_append(record) → WalSequence (append logical record)                 │
+│  • wal_sync() (fsync WAL to disk for durability)                            │
+│  • flush() (write all dirty pages to data file)                             │
+│  • registry_get(name) → Option<PageId>                                      │
+│  • registry_insert(name, page_id)                                           │
+│  • registry_remove(name)                                                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Why this separation?**
+**Why this three-layer separation?**
 
-1. **`BTree` is a pure tree data structure**: It operates only on `NodeId`s with no knowledge of variable names or the registry. This makes it simpler to test and reason about.
+1. **Database = Logical Coordinator**:
+   - Knows about variable `Name`s (like `^PATIENT`)
+   - Logs **logical** WAL records that include Names for meaningful recovery
+   - Manages namespace (name → root mapping) with lazy-loading from registry
+   - Coordinates transactions and commits
 
-2. **`Database` owns namespace management**: The mapping from `Name` (like `^PATIENT`) to root `NodeId` lives here. For persistent globals, roots are lazy-loaded from the on-disk registry.
+2. **BTree = Pure Tree Operations**:
+   - Operates ONLY on `NodeId`s with zero knowledge of `Name`s or WAL
+   - Implements B-tree algorithms (split, merge, search, delete)
+   - Only marks pages dirty via `storage.mark_dirty()` - never writes to disk
+   - Simple, testable, focused on tree correctness
 
-3. **Registry calls happen at the right layer**: When creating a new global, `Database` calls `registry_insert()` after `btree.create_tree()`. The `BTree` never needs to know about persistence details.
+3. **Storage = Physical I/O**:
+   - Handles actual disk reads/writes
+   - Manages page cache, WAL files, registry files
+   - Provides durability guarantees (WAL sync, page flush)
+   - Abstracts physical storage from logical operations
 
-4. **Enables lazy-loading**: `Database.get_root()` can check its cache first, then lazy-load from the registry for globals that haven't been accessed yet.
+**Critical architectural rule**: WAL records need variable `Name`s for crash recovery (e.g., "replay SET to `^PATIENT`"). Only the Database layer has both Names and the BTree context, so WAL logging MUST happen at the Database layer, not in BTree or Storage.
 
 ---
 
@@ -87,13 +153,13 @@ RUMPS separates concerns between two layers:
 
 ### `Database`
 
-Namespace management layer (`database.rs`):
+Namespace management and logical operation coordinator (`database.rs`):
 
 ```rust
 pub(crate) struct Database {
-    roots: RwLock<BTreeMap<Name, NodeId>>,  // Name -> root (lazy-loaded)
-    btree: Arc<BTree>,                       // The underlying tree
-    // storage: Option<Arc<FileStorageEngine>>,  // Future: disk persistence
+    roots: RwLock<BTreeMap<Name, NodeId>>,         // Name → root (lazy-loaded)
+    btree: Arc<BTree>,                              // The underlying tree
+    storage: Option<Arc<FileStorageEngine>>,        // Optional disk persistence
 }
 ```
 
@@ -102,27 +168,45 @@ pub(crate) struct Database {
 - `BTreeMap` for roots enables ordered iteration over variable names
 - Lazy-loading from registry avoids loading all globals at startup
 - Separates namespace concerns from tree structure
+- `storage` is `Option`: `Some` for persistent databases, `None` for in-memory
+- `Database` owns the interface to WAL operations via `storage.wal_append()` / `storage.wal_sync()`
+
+**Key methods:**
+
+- **Namespace**: `get_root()`, `ensure_root()`, `update_root()`, `remove_root()`
+- **MUMPS Operations**: `set()`, `kill()`, `get()`, `data()`, `order()`, `collects()`
+- **Persistence**: `create()`, `open()`, `flush()`, `close()`
+- **Recovery**: `recover()` (private, called during `open()`)
 
 ### `BTree`
 
-The tree storage structure (`btree.rs:146`):
+The tree storage structure (`btree.rs`):
 
 ```rust
 pub(crate) struct BTree {
-    nodes: RwLock<HashMap<NodeId, Node>>,   // Node pool (page cache)
-    allocator: Arc<dyn NodeAllocator>,      // Node ID allocation
-    min_degree: usize,                      // B-tree parameter `t`
-    max_memory_bytes: Option<usize>,        // Optional memory limit
-    stats: RwLock<BTreeStats>,              // Statistics tracking
+    nodes: RwLock<HashMap<NodeId, Node>>,       // In-memory node cache
+    allocator: Arc<dyn NodeAllocator>,          // Node ID allocation
+    storage: Option<Arc<dyn AsyncStorageEngine>>, // Optional persistence
+    min_degree: usize,                          // B-tree parameter `t`
+    max_memory_bytes: Option<usize>,            // Optional memory limit
+    stats: RwLock<BTreeStats>,                  // Statistics tracking
 }
 ```
 
 **Design rationale:**
 
-- `HashMap<NodeId, Node>` is a storage pool—`NodeId`s are internal references with no semantic ordering
+- `HashMap<NodeId, Node>` is an in-memory cache—`NodeId`s are internal references with no semantic ordering
 - Collation order is maintained by sorted `keys` within each `Node` and the tree structure itself
+- `storage` is `Option`: `Some` for disk-backed trees, `None` for in-memory
 - `RwLock` enables concurrent reads with exclusive writes
-- All operations are `async` to support future disk persistence without API changes
+- All operations are `async` for consistent API regardless of storage backend
+
+**Key internal methods:**
+
+- `load_node(id)`: Check cache, load from `storage.read()` on miss
+- `save_node(id, node)`: Update cache, call `storage.mark_dirty()` (no write!)
+- Pure tree operations: `set_at()`, `get_at()`, `kill_at()`, `data_at()`, etc.
+- **No WAL awareness**: Just modifies tree and marks pages dirty
 
 ### `Node`
 
@@ -507,40 +591,119 @@ struct NodeRaw {
 
 ---
 
-## Disk Persistence (Phase 4)
+## Disk Persistence & WAL (Phase 4.6 Complete)
 
-The `Database` layer now exists with namespace management. Disk persistence adds:
+The three-layer architecture enables full disk persistence with crash recovery:
 
-1. **`FileStorageEngine`** with page cache, WAL, and bitmap allocator (complete)
-2. **Global registry** for name→root persistence with chaining (complete)
-3. **`BTree` disk integration** (Phase 4.6, in progress):
-   - `Option<Arc<FileStorageEngine>>` on `BTree`
-   - `load_node()` checks cache, falls back to `storage.read()`
-   - Writes go through WAL for durability
-4. **Lazy-loading** in `Database.get_root()`:
-   - Check in-memory cache first
-   - For globals: call `storage.registry_get()` on cache miss
-   - Cache result for future lookups
-5. **Locals** remain memory-only (no persistence)
+### Components
 
-The async API and root-based methods enable this transition without breaking changes.
+1. **`FileStorageEngine`** ✅ Complete
+   - Page cache with LRU eviction
+   - Write-Ahead Log (WAL) for durability
+   - Bitmap allocator for page allocation
+   - Global registry with chaining for name→root persistence
+
+2. **Database Layer WAL Integration** ✅ Complete
+   - `set()`: Logs `WalRecord::Set` before modifying tree
+   - `kill()`: Logs `WalRecord::KillEntry` for each deleted entry
+   - `flush()`: Logs `WalRecord::TxnCommit`, syncs WAL, flushes dirty pages
+   - `recover()`: Replays committed WAL operations on startup
+
+3. **BTree Disk Integration** ✅ Complete
+   - `Option<Arc<dyn AsyncStorageEngine>>` on `BTree`
+   - `load_node()`: Checks in-memory cache, loads from `storage.read()` on miss
+   - `save_node()`: Updates cache and calls `storage.mark_dirty()` (no immediate write)
+   - No WAL knowledge - just marks pages dirty
+
+4. **Namespace Persistence** ✅ Complete
+   - `Database.get_root()`: Checks in-memory cache first
+   - For globals: Lazy-loads from `storage.registry_get()` on cache miss
+   - `Database.ensure_root()`: Creates tree and registers in registry
+   - `Database.update_root()`: Updates registry after tree structure changes
+
+5. **Transaction Model** (Phase 4.6 uses implicit transactions)
+   - All operations use `TransactionId::IMPLICIT` for WAL logging
+   - Phase 5 will add multi-transaction support with proper isolation
+
+### Write-Ahead Logging Flow
+
+```text
+User: db.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Alice"))
+  ↓
+Database.set():
+  1. Get old value via btree.get_internal() [for undo log]
+  2. storage.wal_append(WalRecord::Set {              [WRITE-AHEAD!]
+       name: "^PATIENT",
+       key: [123, "NAME"],
+       old: None,
+       new: NodeData { value: Some("Alice"), has_descendants: false }
+     })
+  3. btree.set_at(root, key, val)                     [Modify in-memory tree]
+       → Calls save_node() → storage.mark_dirty()     [Mark page dirty, no write]
+  4. update_root(name, new_root) if root changed      [Update registry if needed]
+
+Later: db.flush()
+  1. storage.wal_append(WalRecord::TxnCommit)         [Log commit]
+  2. storage.wal_sync()                               [fsync WAL = DURABLE!]
+  3. storage.flush()                                  [Write dirty pages to disk]
+```
+
+### Crash Recovery
+
+On startup, `Database::open()` calls `recover()`:
+
+```rust
+1. WalReader::open(&wal_dir).recover()
+   → Returns list of committed operations (between TxnBegin/TxnCommit pairs)
+
+2. For each committed WalOp::Set { name, key, new, old }:
+   - ensure_root(name)
+   - btree.set_at(root, key, new.value)
+   - update_root(name, new_root) if changed
+
+3. For each committed WalOp::KillEntry { name, key, data }:
+   - get_root(name)
+   - btree.kill_at(root, key)
+   - update_root or remove_root based on result
+```
+
+WAL records are **logical** (include variable `Name`s), making recovery meaningful and debuggable.
+
+### Locals vs Globals
+
+- **Globals** (`^NAME`):
+  - Persisted to disk via WAL and page cache
+  - Lazy-loaded from registry on first access
+  - Survive database restarts
+
+- **Locals** (`NAME`):
+  - Memory-only (no WAL logging, no registry)
+  - Discarded when database closes
+  - Fast, ephemeral storage for session state
+
+The async API and root-based BTree methods enabled this transition without breaking changes.
 
 ---
 
 ## Design Decisions Summary
 
-| Decision                   | Rationale                                       |
-|----------------------------|-------------------------------------------------|
-| B-tree (not B+-tree)       | Simpler implementation, data in all nodes       |
-| Flat key storage           | Efficient range scans, standard B-tree algos    |
-| `has_descendants` flag     | Enables MUMPS hierarchy operations cheaply      |
-| `Arc<NodeData>`            | Cheap cloning for frequent flag checks          |
-| Idempotent merge           | Safe concurrent ancestor creation               |
-| Async from day one         | Future disk I/O without API changes             |
-| `NodeId` indirection       | Enables lazy loading, page cache, MVCC          |
-| `HashMap` for nodes        | Storage pool—ordering is in tree structure      |
-| Database/BTree separation  | Decouples namespace from tree structure         |
-| Root-based BTree API       | BTree has no registry awareness                 |
+| Decision                      | Rationale                                          |
+|-------------------------------|----------------------------------------------------|
+| B-tree (not B+-tree)          | Simpler implementation, data in all nodes          |
+| Flat key storage              | Efficient range scans, standard B-tree algos       |
+| `has_descendants` flag        | Enables MUMPS hierarchy operations cheaply         |
+| `Arc<NodeData>`               | Cheap cloning for frequent flag checks             |
+| Idempotent merge              | Safe concurrent ancestor creation                  |
+| Async from day one            | Future disk I/O without API changes                |
+| `NodeId` indirection          | Enables lazy loading, page cache, MVCC             |
+| `HashMap` for nodes           | Storage pool—ordering is in tree structure         |
+| Three-layer architecture      | Clear separation: logic, tree, physical I/O        |
+| Database/BTree separation     | Decouples namespace from tree structure            |
+| Root-based BTree API          | BTree has no registry/WAL/Name awareness           |
+| WAL at Database layer         | WAL needs Names; only Database has Name context    |
+| BTree only marks dirty        | Database coordinates WAL + tree + flush            |
+| Logical WAL records           | Recovery replays meaningful ops with Names         |
+| `mark_dirty()` not `write()`  | Separates intent (dirty) from action (flush)       |
 
 ---
 
@@ -560,11 +723,14 @@ While current performance is production-ready, areas for future optimization:
 
 ## Key Implementation Files
 
-| File                                   | Purpose                               |
-|----------------------------------------|---------------------------------------|
-| `crates/rumps-storage/src/database.rs` | Namespace management (name→root)      |
-| `crates/rumps-storage/src/btree.rs`    | B-tree implementation (root-based)    |
-| `crates/rumps-storage/src/node.rs`     | `Node`, `NodeData`, `NodeId` types    |
-| `crates/rumps-storage/src/engine/`     | `FileStorageEngine`, registry, WAL    |
-| `crates/rumps-types/src/key.rs`        | `Key`, `Subscript`, `Name` types      |
-| `crates/rumps-types/src/value.rs`      | `Value` enum for stored data          |
+| File                                      | Purpose                                    |
+|-------------------------------------------|--------------------------------------------|
+| `crates/rumps-storage/src/database.rs`    | Database layer: namespace + WAL + MUMPS ops |
+| `crates/rumps-storage/src/btree.rs`       | BTree layer: pure tree operations          |
+| `crates/rumps-storage/src/node.rs`        | `Node`, `NodeData`, `NodeId` types         |
+| `crates/rumps-storage/src/engine/`        | Storage layer: `FileStorageEngine`         |
+| `crates/rumps-storage/src/engine/file.rs` | Page cache, registry, disk I/O             |
+| `crates/rumps-storage/src/wal/`           | Write-Ahead Log: writer, reader, recovery  |
+| `crates/rumps-storage/src/transaction.rs` | Transaction types (`TransactionId`, etc.)  |
+| `crates/rumps-types/src/key.rs`           | `Key`, `Subscript`, `Name` types           |
+| `crates/rumps-types/src/value.rs`         | `Value` enum for stored data               |
