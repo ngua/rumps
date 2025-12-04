@@ -455,6 +455,40 @@ impl Database {
         Ok(s)
     }
 
+    /// Collects all matching entries into a `Vec`.
+    ///
+    /// This is a convenience wrapper around `collects()` that collects
+    /// the stream into a vector. Useful when you need all results at once.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The variable name (global or local)
+    /// * `start` - Optional key to start iteration after (exclusive)
+    /// * `pred` - Predicate returning `true` to include entry, `false` to skip
+    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
+    pub(crate) async fn collects_vec<P, F, T>(
+        &self,
+        name: &Name,
+        start: Option<&Key>,
+        pred: P,
+        extract: F,
+    ) -> Result<Vec<T>>
+    where
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
+        T: Send,
+    {
+        let opt_root = self.get_root(name).await?;
+        match opt_root {
+            Some(root) => {
+                self.btree
+                    .collects_vec_at(root, start, pred, extract, None)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Flushes all dirty pages and metadata to disk.
     ///
     /// For persistent databases, this:

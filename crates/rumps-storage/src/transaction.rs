@@ -1185,6 +1185,31 @@ impl Transaction {
 
         Ok(merged)
     }
+
+    /// Collects all matching entries into a `Vec`.
+    ///
+    /// This is a convenience wrapper around `collects()` that collects
+    /// the stream into a vector. Useful when you need all results at once.
+    ///
+    /// The vector reflects buffered writes combined with the snapshot.
+    /// Buffered sets may add entries, buffered kills may remove them.
+    pub(crate) async fn collects_vec<P, F, T>(
+        &self,
+        name: &Name,
+        start: Option<&Key>,
+        pred: P,
+        extract: F,
+    ) -> Result<Vec<T>>
+    where
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync + Clone,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + Clone,
+        T: Send,
+    {
+        self.collects(name, start, pred, extract)
+            .await?
+            .try_collect()
+            .await
+    }
 }
 
 #[cfg(test)]
