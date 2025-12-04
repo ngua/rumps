@@ -56,6 +56,7 @@ use crate::wal::{WalOp, WalReader, WalRecord};
 ///
 /// `Database` is designed for shared access via `Arc<Database>`. All
 /// operations use interior mutability with `RwLock` for concurrent access.
+#[derive(Clone)]
 pub(crate) struct Database {
     /// Name → root `NodeId` mapping.
     ///
@@ -64,7 +65,7 @@ pub(crate) struct Database {
     /// in-memory databases, entries are created on demand.
     ///
     /// Uses `BTreeMap` for ordered iteration (MUMPS `$ORDER` over names).
-    roots: RwLock<BTreeMap<Name, NodeId>>,
+    roots: Arc<RwLock<BTreeMap<Name, NodeId>>>,
 
     /// The underlying B-tree (operates on `NodeId`s only).
     btree: Arc<BTree>,
@@ -116,7 +117,7 @@ impl Database {
         );
 
         Ok(Self {
-            roots: RwLock::new(BTreeMap::new()),
+            roots: Arc::new(RwLock::new(BTreeMap::new())),
             btree,
             storage: Some(storage),
         })
@@ -146,7 +147,7 @@ impl Database {
         );
 
         let db = Self {
-            roots: RwLock::new(BTreeMap::new()),
+            roots: Arc::new(RwLock::new(BTreeMap::new())),
             btree,
             storage: Some(Arc::clone(&storage)),
         };
@@ -505,7 +506,7 @@ impl Database {
     /// Useful for testing with specific B-tree configurations.
     fn with_btree(btree: Arc<BTree>) -> Result<Self> {
         Ok(Self {
-            roots: RwLock::new(BTreeMap::new()),
+            roots: Arc::new(RwLock::new(BTreeMap::new())),
             btree,
             storage: None,
         })

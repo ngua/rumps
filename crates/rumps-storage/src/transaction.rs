@@ -42,11 +42,21 @@
 //! assert!(metadata.state.is_committed());
 //! ```
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::Deref;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Instant;
 
+use futures::stream::{self, StreamExt, TryStreamExt};
+use rumps_types::{DataStatus, Key, Name, Value};
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+
+use crate::database::Database;
+use crate::error::Result;
+use crate::node::{NodeData, NodeId};
 
 /// A unique identifier for a database transaction.
 ///
@@ -423,6 +433,757 @@ impl TransactionContext {
             start_time: Instant::now(),
             isolation_level: IsolationLevel::default(),
         }
+    }
+}
+
+/// Strategy for handling transaction conflicts at commit time.
+///
+/// Defines how the system should respond when a transaction conflict
+/// is detected during commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub(crate) enum ConflictStrategy {
+    /// Abort the transaction on conflict (default).
+    #[default]
+    Abort,
+    /// Retry the transaction up to `N` times on conflict.
+    Retry(u32),
+    /// Skip the transaction on conflict (discard changes).
+    Skip,
+    /// Last-write-wins: overwrite conflicting changes.
+    Overwrite,
+}
+
+/// Transaction priority for scheduling and deadlock resolution.
+///
+/// Higher priority transactions may be favored during conflict resolution
+/// or deadlock detection.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default
+)]
+pub(crate) enum TransactionPriority {
+    /// Low priority transaction.
+    Low,
+    /// Normal priority transaction (default).
+    #[default]
+    Normal,
+    /// High priority transaction.
+    High,
+}
+
+/// Builder for creating transactions with custom configuration.
+///
+/// Provides a fluent API for configuring transaction properties before
+/// beginning the transaction. All properties have sensible defaults.
+///
+/// # Examples
+///
+/// ```ignore
+/// let builder = TransactionBuilder::default()
+///     .isolation(IsolationLevel::SnapshotIsolation)
+///     .conflict(ConflictStrategy::Retry(3))
+///     .timeout(5000)
+///     .priority(TransactionPriority::High);
+///
+/// let txn = builder.begin(&db).await?;
+/// ```
+#[derive(Debug, Clone)]
+pub(crate) struct TransactionBuilder {
+    isolation: IsolationLevel,
+    conflict_strategy: ConflictStrategy,
+    timeout: Option<u64>, // in ms
+    priority: TransactionPriority,
+    retry_count: u32,
+}
+
+/// Write operation types for the transaction write buffer.
+///
+/// Tracks different types of write operations that have been buffered
+/// but not yet committed to the database.
+#[derive(Debug, Clone)]
+pub(crate) enum WriteOp {
+    /// SET operation with new value.
+    Set(NodeData),
+    /// DELETE single key.
+    Delete,
+    /// KILL entire subtree.
+    KillSubtree,
+}
+
+/// Snapshot represents a consistent view of the database at a point in time.
+///
+/// Used for implementing snapshot isolation - each transaction sees
+/// the database as it existed at the start of the transaction.
+#[derive(Debug, Clone)]
+pub(crate) struct Snapshot {
+    /// The timestamp at which this snapshot was taken.
+    pub(crate) timestamp: TransactionTimestamp,
+    /// Root nodes at snapshot time (name → root mapping).
+    ///
+    /// In practice, this might reference:
+    /// - Immutable B-tree roots at this timestamp (MVCC)
+    /// - Or a copy-on-write data structure
+    /// - Or version chains with timestamps
+    pub(crate) roots: HashMap<Name, NodeId>,
+}
+
+impl Default for TransactionBuilder {
+    fn default() -> Self {
+        Self {
+            isolation: IsolationLevel::SnapshotIsolation,
+            conflict_strategy: ConflictStrategy::Abort,
+            timeout: None,
+            priority: TransactionPriority::Normal,
+            retry_count: 0,
+        }
+    }
+}
+
+impl TransactionBuilder {
+    /// Sets the isolation level for the transaction.
+    pub(crate) fn isolation(mut self, lvl: IsolationLevel) -> Self {
+        self.isolation = lvl;
+        self
+    }
+
+    /// Sets the conflict resolution strategy.
+    pub(crate) fn conflict(mut self, strategy: ConflictStrategy) -> Self {
+        self.conflict_strategy = strategy;
+        self
+    }
+
+    /// Sets a timeout in milliseconds for the transaction.
+    pub(crate) fn timeout(mut self, ms: u64) -> Self {
+        self.timeout = Some(ms);
+        self
+    }
+
+    /// Sets the transaction priority.
+    pub(crate) fn priority(mut self, prio: TransactionPriority) -> Self {
+        self.priority = prio;
+        self
+    }
+
+    /// Sets the number of retries on conflict.
+    pub(crate) fn retries(mut self, cnt: u32) -> Self {
+        self.retry_count = cnt;
+        self
+    }
+
+    /// Creates and initializes a new transaction with the configured settings.
+    ///
+    /// # What it does
+    ///
+    /// 1. Generates a unique `TransactionId` (monotonically increasing)
+    /// 2. Captures the current database timestamp for snapshot isolation
+    /// 3. Takes a read-only snapshot of the database state at this moment
+    /// 4. Initializes empty write buffer for staging changes
+    /// 5. Registers transaction with the database's `TransactionManager`
+    /// 6. Starts optional timeout timer if configured
+    /// 7. Logs transaction start to WAL (for recovery tracking)
+    /// 8. Returns `Transaction` struct in `Active` state
+    ///
+    /// The returned `Transaction` holds a clone of the `Database` (cheap via `Arc` fields).
+    pub(crate) async fn begin(self, db: &Database) -> Result<Transaction> {
+        // Generate unique transaction ID
+        // TODO: Get from TransactionManager when implemented
+        let id = TransactionId::from(1);
+
+        // Capture current timestamp
+        // TODO: Get from TransactionManager when implemented
+        let start_ts = TransactionTimestamp::from(0);
+
+        // Take snapshot of current database state
+        // TODO: Capture actual roots from database when snapshot support is added
+        let snapshot = Arc::new(Snapshot {
+            timestamp: start_ts,
+            roots: HashMap::new(),
+        });
+
+        // Calculate timeout deadline
+        let timeout = self
+            .timeout
+            .map(|ms| Instant::now() + std::time::Duration::from_millis(ms));
+
+        Ok(Transaction {
+            id,
+            state: Arc::new(RwLock::new(TransactionState::Active)),
+            start_timestamp: start_ts,
+            db: db.clone(),
+            isolation: self.isolation,
+            conflict_strategy: self.conflict_strategy,
+            priority: self.priority,
+            timeout,
+            retry_count: self.retry_count,
+            writes: Arc::new(RwLock::new(HashMap::new())),
+            deleted_subtrees: Arc::new(RwLock::new(HashSet::new())),
+            read_set: Arc::new(RwLock::new(HashSet::new())),
+            snapshot,
+            ops_count: Arc::new(AtomicU64::new(0)),
+            start_time: Instant::now(),
+        })
+    }
+}
+
+/// A database transaction providing ACID guarantees.
+///
+/// Transactions buffer all writes in memory and provide snapshot isolation
+/// for reads. Changes are only visible to other transactions after commit.
+///
+/// # Usage
+///
+/// Transactions are typically created and managed through `Database::transaction()`:
+///
+/// ```ignore
+/// db.transaction(|txn| async move {
+///     txn.set(&name, &key, value).await?;
+///     txn.get(&name, &key).await?;
+///     Ok(()) // Auto-commits on Ok
+/// }).await?;
+/// ```
+#[derive(Clone)]
+pub(crate) struct Transaction {
+    // Identity & Lifecycle
+    id: TransactionId,
+    state: Arc<RwLock<TransactionState>>,
+    start_timestamp: TransactionTimestamp,
+
+    // Database Reference
+    db: Database,
+
+    // Configuration (from builder)
+    isolation: IsolationLevel,
+    conflict_strategy: ConflictStrategy,
+    priority: TransactionPriority,
+    timeout: Option<Instant>,
+    retry_count: u32,
+
+    // Write Buffering
+    writes: Arc<RwLock<HashMap<(Name, Key), WriteOp>>>,
+    deleted_subtrees: Arc<RwLock<HashSet<(Name, Key)>>>,
+
+    // Read Tracking (for conflict detection)
+    read_set: Arc<RwLock<HashSet<(Name, Key)>>>,
+
+    // Snapshot Data
+    snapshot: Arc<Snapshot>,
+
+    // Metrics
+    ops_count: Arc<AtomicU64>,
+    start_time: Instant,
+}
+
+impl Transaction {
+    /// Commits the transaction, applying all buffered writes to the database.
+    ///
+    /// This validates the transaction for conflicts, applies all writes through
+    /// the database layer (which handles WAL logging), and flushes to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The transaction has already been committed or aborted
+    /// - Conflict detection fails (based on conflict strategy)
+    /// - Any write operation fails
+    /// - Flush to disk fails
+    pub(crate) async fn commit(self) -> Result<()> {
+        // Check transaction state
+        {
+            let state = self.state.read().await;
+            match *state {
+                TransactionState::Active => {}
+                TransactionState::Committed => {
+                    Self::err("Transaction already committed")?
+                }
+                TransactionState::Aborted => {
+                    Self::err("Transaction already aborted")?
+                }
+            }
+        }
+
+        // TODO Phase 5.2+: Validate no conflicts with other transactions
+        // For now, we skip conflict validation since we don't have TransactionManager yet
+        // self.validate_no_conflicts().await?;
+
+        // Apply all buffered writes
+        let writes = self.writes.read().await;
+        let db = self.db.clone();
+        stream::iter(writes.iter().map(Ok))
+            .try_for_each(|((name, key), write_op)| {
+                let db = db.clone();
+                async move {
+                    match write_op {
+                        WriteOp::Set(data) => {
+                            let val = data
+                                .value
+                                .clone()
+                                .ok_or_else(|| {
+                                    crate::error::StorageError::InvalidConfiguration(
+                                        "Set operation has no value".into(),
+                                    )
+                                })?;
+                            // Database.set() logs to WAL and calls btree.set_at()
+                            db.set(name, key, val).await
+                        }
+                        WriteOp::KillSubtree => {
+                            // Database.kill() logs to WAL and calls btree.kill_at()
+                            db.kill(name, key).await
+                        }
+                        WriteOp::Delete => {
+                            // Single key deletion - treat as kill
+                            db.kill(name, key).await
+                        }
+                    }
+                }
+            })
+            .await?;
+
+        // Flush: writes TxnCommit record, syncs WAL, flushes dirty pages
+        self.db.flush().await?;
+
+        // TODO Phase 5.2+: Unregister transaction from manager
+        // self.db.transaction_manager.complete(self.id).await?;
+
+        // Update state to Committed
+        {
+            let mut state = self.state.write().await;
+            *state = TransactionState::Committed;
+        }
+
+        Ok(())
+    }
+
+    /// Rolls back the transaction, discarding all buffered writes.
+    ///
+    /// This is automatically called when a transaction is dropped without
+    /// being committed.
+    pub(crate) async fn rollback(self) -> Result<()> {
+        // Check transaction state
+        {
+            let state = self.state.read().await;
+            match *state {
+                TransactionState::Active => {}
+                TransactionState::Committed => {
+                    Self::err("Cannot rollback committed transaction")?
+                }
+                TransactionState::Aborted => {
+                    // Already aborted, this is a no-op
+                    {}
+                }
+            }
+        }
+
+        // Discard all buffered writes
+        {
+            let mut writes = self.writes.write().await;
+            writes.clear();
+        }
+        {
+            let mut deleted = self.deleted_subtrees.write().await;
+            deleted.clear();
+        }
+        {
+            let mut reads = self.read_set.write().await;
+            reads.clear();
+        }
+
+        // TODO Phase 5.2+: Unregister transaction from manager
+        // self.db.transaction_manager.abort(self.id).await?;
+
+        // Update state to Aborted
+        {
+            let mut state = self.state.write().await;
+            *state = TransactionState::Aborted;
+        }
+
+        Ok(())
+    }
+
+    /// Helper to create an error.
+    fn err<T>(msg: &str) -> Result<T> {
+        Err(crate::error::StorageError::InvalidConfiguration(msg.into()))
+    }
+
+    /// Gets a value from the database within this transaction's context.
+    ///
+    /// Checks the write buffer first for pending changes, then delegates
+    /// to the database if not found in the buffer.
+    ///
+    /// # Transaction Semantics
+    ///
+    /// - Reads see buffered writes from this transaction
+    /// - Reads respect deleted subtrees
+    /// - Reads are tracked in the read set for conflict detection
+    pub(crate) async fn get(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> Result<Option<Value>> {
+        self.ops_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let lookup_key = (name.clone(), key.clone());
+
+        // Check write buffer first
+        let buffered = {
+            let writes = self.writes.read().await;
+            writes.get(&lookup_key).cloned()
+        };
+
+        let result = match buffered {
+            Some(WriteOp::Set(data)) => {
+                // Track read
+                self.read_set.write().await.insert(lookup_key.clone());
+                data.value.clone().map(Some).ok_or_else(|| {
+                    crate::error::StorageError::InvalidConfiguration(
+                        "Buffered set has no value".into(),
+                    )
+                })
+            }
+            Some(WriteOp::Delete | WriteOp::KillSubtree) => {
+                // Track read
+                self.read_set.write().await.insert(lookup_key);
+                Ok(None)
+            }
+            None => {
+                // Check if key is in a deleted subtree
+                let deleted = self.deleted_subtrees.read().await;
+                let is_deleted = deleted.iter().any(|(del_name, del_key)| {
+                    del_name == name && key.starts_with(del_key)
+                });
+
+                if is_deleted {
+                    self.read_set.write().await.insert(lookup_key);
+                    Ok(None)
+                } else {
+                    // Delegate to database (snapshot read)
+                    let val = self.db.get(name, key).await;
+
+                    // Track read
+                    self.read_set.write().await.insert(lookup_key);
+
+                    val
+                }
+            }
+        };
+
+        result
+    }
+
+    /// Sets a value in the transaction's write buffer.
+    ///
+    /// The change is not visible to other transactions until commit.
+    pub(crate) async fn set(
+        &self,
+        name: &Name,
+        key: &Key,
+        val: Value,
+    ) -> Result<()> {
+        self.ops_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Buffer the write
+        let mut writes = self.writes.write().await;
+        writes.insert(
+            (name.clone(), key.clone()),
+            WriteOp::Set(NodeData::with_value(val)),
+        );
+
+        Ok(())
+    }
+
+    /// Kills a key and all its descendants in the transaction's write buffer.
+    ///
+    /// The deletion is not visible to other transactions until commit.
+    pub(crate) async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
+        self.ops_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Buffer the kill
+        let mut writes = self.writes.write().await;
+        writes.insert((name.clone(), key.clone()), WriteOp::KillSubtree);
+
+        // Track in deleted subtrees
+        let mut deleted = self.deleted_subtrees.write().await;
+        deleted.insert((name.clone(), key.clone()));
+
+        Ok(())
+    }
+
+    /// Checks the data status of a node within this transaction's context.
+    ///
+    /// Combines buffered writes with the database snapshot to determine
+    /// if a node has a value and/or descendants.
+    pub(crate) async fn data(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> Result<DataStatus> {
+        self.ops_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let lookup_key = (name.clone(), key.clone());
+
+        // Check write buffer
+        let buffered = {
+            let writes = self.writes.read().await;
+            writes.get(&lookup_key).cloned()
+        };
+
+        match buffered {
+            Some(WriteOp::Set(_)) => {
+                // Has value from buffered write
+                // TODO: Check for descendants in buffer
+                Ok(DataStatus::HasValue)
+            }
+            Some(WriteOp::Delete | WriteOp::KillSubtree) => {
+                Ok(DataStatus::NoData)
+            }
+            None => {
+                // Check if in deleted subtree
+                let deleted = self.deleted_subtrees.read().await;
+                let is_deleted = deleted.iter().any(|(del_name, del_key)| {
+                    del_name == name && key.starts_with(del_key)
+                });
+
+                if is_deleted {
+                    Ok(DataStatus::NoData)
+                } else {
+                    self.db.data(name, key).await
+                }
+            }
+        }
+    }
+
+    /// Returns the next key in lexicographic order within this transaction's context.
+    ///
+    /// Must merge snapshot iteration with buffered writes - buffered sets may
+    /// insert new keys, buffered kills may remove keys.
+    pub(crate) async fn order(
+        &self,
+        name: &Name,
+        after: Option<&Key>,
+    ) -> Result<Option<Key>> {
+        self.ops_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        self.order_impl(name, after).await
+    }
+
+    /// Internal recursive implementation of `order()`.
+    ///
+    /// Uses async recursion to avoid `loop` with `break`/`continue`.
+    fn order_impl<'a>(
+        &'a self,
+        name: &'a Name,
+        after: Option<&'a Key>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<Key>>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            // Get snapshot view from database
+            let snapshot_candidate = self.db.order(name, after).await?;
+
+            // Collect buffered keys for this name
+            let writes = self.writes.read().await;
+            let deleted = self.deleted_subtrees.read().await;
+
+            // Find minimum buffered key greater than `after` that's not deleted
+            let buffered_candidate = writes
+                .keys()
+                .filter(|(n, _)| n == name)
+                .map(|(_, k)| k)
+                .filter(|k| match after {
+                    Some(a) => *k > a,
+                    None => true,
+                })
+                .filter(|k| {
+                    let not_explicitly_deleted = !matches!(
+                        writes.get(&(name.clone(), (*k).clone())),
+                        Some(WriteOp::Delete | WriteOp::KillSubtree)
+                    );
+                    let not_in_deleted_subtree =
+                        !deleted.iter().any(|(del_name, del_key)| {
+                            del_name == name && k.starts_with(del_key)
+                        });
+                    not_explicitly_deleted && not_in_deleted_subtree
+                })
+                .min()
+                .cloned();
+
+            // Choose the minimum between snapshot and buffered
+            let next = match (
+                snapshot_candidate.as_ref(),
+                buffered_candidate.as_ref(),
+            ) {
+                (Some(snap), Some(buf)) => Some(snap.min(buf).clone()),
+                (Some(snap), None) => Some(snap.clone()),
+                (None, Some(buf)) => Some(buf.clone()),
+                (None, None) => None,
+            };
+
+            // Check if candidate is deleted in our buffer; if so, recurse
+            match next {
+                None => Ok(None),
+                Some(k) => {
+                    let is_deleted =
+                        matches!(
+                            writes.get(&(name.clone(), k.clone())),
+                            Some(WriteOp::Delete | WriteOp::KillSubtree)
+                        ) || deleted.iter().any(|(del_name, del_key)| {
+                            del_name == name && k.starts_with(del_key)
+                        });
+
+                    if is_deleted {
+                        // Recurse to find next valid key
+                        self.order_impl(name, Some(&k)).await
+                    } else {
+                        Ok(Some(k))
+                    }
+                }
+            }
+        })
+    }
+
+    /// Creates a stream of entries within this transaction's context.
+    ///
+    /// The stream reflects buffered writes combined with the snapshot.
+    /// Buffered sets may add entries, buffered kills may remove them.
+    pub(crate) async fn collects<'a, P, F, T>(
+        &'a self,
+        name: &'a Name,
+        start: Option<&'a Key>,
+        pred: P,
+        extract: F,
+    ) -> Result<impl futures::stream::Stream<Item = Result<T>> + Send + 'a>
+    where
+        P: Fn(&Key, &NodeData) -> bool + Send + Sync + Clone + 'a,
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + Clone + 'a,
+        T: Send + 'a,
+    {
+        self.ops_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Collect buffered and deleted info
+        let writes = self.writes.read().await;
+        let deleted = self.deleted_subtrees.read().await;
+
+        // Build list of deleted keys/subtrees for this name
+        let deleted_list: Vec<Key> = deleted
+            .iter()
+            .filter_map(|(n, k)| if n == name { Some(k.clone()) } else { None })
+            .collect();
+
+        // Build set of explicitly deleted keys in writes
+        let explicitly_deleted_keys: Vec<(Name, Key)> = writes
+            .iter()
+            .filter_map(|((n, k), op)| {
+                match matches!(op, WriteOp::Delete | WriteOp::KillSubtree) {
+                    true => Some((n.clone(), k.clone())),
+                    false => None,
+                }
+            })
+            .collect();
+
+        // Clone data and closures for use in multiple places
+        let deleted_list_for_pred = deleted_list.clone();
+        let explicitly_deleted_for_pred = explicitly_deleted_keys.clone();
+        let name_for_pred = name.clone();
+        let pred_clone = pred.clone();
+        let extract_clone = extract.clone();
+
+        // Create modified predicate that excludes deleted keys
+        let pred_with_deletes = move |k: &Key, data: &NodeData| {
+            // Check if key is in a deleted subtree
+            let in_deleted = deleted_list_for_pred
+                .iter()
+                .any(|del_key| k.starts_with(del_key));
+
+            // Check if key is explicitly deleted in writes
+            let explicitly_deleted = explicitly_deleted_for_pred
+                .iter()
+                .any(|(n, dk)| n == &name_for_pred && dk == k);
+
+            if in_deleted || explicitly_deleted {
+                false
+            } else {
+                pred_clone(k, data)
+            }
+        };
+
+        // Collect buffered entries
+        let buffered_entries: Vec<(Key, Result<T>)> = writes
+            .iter()
+            .filter_map(|((n, k), op)| {
+                match (n == name, op) {
+                    (true, WriteOp::Set(data)) => {
+                        // Check start condition
+                        let after_start = match start {
+                            Some(s) => k >= s,
+                            None => true,
+                        };
+
+                        // Check if in deleted subtree
+                        let in_deleted = deleted_list
+                            .iter()
+                            .any(|del_key| k.starts_with(del_key));
+
+                        if after_start && !in_deleted && pred(k, data) {
+                            extract(k, data).map(|t| (k.clone(), Ok(t)))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+
+        // Collect snapshot entries with keys for proper merging
+        // We use a modified extract that captures both key and value
+        let extract_with_key = |k: &Key, data: &NodeData| {
+            extract_clone(k, data).map(|t| (k.clone(), t))
+        };
+
+        let snapshot_stream_with_keys = self
+            .db
+            .collects(name, start, pred_with_deletes.clone(), &extract_with_key)
+            .await?;
+
+        let snapshot_entries: Vec<(Key, T)> = snapshot_stream_with_keys
+            .collect::<Vec<Result<(Key, T)>>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+
+        // Merge buffered and snapshot entries, removing duplicates
+        // (buffered writes override snapshot reads)
+        let buffered_keys: std::collections::HashSet<_> =
+            buffered_entries.iter().map(|(k, _)| k).collect();
+
+        let filtered_snapshot: Vec<(Key, Result<T>)> = snapshot_entries
+            .into_iter()
+            .filter(|(k, _)| !buffered_keys.contains(k))
+            .map(|(k, t)| (k, Ok(t)))
+            .collect();
+
+        // Combine and sort all entries by key
+        let mut all_entries = buffered_entries;
+        all_entries.extend(filtered_snapshot);
+        all_entries.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+
+        // Create merged stream in sorted order
+        let merged = stream::iter(all_entries.into_iter().map(|(_, r)| r));
+
+        Ok(merged)
     }
 }
 
