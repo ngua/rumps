@@ -1,6 +1,15 @@
 # Architecture Options: Registry Integration
 
-## Problem
+> **STATUS: IMPLEMENTED** (commit `3c3fb0d`)
+>
+> Option A was chosen and implemented. `BTree` now operates purely on `NodeId`s
+> with a root-based API (`get_at`, `set_at`, etc.). The `Database` layer owns
+> the `roots: BTreeMap<Name, NodeId>` mapping and handles registry integration.
+> See `docs/btree.md` for updated architecture documentation.
+
+---
+
+## Problem (Historical)
 
 The current plan (Phase 4.5) has `BTree` calling registry methods like
 `registry_insert()` and `registry_remove()` directly. This is a leaky
@@ -110,101 +119,6 @@ impl BTree {
 ### Cons
 - Requires refactoring existing `BTree` methods
 - `Database` must exist even for in-memory usage (or provide a thin wrapper)
-
----
-
-## Option B: Callback/Hook on Root Changes
-
-Keep `roots` in `BTree`, but add a hook that fires on changes:
-
-```rust
-pub struct BTree {
-    roots: RwLock<BTreeMap<Name, NodeId>>,
-    on_root_change: Option<Arc<dyn Fn(RootChange) + Send + Sync>>,
-}
-
-pub enum RootChange {
-    Created { name: Name, root: NodeId },
-    Deleted { name: Name },
-}
-```
-
-### Usage
-
-```rust
-let storage = FileStorageEngine::open(...)?;
-let storage_ref = Arc::clone(&storage);
-
-let btree = BTree::with_hook(move |change| {
-    match change {
-        RootChange::Created { name, root } => {
-            storage_ref.registry_insert(name, root)
-        }
-        RootChange::Deleted { name } => {
-            storage_ref.registry_remove(name)
-        }
-    }
-});
-```
-
-### Pros
-- `BTree` API unchanged
-- Hook is optional (in-memory mode has no hook)
-- Decoupled: `BTree` doesn't know what the hook does
-
-### Cons
-- Callback complexity (async? error handling?)
-- Two sources of truth (`roots` in BTree, registry in storage)
-- Must ensure hook is called at exactly the right times
-
----
-
-## Option C: Extend NodeAllocator Trait
-
-The allocator already abstracts node allocation. Extend it for named roots:
-
-```rust
-#[async_trait]
-pub trait NodeAllocator: Send + Sync {
-    async fn allocate(&self) -> Result<NodeId>;
-    async fn deallocate(&self, id: NodeId) -> Result<()>;
-
-    // New: root-specific methods
-    async fn allocate_root(&self, name: &str) -> Result<NodeId>;
-    async fn deallocate_root(&self, name: &str, id: NodeId) -> Result<()>;
-    async fn load_roots(&self) -> Result<Vec<(String, NodeId)>>;
-}
-```
-
-### Implementations
-
-**IncrementingAllocator** (in-memory):
-```rust
-async fn allocate_root(&self, _name: &str) -> Result<NodeId> {
-    self.allocate().await  // just allocate normally
-}
-```
-
-**DiskNodeAllocator**:
-```rust
-async fn allocate_root(&self, name: &str) -> Result<NodeId> {
-    let id = self.allocate().await?;
-    self.storage.registry_insert(name, id).await?;
-    Ok(id)
-}
-```
-
-### Pros
-- Fits existing abstraction
-- `BTree` uses allocator interface, doesn't know about registry
-- Clean for testing (mock allocator)
-
-### Cons
-- Mixes allocation with naming concerns
-- Allocator becomes a "god object"
-- `load_roots()` is awkward—allocator loading data?
-
----
 
 ## Recommendation
 

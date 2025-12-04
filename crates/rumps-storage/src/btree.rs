@@ -652,14 +652,18 @@ impl BTree {
     ///
     /// Currently just looks up the node in the in-memory `HashMap`.
     ///
-    /// # Future Implementation (Phase 4.5)
+    /// # Future Implementation (Phase 4.6)
     ///
-    /// TODO Phase 4.5: Implement cache-aware disk loading:
-    /// - Check cache first (`nodes` `HashMap`)
-    /// - Load from disk if cache miss (only for `Name::Global`)
-    /// - Keep `Name::Local` entirely in memory
-    /// - Add to cache with LRU eviction
-    /// - See TODOS/persistence.md Phase 4.5 for details
+    /// TODO Phase 4.6: Implement cache-aware disk loading:
+    /// - Check `nodes` cache first
+    /// - On cache miss, load from `storage.read(id)` if storage is present
+    /// - Add loaded node to cache with LRU eviction
+    /// - For in-memory-only `BTree`s (no storage), behavior unchanged
+    /// - See TODOS/persistence.md Phase 4.6 for details
+    ///
+    /// Note: `BTree` has no knowledge of globals vs locals. The `Database`
+    /// layer decides whether to use a `BTree` with storage (globals) or
+    /// without (locals).
     ///
     /// # Errors
     ///
@@ -671,7 +675,7 @@ impl BTree {
     /// let node = btree.load_node(root_id).await?;
     /// ```
     async fn load_node(&self, id: NodeId) -> Result<Node> {
-        // TODO Phase 4.5: Add disk loading logic here
+        // TODO Phase 4.6: Add disk loading logic here
         self.find_node(id).await
     }
 }

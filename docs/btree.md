@@ -1,6 +1,6 @@
 # RUMPS B-tree Storage Engine
 
-This document describes the B-tree storage engine used by RUMPS for persistent, hierarchical data storage. The implementation lives in `crates/rumps-storage/src/btree.rs`.
+This document describes the B-tree storage engine used by RUMPS for persistent, hierarchical data storage. The implementation lives in `crates/rumps-storage/src/btree.rs` with namespace management in `crates/rumps-storage/src/database.rs`.
 
 ---
 
@@ -43,15 +43,72 @@ The solution is the `has_descendants` flag stored alongside each value. When you
 
 ---
 
+## Architecture: Database and BTree Layers
+
+RUMPS separates concerns between two layers:
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Database                       BTree                    FileStorageEngine  │
+│  ────────                       ─────                    ─────────────────  │
+│                                                                             │
+│  roots: BTreeMap<Name, NodeId>  nodes: HashMap<NodeId, Node>   PageCache    │
+│  (lazy-loaded from registry)    (no names, no roots!)          WAL          │
+│         │                              │                       registry     │
+│         │ lookup/create root           │ load/save nodes                    │
+│         ▼                              ▼                                    │
+│    ┌─────────┐                   ┌───────────┐                              │
+│    │ NodeId  │ ───────────────── │  BTree    │ ◄────────── storage.read()   │
+│    └─────────┘                   │  *_at()   │ ─────────── storage.write()  │
+│                                  └───────────┘                              │
+│                                                                             │
+│  Database calls:                 BTree methods (root-based):                │
+│  • get_root(name)                • get_at(root, key)                        │
+│  • ensure_root(name)             • set_at(root, key, val) → new_root        │
+│  • update_root(name, root)       • kill_at(root, key) → Option<new_root>    │
+│  • remove_root(name)             • create_tree() → NodeId                   │
+│                                  • delete_tree(root)                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why this separation?**
+
+1. **`BTree` is a pure tree data structure**: It operates only on `NodeId`s with no knowledge of variable names or the registry. This makes it simpler to test and reason about.
+
+2. **`Database` owns namespace management**: The mapping from `Name` (like `^PATIENT`) to root `NodeId` lives here. For persistent globals, roots are lazy-loaded from the on-disk registry.
+
+3. **Registry calls happen at the right layer**: When creating a new global, `Database` calls `registry_insert()` after `btree.create_tree()`. The `BTree` never needs to know about persistence details.
+
+4. **Enables lazy-loading**: `Database.get_root()` can check its cache first, then lazy-load from the registry for globals that haven't been accessed yet.
+
+---
+
 ## Data Structures
+
+### `Database`
+
+Namespace management layer (`database.rs`):
+
+```rust
+pub(crate) struct Database {
+    roots: RwLock<BTreeMap<Name, NodeId>>,  // Name -> root (lazy-loaded)
+    btree: Arc<BTree>,                       // The underlying tree
+    // storage: Option<Arc<FileStorageEngine>>,  // Future: disk persistence
+}
+```
+
+**Design rationale:**
+
+- `BTreeMap` for roots enables ordered iteration over variable names
+- Lazy-loading from registry avoids loading all globals at startup
+- Separates namespace concerns from tree structure
 
 ### `BTree`
 
-The main storage structure (`btree.rs:171`):
+The tree storage structure (`btree.rs:146`):
 
 ```rust
 pub(crate) struct BTree {
-    roots: RwLock<BTreeMap<Name, NodeId>>,  // Variable name -> root node
     nodes: RwLock<HashMap<NodeId, Node>>,   // Node pool (page cache)
     allocator: Arc<dyn NodeAllocator>,      // Node ID allocation
     min_degree: usize,                      // B-tree parameter `t`
@@ -62,8 +119,9 @@ pub(crate) struct BTree {
 
 **Design rationale:**
 
-- `BTreeMap` for roots enables ordered iteration over variable names (`ORDER` over globals)
-- `RwLock<HashMap>` for nodes allows concurrent reads with exclusive writes
+- `HashMap<NodeId, Node>` is a storage pool—`NodeId`s are internal references with no semantic ordering
+- Collation order is maintained by sorted `keys` within each `Node` and the tree structure itself
+- `RwLock` enables concurrent reads with exclusive writes
 - All operations are `async` to support future disk persistence without API changes
 
 ### `Node`
@@ -81,9 +139,11 @@ pub(crate) struct Node {
 
 **`Arc<NodeData>` optimization:** Values are wrapped in `Arc` for efficient hierarchy navigation. Operations like `DATA` and ancestor maintenance frequently check `has_descendants` without needing ownership. `Arc::clone()` (refcount increment) is much cheaper than cloning the entire `NodeData`.
 
+**Collation order:** The `keys: Vec<Key>` is always kept sorted according to the extended MUMPS collation. All tree operations use `binary_search()` on this vector. The tree structure (parent-child relationships via `children`) combined with sorted keys maintains global ordering.
+
 ### `NodeData`
 
-Data stored at each key (`node.rs:351`):
+Data stored at each key (`node.rs`):
 
 ```rust
 pub(crate) struct NodeData {
@@ -164,13 +224,17 @@ The hierarchy is **implicit** in key structure. The `has_descendants` flag on ea
 
 ---
 
-## MUMPS Primitive Operations
+## BTree Operations (Root-Based API)
 
-### `SET` — Insert/Update
+All `BTree` methods operate on `NodeId` roots, not variable names. The `Database` layer handles name→root resolution.
+
+### `set_at` — Insert/Update
 
 ```rust
-pub async fn set(&self, name: &Name, key: &Key, value: Value, ctx: &TransactionContext) -> Result<()>
+pub async fn set_at(&self, root: NodeId, key: &Key, value: Value, ctx: &TransactionContext) -> Result<NodeId>
 ```
+
+Returns the (possibly new) root `NodeId`. The root may change if the tree grows due to node splitting.
 
 **Algorithm:**
 
@@ -180,8 +244,7 @@ pub async fn set(&self, name: &Name, key: &Key, value: Value, ctx: &TransactionC
      - If not found: insert `NodeData::with_descendants()`
      - If found but `has_descendants = false`: update flag to `true`
 
-2. **Insert target key** (`set_node`):
-   - If variable doesn't exist: create new root leaf
+2. **Insert target key** (`set_at_node`):
    - If root is full (`2t-1` keys): split root, create new root
    - Insert via `insert_non_full_with_data`
 
@@ -197,27 +260,28 @@ has_descendants = old.has_descendants || new.has_descendants  // OR
 value = new.value.or(old.value)                               // Prefer new
 ```
 
-### `GET` — Retrieve Value
+### `get_at` — Retrieve Value
 
 ```rust
-pub async fn get(&self, name: &Name, key: &Key, ctx: Option<&TransactionContext>) -> Result<Option<Value>>
+pub async fn get_at(&self, root: NodeId, key: &Key, ctx: Option<&TransactionContext>) -> Result<Option<Value>>
 ```
 
 **Algorithm:**
 
-1. Look up root node for variable name
-2. Binary search to find key position in node
-3. If found: return value
-4. If not found and leaf: return `None`
-5. If not found and internal: recurse to appropriate child
+1. Binary search to find key position in node
+2. If found: return value
+3. If not found and leaf: return `None`
+4. If not found and internal: recurse to appropriate child
 
 **Complexity:** `O(log n)` where `n` is total key count.
 
-### `KILL` — Delete Subtree
+### `kill_at` — Delete Subtree
 
 ```rust
-pub async fn kill(&self, name: &Name, key: &Key, ctx: &TransactionContext) -> Result<()>
+pub async fn kill_at(&self, root: NodeId, key: &Key, ctx: &TransactionContext) -> Result<Option<NodeId>>
 ```
+
+Returns `Some(new_root)` or `None` if the tree became empty.
 
 **Algorithm:**
 
@@ -233,10 +297,10 @@ pub async fn kill(&self, name: &Name, key: &Key, ctx: &TransactionContext) -> Re
    - If no descendants remain: set `has_descendants = false`
    - If no value and no descendants: remove node entirely
 
-### `DATA` — Check Node Status
+### `data_at` — Check Node Status
 
 ```rust
-pub async fn data(&self, name: &Name, key: &Key, ctx: Option<&TransactionContext>) -> Result<DataStatus>
+pub async fn data_at(&self, root: NodeId, key: &Key, ctx: Option<&TransactionContext>) -> Result<DataStatus>
 ```
 
 Returns:
@@ -245,10 +309,10 @@ Returns:
 - `HasDescendants` (10): Descendants only
 - `Both` (11): Both value and descendants
 
-### `ORDER` — Next Key
+### `order_at` — Next Key
 
 ```rust
-pub async fn order(&self, name: &Name, after: Option<&Key>, ctx: Option<&TransactionContext>) -> Result<Option<Key>>
+pub async fn order_at(&self, root: NodeId, after: Option<&Key>, ctx: Option<&TransactionContext>) -> Result<Option<Key>>
 ```
 
 **Algorithm:**
@@ -259,16 +323,26 @@ pub async fn order(&self, name: &Name, after: Option<&Key>, ctx: Option<&Transac
    - If exact match in internal node: leftmost key in right subtree
    - If not found: navigate to appropriate child, then check next key
 
-### `COLLECT` — Stream Iteration
+### `collects_at` — Stream Iteration
 
 ```rust
-pub fn collects<P, F, T>(&self, name: &Name, start: Option<&Key>, pred: P, extract: F, ctx: Option<&TransactionContext>) -> impl Stream<Item = Result<T>>
+pub fn collects_at<P, F, T>(&self, root: NodeId, start: Option<&Key>, pred: P, extract: F, ctx: Option<&TransactionContext>) -> impl Stream<Item = Result<T>>
 ```
 
 Creates a lazy stream that:
 - Iterates in lexicographic order
 - Filters by predicate
 - Transforms via extract function
+
+### `create_tree` / `delete_tree` — Tree Lifecycle
+
+```rust
+pub async fn create_tree(&self) -> Result<NodeId>
+pub async fn delete_tree(&self, root: NodeId) -> Result<usize>
+```
+
+- `create_tree()`: Allocates an empty leaf node, returns its `NodeId`
+- `delete_tree()`: Recursively deallocates all nodes, returns count freed
 
 ---
 
@@ -336,15 +410,16 @@ Each ancestor is ensured to exist with `has_descendants = true`:
 
 ```rust
 stream::iter(ancestors)
-    .try_for_each(|ancestor_key| async move {
-        match self.get_internal(name, &ancestor_key).await? {
+    .try_fold(root, |cur_root, ancestor_key| async move {
+        match self.get_internal(cur_root, &ancestor_key).await? {
             Some(data) if !data.has_descendants => {
-                self.update_descendants_flag(name, &ancestor_key, true).await
+                self.update_descendants_flag(cur_root, &ancestor_key, true).await?;
+                Ok(cur_root)
             }
             None => {
-                self.set_node(name, &ancestor_key, NodeData::with_descendants()).await
+                self.set_at_node(cur_root, &ancestor_key, NodeData::with_descendants()).await
             }
-            _ => Ok(())
+            _ => Ok(cur_root)
         }
     })
 ```
@@ -369,11 +444,11 @@ All operations use `RwLock`:
 
 | Operation | Average      | Notes                            |
 |-----------|--------------|----------------------------------|
-| `get`     | O(log n)     | Binary search at each level      |
-| `set`     | O(d × log n) | `d` = key depth for ancestors    |
-| `kill`    | O(k × log n) | `k` = keys deleted               |
-| `data`    | O(log n)     | Same as `get`                    |
-| `order`   | O(log n)     | May traverse multiple nodes      |
+| `get_at`  | O(log n)     | Binary search at each level      |
+| `set_at`  | O(d × log n) | `d` = key depth for ancestors    |
+| `kill_at` | O(k × log n) | `k` = keys deleted               |
+| `data_at` | O(log n)     | Same as `get_at`                 |
+| `order_at`| O(log n)     | May traverse multiple nodes      |
 
 ### Benchmark Results
 
@@ -432,30 +507,40 @@ struct NodeRaw {
 
 ---
 
-## Future: Disk Persistence (Phase 4)
+## Disk Persistence (Phase 4)
 
-The current implementation is in-memory. Future phases will add:
+The `Database` layer now exists with namespace management. Disk persistence adds:
 
-1. **Page cache** with LRU eviction
-2. **Disk-backed storage** for globals
-3. **`load_node`** will check cache, then load from disk
-4. **Locals** remain memory-only (no persistence)
+1. **`FileStorageEngine`** with page cache, WAL, and bitmap allocator (complete)
+2. **Global registry** for name→root persistence with chaining (complete)
+3. **`BTree` disk integration** (Phase 4.6, in progress):
+   - `Option<Arc<FileStorageEngine>>` on `BTree`
+   - `load_node()` checks cache, falls back to `storage.read()`
+   - Writes go through WAL for durability
+4. **Lazy-loading** in `Database.get_root()`:
+   - Check in-memory cache first
+   - For globals: call `storage.registry_get()` on cache miss
+   - Cache result for future lookups
+5. **Locals** remain memory-only (no persistence)
 
-The async API is designed for this transition—no breaking changes needed.
+The async API and root-based methods enable this transition without breaking changes.
 
 ---
 
 ## Design Decisions Summary
 
-| Decision               | Rationale                                       |
-|------------------------|-------------------------------------------------|
-| B-tree (not B+-tree)   | Simpler implementation, data in all nodes       |
-| Flat key storage       | Efficient range scans, standard B-tree algos    |
-| `has_descendants` flag | Enables MUMPS hierarchy operations cheaply      |
-| `Arc<NodeData>`        | Cheap cloning for frequent flag checks          |
-| Idempotent merge       | Safe concurrent ancestor creation               |
-| Async from day one     | Future disk I/O without API changes             |
-| `NodeId` indirection   | Enables lazy loading, page cache, MVCC          |
+| Decision                   | Rationale                                       |
+|----------------------------|-------------------------------------------------|
+| B-tree (not B+-tree)       | Simpler implementation, data in all nodes       |
+| Flat key storage           | Efficient range scans, standard B-tree algos    |
+| `has_descendants` flag     | Enables MUMPS hierarchy operations cheaply      |
+| `Arc<NodeData>`            | Cheap cloning for frequent flag checks          |
+| Idempotent merge           | Safe concurrent ancestor creation               |
+| Async from day one         | Future disk I/O without API changes             |
+| `NodeId` indirection       | Enables lazy loading, page cache, MVCC          |
+| `HashMap` for nodes        | Storage pool—ordering is in tree structure      |
+| Database/BTree separation  | Decouples namespace from tree structure         |
+| Root-based BTree API       | BTree has no registry awareness                 |
 
 ---
 
@@ -465,7 +550,7 @@ While current performance is production-ready, areas for future optimization:
 
 1. **Ancestor caching**: Cache "known ancestors" via bloom filter or `HashSet` to reduce repeated `get_internal()` calls in `ensure_ancestors()`
 
-2. **Batch ancestor creation**: Currently sequential with `try_for_each`; could batch for better locality
+2. **Batch ancestor creation**: Currently sequential with `try_fold`; could batch for better locality
 
 3. **Path compression**: For very deep hierarchies; adds complexity not justified for typical MUMPS use
 
@@ -477,7 +562,9 @@ While current performance is production-ready, areas for future optimization:
 
 | File                                   | Purpose                               |
 |----------------------------------------|---------------------------------------|
-| `crates/rumps-storage/src/btree.rs`    | Main B-tree implementation            |
+| `crates/rumps-storage/src/database.rs` | Namespace management (name→root)      |
+| `crates/rumps-storage/src/btree.rs`    | B-tree implementation (root-based)    |
 | `crates/rumps-storage/src/node.rs`     | `Node`, `NodeData`, `NodeId` types    |
+| `crates/rumps-storage/src/engine/`     | `FileStorageEngine`, registry, WAL    |
 | `crates/rumps-types/src/key.rs`        | `Key`, `Subscript`, `Name` types      |
 | `crates/rumps-types/src/value.rs`      | `Value` enum for stored data          |
