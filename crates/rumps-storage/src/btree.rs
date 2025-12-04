@@ -11,6 +11,7 @@ use futures::{Stream, TryStreamExt};
 use rumps_types::{DataStatus, Key};
 use tokio::sync::RwLock;
 
+use crate::engine;
 use crate::error::{Result, StorageError};
 use crate::node::{Node, NodeData, NodeId};
 
@@ -81,6 +82,40 @@ impl NodeAllocator for IncrementingAllocator {
 
     async fn peek_next(&self) -> NodeId {
         NodeId::from(*self.next_id.read().await)
+    }
+}
+
+/// Disk-backed allocator that delegates to storage engine.
+///
+/// Used when the B-tree is backed by persistent storage. Delegates all
+/// allocation/deallocation to the underlying `AsyncStorageEngine`, which
+/// manages page allocation via a free list or bitmap.
+pub(crate) struct DiskNodeAllocator {
+    storage: Arc<dyn engine::AsyncStorageEngine>,
+}
+
+impl DiskNodeAllocator {
+    /// Creates a new disk allocator backed by the given storage engine.
+    pub(crate) fn new(storage: Arc<dyn engine::AsyncStorageEngine>) -> Self {
+        Self { storage }
+    }
+}
+
+#[async_trait]
+impl NodeAllocator for DiskNodeAllocator {
+    async fn allocate(&self) -> Result<NodeId> {
+        self.storage.allocate().await
+    }
+
+    async fn deallocate(&self, id: NodeId) -> Result<()> {
+        self.storage.deallocate(id).await
+    }
+
+    async fn peek_next(&self) -> NodeId {
+        // For disk-backed storage, peek_next isn't meaningful since
+        // pages can be allocated non-sequentially from a free list.
+        // Return a sentinel value.
+        NodeId::from(0)
     }
 }
 
@@ -158,6 +193,13 @@ pub(crate) struct BTree {
     /// The tree's logical ordering is maintained by parent-child links
     /// and sorted keys within each node.
     nodes: RwLock<HashMap<NodeId, Node>>,
+
+    /// Optional storage engine for persistence.
+    ///
+    /// When `None`, the B-tree operates entirely in memory.
+    /// When `Some`, nodes are persisted to disk and the `nodes` map
+    /// becomes a page cache with lazy loading.
+    storage: Option<Arc<dyn engine::AsyncStorageEngine>>,
 
     /// Node ID allocator strategy.
     allocator: Arc<dyn NodeAllocator>,
@@ -430,6 +472,7 @@ impl BTree {
         if min_degree >= 2 {
             Ok(Self {
                 nodes: RwLock::new(HashMap::new()),
+                storage: None,
                 allocator: Arc::new(IncrementingAllocator::new()),
                 min_degree,
                 max_memory_bytes: None,
@@ -467,6 +510,108 @@ impl BTree {
         Ok(btree)
     }
 
+    /// Creates a disk-backed B-tree with the specified storage engine.
+    ///
+    /// Uses `DiskNodeAllocator` to delegate node allocation to the storage
+    /// engine, which manages page allocation via a free list or bitmap.
+    ///
+    /// **Note**: This constructor does NOT load roots from the registry—that's
+    /// the `Database` layer's responsibility.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rumps_storage::{BTree, FileStorageEngine, StorageConfig};
+    /// use std::sync::Arc;
+    ///
+    /// # tokio_test::block_on(async {
+    /// let storage = Arc::new(FileStorageEngine::create("./data", StorageConfig::default()).await?);
+    /// let btree = BTree::with_storage(3, storage)?;
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
+    /// ```
+    pub(crate) fn with_storage(
+        min_degree: usize,
+        storage: Arc<dyn engine::AsyncStorageEngine>,
+    ) -> Result<Self> {
+        if min_degree < 2 {
+            Err(StorageError::InvalidConfiguration(
+                "min_degree must be >= 2".to_string(),
+            ))
+        } else {
+            Ok(Self {
+                nodes: RwLock::new(HashMap::new()),
+                storage: Some(Arc::clone(&storage)),
+                allocator: Arc::new(DiskNodeAllocator::new(storage)),
+                min_degree,
+                max_memory_bytes: None,
+                stats: RwLock::new(BTreeStats::default()),
+            })
+        }
+    }
+
+    /// Loads a node from cache or disk.
+    ///
+    /// First checks the in-memory `nodes` cache. On cache miss, loads from
+    /// storage (if available) and adds to cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::NodeNotFound` if the node doesn't exist in
+    /// cache or storage.
+    async fn load_node(&self, id: NodeId) -> Result<Node> {
+        // Check cache first
+        let cached = {
+            let nodes = self.nodes.read().await;
+            nodes.get(&id).cloned()
+        };
+
+        match cached {
+            Some(node) => Ok(node),
+            None => {
+                // Load from disk if storage is configured
+                let storage = self
+                    .storage
+                    .as_ref()
+                    .ok_or(StorageError::NodeNotFound(*id))?;
+
+                let node = storage.read(id).await?;
+
+                // Add to cache
+                {
+                    let mut nodes = self.nodes.write().await;
+                    nodes.insert(id, node.clone());
+                    // TODO Phase 4.7: Implement LRU eviction if cache is full
+                }
+
+                Ok(node)
+            }
+        }
+    }
+
+    /// Saves a node to cache and optionally disk.
+    ///
+    /// Updates the in-memory cache first, then writes to storage if configured.
+    /// For disk-backed trees, the node is written to the WAL and marked dirty.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if WAL write fails or the page cannot be allocated.
+    async fn save_node(&self, id: NodeId, node: Node) -> Result<()> {
+        // Update cache
+        {
+            let mut nodes = self.nodes.write().await;
+            nodes.insert(id, node.clone());
+        }
+
+        // Write to disk if storage is configured
+        if let Some(storage) = self.storage.as_ref() {
+            storage.write(id, &node).await?;
+        }
+
+        Ok(())
+    }
+
     /// Creates a new empty tree and returns its root `NodeId`.
     ///
     /// This allocates an empty leaf node that serves as the root of a new tree.
@@ -482,10 +627,7 @@ impl BTree {
         let id = self.allocator.allocate().await?;
         let node = Node::new_leaf();
 
-        {
-            let mut nodes = self.nodes.write().await;
-            nodes.insert(id, node);
-        }
+        self.save_node(id, node).await?;
 
         {
             let mut stats = self.stats.write().await;
@@ -517,16 +659,40 @@ impl BTree {
         node_id: NodeId,
     ) -> BoxFuture<'a, Result<usize>> {
         Box::pin(async move {
-            match self.nodes.write().await.remove(&node_id) {
-                None => Ok(0), // Node doesn't exist - silently return 0
-                Some(node) => {
+            // Try to load node (might be only on disk, not in cache)
+            let node_result = self.load_node(node_id).await;
+
+            // Handle node not found gracefully
+            let node = match node_result {
+                Err(StorageError::NodeNotFound(_)) => {
+                    // Node doesn't exist - this is ok for delete
+                    None
+                }
+                Err(e) => {
+                    // Other errors should propagate
+                    Some(Err(e))
+                }
+                Ok(n) => Some(Ok(n)),
+            };
+
+            match node {
+                None => Ok(0),
+                Some(Err(e)) => Err(e),
+                Some(Ok(node)) => {
+                    // Remove from cache
+                    {
+                        let mut nodes = self.nodes.write().await;
+                        nodes.remove(&node_id);
+                    }
+
+                    // Deallocate from storage
                     self.allocator.deallocate(node_id).await?;
 
                     // If internal node, recursively delete children
-                    let child_counts = if node.is_leaf {
+                    let child_counts: usize = if node.is_leaf {
                         0
                     } else {
-                        let counts = futures::future::try_join_all(
+                        let counts: Vec<usize> = futures::future::try_join_all(
                             node.children
                                 .iter()
                                 .map(|&c| self.delete_subtree(c)),
@@ -641,42 +807,6 @@ impl BTree {
             }
             None => Ok(()),
         }
-    }
-
-    /// Loads a node from cache or disk (Phase 4).
-    ///
-    /// This is the cache-aware node loading method that will be used throughout
-    /// the codebase for retrieving nodes.
-    ///
-    /// # Current Implementation (Phase 2-3)
-    ///
-    /// Currently just looks up the node in the in-memory `HashMap`.
-    ///
-    /// # Future Implementation (Phase 4.6)
-    ///
-    /// TODO Phase 4.6: Implement cache-aware disk loading:
-    /// - Check `nodes` cache first
-    /// - On cache miss, load from `storage.read(id)` if storage is present
-    /// - Add loaded node to cache with LRU eviction
-    /// - For in-memory-only `BTree`s (no storage), behavior unchanged
-    /// - See TODOS/persistence.md Phase 4.6 for details
-    ///
-    /// Note: `BTree` has no knowledge of globals vs locals. The `Database`
-    /// layer decides whether to use a `BTree` with storage (globals) or
-    /// without (locals).
-    ///
-    /// # Errors
-    ///
-    /// Returns `StorageError::NodeNotFound` if the node doesn't exist.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let node = btree.load_node(root_id).await?;
-    /// ```
-    async fn load_node(&self, id: NodeId) -> Result<Node> {
-        // TODO Phase 4.6: Add disk loading logic here
-        self.find_node(id).await
     }
 }
 
@@ -1102,11 +1232,7 @@ impl BTree {
     /// let node = btree.find_node(node_id).await?;
     /// ```
     async fn find_node(&self, id: NodeId) -> Result<Node> {
-        let nodes = self.nodes.read().await;
-        nodes
-            .get(&id)
-            .cloned()
-            .ok_or(StorageError::NodeNotFound(id.into()))
+        self.load_node(id).await
     }
 
     /// Splits a full node into two nodes.
@@ -1243,10 +1369,8 @@ impl BTree {
                 };
 
                 // Write both nodes to storage
-                let mut nodes = self.nodes.write().await;
-                nodes.insert(id, left_node);
-                nodes.insert(right_id, right_node);
-                drop(nodes);
+                self.save_node(id, left_node).await?;
+                self.save_node(right_id, right_node).await?;
 
                 // Update statistics
                 let mut stats = self.stats.write().await;
@@ -1367,13 +1491,14 @@ impl BTree {
                 is_leaf,
             };
 
-            // Write merged node and remove right node
-            let mut nodes = self.nodes.write().await;
-            nodes.insert(left_id, merged);
-            nodes.remove(&right_id);
-            drop(nodes);
+            // Write merged node
+            self.save_node(left_id, merged).await?;
 
-            // Deallocate right node ID
+            // Remove right node from cache and deallocate
+            {
+                let mut nodes = self.nodes.write().await;
+                nodes.remove(&right_id);
+            }
             self.allocator.deallocate(right_id).await?;
 
             // Update statistics
@@ -1481,10 +1606,7 @@ impl BTree {
             };
 
             // Insert new root
-            {
-                let mut nodes = self.nodes.write().await;
-                nodes.insert(new_root_id, new_root_node);
-            }
+            self.save_node(new_root_id, new_root_node).await?;
 
             // Update height
             {
@@ -2261,8 +2383,7 @@ impl BTree {
                 }
 
                 // Write the updated node back
-                let mut nodes = self.nodes.write().await;
-                nodes.insert(node_id, updated_node);
+                self.save_node(node_id, updated_node).await?;
 
                 Ok(())
             } else {
@@ -2291,10 +2412,7 @@ impl BTree {
                     updated_node.children.insert(pos + 1, new_child_id);
 
                     // Write updated parent
-                    {
-                        let mut nodes = self.nodes.write().await;
-                        nodes.insert(node_id, updated_node.clone());
-                    }
+                    self.save_node(node_id, updated_node.clone()).await?;
 
                     // Determine which child to recurse into
                     let next_child_id = if *key > median_key {
