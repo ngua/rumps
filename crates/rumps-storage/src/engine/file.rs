@@ -16,7 +16,7 @@ use super::{
 use crate::error::{Result, StorageError};
 use crate::node::{Node, NodeId};
 use crate::page::{self, PageAllocator, PageCache, PageId};
-use crate::wal::{WalReader, WalRecord, WalSequence, WalWriter};
+use crate::wal::{SyncMode, WalReader, WalRecord, WalSequence, WalWriter};
 
 /// Indirect page data loaded from disk during superblock loading.
 struct LoadedIndirectPages {
@@ -93,6 +93,12 @@ pub(crate) struct FileStorageEngine {
 
     /// Path to the data directory.
     data_dir: PathBuf,
+
+    /// Abort handle for the periodic sync task (if `SyncMode::Periodic`).
+    ///
+    /// When set, a background task is running that syncs the WAL at the
+    /// configured interval. Call `shutdown()` to abort it.
+    sync_task_abort: Option<tokio::task::AbortHandle>,
 }
 
 impl std::fmt::Debug for FileStorageEngine {
@@ -236,9 +242,16 @@ impl FileStorageEngine {
             // Create page cache
             let cache = PageCache::new(cfg.cache_size);
 
+            // Wrap WAL in Arc for potential sharing with sync task
+            let wal = Arc::new(wal);
+
+            // Spawn periodic sync task if configured
+            let sync_task_abort =
+                Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
+
             Ok(Self {
                 data_file: Arc::new(RwLock::new(file)),
-                wal: Arc::new(wal),
+                wal,
                 cache: Arc::new(cache),
                 page_alloc: Arc::new(page_alloc),
                 superblock: RwLock::new(superblock),
@@ -248,6 +261,7 @@ impl FileStorageEngine {
                 registry_chain: RwLock::new(registry_chain),
                 cfg,
                 data_dir: dir.to_path_buf(),
+                sync_task_abort,
             })
         }
     }
@@ -391,9 +405,16 @@ impl FileStorageEngine {
             // Create page cache
             let cache = PageCache::new(cfg.cache_size);
 
+            // Wrap WAL in Arc for potential sharing with sync task
+            let wal = Arc::new(wal);
+
+            // Spawn periodic sync task if configured
+            let sync_task_abort =
+                Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
+
             Ok(Self {
                 data_file: Arc::new(RwLock::new(file)),
-                wal: Arc::new(wal),
+                wal,
                 cache: Arc::new(cache),
                 page_alloc: Arc::new(page_alloc),
                 superblock: RwLock::new(superblock),
@@ -403,7 +424,44 @@ impl FileStorageEngine {
                 registry_chain: RwLock::new(registry_chain),
                 cfg,
                 data_dir: dir.to_path_buf(),
+                sync_task_abort,
             })
+        }
+    }
+
+    /// Spawns a background task for periodic WAL sync if configured.
+    ///
+    /// Returns `Some(AbortHandle)` if a task was spawned, `None` otherwise.
+    fn maybe_spawn_sync_task(
+        cfg: &StorageConfig,
+        wal: Arc<WalWriter>,
+    ) -> Option<tokio::task::AbortHandle> {
+        match cfg.wal_config.sync_mode {
+            SyncMode::Periodic(interval) => {
+                let task = tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(interval);
+                    // First tick completes immediately, skip it
+                    tick.tick().await;
+
+                    loop {
+                        tick.tick().await;
+                        // Ignore sync errors in background task
+                        // (errors will surface on next explicit sync)
+                        let _ = wal.sync().await;
+                    }
+                });
+                Some(task.abort_handle())
+            }
+            SyncMode::Immediate | SyncMode::OnCommit => None,
+        }
+    }
+
+    /// Shuts down the periodic sync task if running.
+    ///
+    /// Call this before dropping the engine to ensure clean shutdown.
+    pub(crate) fn shutdown_sync_task(&self) {
+        if let Some(handle) = &self.sync_task_abort {
+            handle.abort();
         }
     }
 }

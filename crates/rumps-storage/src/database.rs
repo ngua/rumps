@@ -181,6 +181,11 @@ impl Database {
         // Flush all pending writes
         self.flush().await?;
 
+        // Shutdown periodic sync task if running
+        if let Some(storage) = self.storage.as_ref() {
+            storage.shutdown_sync_task();
+        }
+
         // Storage engine will be dropped, closing files
         Ok(())
     }
@@ -1293,5 +1298,76 @@ mod tests {
         // IDs should be increasing
         assert!(*id1 < *id2);
         assert!(*id2 < *id3);
+    }
+
+    #[tokio::test]
+    async fn write_write_conflict_detection() {
+        let db = Database::in_memory().unwrap();
+        let name = rumps_types::Name::global("TEST");
+        let key = rumps_types::key![1];
+
+        // Start transaction A (will commit second)
+        let txn_a = db.build_transaction().begin(&db).await.unwrap();
+
+        // Start transaction B (will commit first)
+        let txn_b = db.build_transaction().begin(&db).await.unwrap();
+
+        // Both write to the same key
+        txn_a
+            .set(&name, &key, rumps_types::Value::from("A"))
+            .await
+            .unwrap();
+        txn_b
+            .set(&name, &key, rumps_types::Value::from("B"))
+            .await
+            .unwrap();
+
+        // B commits first - should succeed
+        txn_b.commit().await.unwrap();
+
+        // A commits second - should fail with WriteConflict
+        let result = txn_a.commit().await;
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::StorageError::WriteConflict { .. })
+            ),
+            "Expected WriteConflict, got {:?}",
+            result
+        );
+
+        // Verify B's value persisted
+        let val = db.get(&name, &key).await.unwrap();
+        assert_eq!(val, Some(rumps_types::Value::from("B")));
+    }
+
+    #[tokio::test]
+    async fn non_overlapping_writes_no_conflict() {
+        let db = Database::in_memory().unwrap();
+        let name = rumps_types::Name::global("TEST");
+
+        // Start both transactions
+        let txn_a = db.build_transaction().begin(&db).await.unwrap();
+        let txn_b = db.build_transaction().begin(&db).await.unwrap();
+
+        // Write to different keys
+        txn_a
+            .set(&name, &rumps_types::key![1], rumps_types::Value::from("A"))
+            .await
+            .unwrap();
+        txn_b
+            .set(&name, &rumps_types::key![2], rumps_types::Value::from("B"))
+            .await
+            .unwrap();
+
+        // Both should commit successfully (no conflict)
+        txn_b.commit().await.unwrap();
+        txn_a.commit().await.unwrap();
+
+        // Verify both values persisted
+        let val1 = db.get(&name, &rumps_types::key![1]).await.unwrap();
+        let val2 = db.get(&name, &rumps_types::key![2]).await.unwrap();
+        assert_eq!(val1, Some(rumps_types::Value::from("A")));
+        assert_eq!(val2, Some(rumps_types::Value::from("B")));
     }
 }

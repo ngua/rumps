@@ -49,7 +49,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
 
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::future::BoxFuture;
+use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name, Value};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -57,6 +58,129 @@ use tokio::sync::RwLock;
 use crate::database::Database;
 use crate::error::Result;
 use crate::node::{NodeData, NodeId};
+
+/// State for lazily merging buffered entries with a snapshot stream.
+///
+/// Maintains sorted buffered entries (from write buffer) and lazily pulls
+/// from the snapshot stream, yielding entries in sorted key order.
+/// Buffered entries take precedence over snapshot entries with the same key.
+///
+/// Both sources yield `(Key, T)` pairs so we can compare keys for merging.
+/// The final output is just `T` (key is stripped).
+struct MergeState<'a, T> {
+    /// Sorted buffered entries (from transaction's write buffer).
+    buffered: std::vec::IntoIter<(Key, T)>,
+    /// Next buffered entry to consider.
+    next_buffered: Option<(Key, T)>,
+    /// The snapshot stream yielding `(Key, T)` pairs (lazy, unbounded).
+    snapshot: BoxStream<'a, Result<(Key, T)>>,
+    /// Next snapshot entry to consider.
+    next_snapshot: Option<(Key, T)>,
+    /// Keys present in the buffered set (for skipping duplicates in snapshot).
+    buffered_keys: HashSet<Key>,
+    /// Tracks if we've encountered an error in the snapshot stream.
+    snapshot_error: Option<crate::error::StorageError>,
+}
+
+impl<'a, T: Send> MergeState<'a, T> {
+    fn new(
+        buffered: Vec<(Key, T)>,
+        snapshot: BoxStream<'a, Result<(Key, T)>>,
+        buffered_keys: HashSet<Key>,
+    ) -> Self {
+        let mut iter = buffered.into_iter();
+        let next_buffered = iter.next();
+        Self {
+            buffered: iter,
+            next_buffered,
+            snapshot,
+            next_snapshot: None,
+            buffered_keys,
+            snapshot_error: None,
+        }
+    }
+
+    /// Gets the next item from the merged stream.
+    async fn next(&mut self) -> Option<Result<T>> {
+        // Check for pending error
+        if let Some(e) = self.snapshot_error.take() {
+            Some(Err(e))
+        } else {
+            // Advance snapshot if needed (skip keys that are in buffered set)
+            self.advance_snapshot().await;
+
+            match (&self.next_buffered, &self.next_snapshot) {
+                (None, None) => None,
+                (Some(_), None) => {
+                    let (_, val) = self.next_buffered.take()?;
+                    self.next_buffered = self.buffered.next();
+                    Some(Ok(val))
+                }
+                (None, Some(_)) => {
+                    let (_, val) = self.next_snapshot.take()?;
+                    Some(Ok(val))
+                }
+                (Some((buf_key, _)), Some((snap_key, _))) => {
+                    match buf_key.cmp(snap_key) {
+                        std::cmp::Ordering::Less => {
+                            // Buffered is smaller, yield it
+                            let (_, val) = self.next_buffered.take()?;
+                            self.next_buffered = self.buffered.next();
+                            Some(Ok(val))
+                        }
+                        std::cmp::Ordering::Equal => {
+                            // Same key - buffered takes precedence, skip snapshot
+                            let (_, val) = self.next_buffered.take()?;
+                            self.next_buffered = self.buffered.next();
+                            self.next_snapshot = None; // Will be refilled on next call
+                            Some(Ok(val))
+                        }
+                        std::cmp::Ordering::Greater => {
+                            // Snapshot is smaller, yield it
+                            let (_, val) = self.next_snapshot.take()?;
+                            Some(Ok(val))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Advances the snapshot stream, skipping entries that are in the buffered set.
+    fn advance_snapshot(&mut self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            // Already have a pending snapshot entry
+            if self.next_snapshot.is_some() {
+                {}
+            } else {
+                // Pull from snapshot until we find a non-buffered key or exhaust
+                self.pull_next_valid_snapshot().await
+            }
+        })
+    }
+
+    /// Pulls entries from snapshot, skipping keys that exist in buffered set.
+    fn pull_next_valid_snapshot(&mut self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            // Use async recursion to skip buffered keys
+            match self.snapshot.next().await {
+                None => {} // Stream exhausted
+                Some(Err(e)) => {
+                    self.snapshot_error = Some(e);
+                }
+                Some(Ok((key, val))) => {
+                    // Skip if key is in buffered set
+                    if self.buffered_keys.contains(&key) {
+                        // Recursively pull next
+                        self.pull_next_valid_snapshot().await
+                    } else {
+                        self.next_snapshot = Some((key, val));
+                    }
+                }
+            }
+        })
+    }
+}
 
 /// A unique identifier for a database transaction.
 ///
@@ -439,6 +563,15 @@ impl TransactionContext {
 /// Default maximum concurrent transactions.
 const DEFAULT_MAX_CONCURRENT_TRANSACTIONS: usize = 1024;
 
+/// A committed transaction's write set, used for conflict detection.
+#[derive(Debug, Clone)]
+struct CommittedWriteSet {
+    /// Timestamp when this transaction committed.
+    commit_ts: TransactionTimestamp,
+    /// Keys that were written by this transaction.
+    keys: HashSet<(Name, Key)>,
+}
+
 /// Manages concurrent transactions and their lifecycles.
 ///
 /// The `TransactionManager` is responsible for:
@@ -461,6 +594,13 @@ pub(crate) struct TransactionManager {
     /// Currently active transactions (`txn_id` → metadata).
     active: RwLock<HashMap<TransactionId, TransactionMetadata>>,
 
+    /// Write sets of recently committed transactions.
+    ///
+    /// Used for conflict detection: a transaction conflicts if it tries
+    /// to write a key that was written by a transaction that committed
+    /// after this transaction's start timestamp.
+    committed_writes: RwLock<Vec<CommittedWriteSet>>,
+
     /// Maximum allowed concurrent transactions.
     max_concurrent: usize,
 }
@@ -472,6 +612,7 @@ impl TransactionManager {
             next_txn_id: RwLock::new(1), // 0 is reserved for IMPLICIT
             next_timestamp: RwLock::new(0),
             active: RwLock::new(HashMap::new()),
+            committed_writes: RwLock::new(Vec::new()),
             max_concurrent,
         }
     }
@@ -533,44 +674,91 @@ impl TransactionManager {
         active.contains_key(&txn_id)
     }
 
-    /// Validates that there are no conflicts with other transactions.
+    /// Validates that there are no write-write conflicts with other transactions.
     ///
-    /// For snapshot isolation, we check write-write conflicts: if any other
-    /// active transaction has written to keys that this transaction is also
-    /// trying to write.
+    /// For snapshot isolation, a conflict occurs when this transaction tries
+    /// to write a key that was written by another transaction that committed
+    /// AFTER this transaction started.
     ///
-    /// # Future Enhancements
+    /// # First-Committer-Wins Rule
     ///
-    /// For serializable isolation, we would also need to check read-write
-    /// conflicts (if other transactions wrote to keys we read).
+    /// If transaction A starts, then transaction B starts, both write to key X,
+    /// and B commits first, then A will fail validation because B committed
+    /// after A's start timestamp.
     pub(crate) async fn validate_no_conflicts(
         &self,
         txn_id: TransactionId,
+        start_ts: TransactionTimestamp,
         _read_set: &HashSet<(Name, Key)>,
-        _write_set: &HashSet<(Name, Key)>,
+        write_set: &HashSet<(Name, Key)>,
     ) -> Result<()> {
+        let committed = self.committed_writes.read().await;
+
+        // Check if any transaction that committed after our start timestamp
+        // wrote to keys that we're trying to write (write-write conflict)
+        committed
+            .iter()
+            .filter(|cws| cws.commit_ts > start_ts)
+            .try_for_each(|cws| {
+                let conflict =
+                    write_set.iter().find(|key| cws.keys.contains(key));
+                match conflict {
+                    Some((name, key)) => {
+                        Err(crate::error::StorageError::WriteConflict {
+                            txn_id: *txn_id,
+                            name: name.clone(),
+                            key: key.clone(),
+                        })
+                    }
+                    None => Ok(()),
+                }
+            })
+    }
+
+    /// Records a transaction's write set upon successful commit.
+    ///
+    /// This is called after validation passes but before the transaction
+    /// is removed from the active set. Other transactions that started
+    /// before this commit will check against this write set.
+    pub(crate) async fn record_commit(
+        &self,
+        write_set: HashSet<(Name, Key)>,
+    ) -> Result<TransactionTimestamp> {
+        let commit_ts = self.current_timestamp().await;
+
+        // Only record if there were actual writes
+        if !write_set.is_empty() {
+            let mut committed = self.committed_writes.write().await;
+            committed.push(CommittedWriteSet {
+                commit_ts,
+                keys: write_set,
+            });
+        }
+
+        Ok(commit_ts)
+    }
+
+    /// Cleans up old committed write sets that are no longer needed.
+    ///
+    /// A committed write set can be removed once all transactions that
+    /// started before the commit have finished.
+    pub(crate) async fn cleanup_old_commits(&self) {
         let active = self.active.read().await;
 
-        // For snapshot isolation, we don't need to validate against reads.
-        // The transaction sees a consistent snapshot from start time.
-        //
-        // Write-write conflicts are prevented by buffering writes in the
-        // Transaction struct until commit time.
-        //
-        // In a more sophisticated implementation with optimistic concurrency
-        // control, we would track write sets for each transaction and check
-        // for overlaps here.
+        // Find the oldest active transaction's start timestamp
+        let oldest_start = active.values().map(|m| m.start_timestamp).min();
 
-        active
-            .iter()
-            .filter(|(id, _)| **id != txn_id)
-            .try_for_each(|(_other_id, _metadata)| {
-                // Currently we allow all transactions to proceed.
-                // Real conflict detection would compare write sets here.
-                Ok::<_, crate::error::StorageError>(())
-            })?;
+        drop(active);
 
-        Ok(())
+        // Remove committed write sets older than the oldest active transaction
+        if let Some(oldest) = oldest_start {
+            let mut committed = self.committed_writes.write().await;
+            committed.retain(|cws| cws.commit_ts >= oldest);
+        } else {
+            // No active transactions, clear all committed write sets
+            let mut committed = self.committed_writes.write().await;
+            committed.clear();
+        }
     }
 
     /// Returns the number of currently active transactions.
@@ -859,15 +1047,23 @@ impl Transaction {
             }
         }
 
+        // Build write set for conflict detection
+        let write_set: HashSet<(Name, Key)> = {
+            let writes = self.writes.read().await;
+            writes.keys().cloned().collect()
+        };
+
         // Validate no conflicts with other transactions
         {
             let read_set = self.read_set.read().await;
-            let writes = self.writes.read().await;
-            let write_set: HashSet<(Name, Key)> =
-                writes.keys().cloned().collect();
             self.db
                 .txn_manager
-                .validate_no_conflicts(self.id, &read_set, &write_set)
+                .validate_no_conflicts(
+                    self.id,
+                    self.start_timestamp,
+                    &read_set,
+                    &write_set,
+                )
                 .await?;
         }
 
@@ -896,12 +1092,17 @@ impl Transaction {
                 }
             })
             .await?;
+        drop(writes);
+
+        // Record this transaction's write set for future conflict detection
+        self.db.txn_manager.record_commit(write_set).await?;
 
         // Flush with transaction ID
         self.db.flush_with_txn(self.id).await?;
 
-        // Unregister transaction from manager
+        // Unregister transaction from manager and cleanup old commits
         self.db.txn_manager.complete(self.id).await?;
+        self.db.txn_manager.cleanup_old_commits().await;
 
         // Update state to Committed
         {
@@ -1208,6 +1409,10 @@ impl Transaction {
     ///
     /// The stream reflects buffered writes combined with the snapshot.
     /// Buffered sets may add entries, buffered kills may remove them.
+    ///
+    /// This implementation uses O(buffer_size) memory, not O(dataset_size),
+    /// by lazily streaming from the snapshot while keeping only the small
+    /// write buffer in memory.
     pub(crate) async fn collects<'a, P, F, T>(
         &'a self,
         name: &'a Name,
@@ -1223,7 +1428,7 @@ impl Transaction {
         self.ops_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        // Collect buffered and deleted info
+        // Collect buffered and deleted info (these are bounded by write buffer size)
         let writes = self.writes.read().await;
         let deleted = self.deleted_subtrees.read().await;
 
@@ -1234,7 +1439,7 @@ impl Transaction {
             .collect();
 
         // Build set of explicitly deleted keys in writes
-        let explicitly_deleted_keys: Vec<(Name, Key)> = writes
+        let explicitly_deleted_keys: HashSet<(Name, Key)> = writes
             .iter()
             .filter_map(|((n, k), op)| {
                 match matches!(op, WriteOp::Delete | WriteOp::KillSubtree) {
@@ -1244,21 +1449,18 @@ impl Transaction {
             })
             .collect();
 
-        // Clone data and closures for use in multiple places
+        // Clone data for closures
         let deleted_list_for_pred = deleted_list.clone();
         let explicitly_deleted_for_pred = explicitly_deleted_keys.clone();
         let name_for_pred = name.clone();
         let pred_clone = pred.clone();
-        let extract_clone = extract.clone();
 
         // Create modified predicate that excludes deleted keys
         let pred_with_deletes = move |k: &Key, data: &NodeData| {
-            // Check if key is in a deleted subtree
             let in_deleted = deleted_list_for_pred
                 .iter()
                 .any(|del_key| k.starts_with(del_key));
 
-            // Check if key is explicitly deleted in writes
             let explicitly_deleted = explicitly_deleted_for_pred
                 .iter()
                 .any(|(n, dk)| n == &name_for_pred && dk == k);
@@ -1270,69 +1472,60 @@ impl Transaction {
             }
         };
 
-        // Collect buffered entries
-        let buffered_entries: Vec<(Key, Result<T>)> = writes
+        // Collect and sort buffered entries (bounded by write buffer size)
+        let mut buffered_entries: Vec<(Key, T)> = writes
             .iter()
-            .filter_map(|((n, k), op)| {
-                match (n == name, op) {
-                    (true, WriteOp::Set(data)) => {
-                        // Check start condition
-                        let after_start = match start {
-                            Some(s) => k >= s,
-                            None => true,
-                        };
+            .filter_map(|((n, k), op)| match (n == name, op) {
+                (true, WriteOp::Set(data)) => {
+                    let after_start = match start {
+                        Some(s) => k >= s,
+                        None => true,
+                    };
 
-                        // Check if in deleted subtree
-                        let in_deleted = deleted_list
-                            .iter()
-                            .any(|del_key| k.starts_with(del_key));
+                    let in_deleted = deleted_list
+                        .iter()
+                        .any(|del_key| k.starts_with(del_key));
 
-                        if after_start && !in_deleted && pred(k, data) {
-                            extract(k, data).map(|t| (k.clone(), Ok(t)))
-                        } else {
-                            None
-                        }
+                    if after_start && !in_deleted && pred(k, data) {
+                        extract(k, data).map(|t| (k.clone(), t))
+                    } else {
+                        None
                     }
-                    _ => None,
                 }
+                _ => None,
             })
             .collect();
 
-        // Collect snapshot entries with keys for proper merging
-        // We use a modified extract that captures both key and value
-        let extract_with_key = |k: &Key, data: &NodeData| {
-            extract_clone(k, data).map(|t| (k.clone(), t))
+        // Sort buffered entries by key for merge
+        buffered_entries.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+
+        // Build set of buffered keys for O(1) lookup
+        let buffered_keys: HashSet<Key> =
+            buffered_entries.iter().map(|(k, _)| k.clone()).collect();
+
+        // Create extract_with_key to get (Key, T) pairs from snapshot
+        let extract_with_key = {
+            let extract = extract.clone();
+            move |k: &Key, data: &NodeData| {
+                extract(k, data).map(|t| (k.clone(), t))
+            }
         };
 
-        let snapshot_stream_with_keys = self
+        // Get snapshot stream yielding (Key, T) pairs (lazy, not collected!)
+        let snapshot_stream = self
             .db
-            .collects(name, start, pred_with_deletes.clone(), &extract_with_key)
+            .collects(name, start, pred_with_deletes, extract_with_key)
             .await?;
 
-        let snapshot_entries: Vec<(Key, T)> = snapshot_stream_with_keys
-            .collect::<Vec<Result<(Key, T)>>>()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
-
-        // Merge buffered and snapshot entries, removing duplicates
-        // (buffered writes override snapshot reads)
-        let buffered_keys: std::collections::HashSet<_> =
-            buffered_entries.iter().map(|(k, _)| k).collect();
-
-        let filtered_snapshot: Vec<(Key, Result<T>)> = snapshot_entries
-            .into_iter()
-            .filter(|(k, _)| !buffered_keys.contains(k))
-            .map(|(k, t)| (k, Ok(t)))
-            .collect();
-
-        // Combine and sort all entries by key
-        let mut all_entries = buffered_entries;
-        all_entries.extend(filtered_snapshot);
-        all_entries.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-
-        // Create merged stream in sorted order
-        let merged = stream::iter(all_entries.into_iter().map(|(_, r)| r));
+        // Create a merge stream using unfold
+        let merged = stream::unfold(
+            MergeState::new(
+                buffered_entries,
+                snapshot_stream.boxed(),
+                buffered_keys,
+            ),
+            |mut state| async move { state.next().await.map(|item| (item, state)) },
+        );
 
         Ok(merged)
     }

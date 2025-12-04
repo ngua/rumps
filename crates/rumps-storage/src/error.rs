@@ -108,6 +108,17 @@ pub enum StorageError {
         /// Current state.
         state: String,
     },
+
+    /// Write-write conflict detected during transaction commit.
+    #[error("Write conflict: transaction {txn_id} conflicts on {name}:{key}")]
+    WriteConflict {
+        /// Transaction ID that encountered the conflict.
+        txn_id: u64,
+        /// Variable name where conflict occurred.
+        name: rumps_types::Name,
+        /// Key where conflict occurred.
+        key: rumps_types::Key,
+    },
 }
 
 /// A specialized Result type for storage operations.
