@@ -76,6 +76,7 @@ pub(crate) struct Database {
     storage: Option<Arc<crate::engine::FileStorageEngine>>,
 }
 
+// Public API
 impl Database {
     /// Creates a new in-memory database.
     ///
@@ -89,17 +90,6 @@ impl Database {
     /// ```
     pub(crate) fn in_memory() -> Result<Self> {
         Self::with_btree(Arc::new(BTreeBuilder::default().build()?))
-    }
-
-    /// Creates a database with a custom B-tree.
-    ///
-    /// Useful for testing with specific B-tree configurations.
-    pub(crate) fn with_btree(btree: Arc<BTree>) -> Result<Self> {
-        Ok(Self {
-            roots: RwLock::new(BTreeMap::new()),
-            btree,
-            storage: None,
-        })
     }
 
     /// Creates a new persistent database at the specified path.
@@ -167,230 +157,22 @@ impl Database {
         Ok(db)
     }
 
-    /// Returns the underlying B-tree.
-    pub(crate) fn btree(&self) -> Arc<BTree> {
-        Arc::clone(&self.btree)
-    }
-
-    /// Runs WAL recovery and replays committed operations.
+    /// Closes the database, flushing all data and releasing resources.
     ///
-    /// This is called during `open()` to bring the database to a consistent
-    /// state after a crash or unclean shutdown.
-    async fn recover(&self, path: &Path) -> Result<()> {
-        let wal_dir = path.join("wal");
+    /// This method consumes `self` to ensure the database cannot be used
+    /// after closing. All pending writes are flushed to disk before closing.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// db.close().await?;
+    /// ```
+    pub(crate) async fn close(self) -> Result<()> {
+        // Flush all pending writes
+        self.flush().await?;
 
-        // Run WAL recovery
-        let (recovery, _reader) =
-            WalReader::open(&wal_dir).await?.recover().await?;
-
-        // Apply committed operations
-        stream::iter(recovery.committed_ops.iter().map(Ok))
-            .try_for_each(|committed_op| async move {
-                match &committed_op.op {
-                    WalOp::Set {
-                        name,
-                        key,
-                        new,
-                        old: _,
-                    } => {
-                        // Ensure root exists
-                        let root = self.ensure_root(name).await?;
-
-                        // Create transaction context
-                        let ctx = TransactionContext::new(
-                            committed_op.txn_id,
-                            TransactionTimestamp::from(0),
-                        );
-
-                        // Apply set operation (value from new NodeData)
-                        let new_val = new.value.clone().ok_or_else(|| {
-                            crate::error::StorageError::InvalidConfiguration(
-                                "Set operation in WAL has no value".into(),
-                            )
-                        })?;
-                        let new_root =
-                            self.btree.set_at(root, key, new_val, &ctx).await?;
-
-                        // Update root if changed
-                        if new_root != root {
-                            self.update_root(name, new_root).await?;
-                        }
-
-                        Ok(())
-                    }
-                    WalOp::KillEntry { name, key, data: _ } => {
-                        let opt_root = self.get_root(name).await?;
-                        match opt_root {
-                            Some(root) => {
-                                // Create transaction context
-                                let ctx = TransactionContext::new(
-                                    committed_op.txn_id,
-                                    TransactionTimestamp::from(0),
-                                );
-
-                                // Apply kill operation
-                                let opt_new_root =
-                                    self.btree.kill_at(root, key, &ctx).await?;
-
-                                // Update or remove root
-                                match opt_new_root {
-                                    Some(new_root) if new_root != root => {
-                                        self.update_root(name, new_root).await
-                                    }
-                                    None => {
-                                        self.remove_root(name).await.map(|_| ())
-                                    }
-                                    _ => Ok(()),
-                                }
-                            }
-                            None => Ok(()), // No root = nothing to kill
-                        }
-                    }
-                }
-            })
-            .await?;
-
+        // Storage engine will be dropped, closing files
         Ok(())
-    }
-
-    /// Looks up the root `NodeId` for a variable name.
-    ///
-    /// For in-memory databases, simply checks the local cache.
-    /// For persistent databases, lazy-loads globals from the registry
-    /// if not already cached.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(Some(root))` - Root exists
-    /// - `Ok(None)` - Variable doesn't exist
-    pub(crate) async fn get_root(&self, name: &Name) -> Result<Option<NodeId>> {
-        // Check cache first
-        let cached = {
-            let roots = self.roots.read().await;
-            roots.get(name).copied()
-        };
-
-        match cached {
-            Some(root) => Ok(Some(root)),
-            None => {
-                // Cache miss - for globals with storage, lazy-load from registry
-                match (name, self.storage.as_ref()) {
-                    (Name::Global(g), Some(storage)) => {
-                        let opt_page = storage.registry_get(g).await;
-
-                        // Convert PageId to NodeId and cache if found
-                        if let Some(page_id) = opt_page {
-                            let node_id = NodeId::from(page_id);
-                            // Cache the loaded root
-                            {
-                                let mut roots_guard = self.roots.write().await;
-                                roots_guard
-                                    .entry(name.clone())
-                                    .or_insert(node_id);
-                            }
-                            Ok(Some(node_id))
-                        } else {
-                            Ok(None)
-                        }
-                    }
-                    _ => Ok(None), // Locals or no storage
-                }
-            }
-        }
-    }
-
-    /// Gets or creates a root for a variable name.
-    ///
-    /// If the variable doesn't exist, creates a new empty tree and returns
-    /// its root. For persistent globals, also registers the new root in
-    /// the storage registry.
-    ///
-    /// # Returns
-    ///
-    /// The root `NodeId` for the variable (existing or newly created).
-    pub(crate) async fn ensure_root(&self, name: &Name) -> Result<NodeId> {
-        // Check cache first, and lazy-load from registry if needed
-        let existing = self.get_root(name).await?;
-
-        match existing {
-            Some(root) => Ok(root),
-            None => {
-                // Create new tree
-                let root = self.btree.create_tree().await?;
-
-                // Cache the new root
-                {
-                    let mut roots = self.roots.write().await;
-                    // Double-check in case another task created it
-                    roots.entry(name.clone()).or_insert(root);
-                }
-
-                // For globals with storage, register in registry
-                if let (Name::Global(g), Some(storage)) =
-                    (name, self.storage.as_ref())
-                {
-                    storage
-                        .registry_insert(
-                            g.clone(),
-                            crate::page::PageId::from(root),
-                        )
-                        .await?;
-                }
-
-                Ok(root)
-            }
-        }
-    }
-
-    /// Removes a variable's root from the cache.
-    ///
-    /// This does NOT delete the tree's nodes - use `delete_tree()` on
-    /// the B-tree for that. This only removes the name → root mapping.
-    ///
-    /// For persistent globals, also removes from the registry.
-    pub(crate) async fn remove_root(
-        &self,
-        name: &Name,
-    ) -> Result<Option<NodeId>> {
-        let removed = self.roots.write().await.remove(name);
-
-        // For globals with storage, remove from registry
-        if let (Name::Global(g), Some(storage)) = (name, self.storage.as_ref())
-        {
-            storage.registry_remove(g).await?;
-        }
-
-        Ok(removed)
-    }
-
-    /// Updates the root for a variable name.
-    ///
-    /// Called after operations that change the tree structure (splits,
-    /// merges) which may result in a new root `NodeId`.
-    pub(crate) async fn update_root(
-        &self,
-        name: &Name,
-        new_root: NodeId,
-    ) -> Result<()> {
-        {
-            let mut roots = self.roots.write().await;
-            roots.insert(name.clone(), new_root);
-        }
-
-        // For globals with storage, update registry
-        if let (Name::Global(g), Some(storage)) = (name, self.storage.as_ref())
-        {
-            storage
-                .registry_insert(g.clone(), crate::page::PageId::from(new_root))
-                .await?;
-        }
-
-        Ok(())
-    }
-
-    /// Returns the number of cached roots (variables).
-    pub(crate) async fn root_count(&self) -> usize {
-        self.roots.read().await.len()
     }
 
     /// Sets a value in the database with WAL logging.
@@ -709,23 +491,238 @@ impl Database {
         }
         Ok(())
     }
+}
 
-    /// Closes the database, flushing all data and releasing resources.
-    ///
-    /// This method consumes `self` to ensure the database cannot be used
-    /// after closing. All pending writes are flushed to disk before closing.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// db.close().await?;
-    /// ```
-    pub(crate) async fn close(self) -> Result<()> {
-        // Flush all pending writes
-        self.flush().await?;
+// Private helpers
+impl Database {
+    /// Returns the underlying B-tree.
+    fn btree(&self) -> Arc<BTree> {
+        Arc::clone(&self.btree)
+    }
 
-        // Storage engine will be dropped, closing files
+    /// Creates a database with a custom B-tree.
+    ///
+    /// Useful for testing with specific B-tree configurations.
+    fn with_btree(btree: Arc<BTree>) -> Result<Self> {
+        Ok(Self {
+            roots: RwLock::new(BTreeMap::new()),
+            btree,
+            storage: None,
+        })
+    }
+
+    /// Runs WAL recovery and replays committed operations.
+    ///
+    /// This is called during `open()` to bring the database to a consistent
+    /// state after a crash or unclean shutdown.
+    async fn recover(&self, path: &Path) -> Result<()> {
+        let wal_dir = path.join("wal");
+
+        // Run WAL recovery
+        let (recovery, _reader) =
+            WalReader::open(&wal_dir).await?.recover().await?;
+
+        // Apply committed operations
+        stream::iter(recovery.committed_ops.iter().map(Ok))
+            .try_for_each(|committed_op| async move {
+                match &committed_op.op {
+                    WalOp::Set {
+                        name,
+                        key,
+                        new,
+                        old: _,
+                    } => {
+                        // Ensure root exists
+                        let root = self.ensure_root(name).await?;
+
+                        // Create transaction context
+                        let ctx = TransactionContext::new(
+                            committed_op.txn_id,
+                            TransactionTimestamp::from(0),
+                        );
+
+                        // Apply set operation (value from new NodeData)
+                        let new_val = new.value.clone().ok_or_else(|| {
+                            crate::error::StorageError::InvalidConfiguration(
+                                "Set operation in WAL has no value".into(),
+                            )
+                        })?;
+                        let new_root =
+                            self.btree.set_at(root, key, new_val, &ctx).await?;
+
+                        // Update root if changed
+                        if new_root != root {
+                            self.update_root(name, new_root).await?;
+                        }
+
+                        Ok(())
+                    }
+                    WalOp::KillEntry { name, key, data: _ } => {
+                        let opt_root = self.get_root(name).await?;
+                        match opt_root {
+                            Some(root) => {
+                                // Create transaction context
+                                let ctx = TransactionContext::new(
+                                    committed_op.txn_id,
+                                    TransactionTimestamp::from(0),
+                                );
+
+                                // Apply kill operation
+                                let opt_new_root =
+                                    self.btree.kill_at(root, key, &ctx).await?;
+
+                                // Update or remove root
+                                match opt_new_root {
+                                    Some(new_root) if new_root != root => {
+                                        self.update_root(name, new_root).await
+                                    }
+                                    None => {
+                                        self.remove_root(name).await.map(|_| ())
+                                    }
+                                    _ => Ok(()),
+                                }
+                            }
+                            None => Ok(()), // No root = nothing to kill
+                        }
+                    }
+                }
+            })
+            .await?;
+
         Ok(())
+    }
+
+    /// Looks up the root `NodeId` for a variable name.
+    ///
+    /// For in-memory databases, simply checks the local cache.
+    /// For persistent databases, lazy-loads globals from the registry
+    /// if not already cached.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(root))` - Root exists
+    /// - `Ok(None)` - Variable doesn't exist
+    async fn get_root(&self, name: &Name) -> Result<Option<NodeId>> {
+        // Check cache first
+        let cached = {
+            let roots = self.roots.read().await;
+            roots.get(name).copied()
+        };
+
+        match cached {
+            Some(root) => Ok(Some(root)),
+            None => {
+                // Cache miss - for globals with storage, lazy-load from registry
+                match (name, self.storage.as_ref()) {
+                    (Name::Global(g), Some(storage)) => {
+                        let opt_page = storage.registry_get(g).await;
+
+                        // Convert PageId to NodeId and cache if found
+                        if let Some(page_id) = opt_page {
+                            let node_id = NodeId::from(page_id);
+                            // Cache the loaded root
+                            {
+                                let mut roots_guard = self.roots.write().await;
+                                roots_guard
+                                    .entry(name.clone())
+                                    .or_insert(node_id);
+                            }
+                            Ok(Some(node_id))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => Ok(None), // Locals or no storage
+                }
+            }
+        }
+    }
+
+    /// Gets or creates a root for a variable name.
+    ///
+    /// If the variable doesn't exist, creates a new empty tree and returns
+    /// its root. For persistent globals, also registers the new root in
+    /// the storage registry.
+    ///
+    /// # Returns
+    ///
+    /// The root `NodeId` for the variable (existing or newly created).
+    async fn ensure_root(&self, name: &Name) -> Result<NodeId> {
+        // Check cache first, and lazy-load from registry if needed
+        let existing = self.get_root(name).await?;
+
+        match existing {
+            Some(root) => Ok(root),
+            None => {
+                // Create new tree
+                let root = self.btree.create_tree().await?;
+
+                // Cache the new root
+                {
+                    let mut roots = self.roots.write().await;
+                    // Double-check in case another task created it
+                    roots.entry(name.clone()).or_insert(root);
+                }
+
+                // For globals with storage, register in registry
+                if let (Name::Global(g), Some(storage)) =
+                    (name, self.storage.as_ref())
+                {
+                    storage
+                        .registry_insert(
+                            g.clone(),
+                            crate::page::PageId::from(root),
+                        )
+                        .await?;
+                }
+
+                Ok(root)
+            }
+        }
+    }
+
+    /// Removes a variable's root from the cache.
+    ///
+    /// This does NOT delete the tree's nodes - use `delete_tree()` on
+    /// the B-tree for that. This only removes the name → root mapping.
+    ///
+    /// For persistent globals, also removes from the registry.
+    async fn remove_root(&self, name: &Name) -> Result<Option<NodeId>> {
+        let removed = self.roots.write().await.remove(name);
+
+        // For globals with storage, remove from registry
+        if let (Name::Global(g), Some(storage)) = (name, self.storage.as_ref())
+        {
+            storage.registry_remove(g).await?;
+        }
+
+        Ok(removed)
+    }
+
+    /// Updates the root for a variable name.
+    ///
+    /// Called after operations that change the tree structure (splits,
+    /// merges) which may result in a new root `NodeId`.
+    async fn update_root(&self, name: &Name, new_root: NodeId) -> Result<()> {
+        {
+            let mut roots = self.roots.write().await;
+            roots.insert(name.clone(), new_root);
+        }
+
+        // For globals with storage, update registry
+        if let (Name::Global(g), Some(storage)) = (name, self.storage.as_ref())
+        {
+            storage
+                .registry_insert(g.clone(), crate::page::PageId::from(new_root))
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Returns the number of cached roots (variables).
+    async fn root_count(&self) -> usize {
+        self.roots.read().await.len()
     }
 }
 

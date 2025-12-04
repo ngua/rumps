@@ -1158,7 +1158,6 @@ Both use `Database.get_root()`/`ensure_root()` for namespace resolution, then de
 to `BTree.*_at()` methods with different `TransactionContext` configurations.
 
 ### 5.1 Transaction Infrastructure
-- [ ] Add `tokio` dependency to `rumps-storage/Cargo.toml`
 - [ ] Define `TransactionBuilder` struct in `crates/rumps-storage/src/transaction.rs` module:
   ```rust
   pub struct TransactionBuilder {
