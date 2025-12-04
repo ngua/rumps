@@ -1176,23 +1176,28 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
 - [x] `Database::Clone` implementation (see `database.rs:59`)
 - [x] Functional style compliance: async recursion in `order()`, proper stream merging in `collects()`
 
-**Current State**: Transaction infrastructure exists and is fully functional, but there's no user-facing API yet. See Phase 5.2 for `Database::transaction()` integration.
+**Current State**: Fully functional with `Database::transaction()` API. See Phase 5.2 below for implementation details.
 
 ### 5.2 Add Multi-Transaction Support to Database
 
-**Status**: Phase 5.1 completed the `Transaction` infrastructure. Phase 5.2 integrates it with `Database` to provide a user-facing API.
+**Status**: ✅ COMPLETE
 
 **Objective**:
-- Add `TransactionManager` for multi-transaction coordination
-- Expose `Database::transaction()` API for users
-- Enforce that global writes require transactions
-- Replace all `TransactionId::IMPLICIT` with actual transaction IDs
+- ✅ Add `TransactionManager` for multi-transaction coordination
+- ✅ Expose `Database::transaction()` API for users
+- ✅ Enforce that global writes require transactions
+- ✅ Replace all `TransactionId::IMPLICIT` with actual transaction IDs (in transaction-aware methods)
 
-**Background**: `Database` already has MUMPS operations (`get`, `set`, `kill`, etc.) from Phase 4.6 with WAL logging using `TransactionId::IMPLICIT`. This phase adds proper transaction support.
+**Implementation Summary**:
+- `TransactionManager` coordinates concurrent transactions with unique IDs and timestamps
+- `Database::transaction()` and `Database::transaction_with()` provide user-facing API
+- `Database::set()` and `Database::kill()` return `GlobalRequiresTransaction` error for globals
+- Internal methods `set_with_txn()`, `kill_with_txn()`, `flush_with_txn()` handle transaction context
+- Tests verify transaction enforcement, commit, rollback, and concurrent ID allocation
 
 ---
 
-- [ ] Define `TransactionManager` for coordinating concurrent transactions:
+- [x] Define `TransactionManager` for coordinating concurrent transactions:
   ```rust
   pub(crate) struct TransactionManager {
       /// Monotonically increasing transaction ID counter
@@ -1299,9 +1304,9 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
   }
   ```
 
-- [ ] Add `transaction_manager: Arc<TransactionManager>` field to `Database`
-- [ ] Update `Database::open()` to initialize `TransactionManager`
-- [ ] Update `TransactionBuilder::begin()` to use `TransactionManager`:
+- [x] Add `transaction_manager: Arc<TransactionManager>` field to `Database`
+- [x] Update `Database::open()` to initialize `TransactionManager`
+- [x] Update `TransactionBuilder::begin()` to use `TransactionManager`:
   ```rust
   // Replace current TODO placeholders (lines 597-608) with:
   let id = db.transaction_manager.allocate_txn_id().await;
@@ -1310,7 +1315,7 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
   db.transaction_manager.register(metadata).await?;
   ```
 
-- [ ] Update `Transaction::commit()` to use `TransactionManager` (see `transaction.rs:697-762`):
+- [x] Update `Transaction::commit()` to use `TransactionManager` (see `transaction.rs:697-762`):
   ```rust
   // Replace TODO at line 712-714 with:
   self.db.transaction_manager.validate_no_conflicts(
@@ -1323,13 +1328,13 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
   self.db.transaction_manager.complete(self.id).await?;
   ```
 
-- [ ] Update `Transaction::rollback()` to use `TransactionManager` (see `transaction.rs:768-808`):
+- [x] Update `Transaction::rollback()` to use `TransactionManager` (see `transaction.rs:768-808`):
   ```rust
   // Replace TODO at line 798-799 with:
   self.db.transaction_manager.abort(self.id).await?;
   ```
 
-- [ ] Implement `Database` transaction API methods:
+- [x] Implement `Database` transaction API methods:
   ```rust
   impl Database {
       /// Execute a function within a transaction context.
@@ -1383,7 +1388,7 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
       }
   }
   ```
-- [ ] Enforce transaction requirements in `Database::set()` and `Database::kill()`:
+- [x] Enforce transaction requirements in `Database::set()` and `Database::kill()`:
   ```rust
   // In Database::set() (see database.rs:194-256)
   // At the beginning, add:
@@ -1392,6 +1397,7 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
       // For now, we can use thread-local storage to track the active transaction
       // OR pass transaction ID as parameter
       // If no active transaction:
+      // NOTE: NO EARLY RETURNS!
       Err(StorageError::GlobalRequiresTransaction);
   } else {
      // Current code
@@ -1400,13 +1406,12 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
   // Similar check in Database::kill() (see database.rs:257-327)
   ```
 
-- [ ] Replace all `TransactionId::IMPLICIT` with actual transaction IDs:
-  - In `Database::set()` line 214: Replace `TransactionId::IMPLICIT` with actual transaction ID
-  - In `Database::kill()` line 303: Replace `TransactionId::IMPLICIT` with actual transaction ID
-  - In `Database::flush()` line 475: Replace `TransactionId::IMPLICIT` with actual transaction ID
-  - **Note**: This requires passing transaction ID through from `Transaction::commit()` or using thread-local storage
+- [x] Replace all `TransactionId::IMPLICIT` with actual transaction IDs:
+  - Added internal methods: `set_with_txn()`, `kill_with_txn()`, `flush_with_txn()`
+  - `Transaction::commit()` uses these internal methods with proper transaction ID
+  - Public `Database::set()` and `Database::kill()` now reject globals (require transaction)
 
-- [ ] Add tests for transaction enforcement:
+- [x] Add tests for transaction enforcement:
   - Verify writes to globals outside transactions are rejected
   - Verify writes to locals work without transactions
   - Verify reads work with or without transactions

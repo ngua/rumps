@@ -88,6 +88,26 @@ pub enum StorageError {
     /// This is an internal error used to signal that chaining is needed.
     #[error("Registry page full")]
     RegistryPageFull,
+
+    /// Too many concurrent transactions.
+    #[error("Too many concurrent transactions (limit: {limit})")]
+    TooManyConcurrentTransactions {
+        /// Maximum allowed concurrent transactions.
+        limit: usize,
+    },
+
+    /// Writes to globals require a transaction.
+    #[error("Writes to global variables require a transaction")]
+    GlobalRequiresTransaction,
+
+    /// Transaction is not active.
+    #[error("Transaction {id} is not active (state: {state})")]
+    TransactionNotActive {
+        /// Transaction ID.
+        id: u64,
+        /// Current state.
+        state: String,
+    },
 }
 
 /// A specialized Result type for storage operations.

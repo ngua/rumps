@@ -35,7 +35,8 @@ use crate::engine::{AsyncStorageEngine, FileStorageEngine, StorageConfig};
 use crate::error::Result;
 use crate::node::{NodeData, NodeId};
 use crate::transaction::{
-    TransactionContext, TransactionId, TransactionTimestamp,
+    Transaction, TransactionBuilder, TransactionContext, TransactionId,
+    TransactionManager, TransactionTimestamp,
 };
 use crate::wal::{WalOp, WalReader, WalRecord};
 
@@ -75,6 +76,9 @@ pub(crate) struct Database {
     /// When `Some`, globals are persisted to disk and lazy-loaded from
     /// the registry. When `None`, all data is in-memory only.
     storage: Option<Arc<crate::engine::FileStorageEngine>>,
+
+    /// Transaction manager for coordinating concurrent transactions.
+    pub(crate) txn_manager: Arc<TransactionManager>,
 }
 
 // Public API
@@ -90,7 +94,10 @@ impl Database {
     /// let db = Database::in_memory()?;
     /// ```
     pub(crate) fn in_memory() -> Result<Self> {
-        Self::with_btree(Arc::new(BTreeBuilder::default().build()?))
+        Self::with_btree(
+            Arc::new(BTreeBuilder::default().build()?),
+            Arc::new(TransactionManager::default()),
+        )
     }
 
     /// Creates a new persistent database at the specified path.
@@ -120,6 +127,7 @@ impl Database {
             roots: Arc::new(RwLock::new(BTreeMap::new())),
             btree,
             storage: Some(storage),
+            txn_manager: Arc::new(TransactionManager::default()),
         })
     }
 
@@ -150,6 +158,7 @@ impl Database {
             roots: Arc::new(RwLock::new(BTreeMap::new())),
             btree,
             storage: Some(Arc::clone(&storage)),
+            txn_manager: Arc::new(TransactionManager::default()),
         };
 
         // Run WAL recovery and replay committed operations
@@ -176,20 +185,29 @@ impl Database {
         Ok(())
     }
 
-    /// Sets a value in the database with WAL logging.
+    /// Sets a value in the database.
     ///
-    /// For persistent globals, this:
-    /// 1. Reads the old value for WAL undo log
-    /// 2. Writes a SET record to the WAL (write-ahead!)
-    /// 3. Modifies the in-memory B-tree
-    /// 4. Updates the root if it changed
+    /// **Note**: Writes to globals require a transaction. Use `db.transaction()`
+    /// or create a `Transaction` manually. Direct calls for globals will error.
     ///
-    /// For in-memory databases and locals, only step 3 happens (no WAL).
+    /// For locals (in-memory only), this modifies the B-tree directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GlobalRequiresTransaction` if attempting to write to a global
+    /// variable without a transaction.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// db.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Bob")).await?;
+    /// // For locals (no transaction needed):
+    /// db.set(&local!("TEMP"), &key![1], Value::from("test")).await?;
+    ///
+    /// // For globals (use transaction):
+    /// db.transaction(|txn| async move {
+    ///     txn.set(&global!("PATIENT"), &key![123], Value::from("Bob")).await?;
+    ///     Ok(())
+    /// }).await?;
     /// ```
     pub(crate) async fn set(
         &self,
@@ -197,138 +215,77 @@ impl Database {
         key: &Key,
         val: Value,
     ) -> Result<()> {
-        // Ensure root exists
-        let root = self.ensure_root(name).await?;
+        // Globals require transactions
+        if matches!(name, Name::Global(_)) {
+            Err(crate::error::StorageError::GlobalRequiresTransaction)
+        } else {
+            // Locals can be modified directly (no WAL, no persistence)
+            let root = self.ensure_root(name).await?;
 
-        // Get old value for WAL (only for globals with storage)
-        let old_data = {
-            let opt_arc = self.btree.get_internal(root, key).await?;
-            opt_arc.map(|arc| (*arc).clone())
-        };
+            let ctx = TransactionContext::new(
+                TransactionId::IMPLICIT,
+                TransactionTimestamp::from(0),
+            );
 
-        // Log to WAL before modifying tree (write-ahead!)
-        if let (Name::Global(_), Some(storage)) = (name, self.storage.as_ref())
-        {
-            storage
-                .wal_append(&WalRecord::Set {
-                    // TODO Phase 5: Replace with actual transaction ID from context
-                    txn_id: TransactionId::IMPLICIT,
-                    name: name.clone(),
-                    key: key.clone(),
-                    old: old_data,
-                    new: NodeData::with_value(val.clone()),
-                })
-                .await?;
+            let new_root = self.btree.set_at(root, key, val, &ctx).await?;
+
+            if new_root != root {
+                self.update_root(name, new_root).await?;
+            }
+
+            Ok(())
         }
-
-        // Create transaction context for BTree operation
-        // TODO Phase 5: Replace with actual transaction context from user
-        let ctx = TransactionContext::new(
-            TransactionId::IMPLICIT,
-            TransactionTimestamp::from(0),
-        );
-
-        // Modify in-memory tree
-        let new_root = self.btree.set_at(root, key, val, &ctx).await?;
-
-        // Update root if it changed
-        if new_root != root {
-            self.update_root(name, new_root).await?;
-        }
-
-        Ok(())
     }
 
-    /// Deletes a key and all its descendants from the database with WAL logging.
+    /// Deletes a key and all its descendants from the database.
     ///
-    /// For persistent globals, this:
-    /// 1. Collects all entries that will be deleted (key + descendants)
-    /// 2. Writes a KillEntry record to WAL for each deleted entry (write-ahead!)
-    /// 3. Deletes from the in-memory B-tree
-    /// 4. Updates or removes the root
+    /// **Note**: Writes to globals require a transaction. Use `db.transaction()`
+    /// or create a `Transaction` manually. Direct calls for globals will error.
     ///
-    /// For in-memory databases and locals, only step 3 happens (no WAL).
+    /// For locals (in-memory only), this deletes from the B-tree directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GlobalRequiresTransaction` if attempting to write to a global
+    /// variable without a transaction.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// db.kill(&global!("PATIENT"), &key![123]).await?;
+    /// // For locals (no transaction needed):
+    /// db.kill(&local!("TEMP"), &key![1]).await?;
+    ///
+    /// // For globals (use transaction):
+    /// db.transaction(|txn| async move {
+    ///     txn.kill(&global!("PATIENT"), &key![123]).await?;
+    ///     Ok(())
+    /// }).await?;
     /// ```
     pub(crate) async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
-        let opt_root = self.get_root(name).await?;
-        match opt_root {
-            None => Ok(()), // No root = nothing to delete
-            Some(root) => {
-                // Collect all entries to be deleted for WAL logging
-                let to_delete = match (name, self.storage.as_ref()) {
-                    (Name::Global(_), Some(_)) => {
-                        let mut entries = Vec::new();
+        // Globals require transactions
+        if matches!(name, Name::Global(_)) {
+            Err(crate::error::StorageError::GlobalRequiresTransaction)
+        } else {
+            // Locals can be deleted directly (no WAL, no persistence)
+            let opt_root = self.get_root(name).await?;
+            match opt_root {
+                None => Ok(()),
+                Some(root) => {
+                    let ctx = TransactionContext::new(
+                        TransactionId::IMPLICIT,
+                        TransactionTimestamp::from(0),
+                    );
 
-                        // First, check if the key itself has data
-                        if let Some(arc_data) =
-                            self.btree.get_internal(root, key).await?
-                        {
-                            entries.push((key.clone(), (*arc_data).clone()));
+                    let opt_new_root =
+                        self.btree.kill_at(root, key, &ctx).await?;
+
+                    match opt_new_root {
+                        Some(new_root) if new_root != root => {
+                            self.update_root(name, new_root).await
                         }
-
-                        // Then collect all descendants
-                        let descendants: Vec<(Key, NodeData)> = self
-                            .btree
-                            .collects_at(
-                                root,
-                                Some(key),
-                                |k, _| k.starts_with(key),
-                                |k, data| Some((k.clone(), data.clone())),
-                                None,
-                            )
-                            .collect::<Vec<_>>()
-                            .await
-                            .into_iter()
-                            .collect::<Result<Vec<_>>>()?;
-
-                        entries.extend(descendants);
-                        Some(entries)
+                        None => self.remove_root(name).await.map(|_| ()),
+                        _ => Ok(()),
                     }
-                    _ => None, // Locals or in-memory - no WAL
-                };
-
-                // Log to WAL before deleting (write-ahead!)
-                if let (Some(entries), Some(storage)) =
-                    (to_delete, self.storage.as_ref())
-                {
-                    stream::iter(entries.iter().map(Ok))
-                        .try_for_each(|(k, data)| async move {
-                            storage
-                                .wal_append(&WalRecord::KillEntry {
-                                    // TODO Phase 5: Replace with actual transaction ID from context
-                                    txn_id: TransactionId::IMPLICIT,
-                                    name: name.clone(),
-                                    key: k.clone(),
-                                    data: data.clone(),
-                                })
-                                .await
-                                .map(|_| ())
-                        })
-                        .await?;
-                }
-
-                // Create transaction context for BTree operation
-                // TODO Phase 5: Replace with actual transaction context from user
-                let ctx = TransactionContext::new(
-                    TransactionId::IMPLICIT,
-                    TransactionTimestamp::from(0),
-                );
-
-                // Delete from in-memory tree
-                let opt_new_root = self.btree.kill_at(root, key, &ctx).await?;
-
-                // Update or remove root
-                match opt_new_root {
-                    Some(new_root) if new_root != root => {
-                        self.update_root(name, new_root).await
-                    }
-                    None => self.remove_root(name).await.map(|_| ()),
-                    _ => Ok(()), // Root unchanged
                 }
             }
         }
@@ -505,23 +462,233 @@ impl Database {
     /// ```
     pub(crate) async fn flush(&self) -> Result<()> {
         if let Some(storage) = self.storage.as_ref() {
-            // Write commit record to WAL
-            // TODO Phase 5: Replace with actual transaction ID from context
+            // Write commit record to WAL with IMPLICIT transaction ID
+            // (used only for recovery operations, not user transactions)
             storage
                 .wal_append(&WalRecord::TxnCommit {
                     txn_id: TransactionId::IMPLICIT,
                 })
                 .await?;
 
-            // Sync WAL to disk (durability!)
-            // TODO Phase 5: Check storage.config.sync_mode:
-            //   - OnCommit (default): call wal_sync() here
-            //   - Immediate: already synced by WalWriter on each append
-            //   - Periodic: skip sync here, external task handles it
-            // For Phase 4.6 with IMPLICIT transaction, always sync (OnCommit behavior).
             storage.wal_sync().await?;
+            storage.flush().await?;
+        }
+        Ok(())
+    }
 
-            // Flush dirty pages to data file
+    /// Executes a function within a transaction context.
+    ///
+    /// The transaction auto-commits if the closure returns `Ok`, and
+    /// auto-rollbacks if it returns `Err`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// db.transaction(|txn| async move {
+    ///     txn.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Bob")).await?;
+    ///     Ok(())
+    /// }).await?;
+    /// ```
+    pub(crate) async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(Transaction) -> Fut,
+        Fut: std::future::Future<Output = Result<R>>,
+    {
+        let txn = TransactionBuilder::default().begin(self).await?;
+        match f(txn.clone()).await {
+            Ok(result) => {
+                txn.commit().await?;
+                Ok(result)
+            }
+            Err(e) => {
+                txn.rollback().await?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Executes a function within a configured transaction context.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let builder = TransactionBuilder::default()
+    ///     .timeout(5000)
+    ///     .priority(TransactionPriority::High);
+    ///
+    /// db.transaction_with(builder, |txn| async move {
+    ///     txn.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Bob")).await?;
+    ///     Ok(())
+    /// }).await?;
+    /// ```
+    pub(crate) async fn transaction_with<F, Fut, R>(
+        &self,
+        builder: TransactionBuilder,
+        f: F,
+    ) -> Result<R>
+    where
+        F: FnOnce(Transaction) -> Fut,
+        Fut: std::future::Future<Output = Result<R>>,
+    {
+        let txn = builder.begin(self).await?;
+        match f(txn.clone()).await {
+            Ok(result) => {
+                txn.commit().await?;
+                Ok(result)
+            }
+            Err(e) => {
+                txn.rollback().await?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Creates a transaction builder for custom configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let txn = db.build_transaction()
+    ///     .timeout(5000)
+    ///     .begin(&db)
+    ///     .await?;
+    /// ```
+    pub(crate) fn build_transaction(&self) -> TransactionBuilder {
+        TransactionBuilder::default()
+    }
+}
+
+// Internal methods for transaction support
+impl Database {
+    /// Sets a value with an explicit transaction ID.
+    ///
+    /// This is the internal version used by `Transaction::commit()`.
+    /// The transaction ID is used for WAL logging and BTree context.
+    pub(crate) async fn set_with_txn(
+        &self,
+        name: &Name,
+        key: &Key,
+        val: Value,
+        txn_id: TransactionId,
+        start_ts: TransactionTimestamp,
+    ) -> Result<()> {
+        let root = self.ensure_root(name).await?;
+
+        let old_data = {
+            let opt_arc = self.btree.get_internal(root, key).await?;
+            opt_arc.map(|arc| (*arc).clone())
+        };
+
+        if let (Name::Global(_), Some(storage)) = (name, self.storage.as_ref())
+        {
+            storage
+                .wal_append(&WalRecord::Set {
+                    txn_id,
+                    name: name.clone(),
+                    key: key.clone(),
+                    old: old_data,
+                    new: NodeData::with_value(val.clone()),
+                })
+                .await?;
+        }
+
+        let ctx = TransactionContext::new(txn_id, start_ts);
+        let new_root = self.btree.set_at(root, key, val, &ctx).await?;
+
+        if new_root != root {
+            self.update_root(name, new_root).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Kills a key/subtree with an explicit transaction ID.
+    ///
+    /// This is the internal version used by `Transaction::commit()`.
+    pub(crate) async fn kill_with_txn(
+        &self,
+        name: &Name,
+        key: &Key,
+        txn_id: TransactionId,
+        start_ts: TransactionTimestamp,
+    ) -> Result<()> {
+        let opt_root = self.get_root(name).await?;
+        match opt_root {
+            None => Ok(()),
+            Some(root) => {
+                let to_delete = match (name, self.storage.as_ref()) {
+                    (Name::Global(_), Some(_)) => {
+                        let mut entries = Vec::new();
+
+                        if let Some(arc_data) =
+                            self.btree.get_internal(root, key).await?
+                        {
+                            entries.push((key.clone(), (*arc_data).clone()));
+                        }
+
+                        let descendants: Vec<(Key, NodeData)> = self
+                            .btree
+                            .collects_at(
+                                root,
+                                Some(key),
+                                |k, _| k.starts_with(key),
+                                |k, data| Some((k.clone(), data.clone())),
+                                None,
+                            )
+                            .collect::<Vec<_>>()
+                            .await
+                            .into_iter()
+                            .collect::<Result<Vec<_>>>()?;
+
+                        entries.extend(descendants);
+                        Some(entries)
+                    }
+                    _ => None,
+                };
+
+                if let (Some(entries), Some(storage)) =
+                    (to_delete, self.storage.as_ref())
+                {
+                    stream::iter(entries.iter().map(Ok))
+                        .try_for_each(|(k, data)| async move {
+                            storage
+                                .wal_append(&WalRecord::KillEntry {
+                                    txn_id,
+                                    name: name.clone(),
+                                    key: k.clone(),
+                                    data: data.clone(),
+                                })
+                                .await
+                                .map(|_| ())
+                        })
+                        .await?;
+                }
+
+                let ctx = TransactionContext::new(txn_id, start_ts);
+                let opt_new_root = self.btree.kill_at(root, key, &ctx).await?;
+
+                match opt_new_root {
+                    Some(new_root) if new_root != root => {
+                        self.update_root(name, new_root).await
+                    }
+                    None => self.remove_root(name).await.map(|_| ()),
+                    _ => Ok(()),
+                }
+            }
+        }
+    }
+
+    /// Flushes with an explicit transaction ID.
+    ///
+    /// This is the internal version used by `Transaction::commit()`.
+    pub(crate) async fn flush_with_txn(
+        &self,
+        txn_id: TransactionId,
+    ) -> Result<()> {
+        if let Some(storage) = self.storage.as_ref() {
+            storage.wal_append(&WalRecord::TxnCommit { txn_id }).await?;
+
+            storage.wal_sync().await?;
             storage.flush().await?;
         }
         Ok(())
@@ -538,11 +705,15 @@ impl Database {
     /// Creates a database with a custom B-tree.
     ///
     /// Useful for testing with specific B-tree configurations.
-    fn with_btree(btree: Arc<BTree>) -> Result<Self> {
+    fn with_btree(
+        btree: Arc<BTree>,
+        txn_manager: Arc<TransactionManager>,
+    ) -> Result<Self> {
         Ok(Self {
             roots: Arc::new(RwLock::new(BTreeMap::new())),
             btree,
             storage: None,
+            txn_manager,
         })
     }
 
@@ -936,23 +1107,26 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
-        // Create database and perform operations
+        // Create database and perform operations using transactions
         {
             let db = Database::create(&db_path).await.unwrap();
             let name = global!("PATIENT");
 
-            // SET operations
-            db.set(&name, &key![1, "NAME"], Value::from("Alice"))
-                .await
-                .unwrap();
-            db.set(&name, &key![1, "AGE"], Value::from(30))
-                .await
-                .unwrap();
-            db.set(&name, &key![2, "NAME"], Value::from("Bob"))
-                .await
-                .unwrap();
+            // SET operations within a transaction
+            let name_clone = name.clone();
+            db.transaction(|txn| async move {
+                txn.set(&name_clone, &key![1, "NAME"], Value::from("Alice"))
+                    .await?;
+                txn.set(&name_clone, &key![1, "AGE"], Value::from(30))
+                    .await?;
+                txn.set(&name_clone, &key![2, "NAME"], Value::from("Bob"))
+                    .await?;
+                Ok(())
+            })
+            .await
+            .unwrap();
 
-            // Verify GET
+            // Verify GET (reads work without transaction)
             assert_eq!(
                 db.get(&name, &key![1, "NAME"]).await.unwrap(),
                 Some(Value::from("Alice"))
@@ -966,8 +1140,14 @@ mod tests {
             let status = db.data(&name, &key![1]).await.unwrap();
             assert_eq!(status, DataStatus::HasDescendants);
 
-            // KILL operation
-            db.kill(&name, &key![1]).await.unwrap();
+            // KILL operation within a transaction
+            let name_clone = name.clone();
+            db.transaction(|txn| async move {
+                txn.kill(&name_clone, &key![1]).await?;
+                Ok(())
+            })
+            .await
+            .unwrap();
 
             // Verify deletion
             assert_eq!(db.get(&name, &key![1, "NAME"]).await.unwrap(), None);
@@ -979,8 +1159,6 @@ mod tests {
                 Some(Value::from("Bob"))
             );
 
-            // Flush (writes TxnCommit + syncs WAL)
-            db.flush().await.unwrap();
             db.close().await.unwrap();
         }
 
@@ -1000,5 +1178,120 @@ mod tests {
 
             db.close().await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn global_set_without_transaction_fails() {
+        let db = Database::in_memory().unwrap();
+        let name = global!("TEST");
+
+        // Direct set on global should fail
+        let result = db
+            .set(&name, &rumps_types::key![1], rumps_types::Value::from(42))
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::error::StorageError::GlobalRequiresTransaction)
+        ));
+    }
+
+    #[tokio::test]
+    async fn local_set_without_transaction_works() {
+        let db = Database::in_memory().unwrap();
+        let name = local!("TEMP");
+
+        // Direct set on local should work
+        db.set(&name, &rumps_types::key![1], rumps_types::Value::from(42))
+            .await
+            .unwrap();
+
+        // Verify the value was set
+        let val = db.get(&name, &rumps_types::key![1]).await.unwrap();
+        assert_eq!(val, Some(rumps_types::Value::from(42)));
+    }
+
+    #[tokio::test]
+    async fn transaction_commit_applies_changes() {
+        let db = Database::in_memory().unwrap();
+        let name = global!("TEST");
+
+        // Set within transaction
+        let name_clone = name.clone();
+        db.transaction(|txn| async move {
+            txn.set(
+                &name_clone,
+                &rumps_types::key![1],
+                rumps_types::Value::from(100),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // Value should be visible after commit
+        let val = db.get(&name, &rumps_types::key![1]).await.unwrap();
+        assert_eq!(val, Some(rumps_types::Value::from(100)));
+    }
+
+    #[tokio::test]
+    async fn transaction_rollback_discards_changes() {
+        let db = Database::in_memory().unwrap();
+        let name = global!("TEST");
+
+        // First, set an initial value
+        let name_clone = name.clone();
+        db.transaction(|txn| async move {
+            txn.set(
+                &name_clone,
+                &rumps_types::key![1],
+                rumps_types::Value::from(100),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // Transaction that fails should rollback
+        let name_clone = name.clone();
+        let result: Result<()> = db
+            .transaction(|txn| async move {
+                txn.set(
+                    &name_clone,
+                    &rumps_types::key![1],
+                    rumps_types::Value::from(200),
+                )
+                .await?;
+                // Simulate error
+                Err(crate::error::StorageError::InvalidOperation(
+                    "intentional failure".into(),
+                ))
+            })
+            .await;
+
+        assert!(result.is_err());
+
+        // Value should still be 100 (rollback preserved original)
+        let val = db.get(&name, &rumps_types::key![1]).await.unwrap();
+        assert_eq!(val, Some(rumps_types::Value::from(100)));
+    }
+
+    #[tokio::test]
+    async fn transaction_manager_allocates_unique_ids() {
+        let db = Database::in_memory().unwrap();
+
+        // Create multiple transactions and verify they get unique IDs
+        let id1 = db.txn_manager.allocate_txn_id().await;
+        let id2 = db.txn_manager.allocate_txn_id().await;
+        let id3 = db.txn_manager.allocate_txn_id().await;
+
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+        assert_ne!(id1, id3);
+
+        // IDs should be increasing
+        assert!(*id1 < *id2);
+        assert!(*id2 < *id3);
     }
 }
