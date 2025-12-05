@@ -23,6 +23,7 @@ mod id;
 
 pub(crate) use allocator::PageAllocator;
 pub(crate) use cache::PageCache;
+pub use cache::PageCacheStats;
 pub(crate) use id::PageId;
 
 /// Page size in bytes for B-tree node storage.

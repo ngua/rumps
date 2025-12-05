@@ -30,15 +30,38 @@ use futures::stream::{self, Stream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name, Value};
 use tokio::sync::RwLock;
 
-use crate::btree::{BTree, BTreeBuilder};
-use crate::engine::{AsyncStorageEngine, FileStorageEngine, StorageConfig};
+use crate::btree::{BTree, BTreeBuilder, BTreeStats};
+use crate::engine::{
+    AsyncStorageEngine, FileStorageEngine, StorageConfig, StorageMetadata,
+};
 use crate::error::{Result, StorageError};
 use crate::node::{NodeData, NodeId};
+use crate::page::PageCacheStats;
 use crate::transaction::{
     Transaction, TransactionBuilder, TransactionContext, TransactionId,
     TransactionManager, TransactionTimestamp,
 };
 use crate::wal::{WalOp, WalReader, WalRecord};
+
+/// Diagnostic statistics for a [`Database`].
+///
+/// Aggregates statistics from the B-tree, page cache, storage engine, and
+/// transaction manager. Use [`Database::debug()`] to obtain this.
+#[derive(Debug, Clone)]
+pub struct DatabaseStats {
+    /// Number of root variables (globals + locals) currently cached.
+    pub root_count: usize,
+    /// B-tree statistics.
+    pub btree: BTreeStats,
+    /// Page cache statistics (persistent DBs only).
+    pub cache: Option<PageCacheStats>,
+    /// Storage metadata (persistent DBs only).
+    pub storage: Option<StorageMetadata>,
+    /// Number of active transactions.
+    pub active_txns: usize,
+    /// Whether this is an in-memory database.
+    pub in_memory: bool,
+}
 
 /// Database providing namespace management over a B-tree.
 ///
@@ -435,6 +458,37 @@ impl Database {
                 txn.rollback().await?;
                 Err(e)
             }
+        }
+    }
+
+    /// Returns diagnostic statistics for the database.
+    ///
+    /// Use this method for debugging and monitoring. The returned
+    /// [`DatabaseStats`] aggregates statistics from all components.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let db = Database::in_memory()?;
+    /// let stats = db.debug().await;
+    /// println!("{:?}", stats);
+    /// ```
+    pub async fn debug(&self) -> DatabaseStats {
+        let cache = match &self.storage {
+            Some(s) => Some(s.cache_stats().await),
+            None => None,
+        };
+        let storage = match &self.storage {
+            Some(s) => Some(s.metadata().await),
+            None => None,
+        };
+        DatabaseStats {
+            root_count: self.roots.read().await.len(),
+            btree: self.btree.stats().await,
+            cache,
+            storage,
+            active_txns: self.txn_manager.active_count().await,
+            in_memory: self.storage.is_none(),
         }
     }
 }

@@ -20,21 +20,21 @@ mod tests;
 
 /// Statistics tracking for B-tree operations.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct BTreeStats {
-    /// Current height of the tree
-    pub(crate) height: usize,
-    /// Total number of nodes
-    pub(crate) node_count: usize,
-    /// Total number of keys across all nodes
-    pub(crate) key_count: usize,
-    /// Average fill factor (keys per node / max keys per node)
-    pub(crate) avg_fill_factor: f64,
-    /// Memory usage in bytes (estimated)
-    pub(crate) memory_bytes: usize,
-    /// Number of splits performed
-    pub(crate) splits: u64,
-    /// Number of merges performed
-    pub(crate) merges: u64,
+pub struct BTreeStats {
+    /// Current height of the tree.
+    pub height: usize,
+    /// Total number of nodes.
+    pub node_count: usize,
+    /// Total number of keys across all nodes.
+    pub key_count: usize,
+    /// Average fill factor (keys per node / max keys per node).
+    pub avg_fill_factor: f64,
+    /// Memory usage in bytes (estimated).
+    pub memory_bytes: usize,
+    /// Number of splits performed.
+    pub splits: u64,
+    /// Number of merges performed.
+    pub merges: u64,
 }
 
 /// Trait for node ID allocation strategies.

@@ -35,24 +35,24 @@ impl Default for StorageConfig {
 
 /// Metadata about the storage engine state.
 #[derive(Debug, Clone)]
-pub(crate) struct StorageMetadata {
+pub struct StorageMetadata {
     /// Total number of allocated pages (including header).
-    pub(crate) allocated_pages: u64,
+    pub allocated_pages: u64,
 
     /// Number of free pages available for allocation.
-    pub(crate) free_pages: u64,
+    pub free_pages: u64,
 
     /// Number of pages currently in cache.
-    pub(crate) cached_pages: usize,
+    pub cached_pages: usize,
 
     /// Number of dirty pages pending flush.
-    pub(crate) dirty_pages: usize,
+    pub dirty_pages: usize,
 
-    /// Cache hit rate (0.0 to 1.0).
-    pub(crate) cache_hit_rate: f64,
+    /// Cache hit rate (`0.0` to `1.0`).
+    pub cache_hit_rate: f64,
 
     /// Path to the data directory.
-    pub(crate) data_dir: PathBuf,
+    pub data_dir: PathBuf,
 }
 
 #[cfg(test)]

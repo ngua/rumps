@@ -26,7 +26,8 @@ mod registry;
 mod superblock;
 
 use async_trait::async_trait;
-pub(crate) use config::{StorageConfig, StorageMetadata};
+pub(crate) use config::StorageConfig;
+pub use config::StorageMetadata;
 pub(crate) use file::FileStorageEngine;
 pub(crate) use indirect::IndirectPage;
 pub(crate) use metadata::MetadataPage;

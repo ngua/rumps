@@ -598,6 +598,13 @@ impl AsyncStorageEngine for FileStorageEngine {
 }
 
 impl FileStorageEngine {
+    /// Returns page cache statistics.
+    pub(crate) async fn cache_stats(&self) -> page::PageCacheStats {
+        self.cache.stats().await
+    }
+}
+
+impl FileStorageEngine {
     // ========== Private Helpers for open() ==========
 
     /// Load superblock and bitmap pages (including indirect pages).

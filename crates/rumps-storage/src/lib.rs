@@ -34,9 +34,11 @@ pub(crate) mod page;
 pub(crate) mod transaction;
 pub(crate) mod wal;
 
-#[cfg(feature = "bench")]
-pub use database::Database;
+pub use btree::BTreeStats;
+pub use database::{Database, DatabaseStats};
+pub use engine::StorageMetadata;
 pub use error::{Result, StorageError};
+pub use page::PageCacheStats;
 pub use rumps_types::DataStatus;
 #[cfg(feature = "bench")]
 pub use transaction::Transaction;

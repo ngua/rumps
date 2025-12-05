@@ -39,17 +39,17 @@ pub(crate) struct EvictedPage {
 
 /// Statistics for the page cache.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct PageCacheStats {
+pub struct PageCacheStats {
     /// Number of cache hits.
-    pub(crate) hits: u64,
+    pub hits: u64,
     /// Number of cache misses.
-    pub(crate) misses: u64,
+    pub misses: u64,
     /// Number of pages written (marked dirty).
-    pub(crate) writes: u64,
+    pub writes: u64,
     /// Number of pages flushed to disk.
-    pub(crate) flushes: u64,
+    pub flushes: u64,
     /// Number of pages evicted from cache.
-    pub(crate) evictions: u64,
+    pub evictions: u64,
 }
 
 /// LRU cache for B-tree node pages with dirty tracking.
