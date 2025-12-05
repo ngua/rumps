@@ -442,8 +442,8 @@ impl From<TransactionTimestamp> for u64 {
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use rumps_storage::transaction::IsolationLevel;
+/// ```
+/// use rumps_storage::IsolationLevel;
 ///
 /// let level = IsolationLevel::default();
 /// assert_eq!(level, IsolationLevel::SnapshotIsolation);
@@ -839,6 +839,18 @@ impl Default for TransactionManager {
 ///
 /// Defines how the system should respond when a transaction conflict
 /// is detected during commit.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_storage::ConflictStrategy;
+///
+/// // Default is Abort
+/// assert_eq!(ConflictStrategy::default(), ConflictStrategy::Abort);
+///
+/// // Retry up to 3 times on conflict
+/// let retry = ConflictStrategy::Retry(3);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ConflictStrategy {
     /// Abort the transaction on conflict (default).
@@ -856,6 +868,18 @@ pub enum ConflictStrategy {
 ///
 /// Higher priority transactions may be favored during conflict resolution
 /// or deadlock detection.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_storage::TransactionPriority;
+///
+/// // Default is Normal
+/// assert_eq!(TransactionPriority::default(), TransactionPriority::Normal);
+///
+/// // Priorities can be compared
+/// assert!(TransactionPriority::Low < TransactionPriority::High);
+/// ```
 #[derive(
     Debug,
     Clone,
@@ -885,14 +909,24 @@ pub enum TransactionPriority {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
+/// # tokio_test::block_on(async {
+/// use rumps_storage::{Database, TransactionBuilder, TransactionPriority, ConflictStrategy};
+/// use rumps_types::{global, key, Value};
+///
+/// let db = Database::in_memory()?;
+///
 /// let builder = TransactionBuilder::default()
-///     .isolation(IsolationLevel::SnapshotIsolation)
 ///     .conflict(ConflictStrategy::Retry(3))
 ///     .timeout(5000)
 ///     .priority(TransactionPriority::High);
 ///
-/// let txn = builder.begin(&db).await?;
+/// db.transaction_with(builder, |txn| async move {
+///     txn.set(&global!("DATA"), &key![1], Value::from("test")).await?;
+///     Ok(())
+/// }).await?;
+/// # Ok::<(), rumps_storage::StorageError>(())
+/// # });
 /// ```
 #[derive(Debug, Clone)]
 pub struct TransactionBuilder {
@@ -1042,12 +1076,28 @@ impl TransactionBuilder {
 ///
 /// Transactions are typically created and managed through `Database::transaction()`:
 ///
-/// ```ignore
+/// ```
+/// # tokio_test::block_on(async {
+/// use rumps_storage::Database;
+/// use rumps_types::{global, key, Value};
+///
+/// let db = Database::in_memory()?;
+///
 /// db.transaction(|txn| async move {
-///     txn.set(&name, &key, value).await?;
-///     txn.get(&name, &key).await?;
+///     txn.set(&global!("DATA"), &key![1], Value::from("hello")).await?;
+///
+///     // Reads within transaction see buffered writes
+///     let val = txn.get(&global!("DATA"), &key![1]).await?;
+///     assert_eq!(val, Some(Value::from("hello")));
+///
 ///     Ok(()) // Auto-commits on Ok
 /// }).await?;
+///
+/// // After commit, values are visible outside the transaction
+/// let val = db.get(&global!("DATA"), &key![1]).await?;
+/// assert_eq!(val, Some(Value::from("hello")));
+/// # Ok::<(), rumps_storage::StorageError>(())
+/// # });
 /// ```
 #[derive(Clone)]
 pub struct Transaction {

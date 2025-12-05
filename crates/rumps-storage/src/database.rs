@@ -1,10 +1,90 @@
-//! Database layer providing namespace management over the B-tree.
+//! Database layer for RUMPS.
 //!
-//! The `Database` struct owns the mapping from variable names (`Name`) to
-//! B-tree roots (`NodeId`). This separates namespace concerns from the core
-//! B-tree implementation, which operates purely on `NodeId`s.
+//! The [`Database`] struct provides the main entry point for interacting with
+//! RUMPS storage. It supports two namespaces—persistent **globals** (`^NAME`)
+//! and ephemeral **locals** (`NAME`)—and requires explicit transactions for
+//! writes to globals.
 //!
-//! # Architecture
+//! # Quick Start
+//!
+//! ```
+//! # tokio_test::block_on(async {
+//! use rumps_storage::Database;
+//! use rumps_types::{global, local, key, Value};
+//!
+//! // Create an in-memory database (no disk I/O)
+//! let db = Database::in_memory()?;
+//!
+//! // Locals can be set directly (no transaction needed)
+//! db.set(&local!("TEMP"), &key![1, "NAME"], Value::from("Alice")).await?;
+//!
+//! // Read back the value
+//! let val = db.get(&local!("TEMP"), &key![1, "NAME"]).await?;
+//! assert_eq!(val, Some(Value::from("Alice")));
+//!
+//! // Globals require transactions
+//! db.transaction(|txn| async move {
+//!     txn.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Bob")).await?;
+//!     txn.set(&global!("PATIENT"), &key![123, "AGE"], Value::from(42)).await?;
+//!     Ok(())
+//! }).await?;
+//!
+//! // Read from global (no transaction needed for reads)
+//! let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
+//! assert_eq!(name, Some(Value::from("Bob")));
+//! # Ok::<(), rumps_storage::StorageError>(())
+//! # });
+//! ```
+//!
+//! # Persistence
+//!
+//! For disk-backed storage, use [`Database::create()`] for new databases
+//! or [`Database::open()`] for existing ones:
+//!
+//! ```no_run
+//! # tokio_test::block_on(async {
+//! use rumps_storage::Database;
+//!
+//! // Create a new persistent database
+//! let db = Database::create("./my_data").await?;
+//!
+//! // Later, reopen it
+//! let db = Database::open("./my_data").await?;
+//! # Ok::<(), rumps_storage::StorageError>(())
+//! # });
+//! ```
+//!
+//! # Advanced Configuration
+//!
+//! Use [`DatabaseBuilder`] for fine-grained control over cache size, WAL
+//! settings, and B-tree parameters:
+//!
+//! ```no_run
+//! # tokio_test::block_on(async {
+//! use rumps_storage::{Database, SyncMode};
+//!
+//! let db = Database::builder()
+//!     .cache_size(4096)              // 4096 pages (~16 MiB)
+//!     .sync_mode(SyncMode::Immediate)
+//!     .min_degree(5)
+//!     .create("./data")
+//!     .await?;
+//! # Ok::<(), rumps_storage::StorageError>(())
+//! # });
+//! ```
+//!
+//! # Two Namespaces
+//!
+//! - **Globals** (`^NAME`): Persistent, backed by disk storage. All writes
+//!   MUST occur within a transaction.
+//! - **Locals** (`NAME`): Ephemeral, memory-only. Can be modified directly
+//!   without transactions.
+//!
+//! # Architecture Details
+//!
+//! Internally, `Database` maps variable names ([`Name`]) to B-tree root
+//! [`NodeId`]s. The B-tree itself operates purely on `NodeId`s, with no
+//! knowledge of variable names.
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────────────┐
@@ -21,6 +101,8 @@
 //! │                                  └───────────┘                          │
 //! └─────────────────────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! [`Name`]: rumps_types::Name
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -72,7 +154,10 @@ pub struct DatabaseStats {
 ///
 /// Use the builder for advanced configuration when **creating** a database:
 ///
-/// ```ignore
+/// ```no_run
+/// # tokio_test::block_on(async {
+/// use rumps_storage::{Database, SyncMode};
+///
 /// let db = Database::builder()
 ///     .cache_size(4096)              // 4096 pages (~16 MiB)
 ///     .sync_mode(SyncMode::Immediate)
@@ -82,6 +167,19 @@ pub struct DatabaseStats {
 ///
 /// // Later, just open - config is restored automatically
 /// let db = Database::open("./data").await?;
+/// # Ok::<(), rumps_storage::StorageError>(())
+/// # });
+/// ```
+///
+/// For in-memory databases with custom B-tree settings:
+///
+/// ```
+/// use rumps_storage::Database;
+///
+/// let db = Database::builder()
+///     .min_degree(5)
+///     .in_memory()?;
+/// # Ok::<(), rumps_storage::StorageError>(())
 /// ```
 ///
 /// # Configuration Persistence
@@ -255,12 +353,13 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use rumps_storage::Database;
+    ///
     /// let db = Database::builder()
-    ///     .cache_size(4096)
-    ///     .sync_mode(SyncMode::Immediate)
-    ///     .create("./data")
-    ///     .await?;
+    ///     .min_degree(5)
+    ///     .in_memory()?;
+    /// # Ok::<(), rumps_storage::StorageError>(())
     /// ```
     ///
     /// [`in_memory()`]: Self::in_memory
@@ -273,12 +372,25 @@ impl Database {
     /// Creates a new in-memory database.
     ///
     /// This database has no persistent storage - all data exists only in
-    /// memory and is discarded when the database is dropped.
+    /// memory and is discarded when the database is dropped. Useful for
+    /// caching, temporary workspaces, or testing.
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{local, key, Value};
+    ///
     /// let db = Database::in_memory()?;
+    ///
+    /// // Use as a cache for computed values
+    /// db.set(&local!("CACHE"), &key!["user", 123], Value::from("cached_data")).await?;
+    ///
+    /// let val = db.get(&local!("CACHE"), &key!["user", 123]).await?;
+    /// assert_eq!(val, Some(Value::from("cached_data")));
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub fn in_memory() -> Result<Self> {
         Self::with_btree(
@@ -298,8 +410,20 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let db = Database::create("./data").await?;
+    /// ```no_run
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{global, key, Value};
+    ///
+    /// let db = Database::create("./my_data").await?;
+    ///
+    /// // Globals are persisted to disk
+    /// db.transaction(|txn| async move {
+    ///     txn.set(&global!("CONFIG"), &key!["version"], Value::from(1)).await?;
+    ///     Ok(())
+    /// }).await?;
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     ///
     /// [`open()`]: Self::open
@@ -336,8 +460,17 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let db = Database::open("./data").await?;
+    /// ```no_run
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{global, key};
+    ///
+    /// let db = Database::open("./my_data").await?;
+    ///
+    /// // Read previously stored data
+    /// let version = db.get(&global!("CONFIG"), &key!["version"]).await?;
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let storage = Arc::new(FileStorageEngine::open(path.as_ref()).await?);
@@ -381,7 +514,13 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{local, global, key, Value};
+    ///
+    /// let db = Database::in_memory()?;
+    ///
     /// // For locals (no transaction needed):
     /// db.set(&local!("TEMP"), &key![1], Value::from("test")).await?;
     ///
@@ -390,6 +529,8 @@ impl Database {
     ///     txn.set(&global!("PATIENT"), &key![123], Value::from("Bob")).await?;
     ///     Ok(())
     /// }).await?;
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub async fn set(&self, name: &Name, key: &Key, val: Value) -> Result<()> {
         // Globals require transactions
@@ -420,8 +561,21 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{local, key, Value};
+    ///
+    /// let db = Database::in_memory()?;
+    /// db.set(&local!("DATA"), &key![1, "NAME"], Value::from("Alice")).await?;
+    ///
+    /// let name = db.get(&local!("DATA"), &key![1, "NAME"]).await?;
+    /// assert_eq!(name, Some(Value::from("Alice")));
+    ///
+    /// let missing = db.get(&local!("DATA"), &key![999]).await?;
+    /// assert_eq!(missing, None);
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
         let opt_root = self.get_root(name).await?;
@@ -438,8 +592,27 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let status = db.data(&global!("PATIENT"), &key![123]).await?;
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{local, key, Value, DataStatus};
+    ///
+    /// let db = Database::in_memory()?;
+    /// db.set(&local!("DATA"), &key![1, "A"], Value::from("val")).await?;
+    ///
+    /// // Key `[1]` has descendants but no value
+    /// let status = db.data(&local!("DATA"), &key![1]).await?;
+    /// assert_eq!(status, DataStatus::HasDescendants);
+    ///
+    /// // Key `[1, "A"]` has a value
+    /// let status = db.data(&local!("DATA"), &key![1, "A"]).await?;
+    /// assert_eq!(status, DataStatus::HasValue);
+    ///
+    /// // Non-existent key
+    /// let status = db.data(&local!("DATA"), &key![999]).await?;
+    /// assert_eq!(status, DataStatus::NoData);
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus> {
         let opt_root = self.get_root(name).await?;
@@ -456,12 +629,29 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// // Get first key
-    /// let first = db.order(&global!("PATIENT"), None).await?;
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{local, key, Value};
     ///
-    /// // Get next key after [123]
-    /// let next = db.order(&global!("PATIENT"), Some(&key![123])).await?;
+    /// let db = Database::in_memory()?;
+    /// db.set(&local!("DATA"), &key![1], Value::from("a")).await?;
+    /// db.set(&local!("DATA"), &key![2], Value::from("b")).await?;
+    /// db.set(&local!("DATA"), &key![10], Value::from("c")).await?;
+    ///
+    /// // Get first key
+    /// let first = db.order(&local!("DATA"), None).await?;
+    /// assert_eq!(first, Some(key![1]));
+    ///
+    /// // Get next key after `[1]`
+    /// let next = db.order(&local!("DATA"), Some(&key![1])).await?;
+    /// assert_eq!(next, Some(key![2]));
+    ///
+    /// // Numeric ordering: `2 < 10`
+    /// let next = db.order(&local!("DATA"), Some(&key![2])).await?;
+    /// assert_eq!(next, Some(key![10]));
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub async fn order(
         &self,
@@ -489,20 +679,33 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{local, key, Value};
     /// use futures::stream::StreamExt;
     ///
-    /// let stream = db.collects(
-    ///     &global!("PATIENT"),
+    /// let db = Database::in_memory()?;
+    /// let name = local!("DATA");
+    /// db.set(&name, &key![1, "A"], Value::from("x")).await?;
+    /// db.set(&name, &key![1, "B"], Value::from("y")).await?;
+    /// db.set(&name, &key![2, "A"], Value::from("z")).await?;
+    ///
+    /// // Collect all values where key starts with `[1]`
+    /// let mut stream = db.collects(
+    ///     &name,
     ///     None,
-    ///     |key, _| key.len() == 2,  // Only keys with 2 subscripts
-    ///     |key, val| val.clone(),   // Extract value
+    ///     |k, _| k.len() == 2 && k.get(0) == Some(&1.into()),
+    ///     |_, val| val.clone(),
     /// ).await?;
     ///
-    /// while let Some(value) = stream.next().await {
-    ///     let v = value?;
-    ///     println!("Value: {:?}", v);
+    /// let mut results = Vec::new();
+    /// while let Some(val) = stream.next().await {
+    ///     results.push(val?);
     /// }
+    /// assert_eq!(results.len(), 2);
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub async fn collects<'a, P, F, T>(
         &'a self,
@@ -578,11 +781,24 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{global, key, Value};
+    ///
+    /// let db = Database::in_memory()?;
+    ///
     /// db.transaction(|txn| async move {
     ///     txn.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Bob")).await?;
+    ///     txn.set(&global!("PATIENT"), &key![123, "AGE"], Value::from(42)).await?;
     ///     Ok(())
     /// }).await?;
+    ///
+    /// // Values are visible after commit
+    /// let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
+    /// assert_eq!(name, Some(Value::from("Bob")));
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
     where
@@ -606,15 +822,23 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::{Database, TransactionBuilder, TransactionPriority};
+    /// use rumps_types::{global, key, Value};
+    ///
+    /// let db = Database::in_memory()?;
+    ///
     /// let builder = TransactionBuilder::default()
     ///     .timeout(5000)
     ///     .priority(TransactionPriority::High);
     ///
     /// db.transaction_with(builder, |txn| async move {
-    ///     txn.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Bob")).await?;
+    ///     txn.set(&global!("PATIENT"), &key![1], Value::from("data")).await?;
     ///     Ok(())
     /// }).await?;
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub async fn transaction_with<F, Fut, R>(
         &self,
@@ -645,10 +869,17 @@ impl Database {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    ///
     /// let db = Database::in_memory()?;
     /// let stats = db.debug().await;
-    /// println!("{:?}", stats);
+    ///
+    /// assert!(stats.in_memory);
+    /// assert_eq!(stats.active_txns, 0);
+    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # });
     /// ```
     pub async fn debug(&self) -> DatabaseStats {
         let cache = match &self.storage {
