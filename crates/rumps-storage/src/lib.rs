@@ -30,6 +30,7 @@ pub(crate) mod database;
 pub(crate) mod engine;
 pub(crate) mod error;
 pub(crate) mod node;
+pub mod orm;
 pub(crate) mod page;
 pub(crate) mod transaction;
 pub(crate) mod wal;

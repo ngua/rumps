@@ -1,15 +1,18 @@
 [package]
-name = "rumps"
+name = "rumps-derive"
 version = "0.0.1"
 edition = "2021"
 
+[lib]
+proc-macro = true
+
 [dependencies]
-rumps-types = { path = "../rumps-types" }
-rumps-storage = { path = "../rumps-storage" }
-rumps-derive = { path = "../rumps-derive" }
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
-tokio-test = "0.4"
+rumps-types = { path = "../rumps-types" }
 
 [lints.clippy]
 obfuscated_if_else = "allow"

@@ -41,7 +41,6 @@
 //! - [`key!`] - Create a key path: `key![123, "NAME"]` → `(123, NAME)`
 //! - [`json`] - Create JSON values for subscripts or values
 
-// Re-export types from rumps-types
 // Re-export types from rumps-storage
 pub use rumps_storage::{
     // B-tree stats
@@ -68,6 +67,7 @@ pub use rumps_storage::{
     TransactionPriority,
     WalWriterConfig,
 };
+// Re-export types from rumps-types
 pub use rumps_types::{
     // Macros
     global,
@@ -81,3 +81,32 @@ pub use rumps_types::{
     Subscript,
     Value,
 };
+
+/// ORM-like traits for converting Rust types to/from RUMPS storage.
+///
+/// This module re-exports traits from both `rumps-types::orm` and
+/// `rumps-storage::orm` for convenient access, including derive macros.
+///
+/// # Example
+///
+/// ```ignore
+/// use rumps::orm::{ToRumps, FromRumps, RumpsRead, RumpsWrite};
+///
+/// #[derive(ToRumps, FromRumps)]
+/// #[rumps(global = "user")]
+/// struct User {
+///     #[rumps(key)]
+///     id: u64,
+///     name: String,
+/// }
+/// ```
+pub mod orm {
+    // From rumps-types: primitive conversion traits and error types
+    // From rumps-storage: struct conversion traits, extension traits, and derive macros
+    pub use rumps_storage::orm::{
+        FromRumps, RumpsRead, RumpsWrite, Sealed, ToRumps,
+    };
+    pub use rumps_types::orm::{
+        DecodeError, FromSubscript, FromValue, IntoKey, ToSubscript, ToValue,
+    };
+}

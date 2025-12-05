@@ -23,4 +23,5 @@ pub use value::*;
 
 mod error;
 mod key;
+pub mod orm;
 mod value;

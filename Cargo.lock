@@ -707,9 +707,20 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 name = "rumps"
 version = "0.0.1"
 dependencies = [
+ "rumps-derive",
  "rumps-storage",
  "rumps-types",
  "tokio-test",
+]
+
+[[package]]
+name = "rumps-derive"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rumps-types",
+ "syn",
 ]
 
 [[package]]
@@ -723,6 +734,7 @@ dependencies = [
  "criterion",
  "futures",
  "lru",
+ "rumps-derive",
  "rumps-types",
  "serde",
  "serde_json",
