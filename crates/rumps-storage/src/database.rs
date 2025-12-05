@@ -41,7 +41,7 @@ use crate::transaction::{
     Transaction, TransactionBuilder, TransactionContext, TransactionId,
     TransactionManager, TransactionTimestamp,
 };
-use crate::wal::{WalOp, WalReader, WalRecord};
+use crate::wal::{SyncMode, WalOp, WalReader, WalRecord};
 
 /// Diagnostic statistics for a [`Database`].
 ///
@@ -61,6 +61,158 @@ pub struct DatabaseStats {
     pub active_txns: usize,
     /// Whether this is an in-memory database.
     pub in_memory: bool,
+}
+
+/// Builder for creating [`Database`] instances with custom configuration.
+///
+/// For most use cases, prefer the simple constructors:
+/// - [`Database::in_memory()`] - ephemeral in-memory database
+/// - [`Database::create()`] - new persistent database with defaults
+/// - [`Database::open()`] - open existing persistent database
+///
+/// Use the builder for advanced configuration:
+///
+/// ```ignore
+/// let db = Database::builder()
+///     .cache_size(4096)              // 4096 pages (~16 MiB)
+///     .sync_mode(SyncMode::Immediate)
+///     .min_degree(5)                 // B-tree branching factor
+///     .create("./data")
+///     .await?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct DatabaseBuilder {
+    storage_config: StorageConfig,
+    min_degree: Option<usize>,
+    max_memory_bytes: Option<usize>,
+}
+
+impl Default for DatabaseBuilder {
+    fn default() -> Self {
+        Self {
+            storage_config: StorageConfig::default(),
+            min_degree: None,
+            max_memory_bytes: None,
+        }
+    }
+}
+
+impl DatabaseBuilder {
+    /// Sets the page cache size in pages.
+    ///
+    /// Default: `1024` pages (~4 MiB at 4KB page size).
+    pub fn cache_size(mut self, pages: usize) -> Self {
+        self.storage_config.cache_size = pages;
+        self
+    }
+
+    /// Sets maximum database size in pages.
+    ///
+    /// `None` means unlimited growth. Default: `None`.
+    pub fn max_pages(mut self, pages: u64) -> Self {
+        self.storage_config.max_pages = Some(pages);
+        self
+    }
+
+    /// Sets WAL sync mode.
+    ///
+    /// Default: [`SyncMode::OnCommit`].
+    pub fn sync_mode(mut self, mode: SyncMode) -> Self {
+        self.storage_config.wal_config.sync_mode = mode;
+        self
+    }
+
+    /// Sets WAL file rotation size in bytes.
+    ///
+    /// Default: `64` MiB.
+    pub fn wal_max_file_size(mut self, bytes: u64) -> Self {
+        self.storage_config.wal_config.max_file_size = bytes;
+        self
+    }
+
+    /// Sets B-tree minimum degree (branching factor).
+    ///
+    /// Nodes contain `t-1` to `2t-1` keys. Default: `3`.
+    pub fn min_degree(mut self, deg: usize) -> Self {
+        self.min_degree = Some(deg);
+        self
+    }
+
+    /// Sets memory limit for in-memory operations.
+    ///
+    /// Default: unlimited.
+    pub fn max_memory_bytes(mut self, bytes: usize) -> Self {
+        self.max_memory_bytes = Some(bytes);
+        self
+    }
+
+    /// Creates a new in-memory database with these settings.
+    ///
+    /// In-memory databases ignore storage configuration (cache size, WAL, etc.)
+    /// but respect B-tree settings (`min_degree`, `max_memory_bytes`).
+    pub fn in_memory(self) -> Result<Database> {
+        let mut builder = BTreeBuilder::default();
+        if let Some(deg) = self.min_degree {
+            builder = builder.min_degree(deg);
+        }
+        if let Some(bytes) = self.max_memory_bytes {
+            builder = builder.max_memory_bytes(bytes);
+        }
+        Database::with_btree(
+            Arc::new(builder.build()?),
+            Arc::new(TransactionManager::default()),
+        )
+    }
+
+    /// Creates a new persistent database at the specified path.
+    pub async fn create(self, path: impl AsRef<Path>) -> Result<Database> {
+        let storage = Arc::new(
+            FileStorageEngine::create(path.as_ref(), self.storage_config)
+                .await?,
+        );
+
+        let mut builder = BTreeBuilder::default()
+            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>);
+        if let Some(deg) = self.min_degree {
+            builder = builder.min_degree(deg);
+        }
+        if let Some(bytes) = self.max_memory_bytes {
+            builder = builder.max_memory_bytes(bytes);
+        }
+
+        Ok(Database {
+            roots: Arc::new(RwLock::new(BTreeMap::new())),
+            btree: Arc::new(builder.build()?),
+            storage: Some(storage),
+            txn_manager: Arc::new(TransactionManager::default()),
+        })
+    }
+
+    /// Opens an existing persistent database at the specified path.
+    pub async fn open(self, path: impl AsRef<Path>) -> Result<Database> {
+        let storage = Arc::new(
+            FileStorageEngine::open(path.as_ref(), self.storage_config).await?,
+        );
+
+        let mut builder = BTreeBuilder::default()
+            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>);
+        if let Some(deg) = self.min_degree {
+            builder = builder.min_degree(deg);
+        }
+        if let Some(bytes) = self.max_memory_bytes {
+            builder = builder.max_memory_bytes(bytes);
+        }
+
+        let db = Database {
+            roots: Arc::new(RwLock::new(BTreeMap::new())),
+            btree: Arc::new(builder.build()?),
+            storage: Some(Arc::clone(&storage)),
+            txn_manager: Arc::new(TransactionManager::default()),
+        };
+
+        db.recover(path.as_ref()).await?;
+        Ok(db)
+    }
 }
 
 /// Database providing namespace management over a B-tree.
@@ -106,6 +258,27 @@ pub struct Database {
 
 // Public API
 impl Database {
+    /// Returns a builder for advanced configuration.
+    ///
+    /// For most use cases, prefer [`in_memory()`], [`create()`], or [`open()`].
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let db = Database::builder()
+    ///     .cache_size(4096)
+    ///     .sync_mode(SyncMode::Immediate)
+    ///     .create("./data")
+    ///     .await?;
+    /// ```
+    ///
+    /// [`in_memory()`]: Self::in_memory
+    /// [`create()`]: Self::create
+    /// [`open()`]: Self::open
+    pub fn builder() -> DatabaseBuilder {
+        DatabaseBuilder::default()
+    }
+
     /// Creates a new in-memory database.
     ///
     /// This database has no persistent storage - all data exists only in

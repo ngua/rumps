@@ -47,7 +47,8 @@ pub(crate) use reader::WalReader;
 pub(crate) use recovery::{recover_from_dir, WalOp};
 use rumps_types::{Key, Name};
 use serde::{Deserialize, Serialize};
-pub(crate) use writer::{SyncMode, WalWriter, WalWriterConfig};
+pub(crate) use writer::WalWriter;
+pub use writer::{SyncMode, WalWriterConfig};
 
 use crate::node::NodeData;
 use crate::transaction::TransactionId;

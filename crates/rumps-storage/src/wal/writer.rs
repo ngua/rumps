@@ -46,7 +46,7 @@ use crate::error::{Result, StorageError};
 
 /// When to sync WAL data to disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum SyncMode {
+pub enum SyncMode {
     /// Sync on every write (slowest but safest).
     ///
     /// Each [`append`] call is immediately flushed and synced to disk.
@@ -73,17 +73,17 @@ pub(crate) enum SyncMode {
     Periodic(Duration),
 }
 
-/// Configuration for `WalWriter`.
+/// Configuration for [`WalWriter`].
 #[derive(Debug, Clone)]
-pub(crate) struct WalWriterConfig {
+pub struct WalWriterConfig {
     /// When to sync writes to disk.
-    pub(crate) sync_mode: SyncMode,
+    pub sync_mode: SyncMode,
 
     /// Maximum WAL file size in bytes before rotation.
     ///
     /// When the current file exceeds this threshold, a new file
     /// is created. Default: `64` MiB.
-    pub(crate) max_file_size: u64,
+    pub max_file_size: u64,
 }
 
 impl Default for WalWriterConfig {

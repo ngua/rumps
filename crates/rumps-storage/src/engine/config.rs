@@ -4,23 +4,27 @@ use std::path::PathBuf;
 
 use crate::wal::WalWriterConfig;
 
-/// Configuration for [`super::FileStorageEngine`].
+/// Configuration for the storage engine.
+///
+/// Controls page cache size, database size limits, and WAL behavior.
+/// Use [`Default::default()`] for sensible defaults, or customize via
+/// [`DatabaseBuilder`](crate::DatabaseBuilder).
 #[derive(Debug, Clone)]
-pub(crate) struct StorageConfig {
+pub struct StorageConfig {
     /// Maximum number of pages to cache in memory.
     ///
     /// Larger values improve read performance at the cost of memory.
     /// Default: `1024` pages (~4 MiB at 4KB page size).
-    pub(crate) cache_size: usize,
+    pub cache_size: usize,
 
     /// Maximum number of pages in the database (optional limit).
     ///
     /// `None` means unlimited growth. Useful for testing or
     /// resource-constrained environments.
-    pub(crate) max_pages: Option<u64>,
+    pub max_pages: Option<u64>,
 
     /// WAL configuration (sync mode, max file size, etc.).
-    pub(crate) wal_config: WalWriterConfig,
+    pub wal_config: WalWriterConfig,
 }
 
 impl Default for StorageConfig {

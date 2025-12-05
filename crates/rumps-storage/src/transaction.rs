@@ -948,31 +948,31 @@ impl Default for TransactionBuilder {
 
 impl TransactionBuilder {
     /// Sets the isolation level for the transaction.
-    pub(crate) fn isolation(mut self, lvl: IsolationLevel) -> Self {
+    pub fn isolation(mut self, lvl: IsolationLevel) -> Self {
         self.isolation = lvl;
         self
     }
 
     /// Sets the conflict resolution strategy.
-    pub(crate) fn conflict(mut self, strategy: ConflictStrategy) -> Self {
+    pub fn conflict(mut self, strategy: ConflictStrategy) -> Self {
         self.conflict_strategy = strategy;
         self
     }
 
     /// Sets a timeout in milliseconds for the transaction.
-    pub(crate) fn timeout(mut self, ms: u64) -> Self {
+    pub fn timeout(mut self, ms: u64) -> Self {
         self.timeout = Some(ms);
         self
     }
 
     /// Sets the transaction priority.
-    pub(crate) fn priority(mut self, prio: TransactionPriority) -> Self {
+    pub fn priority(mut self, prio: TransactionPriority) -> Self {
         self.priority = prio;
         self
     }
 
     /// Sets the number of retries on conflict.
-    pub(crate) fn retries(mut self, cnt: u32) -> Self {
+    pub fn retries(mut self, cnt: u32) -> Self {
         self.retry_count = cnt;
         self
     }
@@ -991,7 +991,7 @@ impl TransactionBuilder {
     /// 8. Returns `Transaction` struct in `Active` state
     ///
     /// The returned `Transaction` holds a clone of the `Database` (cheap via `Arc` fields).
-    pub(crate) async fn begin(self, db: &Database) -> Result<Transaction> {
+    pub async fn begin(self, db: &Database) -> Result<Transaction> {
         // Allocate unique transaction ID from manager
         let id = db.txn_manager.allocate_txn_id().await;
 
