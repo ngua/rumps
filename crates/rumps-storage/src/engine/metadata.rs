@@ -1,7 +1,11 @@
 //! Database metadata page stored separately from the superblock.
 
+use std::time::Duration;
+
+use crate::engine::config::StorageConfig;
 use crate::error::{Result, StorageError};
 use crate::page;
+use crate::wal::{SyncMode, WalWriterConfig};
 
 /// Database metadata page stored separately from the superblock.
 ///
@@ -12,19 +16,26 @@ use crate::page;
 /// # Layout
 ///
 /// ```text
-// ┌─────────────────────────────────────────────────────────────┐
-// │ Offset   Size     Field                                     │
-// ├─────────────────────────────────────────────────────────────┤
-// │ 0        4        Magic ("RMTD")                            │
-// │ 4        4        Format version (1)                        │
-// │ 8        8        Created timestamp (Unix seconds)          │
-// │ 16       4        Page size (must match runtime)            │
-// │ 20       2        B-tree min degree                         │
-// │ 22       2        Reserved (alignment)                      │
-// │ 24       8        Last checkpoint sequence number           │
-// │ 32       4056     Reserved (future fields)                  │
-// │ 4088     8        Checksum (CRC32 of bytes 0..4088)         │
-// └─────────────────────────────────────────────────────────────┘
+/// ┌─────────────────────────────────────────────────────────────┐
+/// │ Offset   Size     Field                                     │
+/// ├─────────────────────────────────────────────────────────────┤
+/// │ 0        4        Magic ("RMTD")                            │
+/// │ 4        4        Format version (1)                        │
+/// │ 8        8        Created timestamp (Unix seconds)          │
+/// │ 16       4        Page size (must match runtime)            │
+/// │ 20       2        B-tree min degree                         │
+/// │ 22       2        Reserved (alignment)                      │
+/// │ 24       8        Last checkpoint sequence number           │
+/// │ 32       8        Page cache size (pages)                   │
+/// │ 40       8        Max pages (`0` = unlimited)               │
+/// │ 48       8        Max memory bytes (`0` = unlimited)        │
+/// │ 56       1        Sync mode (see below for mapping)         │
+/// │ 57       7        Reserved (alignment)                      │
+/// │ 64       8        Sync interval ms (for Periodic mode)      │
+/// │ 72       8        WAL max file size                         │
+/// │ 80       4000     Reserved (future fields)                  │
+/// │ 4088     8        Checksum (CRC32 of bytes `0..4088`)       │
+/// └─────────────────────────────────────────────────────────────┘
 /// ```
 #[derive(Debug, Clone)]
 pub(crate) struct MetadataPage {
@@ -38,6 +49,18 @@ pub(crate) struct MetadataPage {
     pub(crate) min_degree: u16,
     /// Last successful checkpoint sequence number.
     pub(crate) last_checkpoint: u64,
+    /// Page cache size in pages.
+    pub(crate) cache_size: u64,
+    /// Max pages (`0` = unlimited).
+    pub(crate) max_pages: u64,
+    /// Max memory bytes for B-tree (`0` = unlimited).
+    pub(crate) max_memory_bytes: u64,
+    /// Sync mode: `0`=Immediate, `1`=OnCommit, `2`=Periodic.
+    pub(crate) sync_mode: u8,
+    /// Sync interval in milliseconds (only for `Periodic` mode).
+    pub(crate) sync_interval_ms: u64,
+    /// WAL max file size before rotation.
+    pub(crate) wal_max_file_size: u64,
 }
 
 impl MetadataPage {
@@ -50,11 +73,27 @@ impl MetadataPage {
     const OFF_PAGE_SIZE: usize = 16;
     const OFF_MIN_DEGREE: usize = 20;
     const OFF_LAST_CHECKPOINT: usize = 24;
+    const OFF_CACHE_SIZE: usize = 32;
+    const OFF_MAX_PAGES: usize = 40;
+    const OFF_MAX_MEMORY_BYTES: usize = 48;
+    const OFF_SYNC_MODE: usize = 56;
+    const OFF_SYNC_INTERVAL_MS: usize = 64;
+    const OFF_WAL_MAX_FILE_SIZE: usize = 72;
     const OFF_CHECKSUM: usize = 4088;
     const SIZE: usize = 4096;
 
-    /// Create a new metadata page with current timestamp.
+    /// Create a new metadata page with current timestamp and default config.
     pub(crate) fn new(min_degree: u16) -> Self {
+        let cfg = StorageConfig::default();
+        Self::from_config(min_degree, &cfg, None)
+    }
+
+    /// Create a metadata page from full configuration.
+    pub(crate) fn from_config(
+        min_degree: u16,
+        cfg: &StorageConfig,
+        max_memory_bytes: Option<usize>,
+    ) -> Self {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let created_at = SystemTime::now()
@@ -62,13 +101,49 @@ impl MetadataPage {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
+        let (sync_mode, sync_interval_ms) = match cfg.wal_config.sync_mode {
+            SyncMode::Immediate => (0, 0),
+            SyncMode::OnCommit => (1, 0),
+            SyncMode::Periodic(d) => (2, d.as_millis() as u64),
+        };
+
         Self {
             version: Self::VERSION,
             created_at,
             page_size: page::PAGE_SIZE as u32,
             min_degree,
             last_checkpoint: 0,
+            cache_size: cfg.cache_size as u64,
+            max_pages: cfg.max_pages.unwrap_or(0),
+            max_memory_bytes: max_memory_bytes.map_or(0, |b| b as u64),
+            sync_mode,
+            sync_interval_ms,
+            wal_max_file_size: cfg.wal_config.max_file_size,
         }
+    }
+
+    /// Convert stored config back to a [`StorageConfig`].
+    pub(crate) fn to_storage_config(&self) -> StorageConfig {
+        let sync_mode = match self.sync_mode {
+            0 => SyncMode::Immediate,
+            2 => {
+                SyncMode::Periodic(Duration::from_millis(self.sync_interval_ms))
+            }
+            _ => SyncMode::OnCommit,
+        };
+        StorageConfig {
+            cache_size: self.cache_size as usize,
+            max_pages: (self.max_pages != 0).then_some(self.max_pages),
+            wal_config: WalWriterConfig {
+                sync_mode,
+                max_file_size: self.wal_max_file_size,
+            },
+        }
+    }
+
+    /// Returns `max_memory_bytes` as `Option` (`0` means unlimited/`None`).
+    pub(crate) fn max_memory_bytes_opt(&self) -> Option<usize> {
+        (self.max_memory_bytes != 0).then_some(self.max_memory_bytes as usize)
     }
 
     /// Serialize to a page-sized buffer with checksum.
@@ -92,6 +167,26 @@ impl MetadataPage {
 
         buf.get_mut(Self::OFF_LAST_CHECKPOINT..Self::OFF_LAST_CHECKPOINT + 8)
             .map(|s| s.copy_from_slice(&self.last_checkpoint.to_le_bytes()));
+
+        buf.get_mut(Self::OFF_CACHE_SIZE..Self::OFF_CACHE_SIZE + 8)
+            .map(|s| s.copy_from_slice(&self.cache_size.to_le_bytes()));
+
+        buf.get_mut(Self::OFF_MAX_PAGES..Self::OFF_MAX_PAGES + 8)
+            .map(|s| s.copy_from_slice(&self.max_pages.to_le_bytes()));
+
+        buf.get_mut(Self::OFF_MAX_MEMORY_BYTES..Self::OFF_MAX_MEMORY_BYTES + 8)
+            .map(|s| s.copy_from_slice(&self.max_memory_bytes.to_le_bytes()));
+
+        buf.get_mut(Self::OFF_SYNC_MODE..Self::OFF_SYNC_MODE + 1)
+            .map(|s| s.copy_from_slice(&[self.sync_mode]));
+
+        buf.get_mut(Self::OFF_SYNC_INTERVAL_MS..Self::OFF_SYNC_INTERVAL_MS + 8)
+            .map(|s| s.copy_from_slice(&self.sync_interval_ms.to_le_bytes()));
+
+        buf.get_mut(
+            Self::OFF_WAL_MAX_FILE_SIZE..Self::OFF_WAL_MAX_FILE_SIZE + 8,
+        )
+        .map(|s| s.copy_from_slice(&self.wal_max_file_size.to_le_bytes()));
 
         let crc = crc32fast::hash(buf.get(..Self::OFF_CHECKSUM).unwrap_or(&[]));
         buf.get_mut(Self::OFF_CHECKSUM..Self::OFF_CHECKSUM + 4)
@@ -146,6 +241,14 @@ impl MetadataPage {
 
     /// Deserialize without checksum validation (for internal use after validation).
     fn deserialize_unchecked(buf: &[u8]) -> Result<Self> {
+        let read_u8 = |off: usize| -> Result<u8> {
+            buf.get(off).copied().ok_or_else(|| {
+                StorageError::InvalidOperation(format!(
+                    "failed to read u8 at {off}"
+                ))
+            })
+        };
+
         let read_u16 = |off: usize| -> Result<u16> {
             buf.get(off..off + 2)
                 .and_then(|s| s.try_into().ok())
@@ -185,6 +288,12 @@ impl MetadataPage {
             page_size: read_u32(Self::OFF_PAGE_SIZE)?,
             min_degree: read_u16(Self::OFF_MIN_DEGREE)?,
             last_checkpoint: read_u64(Self::OFF_LAST_CHECKPOINT)?,
+            cache_size: read_u64(Self::OFF_CACHE_SIZE)?,
+            max_pages: read_u64(Self::OFF_MAX_PAGES)?,
+            max_memory_bytes: read_u64(Self::OFF_MAX_MEMORY_BYTES)?,
+            sync_mode: read_u8(Self::OFF_SYNC_MODE)?,
+            sync_interval_ms: read_u64(Self::OFF_SYNC_INTERVAL_MS)?,
+            wal_max_file_size: read_u64(Self::OFF_WAL_MAX_FILE_SIZE)?,
         })
     }
 
@@ -218,6 +327,65 @@ mod tests {
         assert_eq!(restored.page_size, page::PAGE_SIZE as u32);
         assert!(restored.created_at > 0);
         assert_eq!(restored.last_checkpoint, 0);
+        // Check default config values
+        assert_eq!(restored.cache_size, 1024); // Default
+        assert_eq!(restored.max_pages, 0); // 0 = unlimited
+        assert_eq!(restored.max_memory_bytes, 0);
+        assert_eq!(restored.sync_mode, 1); // OnCommit
+        assert_eq!(restored.sync_interval_ms, 0);
+        assert_eq!(restored.wal_max_file_size, 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn metadata_page_from_config_roundtrip() {
+        let cfg = StorageConfig {
+            cache_size: 2048,
+            max_pages: Some(10000),
+            wal_config: WalWriterConfig {
+                sync_mode: SyncMode::Periodic(Duration::from_millis(500)),
+                max_file_size: 128 * 1024 * 1024,
+            },
+        };
+        let meta = MetadataPage::from_config(7, &cfg, Some(1024 * 1024));
+        let buf = meta.serialize();
+        let restored = MetadataPage::deserialize(&buf).expect("deserialize");
+
+        assert_eq!(restored.min_degree, 7);
+        assert_eq!(restored.cache_size, 2048);
+        assert_eq!(restored.max_pages, 10000);
+        assert_eq!(restored.max_memory_bytes, 1024 * 1024);
+        assert_eq!(restored.sync_mode, 2); // Periodic
+        assert_eq!(restored.sync_interval_ms, 500);
+        assert_eq!(restored.wal_max_file_size, 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn metadata_page_to_storage_config() {
+        let cfg = StorageConfig {
+            cache_size: 4096,
+            max_pages: Some(50000),
+            wal_config: WalWriterConfig {
+                sync_mode: SyncMode::Immediate,
+                max_file_size: 32 * 1024 * 1024,
+            },
+        };
+        let meta = MetadataPage::from_config(5, &cfg, None);
+        let restored_cfg = meta.to_storage_config();
+
+        assert_eq!(restored_cfg.cache_size, 4096);
+        assert_eq!(restored_cfg.max_pages, Some(50000));
+        assert_eq!(restored_cfg.wal_config.sync_mode, SyncMode::Immediate);
+        assert_eq!(restored_cfg.wal_config.max_file_size, 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn metadata_page_max_memory_bytes_opt() {
+        let meta = MetadataPage::new(3);
+        assert_eq!(meta.max_memory_bytes_opt(), None);
+
+        let cfg = StorageConfig::default();
+        let meta = MetadataPage::from_config(3, &cfg, Some(999));
+        assert_eq!(meta.max_memory_bytes_opt(), Some(999));
     }
 
     #[test]

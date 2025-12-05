@@ -70,7 +70,7 @@ pub struct DatabaseStats {
 /// - [`Database::create()`] - new persistent database with defaults
 /// - [`Database::open()`] - open existing persistent database
 ///
-/// Use the builder for advanced configuration:
+/// Use the builder for advanced configuration when **creating** a database:
 ///
 /// ```ignore
 /// let db = Database::builder()
@@ -79,22 +79,31 @@ pub struct DatabaseStats {
 ///     .min_degree(5)                 // B-tree branching factor
 ///     .create("./data")
 ///     .await?;
+///
+/// // Later, just open - config is restored automatically
+/// let db = Database::open("./data").await?;
 /// ```
-#[derive(Debug, Clone)]
+///
+/// # Configuration Persistence
+///
+/// All configuration is persisted to the database's metadata page when
+/// creating. On reopen via [`Database::open()`], the stored configuration
+/// is restored automatically.
+///
+/// # Why No `open()` Method?
+///
+/// The builder intentionally only has [`create()`] and [`in_memory()`].
+/// Since all configuration is persisted at creation time and restored
+/// automatically on open, there's no need to specify config when opening.
+/// Use [`Database::open()`] directly to open an existing database.
+///
+/// [`create()`]: Self::create
+/// [`in_memory()`]: Self::in_memory
+#[derive(Debug, Clone, Default)]
 pub struct DatabaseBuilder {
     storage_config: StorageConfig,
     min_degree: Option<usize>,
     max_memory_bytes: Option<usize>,
-}
-
-impl Default for DatabaseBuilder {
-    fn default() -> Self {
-        Self {
-            storage_config: StorageConfig::default(),
-            min_degree: None,
-            max_memory_bytes: None,
-        }
-    }
 }
 
 impl DatabaseBuilder {
@@ -165,17 +174,25 @@ impl DatabaseBuilder {
     }
 
     /// Creates a new persistent database at the specified path.
+    ///
+    /// All configuration is persisted to the database's metadata page,
+    /// so subsequent calls to [`Database::open()`] will restore the same
+    /// configuration without needing to specify it again.
     pub async fn create(self, path: impl AsRef<Path>) -> Result<Database> {
+        let deg = self.min_degree.unwrap_or(3) as u16;
         let storage = Arc::new(
-            FileStorageEngine::create(path.as_ref(), self.storage_config)
-                .await?,
+            FileStorageEngine::create(
+                path.as_ref(),
+                self.storage_config,
+                deg,
+                self.max_memory_bytes,
+            )
+            .await?,
         );
 
         let mut builder = BTreeBuilder::default()
-            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>);
-        if let Some(deg) = self.min_degree {
-            builder = builder.min_degree(deg);
-        }
+            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>)
+            .min_degree(deg as usize);
         if let Some(bytes) = self.max_memory_bytes {
             builder = builder.max_memory_bytes(bytes);
         }
@@ -186,32 +203,6 @@ impl DatabaseBuilder {
             storage: Some(storage),
             txn_manager: Arc::new(TransactionManager::default()),
         })
-    }
-
-    /// Opens an existing persistent database at the specified path.
-    pub async fn open(self, path: impl AsRef<Path>) -> Result<Database> {
-        let storage = Arc::new(
-            FileStorageEngine::open(path.as_ref(), self.storage_config).await?,
-        );
-
-        let mut builder = BTreeBuilder::default()
-            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>);
-        if let Some(deg) = self.min_degree {
-            builder = builder.min_degree(deg);
-        }
-        if let Some(bytes) = self.max_memory_bytes {
-            builder = builder.max_memory_bytes(bytes);
-        }
-
-        let db = Database {
-            roots: Arc::new(RwLock::new(BTreeMap::new())),
-            btree: Arc::new(builder.build()?),
-            storage: Some(Arc::clone(&storage)),
-            txn_manager: Arc::new(TransactionManager::default()),
-        };
-
-        db.recover(path.as_ref()).await?;
-        Ok(db)
     }
 }
 
@@ -298,24 +289,32 @@ impl Database {
 
     /// Creates a new persistent database at the specified path.
     ///
-    /// Initializes a new database with disk-backed storage. Globals will be
-    /// persisted to disk, while locals remain in-memory only.
+    /// Initializes a new database with disk-backed storage and default
+    /// configuration. Globals will be persisted to disk, while locals
+    /// remain in-memory only.
+    ///
+    /// The default configuration is persisted to the database's metadata,
+    /// so subsequent calls to [`open()`] will restore the same settings.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// let db = Database::create("./data").await?;
     /// ```
+    ///
+    /// [`open()`]: Self::open
     pub async fn create(path: impl AsRef<Path>) -> Result<Self> {
+        let cfg = StorageConfig::default();
+        let deg = 3u16; // default min_degree
         let storage = Arc::new(
-            FileStorageEngine::create(path.as_ref(), StorageConfig::default())
-                .await?,
+            FileStorageEngine::create(path.as_ref(), cfg, deg, None).await?,
         );
 
         let btree = Arc::new(
             BTreeBuilder::default()
                 .storage(Arc::clone(&storage)
                     as Arc<dyn crate::engine::AsyncStorageEngine>)
+                .min_degree(deg as usize)
                 .build()?,
         );
 
@@ -332,23 +331,28 @@ impl Database {
     /// Loads the database from disk, runs WAL recovery, and replays committed
     /// operations. Globals are lazy-loaded from the registry on first access.
     ///
+    /// The configuration is restored from the database's stored metadata,
+    /// so no configuration parameters are needed.
+    ///
     /// # Examples
     ///
     /// ```ignore
     /// let db = Database::open("./data").await?;
     /// ```
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let storage = Arc::new(
-            FileStorageEngine::open(path.as_ref(), StorageConfig::default())
-                .await?,
-        );
+        let storage = Arc::new(FileStorageEngine::open(path.as_ref()).await?);
 
-        let btree = Arc::new(
-            BTreeBuilder::default()
-                .storage(Arc::clone(&storage)
-                    as Arc<dyn crate::engine::AsyncStorageEngine>)
-                .build()?,
-        );
+        // Use stored config from metadata
+        let deg = storage.min_degree().await as usize;
+        let mut builder = BTreeBuilder::default()
+            .storage(Arc::clone(&storage)
+                as Arc<dyn crate::engine::AsyncStorageEngine>)
+            .min_degree(deg);
+        if let Some(bytes) = storage.max_memory_bytes().await {
+            builder = builder.max_memory_bytes(bytes);
+        }
+
+        let btree = Arc::new(builder.build()?);
 
         let db = Self {
             roots: Arc::new(RwLock::new(BTreeMap::new())),
@@ -1574,5 +1578,69 @@ mod tests {
         let val2 = db.get(&name, &rumps_types::key![2]).await.unwrap();
         assert_eq!(val1, Some(rumps_types::Value::from("A")));
         assert_eq!(val2, Some(rumps_types::Value::from("B")));
+    }
+
+    mod config_persistence {
+        use std::time::Duration;
+
+        use tempfile::TempDir;
+
+        use super::*;
+
+        #[tokio::test]
+        async fn full_roundtrip_custom_config() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("test.db");
+
+            // Create with custom config
+            {
+                let db = Database::builder()
+                    .cache_size(2048)
+                    .max_pages(5000)
+                    .sync_mode(SyncMode::Immediate)
+                    .wal_max_file_size(32 * 1024 * 1024)
+                    .min_degree(5)
+                    .max_memory_bytes(1024 * 1024)
+                    .create(&path)
+                    .await
+                    .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reopen with simple `Database::open()` - config restored
+            {
+                let db = Database::open(&path).await.unwrap();
+
+                // Verify it opens and works
+                let stats = db.debug().await;
+                assert!(stats.storage.is_some());
+
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn periodic_sync_mode_roundtrip() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("test.db");
+
+            // Create with SyncMode::Periodic
+            {
+                let db = Database::builder()
+                    .sync_mode(SyncMode::Periodic(Duration::from_millis(500)))
+                    .create(&path)
+                    .await
+                    .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reopen and verify it opens successfully
+            {
+                let db = Database::open(&path).await.unwrap();
+                let stats = db.debug().await;
+                assert!(stats.storage.is_some());
+                db.close().await.unwrap();
+            }
+        }
     }
 }
