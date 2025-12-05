@@ -60,13 +60,11 @@ use crate::node::{NodeData, NodeId};
 
 /// State for lazily merging buffered entries with a snapshot stream.
 ///
-/// Uses O(1) additional memory by:
-/// - Holding an owned lock guard to the BTreeMap (no collection)
-/// - Using key-based positioning instead of storing an iterator
-/// - Checking buffered membership via O(log n) BTreeMap lookup
+/// Uses O(n + m) merge iteration where n = snapshot entries, m = buffered writes.
+/// Both sources are in sorted key order; we advance through both simultaneously
+/// without per-entry lookups.
 ///
-/// Both sources yield entries in sorted key order. Buffered entries take
-/// precedence over snapshot entries with the same key.
+/// Buffered entries take precedence over snapshot entries with the same key.
 struct MergeState<'a, T, F, P>
 where
     F: Fn(&Key, &Option<Value>) -> Option<T>,
@@ -76,10 +74,11 @@ where
     writes_guard: OwnedRwLockReadGuard<BTreeMap<(Name, Key), WriteOp>>,
     /// Target name for filtering buffered entries.
     name: Name,
-    /// Last buffered key yielded (for range iteration). None = start.
+    /// Last buffered key visited (for range iteration). `None` = start.
     last_buffered_key: Option<Key>,
-    /// Next buffered entry to consider (lazily fetched).
-    next_buffered: Option<(Key, T)>,
+    /// Next buffered entry: `Some((key, Some(val)))` = yieldable Set,
+    /// `Some((key, None))` = non-yieldable (Delete/Kill or failed pred).
+    next_buffered: Option<(Key, Option<T>)>,
     /// Extract function to convert `Option<Value>` to `T`.
     extract: F,
     /// Predicate for filtering entries.
@@ -102,6 +101,10 @@ where
     P: Fn(&Key, &Option<Value>) -> bool + Send + Sync,
 {
     /// Advances to the next buffered entry using O(log n) range lookup.
+    ///
+    /// Unlike the previous implementation, this includes ALL write ops
+    /// (Set, Delete, KillSubtree) so the merge logic can properly hide
+    /// snapshot entries without per-entry `is_buffered` checks.
     fn advance_buffered(&mut self) {
         use std::ops::Bound;
 
@@ -110,7 +113,7 @@ where
             Some(k) => Bound::Excluded((self.name.clone(), k.clone())),
         };
 
-        // Find next matching entry in O(log n)
+        // Find next entry in O(log n) - include ALL write ops
         self.next_buffered = self
             .writes_guard
             .range((range_start, Bound::Unbounded))
@@ -119,32 +122,31 @@ where
                 if n != &self.name {
                     None
                 } else {
-                    match op {
-                        WriteOp::Set(data) => {
-                            // Check start condition
-                            let after_start = self
-                                .start
-                                .as_ref()
-                                .map(|s| k >= s)
-                                .unwrap_or(true);
+                    let after_start =
+                        self.start.as_ref().map(|s| k >= s).unwrap_or(true);
 
-                            // Check if in deleted subtree
-                            let in_deleted = self
-                                .deleted_subtrees
-                                .iter()
-                                .any(|del| k.starts_with(del));
+                    if after_start {
+                        match op {
+                            WriteOp::Set(data) => {
+                                // Check if in deleted subtree
+                                let in_deleted = self
+                                    .deleted_subtrees
+                                    .iter()
+                                    .any(|del| k.starts_with(del));
 
-                            if after_start
-                                && !in_deleted
-                                && (self.pred)(k, &data.value)
-                            {
-                                (self.extract)(k, &data.value)
-                                    .map(|t| (k.clone(), t))
-                            } else {
-                                None
+                                let val = (!in_deleted
+                                    && (self.pred)(k, &data.value))
+                                .then(|| (self.extract)(k, &data.value))
+                                .flatten();
+
+                                Some((k.clone(), val))
+                            }
+                            WriteOp::Delete | WriteOp::KillSubtree => {
+                                Some((k.clone(), None))
                             }
                         }
-                        WriteOp::Delete | WriteOp::KillSubtree => None,
+                    } else {
+                        None
                     }
                 }
             })
@@ -156,88 +158,91 @@ where
         }
     }
 
-    /// Checks if a key exists in the buffered writes (O(log n) lookup).
-    fn is_buffered(&self, key: &Key) -> bool {
-        self.writes_guard
-            .contains_key(&(self.name.clone(), key.clone()))
+    /// Advances the snapshot stream (no `is_buffered` check needed).
+    fn advance_snapshot(&mut self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            if self.next_snapshot.is_none() {
+                match self.snapshot.next().await {
+                    None => {}
+                    Some(Err(e)) => {
+                        self.snapshot_error = Some(e);
+                    }
+                    Some(Ok(entry)) => {
+                        self.next_snapshot = Some(entry);
+                    }
+                }
+            }
+        })
+    }
+
+    /// Yields buffered value if present, skips snapshot if requested, recurses.
+    fn yield_buffered_or_skip(
+        &mut self,
+        skip_snapshot: bool,
+    ) -> BoxFuture<'_, Option<Result<T>>> {
+        Box::pin(async move {
+            let opt_val = self.next_buffered.take().and_then(|(_, v)| v);
+            if skip_snapshot {
+                self.next_snapshot = None;
+            }
+            self.advance_buffered();
+            match opt_val {
+                Some(val) => Some(Ok(val)),
+                None => self.next_impl().await,
+            }
+        })
+    }
+
+    /// Core merge logic with O(n + m) complexity.
+    fn next_impl(&mut self) -> BoxFuture<'_, Option<Result<T>>> {
+        Box::pin(async move {
+            match self.snapshot_error.take() {
+                Some(e) => Some(Err(e)),
+                None => {
+                    // Initialize buffered on first call
+                    if self.next_buffered.is_none()
+                        && self.last_buffered_key.is_none()
+                    {
+                        self.advance_buffered();
+                    }
+
+                    self.advance_snapshot().await;
+
+                    // Clone keys for comparison to avoid borrow issues
+                    let buf_key =
+                        self.next_buffered.as_ref().map(|(k, _)| k.clone());
+                    let snap_key =
+                        self.next_snapshot.as_ref().map(|(k, _)| k.clone());
+
+                    match (buf_key, snap_key) {
+                        (None, None) => None,
+                        (Some(_), None) => {
+                            self.yield_buffered_or_skip(false).await
+                        }
+                        (None, Some(_)) => {
+                            self.next_snapshot.take().map(|(_, val)| Ok(val))
+                        }
+                        (Some(bk), Some(sk)) => match bk.cmp(&sk) {
+                            std::cmp::Ordering::Less => {
+                                self.yield_buffered_or_skip(false).await
+                            }
+                            std::cmp::Ordering::Equal => {
+                                self.yield_buffered_or_skip(true).await
+                            }
+                            std::cmp::Ordering::Greater => self
+                                .next_snapshot
+                                .take()
+                                .map(|(_, val)| Ok(val)),
+                        },
+                    }
+                }
+            }
+        })
     }
 
     /// Gets the next item from the merged stream.
     async fn next(&mut self) -> Option<Result<T>> {
-        // Check for pending error
-        if let Some(e) = self.snapshot_error.take() {
-            Some(Err(e))
-        } else {
-            // Ensure we have next entries from both sources
-            if self.next_buffered.is_none() && self.last_buffered_key.is_none()
-            {
-                // First call - initialize buffered
-                self.advance_buffered();
-            }
-            self.advance_snapshot().await;
-
-            match (&self.next_buffered, &self.next_snapshot) {
-                (None, None) => None,
-                (Some(_), None) => {
-                    let (_, val) = self.next_buffered.take()?;
-                    self.advance_buffered();
-                    Some(Ok(val))
-                }
-                (None, Some(_)) => {
-                    let (_, val) = self.next_snapshot.take()?;
-                    Some(Ok(val))
-                }
-                (Some((buf_key, _)), Some((snap_key, _))) => {
-                    match buf_key.cmp(snap_key) {
-                        std::cmp::Ordering::Less => {
-                            let (_, val) = self.next_buffered.take()?;
-                            self.advance_buffered();
-                            Some(Ok(val))
-                        }
-                        std::cmp::Ordering::Equal => {
-                            // Buffered takes precedence
-                            let (_, val) = self.next_buffered.take()?;
-                            self.advance_buffered();
-                            self.next_snapshot = None;
-                            Some(Ok(val))
-                        }
-                        std::cmp::Ordering::Greater => {
-                            let (_, val) = self.next_snapshot.take()?;
-                            Some(Ok(val))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Advances the snapshot stream, skipping entries that are in the buffered set.
-    fn advance_snapshot(&mut self) -> BoxFuture<'_, ()> {
-        Box::pin(async move {
-            if self.next_snapshot.is_none() {
-                self.pull_next_valid_snapshot().await
-            }
-        })
-    }
-
-    /// Pulls entries from snapshot, skipping keys that exist in buffered set.
-    fn pull_next_valid_snapshot(&mut self) -> BoxFuture<'_, ()> {
-        Box::pin(async move {
-            match self.snapshot.next().await {
-                None => {}
-                Some(Err(e)) => {
-                    self.snapshot_error = Some(e);
-                }
-                Some(Ok((key, val))) => {
-                    // Skip if key is in buffered set (O(log n) check)
-                    if self.is_buffered(&key) {
-                        self.pull_next_valid_snapshot().await
-                    } else {
-                        self.next_snapshot = Some((key, val));
-                    }
-                }
-            }
-        })
+        self.next_impl().await
     }
 }
 

@@ -232,6 +232,45 @@ fn bench_collects(c: &mut Criterion) {
     });
 }
 
+/// Benchmark `collects` stream iteration with 10,000 entries.
+fn bench_collects_10k(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let dir = TempDir::new().unwrap();
+    let db = rt.block_on(Database::create(dir.path())).unwrap();
+    let name = global!("BENCH");
+
+    // Setup: insert 10,000 keys
+    rt.block_on(async {
+        db.transaction(|txn| {
+            let n = name.clone();
+            async move { insert_keys(&txn, &n, 10_000).await }
+        })
+        .await
+        .unwrap();
+    });
+
+    c.bench_function("collects_10000", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                db.transaction(|txn| {
+                    let n = name.clone();
+                    async move {
+                        let vals: Vec<Value> = txn
+                            .collects(&n, None, |_, _| true, |_, v| v.clone())
+                            .await?
+                            .try_collect()
+                            .await?;
+                        black_box(vals.len());
+                        Ok(())
+                    }
+                })
+                .await
+                .unwrap();
+            })
+        })
+    });
+}
+
 /// Benchmark `kill` operation.
 fn bench_kill(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
@@ -298,6 +337,7 @@ criterion_group!(
     bench_get,
     bench_order,
     bench_collects,
+    bench_collects_10k,
     bench_kill,
 );
 
