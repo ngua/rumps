@@ -522,44 +522,6 @@ All operations use `RwLock`:
 
 ---
 
-## Performance Characteristics
-
-### Complexity
-
-| Operation | Average      | Notes                            |
-|-----------|--------------|----------------------------------|
-| `get_at`  | O(log n)     | Binary search at each level      |
-| `set_at`  | O(d × log n) | `d` = key depth for ancestors    |
-| `kill_at` | O(k × log n) | `k` = keys deleted               |
-| `data_at` | O(log n)     | Same as `get_at`                 |
-| `order_at`| O(log n)     | May traverse multiple nodes      |
-
-### Benchmark Results
-
-Empirical benchmarks with async Tokio runtime:
-
-| Benchmark                         | Time (µs) | Description                           |
-|-----------------------------------|-----------|---------------------------------------|
-| `insert_by_depth/2`               | 0.997     | Depth 2 — creates 1 ancestor          |
-| `insert_by_depth/3`               | 1.804     | Depth 3 — creates 2 ancestors         |
-| `insert_by_depth/4`               | 2.605     | Depth 4 — creates 3 ancestors         |
-| `insert_by_depth/5`               | 3.469     | Depth 5 — creates 4 ancestors         |
-| `insert_by_depth/10`              | 11.463    | Depth 10 — creates 9 ancestors        |
-| `depth_5_with_existing_ancestors` | 6.204     | Two inserts at depth 5 (amortization) |
-| `ensure_ancestors_depth_5`        | 5.401     | Isolates ancestor creation            |
-| `best_case_depth_2_fresh_tree`    | 1.033     | Shallow nesting baseline              |
-| `worst_case_depth_10_fresh_tree`  | 11.111    | Deep nesting scenario                 |
-
-**Strengths:**
-- Excellent performance for typical depths (2-3): 1-2 µs
-- Linear scaling with depth (no exponential blowup)
-- Reasonable worst-case at depth 10: ~11 µs
-- Smooth, predictable scaling
-
-Most MUMPS data is 2-3 levels deep, so typical operations complete in 1-2 µs.
-
----
-
 ## Serialization
 
 ### `NodeData` Compact Encoding
@@ -718,19 +680,3 @@ While current performance is production-ready, areas for future optimization:
 3. **Path compression**: For very deep hierarchies; adds complexity not justified for typical MUMPS use
 
 4. **Memory pooling for `Arc` allocations**: Could reduce allocation overhead, though modern allocators are efficient
-
----
-
-## Key Implementation Files
-
-| File                                      | Purpose                                    |
-|-------------------------------------------|--------------------------------------------|
-| `crates/rumps-storage/src/database.rs`    | Database layer: namespace + WAL + MUMPS ops |
-| `crates/rumps-storage/src/btree.rs`       | BTree layer: pure tree operations          |
-| `crates/rumps-storage/src/node.rs`        | `Node`, `NodeData`, `NodeId` types         |
-| `crates/rumps-storage/src/engine/`        | Storage layer: `FileStorageEngine`         |
-| `crates/rumps-storage/src/engine/file.rs` | Page cache, registry, disk I/O             |
-| `crates/rumps-storage/src/wal/`           | Write-Ahead Log: writer, reader, recovery  |
-| `crates/rumps-storage/src/transaction.rs` | Transaction types (`TransactionId`, etc.)  |
-| `crates/rumps-types/src/key.rs`           | `Key`, `Subscript`, `Name` types           |
-| `crates/rumps-types/src/value.rs`         | `Value` enum for stored data               |
