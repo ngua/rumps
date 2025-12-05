@@ -1,0 +1,12 @@
+; Inferred closure constraints are captured in the `let` scheme.
+
+fun main() {
+  let neg = x => 0 - x
+
+  write neg(5)
+
+  let twice = x => x + x
+
+  write twice(21)
+  write twice(1.5)
+}

@@ -42,13 +42,10 @@
 //! expression `^PATIENT(123, "NAME")` maps to:
 //!
 //! ```
-//! use rumps_types::{Name, Key, Subscript};
+//! use rumps_types::{global, key};
 //!
-//! let name = Name::global("PATIENT");
-//! let key = Key::from(vec![
-//!     Subscript::from(123),
-//!     Subscript::from("NAME"),
-//! ]);
+//! let name = global!("PATIENT");
+//! let key = key![123, "NAME"];
 //! // Represents: ^PATIENT(123, "NAME")
 //! ```
 //!
@@ -64,49 +61,47 @@
 //! ## Example Usage
 //!
 //! ```
-//! use rumps_types::{Name, Key, Subscript};
+//! use rumps_types::{global, local, key};
 //!
 //! // Global variable (persistent)
-//! let global_name = Name::global("PATIENT");
+//! let global_name = global!("PATIENT");
 //! assert_eq!(global_name.to_string(), "^PATIENT");
 //!
 //! // Local variable (ephemeral)
-//! let local_name = Name::local("TEMP");
+//! let local_name = local!("TEMP");
 //! assert_eq!(local_name.to_string(), "TEMP");
 //!
 //! // Hierarchical key path
-//! let key = Key::from(vec![
-//!     Subscript::from(123),        // Number
-//!     Subscript::from("ADDRESS"),  // String
-//!     Subscript::from("CITY"),     // String
-//! ]);
+//! let key = key![123, "ADDRESS", "CITY"];
 //! assert_eq!(key.to_string(), "(123, ADDRESS, CITY)");
 //!
 //! // Collation ordering ensures numbers sort numerically
-//! let key1 = Key::from(vec![Subscript::from(2)]);
-//! let key100 = Key::from(vec![Subscript::from(100)]);
+//! let key1 = key![2];
+//! let key100 = key![100];
 //! assert!(key1 < key100);  // NOT "100" < "2" as with strings!
 //! ```
 
-use std::{cmp, fmt};
+use std::hash::{Hash, Hasher};
+use std::{cmp, fmt, mem, slice, vec};
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use smol_str::SmolStr;
 
 /// A RUMPS variable name, either Global (persistent) or Local (ephemeral).
 ///
 /// # Examples
 ///
 /// ```
-/// use rumps_types::Name;
+/// use rumps_types::{global, local};
 ///
 /// // Global variable (persistent, prefixed with ^)
-/// let global = Name::global("PATIENT");
-/// assert_eq!(global.to_string(), "^PATIENT");
+/// let g = global!("PATIENT");
+/// assert_eq!(g.to_string(), "^PATIENT");
 ///
 /// // Local variable (ephemeral, no prefix)
-/// let local = Name::local("TEMP");
-/// assert_eq!(local.to_string(), "TEMP");
+/// let l = local!("TEMP");
+/// assert_eq!(l.to_string(), "TEMP");
 /// ```
 ///
 /// # Serialization
@@ -119,12 +114,12 @@ pub enum Name {
     /// A global variable (persistent, stored on disk).
     ///
     /// Example: `^PATIENT`
-    Global(String),
+    Global(SmolStr),
 
     /// A local variable (ephemeral, memory-only).
     ///
     /// Example: `PATIENT`
-    Local(String),
+    Local(SmolStr),
 }
 
 impl Serialize for Name {
@@ -143,25 +138,78 @@ impl<'de> Deserialize<'de> for Name {
         D: Deserializer<'de>,
     {
         // Deserialize as string, always create Global variant
-        // (since only globals are persisted)
-        let name = String::deserialize(deserializer)?;
-        Ok(Self::Global(name))
+        // (since only globals are persisted; locals are ephemeral)
+        SmolStr::deserialize(deserializer).map(Self::Global)
     }
 }
 
 impl Name {
-    /// Returns the inner name string without the namespace prefix.
+    /// Creates a global variable name from a runtime string.
+    ///
+    /// Use this for dynamically-constructed names (e.g., from user input or
+    /// formatted strings). For string literals known at compile time, prefer
+    /// the [`global!`] macro which uses zero-copy storage.
+    ///
+    /// # When to Use
+    ///
+    /// - **Use [`global!`]** for string literals: `global!("PATIENT")`
+    /// - **Use `Name::global()`** for runtime strings: `Name::global(&format!("TABLE_{}", id))`
     ///
     /// # Examples
     ///
     /// ```
     /// use rumps_types::Name;
     ///
-    /// let global = Name::global("PATIENT");
-    /// assert_eq!(global.name(), "PATIENT");
+    /// // Runtime string from format!
+    /// let id = 123;
+    /// let g = Name::global(&format!("PATIENT_{}", id));
+    /// assert_eq!(g.to_string(), "^PATIENT_123");
     ///
-    /// let local = Name::local("TEMP");
-    /// assert_eq!(local.name(), "TEMP");
+    /// // Runtime string from user input
+    /// let user_input = "CUSTOM_TABLE";
+    /// let g2 = Name::global(user_input);
+    /// ```
+    pub fn global(s: &str) -> Self {
+        Self::Global(SmolStr::new(s))
+    }
+
+    /// Creates a local variable name from a runtime string.
+    ///
+    /// Use this for dynamically-constructed names (e.g., from user input or
+    /// formatted strings). For string literals known at compile time, prefer
+    /// the [`local!`] macro which uses zero-copy storage.
+    ///
+    /// # When to Use
+    ///
+    /// - **Use [`local!`]** for string literals: `local!("TEMP")`
+    /// - **Use `Name::local()`** for runtime strings: `Name::local(&format!("VAR_{}", id))`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::Name;
+    ///
+    /// // Runtime string from format!
+    /// let id = 42;
+    /// let l = Name::local(&format!("TEMP_{}", id));
+    /// assert_eq!(l.to_string(), "TEMP_42");
+    /// ```
+    pub fn local(s: &str) -> Self {
+        Self::Local(SmolStr::new(s))
+    }
+
+    /// Returns the inner name string without the namespace prefix.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::{global, local};
+    ///
+    /// let g = global!("PATIENT");
+    /// assert_eq!(g.name(), "PATIENT");
+    ///
+    /// let l = local!("TEMP");
+    /// assert_eq!(l.name(), "TEMP");
     /// ```
     pub fn name(&self) -> &str {
         match self {
@@ -177,40 +225,6 @@ impl Name {
     /// Returns `true` if this is a local variable.
     pub fn is_local(&self) -> bool {
         matches!(self, Self::Local(_))
-    }
-
-    /// Creates a new global variable name.
-    ///
-    /// This is a convenience method to avoid the verbosity of `Name::Global("name".into())`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use rumps_types::Name;
-    ///
-    /// let global = Name::global("PATIENT");
-    /// assert_eq!(global, Name::global("PATIENT"));
-    /// assert_eq!(global.to_string(), "^PATIENT");
-    /// ```
-    pub fn global(name: &str) -> Self {
-        Self::Global(name.to_string())
-    }
-
-    /// Creates a new local variable name.
-    ///
-    /// This is a convenience method to avoid the verbosity of `Name::Local("name".into())`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use rumps_types::Name;
-    ///
-    /// let local = Name::local("TEMP");
-    /// assert_eq!(local, Name::local("TEMP"));
-    /// assert_eq!(local.to_string(), "TEMP");
-    /// ```
-    pub fn local(name: &str) -> Self {
-        Self::Local(name.to_string())
     }
 }
 
@@ -237,12 +251,12 @@ impl fmt::Display for Name {
 /// # Examples
 ///
 /// ```
-/// use rumps_types::Subscript;
+/// use rumps_types::{subscript, Subscript};
 ///
-/// let bool_sub = Subscript::from(false);
-/// let num_sub = Subscript::from(123);
-/// let char_sub = Subscript::from('A');
-/// let str_sub = Subscript::from("NAME");
+/// let bool_sub = subscript!(false);
+/// let num_sub = subscript!(123);
+/// let char_sub = subscript!('A');
+/// let str_sub = subscript!("NAME");
 /// let json_sub = Subscript::Json(serde_json::json!({"key": "value"}));
 ///
 /// // Extended RUMPS collation: booleans < numbers < chars < strings < json
@@ -258,24 +272,30 @@ impl fmt::Display for Name {
 /// - JSON: single quotes like `'{"active": true}'`
 /// - Char: single quotes with single character like `'A'`
 /// - String: double quotes like `"NAME"`
+///
+/// # Memory Layout
+///
+/// Uses `#[repr(u8)]` with explicit discriminants matching collation order,
+/// enabling fast cross-type comparisons via discriminant byte comparison.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Subscript {
     /// A boolean subscript (false < true).
-    Boolean(bool),
+    Boolean(bool) = 0,
     /// A numeric subscript (integers and floats in numeric order).
-    Number(OrderedFloat<f64>),
+    Number(OrderedFloat<f64>) = 1,
     /// A single character subscript.
-    Char(char),
+    Char(char) = 2,
     /// A string subscript (lexicographic order).
-    String(String),
+    String(String) = 3,
     /// A JSON subscript (arbitrary nested structure).
-    Json(serde_json::Value),
+    Json(serde_json::Value) = 4,
 }
 
 // Manual Hash implementation since serde_json::Value doesn't implement Hash
-impl std::hash::Hash for Subscript {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
+impl Hash for Subscript {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        mem::discriminant(self).hash(state);
         match self {
             Self::Boolean(b) => b.hash(state),
             Self::Number(n) => n.hash(state),
@@ -287,6 +307,18 @@ impl std::hash::Hash for Subscript {
 }
 
 impl Subscript {
+    /// Returns the discriminant byte directly.
+    ///
+    /// # Safety
+    ///
+    /// `#[repr(u8)]` guarantees the enum's memory layout has the discriminant
+    /// as its first byte.
+    #[inline]
+    const fn discriminant(&self) -> u8 {
+        // SAFETY: #[repr(u8)] ensures discriminant is first byte
+        unsafe { *(self as *const Self as *const u8) }
+    }
+
     /// Returns `true` if this is a boolean subscript.
     pub fn is_boolean(&self) -> bool {
         matches!(self, Self::Boolean(_))
@@ -341,44 +373,36 @@ impl Subscript {
 }
 
 impl PartialOrd for Subscript {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Subscript {
+    #[inline]
     fn cmp(&self, other: &Self) -> cmp::Ordering {
-        use Subscript::*;
+        let self_disc = self.discriminant();
+        let other_disc = other.discriminant();
 
-        match (self, other) {
-            // Same variant comparisons
-            (Boolean(a), Boolean(b)) => a.cmp(b),
-            (Number(a), Number(b)) => a.cmp(b),
-            (Char(a), Char(b)) => a.cmp(b),
-            (String(a), String(b)) => a.cmp(b),
-            (Json(a), Json(b)) => a.to_string().cmp(&b.to_string()),
-
-            // Cross-variant comparisons: Boolean < Number < Char < String < Json
-            (Boolean(_), Number(_)) => cmp::Ordering::Less,
-            (Boolean(_), Char(_)) => cmp::Ordering::Less,
-            (Boolean(_), String(_)) => cmp::Ordering::Less,
-            (Boolean(_), Json(_)) => cmp::Ordering::Less,
-            (Number(_), Boolean(_)) => cmp::Ordering::Greater,
-            (Number(_), Char(_)) => cmp::Ordering::Less,
-            (Number(_), String(_)) => cmp::Ordering::Less,
-            (Number(_), Json(_)) => cmp::Ordering::Less,
-            (Char(_), Boolean(_)) => cmp::Ordering::Greater,
-            (Char(_), Number(_)) => cmp::Ordering::Greater,
-            (Char(_), String(_)) => cmp::Ordering::Less,
-            (Char(_), Json(_)) => cmp::Ordering::Less,
-            (String(_), Boolean(_)) => cmp::Ordering::Greater,
-            (String(_), Number(_)) => cmp::Ordering::Greater,
-            (String(_), Char(_)) => cmp::Ordering::Greater,
-            (String(_), Json(_)) => cmp::Ordering::Less,
-            (Json(_), Boolean(_)) => cmp::Ordering::Greater,
-            (Json(_), Number(_)) => cmp::Ordering::Greater,
-            (Json(_), Char(_)) => cmp::Ordering::Greater,
-            (Json(_), String(_)) => cmp::Ordering::Greater,
+        // Fast path: different types resolve by discriminant alone
+        match self_disc.cmp(&other_disc) {
+            cmp::Ordering::Less => cmp::Ordering::Less,
+            cmp::Ordering::Greater => cmp::Ordering::Greater,
+            cmp::Ordering::Equal => {
+                // Same type: compare values
+                match (self, other) {
+                    (Self::Boolean(a), Self::Boolean(b)) => a.cmp(b),
+                    (Self::Number(a), Self::Number(b)) => a.cmp(b),
+                    (Self::Char(a), Self::Char(b)) => a.cmp(b),
+                    (Self::String(a), Self::String(b)) => a.cmp(b),
+                    (Self::Json(a), Self::Json(b)) => {
+                        a.to_string().cmp(&b.to_string())
+                    }
+                    // Unreachable: same discriminant means same variant
+                    _ => cmp::Ordering::Equal,
+                }
+            }
         }
     }
 }
@@ -446,15 +470,12 @@ impl From<serde_json::Value> for Subscript {
 /// # Examples
 ///
 /// ```
-/// use rumps_types::{key, json, Key, Subscript};
+/// use rumps_types::{key, json, Key};
 ///
 /// // Simple key with multiple subscripts
 /// let k = key![123, "ADDRESS", "CITY"];
-/// assert_eq!(k, Key::from(vec![
-///     Subscript::from(123),
-///     Subscript::from("ADDRESS"),
-///     Subscript::from("CITY"),
-/// ]));
+/// assert_eq!(k.len(), 3);
+/// assert_eq!(k.to_string(), "(123, ADDRESS, CITY)");
 ///
 /// // Empty key
 /// let empty = key![];
@@ -462,7 +483,7 @@ impl From<serde_json::Value> for Subscript {
 ///
 /// // Single subscript
 /// let single = key![42];
-/// assert_eq!(single, Key::from(vec![Subscript::from(42)]));
+/// assert_eq!(single.len(), 1);
 ///
 /// // Mixed types with trailing comma
 /// let mixed = key![false, 1.5, 'X', "test",];
@@ -546,8 +567,7 @@ impl<'de> Deserialize<'de> for Subscript {
 /// A key representing a path through the RUMPS tree structure.
 ///
 /// A `Key` is a sequence of subscripts that define a hierarchical path,
-/// like `^PATIENT(123, "NAME")` which would be represented as
-/// `Key::from(vec![123.into(), "NAME".into()])`.
+/// like `^PATIENT(123, "NAME")` which would be represented as `key![123, "NAME"]`.
 ///
 /// Keys are ordered lexicographically by their subscripts using the
 /// extended RUMPS collation order.
@@ -555,16 +575,13 @@ impl<'de> Deserialize<'de> for Subscript {
 /// # Examples
 ///
 /// ```
-/// use rumps_types::{Key, Subscript};
+/// use rumps_types::{key, subscript, Subscript};
 ///
 /// // Create a key with multiple subscripts
-/// let key = Key::from(vec![
-///     Subscript::from(123),
-///     Subscript::from("NAME"),
-/// ]);
+/// let key = key![123, "NAME"];
 ///
 /// assert_eq!(key.len(), 2);
-/// assert_eq!(key.get(0), Some(&Subscript::from(123)));
+/// assert_eq!(key.get(0), Some(&subscript!(123)));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -634,16 +651,13 @@ impl Key {
     /// # Examples
     ///
     /// ```
-    /// use rumps_types::{Key, Subscript};
+    /// use rumps_types::key;
     ///
-    /// let key = Key::from(vec![
-    ///     Subscript::from(123),
-    ///     Subscript::from("NAME"),
-    /// ]);
+    /// let key = key![123, "NAME"];
     ///
     /// let ancestors = key.ancestors();
     /// assert_eq!(ancestors.len(), 1);
-    /// assert_eq!(ancestors[0], Key::from(vec![Subscript::from(123)]));
+    /// assert_eq!(ancestors[0], key![123]);
     /// ```
     pub fn ancestors(&self) -> Vec<Self> {
         (1..self.len())
@@ -662,18 +676,14 @@ impl Key {
     /// # Examples
     ///
     /// ```
-    /// use rumps_types::{Key, Subscript};
+    /// use rumps_types::{key, Key};
     ///
-    /// let key = Key::from(vec![
-    ///     Subscript::from(1),
-    ///     Subscript::from(2),
-    ///     Subscript::from(3),
-    /// ]);
+    /// let key = key![1, 2, 3];
     ///
-    /// let prefix = Key::from(vec![Subscript::from(1), Subscript::from(2)]);
+    /// let prefix = key![1, 2];
     /// assert!(key.starts_with(&prefix));
     ///
-    /// let not_prefix = Key::from(vec![Subscript::from(1), Subscript::from(9)]);
+    /// let not_prefix = key![1, 9];
     /// assert!(!key.starts_with(&not_prefix));
     ///
     /// // A key starts with itself
@@ -693,18 +703,14 @@ impl Key {
     /// # Examples
     ///
     /// ```
-    /// use rumps_types::{Key, Subscript};
+    /// use rumps_types::{key, Key};
     ///
-    /// let key = Key::from(vec![
-    ///     Subscript::from(1),
-    ///     Subscript::from(2),
-    ///     Subscript::from(3),
-    /// ]);
+    /// let key = key![1, 2, 3];
     ///
     /// let parent = key.parent().unwrap();
-    /// assert_eq!(parent, Key::from(vec![Subscript::from(1), Subscript::from(2)]));
+    /// assert_eq!(parent, key![1, 2]);
     ///
-    /// let single = Key::from(vec![Subscript::from(1)]);
+    /// let single = key![1];
     /// assert_eq!(single.parent(), Some(Key::new())); // Empty key
     ///
     /// let empty = Key::new();
@@ -770,7 +776,7 @@ impl FromIterator<Subscript> for Key {
 
 impl IntoIterator for Key {
     type Item = Subscript;
-    type IntoIter = std::vec::IntoIter<Subscript>;
+    type IntoIter = vec::IntoIter<Subscript>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -779,46 +785,116 @@ impl IntoIterator for Key {
 
 impl<'a> IntoIterator for &'a Key {
     type Item = &'a Subscript;
-    type IntoIter = std::slice::Iter<'a, Subscript>;
+    type IntoIter = slice::Iter<'a, Subscript>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
     }
 }
 
-/// Convenience macro for constructing a [`Name::Global`] variable name.
+/// Creates a [`Name::Global`] from a string literal.
+///
+/// This is the preferred way to create global names when the name is known
+/// at compile time. It uses zero-copy storage for the string.
+///
+/// # When to Use
+///
+/// - **Use `global!`** for string literals: `global!("PATIENT")`
+/// - **Use [`Name::global()`]** for runtime strings: `Name::global(&format!("TABLE_{}", id))`
 ///
 /// # Examples
 ///
 /// ```
-/// use rumps_types::{global, Name};
+/// use rumps_types::global;
 ///
-/// let name = global!("PATIENT");
-/// assert_eq!(name, Name::Global("PATIENT".into()));
-/// assert_eq!(name.to_string(), "^PATIENT");
+/// let patients = global!("PATIENT");
+/// assert_eq!(patients.to_string(), "^PATIENT");
+///
+/// // Cloning is cheap (no heap allocation for short names)
+/// let patients2 = patients.clone();
 /// ```
+///
+/// # Note
+///
+/// This macro requires a `&'static str` (i.e., a string literal). For
+/// dynamically-constructed names, use [`Name::global()`] instead.
 #[macro_export]
 macro_rules! global {
     ($name:expr) => {
-        $crate::Name::Global($name.into())
+        $crate::Name::Global($crate::SmolStr::new_static($name))
     };
 }
 
-/// Convenience macro for constructing a [`Name::Local`] variable name.
+/// Creates a [`Name::Local`] from a string literal.
+///
+/// This is the preferred way to create local names when the name is known
+/// at compile time. It uses zero-copy storage for the string.
+///
+/// # When to Use
+///
+/// - **Use `local!`** for string literals: `local!("TEMP")`
+/// - **Use [`Name::local()`]** for runtime strings: `Name::local(&format!("VAR_{}", id))`
 ///
 /// # Examples
 ///
 /// ```
-/// use rumps_types::{local, Name};
+/// use rumps_types::local;
 ///
-/// let name = local!("TEMP");
-/// assert_eq!(name, Name::Local("TEMP".into()));
-/// assert_eq!(name.to_string(), "TEMP");
+/// let temp = local!("TEMP");
+/// assert_eq!(temp.to_string(), "TEMP");
+///
+/// // Cloning is cheap (no heap allocation for short names)
+/// let temp2 = temp.clone();
 /// ```
+///
+/// # Note
+///
+/// This macro requires a `&'static str` (i.e., a string literal). For
+/// dynamically-constructed names, use [`Name::local()`] instead.
 #[macro_export]
 macro_rules! local {
     ($name:expr) => {
-        $crate::Name::Local($name.into())
+        $crate::Name::Local($crate::SmolStr::new_static($name))
+    };
+}
+
+/// Creates a [`Subscript`] from a value.
+///
+/// This is a convenience macro for `Subscript::from(value)`. It accepts any
+/// type that implements `Into<Subscript>`: booleans, integers, floats, chars,
+/// strings, and JSON values.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::subscript;
+///
+/// let b = subscript!(true);
+/// let n = subscript!(123);
+/// let f = subscript!(1.5);
+/// let c = subscript!('X');
+/// let s = subscript!("NAME");
+/// ```
+///
+/// # Note
+///
+/// For building keys with multiple subscripts, prefer the [`key!`] macro
+/// which handles the conversion automatically:
+///
+/// ```
+/// use rumps_types::key;
+///
+/// // Preferred for multi-subscript keys
+/// let k = key![123, "NAME"];
+///
+/// // subscript! is useful for single subscripts or comparisons
+/// use rumps_types::subscript;
+/// assert_eq!(k.get(1), Some(&subscript!("NAME")));
+/// ```
+#[macro_export]
+macro_rules! subscript {
+    ($val:expr) => {
+        $crate::Subscript::from($val)
     };
 }
 
@@ -830,70 +906,70 @@ mod tests {
 
     #[test]
     fn test_global_display() {
-        let name = Name::global("PATIENT");
+        let name = global!("PATIENT");
         assert_eq!(name.to_string(), "^PATIENT");
     }
 
     #[test]
     fn test_local_display() {
-        let name = Name::local("TEMP");
+        let name = local!("TEMP");
         assert_eq!(name.to_string(), "TEMP");
     }
 
     #[test]
     fn test_name_accessor() {
-        let global = Name::global("PATIENT");
-        assert_eq!(global.name(), "PATIENT");
+        let g = global!("PATIENT");
+        assert_eq!(g.name(), "PATIENT");
 
-        let local = Name::local("TEMP");
-        assert_eq!(local.name(), "TEMP");
+        let l = local!("TEMP");
+        assert_eq!(l.name(), "TEMP");
     }
 
     #[test]
     fn test_is_global() {
-        let global = Name::global("PATIENT");
-        assert!(global.is_global());
-        assert!(!global.is_local());
+        let g = global!("PATIENT");
+        assert!(g.is_global());
+        assert!(!g.is_local());
     }
 
     #[test]
     fn test_is_local() {
-        let local = Name::local("TEMP");
-        assert!(local.is_local());
-        assert!(!local.is_global());
+        let l = local!("TEMP");
+        assert!(l.is_local());
+        assert!(!l.is_global());
     }
 
     #[test]
     fn test_ordering() {
-        let global1 = Name::global("A");
-        let global2 = Name::global("B");
-        let local1 = Name::local("A");
-        let local2 = Name::local("B");
+        let g1 = global!("A");
+        let g2 = global!("B");
+        let l1 = local!("A");
+        let l2 = local!("B");
 
         // Globals should sort before locals (based on enum variant order)
-        assert!(global1 < local1);
-        assert!(global2 < local2);
+        assert!(g1 < l1);
+        assert!(g2 < l2);
 
         // Within same variant, sort by name
-        assert!(global1 < global2);
-        assert!(local1 < local2);
+        assert!(g1 < g2);
+        assert!(l1 < l2);
     }
 
     #[test]
     fn test_equality() {
-        let global1 = Name::global("PATIENT");
-        let global2 = Name::global("PATIENT");
-        let local = Name::local("PATIENT");
+        let g1 = global!("PATIENT");
+        let g2 = global!("PATIENT");
+        let l = local!("PATIENT");
 
-        assert_eq!(global1, global2);
-        assert_ne!(global1, local);
+        assert_eq!(g1, g2);
+        assert_ne!(g1, l);
     }
 
     #[test]
     fn test_serialization() {
         // Test that Global serializes as plain string (no enum tag)
-        let global = Name::global("PATIENT");
-        let serialized = bincode::serialize(&global).unwrap();
+        let g = global!("PATIENT");
+        let serialized = bincode::serialize(&g).unwrap();
 
         // Should be same as serializing the string directly
         let string_serialized = bincode::serialize("PATIENT").unwrap();
@@ -901,105 +977,103 @@ mod tests {
 
         // Round-trip should work
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(global, deserialized);
+        assert_eq!(g, deserialized);
 
         // Test that Local also serializes as plain string
-        let local = Name::local("TEMP");
-        let serialized = bincode::serialize(&local).unwrap();
+        let l = local!("TEMP");
+        let serialized = bincode::serialize(&l).unwrap();
         let string_serialized = bincode::serialize("TEMP").unwrap();
         assert_eq!(serialized, string_serialized);
 
         // Deserializing always produces Global variant
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(deserialized, Name::global("TEMP"));
-        assert_ne!(deserialized, local);
+        assert_eq!(deserialized, global!("TEMP"));
+        assert_ne!(deserialized, l);
     }
 
     #[test]
     fn test_name_clone() {
-        let global = Name::global("PATIENT");
-        let global_clone = global.clone();
-        assert_eq!(global, global_clone);
+        let g = global!("PATIENT");
+        let g_clone = g.clone();
+        assert_eq!(g, g_clone);
 
-        let local = Name::local("TEMP");
-        let local_clone = local.clone();
-        assert_eq!(local, local_clone);
+        let l = local!("TEMP");
+        let l_clone = l.clone();
+        assert_eq!(l, l_clone);
     }
 
     #[test]
     fn test_name_hash() {
         use std::collections::HashMap;
 
-        let global1 = Name::global("PATIENT");
-        let global2 = Name::global("PATIENT");
-        let local = Name::local("PATIENT");
+        let g1 = global!("PATIENT");
+        let g2 = global!("PATIENT");
+        let l = local!("PATIENT");
 
         // Test that Name can be used as HashMap key
-        let map = HashMap::from([
-            (global1.clone(), "value1"),
-            (local.clone(), "value2"),
-        ]);
+        let map =
+            HashMap::from([(g1.clone(), "value1"), (l.clone(), "value2")]);
 
         // Same values should map to the same key
-        assert_eq!(map.get(&global2), Some(&"value1"));
-        assert_eq!(map.get(&local), Some(&"value2"));
+        assert_eq!(map.get(&g2), Some(&"value1"));
+        assert_eq!(map.get(&l), Some(&"value2"));
 
         // Different variants with same string should be different keys
         assert_eq!(map.len(), 2);
-        assert_ne!(map.get(&global1), map.get(&local));
+        assert_ne!(map.get(&g1), map.get(&l));
     }
 
     #[test]
     fn test_name_debug() {
-        let global = Name::global("PATIENT");
-        let debug_str = format!("{:?}", global);
+        let g = global!("PATIENT");
+        let debug_str = format!("{:?}", g);
         assert!(debug_str.contains("Global"));
         assert!(debug_str.contains("PATIENT"));
 
-        let local = Name::local("TEMP");
-        let debug_str = format!("{:?}", local);
+        let l = local!("TEMP");
+        let debug_str = format!("{:?}", l);
         assert!(debug_str.contains("Local"));
         assert!(debug_str.contains("TEMP"));
     }
 
     #[test]
     fn test_name_with_special_characters() {
-        let special = Name::global("TEST$#@!");
+        let special = global!("TEST$#@!");
         assert_eq!(special.name(), "TEST$#@!");
         assert_eq!(special.to_string(), "^TEST$#@!");
 
-        let unicode = Name::local("日本語");
+        let unicode = local!("日本語");
         assert_eq!(unicode.name(), "日本語");
         assert_eq!(unicode.to_string(), "日本語");
     }
 
     #[test]
     fn test_name_empty_string() {
-        let empty_global = Name::global("");
-        assert_eq!(empty_global.name(), "");
-        assert_eq!(empty_global.to_string(), "^");
+        let empty_g = global!("");
+        assert_eq!(empty_g.name(), "");
+        assert_eq!(empty_g.to_string(), "^");
 
-        let empty_local = Name::local("");
-        assert_eq!(empty_local.name(), "");
-        assert_eq!(empty_local.to_string(), "");
+        let empty_l = local!("");
+        assert_eq!(empty_l.name(), "");
+        assert_eq!(empty_l.to_string(), "");
     }
 
     #[test]
     fn test_name_serialization_edge_cases() {
         // Test empty string
-        let empty = Name::global("");
+        let empty = global!("");
         let serialized = bincode::serialize(&empty).unwrap();
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
         assert_eq!(empty, deserialized);
 
         // Test special characters
-        let special = Name::global("^$#@!");
+        let special = global!("^$#@!");
         let serialized = bincode::serialize(&special).unwrap();
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
         assert_eq!(special, deserialized);
 
         // Test unicode
-        let unicode = Name::global("日本語テスト");
+        let unicode = global!("日本語テスト");
         let serialized = bincode::serialize(&unicode).unwrap();
         let deserialized: Name = bincode::deserialize(&serialized).unwrap();
         assert_eq!(unicode, deserialized);
@@ -1008,12 +1082,12 @@ mod tests {
     #[test]
     fn test_name_comprehensive_ordering() {
         let names = vec![
-            Name::global("A"),
-            Name::global("B"),
-            Name::global("Z"),
-            Name::local("A"),
-            Name::local("B"),
-            Name::local("Z"),
+            global!("A"),
+            global!("B"),
+            global!("Z"),
+            local!("A"),
+            local!("B"),
+            local!("Z"),
         ];
 
         // Verify all globals come before all locals
@@ -1024,15 +1098,15 @@ mod tests {
         names.windows(2).all(|w| w[0] < w[1]);
 
         // Test with same name strings
-        let g = Name::global("SAME");
-        let l = Name::local("SAME");
+        let g = global!("SAME");
+        let l = local!("SAME");
         assert!(g < l);
     }
 
     #[test]
     fn test_name_partialord_consistency() {
-        let g1 = Name::global("A");
-        let g2 = Name::global("B");
+        let g1 = global!("A");
+        let g2 = global!("B");
 
         // PartialOrd should be consistent with Ord
         assert_eq!(g1.partial_cmp(&g2), Some(std::cmp::Ordering::Less));
@@ -1046,20 +1120,20 @@ mod tests {
 
     #[test]
     fn test_subscript_boolean_ordering() {
-        let f = Subscript::from(false);
-        let t = Subscript::from(true);
+        let f = subscript!(false);
+        let t = subscript!(true);
 
         assert!(f < t);
-        assert_eq!(f, Subscript::from(false));
+        assert_eq!(f, subscript!(false));
     }
 
     #[test]
     fn test_subscript_number_ordering() {
-        let n1 = Subscript::from(-10);
-        let n2 = Subscript::from(0);
-        let n3 = Subscript::from(1.5);
-        let n4 = Subscript::from(10);
-        let n5 = Subscript::from(100);
+        let n1 = subscript!(-10);
+        let n2 = subscript!(0);
+        let n3 = subscript!(1.5);
+        let n4 = subscript!(10);
+        let n5 = subscript!(100);
 
         // Numeric ordering
         assert!(n1 < n2);
@@ -1070,10 +1144,10 @@ mod tests {
 
     #[test]
     fn test_subscript_string_ordering() {
-        let s1 = Subscript::from("1");
-        let s2 = Subscript::from("10");
-        let s3 = Subscript::from("ABC");
-        let s4 = Subscript::from("NAME");
+        let s1 = subscript!("1");
+        let s2 = subscript!("10");
+        let s3 = subscript!("ABC");
+        let s4 = subscript!("NAME");
 
         // Lexicographic ordering (note: "1" < "10" as strings)
         assert!(s1 < s2);
@@ -1083,15 +1157,15 @@ mod tests {
 
     #[test]
     fn test_subscript_cross_type_ordering() {
-        let bool_false = Subscript::from(false);
-        let bool_true = Subscript::from(true);
-        let num_neg = Subscript::from(-10);
-        let num_zero = Subscript::from(0);
-        let num_pos = Subscript::from(100);
-        let char_a = Subscript::from('A');
-        let char_z = Subscript::from('Z');
-        let str_num = Subscript::from("1");
-        let str_alpha = Subscript::from("ABC");
+        let bool_false = subscript!(false);
+        let bool_true = subscript!(true);
+        let num_neg = subscript!(-10);
+        let num_zero = subscript!(0);
+        let num_pos = subscript!(100);
+        let char_a = subscript!('A');
+        let char_z = subscript!('Z');
+        let str_num = subscript!("1");
+        let str_alpha = subscript!("ABC");
         let json_val = Subscript::Json(serde_json::json!({"a": 1}));
 
         // Boolean < Number < Char < String < Json
@@ -1110,12 +1184,12 @@ mod tests {
     fn test_subscript_mumps_collation() {
         // This test verifies the RUMPS collation where numeric subscripts
         // are ordered numerically, not lexicographically
-        let num_1 = Subscript::from(1);
-        let num_10 = Subscript::from(10);
-        let num_100 = Subscript::from(100);
-        let str_1 = Subscript::from("1");
-        let str_10 = Subscript::from("10");
-        let str_100 = Subscript::from("100");
+        let num_1 = subscript!(1);
+        let num_10 = subscript!(10);
+        let num_100 = subscript!(100);
+        let str_1 = subscript!("1");
+        let str_10 = subscript!("10");
+        let str_100 = subscript!("100");
 
         // Numeric ordering: 1 < 10 < 100
         assert!(num_1 < num_10);
@@ -1131,12 +1205,12 @@ mod tests {
 
     #[test]
     fn test_subscript_display() {
-        assert_eq!(Subscript::from(false).to_string(), "false");
-        assert_eq!(Subscript::from(true).to_string(), "true");
-        assert_eq!(Subscript::from(123).to_string(), "123");
-        assert_eq!(Subscript::from(1.5).to_string(), "1.5");
-        assert_eq!(Subscript::from('A').to_string(), "A");
-        assert_eq!(Subscript::from("NAME").to_string(), "NAME");
+        assert_eq!(subscript!(false).to_string(), "false");
+        assert_eq!(subscript!(true).to_string(), "true");
+        assert_eq!(subscript!(123).to_string(), "123");
+        assert_eq!(subscript!(1.5).to_string(), "1.5");
+        assert_eq!(subscript!('A').to_string(), "A");
+        assert_eq!(subscript!("NAME").to_string(), "NAME");
         assert_eq!(
             Subscript::Json(serde_json::json!({"a": 1})).to_string(),
             "{\"a\":1}"
@@ -1145,10 +1219,10 @@ mod tests {
 
     #[test]
     fn test_subscript_type_checks() {
-        let bool_sub = Subscript::from(false);
-        let num_sub = Subscript::from(123);
-        let char_sub = Subscript::from('X');
-        let str_sub = Subscript::from("ABC");
+        let bool_sub = subscript!(false);
+        let num_sub = subscript!(123);
+        let char_sub = subscript!('X');
+        let str_sub = subscript!("ABC");
         let json_sub = Subscript::Json(serde_json::json!({"a": 1}));
 
         assert!(bool_sub.is_boolean());
@@ -1185,31 +1259,31 @@ mod tests {
     #[test]
     fn test_subscript_serialization() {
         // Test each variant round-trips correctly
-        let bool_sub = Subscript::from(true);
+        let bool_sub = subscript!(true);
         let serialized = bincode::serialize(&bool_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(bool_sub, deserialized);
 
-        let num_sub = Subscript::from(123.45);
+        let num_sub = subscript!(123.45);
         let serialized = bincode::serialize(&num_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(num_sub, deserialized);
 
-        let char_sub = Subscript::from('Z');
+        let char_sub = subscript!('Z');
         let serialized = bincode::serialize(&char_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(char_sub, deserialized);
 
-        let str_sub = Subscript::from("TEST");
+        let str_sub = subscript!("TEST");
         let serialized = bincode::serialize(&str_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(str_sub, deserialized);
 
-        let json_sub = Subscript::from(serde_json::json!({"test": 123}));
+        let json_sub = subscript!(serde_json::json!({"test": 123}));
         let serialized = bincode::serialize(&json_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
@@ -1232,14 +1306,14 @@ mod tests {
     #[test]
     fn test_key_push_pop() {
         let mut key = Key::new();
-        key.push(Subscript::from(123));
-        key.push(Subscript::from("NAME"));
+        key.push(subscript!(123));
+        key.push(subscript!("NAME"));
 
         assert_eq!(key.len(), 2);
-        assert_eq!(key.get(0), Some(&Subscript::from(123)));
-        assert_eq!(key.get(1), Some(&Subscript::from("NAME")));
+        assert_eq!(key.get(0), Some(&subscript!(123)));
+        assert_eq!(key.get(1), Some(&subscript!("NAME")));
 
-        assert_eq!(key.pop(), Some(Subscript::from("NAME")));
+        assert_eq!(key.pop(), Some(subscript!("NAME")));
         assert_eq!(key.len(), 1);
     }
 
@@ -1299,7 +1373,7 @@ mod tests {
         let collected: Vec<_> = k.iter().cloned().collect();
         assert_eq!(
             collected,
-            vec![Subscript::from(1), Subscript::from(2), Subscript::from(3)]
+            vec![subscript!(1), subscript!(2), subscript!(3)]
         );
 
         // Test IntoIterator for &Key
@@ -1314,8 +1388,7 @@ mod tests {
 
     #[test]
     fn test_key_from_iterator() {
-        let subscripts =
-            vec![Subscript::from(1), Subscript::from(2), Subscript::from(3)];
+        let subscripts = vec![subscript!(1), subscript!(2), subscript!(3)];
         let key: Key = subscripts.into_iter().collect();
         assert_eq!(key.len(), 3);
     }
@@ -1371,21 +1444,19 @@ mod tests {
         // Empty key
         let empty = key![];
         assert_eq!(empty, Key::new());
+        assert_eq!(empty.len(), 0);
 
         // Single subscript
         let single = key![42];
-        assert_eq!(single, Key::from(vec![Subscript::from(42)]));
+        assert_eq!(single.len(), 1);
+        assert_eq!(single.get(0), Some(&subscript!(42)));
 
         // Multiple subscripts with different types
         let multi = key![123, "ADDRESS", "CITY"];
-        assert_eq!(
-            multi,
-            Key::from(vec![
-                Subscript::from(123),
-                Subscript::from("ADDRESS"),
-                Subscript::from("CITY"),
-            ])
-        );
+        assert_eq!(multi.len(), 3);
+        assert_eq!(multi.get(0), Some(&subscript!(123)));
+        assert_eq!(multi.get(1), Some(&subscript!("ADDRESS")));
+        assert_eq!(multi.get(2), Some(&subscript!("CITY")));
 
         // Mixed types
         let mixed = key![false, 1.5, 'X', "test"];

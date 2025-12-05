@@ -1,0 +1,34 @@
+[package]
+name = "rumps"
+version = "0.0.1"
+edition = "2021"
+
+[[bin]]
+name = "rumps"
+required-features = ["cli"]
+
+[dependencies]
+rumps-types = { path = "../rumps-types" }
+rumps-storage = { path = "../rumps-storage", default-features = false }
+rumps-query = { path = "../rumps-query", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+miette = { workspace = true, features = ["fancy"], optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+csv = "1"
+futures = { workspace = true }
+tokio = { workspace = true }
+tokio-test = "0.4"
+
+[features]
+cli = ["dep:clap", "dep:miette", "dep:rumps-query", "dep:tokio"]
+
+[[example]]
+name = "medical"
+
+[[example]]
+name = "financial"
+
+[lints]
+workspace = true

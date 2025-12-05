@@ -1,0 +1,17 @@
+; `Lazy.force` extracts the delayed payload.
+
+fun main() {
+  write "before"
+  let x = Lazy.Lazy(mark())
+  write "after"
+  write Lazy.force(x)
+
+  let y = Lazy.Lazy(() => 7)
+  let f = Lazy.force(y)
+  write f()
+}
+
+fun mark() -> Int {
+  write "forced"
+  23
+}

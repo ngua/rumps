@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; A direct newtype instance blocks falling back to representation-derived `Display`.\n\nfun main() { }\n\nnewtype Label = String\n\nclass Display for Label {\n  fun display(x: Label) -> String {\n    Display:display(x)\n  }\n}\n"
+---
+ERROR: cannot use a class method while defining that class for the same type

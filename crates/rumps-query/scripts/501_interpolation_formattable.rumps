@@ -1,0 +1,31 @@
+; Interpolation uses `Formattable`, not `Display` or `Into[String]`.
+
+#(deriving: Display)
+variant Token = Token(String)
+
+class Into[String] for Token {
+  fun into(t: Token) -> String {
+    match t {
+      Token.Token(_) => { "into-token" }
+    }
+  }
+}
+
+class Formattable for Token {
+  fun format(t: Token) -> String {
+    match t {
+      Token.Token(_) => { "format-token" }
+    }
+  }
+}
+
+#(deriving: Formattable)
+variant Stamp = Stamp
+
+fun main() {
+  let t = Token.Token("secret")
+  write "hole={t}"
+  write "display={:display(t)}"
+  write "into={Into[String]:into(t)}"
+  write "stamp={Stamp.Stamp}"
+}

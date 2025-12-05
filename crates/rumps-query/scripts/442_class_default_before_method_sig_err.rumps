@@ -1,0 +1,13 @@
+; `#(default)` only attaches to method bodies, not signatures.
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+
+  #(default)
+  fun g(x: C) -> Int
+}
+
+fun main() {
+  write "bad"
+}

@@ -1,0 +1,264 @@
+; Union type tests
+
+union NumericId = Int | String
+
+fun format-id(id: NumericId) -> String {
+  match id {
+    n is Int => { "ID#{n}" }
+    s is String => { "ID:{s}" }
+    _ => { "unknown" }
+  }
+}
+
+fun classify(v: Storable) -> String {
+  match v {
+    n is Int if n > 100 => { "large int" }
+    n is Int if n > 0 => { "positive int" }
+    n is Int => { "non-positive int" }
+    s is String if String.length(s) > 10 => { "long string" }
+    s is String => { "short string" }
+    b is Bool => { "boolean" }
+    _ => { "other storable" }
+  }
+}
+
+fun describe-scalar(opt: Option[Scalar]) -> String {
+  match opt {
+    Option.None => { "missing" }
+    Option.Some(s) => {
+      match s {
+        v is String => { "string: {v}" }
+        v is Int => { "int: {v}" }
+        v is Bool => { "bool: {v}" }
+        v is Float => { "float: {v}" }
+        _ => { "unknown scalar" }
+      }
+    }
+  }
+}
+
+fun get-id(use-int: Bool) -> Int | String {
+  if use-int { 42 } else { "abc-123" }
+}
+
+fun get-storable(kind: Int) -> Storable {
+  match kind {
+    0 => { true }
+    1 => { 42 }
+    2 => { 3.14 }
+    3 => { 'x' }
+    4 => { "hello" }
+    _ => { { "json": true } }
+  }
+}
+
+fun get-scalar(kind: Int) -> Scalar {
+  match kind {
+    0 => { true }
+    1 => { 42 }
+    2 => { 3.14 }
+    _ => { "default" }
+  }
+}
+
+fun parse-id(s: String) -> NumericId {
+  let as-int = s read Int
+  match as-int {
+    Result.Ok(n) => { n }
+    Result.Err(_) => { s }
+  }
+}
+
+fun main() {
+  ; === Builtin unions: Storable and Scalar ===
+
+  ; Storable contains: Bool | Int | Float | Char | String | Json
+  ; Scalar contains: Bool | Int | Float | String
+
+  ; is checks against Storable
+  let b: Bool = true
+  let i: Int = 42
+  let f: Float = 3.14
+  let c: Char = 'x'
+  let s: String = "hello"
+
+  write b is Storable
+  write i is Storable
+  write f is Storable
+  write c is Storable
+  write s is Storable
+
+  ; Non-storables
+  let arr = [1, 2, 3]
+  let obj = { x: 1 }
+  let tup = (1, 2)
+  write arr is Storable
+  write obj is Storable
+  write tup is Storable
+
+  ; is checks against Scalar
+  write b is Scalar
+  write i is Scalar
+  write f is Scalar
+  write s is Scalar
+  write c is Scalar  ; Char is not Scalar
+
+  ; === as cast for Storable (infallible) ===
+
+  let int-val: Int = 100
+  let storable-int = int-val as Storable
+  write storable-int is Storable
+  write storable-int is Int
+
+  let str-val: String = "test"
+  let storable-str = str-val as Storable
+  write storable-str is Storable
+  write storable-str is String
+
+  ; === User-defined unions ===
+
+  let id1: Int = 123
+  let id2: String = "abc-456"
+
+  write id1 is NumericId
+  write id2 is NumericId
+
+  ; Non-member
+  let not-id: Float = 1.5
+  write not-id is NumericId
+
+  ; === Union type in function signatures ===
+
+  write format-id(123)
+  write format-id("xyz")
+
+  ; === match with is patterns ===
+
+  let val1 = 42
+  let result1 = match val1 {
+    n is Int => { "int: {n}" }
+    s is String => { "str: {s}" }
+    b is Bool => { "bool" }
+    _ => { "other" }
+  }
+  write result1
+
+  let val2 = "hello"
+  let result2 = match val2 {
+    n is Int => { "int: {n}" }
+    s is String => { "str: {s}" }
+    b is Bool => { "bool" }
+    _ => { "other" }
+  }
+  write result2
+
+  let val3 = true
+  let result3 = match val3 {
+    n is Int => { "int" }
+    s is String => { "str" }
+    b is Bool => { "bool: {b}" }
+    _ => { "other" }
+  }
+  write result3
+
+  ; === Inline union types ===
+
+  let mixed: Int | String = 99
+  write mixed is Int
+  write mixed is String
+
+  let mixed2: Int | String = "foo"
+  write mixed2 is Int
+  write mixed2 is String
+
+  ; === Complex match with guards ===
+
+  write classify(500)
+  write classify(50)
+  write classify(0)
+  write classify("hello world!!!")
+  write classify("hi")
+  write classify(true)
+  write classify(3.14)
+
+  ; === json scalar extraction returns Option[Scalar] ===
+
+  let data = { "name": "Alice", "age": 30, "active": true, "score": 3.14 }
+
+  ; ->> returns Option[Scalar]
+  let name-opt = data->>("name")
+  let age-opt = data->>("age")
+  let active-opt = data->>("active")
+  let score-opt = data->>("score")
+  let missing-opt = data->>("missing")
+
+  write name-opt is Option[_]
+  write age-opt is Option[_]
+  write missing-opt is Option.None
+
+  ; Unwrapped values are Scalar (the union type)
+  let name-val = name-opt!
+  let age-val = age-opt!
+  let active-val = active-opt!
+  let score-val = score-opt!
+
+  write name-val is Scalar
+  write age-val is Scalar
+  write active-val is Scalar
+  write score-val is Scalar
+
+  ; Can narrow Scalar with is
+  write name-val is String
+  write age-val is Int
+  write active-val is Bool
+  write score-val is Float
+
+  ; === Type narrowing with match on json scalars ===
+
+  write describe-scalar(data->>("name"))
+  write describe-scalar(data->>("age"))
+  write describe-scalar(data->>("active"))
+  write describe-scalar(data->>("score"))
+  write describe-scalar(data->>("missing"))
+
+  ; === Static field extraction with .. also returns Option[Scalar] ===
+
+  let static-name = data..name
+  let static-age = data..age
+
+  write static-name is Option[_]
+  write static-name! is Scalar
+  write static-name! is String
+
+  write static-age is Option[_]
+  write static-age! is Scalar
+  write static-age! is Int
+
+  ; === Returning union types from functions ===
+
+  let id-int = get-id(true)
+  let id-str = get-id(false)
+
+  write id-int is Int
+  write id-int is String
+  write id-str is Int
+  write id-str is String
+
+  ; Return Storable
+  write get-storable(0) is Bool
+  write get-storable(1) is Int
+  write get-storable(2) is Float
+  write get-storable(3) is Char
+  write get-storable(4) is String
+  write get-storable(5) is Json
+
+  ; Return Scalar
+  write get-scalar(0) is Bool
+  write get-scalar(1) is Int
+  write get-scalar(2) is Float
+  write get-scalar(3) is String
+
+  ; Return user-defined union
+  write parse-id("123") is Int
+  write parse-id("abc") is String
+}

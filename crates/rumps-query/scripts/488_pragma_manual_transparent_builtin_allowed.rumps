@@ -1,0 +1,20 @@
+; Manual builtin instance is allowed when the representation lacks it.
+
+#(transparent)
+newtype Count = Int
+
+class Indexable[String] for Count {
+  newtype Index = Int
+
+  fun index(x: Count, i: :Index) -> String {
+    "{x}:{i}"
+  }
+
+  fun get(x: Count, i: :Index) -> Option[String] {
+    Option.Some("ok")
+  }
+}
+
+fun main() {
+  write "ok"
+}

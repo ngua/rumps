@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Static `let` dependency collection respects local binders.\n\nvariant Box = Box(Int)\n\nlet y = if Box.Box(5) is Box.Box(x) { x } else { 0 }\nlet x = y\n\nlet outer = () => {\n  fun dep() -> Int {\n    shadow()\n  }\n\n  fun shadow() -> Int {\n    41\n  }\n\n  dep() + 1\n}\n\nlet shadow = outer()\n\nlet by-param = local => local + 1\nlet local = by-param(40)\n\nfun main() {\n  write y\n  write x\n  write shadow\n  write local\n}\n"
+---
+5
+5
+42
+41

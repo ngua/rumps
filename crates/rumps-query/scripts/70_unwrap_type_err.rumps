@@ -1,0 +1,6 @@
+; Unwrap on non-Option/Result should error
+
+fun main() {
+  let plain = 42
+  write plain!
+}

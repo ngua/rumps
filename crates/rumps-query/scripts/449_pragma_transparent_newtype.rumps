@@ -1,0 +1,6 @@
+#(transparent)
+newtype UserId = Int
+
+fun main() {
+  write "transparent newtype"
+}

@@ -1,0 +1,14 @@
+; Non-exhaustive match error
+
+fun main() {
+  let x = 5
+
+  ; This should fail because no arm matches
+  let result = match x {
+    1 => { "one" }
+    2 => { "two" }
+    3 => { "three" }
+  }
+
+  write result
+}

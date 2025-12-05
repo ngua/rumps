@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Partial application boundary errors\n; Over-application and zero-application errors are rejected at both\n; call-sites (user functions, class methods, module functions).\n\nfun add (a: Int, b: Int) -> Int { a + b }\n\nmodule Calc {\n  +fun add(a: Int, b: Int) -> Int { a + b }\n}\n\nfun main() {\n  ; Too many args to user function\n  let a = add(1, 2, 3)\n  ; Too many args to module function\n  let b = Calc.add(1, 2, 3)\n  ; Too many args to class method\n  let c = Mappable:map(x => x + 1, [1, 2, 3], 99)\n  ; Zero args to class method\n  let d = Mappable:map()\n  ; Zero args to module function\n  let e = Calc.add()\n}\n"
+---
+ERROR: too many arguments: expected at most 2, got 3
+missing arguments: expected 2 argument(s), got 0
+too many arguments: expected at most 2, got 3
+too many arguments: expected at most 2, got 3
+missing arguments: expected 2 argument(s), got 0

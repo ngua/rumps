@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module IntoPriv {\n  +newtype A = Int\n\n  +fun make(n: Int) -> IntoPriv.A {\n    n as IntoPriv.A\n  }\n}\n\nclass Into[Int] for IntoPriv.A {\n  fun into(a: IntoPriv.A) -> Int {\n    0\n  }\n}\n\nclass Into[IntoPriv.A] for Int {\n  fun into(n: Int) -> IntoPriv.A {\n    IntoPriv.make(n)\n  }\n}\n\nmodule IntoPub {\n  +newtype A = +Int\n}\n\nmodule IntoPrivInternal {\n  +newtype A = Int\n\n  class Into[Int] for IntoPrivInternal.A {\n    fun into(a: IntoPrivInternal.A) -> Int {\n      0\n    }\n  }\n}\n\nclass Into[Int] for IntoPub.A {\n  fun into(a: IntoPub.A) -> Int {\n    0\n  }\n}\n\nclass Into[IntoPub.A] for Int {\n  fun into(n: Int) -> IntoPub.A {\n    n as IntoPub.A\n  }\n}\n\nfun main() {}\n"
+---
+ERROR: private representation cannot be exposed through `Into`
+private representation cannot be exposed through `Into`
+private representation cannot be exposed through `Into`
+public representation already provides this `Into` conversion
+public representation already provides this `Into` conversion

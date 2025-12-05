@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  write Bad.Bad ?? 1\n}\n\nvariant Bad = Bad\n\nclass Coalescable[Int] for Bad {\n  fun coalesce(b: Bad, rhs: Lazy[Int]) -> Int {\n    raise \"bad coalesce\"\n  }\n}\n"
+---
+ERROR: raise at 141..161: "bad coalesce"

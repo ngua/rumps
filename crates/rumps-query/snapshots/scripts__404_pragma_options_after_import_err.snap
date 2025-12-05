@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "import Math.{ floor }\n\n#(options: sync-mode = immediate)\n\nfun main() {\n  write floor(1.5)\n}\n"
+---
+ERROR: 23..56: `options` pragmas must appear before imports and declarations

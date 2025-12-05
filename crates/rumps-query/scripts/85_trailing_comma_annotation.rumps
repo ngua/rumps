@@ -1,0 +1,7 @@
+; Test: Single-element tuple with incorrect type annotation
+; `(x,)` is a tuple (due to trailing comma), so `(x,): Int` is a type mismatch
+
+fun main() {
+  let x = (42,): Int
+  write x
+}

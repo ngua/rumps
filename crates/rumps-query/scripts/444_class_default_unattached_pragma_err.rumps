@@ -1,0 +1,12 @@
+; Unattached `#(default)` pragmas are static errors.
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+
+  #(default)
+}
+
+fun main() {
+  write "bad"
+}

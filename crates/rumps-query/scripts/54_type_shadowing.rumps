@@ -1,0 +1,15 @@
+; Test: type shadowing
+; Declaring a type with the same name twice shadows the first definition
+
+#(deriving: Display)
+variant Status = Pending | Active
+
+; This shadows the previous definition
+#(deriving: Display)
+variant Status = Open | Closed
+
+fun main() {
+  ; Use the shadowed type (should have Open and Closed variants)
+  let s: Status = Status.Open
+  write :display(s)
+}

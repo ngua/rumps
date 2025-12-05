@@ -1,0 +1,25 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test spread operators for arrays and objects\n; Section 8 of phase-4c.md\n\nfun main() {\n  ; ====== Array Spread ======\n\n  ; Basic array spread\n  let arr1 = [1, 2, 3]\n  let arr2 = [4, 5, 6]\n  let combined = [...arr1, ...arr2]\n  write :display(combined)\n\n  ; Prepend/append with spread\n  let with-zero = [0, ...arr1]\n  write :display(with-zero)\n\n  let with-four = [...arr1, 4]\n  write :display(with-four)\n\n  ; Mixed elements and spreads\n  let mixed = [0, ...arr1, 4, 5]\n  write :display(mixed)\n\n  ; Empty array spread\n  let empty: Array[Int] = []\n  let spread-empty = [...empty, 1, 2]\n  write :display(spread-empty)\n\n  ; Spread with single element array\n  let single = [42]\n  let spread-single = [...single, ...single]\n  write :display(spread-single)\n\n  ; ====== Object Spread ======\n\n  ; Basic object spread\n  let base = { name: \"Alice\", age: 30 }\n  let updated = { ...base, age: 31 }\n  write updated.name\n  write updated.age\n\n  ; Merge multiple objects\n  let defaults = { color: \"red\", size: \"medium\" }\n  let user-prefs = { size: \"large\" }\n  let config = { ...defaults, ...user-prefs }\n  write config.color\n  write config.size\n\n  ; Add new fields\n  let extended = { ...base, city: \"NYC\" }\n  write extended.name\n  write extended.city\n\n  ; Empty object spread\n  let empty-obj = { }\n  let spread-empty-obj = { ...empty-obj, x: 1 }\n  write spread-empty-obj.x\n\n  ; ====== Struct Spread with Preservation ======\n\n  ; Spread a struct value (should preserve type)\n  let alice: Person = { name: \"Alice\", age: 30 }\n  let alice-older: Person = { ...alice, age: 31 }\n  write alice-older.name\n  write alice-older.age\n\n  ; Adding fields to a struct (extensible record semantics)\n  let alice-with-city = { ...alice, city: \"NYC\" }\n  write alice-with-city.city\n\n  ; ====== Nested Spreads ======\n\n  ; Spread of spreads\n  let a = [1, 2]\n  let b = [3, 4]\n  let c = [5, 6]\n  let all = [...a, ...b, ...c]\n  write :display(all)\n\n  ; Nested object spreads\n  let o1 = { x: 1 }\n  let o2 = { y: 2 }\n  let o3 = { z: 3 }\n  let merged = { ...o1, ...o2, ...o3 }\n  write merged.x\n  write merged.y\n  write merged.z\n\n  write \"--- TESTS PASSED ---\"\n}\n\n; Define a struct\nnewtype Person = { name: String, age: Int }\n"
+---
+[ 1, 2, 3, 4, 5, 6 ]
+[ 0, 1, 2, 3 ]
+[ 1, 2, 3, 4 ]
+[ 0, 1, 2, 3, 4, 5 ]
+[ 1, 2 ]
+[ 42, 42 ]
+Alice
+31
+red
+large
+Alice
+NYC
+1
+Alice
+31
+NYC
+[ 1, 2, 3, 4, 5, 6 ]
+1
+2
+3
+--- TESTS PASSED ---

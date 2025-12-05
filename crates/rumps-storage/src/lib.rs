@@ -21,6 +21,11 @@
 //! Operations use interior mutability via `RwLock` for concurrent access.
 
 #![warn(missing_docs)]
+#![allow(dead_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::approx_constant, clippy::expect_used, clippy::unwrap_used)
+)]
 
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("RUMPS requires a 64-bit platform (usize must be 64 bits)");
@@ -35,13 +40,16 @@ pub(crate) mod transaction;
 pub(crate) mod wal;
 
 pub use btree::BTreeStats;
-pub use database::{Database, DatabaseBuilder, DatabaseStats};
+pub use database::{
+    Database, DatabaseBuilder, DatabaseOverride, DatabaseRebuild,
+    DatabaseReconfigure, DatabaseStats,
+};
 pub use engine::{StorageConfig, StorageMetadata};
-pub use error::{Result, StorageError};
+pub use error::{Error, StorageError};
 pub use page::PageCacheStats;
-pub use rumps_types::DataStatus;
+pub use rumps_types::{DataStatus, Result};
 pub use transaction::{
     ConflictStrategy, IsolationLevel, Transaction, TransactionBuilder,
-    TransactionContext, TransactionPriority,
+    TransactionContext,
 };
 pub use wal::{SyncMode, WalWriterConfig};

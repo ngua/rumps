@@ -1,0 +1,5 @@
+; Test: negating a Word is a type error (Word is unsigned)
+
+fun main() {
+  write -(10: Word)
+}

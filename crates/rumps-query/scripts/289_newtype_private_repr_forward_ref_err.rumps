@@ -1,0 +1,12 @@
+fun main() {
+  let x: Int = Leak.zero()
+  write x
+}
+
+module Leak {
+  +newtype A = Int
+
+  +fun zero() -> Leak.A {
+    1
+  }
+}

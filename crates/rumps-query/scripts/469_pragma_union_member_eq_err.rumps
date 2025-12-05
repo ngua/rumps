@@ -1,0 +1,8 @@
+variant Token = Token
+union Equatable = Int | Token
+
+fun main() {
+  let a: Equatable = 1
+  let b: Equatable = 2
+  write a == b
+}

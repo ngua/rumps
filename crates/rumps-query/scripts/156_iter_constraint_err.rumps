@@ -1,0 +1,10 @@
+; `Iterable` constraint rejects non-iterable values
+
+fun main() {
+  ; This should fail: `Int` does not satisfy `Iterable`
+  write process(42)
+}
+
+fun process[T: Iterable](i: T) -> Int {
+  Iterable:length(i)
+}

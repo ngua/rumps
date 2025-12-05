@@ -1,0 +1,190 @@
+; class implementations inside module blocks
+;
+; Tests class ... for ... syntax within user-defined modules.
+; Instances become available after importing the module.
+
+; All imports at top
+import Shapes.{ ... }
+import Prio.{ ... }
+import Nums.{ ... }
+import Container.{ ... }
+import Collections.{ ... }
+; Instances are also brought into scope by empty import
+import EmptyImport.{ }
+
+fun main() {
+  ; ============ Display class in module ============
+
+  let c = Shapes.Circle.Circle(3.14)
+  write :display(c)
+
+  ; ============ Ord class in module ============
+
+  let low: Prio.Priority = 10
+  let high: Prio.Priority = 1
+  write :display(Ord:compare(low, high))
+  write :display(Ord:compare(high, low))
+  write :display(Ord:compare(low, low))
+
+  ; ============ `Numeric` stack in module ============
+
+  let a: Nums.MyInt = 10
+  let b: Nums.MyInt = 3
+  write Additive:add(a, b)
+  write Multiplicative:mul(a, b)
+
+  ; ============ Constrained type params in module ============
+
+  let p1 = Container.Pair.Pair(1, 2)
+  let p2 = Container.Pair.Pair("hello", "world")
+  write :display(p1)
+  write :display(p2)
+
+  ; ============ Indexable with associated type in module ============
+
+  let arr = Collections.IntArray.IntArray([10, 20, 30])
+  write :display(Indexable:get(arr, 1))
+  write Indexable:index(arr, 2)
+
+  ; ============ Empty import brings instance into scope ============
+
+  let thing = EmptyImport.Thing.Thing(42)
+  write :display(thing)
+}
+
+module Shapes {
+  +variant Circle = Circle(Float)
+
+  class Display for Shapes.Circle {
+    fun display(c: Shapes.Circle) -> String {
+      match c {
+        Shapes.Circle.Circle(r) => { "Circle(r={r})" }
+      }
+    }
+  }
+}
+
+module Prio {
+  +newtype Priority = +Int
+
+  ; Reversed ordering: higher number = lower priority
+  class Ord for Prio.Priority {
+    fun compare(a: Prio.Priority, b: Prio.Priority) -> Ordering {
+      let x: Int = a
+      let y: Int = b
+      if x > y { Ordering.Lt } else {
+        if x == y { Ordering.Eq } else { Ordering.Gt }
+      }
+    }
+  }
+}
+
+module Nums {
+  +newtype MyInt = +Int
+
+  class Additive for Nums.MyInt {
+    fun zero() -> Nums.MyInt { 0 }
+    fun add(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x + y
+    }
+  }
+
+  class Subtractive for Nums.MyInt {
+    fun sub(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x - y
+    }
+  }
+
+  class Multiplicative for Nums.MyInt {
+    fun one() -> Nums.MyInt { 1 }
+    fun mul(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x * y
+    }
+  }
+
+  class Divisible for Nums.MyInt {
+    fun div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x / y
+    }
+  }
+
+  class FloorDivisible for Nums.MyInt {
+    fun floor-div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x // y
+    }
+
+    fun mod(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x % y
+    }
+  }
+
+  class Powerable for Nums.MyInt {
+    fun pow(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x ** y
+    }
+  }
+
+  class Numeric for Nums.MyInt { }
+}
+
+module Container {
+  +variant Pair[L, R] = Pair(L, R)
+
+  class Display for Container.Pair[L, R] where L: Display, R: Display {
+    fun display(p: Container.Pair[L, R]) -> String {
+      match p {
+        Container.Pair.Pair(l, r) => {
+          let ls = Display:display(l)
+          let rs = Display:display(r)
+          "Pair({ls}, {rs})"
+        }
+      }
+    }
+  }
+}
+
+module Collections {
+  +variant IntArray = IntArray(Array[Int])
+
+  class Indexable[Int] for Collections.IntArray {
+    newtype Index = Int
+
+    fun index(arr: Collections.IntArray, i: Int) -> Int {
+      match arr {
+        Collections.IntArray.IntArray(inner) => inner[i]
+      }
+    }
+
+    fun get(arr: Collections.IntArray, i: Int) -> Option[Int] {
+      match arr {
+        Collections.IntArray.IntArray(inner) => inner?[i]
+      }
+    }
+  }
+}
+
+module EmptyImport {
+  +variant Thing = Thing(Int)
+
+  class Display for EmptyImport.Thing {
+    fun display(t: EmptyImport.Thing) -> String {
+      match t {
+        EmptyImport.Thing.Thing(n) => { "Thing({n})" }
+      }
+    }
+  }
+}

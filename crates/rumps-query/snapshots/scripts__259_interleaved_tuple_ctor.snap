@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Interleaved tuple constructor positions in HKT class instances.\n;\n; Tuple constructors may have fixed (non-element) positions\n; freely interleaved with element positions, not just as a\n; prefix. E.g. `(,T,)` fixes middle of a triple; `(T,)` fixes\n; first of a pair; `(T, U,)` fixes first two of a triple.\n\nclass MyBimap F {\n  fun my-bimap[A, B, C, D](f: (A) -> C, g: (B) -> D, x: F[A, B]) -> F[C, D]\n}\n\n; Fix middle of triple: (,T,)\nclass MyBimap for (,T,) {\n  fun my-bimap(f, g, x) {\n    (f(x.0), x.1, g(x.2))\n  }\n}\n\nclass MyMap F {\n  fun my-map[A, B](f: (A) -> B, x: F[A]) -> F[B]\n}\n\n; Prefix: (T,)\nclass MyMap for (T,) {\n  fun my-map(f, x) {\n    (x.0, f(x.1))\n  }\n}\n\n; Two fixed prefix: (T, U,)\nclass MyMap for (T, U,) {\n  fun my-map(f, x) {\n    (x.0, x.1, f(x.2))\n  }\n}\n\nfun main() {\n  ; Interleaved: (,T,)\n  let t = (1, \"fixed\", true)\n  write MyBimap:my-bimap(x => x * 2, b => !b, t)\n\n  ; Prefix: (T,)\n  let p = (\"hello\", 42)\n  write MyMap:my-map(x => x + 1, p)\n\n  ; Two fixed prefix: (T, U,)\n  let q = (1, \"two\", 3)\n  write MyMap:my-map(x => x * 10, q)\n}\n"
+---
+(2, "fixed", false)
+("hello", 43)
+(1, "two", 30)

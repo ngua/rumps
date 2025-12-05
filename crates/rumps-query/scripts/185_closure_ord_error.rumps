@@ -1,0 +1,10 @@
+; Test: Closures are not Ord
+; Comparing closures should produce a type error since they don't implement Ord.
+
+fun main() {
+  let f = (x: Int) -> Int => x + 1
+  let g = (x: Int) -> Int => x + 2
+
+  ; Closures are not comparable
+  write f < g
+}

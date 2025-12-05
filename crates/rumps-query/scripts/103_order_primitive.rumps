@@ -1,0 +1,79 @@
+; Test: @order primitive
+; Returns next subscript at a given level
+; NOTE: Uses locals only; globals require transaction blocks
+
+fun main() {
+  ; Set up test data
+  @set items{1} "one"
+  @set items{2} "two"
+  @set items{10} "ten"
+  @set items{"A"} "alpha"
+  @set items{"B"} "beta"
+
+  @set nested{1, "A"} "nested 1A"
+  @set nested{1, "B"} "nested 1B"
+  @set nested{2, "X"} "nested 2X"
+
+  ; First subscript at root (no after value, use {} for root)
+  let first = @order items{}
+  write :display(first)
+
+  ; Next subscript after 1
+  let after-1 = @order items{1}
+  write :display(after-1)
+
+  ; Next subscript after 2
+  let after-2 = @order items{2}
+  write :display(after-2)
+
+  ; Next subscript after 10
+  let after-10 = @order items{10}
+  write :display(after-10)
+
+  ; Past the last numeric key
+  let after-a = @order items{"A"}
+  write :display(after-a)
+
+  ; Past the last key entirely
+  let after-b = @order items{"B"}
+  write :display(after-b)
+
+  ; Next subscript at root after 1 (which is 2)
+  let nested-after-1 = @order nested{1}
+  write :display(nested-after-1)
+
+  ; Next subscript under nested{1} after "A"
+  let nested-1-after-a = @order nested{1, "A"}
+  write :display(nested-1-after-a)
+
+  ; Past last key under nested{1}
+  let nested-1-after-b = @order nested{1, "B"}
+  write :display(nested-1-after-b)
+
+  ; Next subscript at root after 2 (none)
+  let nested-after-2 = @order nested{2}
+  write :display(nested-after-2)
+
+  ; @order on non-existent variable (use {} for root)
+  let no-keys = @order empty{}
+  write :display(no-keys)
+
+  ; @order with different subscript types
+  @set mixed{true} "bool key"
+  @set mixed{42} "int key"
+  @set mixed{3.14} "float key"
+  @set mixed{"str"} "string key"
+
+  ; Bool comes first, then numbers, then strings
+  let mixed-first = @order mixed{}
+  write :display(mixed-first)
+
+  let mixed-after-true = @order mixed{true}
+  write :display(mixed-after-true)
+
+  ; Type annotation
+  let typed: Option[Subscript] = @order items{}
+  write :display(typed)
+
+  write "@order test complete"
+}

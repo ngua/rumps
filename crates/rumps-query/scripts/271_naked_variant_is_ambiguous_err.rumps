@@ -1,0 +1,11 @@
+; Ambiguous naked variant constructor in an `is` pattern reports once.
+
+variant A = Foo
+variant B = Foo
+
+fun main() {
+  let x = A.Foo
+  if x is .Foo {
+    write "foo"
+  }
+}

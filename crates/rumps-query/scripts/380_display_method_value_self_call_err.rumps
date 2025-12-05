@@ -1,0 +1,12 @@
+; Method values cannot use their own class method.
+
+fun main() { }
+
+variant Thing = Thing(String)
+
+class Display for Thing {
+  fun display(x: Thing) -> String {
+    let f = Display:display
+    f(x)
+  }
+}

@@ -1,0 +1,15 @@
+; Operator syntax cannot use its own class method.
+
+fun main() { }
+
+newtype Count = Int
+
+class Additive for Count {
+  fun zero() -> Count {
+    0
+  }
+
+  fun add(a: Count, b: Count) -> Count {
+    a + b
+  }
+}

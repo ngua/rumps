@@ -1,0 +1,17 @@
+; No implicit representation `Display` evidence is available across a module.
+
+fun main() {
+  let x: Labels.Label = "name"
+  write :display(x)
+}
+
+module Labels {
+  +newtype Label = +String
+
+  class Display for Labels.Label {
+    fun display(x: Labels.Label) -> String {
+      let s: String = x
+      "Label({s})"
+    }
+  }
+}

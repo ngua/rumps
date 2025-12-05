@@ -1,0 +1,7 @@
+; Let-bound closure with explicit `T` must declare inferred constraints.
+
+fun main() {
+  let f = [T](x: T) -> T => x + 1
+
+  write f(1)
+}

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Uppercase object field names can hold callable values.\n\nfun main() {\n  let x = { Make: n => n + 1 }\n\n  write x.Make(41)\n}\n"
+---
+42

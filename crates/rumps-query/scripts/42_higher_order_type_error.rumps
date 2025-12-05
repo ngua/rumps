@@ -1,0 +1,15 @@
+; Test: Higher-Order Function Type Error
+; Passing a function with wrong signature to higher-order function.
+
+fun apply (f: (Int) -> Int, x: Int) -> Int {
+  f(x)
+}
+
+; Pass a function that takes String instead of Int
+fun greet (name: String) -> String {
+  "Hello, {name}"
+}
+
+fun main() {
+  write apply(greet, 5)
+}

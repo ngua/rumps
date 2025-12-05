@@ -1,0 +1,99 @@
+; Test: logical operators
+; Tests and, or, not with both keyword and symbol forms
+
+fun main() {
+  ; and operator (keyword)
+  write true and true
+  ; Expected: true
+
+  write true and false
+  ; Expected: false
+
+  write false and true
+  ; Expected: false
+
+  write false and false
+  ; Expected: false
+
+  ; and operator (symbol)
+  write true && true
+  ; Expected: true
+
+  write true && false
+  ; Expected: false
+
+  ; or operator (keyword)
+  write true or true
+  ; Expected: true
+
+  write true or false
+  ; Expected: true
+
+  write false or true
+  ; Expected: true
+
+  write false or false
+  ; Expected: false
+
+  ; or operator (symbol)
+  write true || false
+  ; Expected: true
+
+  write false || false
+  ; Expected: false
+
+  ; not operator (keyword)
+  write not true
+  ; Expected: false
+
+  write not false
+  ; Expected: true
+
+  ; not operator (symbol)
+  write !true
+  ; Expected: false
+
+  write !false
+  ; Expected: true
+
+  ; Precedence: not before and before or
+  write not false and true
+  ; Expected: true (not binds tighter)
+
+  write true or false and false
+  ; Expected: true (and binds tighter than or)
+
+  write false or true and true
+  ; Expected: true
+
+  ; Parentheses override precedence
+  write (true or false) and false
+  ; Expected: false
+
+  write not (true and false)
+  ; Expected: true
+
+  ; Complex expressions
+  write (true and false) or (false or true)
+  ; Expected: true
+
+  write not (false or false)
+  ; Expected: true
+
+  write (not false) and (not false)
+  ; Expected: true
+
+  ; With variables
+  let a = true
+  let b = false
+  write a and not b
+  ; Expected: true
+
+  write not a or b
+  ; Expected: false
+
+  write (a or b) and (not b)
+  ; Expected: true
+
+  write "Logical operators test complete"
+}

@@ -1,0 +1,14 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Direct `Formattable:format` tests. Interpolation is intentionally not used.\n\n#(deriving: Formattable)\nvariant Token = Token(String) | Empty\n\n#(deriving: Formattable)\nnewtype Label = String\n\n#(transparent)\nnewtype Raw = String\n\nvariant Manual = Manual(Int)\n\nclass Formattable for Manual {\n  fun format(m: Manual) -> String {\n    match m {\n      Manual.Manual(n) => { \"manual:\" ++ Into[String]:into(n) }\n    }\n  }\n}\n\nfun main() {\n  write Formattable:format(\"abc\")\n  write Formattable:format(\"/tmp/raw\" as FilePath)\n  write Formattable:format(true)\n  write Formattable:format(42)\n  write Formattable:format([ \"a\", \"b\" ])\n\n  write Formattable:format(Token.Token(\"secret\"))\n  write Formattable:format(Token.Empty)\n\n  let label: Label = \"label-text\"\n  write Formattable:format(label)\n\n  let raw: Raw = \"raw-text\"\n  write Formattable:format(raw)\n\n  write Formattable:format(Manual.Manual(7))\n}\n"
+---
+abc
+/tmp/raw
+true
+42
+[ a, b ]
+Token.Token(secret)
+Token.Empty
+label-text
+raw-text
+manual:7

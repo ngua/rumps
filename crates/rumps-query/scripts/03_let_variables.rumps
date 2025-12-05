@@ -1,0 +1,54 @@
+; Test: let and variable lookup
+; Tests lexical scoping with let bindings
+
+fun main() {
+  ; Simple binding
+  let x = 42
+  write x
+  ; Expected: 42
+
+  ; Binding using another variable
+  let y = x + 8
+  write y
+  ; Expected: 50
+
+  ; Multiple bindings
+  let a = 1
+  let b = 2
+  let c = 3
+  let sum = a + b + c
+  write sum
+  ; Expected: 6
+
+  ; Shadowing in same scope
+  let val = 10
+  let val = 20
+  write val
+  ; Expected: 20
+
+  ; String variables
+  let name = "Alice"
+  write name
+  ; Expected: Alice
+
+  ; Boolean variables
+  let flag = true
+  write flag
+  ; Expected: true (or true)
+
+  ; Using variables in expressions
+  let base = 100
+  let offset = 25
+  let result = base - offset * 2
+  write result
+  ; Expected: 50
+
+  ; Chained variable references
+  let v1 = 5
+  let v2 = v1 * 2
+  let v3 = v2 + v1
+  write v3
+  ; Expected: 15
+
+  write "let variable test complete"
+}

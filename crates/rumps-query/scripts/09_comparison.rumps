@@ -1,0 +1,109 @@
+; Test: comparison operators
+; Tests all comparison operators
+
+fun main() {
+  ; Equality
+  write 5 == 5
+  ; Expected: true
+
+  write 5 == 6
+  ; Expected: false
+
+  write "abc" == "abc"
+  ; Expected: true
+
+  write "abc" == "def"
+  ; Expected: false
+
+  write true == true
+  ; Expected: true
+
+  write true == false
+  ; Expected: false
+
+  ; Inequality
+  write 5 != 6
+  ; Expected: true
+
+  write 5 != 5
+  ; Expected: false
+
+  ; Less than
+  write 5 < 10
+  ; Expected: true
+
+  write 10 < 5
+  ; Expected: false
+
+  write 5 < 5
+  ; Expected: false
+
+  ; Greater than
+  write 10 > 5
+  ; Expected: true
+
+  write 5 > 10
+  ; Expected: false
+
+  write 5 > 5
+  ; Expected: false
+
+  ; Less than or equal
+  write 5 <= 10
+  ; Expected: true
+
+  write 5 <= 5
+  ; Expected: true
+
+  write 10 <= 5
+  ; Expected: false
+
+  ; Greater than or equal
+  write 10 >= 5
+  ; Expected: true
+
+  write 5 >= 5
+  ; Expected: true
+
+  write 5 >= 10
+  ; Expected: false
+
+  ; Float comparisons
+  write 3.14 < 3.15
+  ; Expected: true
+
+  write 2.5 >= 2.5
+  ; Expected: true
+
+  ; Same-type comparisons (no implicit coercion)
+  write 5 < 6
+  ; Expected: true
+
+  write 5.0 == 5.0
+  ; Expected: true
+
+  ; String comparisons (lexicographic)
+  write "abc" < "abd"
+  ; Expected: true
+
+  write "abc" < "ab"
+  ; Expected: false
+
+  write "apple" < "banana"
+  ; Expected: true
+
+  ; Chained comparisons via variables
+  let a = 5
+  let b = 10
+  let c = 15
+  write a < b
+  ; Expected: true
+
+  write b < c
+  ; Expected: true
+
+  write a < c
+  ; Expected: true
+
+  write "Comparison test complete"
+}

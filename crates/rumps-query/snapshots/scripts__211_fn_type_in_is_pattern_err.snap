@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Function types cannot appear in `is` patterns. The typechecker rejects\n; them because opaque callables (class method refs, module fn refs,\n; partial applications) cannot be introspected at runtime. Without this\n; check, the old runtime helper `fn_value_matches` would be asked to\n; answer an unanswerable question and panic or return a wrong answer.\n\nfun main() {\n  let v: Int | String = 1\n  match v {\n    f is ((Int, Int) -> Int) => write \"got fn: {f}\"\n    _ => write \"other\"\n  }\n}\n"
+---
+ERROR: function types cannot appear in `is` patterns

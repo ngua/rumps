@@ -1,0 +1,31 @@
+class NeedRead T {
+  fun need-read(x: T) -> String
+}
+
+module ReadPrivBound {
+  +newtype A = Array[Int]
+
+  class TryInto[ReadPrivBound.A] for Array[T] where T: NeedRead {
+    fun try-into(xs: Array[T]) -> Result[ReadPrivBound.A, String] {
+      Result.Err("no")
+    }
+  }
+}
+
+module TryPrivExternal {
+  +newtype A = Array[Int]
+
+  +fun wrap(xs: Array[Int]) -> TryPrivExternal.A {
+    xs as TryPrivExternal.A
+  }
+}
+
+class TryInto[TryPrivExternal.A] for Array[Int] {
+  fun try-into(xs: Array[Int]) -> Result[TryPrivExternal.A, String] {
+    Result.Ok(TryPrivExternal.wrap(xs))
+  }
+}
+
+fun main() {
+  let xs = ([1, 2, 3] read ReadPrivBound.A)!
+}

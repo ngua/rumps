@@ -1,0 +1,37 @@
+; Type shadowing errors
+;
+; Tests that defining a type that shadows a builtin or parent module type
+; produces a compile-time error.
+
+fun main() { }
+
+; ============ Shadowing a builtin type ============
+
+module Builtins {
+  ; Error: `Int` shadows a builtin type
+  newtype Int = String
+}
+
+; ============ Shadowing a parent module type ============
+
+module Parent {
+  +newtype Id = Int
+
+  module Child {
+    ; Error: `Id` already in scope from outer module
+    newtype Id = String
+  }
+}
+
+; ============ Shadowing deeply nested ============
+
+module Deep {
+  +variant Status = Active | Inactive
+
+  module Level1 {
+    module Level2 {
+      ; Error: `Status` already in scope from outer module (Deep)
+      variant Status = On | Off
+    }
+  }
+}

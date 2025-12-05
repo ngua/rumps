@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Json` keys do not satisfy `Ord`.\n\nfun main() {\n  let j = { \"a\": 1 }\n  let m = Map.from-entries([(j, \"bad\")])\n  write m\n}\n"
+---
+ERROR: type `Json` does not satisfy `Ord` class

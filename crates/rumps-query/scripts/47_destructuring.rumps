@@ -1,0 +1,63 @@
+; Destructuring bindings
+
+fun main() {
+  ; === Tuple destructuring ===
+
+  let pair = (1, 2)
+  let (a, b) = pair
+  write a
+  write b
+
+  ; Nested tuple
+  let nested = ((1, 2), (3, 4))
+  let ((x1, y1), (x2, y2)) = nested
+  write x1
+  write y1
+  write x2
+  write y2
+
+  ; === Object destructuring ===
+
+  let person = { name: "Alice", age: 30 }
+  let { name, age } = person
+  write name
+  write age
+
+  ; Object with rename
+  let point = { x: 10, y: 20 }
+  let { x: px, y: py } = point
+  write px
+  write py
+
+  ; NOTE: Array destructuring is only supported in match expressions, not in let bindings.
+  ; See 62_match.rumps for array pattern matching examples.
+
+  ; === Wildcard ===
+
+  let triple = (100, 200, 300)
+  let (keep, _, last) = triple
+  write keep
+  write last
+
+  ; Wildcard discards entire value
+  let _ = "discarded"
+  write "wildcard works"
+
+  ; === Mixed nesting ===
+
+  let data = { coords: (10, 20), name: "origin" }
+  let { coords: (cx, cy), name: label } = data
+  write cx
+  write cy
+  write label
+
+  ; === In expressions ===
+
+  let result = {
+    let (x, y) = (5, 10)
+    x + y
+  }
+  write result
+
+  write "Destructuring test complete"
+}

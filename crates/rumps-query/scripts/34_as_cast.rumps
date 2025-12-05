@@ -1,0 +1,113 @@
+; Test: Type cast operator (as)
+; Tests infallible type conversions with the `as` keyword
+
+fun main() {
+  ; === Int -> Float (widen) ===
+
+  let i = 42
+  let f = i as Float
+  write f
+  ; Expected: 42
+
+  ; === Float -> Int (truncate) ===
+
+  let pi = 3.7
+  let truncated = pi as Int
+  write truncated
+  ; Expected: 3
+
+  let neg = -2.9
+  let neg-trunc = neg as Int
+  write neg-trunc
+  ; Expected: -2
+
+  ; === Bool -> Int ===
+
+  let t = true as Int
+  write t
+  ; Expected: 1
+
+  let f = false as Int
+  write f
+  ; Expected: 0
+
+  ; === `T` -> `String` ===
+
+  ; Int to String
+  let n = 123
+  let n-str = n as String
+  write n-str
+  ; Expected: 123
+
+  ; Float to String
+  let pi-str = 3.14 as String
+  write pi-str
+  ; Expected: 3.14
+
+  ; Bool to String
+  let b-str = true as String
+  write b-str
+  ; Expected: true
+
+  let b-str2 = false as String
+  write b-str2
+  ; Expected: false
+
+  ; Array display
+  let arr = [1, 2, 3]
+  let arr-str = :display(arr)
+  write arr-str
+  ; Expected: [ 1, 2, 3 ]
+
+  ; Object display
+  let obj = { name: "Alice", age: 30 }
+  let obj-str = :display(obj)
+  write obj-str
+  ; Expected: { name: Alice, age: 30 }
+
+  ; Option display
+  let some = Option.Some(42)
+  let some-str = :display(some)
+  write some-str
+  ; Expected: Option.Some(42)
+
+  let none = Option.None
+  let none-str = :display(none)
+  write none-str
+  ; Expected: Option.None
+
+  ; === Identity casts ===
+
+  let x = 42 as Int
+  write x
+  ; Expected: 42
+
+  let s = "hello" as String
+  write s
+  ; Expected: hello
+
+  ; Tuple identity cast
+  let tup = (1, 2)
+  write :display(tup as (Int, Int))
+  ; Expected: (1, 2)
+
+  ; Object identity cast
+  let obj2 = { a: 1, b: 2 }
+  write :display(obj2 as { a: Int, b: Int })
+  ; Expected: { a: 1, b: 2 }
+
+  ; === Chained casts ===
+
+  ; Note: Chained casts like `3.7 as Int as Float` require parentheses
+  let chain = (3.7 as Int) as Float
+  write chain
+  ; Expected: 3
+
+  ; === Cast with expressions ===
+
+  let result = (10 + 5) as Float
+  write result
+  ; Expected: 15
+
+  write "Type cast test complete"
+}

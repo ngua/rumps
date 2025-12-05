@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Explicit `Map[K, V]` annotations require `Ord` keys.\n\nfun main() {\n  let m: Map[(Int) -> Int, String] = Map.empty()\n  write m\n}\n"
+---
+ERROR: type `(Int) -> Int` does not satisfy `Ord` class
+type `(Int) -> Int` does not satisfy `Ord` class

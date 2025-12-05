@@ -1,0 +1,50 @@
+; Destructured `let` bindings project generalized component schemes.
+
+newtype Score = Int
+
+fun main() {
+  let (id, empty, _) = (x => x, [], "discarded")
+
+  let nums: Array[Int] = empty
+  let names: Array[String] = empty
+
+  write id(42)
+  write id("forty-two")
+  write Iterable:length(nums)
+  write Iterable:length(names)
+
+  let funcs = {
+    neg: x => 0 - x,
+    same: x => x == x
+  }
+  let { neg, same } = funcs
+
+  write neg(7)
+  write neg(2.5)
+  write same(1)
+  write same("a")
+
+  let { first: keep, vals } = {
+    first: x => x,
+    vals: []
+  }
+
+  let more-ints: Array[Int] = vals
+  let more-strs: Array[String] = vals
+
+  write keep(true)
+  write keep("ok")
+  write Iterable:length(more-ints)
+  write Iterable:length(more-strs)
+
+  let (into-score,) = (Into[Score]:into,)
+  let score = into-score(77)
+  write Into[Int]:into(score)
+
+  let { flip } = {
+    flip: Negatable:neg
+  }
+
+  write flip(8)
+  write flip(1.25)
+}

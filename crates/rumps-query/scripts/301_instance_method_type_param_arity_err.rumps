@@ -1,0 +1,17 @@
+; Error: explicit instance method type param arity must match the class method
+
+variant Box = Box
+
+class Weird C {
+  fun f[A, B](x: C) -> String
+}
+
+class Weird for Box {
+  fun f[T](x: Box) -> String {
+    "ok"
+  }
+}
+
+fun main() {
+  write Weird:f(Box.Box)
+}

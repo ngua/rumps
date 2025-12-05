@@ -1,0 +1,78 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Union type tests\n\nunion NumericId = Int | String\n\nfun format-id(id: NumericId) -> String {\n  match id {\n    n is Int => { \"ID#{n}\" }\n    s is String => { \"ID:{s}\" }\n    _ => { \"unknown\" }\n  }\n}\n\nfun classify(v: Storable) -> String {\n  match v {\n    n is Int if n > 100 => { \"large int\" }\n    n is Int if n > 0 => { \"positive int\" }\n    n is Int => { \"non-positive int\" }\n    s is String if String.length(s) > 10 => { \"long string\" }\n    s is String => { \"short string\" }\n    b is Bool => { \"boolean\" }\n    _ => { \"other storable\" }\n  }\n}\n\nfun describe-scalar(opt: Option[Scalar]) -> String {\n  match opt {\n    Option.None => { \"missing\" }\n    Option.Some(s) => {\n      match s {\n        v is String => { \"string: {v}\" }\n        v is Int => { \"int: {v}\" }\n        v is Bool => { \"bool: {v}\" }\n        v is Float => { \"float: {v}\" }\n        _ => { \"unknown scalar\" }\n      }\n    }\n  }\n}\n\nfun get-id(use-int: Bool) -> Int | String {\n  if use-int { 42 } else { \"abc-123\" }\n}\n\nfun get-storable(kind: Int) -> Storable {\n  match kind {\n    0 => { true }\n    1 => { 42 }\n    2 => { 3.14 }\n    3 => { 'x' }\n    4 => { \"hello\" }\n    _ => { { \"json\": true } }\n  }\n}\n\nfun get-scalar(kind: Int) -> Scalar {\n  match kind {\n    0 => { true }\n    1 => { 42 }\n    2 => { 3.14 }\n    _ => { \"default\" }\n  }\n}\n\nfun parse-id(s: String) -> NumericId {\n  let as-int = s read Int\n  match as-int {\n    Result.Ok(n) => { n }\n    Result.Err(_) => { s }\n  }\n}\n\nfun main() {\n  ; === Builtin unions: Storable and Scalar ===\n\n  ; Storable contains: Bool | Int | Float | Char | String | Json\n  ; Scalar contains: Bool | Int | Float | String\n\n  ; is checks against Storable\n  let b: Bool = true\n  let i: Int = 42\n  let f: Float = 3.14\n  let c: Char = 'x'\n  let s: String = \"hello\"\n\n  write b is Storable\n  write i is Storable\n  write f is Storable\n  write c is Storable\n  write s is Storable\n\n  ; Non-storables\n  let arr = [1, 2, 3]\n  let obj = { x: 1 }\n  let tup = (1, 2)\n  write arr is Storable\n  write obj is Storable\n  write tup is Storable\n\n  ; is checks against Scalar\n  write b is Scalar\n  write i is Scalar\n  write f is Scalar\n  write s is Scalar\n  write c is Scalar  ; Char is not Scalar\n\n  ; === as cast for Storable (infallible) ===\n\n  let int-val: Int = 100\n  let storable-int = int-val as Storable\n  write storable-int is Storable\n  write storable-int is Int\n\n  let str-val: String = \"test\"\n  let storable-str = str-val as Storable\n  write storable-str is Storable\n  write storable-str is String\n\n  ; === User-defined unions ===\n\n  let id1: Int = 123\n  let id2: String = \"abc-456\"\n\n  write id1 is NumericId\n  write id2 is NumericId\n\n  ; Non-member\n  let not-id: Float = 1.5\n  write not-id is NumericId\n\n  ; === Union type in function signatures ===\n\n  write format-id(123)\n  write format-id(\"xyz\")\n\n  ; === match with is patterns ===\n\n  let val1 = 42\n  let result1 = match val1 {\n    n is Int => { \"int: {n}\" }\n    s is String => { \"str: {s}\" }\n    b is Bool => { \"bool\" }\n    _ => { \"other\" }\n  }\n  write result1\n\n  let val2 = \"hello\"\n  let result2 = match val2 {\n    n is Int => { \"int: {n}\" }\n    s is String => { \"str: {s}\" }\n    b is Bool => { \"bool\" }\n    _ => { \"other\" }\n  }\n  write result2\n\n  let val3 = true\n  let result3 = match val3 {\n    n is Int => { \"int\" }\n    s is String => { \"str\" }\n    b is Bool => { \"bool: {b}\" }\n    _ => { \"other\" }\n  }\n  write result3\n\n  ; === Inline union types ===\n\n  let mixed: Int | String = 99\n  write mixed is Int\n  write mixed is String\n\n  let mixed2: Int | String = \"foo\"\n  write mixed2 is Int\n  write mixed2 is String\n\n  ; === Complex match with guards ===\n\n  write classify(500)\n  write classify(50)\n  write classify(0)\n  write classify(\"hello world!!!\")\n  write classify(\"hi\")\n  write classify(true)\n  write classify(3.14)\n\n  ; === json scalar extraction returns Option[Scalar] ===\n\n  let data = { \"name\": \"Alice\", \"age\": 30, \"active\": true, \"score\": 3.14 }\n\n  ; ->> returns Option[Scalar]\n  let name-opt = data->>(\"name\")\n  let age-opt = data->>(\"age\")\n  let active-opt = data->>(\"active\")\n  let score-opt = data->>(\"score\")\n  let missing-opt = data->>(\"missing\")\n\n  write name-opt is Option[_]\n  write age-opt is Option[_]\n  write missing-opt is Option.None\n\n  ; Unwrapped values are Scalar (the union type)\n  let name-val = name-opt!\n  let age-val = age-opt!\n  let active-val = active-opt!\n  let score-val = score-opt!\n\n  write name-val is Scalar\n  write age-val is Scalar\n  write active-val is Scalar\n  write score-val is Scalar\n\n  ; Can narrow Scalar with is\n  write name-val is String\n  write age-val is Int\n  write active-val is Bool\n  write score-val is Float\n\n  ; === Type narrowing with match on json scalars ===\n\n  write describe-scalar(data->>(\"name\"))\n  write describe-scalar(data->>(\"age\"))\n  write describe-scalar(data->>(\"active\"))\n  write describe-scalar(data->>(\"score\"))\n  write describe-scalar(data->>(\"missing\"))\n\n  ; === Static field extraction with .. also returns Option[Scalar] ===\n\n  let static-name = data..name\n  let static-age = data..age\n\n  write static-name is Option[_]\n  write static-name! is Scalar\n  write static-name! is String\n\n  write static-age is Option[_]\n  write static-age! is Scalar\n  write static-age! is Int\n\n  ; === Returning union types from functions ===\n\n  let id-int = get-id(true)\n  let id-str = get-id(false)\n\n  write id-int is Int\n  write id-int is String\n  write id-str is Int\n  write id-str is String\n\n  ; Return Storable\n  write get-storable(0) is Bool\n  write get-storable(1) is Int\n  write get-storable(2) is Float\n  write get-storable(3) is Char\n  write get-storable(4) is String\n  write get-storable(5) is Json\n\n  ; Return Scalar\n  write get-scalar(0) is Bool\n  write get-scalar(1) is Int\n  write get-scalar(2) is Float\n  write get-scalar(3) is String\n\n  ; Return user-defined union\n  write parse-id(\"123\") is Int\n  write parse-id(\"abc\") is String\n}\n"
+---
+true
+true
+true
+true
+true
+false
+false
+false
+true
+true
+true
+true
+false
+true
+true
+true
+true
+true
+true
+false
+ID#123
+ID:xyz
+int: 42
+str: hello
+bool: true
+true
+false
+false
+true
+large int
+positive int
+non-positive int
+long string
+short string
+boolean
+other storable
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+string: Alice
+int: 30
+bool: true
+float: 3.14
+missing
+true
+true
+true
+true
+true
+true
+true
+false
+false
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true

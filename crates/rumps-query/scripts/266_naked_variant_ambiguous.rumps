@@ -1,0 +1,9 @@
+; Naked variant constructor with ambiguous constructor name.
+
+variant A = Foo
+variant B = Foo
+
+fun main() {
+  let x = .Foo
+  write x
+}

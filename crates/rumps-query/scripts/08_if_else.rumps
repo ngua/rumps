@@ -1,0 +1,90 @@
+; Test: if/else branches
+; Tests conditional expressions and statements
+
+fun main() {
+  ; Simple if with true condition
+  if true {
+    write "true branch taken"
+  }
+
+  ; Simple if with false condition (no output)
+  if false {
+    write "This should not print"
+  }
+
+  ; if/else with true condition
+  if true {
+    write "if branch"
+  } else {
+    write "else branch"
+  }
+  ; Expected: if branch
+
+  ; if/else with false condition
+  if false {
+    write "if branch"
+  } else {
+    write "else branch"
+  }
+  ; Expected: else branch
+
+  ; if with comparison
+  let x = 10
+  if x > 5 {
+    write "x is greater than 5"
+  } else {
+    write "x is not greater than 5"
+  }
+  ; Expected: x is greater than 5
+
+  ; if with equality
+  let name = "Alice"
+  if name == "Alice" {
+    write "Hello, Alice!"
+  } else {
+    write "You are not Alice"
+  }
+  ; Expected: Hello, Alice!
+
+  ; if as expression
+  let result = if 10 > 5 { "big" } else { "small" }
+  write result
+  ; Expected: big
+
+  ; Nested if
+  let score = 85
+  if score >= 90 {
+    write "A"
+  } else {
+    if score >= 80 {
+      write "B"
+    } else {
+      if score >= 70 {
+        write "C"
+      } else {
+        write "F"
+      }
+    }
+  }
+  ; Expected: B
+
+  ; if with logical operators
+  let a = true
+  let b = false
+  if a and not b {
+    write "a is true and b is false"
+  }
+  ; Expected: a is true and b is false
+
+  ; if with complex condition
+  let age = 25
+  let has-license = true
+  if age >= 18 and has-license {
+    write "Can drive"
+  } else {
+    write "Cannot drive"
+  }
+  ; Expected: Can drive
+
+  write "if/else test complete"
+}

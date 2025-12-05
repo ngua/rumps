@@ -1,0 +1,77 @@
+; Test: Block and if expressions in expression contexts
+; Tests that blocks and if can appear anywhere an expression is expected
+
+fun main() {
+  ; === Single-arm if returns Unit ===
+  ; Single-arm if always evaluates to Unit (for side effects only)
+  let res = if true { write "side effect" }
+  write :display(res)
+  ; Expected: Unit
+
+  ; === if/else expression in let binding ===
+  let a = if true { "yes" } else { "no" }
+  write a
+
+  let b = if false { "yes" } else { "no" }
+  write b
+
+  ; Nested if/else expressions
+  let nested = if true {
+    if false { 1 } else { 2 }
+  } else {
+    3
+  }
+  write nested
+
+  ; if/else in arithmetic
+  let sum = 10 + if true { 5 } else { 0 }
+  write sum
+
+  ; if/else as argument
+  write if true { "direct if" } else { "nope" }
+
+  ; === Block expressions ===
+
+  ; Block expression in let binding
+  let blk = { 1 + 2 }
+  write blk
+
+  ; Block with statements and tail
+  let computed = {
+    let tmp = 10
+    tmp * 2
+  }
+  write computed
+
+  ; Block in arithmetic
+  let expr = { 5 } + { 3 }
+  write expr
+
+  ; if/else with block that has statements
+  let complex = if true {
+    let inner = 100
+    inner + 1
+  } else {
+    0
+  }
+  write complex
+
+  ; Chained conditionals (all if/else)
+  let grade = 85
+  let letter = if grade >= 90 { "A" } else {
+    if grade >= 80 { "B" } else {
+      if grade >= 70 { "C" } else { "F" }
+    }
+  }
+  write letter
+
+  ; === Blocks without tail return Unit ===
+  let no-tail = {
+    let tmp = 42
+    write tmp
+  }
+  write :display(no-tail)
+  ; Expected: Unit
+
+  write "Block expressions test complete"
+}

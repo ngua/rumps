@@ -1,0 +1,23 @@
+; Static `let`s can reference later functions, `let`s, and module members.
+
+module M {
+  +let g = x => f(x)
+  +let y = () => n + 1
+}
+
+let z = Later.v + 1
+
+fun f(n: Int) -> Int {
+  n + 1
+}
+
+let n = 40
+
+module Later {
+  +let v = 1
+}
+
+fun main() {
+  write M.g(1)
+  write z
+}

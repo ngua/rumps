@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Simple builtin `Iterable` instances\n\nfun main() {\n  write Iterable:length([1, 2, 3])\n  write Iterable:length(1 .. 10)\n  write Iterable:reverse([1, 2, 3])\n  write Iterable:reverse(1 .. 10)\n}\n"
+---
+3
+9
+[ 3, 2, 1 ]
+9 ..= 1

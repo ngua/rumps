@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Unknown type error\n; Type checker should catch use of undefined type names\n\n; This should fail: `Florbl` is not a defined type\nOUTPUT \"3.14\" READ Florbl\n"
+---
+ERROR: unknown type `Florbl`

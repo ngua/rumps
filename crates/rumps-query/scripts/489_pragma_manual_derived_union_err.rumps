@@ -1,0 +1,8 @@
+; Error: deriving before `union` is still an unsupported target.
+
+#(deriving: Eq)
+union Atom = Int | String
+
+fun main() {
+  write "bad"
+}

@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Foldable` methods are required.\n\nvariant Box[T] = Full(T) | Empty\n\nclass Foldable for Box {\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: missing required method `fold` for class `Foldable`
+missing required method `fold-map` for class `Foldable`

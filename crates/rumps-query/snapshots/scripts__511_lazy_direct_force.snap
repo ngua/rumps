@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Direct `Lazy.Lazy(expr)` construction and forcing.\n\nfun main() {\n  let x = 10\n  match Lazy.Lazy(x + 1) {\n    Lazy.Lazy(f) => { write f() }\n  }\n}\n"
+---
+11

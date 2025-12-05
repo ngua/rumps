@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Reversible` was removed; use `Iterable:reverse`.\n\nfun main() {\n  write Reversible:reverse([1, 2, 3])\n}\n"
+---
+ERROR: unknown class `Reversible`

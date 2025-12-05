@@ -1,0 +1,24 @@
+; Top-level `let` groups infer final schemes before function bodies.
+
+fun main() {
+  write use-id-int()
+  write use-id-string()
+
+  let ints: Array[Int] = empty
+  let strs: Array[String] = empty
+
+  write Iterable:length(ints)
+  write Iterable:length(strs)
+  write id(true)
+}
+
+fun use-id-int() -> Int {
+  id(42)
+}
+
+fun use-id-string() -> String {
+  id("forward")
+}
+
+let id = x => x
+let empty = []

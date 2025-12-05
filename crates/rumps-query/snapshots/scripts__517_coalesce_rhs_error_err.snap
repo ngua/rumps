@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  write Option.None ?? boom()\n}\n\nfun boom() -> Int {\n  raise \"rhs failed\"\n}\n"
+---
+ERROR: raise at 68..86: "rhs failed"

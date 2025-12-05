@@ -1,0 +1,11 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Partial application combined with the pipe operator\n\nfun add (a: Int, b: Int) -> Int { a + b }\nfun mul (a: Int, b: Int) -> Int { a * b }\nfun add3 (a: Int, b: Int, c: Int) -> Int { a + b + c }\n\nfun main() {\n  ; Simple pipe + partial app: `x |> f(a)` is `f(a, x)`\n  write 10 |> add(5)\n  ; Expected: 15\n\n  ; Chained pipes with partial app\n  write 5 |> add(10) |> add(20)\n  ; Expected: 35\n\n  ; Mix partial and full application in pipe chain\n  write 3 |> add(4) |> mul(2)\n  ; Expected: 14\n\n  ; 3-arg partially applied to 2 args, pipe supplies the last one\n  write 10 |> add3(1, 2)\n  ; Expected: 13\n\n  ; Store partial, supply remaining via chained call, then pipe\n  let f = add3(1)\n  write 10 |> f(2)\n  ; Expected: 13\n\n  ; Pipe through several partial apps\n  write 0 |> add(1) |> add(2) |> add(3) |> add(4)\n  ; Expected: 10\n\n  ; Closure partially applied in a pipe\n  let g = (a: Int, b: Int) => a * 10 + b\n  write 7 |> g(2)\n  ; Expected: 27\n}\n"
+---
+15
+35
+14
+13
+13
+10
+27

@@ -1,0 +1,199 @@
+; User-defined class instance tests
+;
+; Tests class ... for ... syntax for implementing builtin classes
+; on user-defined types (type, newtype, union).
+;
+; All types and class instances are defined at the BOTTOM to test hoisting.
+
+fun main() {
+  ; === Usage (hoisted) ===
+
+  ; type with Display
+  let p1 = Point.Point(10, 20)
+  let p2 = Point.Origin
+  write :display(p1)
+  write :display(p2)
+
+  ; type with Into[String]
+  let uid = UserId.UserId(42)
+  write Into:into(uid)
+
+  ; Builtin Int with Into[UserId] (convert builtin to user type)
+  let id-from-int = Into:into(99)
+  write id-from-int
+
+  ; newtype with Display
+  let my-age: Age = 30
+  write :display(my-age)
+
+  ; newtype with full `Numeric` stack (delegates to underlying `Int`)
+  let a: MyInt = 10
+  let b: MyInt = 3
+  write "add: {:display(Additive:add(a, b))}"
+  write "sub: {:display(Subtractive:sub(a, b))}"
+  write "mul: {:display(Multiplicative:mul(a, b))}"
+  write "floor-div: {:display(FloorDivisible:floor-div(a, b))}"
+  write "mod: {:display(FloorDivisible:mod(a, b))}"
+  write "pow: {:display(Powerable:pow(a, b))}"
+
+  ; newtype with Ord (reversed comparison)
+  let low: Priority = 10
+  let high: Priority = 1
+  write "compare(10, 1) = {:display(Ord:compare(low, high))}"
+  write "compare(1, 10) = {:display(Ord:compare(high, low))}"
+  let same1: Priority = 5
+  let same2: Priority = 5
+  write "compare(5, 5) = {:display(Ord:compare(same1, same2))}"
+
+  ; union with Display
+  let soi1: StrOrInt = "hello"
+  let soi2: StrOrInt = 42
+  write :display(soi1)
+  write :display(soi2)
+
+  ; type with constrained Display
+  let pair1 = Pair.Pair(1, 2)
+  let pair2 = Pair.Pair("hello", "world")
+  let pair3 = Pair.Pair(true, false)
+  write :display(pair1)
+  write :display(pair2)
+  write :display(pair3)
+}
+
+; === Type and Class Definitions ===
+
+variant Point = Point(Int, Int) | Origin
+
+class Display for Point {
+  fun display(p: Point) -> String {
+    match p {
+      Point.Point(x, y) => { "Point({x}, {y})" }
+      Point.Origin => { "Origin" }
+    }
+  }
+}
+
+variant UserId = UserId(Int)
+
+class Into[String] for UserId {
+  fun into(u: UserId) -> String {
+    match u {
+      UserId.UserId(id) => { "user:{id}" }
+    }
+  }
+}
+
+; Into[UserId] for builtin Int: convert Int to UserId
+class Into[UserId] for Int {
+  fun into(n: Int) -> UserId {
+    UserId.UserId(n)
+  }
+}
+
+#(deriving: Into[String])
+newtype Age = Int
+
+class Display for Age {
+  fun display(a: Age) -> String {
+    "{a} years old"
+  }
+}
+
+newtype MyInt = Int
+
+class Additive for MyInt {
+  fun zero() -> MyInt { 0 }
+  fun add(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x + y
+  }
+}
+
+class Subtractive for MyInt {
+  fun sub(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x - y
+  }
+}
+
+class Multiplicative for MyInt {
+  fun one() -> MyInt { 1 }
+  fun mul(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x * y
+  }
+}
+
+class Divisible for MyInt {
+  fun div(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x / y
+  }
+}
+
+class FloorDivisible for MyInt {
+  fun floor-div(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x // y
+  }
+
+  fun mod(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x % y
+  }
+}
+
+class Powerable for MyInt {
+  fun pow(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x ** y
+  }
+}
+
+class Numeric for MyInt { }
+
+newtype Priority = Int
+
+class Ord for Priority {
+  fun compare(a: Priority, b: Priority) -> Ordering {
+    ; Reversed: higher number = lower priority
+    let x: Int = a
+    let y: Int = b
+    if x > y { Ordering.Lt } else {
+      if x == y { Ordering.Eq } else { Ordering.Gt }
+    }
+  }
+}
+
+union StrOrInt = String | Int
+
+class Display for StrOrInt {
+  fun display(v: StrOrInt) -> String {
+    match v {
+      s is String => { "str({s})" }
+      n is Int => { "int({n})" }
+      _ => { "unknown" }
+    }
+  }
+}
+
+variant Pair[L, R] = Pair(L, R)
+
+class Display for Pair[L, R] where L: Display, R: Display {
+  fun display(p: Pair[L, R]) -> String {
+    match p {
+      Pair.Pair(l, r) => {
+        let ls = :display(l)
+        let rs = :display(r)
+        "Pair({ls}, {rs})"
+      }
+    }
+  }
+}

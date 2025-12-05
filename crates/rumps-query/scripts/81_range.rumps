@@ -1,0 +1,72 @@
+; Range operator tests
+; Tests exclusive (`..`) and inclusive (`..=`) ranges
+; NOTE: Range operators require spaces around `..` and `..=`
+
+fun double(n: Int) -> Int { n * 2 }
+
+fun main() {
+  ; Basic exclusive range display
+  let r1 = 1 .. 5
+  write :display(r1)  ; 1..5
+
+  ; Basic inclusive range display
+  let r2 = 1 ..= 5
+  write :display(r2)  ; 1..=5
+
+  ; Range with expressions: binds looser than additive
+  ; So `1 .. n + 1` parses as `1..(n + 1)`, not `(1..n) + 1`
+  let n = 3
+  let r3 = 0 .. n + 1
+  write :display(r3)  ; 0..4
+
+  ; Collect range to array then map (Range is not Mappable)
+  let squares = Mappable:map(x => x * x, Range.collect(1 .. 4))
+  write :display(squares)  ; [1, 4, 9]
+
+  ; Collect inclusive range to array then map
+  let cubes = Mappable:map(x => x * x * x, Range.collect(1 ..= 3))
+  write :display(cubes)  ; [1, 8, 27]
+
+  ; Filterable:filter with range (collect first)
+  let evens = Filterable:filter(x => x % 2 == 0, Range.collect(1 .. 10))
+  write :display(evens)  ; [2, 4, 6, 8]
+
+  ; Filterable:filter with inclusive range (collect first)
+  let odd = Filterable:filter(x => x % 2 != 0, Range.collect(1 ..= 5))
+  write :display(odd)  ; [1, 3, 5]
+
+  ; Foldable:fold with range (sum 1..5 = 1+2+3+4 = 10)
+  let sum1 = Foldable:fold((acc, x) => acc + x, 0, Range.collect(1 .. 5))
+  write sum1  ; 10
+
+  ; Foldable:fold with inclusive range (sum 1..=5 = 1+2+3+4+5 = 15)
+  let sum2 = Foldable:fold((acc, x) => acc + x, 0, Range.collect(1 ..= 5))
+  write sum2  ; 15
+
+  ; Factorial using range and `fold`
+  let fact5 = Foldable:fold((acc, x) => acc * x, 1, Range.collect(1 ..= 5))
+  write fact5  ; 120
+
+  ; Chaining operations with ranges (collect first)
+  let filtered = Filterable:filter(x => x > 2, Range.collect(1 ..= 5))
+  let result = Mappable:map(x => x * 10, filtered)
+  write :display(result)  ; [30, 40, 50]
+
+  ; Empty range (start >= end for exclusive)
+  let empty = Range.collect(5 .. 5)
+  write :display(empty)  ; []
+
+  ; Negative ranges
+  let negatives = Range.collect(-3 .. 1)
+  write :display(negatives)  ; [-3, -2, -1, 0]
+
+  ; Range with named function (collect first)
+  let doubles = Mappable:map(double, Range.collect(1 .. 5))
+  write :display(doubles)  ; [2, 4, 6, 8]
+
+  ; `Range` to `Array[Int]` via `Range.collect`
+  write :display(Range.collect(1 .. 5))      ; `[1, 2, 3, 4]`
+  write :display(Range.collect(1 ..= 5))     ; `[1, 2, 3, 4, 5]`
+  write :display(Range.collect(3 .. 3))      ; `[]`
+  write :display(Range.collect(-2 .. 2))     ; `[-2, -1, 0, 1]`
+}

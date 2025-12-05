@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Payload evaluation happens when `f()` is called.\n\nfun main() {\n  write \"before\"\n  let x = Lazy.Lazy(mark())\n  write \"after\"\n  match x {\n    Lazy.Lazy(f) => { write f() }\n  }\n}\n\nfun mark() -> Int {\n  write \"forced\"\n  23\n}\n"
+---
+before
+after
+forced
+23

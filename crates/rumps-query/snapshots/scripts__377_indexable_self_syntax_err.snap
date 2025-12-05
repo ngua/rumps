@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Indexable` instance bodies cannot use their own class methods.\n\nfun main() { }\n\nnewtype IntMap = Map[Int, String]\n\nclass Indexable[String] for IntMap {\n  newtype Index = Int\n\n  fun index(im: IntMap, i: :Index) -> String {\n    im[i]\n  }\n\n  fun get(im: IntMap, i: :Index) -> Option[String] {\n    im?[i]\n  }\n}\n"
+---
+ERROR: cannot use a class method while defining that class for the same type
+cannot use a class method while defining that class for the same type

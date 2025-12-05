@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Interpolation uses `Formattable`, not `Display` or `Into[String]`.\n\n#(deriving: Display)\nvariant Token = Token(String)\n\nclass Into[String] for Token {\n  fun into(t: Token) -> String {\n    match t {\n      Token.Token(_) => { \"into-token\" }\n    }\n  }\n}\n\nclass Formattable for Token {\n  fun format(t: Token) -> String {\n    match t {\n      Token.Token(_) => { \"format-token\" }\n    }\n  }\n}\n\n#(deriving: Formattable)\nvariant Stamp = Stamp\n\nfun main() {\n  let t = Token.Token(\"secret\")\n  write \"hole={t}\"\n  write \"display={:display(t)}\"\n  write \"into={Into[String]:into(t)}\"\n  write \"stamp={Stamp.Stamp}\"\n}\n"
+---
+hole=format-token
+display=Token.Token("secret")
+into=into-token
+stamp=Stamp.Stamp

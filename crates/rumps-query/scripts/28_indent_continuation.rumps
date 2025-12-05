@@ -1,0 +1,100 @@
+; Test: indentation-based expression continuation
+; Expressions continue across newlines when indented
+
+fun main() {
+  ; === Basic continuation ===
+
+  let x = 1
+    + 2
+  write x
+  ; Expected: 3
+
+  let y = 10
+    - 3
+    - 2
+  write y
+  ; Expected: 5
+
+  ; === Multi-operator continuation ===
+
+  let sum = 1
+    + 2
+    + 3
+    + 4
+  write sum
+  ; Expected: 10
+
+  ; === Mixed operators with precedence ===
+
+  let expr = 1
+    + 2
+    * 3
+  write expr
+  ; Expected: 7 (1 + (2 * 3))
+
+  let expr2 = 2
+    * 3
+    + 4
+  write expr2
+  ; Expected: 10 ((2 * 3) + 4)
+
+  ; === Comparison continuation ===
+
+  let cmp = 10
+    > 5
+  write cmp
+  ; Expected: true
+
+  ; === Logical continuation ===
+
+  let logic = true
+    and true
+    and false
+  write logic
+  ; Expected: false
+
+  ; === String interpolation (replaces concat) ===
+
+  let greet = "Hello"
+  let target = "World"
+  let msg = "{greet} {target}"
+  write msg
+  ; Expected: Hello World
+
+  ; === Continuation does not apply inside delimiters ===
+
+  ; Arrays can have newlines freely
+  let arr = [
+    1,
+    2,
+    3
+  ]
+  write arr[0]
+  ; Expected: 1
+
+  ; Objects can have newlines freely
+  let obj = {
+    a: 1,
+    b: 2
+  }
+  write obj.a
+  ; Expected: 1
+
+  ; Blocks use braces, not indentation
+  let blk = {
+    let inner = 5
+    inner * 2
+  }
+  write blk
+  ; Expected: 10
+
+  ; === Continuation ends at dedent ===
+
+  let a = 1
+    + 2
+  let b = 3
+  write a + b
+  ; Expected: 6
+
+  write "Indent continuation test complete"
+}

@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Missing superclass for a `Numeric` user instance.\n\nfun main() { }\n\nvariant AddOnly = AddOnly(Int)\n\nclass Additive for AddOnly {\n  fun zero() -> AddOnly {\n    AddOnly.AddOnly(0)\n  }\n\n  fun add(a: AddOnly, b: AddOnly) -> AddOnly {\n    match a {\n      AddOnly.AddOnly(x) => {\n        match b {\n          AddOnly.AddOnly(y) => { AddOnly.AddOnly(x + y) }\n        }\n      }\n    }\n  }\n}\n\nclass Numeric for AddOnly { }\n"
+---
+ERROR: cannot implement `Numeric` for `AddOnly`; missing required superclass instance `Subtractive`
+cannot implement `Numeric` for `AddOnly`; missing required superclass instance `Multiplicative`
+cannot implement `Numeric` for `AddOnly`; missing required superclass instance `Divisible`
+cannot implement `Numeric` for `AddOnly`; missing required superclass instance `FloorDivisible`
+cannot implement `Numeric` for `AddOnly`; missing required superclass instance `Powerable`

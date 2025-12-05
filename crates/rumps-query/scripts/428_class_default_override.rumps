@@ -1,0 +1,32 @@
+; Instance methods override class defaults.
+
+variant Cell = Cell(Int)
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+  fun g(x: C) -> Int
+
+  #(default)
+  fun g(x) {
+    10
+  }
+}
+
+class Optional for Cell {
+  fun f(x: Cell) -> Int {
+    match x {
+      Cell.Cell(n) => { n }
+    }
+  }
+
+  fun g(x: Cell) -> Int {
+    match x {
+      Cell.Cell(n) => { n + 1 }
+    }
+  }
+}
+
+fun main() {
+  write Optional:g(Cell.Cell(3))
+}

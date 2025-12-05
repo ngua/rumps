@@ -1,0 +1,8 @@
+; Direct `Lazy.Lazy(expr)` construction and forcing.
+
+fun main() {
+  let x = 10
+  match Lazy.Lazy(x + 1) {
+    Lazy.Lazy(f) => { write f() }
+  }
+}

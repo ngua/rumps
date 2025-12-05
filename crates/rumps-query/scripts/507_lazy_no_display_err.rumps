@@ -1,0 +1,6 @@
+; `Lazy[T]` does not satisfy `Display`.
+
+fun main() {
+  let x: Lazy[Int] = Lazy.Lazy(1)
+  write :display(x)
+}

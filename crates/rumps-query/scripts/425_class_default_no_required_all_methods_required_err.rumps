@@ -1,0 +1,20 @@
+; No `#(required: ...)` means every method is required.
+
+variant Cell = Cell(Int)
+
+class Strict C {
+  fun f(x: C) -> Int
+  fun g(x: C) -> Int
+}
+
+class Strict for Cell {
+  fun f(x: Cell) -> Int {
+    match x {
+      Cell.Cell(n) => { n }
+    }
+  }
+}
+
+fun main() {
+  write Strict:f(Cell.Cell(3))
+}

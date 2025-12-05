@@ -38,6 +38,8 @@
 //!
 //! The payload is the bincode-serialized `WalRecord`.
 
+use std::path::Path;
+
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 
@@ -74,7 +76,7 @@ impl FileHeader {
     }
 
     /// Read a file header from a WAL file path.
-    pub(crate) async fn read(path: &std::path::Path) -> Result<Self> {
+    pub(crate) async fn read(path: &Path) -> Result<Self> {
         let mut file = File::open(path).await?;
         let mut buf = [0u8; Self::SIZE];
 

@@ -1,0 +1,32 @@
+; Bare `write` uses `Into[String]`; explicit `:display` uses `Display`.
+
+#(deriving: Display)
+variant Password = Password(String)
+
+variant Report = Report
+
+class Into[String] for Password {
+  fun into(p: Password) -> String {
+    match p {
+      Password.Password(_) => { "<redacted>\nsecret" }
+    }
+  }
+}
+
+class Into[Json] for Report {
+  fun into(r: Report) -> Json {
+    match r {
+      Report.Report => {
+        { "kind": "report", "from": "instance" }
+      }
+    }
+  }
+}
+
+fun main() {
+  let p = Password.Password("secret")
+  write p
+  write :display(p)
+  write p raw
+  write Report.Report json
+}

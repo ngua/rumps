@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  write P.f(P.mk([1, 2, 3]))\n}\n\nmodule P {\n  +newtype A[T] = Array[T]\n\n  +fun mk[T](xs: Array[T]) -> A[T] {\n    xs as A[T]\n  }\n\n  +fun f[T](x: A[T]) -> Option[T] {\n    let y = x as Array[T]\n    Indexable:get(y, 0)\n  }\n}\n"
+---
+Option.Some(1)

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Required methods cannot have default bodies.\n\n#(required: f)\nclass Optional C {\n  fun f(x: C) -> Int\n\n  #(default)\n  fun f(x) {\n    10\n  }\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 119..140: `default` method `f` is only allowed for optional methods

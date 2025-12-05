@@ -1,0 +1,7 @@
+; Test catch type errors
+
+fun main() {
+  ; Handler must return same type as expression
+  ; This should fail: expression is Int, handler returns String
+  let x: Int = 42 catch e => "not an int"
+}

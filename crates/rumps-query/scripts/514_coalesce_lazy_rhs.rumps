@@ -1,0 +1,14 @@
+fun main() {
+  write Option.Some(7) ?? mark(1)
+  write Option.None ?? mark(2)
+  write Result.Ok(9) ?? mark(3)
+  write Result.Err("x") ?? mark(4)
+
+  let n = 5
+  write Option.None ?? (n + mark(6))
+}
+
+fun mark(i: Int) -> Int {
+  write "rhs {i}"
+  i
+}

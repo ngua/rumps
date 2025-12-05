@@ -1,0 +1,73 @@
+; Object representation visibility
+
+import ObjPub.{ Person }
+
+module ObjPub {
+  +newtype Person = +{ name: String, age: Int }
+  +newtype Box[T] = +{ value: T }
+  +newtype Pair[L, R] = +{ left: L, right: R }
+}
+
+module ObjPriv {
+  +newtype Person = { name: String, age: Int }
+
+  +fun make(name: String, age: Int) -> ObjPriv.Person {
+    { name: name, age: age }
+  }
+
+  +fun name(p: ObjPriv.Person) -> String {
+    p.name
+  }
+
+  +fun age(p: ObjPriv.Person) -> Int {
+    p.age
+  }
+}
+
+fun greet(p: ObjPub.Person) -> String {
+  "Hello, {p.name}!"
+}
+
+fun make-person(name: String, age: Int) -> { name: String, age: Int } {
+  { name: name, age: age }
+}
+
+fun main() {
+  let p1: ObjPub.Person = { name: "Alice", age: 30 }
+
+  write p1 is Person
+  write p1 is { name: String }
+  write p1 is { name: String, age: Int }
+  write p1 is { name: String, age: Int, extra: Bool }
+
+  write p1.name
+  write p1.age
+
+  let p2: ObjPub.Person = { name: "Bob", age: 25, job: "Engineer" }
+  write p2 is Person
+  write p2 is { name: String, job: String }
+  write p2 is { name: String, age: Int, job: String }
+
+  write p2.name
+  write p2.job
+
+  let int-box: ObjPub.Box[Int] = { value: 42 }
+  write int-box.value
+
+  let str-box: ObjPub.Box[String] = { value: "hello" }
+  write str-box.value
+
+  let pair: ObjPub.Pair[Int, String] = { left: 1, right: "one" }
+  write pair.left
+  write pair.right
+
+  let priv = ObjPriv.make("Carol", 40)
+  write ObjPriv.name(priv)
+  write ObjPriv.age(priv)
+
+  write greet({ name: "Diana", age: 28 })
+
+  let p3 = make-person("Eve", 35)
+  write p3.name
+  write p3.age
+}

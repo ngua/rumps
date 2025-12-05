@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Display` alone is not enough for interpolation.\n\n#(deriving: Display)\nvariant DebugOnly = DebugOnly\n\nfun main() {\n  write \"debug={DebugOnly.DebugOnly}\"\n}\n"
+---
+ERROR: type `DebugOnly` does not satisfy `Formattable` class

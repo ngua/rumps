@@ -1,0 +1,9 @@
+#(required: eq)
+#(required: eq)
+class MyEq C {
+  fun eq(a: C, b: C) -> Bool
+}
+
+fun main() {
+  write "bad"
+}

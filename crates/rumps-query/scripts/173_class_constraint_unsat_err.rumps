@@ -1,0 +1,25 @@
+; Error: where constraint not satisfied at use site
+;
+; Pair requires both L and R to implement Display, but we try to use
+; it with a function type (which cannot implement Display).
+
+fun main() {
+  ; Int -> Int is a function type; functions don't implement Display
+  let f: Int -> Int = x => { x + 1 }
+  let bad = Pair.Pair(f, 42)
+  write :display(bad)
+}
+
+variant Pair[L, R] = Pair(L, R)
+
+class Display for Pair[L, R] where L: Display, R: Display {
+  fun display(p: Pair[L, R]) -> String {
+    match p {
+      Pair.Pair(l, r) => {
+        let ls = :display(l)
+        let rs = :display(r)
+        "({ls}, {rs})"
+      }
+    }
+  }
+}

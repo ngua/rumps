@@ -1,0 +1,8 @@
+; Error: missing required field in object alias
+
+newtype Person = { name: String, age: Int }
+
+fun main() {
+  ; Missing `age` field
+  let p: Person = { name: "Alice" }
+}

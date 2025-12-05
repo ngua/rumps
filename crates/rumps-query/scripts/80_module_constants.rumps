@@ -1,0 +1,82 @@
+; Module constants
+; Tests Math.pi, Math.e, Math.tau, Math.inf, Math.neg-inf
+
+fun main() {
+  ; ============ Math.pi ============
+
+  write Math.pi  ; ~3.14159...
+
+  let pi-val = Math.pi
+  write pi-val > 3.14  ; true
+  write pi-val < 3.15  ; true
+
+  ; Use in calculations
+  let area = Math.pi * 4.0  ; area of circle with r=2
+  write area > 12.0  ; true
+
+  ; ============ Math.e ============
+
+  write Math.e  ; ~2.71828...
+
+  let e-val = Math.e
+  write e-val > 2.71  ; true
+  write e-val < 2.72  ; true
+
+  ; Use with log
+  let log-e = Math.log(Math.e)
+  write Math.round(log-e)  ; 1
+
+  ; ============ Math.tau ============
+
+  write Math.tau  ; ~6.28318... (2*pi)
+
+  let tau-val = Math.tau
+  write tau-val > 6.28  ; true
+  write tau-val < 6.29  ; true
+
+  ; tau = 2*pi
+  let two-pi = Math.pi * 2.0
+  let diff = Math.abs(Math.tau - two-pi)
+  write diff < 0.0001  ; true (essentially equal)
+
+  ; ============ Math.inf ============
+
+  write Math.inf  ; inf
+
+  let inf-val = Math.inf
+  write inf-val > 1000000.0  ; true
+  write inf-val > 0.0  ; true
+
+  ; ============ Math.neg-inf ============
+
+  write Math.neg-inf  ; -inf
+
+  let neg-inf-val = Math.neg-inf
+  write neg-inf-val < -1000000.0  ; true
+  write neg-inf-val < 0.0  ; true
+
+  ; ============ Constants in expressions ============
+
+  ; Circle circumference: 2 * pi * r
+  let radius = 5.0
+  let circ = Math.tau * radius
+  write circ > 31.0  ; true
+
+  ; Constants work with pipeline
+  let doubled-pi = Math.pi
+    |> (x => x * 2.0)
+  write Math.abs(doubled-pi - Math.tau) < 0.0001  ; true
+
+  ; Constants in array
+  let consts = [Math.pi, Math.e, Math.tau]
+  write Iterable:length(consts)  ; 3
+
+  ; Constants in object
+  let math-consts = {
+    pi: Math.pi,
+    e: Math.e,
+    tau: Math.tau
+  }
+  write math-consts.pi > 3.0  ; true
+  write math-consts.e > 2.0  ; true
+}

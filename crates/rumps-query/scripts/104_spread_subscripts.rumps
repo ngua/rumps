@@ -1,0 +1,76 @@
+; Test: Spread subscripts in local/global variables
+; Allows spreading an Array[Subscript] into subscript position
+; Useful for @query iteration where keys are returned as arrays
+
+fun main() {
+  ; Set up test data
+  @set data{1, "a"} "first"
+  @set data{1, "b"} "second"
+  @set data{2, "x"} "third"
+  @set data{2, "y"} "fourth"
+
+  ; Regular subscripts (existing behavior)
+  let v1 = @get data{1, "a"}
+  write :display(v1)
+
+  ; Spread an empty array: equivalent to data{}
+  let empty: Array[Subscript] = []
+  let root = @get data{...empty}
+  write :display(root)
+
+  ; Spread a single-element array
+  let k1: Array[Subscript] = [1]
+  let partial = @get data{...k1, "a"}
+  write :display(partial)
+
+  ; Spread a full key path
+  let key: Array[Subscript] = [1, "b"]
+  let v2 = @get data{...key}
+  write :display(v2)
+
+  ; Mix regular and spread subscripts
+  let suffix: Array[Subscript] = ["x"]
+  let v3 = @get data{2, ...suffix}
+  write :display(v3)
+
+  ; Spread with @set
+  let set-key: Array[Subscript] = [3, "z"]
+  @set data{...set-key} "spread-set"
+  let v4 = @get data{3, "z"}
+  write :display(v4)
+
+  ; Spread with @kill
+  @set data{99, "del"} "to-delete"
+  let kill-key: Array[Subscript] = [99, "del"]
+  @kill data{...kill-key}
+  let deleted = @get data{99, "del"}
+  write :display(deleted)
+
+  ; Spread with @data
+  let data-key: Array[Subscript] = [1, "a"]
+  let status = @data data{...data-key}
+  write :display(status)
+
+  ; Spread with @order
+  @set items{1} "one"
+  @set items{2} "two"
+  @set items{10} "ten"
+  let prefix: Array[Subscript] = [1]
+  let next = @order items{...prefix}
+  write :display(next)
+
+  ; Multiple spreads (concatenation)
+  let part1: Array[Subscript] = [1]
+  let part2: Array[Subscript] = ["a"]
+  let combined = @get data{...part1, ...part2}
+  write :display(combined)
+
+  ; Spread with dynamic subscript values
+  let n = 2
+  let s = "y"
+  let dyn-key: Array[Subscript] = [n, s]
+  let v5 = @get data{...dyn-key}
+  write :display(v5)
+
+  write "spread subscript test complete"
+}

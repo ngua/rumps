@@ -1,0 +1,25 @@
+; `newtype` representation visibility syntax and public annotation
+
+module SyntaxRepr {
+  +newtype A[T] = +Array[T]
+  +newtype B[T] = Array[T]
+
+  +fun make[T](xs: Array[T]) -> SyntaxRepr.B[T] {
+    xs
+  }
+
+  +fun len[T](xs: SyntaxRepr.B[T]) -> Int {
+    Iterable:length(xs)
+  }
+}
+
+fun main() {
+  let pub: SyntaxRepr.A[Int] = [1, 2, 3]
+  write Iterable:length(pub)
+
+  let arr: Array[Int] = pub
+  write Iterable:length(arr)
+
+  let priv = SyntaxRepr.make([1, 2, 3, 4])
+  write SyntaxRepr.len(priv)
+}

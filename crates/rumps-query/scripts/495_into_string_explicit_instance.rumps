@@ -1,0 +1,13 @@
+newtype Label = Int
+
+class Into[String] for Label {
+  fun into(x: Label) -> String {
+    let n: Int = x
+    "{n}"
+  }
+}
+
+fun main() {
+  let x: Label = 7
+  write x as String
+}

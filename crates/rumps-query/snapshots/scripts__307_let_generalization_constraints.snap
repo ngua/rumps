@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Inferred closure constraints are captured in the `let` scheme.\n\nfun main() {\n  let neg = x => 0 - x\n\n  write neg(5)\n\n  let twice = x => x + x\n\n  write twice(21)\n  write twice(1.5)\n}\n"
+---
+-5
+42
+3.0

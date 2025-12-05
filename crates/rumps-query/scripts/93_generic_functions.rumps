@@ -1,0 +1,76 @@
+; Test: Generic user-defined functions with explicit type parameters
+; Tests `fun name[T](x: T) -> T` syntax
+
+fun main() {
+  write id(42)        ; 42
+  write id("hello")   ; hello
+  write id(true)      ; true
+
+  write :display(pair(1, "hello"))  ; (1, "hello")
+  write :display(pair(true, 3.14))  ; (true, 3.14)
+
+  write :display(wrap(42))      ; Option.Some(42)
+  write :display(wrap("test"))  ; Option.Some("test")
+
+  write :display(swap((1, "x")))    ; ("x", 1)
+  write :display(swap(("a", true))) ; (true, "a")
+
+  let p = (42, "answer")
+  write fst(p)  ; 42
+  write snd(p)  ; answer
+
+  write apply(double, 21)        ; 42
+  write apply(greet, "World")    ; Hello, World
+
+  ; Both should work the same way
+  write implicit-id(100)   ; 100
+  write explicit-id(100)   ; 100
+  write implicit-id("hi")  ; hi
+  write explicit-id("hi")  ; hi
+
+  write "Generic functions test complete"
+}
+
+; === Simple identity function with explicit type parameter ===
+
+fun id[T](x: T) -> T { x }
+
+; === Multiple type parameters ===
+
+fun pair[A, B](a: A, b: B) -> (A, B) {
+  (a, b)
+}
+
+; === Generic function returning parameterized type ===
+
+fun wrap[T](x: T) -> Option[T] {
+  Option.Some(x)
+}
+
+; === Generic swap function ===
+
+fun swap[A, B](p: (A, B)) -> (B, A) {
+  (p.1, p.0)
+}
+
+; === Generic first/second accessors ===
+
+fun fst[A, B](p: (A, B)) -> A { p.0 }
+fun snd[A, B](p: (A, B)) -> B { p.1 }
+
+; === Generic higher-order function ===
+
+fun apply[A, B](f: (A) -> B, x: A) -> B {
+  f(x)
+}
+
+fun double(n: Int) -> Int { n * 2 }
+fun greet(s: String) -> String { "Hello, {s}" }
+
+; === Mix of implicit and explicit generics ===
+
+; This function is implicitly generic (inferred)
+fun implicit-id(x) { x }
+
+; This function is explicitly generic
+fun explicit-id[T](x: T) -> T { x }

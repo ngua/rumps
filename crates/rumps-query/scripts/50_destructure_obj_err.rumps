@@ -1,0 +1,5 @@
+; Object missing field
+
+fun main() {
+  let { name, missing } = { name: "Alice" }
+}

@@ -1,0 +1,6 @@
+; Pipe placeholder `.` must only appear in call arguments on RHS of `|>`
+
+fun main() {
+  ; Error: placeholder outside pipe context
+  let x = .
+}

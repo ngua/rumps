@@ -1,0 +1,6 @@
+#(deriving: Eq)
+variant Box = Box(Int)
+
+fun main() {
+  write Box.Box(1) == Box.Box(1)
+}

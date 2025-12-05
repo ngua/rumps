@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Ambiguous naked variant constructor in an `is` pattern reports once.\n\nvariant A = Foo\nvariant B = Foo\n\nfun main() {\n  let x = A.Foo\n  if x is .Foo {\n    write \"foo\"\n  }\n}\n"
+---
+ERROR: ambiguous variant constructor `.Foo`; defined in multiple types

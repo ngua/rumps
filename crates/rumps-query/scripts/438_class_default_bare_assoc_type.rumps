@@ -1,0 +1,65 @@
+; Class defaults can use bare associated types in annotations and bodies.
+
+import Scoped.{ ... }
+
+variant Cell = Cell(Int)
+
+#(required: get)
+class HasElem C {
+  newtype Element
+  fun get(x: C) -> :Element
+  fun get-or-default(x: C, fallback: :Element) -> :Element
+
+  #(default)
+  fun get-or-default(x, fallback: :Element) -> :Element {
+    let v: :Element = HasElem:get(x)
+    v
+  }
+}
+
+class HasElem for Cell {
+  newtype Element = Int
+
+  fun get(x: Cell) -> Int {
+    match x {
+      Cell.Cell(n) => { n }
+    }
+  }
+}
+
+fun main() {
+  write HasElem:get-or-default(Cell.Cell(7), 0)
+
+  let b = Scoped.Box.Box("module")
+  write ScopedElem:get-or-default(b, "fallback")
+  write shown
+}
+
+module Scoped {
+  +variant Box = Box(String)
+
+  #(required: get)
+  class ScopedElem C {
+    newtype Element
+    fun get(x: C) -> :Element
+    fun get-or-default(x: C, fallback: :Element) -> :Element
+
+    #(default)
+    fun get-or-default(x, fallback: :Element) -> :Element {
+      let v: :Element = ScopedElem:get(x)
+      v
+    }
+  }
+
+  class ScopedElem for Box {
+    newtype Element = String
+
+    fun get(x: Box) -> String {
+      match x {
+        Box.Box(s) => { s }
+      }
+    }
+  }
+
+  +let shown = ScopedElem:get-or-default(Box.Box("constant"), "fallback")
+}

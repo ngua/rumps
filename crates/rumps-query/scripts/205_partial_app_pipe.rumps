@@ -1,0 +1,37 @@
+; Partial application combined with the pipe operator
+
+fun add (a: Int, b: Int) -> Int { a + b }
+fun mul (a: Int, b: Int) -> Int { a * b }
+fun add3 (a: Int, b: Int, c: Int) -> Int { a + b + c }
+
+fun main() {
+  ; Simple pipe + partial app: `x |> f(a)` is `f(a, x)`
+  write 10 |> add(5)
+  ; Expected: 15
+
+  ; Chained pipes with partial app
+  write 5 |> add(10) |> add(20)
+  ; Expected: 35
+
+  ; Mix partial and full application in pipe chain
+  write 3 |> add(4) |> mul(2)
+  ; Expected: 14
+
+  ; 3-arg partially applied to 2 args, pipe supplies the last one
+  write 10 |> add3(1, 2)
+  ; Expected: 13
+
+  ; Store partial, supply remaining via chained call, then pipe
+  let f = add3(1)
+  write 10 |> f(2)
+  ; Expected: 13
+
+  ; Pipe through several partial apps
+  write 0 |> add(1) |> add(2) |> add(3) |> add(4)
+  ; Expected: 10
+
+  ; Closure partially applied in a pipe
+  let g = (a: Int, b: Int) => a * 10 + b
+  write 7 |> g(2)
+  ; Expected: 27
+}

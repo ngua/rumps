@@ -1,0 +1,66 @@
+module ClassEdgePub {
+  +newtype A = +Array[Int]
+}
+
+module ClassEdgePriv {
+  +newtype A = Array[Int]
+
+  +fun wrap(xs: Array[Int]) -> ClassEdgePriv.A {
+    Into[ClassEdgePriv.A]:into(xs)
+  }
+
+  +fun unwrap(xs: ClassEdgePriv.A) -> Array[Int] {
+    Into[Array[Int]]:into(xs)
+  }
+
+  class TryInto[ClassEdgePriv.A] for Array[Int] {
+    fun try-into(xs: Array[Int]) -> Result[ClassEdgePriv.A, String] {
+      Result.Ok(ClassEdgePriv.wrap(xs))
+    }
+  }
+
+  +fun read-a(xs: Array[Int]) -> Result[ClassEdgePriv.A, String] {
+    TryInto[ClassEdgePriv.A]:try-into(xs)
+  }
+
+  +fun direct-read-len(xs: Array[Int]) -> Int {
+    let direct = TryInto[ClassEdgePriv.A]:try-into(xs)!
+    let unwrapped = Into[Array[Int]]:into(direct)
+    Iterable:length(unwrapped)
+  }
+
+  +fun pipe-read-len(xs: Array[Int]) -> Int {
+    let piped = xs |> TryInto[ClassEdgePriv.A]:try-into
+    let direct = piped!
+    let unwrapped = direct |> Into[Array[Int]]:into
+    Iterable:length(unwrapped)
+  }
+
+  +fun first-class-read-len(xs: Array[Int]) -> Int {
+    let f = TryInto[ClassEdgePriv.A]:try-into
+    let direct = f(xs)!
+    let g = Into[Array[Int]]:into
+    let unwrapped = g(direct)
+    Iterable:length(unwrapped)
+  }
+}
+
+fun main() {
+  let pub-a = Into[ClassEdgePub.A]:into([1, 2, 3])
+  let pub-xs = Into[Array[Int]]:into(pub-a)
+  write Iterable:length(pub-xs)
+
+  let priv-a = ClassEdgePriv.wrap([4, 5])
+  let priv-xs = ClassEdgePriv.unwrap(priv-a)
+  write Iterable:length(priv-xs)
+
+  let read-a = ClassEdgePriv.read-a([6, 7, 8, 9])!
+  let read-xs = ClassEdgePriv.unwrap(read-a)
+  write Iterable:length(read-xs)
+
+  write ClassEdgePriv.direct-read-len([10, 11])
+
+  write ClassEdgePriv.pipe-read-len([12])
+
+  write ClassEdgePriv.first-class-read-len([13, 14, 15])
+}

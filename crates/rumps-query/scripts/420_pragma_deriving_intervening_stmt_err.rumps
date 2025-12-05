@@ -1,0 +1,8 @@
+#(deriving: Eq)
+let x = 1
+
+variant Mood = Happy | Sad
+
+fun main() {
+  write "bad"
+}

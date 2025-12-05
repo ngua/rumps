@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Object keys do not satisfy `Ord`.\n\nfun main() {\n  let m: Map[{ a: Int }, String] = Map.empty()\n  write m\n}\n"
+---
+ERROR: type `{ a: Int }` does not satisfy `Ord` class
+type `{ a: Int }` does not satisfy `Ord` class

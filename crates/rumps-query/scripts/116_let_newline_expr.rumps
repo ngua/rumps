@@ -1,0 +1,28 @@
+; let with expression on next line (after `=`)
+
+fun main() {
+  let x =
+    match Unit {
+      Unit => Unit
+    }
+
+  write :display(x)
+
+  ; Also test with other expressions
+  let y =
+    1
+    + 2
+    + 3
+
+  write y
+
+  ; Nested
+  let z =
+    if true {
+      "yes"
+    } else {
+      "no"
+    }
+
+  write z
+}

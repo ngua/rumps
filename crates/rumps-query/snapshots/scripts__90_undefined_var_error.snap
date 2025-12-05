@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Undefined variable error\n; Type checker should catch use of undefined variables\n\n; This should fail: `y` is not defined\nLET x = y + 1\n"
+---
+ERROR: undefined variable `y`

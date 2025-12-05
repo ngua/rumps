@@ -1,0 +1,39 @@
+; Direct `Formattable:format` tests. Interpolation is intentionally not used.
+
+#(deriving: Formattable)
+variant Token = Token(String) | Empty
+
+#(deriving: Formattable)
+newtype Label = String
+
+#(transparent)
+newtype Raw = String
+
+variant Manual = Manual(Int)
+
+class Formattable for Manual {
+  fun format(m: Manual) -> String {
+    match m {
+      Manual.Manual(n) => { "manual:" ++ Into[String]:into(n) }
+    }
+  }
+}
+
+fun main() {
+  write Formattable:format("abc")
+  write Formattable:format("/tmp/raw" as FilePath)
+  write Formattable:format(true)
+  write Formattable:format(42)
+  write Formattable:format([ "a", "b" ])
+
+  write Formattable:format(Token.Token("secret"))
+  write Formattable:format(Token.Empty)
+
+  let label: Label = "label-text"
+  write Formattable:format(label)
+
+  let raw: Raw = "raw-text"
+  write Formattable:format(raw)
+
+  write Formattable:format(Manual.Manual(7))
+}

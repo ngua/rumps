@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Unattached `#(default)` pragmas are static errors.\n\n#(required: f)\nclass Optional C {\n  fun f(x: C) -> Int\n\n  #(default)\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 112..122: unattached `default` pragma

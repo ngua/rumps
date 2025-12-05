@@ -1,0 +1,118 @@
+; Test: Transaction modifiers
+; Tests on conflict, with timeout, with retries, with isolation
+;
+; Modifier ordering:
+;   Modifiers must appear in this fixed order (each is optional):
+;     1. on conflict (abort | overwrite)
+;     2. with timeout <expr>
+;     3. with retries n
+;     4. with isolation snapshot
+;
+;   Note that we only support snapshot isolation at the moment and that
+;   this is the default; other isolation levels are a future enhancement.
+;
+;   Retry semantics: `with retries n` retries the commit phase only, not
+;   the entire transaction block. This helps with transient errors like
+;   `TransactionTimeout`, but not with `WriteConflict`; write conflicts
+;   are permanent for a given snapshot since the conflicting write from
+;   another transaction is already recorded.
+;
+;   Each modifier can appear at most once. Out-of-order or duplicate
+;   modifiers will produce a parse error.
+
+fun main() {
+  ; === on conflict abort (default) ===
+  let r1 = transaction {
+    @set ^data{1} "one"
+  } on conflict abort
+  write r1 is Result.Ok(_)
+
+  ; === on conflict overwrite ===
+  let r2 = transaction {
+    @set ^data{2} "two"
+  } on conflict overwrite
+  write r2 is Result.Ok(_)
+
+  ; === with timeout (milliseconds) ===
+  let r3 = transaction {
+    @set ^data{3} "three"
+  } with timeout 5000
+  write r3 is Result.Ok(_)
+
+  ; === with retries n ===
+  let r4 = transaction {
+    @set ^data{4} "four"
+  } with retries 3
+  write r4 is Result.Ok(_)
+
+  ; === with isolation snapshot ===
+  let r5 = transaction {
+    @set ^data{5} "five"
+  } with isolation snapshot
+  write r5 is Result.Ok(_)
+
+  ; === Combined modifiers ===
+  let r6 = transaction {
+    @set ^data{6} "six"
+  } on conflict overwrite with timeout 5000 with retries 3
+  write r6 is Result.Ok(_)
+
+  ; === All modifiers ===
+  let r7 = transaction {
+    @set ^data{7} "seven"
+  } on conflict overwrite with timeout 1000 with retries 5 with isolation snapshot
+  write r7 is Result.Ok(_)
+
+  ; === Timeout from expression ===
+  let timeout-ms = 2000
+  let r8 = transaction {
+    @set ^data{8} "eight"
+  } with timeout timeout-ms
+  write r8 is Result.Ok(_)
+
+  let r9 = transaction {
+    @set ^data{9} "nine"
+  } on conflict abort with timeout 1000
+  write r9 is Result.Ok(_)
+
+  let r10 = transaction {
+    @set ^data{10} "ten"
+  } on conflict overwrite with retries 2
+  write r10 is Result.Ok(_)
+
+  ; === Contextual identifiers as variables ===
+  let on = "on"
+  let conflict = "conflict"
+  let timeout = 1000
+  let with = "with"
+  let retries = "retries"
+  let isolation = "isolation"
+  write "{on} {conflict}"
+
+  ; Can use these as variable names and still use modifiers
+  let r11 = transaction {
+    @set ^data{11} "{on}{conflict}"
+  } with timeout timeout
+  write r11 is Result.Ok(_)
+  write :display(@get ^data{11})
+
+  ; === Timeout actually triggers ===
+  ; This tests that with timeout actually cancels long-running transactions
+  let timed-out = transaction {
+    loop 0 (next, cont) => {
+      if next > 100 {
+        next
+      } else {
+        cont({
+          @set ^d{next} "a"
+          Time.sleep(10 * 10000)
+          next + 1
+        })
+      }
+    }
+  } with timeout 1
+
+  write :display(timed-out)
+
+  write "Transaction modifiers test complete"
+}

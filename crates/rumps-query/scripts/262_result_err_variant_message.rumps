@@ -1,0 +1,6 @@
+; Result.Err unwrap messages preserve constructor display.
+
+fun main() {
+  let err: Result[Int, Option[Int]] = Result.Err(Option.Some(1))
+  write err!
+}

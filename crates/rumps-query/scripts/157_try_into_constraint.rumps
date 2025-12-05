@@ -1,0 +1,44 @@
+; Test TryInto constraint for fallible read conversions
+
+fun main() {
+  ; ============================================================================
+  ; Basic TryInto usage
+  ; ============================================================================
+
+  write :display(read-int("42"))
+  write :display(read-int("abc"))
+
+  write :display(read-bool("true"))
+  write :display(read-bool(1))
+
+  ; ============================================================================
+  ; Multiple constraints including TryInto
+  ; ============================================================================
+
+  write :display(numeric-to-bool(0))
+  write :display(numeric-to-bool(1))
+
+  ; ============================================================================
+  ; Closure with TryInto constraint
+  ; ============================================================================
+
+  let parse-int = [T: TryInto[Int]](x: T) -> Result[Int, String] => x read Int
+
+  write :display(parse-int("100"))
+  write :display(parse-int("not a number"))
+}
+
+; Function that reads any type into Int
+fun read-int[T: TryInto[Int]](x: T) -> Result[Int, String] {
+  x read Int
+}
+
+; Function that reads any type into Bool
+fun read-bool[T: TryInto[Bool]](x: T) -> Result[Bool, String] {
+  x read Bool
+}
+
+; Numeric and TryInto[Bool]
+fun numeric-to-bool[T: Numeric + TryInto[Bool]](x: T) -> Result[Bool, String] {
+  x read Bool
+}

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Explicit `Additive:add` calls cannot use their own class method.\n\nfun main() { }\n\nvariant AddOnly = AddOnly(Int)\n\nclass Additive for AddOnly {\n  fun zero() -> AddOnly {\n    AddOnly.AddOnly(0)\n  }\n\n  fun add(a: AddOnly, b: AddOnly) -> AddOnly {\n    Additive:add(a, b)\n  }\n}\n"
+---
+ERROR: cannot use a class method while defining that class for the same type

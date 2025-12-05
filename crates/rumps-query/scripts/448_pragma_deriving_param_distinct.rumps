@@ -1,0 +1,6 @@
+#(deriving: Into[String], Into[Json])
+newtype UserId = Int
+
+fun main() {
+  write "distinct deriving args"
+}

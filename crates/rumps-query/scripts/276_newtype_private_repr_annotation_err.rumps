@@ -1,0 +1,14 @@
+module CoercePriv {
+  +newtype A[T] = Array[T]
+
+  +fun make[T](xs: Array[T]) -> CoercePriv.A[T] {
+    xs
+  }
+}
+
+fun main() {
+  let ann-in: CoercePriv.A[Int] = [1, 2, 3]
+  let ann-out: Array[Int] = CoercePriv.make([4, 5, 6])
+  let as-in = [7, 8] as CoercePriv.A[Int]
+  let as-out = CoercePriv.make([9]) as Array[Int]
+}

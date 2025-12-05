@@ -1,0 +1,49 @@
+; Tuple literals and access
+
+fun main() {
+  ; Basic tuple construction
+  let pair = (1, "hello")
+  write pair.0
+  write pair.1
+
+  ; Triple
+  let triple = (true, 42, "world")
+  write triple.0
+  write triple.1
+  write triple.2
+
+  ; Nested tuples
+  let nested = ((1, 2), (3, 4))
+  let inner1 = nested.0
+  let inner2 = nested.1
+  write inner1.0
+  write inner1.1
+  write inner2.0
+  write inner2.1
+
+  ; Empty tuple (unit)
+  let unit = ()
+  write :display(unit)
+
+  ; Single-element tuple (trailing comma required)
+  let single = (42,)
+  write single.0
+
+  ; Tuple in expression
+  let first = (1, 2).0
+  let second = (1, 2).1
+  let sum = first + second
+  write sum
+
+  ; Tuple with function results
+  let expr-tuple = (1 + 2, 3 * 4, "test")
+  write expr-tuple.0
+  write expr-tuple.1
+  write expr-tuple.2
+
+  ; Tuple passed to closure
+  let get-first = t => t.0
+  let get-second = t => t.1
+  write get-first((10, 20))
+  write get-second((10, 20))
+}

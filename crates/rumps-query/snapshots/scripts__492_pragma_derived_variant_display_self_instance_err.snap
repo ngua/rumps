@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: derived variant `Display` payload evidence cannot use a direct self instance.\n\n#(deriving: Display)\nvariant Box = Box(Item)\n\nvariant Item = Item(String)\n\nclass Display for Item {\n  fun display(x: Item) -> String {\n    Display:display(x)\n  }\n}\n\nfun main() {\n  write Box.Box(Item.Item(\"a\"))\n}\n"
+---
+ERROR: cannot use a class method while defining that class for the same type

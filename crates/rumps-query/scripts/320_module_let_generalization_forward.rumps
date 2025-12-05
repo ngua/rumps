@@ -1,0 +1,17 @@
+; Module `let` members expose final schemes after dependency ordering.
+
+fun main() {
+  write Forward.id(7)
+  write Forward.id("seven")
+
+  let ints: Array[Int] = Forward.empty
+  let strs: Array[String] = Forward.empty
+
+  write Iterable:length(ints)
+  write Iterable:length(strs)
+}
+
+module Forward {
+  +let id = x => x
+  +let empty = []
+}

@@ -1,0 +1,70 @@
+; Test: expression statements
+; Tests using expressions as statements (evaluated for side effects)
+
+fun main() {
+  ; if as statement (not capturing result)
+  let x = 10
+
+  if x > 5 {
+    write "x is big"
+  }
+  ; Expected: x is big
+
+  if x < 5 {
+    write "x is small"
+  }
+  ; Expected: (no output; condition false)
+
+  ; Block as statement
+  {
+    write "Inside block"
+    let temp = 42
+    write temp
+  }
+  ; Expected: Inside block, 42
+
+  ; Nested if statements
+  let a = true
+  let b = false
+
+  if a {
+    if not b {
+      write "a is true and b is false"
+    }
+  }
+  ; Expected: a is true and b is false
+
+  ; Multiple expression statements
+  5 + 3
+  ; Evaluated but result discarded
+  "hello"
+  ; Evaluated but result discarded
+  true and false
+  ; Evaluated but result discarded
+
+  write "Made it past expression statements"
+
+  ; if/else as statement
+  let mode = "debug"
+
+  if mode == "debug" {
+    write "Debug mode enabled"
+  } else {
+    write "Production mode"
+  }
+  ; Expected: Debug mode enabled
+
+  ; Block with @set side effects
+  {
+    @set items{1} "first"
+    @set items{2} "second"
+  }
+
+  write :display(@get items{1})
+  ; Expected: first
+
+  write :display(@get items{2})
+  ; Expected: second
+
+  write "Expression statements test complete"
+}

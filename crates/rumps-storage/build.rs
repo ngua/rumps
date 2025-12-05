@@ -11,5 +11,10 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(4096);
 
+    assert!(
+        page_size.is_power_of_two(),
+        "RUMPS_PAGE_SIZE must be a power of two, got {page_size}"
+    );
+
     println!("cargo::rustc-env=RUMPS_PAGE_SIZE={page_size}");
 }

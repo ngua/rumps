@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "variant Token = Token\nunion Showable = Int | Token\n\nfun main() {\n  let x: Showable = 1\n  write Display:display(x)\n}\n"
+---
+ERROR: type `Token` does not satisfy `Display` class

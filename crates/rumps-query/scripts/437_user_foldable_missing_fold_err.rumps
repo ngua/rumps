@@ -1,0 +1,10 @@
+; `Foldable` methods are required.
+
+variant Box[T] = Full(T) | Empty
+
+class Foldable for Box {
+}
+
+fun main() {
+  write "bad"
+}

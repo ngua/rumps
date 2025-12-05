@@ -1,0 +1,8 @@
+module M {
+  #(options: sync-mode = immediate)
+  let x = 1
+}
+
+fun main() {
+  write "bad"
+}

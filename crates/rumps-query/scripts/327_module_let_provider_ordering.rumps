@@ -1,0 +1,94 @@
+; Module `let` providers are ordered before import and path consumers.
+
+import TopLater.{ v }
+import FalseCycle.{ w }
+
+let top-imported = v + 1
+let seed = 1
+
+module UseImport {
+  import SourceImport.{ v }
+
+  +let w = () => v + 1
+}
+
+module UsePath {
+  +let w = () => SourcePath.v + 1
+}
+
+module UseNestedImport {
+  import SourceNestedImport.Inner.{ v }
+
+  +let w = () => v + 1
+}
+
+module UseNestedPath {
+  +let w = () => SourceNestedPath.Inner.v + 1
+}
+
+module ParentSib {
+  module Use {
+    import ParentSib.Source.{ v }
+
+    +let w = () => v + 1
+  }
+
+  module Source {
+    +let v = 41
+  }
+}
+
+module ChildParent {
+  import ChildParent.Child.{ v }
+
+  +let via-path = () => ChildParent.Child.v + 1
+  +let via-import = () => v + 2
+
+  module Child {
+    +let v = 41
+  }
+}
+
+module WildA {
+  import WildB.{ ..., -b }
+
+  +let a = 1
+}
+
+module WildB {
+  import WildA.{ ..., -a }
+
+  +let b = 2
+}
+
+module SourceImport {
+  +let v = 41
+}
+
+module SourcePath {
+  +let v = 41
+}
+
+module SourceNestedImport {
+  module Inner {
+    +let v = 41
+  }
+}
+
+module SourceNestedPath {
+  module Inner {
+    +let v = 41
+  }
+}
+
+module TopLater {
+  +let v = 41
+}
+
+module FalseCycle {
+  +let w = () => seed
+}
+
+fun main() {
+  write 0
+}

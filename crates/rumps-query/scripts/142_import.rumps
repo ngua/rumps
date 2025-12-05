@@ -1,0 +1,102 @@
+; Test: import statement
+; Tests importing module members into local scope
+
+; All top-level imports must appear first
+import Math.{ floor, ceil, sqrt as root, pi, e }
+import Math.Trig.{ sin as sine, cos as cosine }
+import Array.{ head, tail }
+import Counter.{ new, inc }
+import Forward.{ id, val }
+
+fun main() {
+  ; Basic named import
+  write floor(3.7)
+  ; Expected: 3
+
+  ; Multiple named imports
+  write :display(head([1, 2, 3]))
+  ; Expected: Some(1)
+  write :display(tail([1, 2, 3]))
+  ; Expected: [ 2, 3 ]
+
+  ; Wildcard import in nested scope (at top of scope)
+  {
+    import String.{ ... }
+    write length("hello")
+    ; Expected: 5
+  }
+
+  ; User module import
+  let c = new()
+  write c
+  ; Expected: 0
+  write inc(c)
+  ; Expected: 1
+
+  ; Wildcard with exclusion in nested scope
+  {
+    import Math.{ ..., -floor }
+    write ceil(1.1)
+    ; Expected: 2
+  }
+
+  ; Import in nested scope does not leak
+  let x = 100
+  {
+    import Math.{ floor }
+    write floor(2.9)
+    ; Expected: 2
+  }
+  write x
+  ; Expected: 100
+
+  ; ceil and floor from top-level imports
+  write ceil(4.1)
+  ; Expected: 5
+  write floor(4.9)
+  ; Expected: 4
+
+  write test()
+  ; Expected: 42
+
+  ; as alias from top-level import
+  write root(16.0)
+  ; Expected: 4.0
+
+  ; Multiple aliases from top-level import
+  write sine(0.0)
+  ; Expected: 0.0
+  write cosine(0.0)
+  ; Expected: 1.0
+
+  ; Import from hoisted module
+  write id("hoisted")
+  ; Expected: "hoisted"
+  write val
+  ; Expected: 42
+
+  ; Import builtin module constants
+  write pi
+  ; Expected: 3.141592653589793
+  write e
+  ; Expected: 2.718281828459045
+}
+
+; User module (defined after import due to hoisting)
+module Counter {
+  let start = 0
+  +fun new() -> Int { start }
+  +fun inc(n: Int) -> Int { n + 1 }
+}
+
+; Hoisted module (defined after import)
+module Forward {
+  +let val: Int = 42
+  +fun id[T](x: T) -> T { x }
+}
+
+; Import inside function body (at top of function scope)
+fun test() -> Int {
+  import Math.{ abs }
+  abs(-42)
+}

@@ -1,0 +1,95 @@
+; @data primitive tests
+; NOTE: Uses locals only; globals require transaction blocks
+
+fun main() {
+  ; === Setup: create test data ===
+
+  @set vars{1} "value at 1"
+  @set vars{1, "A"} "value at 1,A"
+  @set vars{2, "B", "C"} "deep value"
+
+  ; === @data on non-existent key ===
+
+  let status0 = @data vars{999}
+  write :display(status0)
+
+  ; === @data on key with value only ===
+
+  ; Key {1, "A"} has value but no descendants
+  let status1 = @data vars{1, "A"}
+  write :display(status1)
+
+  ; === @data on key with descendants only ===
+
+  ; Key {2} has no value but has descendants at {2, "B", ...}
+  let status2 = @data vars{2}
+  write :display(status2)
+
+  ; === @data on key with both value and descendants ===
+
+  ; Key {1} has value and descendants at {1, "A"}
+  let status3 = @data vars{1}
+  write :display(status3)
+
+  ; === Pattern matching on DataStatus ===
+
+  write describe(@data vars{999})
+  write describe(@data vars{1, "A"})
+  write describe(@data vars{2})
+  write describe(@data vars{1})
+
+  ; === as Int coercion (MUMPS $@data values) ===
+
+  write (@data vars{999}) as Int
+  write (@data vars{1, "A"}) as Int
+  write (@data vars{2}) as Int
+  write (@data vars{1}) as Int
+
+  ; === DataStatus in expressions ===
+
+  write has-data(@data vars{999})
+  write has-data(@data vars{1})
+
+  ; === Type annotation ===
+
+  let typed: DataStatus = @data vars{1}
+  write :display(typed)
+
+  ; === DataStatus in arrays ===
+
+  let statuses: Array[DataStatus] = [
+    @data vars{999},
+    @data vars{1, "A"},
+    @data vars{2},
+    @data vars{1}
+  ]
+  write Iterable:length(statuses)
+  write :display(Mappable:map(describe, statuses))
+
+  ; === read DataStatus from Int ===
+
+  let from0 = 0 read DataStatus
+  let from1 = 1 read DataStatus
+  let from10 = 10 read DataStatus
+  let from11 = 11 read DataStatus
+  let invalid = 5 read DataStatus
+
+  write :display(from0)
+  write :display(from1)
+  write :display(from10)
+  write :display(from11)
+  write :display(invalid)
+}
+
+fun describe(s: DataStatus) -> String {
+  match s {
+    DataStatus.NoData => { "no data" }
+    DataStatus.HasValue => { "has value" }
+    DataStatus.HasDescendants => { "has descendants" }
+    DataStatus.Both => { "both" }
+  }
+}
+
+fun has-data(s: DataStatus) -> Bool {
+  (s as Int) > 0
+}

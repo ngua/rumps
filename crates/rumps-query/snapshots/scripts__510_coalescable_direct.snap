@@ -1,0 +1,11 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Direct `:coalesce` calls before `??` lowering.\n\nfun main() {\n  let full: Box[Int] = Box.Full(7)\n  let empty: Box[Int] = Box.Empty\n\n  write :coalesce(full, Lazy.Lazy(forced()))\n  write :coalesce(empty, Lazy.Lazy(11))\n\n  let words: Box[String] = Box.Empty\n  write :coalesce(words, Lazy.Lazy(\"fallback\"))\n\n  write :coalesce(Option.Some(3), Lazy.Lazy(forced()))\n  write :coalesce(Option.None, Lazy.Lazy(5))\n  write :coalesce(Result.Ok(13), Lazy.Lazy(forced()))\n  write :coalesce(Result.Err(\"no\"), Lazy.Lazy(17))\n}\n\nvariant Box[T] = Full(T) | Empty\n\nclass Coalescable[T] for Box[T] {\n  fun coalesce(b: Box[T], rhs: Lazy[T]) -> T {\n    match b {\n      Box.Full(x) => { x }\n      Box.Empty => {\n        match rhs {\n          Lazy.Lazy(f) => { f() }\n        }\n      }\n    }\n  }\n}\n\nfun forced() -> Int {\n  write \"forced\"\n  1\n}\n"
+---
+7
+11
+fallback
+3
+5
+13
+17

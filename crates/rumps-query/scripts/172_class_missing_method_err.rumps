@@ -1,0 +1,11 @@
+; Error: missing required method
+;
+; The Display class requires a `display` method but none is provided.
+
+fun main() { }
+
+variant Point = Point(Int, Int)
+
+class Display for Point {
+  ; Missing the display method
+}

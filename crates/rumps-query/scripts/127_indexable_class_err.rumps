@@ -1,0 +1,8 @@
+; Test: Indexable class errors
+; Tests that non-indexable types produce proper error messages
+
+fun main() {
+  ; Try to index an Int (should fail)
+  let x = 42
+  write x[0]
+}

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: unknown constraint name\n\nfun main() {}\n\nfun bad[T: Unknown](x: T) -> T {\n  x\n}\n"
+---
+ERROR: 60..67: unknown class `Unknown`

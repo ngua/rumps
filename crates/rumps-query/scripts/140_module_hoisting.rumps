@@ -1,0 +1,43 @@
+; Module hoisting: forward references to modules
+
+fun main() {
+  ; Forward reference to module defined later
+  write M.get-value()
+  write M.add(10, 20)
+
+  ; Forward reference to nested module
+  write Outer.Inner.greet("world")
+
+  ; Simple module function
+  write Utils.double(21)
+
+  ; Forward reference to module let constants
+  write Config.name
+  write Config.version
+
+  ; Forward reference to nested module constant
+  write Outer.Inner.prefix
+}
+
+; Definitions
+
+module M {
+  +fun get-value() -> Int { 42 }
+  +fun add(a: Int, b: Int) -> Int { a + b }
+}
+
+module Outer {
+  module Inner {
+    +fun greet(name: String) -> String { "Hello, " ++ name ++ "!" }
+    +let prefix: String = "[Inner]"
+  }
+}
+
+module Utils {
+  +fun double(n: Int) -> Int { n * 2 }
+}
+
+module Config {
+  +let name: String = "TestApp"
+  +let version: Int = 42
+}

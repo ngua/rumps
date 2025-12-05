@@ -1,0 +1,7 @@
+; Test: Unknown type error
+; Type checker should catch use of undefined type names
+
+fun main() {
+  ; This should fail: `Florbl` is not a defined type
+  write :display("3.14" read Florbl)
+}

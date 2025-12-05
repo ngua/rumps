@@ -4,9 +4,9 @@ mod tests {
     use std::sync::Arc;
 
     use futures::{future, StreamExt};
-    use rumps_types::{key, Value};
+    use rumps_types::{key, value, Value};
+    use smallvec::smallvec;
     use tokio::task;
-    use tokio::time::{sleep, Duration};
 
     use crate::btree::*;
     use crate::error::StorageError;
@@ -59,14 +59,14 @@ mod tests {
     #[tokio::test]
     async fn test_btree_initial_state() {
         let btree = BTreeBuilder::default().min_degree(4).build().unwrap();
-        assert_eq!(btree.node_count().await, 0);
+        assert_eq!(btree.node_count(), 0);
         assert_eq!(btree.allocator.peek_next().await, NodeId::from(0));
     }
 
     #[tokio::test]
     async fn test_btree_node_count() {
         let btree = BTreeBuilder::default().build().unwrap();
-        assert_eq!(btree.node_count().await, 0);
+        assert_eq!(btree.node_count(), 0);
     }
 
     #[tokio::test]
@@ -81,6 +81,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "debug")]
     async fn test_btree_stats() {
         let btree = BTreeBuilder::default().build().unwrap();
         let stats = btree.stats().await;
@@ -100,7 +101,7 @@ mod tests {
                 let btree_clone = Arc::clone(&btree);
                 task::spawn(async move {
                     future::join_all((0..100).map(|_| async {
-                        let _count = btree_clone.node_count().await;
+                        let _count = btree_clone.node_count();
                         let _stats = btree_clone.stats().await;
                     }))
                     .await;
@@ -112,23 +113,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_writer_blocks_readers() {
+    async fn test_concurrent_node_access() {
         let btree = Arc::new(BTreeBuilder::default().build().unwrap());
 
-        let write_guard = btree.nodes.write().await;
+        // Insert a node
+        let node_id = NodeId::from(1);
+        btree.nodes.insert(node_id, Node::new_leaf());
 
+        // Concurrent reads should work
         let btree_clone = Arc::clone(&btree);
-        let read_task = tokio::spawn(async move {
-            let start = tokio::time::Instant::now();
-            let _count = btree_clone.node_count().await;
-            start.elapsed()
-        });
+        let read_task =
+            tokio::spawn(async move { btree_clone.nodes.get(node_id) });
 
-        sleep(Duration::from_millis(10)).await;
-        drop(write_guard);
+        let local_read = btree.nodes.get(node_id);
+        let spawned_read: Option<Arc<Node>> = read_task.await.unwrap();
 
-        let elapsed = read_task.await.unwrap();
-        assert!(elapsed >= Duration::from_millis(10));
+        assert!(local_read.is_some());
+        assert!(spawned_read.is_some());
     }
 
     #[tokio::test]
@@ -136,9 +137,12 @@ mod tests {
         let btree = BTreeBuilder::default().build().unwrap();
         let root = btree.create_tree().await.unwrap();
 
-        assert_eq!(btree.node_count().await, 1);
-        let stats = btree.stats().await;
-        assert_eq!(stats.height, 1);
+        assert_eq!(btree.node_count(), 1);
+        #[cfg(feature = "debug")]
+        {
+            let stats = btree.stats().await;
+            assert_eq!(stats.height, 1);
+        }
 
         // Root should be an empty leaf
         let node = btree.find_node(root).await.unwrap();
@@ -157,7 +161,7 @@ mod tests {
         // Each tree gets its own root
         assert_ne!(root1, root2);
         assert_ne!(root2, root3);
-        assert_eq!(btree.node_count().await, 3);
+        assert_eq!(btree.node_count(), 3);
     }
 
     #[tokio::test]
@@ -168,20 +172,20 @@ mod tests {
         // Insert some data to create more nodes
         let mut r = root;
         r = btree
-            .set_internal(r, &key![1], NodeData::with_value(Value::Integer(1)))
+            .set_internal(r, &key![1], NodeData::with_value(value!(1)))
             .await
             .unwrap();
         r = btree
-            .set_internal(r, &key![2], NodeData::with_value(Value::Integer(2)))
+            .set_internal(r, &key![2], NodeData::with_value(value!(2)))
             .await
             .unwrap();
 
-        let node_count_before = btree.node_count().await;
+        let node_count_before = btree.node_count();
         assert!(node_count_before >= 1);
 
         let freed = btree.delete_tree(r).await.unwrap();
         assert!(freed >= 1);
-        assert_eq!(btree.node_count().await, 0);
+        assert_eq!(btree.node_count(), 0);
     }
 
     #[tokio::test]
@@ -206,10 +210,7 @@ mod tests {
         let node_id = NodeId::from(1);
         let test_node = Node::new_leaf();
 
-        {
-            let mut nodes = btree.nodes.write().await;
-            nodes.insert(node_id, test_node.clone());
-        }
+        btree.nodes.insert(node_id, test_node.clone());
 
         let result = btree.find_node(node_id).await;
         assert!(result.is_ok());
@@ -224,29 +225,26 @@ mod tests {
 
         let node_id = NodeId::from(100);
         let node = Node {
-            keys: vec![key![10], key![20], key![30], key![40], key![50]],
-            children: vec![],
-            values: vec![
-                Arc::new(NodeData::with_value(Value::Integer(10))),
-                Arc::new(NodeData::with_value(Value::Integer(20))),
-                Arc::new(NodeData::with_value(Value::Integer(30))),
-                Arc::new(NodeData::with_value(Value::Integer(40))),
-                Arc::new(NodeData::with_value(Value::Integer(50))),
+            keys: smallvec![key![10], key![20], key![30], key![40], key![50]],
+            children: smallvec![],
+            values: smallvec![
+                Arc::new(NodeData::with_value(value!(10))),
+                Arc::new(NodeData::with_value(value!(20))),
+                Arc::new(NodeData::with_value(value!(30))),
+                Arc::new(NodeData::with_value(value!(40))),
+                Arc::new(NodeData::with_value(value!(50))),
             ],
             is_leaf: true,
         };
 
-        {
-            let mut nodes = btree.nodes.write().await;
-            nodes.insert(node_id, node);
-        }
+        btree.nodes.insert(node_id, node);
 
         let result = btree.split_node(node_id).await;
         assert!(result.is_ok());
         let (median_key, median_value, right_id) = result.unwrap();
 
         assert_eq!(median_key, key![30]);
-        assert_eq!(median_value.value, Some(Value::Integer(30)));
+        assert_eq!(median_value.value, Some(value!(30)));
 
         let left = btree.find_node(node_id).await.unwrap();
         assert_eq!(left.keys.len(), 2);
@@ -258,8 +256,11 @@ mod tests {
         assert_eq!(right.keys[0], key![40]);
         assert_eq!(right.keys[1], key![50]);
 
-        let stats = btree.stats().await;
-        assert_eq!(stats.splits, 1);
+        #[cfg(feature = "debug")]
+        {
+            let stats = btree.stats().await;
+            assert_eq!(stats.splits, 1);
+        }
     }
 
     #[tokio::test]
@@ -269,33 +270,30 @@ mod tests {
         let left_id = NodeId::from(100);
         let right_id = NodeId::from(101);
         let sep_key = key![30];
-        let sep_val = Arc::new(NodeData::with_value(Value::Integer(30)));
+        let sep_val = Arc::new(NodeData::with_value(value!(30)));
 
         let left_node = Node {
-            keys: vec![key![10], key![20]],
-            children: vec![],
-            values: vec![
-                Arc::new(NodeData::with_value(Value::Integer(10))),
-                Arc::new(NodeData::with_value(Value::Integer(20))),
+            keys: smallvec![key![10], key![20]],
+            children: smallvec![],
+            values: smallvec![
+                Arc::new(NodeData::with_value(value!(10))),
+                Arc::new(NodeData::with_value(value!(20))),
             ],
             is_leaf: true,
         };
 
         let right_node = Node {
-            keys: vec![key![40], key![50]],
-            children: vec![],
-            values: vec![
-                Arc::new(NodeData::with_value(Value::Integer(40))),
-                Arc::new(NodeData::with_value(Value::Integer(50))),
+            keys: smallvec![key![40], key![50]],
+            children: smallvec![],
+            values: smallvec![
+                Arc::new(NodeData::with_value(value!(40))),
+                Arc::new(NodeData::with_value(value!(50))),
             ],
             is_leaf: true,
         };
 
-        {
-            let mut nodes = btree.nodes.write().await;
-            nodes.insert(left_id, left_node);
-            nodes.insert(right_id, right_node);
-        }
+        btree.nodes.insert(left_id, left_node);
+        btree.nodes.insert(right_id, right_node);
 
         btree
             .merge_nodes(left_id, sep_key, sep_val, right_id)
@@ -310,8 +308,11 @@ mod tests {
 
         assert!(btree.find_node(right_id).await.is_err());
 
-        let stats = btree.stats().await;
-        assert_eq!(stats.merges, 1);
+        #[cfg(feature = "debug")]
+        {
+            let stats = btree.stats().await;
+            assert_eq!(stats.merges, 1);
+        }
     }
 
     #[cfg(test)]
@@ -331,7 +332,7 @@ mod tests {
         async fn exact_match() {
             let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
-            let value = Value::String("test".into());
+            let value = value!("test");
 
             let root = btree
                 .set_internal(
@@ -353,19 +354,11 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![100],
-                    NodeData::with_value(Value::Integer(1)),
-                )
+                .set_internal(root, &key![100], NodeData::with_value(value!(1)))
                 .await
                 .unwrap();
             let root = btree
-                .set_internal(
-                    root,
-                    &key![200],
-                    NodeData::with_value(Value::Integer(2)),
-                )
+                .set_internal(root, &key![200], NodeData::with_value(value!(2)))
                 .await
                 .unwrap();
 
@@ -395,27 +388,15 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![1],
-                    NodeData::with_value(Value::Integer(1)),
-                )
+                .set_internal(root, &key![1], NodeData::with_value(value!(1)))
                 .await
                 .unwrap();
             let root = btree
-                .set_internal(
-                    root,
-                    &key![2],
-                    NodeData::with_value(Value::Integer(2)),
-                )
+                .set_internal(root, &key![2], NodeData::with_value(value!(2)))
                 .await
                 .unwrap();
             let root = btree
-                .set_internal(
-                    root,
-                    &key![3],
-                    NodeData::with_value(Value::Integer(3)),
-                )
+                .set_internal(root, &key![3], NodeData::with_value(value!(3)))
                 .await
                 .unwrap();
 
@@ -426,7 +407,7 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .value,
-                Some(Value::Integer(1))
+                Some(value!(1))
             );
             assert_eq!(
                 btree
@@ -435,7 +416,7 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .value,
-                Some(Value::Integer(2))
+                Some(value!(2))
             );
             assert_eq!(
                 btree
@@ -444,7 +425,7 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .value,
-                Some(Value::Integer(3))
+                Some(value!(3))
             );
         }
 
@@ -457,7 +438,7 @@ mod tests {
                 .set_internal(
                     root,
                     &key![1, 2, 3],
-                    NodeData::with_value(Value::String("nested".into())),
+                    NodeData::with_value(value!("nested")),
                 )
                 .await
                 .unwrap();
@@ -465,10 +446,7 @@ mod tests {
             let result =
                 btree.get_internal(root, &key![1, 2, 3]).await.unwrap();
             assert!(result.is_some());
-            assert_eq!(
-                result.unwrap().value,
-                Some(Value::String("nested".into()))
-            );
+            assert_eq!(result.unwrap().value, Some(value!("nested")));
 
             // Ancestor should exist with has_descendants
             let ancestor = btree.get_internal(root, &key![1]).await.unwrap();
@@ -489,7 +467,7 @@ mod tests {
                         bt.set_internal(
                             acc,
                             &key![i],
-                            NodeData::with_value(Value::Integer(i)),
+                            NodeData::with_value(value!(i)),
                         )
                         .await
                         .unwrap()
@@ -505,7 +483,7 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .value,
-                Some(Value::Integer(30))
+                Some(value!(30))
             );
             assert_eq!(
                 btree
@@ -514,7 +492,7 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .value,
-                Some(Value::Integer(60))
+                Some(value!(60))
             );
         }
     }
@@ -532,7 +510,7 @@ mod tests {
                 .set_internal(
                     root,
                     &key![1, 2, 3],
-                    NodeData::with_value(Value::String("leaf".into())),
+                    NodeData::with_value(value!("leaf")),
                 )
                 .await
                 .unwrap();
@@ -543,7 +521,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(leaf.value, Some(Value::String("leaf".into())));
+            assert_eq!(leaf.value, Some(value!("leaf")));
 
             // Ancestors should exist with has_descendants=true
             let anc1 =
@@ -566,26 +544,18 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![1],
-                    NodeData::with_value(Value::Integer(100)),
-                )
+                .set_internal(root, &key![1], NodeData::with_value(value!(100)))
                 .await
                 .unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![1],
-                    NodeData::with_value(Value::Integer(200)),
-                )
+                .set_internal(root, &key![1], NodeData::with_value(value!(200)))
                 .await
                 .unwrap();
 
             let result =
                 btree.get_internal(root, &key![1]).await.unwrap().unwrap();
-            assert_eq!(result.value, Some(Value::Integer(200)));
+            assert_eq!(result.value, Some(value!(200)));
         }
 
         #[tokio::test]
@@ -598,7 +568,7 @@ mod tests {
                 .set_internal(
                     root,
                     &key![1, 2],
-                    NodeData::with_value(Value::Integer(12)),
+                    NodeData::with_value(value!(12)),
                 )
                 .await
                 .unwrap();
@@ -610,11 +580,7 @@ mod tests {
 
             // Set a value on parent
             let root = btree
-                .set_internal(
-                    root,
-                    &key![1],
-                    NodeData::with_value(Value::Integer(1)),
-                )
+                .set_internal(root, &key![1], NodeData::with_value(value!(1)))
                 .await
                 .unwrap();
 
@@ -622,7 +588,7 @@ mod tests {
             let parent =
                 btree.get_internal(root, &key![1]).await.unwrap().unwrap();
             assert!(parent.has_descendants);
-            assert_eq!(parent.value, Some(Value::Integer(1)));
+            assert_eq!(parent.value, Some(value!(1)));
         }
 
         #[tokio::test]
@@ -632,6 +598,7 @@ mod tests {
             ); // Small degree to trigger splits
             let root = btree.create_tree().await.unwrap();
 
+            #[cfg(feature = "debug")]
             let initial_height = btree.stats().await.height;
 
             // Insert many keys to cause splits
@@ -642,7 +609,7 @@ mod tests {
                         bt.set_internal(
                             acc,
                             &key![i],
-                            NodeData::with_value(Value::Integer(i)),
+                            NodeData::with_value(value!(i)),
                         )
                         .await
                         .unwrap()
@@ -650,9 +617,12 @@ mod tests {
                 })
                 .await;
 
-            let final_stats = btree.stats().await;
-            assert!(final_stats.splits > 0);
-            assert!(final_stats.height > initial_height);
+            #[cfg(feature = "debug")]
+            {
+                let final_stats = btree.stats().await;
+                assert!(final_stats.splits > 0);
+                assert!(final_stats.height > initial_height);
+            }
 
             // All keys should still be retrievable
             futures::stream::iter(0..20i64)
@@ -678,11 +648,7 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![1],
-                    NodeData::with_value(Value::Integer(1)),
-                )
+                .set_internal(root, &key![1], NodeData::with_value(value!(1)))
                 .await
                 .unwrap();
 
@@ -710,18 +676,14 @@ mod tests {
 
             // Create: [1], [1,2], [1,2,3]
             let root = btree
-                .set_internal(
-                    root,
-                    &key![1],
-                    NodeData::with_value(Value::Integer(1)),
-                )
+                .set_internal(root, &key![1], NodeData::with_value(value!(1)))
                 .await
                 .unwrap();
             let root = btree
                 .set_internal(
                     root,
                     &key![1, 2],
-                    NodeData::with_value(Value::Integer(12)),
+                    NodeData::with_value(value!(12)),
                 )
                 .await
                 .unwrap();
@@ -729,7 +691,7 @@ mod tests {
                 .set_internal(
                     root,
                     &key![1, 2, 3],
-                    NodeData::with_value(Value::Integer(123)),
+                    NodeData::with_value(value!(123)),
                 )
                 .await
                 .unwrap();
@@ -767,11 +729,7 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![1],
-                    NodeData::with_value(Value::Integer(1)),
-                )
+                .set_internal(root, &key![1], NodeData::with_value(value!(1)))
                 .await
                 .unwrap();
 
@@ -805,11 +763,7 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![1],
-                    NodeData::with_value(Value::Integer(1)),
-                )
+                .set_internal(root, &key![1], NodeData::with_value(value!(1)))
                 .await
                 .unwrap();
 
@@ -827,7 +781,7 @@ mod tests {
                 .set_internal(
                     root,
                     &key![1, 2],
-                    NodeData::with_value(Value::Integer(12)),
+                    NodeData::with_value(value!(12)),
                 )
                 .await
                 .unwrap();
@@ -846,18 +800,14 @@ mod tests {
                 .set_internal(
                     root,
                     &key![1, 2],
-                    NodeData::with_value(Value::Integer(12)),
+                    NodeData::with_value(value!(12)),
                 )
                 .await
                 .unwrap();
 
             // Set value on parent
             let root = btree
-                .set_internal(
-                    root,
-                    &key![1],
-                    NodeData::with_value(Value::Integer(1)),
-                )
+                .set_internal(root, &key![1], NodeData::with_value(value!(1)))
                 .await
                 .unwrap();
 
@@ -867,7 +817,7 @@ mod tests {
     }
 
     #[cfg(test)]
-    mod order_internal_tests {
+    mod query_internal_tests {
         use super::*;
 
         #[tokio::test]
@@ -875,7 +825,7 @@ mod tests {
             let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
-            let result = btree.order_internal(root, None).await.unwrap();
+            let result = btree.query_internal(root, None).await.unwrap();
             assert!(result.is_none());
         }
 
@@ -885,23 +835,15 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![10],
-                    NodeData::with_value(Value::Integer(10)),
-                )
+                .set_internal(root, &key![10], NodeData::with_value(value!(10)))
                 .await
                 .unwrap();
             let root = btree
-                .set_internal(
-                    root,
-                    &key![20],
-                    NodeData::with_value(Value::Integer(20)),
-                )
+                .set_internal(root, &key![20], NodeData::with_value(value!(20)))
                 .await
                 .unwrap();
 
-            let result = btree.order_internal(root, None).await.unwrap();
+            let result = btree.query_internal(root, None).await.unwrap();
             assert_eq!(result, Some(key![10]));
         }
 
@@ -911,36 +853,24 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![10],
-                    NodeData::with_value(Value::Integer(10)),
-                )
+                .set_internal(root, &key![10], NodeData::with_value(value!(10)))
                 .await
                 .unwrap();
             let root = btree
-                .set_internal(
-                    root,
-                    &key![20],
-                    NodeData::with_value(Value::Integer(20)),
-                )
+                .set_internal(root, &key![20], NodeData::with_value(value!(20)))
                 .await
                 .unwrap();
             let root = btree
-                .set_internal(
-                    root,
-                    &key![30],
-                    NodeData::with_value(Value::Integer(30)),
-                )
+                .set_internal(root, &key![30], NodeData::with_value(value!(30)))
                 .await
                 .unwrap();
 
             let result =
-                btree.order_internal(root, Some(&key![10])).await.unwrap();
+                btree.query_internal(root, Some(&key![10])).await.unwrap();
             assert_eq!(result, Some(key![20]));
 
             let result =
-                btree.order_internal(root, Some(&key![20])).await.unwrap();
+                btree.query_internal(root, Some(&key![20])).await.unwrap();
             assert_eq!(result, Some(key![30]));
         }
 
@@ -950,16 +880,12 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let root = btree
-                .set_internal(
-                    root,
-                    &key![10],
-                    NodeData::with_value(Value::Integer(10)),
-                )
+                .set_internal(root, &key![10], NodeData::with_value(value!(10)))
                 .await
                 .unwrap();
 
             let result =
-                btree.order_internal(root, Some(&key![10])).await.unwrap();
+                btree.query_internal(root, Some(&key![10])).await.unwrap();
             assert!(result.is_none());
         }
 
@@ -976,7 +902,7 @@ mod tests {
                         bt.set_internal(
                             acc,
                             &key![i],
-                            NodeData::with_value(Value::Integer(i)),
+                            NodeData::with_value(value!(i)),
                         )
                         .await
                         .unwrap()
@@ -990,7 +916,7 @@ mod tests {
 
             // Manual iteration since we can't use while loop
             let result =
-                btree.order_internal(r, cursor.as_ref()).await.unwrap();
+                btree.query_internal(r, cursor.as_ref()).await.unwrap();
             if let Some(k) = result {
                 collected.push(k.clone());
                 cursor = Some(k);
@@ -1005,7 +931,7 @@ mod tests {
                             None => (None, acc),
                             Some(ref c) => {
                                 match bt
-                                    .order_internal(r, Some(c))
+                                    .query_internal(r, Some(c))
                                     .await
                                     .unwrap()
                                 {
@@ -1025,6 +951,245 @@ mod tests {
             assert_eq!(keys_found.len(), 5);
             assert_eq!(keys_found[0], key![5]);
             assert_eq!(keys_found[4], key![45]);
+        }
+    }
+
+    #[cfg(test)]
+    mod query_at_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn skips_intermediate_nodes() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            // Insert nested keys; `ensure_ancestors` creates intermediate nodes
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "age"],
+                    NodeData::with_value(value!(30)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "name"],
+                    NodeData::with_value(value!("Alice")),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![2, "name"],
+                    NodeData::with_value(value!("Bob")),
+                )
+                .await
+                .unwrap();
+
+            // Verify intermediate node [2] exists but has no value
+            let intermediate =
+                btree.get_internal(root, &key![2]).await.unwrap();
+            assert!(intermediate.is_some());
+            assert!(intermediate.unwrap().value.is_none());
+
+            // query_at should skip [2] and return [2, "name"]
+            let result = btree
+                .query_at(root, Some(&key![1, "name"]), None)
+                .await
+                .unwrap();
+            assert_eq!(result, Some(key![2, "name"]));
+        }
+
+        #[tokio::test]
+        async fn first_key_skips_intermediate() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            // Insert only nested keys so [1] is intermediate
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "data"],
+                    NodeData::with_value(value!("value")),
+                )
+                .await
+                .unwrap();
+
+            // Verify [1] exists as intermediate
+            let intermediate =
+                btree.get_internal(root, &key![1]).await.unwrap();
+            assert!(intermediate.is_some());
+            assert!(intermediate.unwrap().value.is_none());
+
+            // query_at(None) should skip [1] and return [1, "data"]
+            let result = btree.query_at(root, None, None).await.unwrap();
+            assert_eq!(result, Some(key![1, "data"]));
+        }
+
+        #[tokio::test]
+        async fn skips_multiple_intermediates() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            // Deep nesting: [1, 2, 3, "leaf"] creates intermediates [1], [1, 2], [1, 2, 3]
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, 2, 3, "leaf"],
+                    NodeData::with_value(value!("deep")),
+                )
+                .await
+                .unwrap();
+
+            // query_at(None) should skip all intermediates
+            let result = btree.query_at(root, None, None).await.unwrap();
+            assert_eq!(result, Some(key![1, 2, 3, "leaf"]));
+        }
+    }
+
+    #[cfg(test)]
+    mod order_internal_tests {
+        use rumps_types::Subscript;
+
+        use super::*;
+
+        #[tokio::test]
+        async fn empty_tree() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let result =
+                btree.order_internal(root, &key![], None).await.unwrap();
+            assert!(result.is_none());
+        }
+
+        #[tokio::test]
+        async fn first_subscript_at_root() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "A"],
+                    NodeData::with_value(value!(1)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![2, "B"],
+                    NodeData::with_value(value!(2)),
+                )
+                .await
+                .unwrap();
+
+            let result =
+                btree.order_internal(root, &key![], None).await.unwrap();
+            assert_eq!(result, Some(Subscript::from(1)));
+        }
+
+        #[tokio::test]
+        async fn next_subscript_at_root() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "A"],
+                    NodeData::with_value(value!(1)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![2, "B"],
+                    NodeData::with_value(value!(2)),
+                )
+                .await
+                .unwrap();
+
+            let result = btree
+                .order_internal(root, &key![], Some(&Subscript::from(1)))
+                .await
+                .unwrap();
+            assert_eq!(result, Some(Subscript::from(2)));
+        }
+
+        #[tokio::test]
+        async fn subscript_at_nested_level() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "A"],
+                    NodeData::with_value(value!(1)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "B"],
+                    NodeData::with_value(value!(2)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![2, "C"],
+                    NodeData::with_value(value!(3)),
+                )
+                .await
+                .unwrap();
+
+            // First subscript under [1]
+            let result =
+                btree.order_internal(root, &key![1], None).await.unwrap();
+            assert_eq!(result, Some(Subscript::from("A")));
+
+            // Next subscript under [1] after "A"
+            let result = btree
+                .order_internal(root, &key![1], Some(&Subscript::from("A")))
+                .await
+                .unwrap();
+            assert_eq!(result, Some(Subscript::from("B")));
+
+            // No more subscripts under [1] after "B"
+            let result = btree
+                .order_internal(root, &key![1], Some(&Subscript::from("B")))
+                .await
+                .unwrap();
+            assert!(result.is_none());
+        }
+
+        #[tokio::test]
+        async fn no_subscripts_at_nonexistent_prefix() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "A"],
+                    NodeData::with_value(value!(1)),
+                )
+                .await
+                .unwrap();
+
+            // No keys under [2]
+            let result =
+                btree.order_internal(root, &key![2], None).await.unwrap();
+            assert!(result.is_none());
         }
     }
 
@@ -1063,7 +1228,7 @@ mod tests {
                         bt.set_internal(
                             acc,
                             &key![i],
-                            NodeData::with_value(Value::Integer(i)),
+                            NodeData::with_value(value!(i)),
                         )
                         .await
                         .unwrap()
@@ -1097,7 +1262,7 @@ mod tests {
                         bt.set_internal(
                             acc,
                             &key![i],
-                            NodeData::with_value(Value::Integer(i)),
+                            NodeData::with_value(value!(i)),
                         )
                         .await
                         .unwrap()
@@ -1148,7 +1313,7 @@ mod tests {
                     bt.set_internal(
                         acc,
                         &key![i],
-                        NodeData::with_value(Value::Integer(i)),
+                        NodeData::with_value(value!(i)),
                     )
                     .await
                     .unwrap()
@@ -1163,13 +1328,16 @@ mod tests {
                 async move {
                     let result = bt.get_internal(r, &key![i]).await.unwrap();
                     assert!(result.is_some(), "Key {} should exist", i);
-                    assert_eq!(result.unwrap().value, Some(Value::Integer(i)));
+                    assert_eq!(result.unwrap().value, Some(value!(i)));
                 }
             })
             .await;
 
-        let stats = btree.stats().await;
-        assert!(stats.splits > 0);
+        #[cfg(feature = "debug")]
+        {
+            let stats = btree.stats().await;
+            assert!(stats.splits > 0);
+        }
     }
 
     #[tokio::test]
@@ -1185,7 +1353,7 @@ mod tests {
                     bt.set_internal(
                         acc,
                         &key![i, i * 10, i * 100],
-                        NodeData::with_value(Value::Integer(i)),
+                        NodeData::with_value(value!(i)),
                     )
                     .await
                     .unwrap()
@@ -1220,7 +1388,7 @@ mod tests {
             .set_internal(
                 root1,
                 &key![1],
-                NodeData::with_value(Value::String("tree1".into())),
+                NodeData::with_value(value!("tree1")),
             )
             .await
             .unwrap();
@@ -1230,7 +1398,7 @@ mod tests {
             .set_internal(
                 root2,
                 &key![1],
-                NodeData::with_value(Value::String("tree2".into())),
+                NodeData::with_value(value!("tree2")),
             )
             .await
             .unwrap();
@@ -1239,7 +1407,7 @@ mod tests {
         let val1 = btree.get_internal(root1, &key![1]).await.unwrap().unwrap();
         let val2 = btree.get_internal(root2, &key![1]).await.unwrap().unwrap();
 
-        assert_eq!(val1.value, Some(Value::String("tree1".into())));
-        assert_eq!(val2.value, Some(Value::String("tree2".into())));
+        assert_eq!(val1.value, Some(value!("tree1")));
+        assert_eq!(val2.value, Some(value!("tree2")));
     }
 }

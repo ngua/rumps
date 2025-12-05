@@ -1,0 +1,22 @@
+; Partial application boundary errors
+; Over-application and zero-application errors are rejected at both
+; call-sites (user functions, class methods, module functions).
+
+fun add (a: Int, b: Int) -> Int { a + b }
+
+module Calc {
+  +fun add(a: Int, b: Int) -> Int { a + b }
+}
+
+fun main() {
+  ; Too many args to user function
+  let a = add(1, 2, 3)
+  ; Too many args to module function
+  let b = Calc.add(1, 2, 3)
+  ; Too many args to class method
+  let c = Mappable:map(x => x + 1, [1, 2, 3], 99)
+  ; Zero args to class method
+  let d = Mappable:map()
+  ; Zero args to module function
+  let e = Calc.add()
+}

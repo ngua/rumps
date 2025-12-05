@@ -1,0 +1,17 @@
+; `Indexable` instance bodies cannot use their own class methods.
+
+fun main() { }
+
+newtype IntMap = Map[Int, String]
+
+class Indexable[String] for IntMap {
+  newtype Index = Int
+
+  fun index(im: IntMap, i: :Index) -> String {
+    im[i]
+  }
+
+  fun get(im: IntMap, i: :Index) -> Option[String] {
+    im?[i]
+  }
+}

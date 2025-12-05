@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Static `let`s can reference later functions, `let`s, and module members.\n\nmodule M {\n  +let g = x => f(x)\n  +let y = () => n + 1\n}\n\nlet z = Later.v + 1\n\nfun f(n: Int) -> Int {\n  n + 1\n}\n\nlet n = 40\n\nmodule Later {\n  +let v = 1\n}\n\nfun main() {\n  write M.g(1)\n  write z\n}\n"
+---
+2
+2

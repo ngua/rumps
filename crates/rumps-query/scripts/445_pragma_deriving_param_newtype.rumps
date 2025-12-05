@@ -1,0 +1,6 @@
+#(deriving: Into[String], TryInto[Int])
+newtype UserId = Int
+
+fun main() {
+  write "param deriving newtype"
+}

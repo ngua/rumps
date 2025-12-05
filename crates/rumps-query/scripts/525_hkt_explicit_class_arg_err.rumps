@@ -1,0 +1,11 @@
+; Higher kinded instances infer element types from the receiver.
+
+variant Box[T] = Box(T)
+
+class Wrappable[Int] for Box {
+  fun wrap(v: T) -> Box[T] {
+    Box.Box(v)
+  }
+}
+
+fun main() { }

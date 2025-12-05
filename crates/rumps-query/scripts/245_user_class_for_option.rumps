@@ -1,0 +1,23 @@
+; User-defined class instance for parameterized builtin `Option`.
+;
+; Verifies that user classes can be implemented for builtin
+; parameterized types, not just scalar builtins.
+
+class Describe C {
+  fun describe(x: C) -> String
+}
+
+class Describe for Option[T] {
+  fun describe(x: Option[T]) -> String {
+    match x {
+      Option.Some(v) => { "some" }
+      Option.None => { "none" }
+    }
+  }
+}
+
+fun main() {
+  write Describe:describe(Option.Some(42))
+  write Describe:describe(Option.Some("hi"))
+  write Describe:describe(Option.None)
+}

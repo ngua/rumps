@@ -1,0 +1,36 @@
+; Private module member access errors
+; Tests that private members (without `+`) cannot be accessed outside the module
+
+fun main() {
+  ; Accessing private constant should produce a type error
+  let x = Secrets.hidden
+
+  ; Accessing private function should produce a type error
+  let y = Secrets.internal()
+
+  ; Accessing private type should produce a type error
+  let z: Secrets.Status = Secrets.Status.Pending
+
+  ; Accessing private newtype should produce a type error
+  let w: Secrets.UserId = 123
+
+  ; Accessing private union should produce a type error
+  let v: Secrets.Payload = 456
+}
+
+module Secrets {
+  ; Private constant (no `+` prefix)
+  let hidden = 42
+
+  ; Private function
+  fun internal() -> Int { 100 }
+
+  ; Private type
+  variant Status = Pending | Done
+
+  ; Private newtype
+  newtype UserId = Int
+
+  ; Private union
+  union Payload = Int | String
+}

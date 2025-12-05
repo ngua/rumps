@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Eq)\nvariant Box = Box(Int)\n\nfun main() {\n  write Box.Box(1) == Box.Box(1)\n}\n"
+---
+true

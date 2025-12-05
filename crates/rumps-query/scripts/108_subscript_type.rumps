@@ -1,0 +1,48 @@
+; Test: Subscript type as subscript key
+; The `Subscript` union type can be used directly as a subscript key,
+; enabling seamless piping of `@order` results into `@get` without coercions.
+
+fun main() {
+  ; Set up test data with mixed subscript types
+  @set data{1} "one"
+  @set data{2} "two"
+  @set data{3} "three"
+  @set data{"a"} "alpha"
+  @set data{"b"} "beta"
+
+  ; Use @order result directly as subscript (no read coercion needed)
+  let first : Subscript = @order data{}!
+  write :display(first)
+  write @get data{first}!
+
+  ; Chain through all keys using loop
+  let vals = loop { key: @order data{}, acc: [] } (st, cont) => {
+    match st.key {
+      Option.None => st.acc
+      Option.Some(k) => {
+        ; k is Subscript; use directly in @get and @order
+        let v = @get data{k}!
+        cont({
+          key: @order data{k},
+          acc: Array.concat(st.acc, [v])
+        })
+      }
+    }
+  }
+  write :display(vals)
+
+  ; Explicit Subscript annotation works
+  let sub : Subscript = 42
+  @set x{sub} "works"
+  write @get x{sub}!
+
+  write :display(lookup(1))
+  write :display(lookup("a"))
+
+  write "Subscript type test complete"
+}
+
+; Function that takes Subscript parameter
+fun lookup (key: Subscript) -> Option[Storable] {
+  @get data{key}
+}

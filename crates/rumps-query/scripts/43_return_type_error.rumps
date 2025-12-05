@@ -1,0 +1,10 @@
+; Test: Return Type Error
+; Function returns wrong type.
+
+fun get-number () -> Int {
+  "not a number"
+}
+
+fun main() {
+  write get-number()
+}

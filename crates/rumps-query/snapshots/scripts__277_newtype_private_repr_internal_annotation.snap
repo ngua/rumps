@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module CoercePrivInternal {\n  +newtype A[T] = Array[T]\n\n  +fun wrap-ann(xs: Array[Int]) -> CoercePrivInternal.A[Int] {\n    let ys: CoercePrivInternal.A[Int] = xs\n    ys\n  }\n\n  +fun unwrap-ann(xs: CoercePrivInternal.A[Int]) -> Array[Int] {\n    let ys: Array[Int] = xs\n    ys\n  }\n\n  +fun wrap-as(xs: Array[Int]) -> CoercePrivInternal.A[Int] {\n    xs as CoercePrivInternal.A[Int]\n  }\n\n  +fun unwrap-as(xs: CoercePrivInternal.A[Int]) -> Array[Int] {\n    xs as Array[Int]\n  }\n}\n\nfun main() {\n  let ann = CoercePrivInternal.wrap-ann([1, 2, 3, 4])\n  let ann-xs = CoercePrivInternal.unwrap-ann(ann)\n  write Iterable:length(ann-xs)\n\n  let as-val = CoercePrivInternal.wrap-as([5, 6, 7])\n  let as-xs = CoercePrivInternal.unwrap-as(as-val)\n  write Iterable:length(as-xs)\n}\n"
+---
+4
+3

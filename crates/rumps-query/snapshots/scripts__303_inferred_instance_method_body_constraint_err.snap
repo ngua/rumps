@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: inferred instance method bodies may not add method constraints\n\nvariant Box[T] = Box(T)\n\nclass Bad F {\n  fun f[T](x: F[T]) -> F[T]\n}\n\nclass Bad for Box {\n  fun f(x: Box[T]) -> Box[T] {\n    match x {\n      Box.Box(v) => { Box.Box(v + 1) }\n    }\n  }\n}\n\nfun main() {\n  write Bad:f(Box.Box(1))\n}\n"
+---
+ERROR: method `f` of class `Bad` has constraints that do not match the class method signature

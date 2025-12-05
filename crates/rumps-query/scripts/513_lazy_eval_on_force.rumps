@@ -1,0 +1,15 @@
+; Payload evaluation happens when `f()` is called.
+
+fun main() {
+  write "before"
+  let x = Lazy.Lazy(mark())
+  write "after"
+  match x {
+    Lazy.Lazy(f) => { write f() }
+  }
+}
+
+fun mark() -> Int {
+  write "forced"
+  23
+}

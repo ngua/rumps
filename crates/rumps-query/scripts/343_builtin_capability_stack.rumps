@@ -1,0 +1,38 @@
+; Builtin numeric capability stack.
+
+fun main() {
+  write "Int numeric: {needs-numeric(3)}"
+  let w: Word = 4
+  write "Word numeric: {needs-numeric(w)}"
+  write "Float numeric: {needs-numeric(5.5)}"
+
+  let zi: Int = Additive:zero()
+  let zw: Word = Additive:zero()
+  let zf: Float = Additive:zero()
+  write "zero Int: {zi}"
+  write "zero Word: {zw}"
+  write "zero Float: {zf}"
+
+  let oi: Int = Multiplicative:one()
+  let ow: Word = Multiplicative:one()
+  let of: Float = Multiplicative:one()
+  write "one Int: {oi}"
+  write "one Word: {ow}"
+  write "one Float: {of}"
+
+  write "add: {2 + 3}"
+  write "sub: {7 - 4}"
+  write "mul: {6 * 5}"
+  write "div Float: {7.5 / 2.5}"
+  write "div Int: {7 / 2}"
+  let wa: Word = 7
+  let wb: Word = 2
+  write "div Word: {wa / wb}"
+  write "floor-div: {7 // 2}"
+  write "mod: {7 % 2}"
+  write "pow: {2 ** 5}"
+}
+
+fun needs-numeric[T: Numeric](x: T) -> T {
+  x
+}

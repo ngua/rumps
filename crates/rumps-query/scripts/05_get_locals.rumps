@@ -1,0 +1,51 @@
+; Test: @get locals
+; Tests retrieving values from local B-tree variables
+
+fun main() {
+  ; Set up test data
+  @set x{} 42
+  @set items{1} "first"
+  @set items{2} "second"
+  @set patient{123, "name"} "John"
+  @set patient{123, "age"} 30
+
+  ; @get simple local (use {} for root ref)
+  let val = @get x{}
+  write :display(val)
+  ; Expected: 42 (or Option.Some(42))
+
+  ; @get with subscript
+  let d1 = @get items{1}
+  write :display(d1)
+  ; Expected: first
+
+  let d2 = @get items{2}
+  write :display(d2)
+  ; Expected: second
+
+  ; @get with multiple subscripts
+  let name = @get patient{123, "name"}
+  write :display(name)
+  ; Expected: John
+
+  let age = @get patient{123, "age"}
+  write :display(age)
+  ; Expected: 30
+
+  ; @get non-existent key (should return Option.None)
+  let missing = @get items{999}
+  write :display(missing)
+  ; Expected: Option.None (or similar)
+
+  let missing2 = @get nonexistent{}
+  write :display(missing2)
+  ; Expected: Option.None
+
+  ; @get after overwrite
+  @set x{} 100
+  let newval = @get x{}
+  write :display(newval)
+  ; Expected: 100
+
+  write "@get locals test complete"
+}

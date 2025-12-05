@@ -1,9 +1,11 @@
 //! File-based storage engine with WAL and page cache.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use futures::stream::TryStreamExt;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
@@ -39,11 +41,11 @@ struct LoadedIndirectPages {
 /// Use [`open`] for existing databases or [`create`] for new ones:
 ///
 /// ```ignore
-/// // Open existing
-/// let engine = FileStorageEngine::open(Path::new("./data"), config).await?;
+/// // Open existing (config restored from metadata)
+/// let engine = FileStorageEngine::open(Path::new("./data")).await?;
 ///
-/// // Create new
-/// let engine = FileStorageEngine::create(Path::new("./data"), config).await?;
+/// // Create new (config persisted to metadata)
+/// let engine = FileStorageEngine::create(Path::new("./data"), config, 3, None).await?;
 /// ```
 ///
 /// # Thread Safety
@@ -99,10 +101,15 @@ pub(crate) struct FileStorageEngine {
     /// When set, a background task is running that syncs the WAL at the
     /// configured interval. Call `shutdown()` to abort it.
     sync_task_abort: Option<tokio::task::AbortHandle>,
+
+    /// Lock file handle; held for the lifetime of the engine to prevent
+    /// concurrent access from other processes.
+    #[allow(dead_code)]
+    lock_file: std::fs::File,
 }
 
-impl std::fmt::Debug for FileStorageEngine {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for FileStorageEngine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileStorageEngine")
             .field("data_dir", &self.data_dir)
             .field("cache_size", &self.cfg.cache_size)
@@ -119,6 +126,40 @@ impl FileStorageEngine {
 
     /// WAL directory name within the data directory.
     const WAL_DIR_NAME: &'static str = "wal";
+
+    /// Lock file name within the data directory.
+    const LOCK_FILE_NAME: &'static str = "db.lock";
+
+    /// Acquires an exclusive lock on the database directory.
+    ///
+    /// Creates the lock file if it doesn't exist, then attempts to acquire
+    /// an exclusive (non-blocking) lock. Returns the locked file handle on
+    /// success; the lock is held until the file is dropped.
+    fn acquire_lock(dir: &Path) -> Result<std::fs::File> {
+        use fs2::FileExt;
+
+        let lock_path = dir.join(Self::LOCK_FILE_NAME);
+        // Note: `fs2` requires blocking I/O for lock acquisition
+        let lock_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| StorageError::Io {
+                op: "open lock file".into(),
+                path: lock_path.clone(),
+                source: e,
+            })?;
+
+        lock_file.try_lock_exclusive().map_err(|_| {
+            StorageError::DatabaseLocked {
+                path: dir.to_path_buf(),
+            }
+        })?;
+
+        Ok(lock_file)
+    }
 
     /// Open an existing database.
     ///
@@ -138,10 +179,38 @@ impl FileStorageEngine {
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The path exists but is not a directory
     /// - The directory doesn't exist
     /// - The data file is missing or corrupted
     /// - WAL recovery fails
-    pub(crate) async fn open(dir: &Path, cfg: StorageConfig) -> Result<Self> {
+    pub(crate) async fn open(dir: &Path) -> Result<Self> {
+        Self::open_with_overrides(dir, super::SafeReconfiguration::default())
+            .await
+    }
+
+    /// Open an existing database with config overrides.
+    ///
+    /// Like [`open`], but applies `overrides` to the stored config before
+    /// initializing. The overrides are NOT persisted; subsequent opens
+    /// without overrides will use the original stored config.
+    ///
+    /// [`open`]: Self::open
+    pub(crate) async fn open_with_overrides(
+        dir: &Path,
+        overrides: super::SafeReconfiguration,
+    ) -> Result<Self> {
+        // Validate path is a directory
+        if dir.exists() && !dir.is_dir() {
+            Err(StorageError::InvalidOperation(format!(
+                "path is not a directory: {}; \
+                 Database::open expects a directory containing data.db",
+                dir.display()
+            )))?;
+        }
+
+        // Acquire exclusive lock before any other operations
+        let lock_file = Self::acquire_lock(dir)?;
+
         let data_path = dir.join(Self::DATA_FILE_NAME);
         let wal_dir = dir.join(Self::WAL_DIR_NAME);
 
@@ -172,98 +241,104 @@ impl FileStorageEngine {
         if file_len < page::PAGE_SIZE as u64 {
             Err(StorageError::InvalidOperation(
                 "data file too small for header page".into(),
-            ))
-        } else {
-            // Read page 0 (header/superblock)
-            let mut hdr = vec![0u8; page::PAGE_SIZE];
-
-            file.seek(SeekFrom::Start(0)).await.map_err(|e| {
-                StorageError::Io {
-                    op: "seek to header".into(),
-                    path: data_path.clone(),
-                    source: e,
-                }
-            })?;
-            file.read_exact(&mut hdr)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "read header".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            // Parse superblock and load bitmap pages (including indirect)
-            // (Superblock::deserialize validates magic and checksum)
-            let (page_alloc, superblock, indirect) =
-                Self::load_superblock(&mut file, &hdr, &cfg, &data_path)
-                    .await?;
-
-            // Load metadata page
-            let metadata = match superblock.metadata_root {
-                Some(pid) => {
-                    let buf = Self::read_page_at(
-                        &mut file,
-                        pid.byte_offset(),
-                        &data_path,
-                    )
-                    .await?;
-                    let meta = MetadataPage::deserialize(&buf)?;
-                    meta.validate_runtime()?;
-                    meta
-                }
-                None => {
-                    // DB without metadata page - create default
-                    MetadataPage::new(3)
-                }
-            };
-
-            // Load registry chain (follows next_page links)
-            let registry_chain = match superblock.registry_root {
-                Some(pid) => {
-                    Self::load_registry_chain(&mut file, pid, &data_path)
-                        .await?
-                }
-                None => {
-                    // DB without registry - create empty chain
-                    Vec::new()
-                }
-            };
-
-            // Run WAL recovery
-            let (recovery, reader) =
-                WalReader::open(&wal_dir).await?.recover().await?;
-
-            // TODO(Phase 4.4): Apply recovery.committed_ops to page cache/data file
-            let _ = recovery.uncommitted_txns;
-
-            // Convert reader to writer
-            let wal = reader.into_writer(cfg.wal_config.clone()).await?;
-
-            // Create page cache
-            let cache = PageCache::new(cfg.cache_size);
-
-            // Wrap WAL in Arc for potential sharing with sync task
-            let wal = Arc::new(wal);
-
-            // Spawn periodic sync task if configured
-            let sync_task_abort =
-                Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
-
-            Ok(Self {
-                data_file: Arc::new(RwLock::new(file)),
-                wal,
-                cache: Arc::new(cache),
-                page_alloc: Arc::new(page_alloc),
-                superblock: RwLock::new(superblock),
-                single_indirect: RwLock::new(indirect.single),
-                double_indirect: RwLock::new(indirect.double),
-                metadata: RwLock::new(metadata),
-                registry_chain: RwLock::new(registry_chain),
-                cfg,
-                data_dir: dir.to_path_buf(),
-                sync_task_abort,
-            })
+            ))?;
         }
+
+        // Read page 0 (header/superblock)
+        let mut hdr = vec![0u8; page::PAGE_SIZE];
+
+        file.seek(SeekFrom::Start(0))
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "seek to header".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+        file.read_exact(&mut hdr)
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "read header".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+
+        // Load metadata page first so we can use stored config
+        let superblock_raw = Superblock::deserialize(&hdr)?;
+
+        let metadata = match superblock_raw.metadata_root {
+            Some(pid) => {
+                let buf = Self::read_page_at(
+                    &mut file,
+                    pid.byte_offset(),
+                    &data_path,
+                )
+                .await?;
+                let meta = MetadataPage::deserialize(&buf)?;
+                meta.validate_runtime()?;
+                meta
+            }
+            None => MetadataPage::new(3),
+        };
+
+        // Use stored config, then apply overrides
+        let mut cfg = metadata.to_storage_config();
+        if let Some(cs) = overrides.cache_size {
+            cfg.cache_size = cs;
+        }
+        if let Some(sm) = overrides.sync_mode {
+            cfg.wal_config.sync_mode = sm;
+        }
+        if let Some(ws) = overrides.wal_max_file_size {
+            cfg.wal_config.max_file_size = ws;
+        }
+
+        // Parse superblock and load bitmap pages (including indirect)
+        let (page_alloc, superblock, indirect) =
+            Self::load_superblock(&mut file, &hdr, &cfg, &data_path).await?;
+
+        // Load registry chain (follows next_page links)
+        let registry_chain = match superblock.registry_root {
+            Some(pid) => {
+                Self::load_registry_chain(&mut file, pid, &data_path).await?
+            }
+            None => Vec::new(),
+        };
+
+        // Run WAL recovery
+        let (recovery, reader) =
+            WalReader::open(&wal_dir).await?.recover().await?;
+
+        // TODO: Apply recovery.committed_ops to page cache/data file
+        let _ = recovery.uncommitted_txns;
+
+        // Convert reader to writer using (possibly overridden) WAL config
+        let wal = reader.into_writer(cfg.wal_config.clone()).await?;
+
+        // Create page cache using (possibly overridden) cache size
+        let cache = PageCache::new(cfg.cache_size);
+
+        // Wrap WAL in Arc for potential sharing with sync task
+        let wal = Arc::new(wal);
+
+        // Spawn periodic sync task if configured
+        let sync_task_abort =
+            Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
+
+        Ok(Self {
+            data_file: Arc::new(RwLock::new(file)),
+            wal,
+            cache: Arc::new(cache),
+            page_alloc: Arc::new(page_alloc),
+            superblock: RwLock::new(superblock),
+            single_indirect: RwLock::new(indirect.single),
+            double_indirect: RwLock::new(indirect.double),
+            metadata: RwLock::new(metadata),
+            registry_chain: RwLock::new(registry_chain),
+            cfg,
+            data_dir: dir.to_path_buf(),
+            sync_task_abort,
+            lock_file,
+        })
     }
 
     /// Create a new database.
@@ -280,11 +355,26 @@ impl FileStorageEngine {
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The path exists but is not a directory
     /// - The directory already exists with a data file
     /// - Directory creation fails
     /// - File creation fails
-    pub(crate) async fn create(dir: &Path, cfg: StorageConfig) -> Result<Self> {
+    pub(crate) async fn create(
+        dir: &Path,
+        cfg: StorageConfig,
+        min_degree: u16,
+        max_memory_bytes: Option<usize>,
+    ) -> Result<Self> {
         use tokio::io::AsyncWriteExt;
+
+        // Validate path is not an existing file
+        if dir.exists() && !dir.is_dir() {
+            Err(StorageError::InvalidOperation(format!(
+                "path is not a directory: {}; \
+                 Database::create expects a directory path",
+                dir.display()
+            )))?;
+        }
 
         let data_path = dir.join(Self::DATA_FILE_NAME);
         let wal_dir = dir.join(Self::WAL_DIR_NAME);
@@ -305,6 +395,9 @@ impl FileStorageEngine {
                 path: wal_dir.clone(),
                 source: e,
             })?;
+
+        // Acquire exclusive lock after creating directories
+        let lock_file = Self::acquire_lock(dir)?;
 
         // Fail if data file already exists
         if data_path.exists() {
@@ -328,8 +421,9 @@ impl FileStorageEngine {
                 .get_mut(..copy_len)
                 .map(|s| s.copy_from_slice(&bm_data[..copy_len]));
 
-            // Create metadata page (page 2)
-            let metadata = MetadataPage::new(3); // default min_degree = 3
+            // Create metadata page (page 2) with full config
+            let metadata =
+                MetadataPage::from_config(min_degree, &cfg, max_memory_bytes);
             let meta_data = metadata.serialize();
 
             // Create registry page (page 3)
@@ -425,6 +519,7 @@ impl FileStorageEngine {
                 cfg,
                 data_dir: dir.to_path_buf(),
                 sync_task_abort,
+                lock_file,
             })
         }
     }
@@ -452,7 +547,9 @@ impl FileStorageEngine {
                 });
                 Some(task.abort_handle())
             }
-            SyncMode::Immediate | SyncMode::OnCommit => None,
+            SyncMode::Immediate | SyncMode::OnCommit | SyncMode::Relaxed => {
+                None
+            }
         }
     }
 
@@ -498,7 +595,7 @@ impl AsyncStorageEngine for FileStorageEngine {
 
             // Deserialize
             let node: Node = bincode::deserialize(&buf).map_err(|e| {
-                StorageError::InvalidOperation(format!("deserialize node: {e}"))
+                StorageError::Serialization(format!("deserialize node: {e}"))
             })?;
 
             // Add to cache (clean, since it came from disk)
@@ -573,14 +670,16 @@ impl AsyncStorageEngine for FileStorageEngine {
         // Write registry chain pages
         self.flush_registry_chain().await?;
 
-        // Sync data file
-        let file = self.data_file.read().await;
+        // Sync data file (skip in Relaxed mode)
+        if self.cfg.wal_config.sync_mode != SyncMode::Relaxed {
+            let file = self.data_file.read().await;
 
-        file.sync_all().await.map_err(|e| StorageError::Io {
-            op: "sync data file".into(),
-            path: self.data_dir.join(Self::DATA_FILE_NAME),
-            source: e,
-        })?;
+            file.sync_all().await.map_err(|e| StorageError::Io {
+                op: "sync data file".into(),
+                path: self.data_dir.join(Self::DATA_FILE_NAME),
+                source: e,
+            })?;
+        }
 
         Ok(())
     }
@@ -602,10 +701,25 @@ impl FileStorageEngine {
     pub(crate) async fn cache_stats(&self) -> page::PageCacheStats {
         self.cache.stats().await
     }
+
+    /// Returns the stored B-tree min_degree from the metadata page.
+    pub(crate) async fn min_degree(&self) -> u16 {
+        self.metadata.read().await.min_degree
+    }
+
+    /// Returns the stored max_memory_bytes as `Option` (`0` means unlimited).
+    pub(crate) async fn max_memory_bytes(&self) -> Option<usize> {
+        self.metadata.read().await.max_memory_bytes_opt()
+    }
+
+    /// Returns a clone of the current storage configuration.
+    pub(crate) fn config(&self) -> StorageConfig {
+        self.cfg.clone()
+    }
 }
 
 impl FileStorageEngine {
-    // ========== Private Helpers for open() ==========
+    // Private Helpers for open()
 
     /// Load superblock and bitmap pages (including indirect pages).
     ///
@@ -702,13 +816,7 @@ impl FileStorageEngine {
         path: &'a Path,
         bm_ids: &'a mut Vec<PageId>,
         reserved: &'a mut Vec<u64>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Vec<IndirectPage>>>
-                + Send
-                + 'a,
-        >,
-    > {
+    ) -> BoxFuture<'a, Result<Vec<IndirectPage>>> {
         Box::pin(async move {
             match entries.split_first() {
                 None => Ok(Vec::new()),
@@ -746,9 +854,7 @@ impl FileStorageEngine {
         file: &'a mut File,
         page_ids: &'a [PageId],
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<Vec<u8>>> {
         Box::pin(async move {
             match page_ids.split_first() {
                 None => Ok(Vec::new()),
@@ -798,14 +904,7 @@ impl FileStorageEngine {
         file: &'a mut File,
         start_pid: PageId,
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Vec<(PageId, GlobalRegistry)>>,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> BoxFuture<'a, Result<Vec<(PageId, GlobalRegistry)>>> {
         Box::pin(async move {
             let buf =
                 Self::read_page_at(file, start_pid.byte_offset(), path).await?;
@@ -825,7 +924,7 @@ impl FileStorageEngine {
         })
     }
 
-    // ========== Private Helpers for write operations ==========
+    // Private Helpers for write operations
 
     /// Write a page to disk at its designated offset.
     async fn write_page_to_disk(&self, id: PageId, node: &Node) -> Result<()> {
@@ -993,9 +1092,7 @@ impl FileStorageEngine {
         pids: &'a [PageId],
         pages: &'a [IndirectPage],
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             match (pids.split_first(), pages.split_first()) {
                 (Some((&pid, rest_pids)), Some((page, rest_pages))) => {
@@ -1017,9 +1114,7 @@ impl FileStorageEngine {
         file: &'a RwLock<File>,
         pages: &'a [(PageId, Vec<u8>)],
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             match pages.split_first() {
                 None => Ok(()),
@@ -1365,7 +1460,7 @@ impl FileStorageEngine {
         Ok(())
     }
 
-    // ========== Registry Chain Operations ==========
+    // Registry Chain Operations
 
     /// Look up a global's root page by name across the entire registry chain.
     pub(crate) async fn registry_get(&self, name: &str) -> Option<PageId> {
@@ -1481,10 +1576,7 @@ impl FileStorageEngine {
                         reg.insert_unchecked(name.clone(), root)
                     });
                     drop(chain);
-                    self.page_alloc
-                        .free(new_pid)
-                        .await
-                        .map_err(StorageError::from)
+                    self.page_alloc.free(new_pid).await
                 }
                 None => {
                     // No existing space - use our newly allocated page
@@ -1590,6 +1682,17 @@ impl FileStorageEngine {
         self.wal.sync().await
     }
 
+    /// Sync the WAL if the current mode requires it at commit time.
+    ///
+    /// This respects the configured `SyncMode`:
+    /// - `Immediate`: No-op (already synced on append)
+    /// - `OnCommit`: Performs fsync
+    /// - `Periodic`: No-op (background task handles it)
+    /// - `Relaxed`: No-op (rely on OS page cache)
+    pub(crate) async fn wal_sync_if_needed(&self) -> Result<()> {
+        self.wal.sync_if_needed().await
+    }
+
     /// Flush the entire registry chain to disk.
     async fn flush_registry_chain(&self) -> Result<()> {
         let chain = self.registry_chain.read().await;
@@ -1604,9 +1707,7 @@ impl FileStorageEngine {
         file: &'a RwLock<File>,
         pages: &'a [(PageId, GlobalRegistry)],
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             match pages.split_first() {
                 None => Ok(()),
@@ -1629,7 +1730,7 @@ mod tests {
 
     use super::*;
 
-    // ========== Test Helpers ==========
+    // Test Helpers
 
     /// Fills the first registry page with entries until full.
     ///
@@ -1673,8 +1774,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("nonexistent");
 
-        let result =
-            FileStorageEngine::open(&path, StorageConfig::default()).await;
+        let result = FileStorageEngine::open(&path).await;
 
         // Should fail because data file doesn't exist
         assert!(result.is_err());
@@ -1685,10 +1785,49 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
 
         // Directory exists but no data.db file
-        let result =
-            FileStorageEngine::open(dir.path(), StorageConfig::default()).await;
+        let result = FileStorageEngine::open(dir.path()).await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn open_file_path_fails() {
+        let dir = TempDir::new().expect("temp dir");
+        let file_path = dir.path().join("not_a_dir.db");
+
+        // Create a regular file
+        tokio::fs::write(&file_path, b"not a database")
+            .await
+            .expect("write file");
+
+        let result = FileStorageEngine::open(&file_path).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not a directory"), "error was: {}", err);
+    }
+
+    #[tokio::test]
+    async fn create_file_path_fails() {
+        let dir = TempDir::new().expect("temp dir");
+        let file_path = dir.path().join("not_a_dir.db");
+
+        // Create a regular file
+        tokio::fs::write(&file_path, b"existing file")
+            .await
+            .expect("write file");
+
+        let result = FileStorageEngine::create(
+            &file_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not a directory"), "error was: {}", err);
     }
 
     #[tokio::test]
@@ -1696,10 +1835,14 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create should succeed");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create should succeed");
 
         // Verify files exist
         assert!(db_path.join("data.db").exists());
@@ -1715,17 +1858,20 @@ mod tests {
         let db_path = dir.path().join("testdb");
 
         // Create
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create should succeed");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create should succeed");
         drop(engine);
 
         // Reopen
-        let engine =
-            FileStorageEngine::open(&db_path, StorageConfig::default())
-                .await
-                .expect("open should succeed");
+        let engine = FileStorageEngine::open(&db_path)
+            .await
+            .expect("open should succeed");
 
         assert_eq!(engine.data_dir, db_path);
     }
@@ -1736,13 +1882,18 @@ mod tests {
         let db_path = dir.path().join("testdb");
 
         // Create first time
-        FileStorageEngine::create(&db_path, StorageConfig::default())
+        FileStorageEngine::create(&db_path, StorageConfig::default(), 3, None)
             .await
             .expect("first create should succeed");
 
         // Create again should fail
-        let result =
-            FileStorageEngine::create(&db_path, StorageConfig::default()).await;
+        let result = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await;
 
         assert!(result.is_err());
     }
@@ -1754,7 +1905,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        FileStorageEngine::create(&db_path, StorageConfig::default())
+        FileStorageEngine::create(&db_path, StorageConfig::default(), 3, None)
             .await
             .expect("create should succeed");
 
@@ -1781,10 +1932,14 @@ mod tests {
 
         // Create
         {
-            let engine =
-                FileStorageEngine::create(&db_path, StorageConfig::default())
-                    .await
-                    .expect("create should succeed");
+            let engine = FileStorageEngine::create(
+                &db_path,
+                StorageConfig::default(),
+                3,
+                None,
+            )
+            .await
+            .expect("create should succeed");
 
             let sb = engine.superblock.read().await;
             assert_eq!(sb.version, Superblock::VERSION);
@@ -1793,10 +1948,9 @@ mod tests {
 
         // Reopen
         {
-            let engine =
-                FileStorageEngine::open(&db_path, StorageConfig::default())
-                    .await
-                    .expect("open should succeed");
+            let engine = FileStorageEngine::open(&db_path)
+                .await
+                .expect("open should succeed");
 
             let sb = engine.superblock.read().await;
             assert_eq!(sb.version, Superblock::VERSION);
@@ -1809,10 +1963,14 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create should succeed");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create should succeed");
 
         // Pages 0-3 should be reserved (superblock, bitmap, metadata, registry)
         assert!(engine.page_alloc.is_reserved(0).await);
@@ -1832,10 +1990,14 @@ mod tests {
 
         // Create and drop engine
         {
-            let engine =
-                FileStorageEngine::create(&db_path, StorageConfig::default())
-                    .await
-                    .expect("create");
+            let engine = FileStorageEngine::create(
+                &db_path,
+                StorageConfig::default(),
+                3,
+                None,
+            )
+            .await
+            .expect("create");
 
             // Verify metadata was created
             let meta = engine.metadata.read().await;
@@ -1845,10 +2007,7 @@ mod tests {
         }
 
         // Reopen and verify
-        let engine =
-            FileStorageEngine::open(&db_path, StorageConfig::default())
-                .await
-                .expect("open");
+        let engine = FileStorageEngine::open(&db_path).await.expect("open");
 
         let meta = engine.metadata.read().await;
         assert_eq!(meta.version, 1);
@@ -1968,10 +2127,14 @@ mod tests {
         );
 
         // Create database
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
 
         let start = Instant::now();
         let mut last_report = 0usize;
@@ -2044,10 +2207,7 @@ mod tests {
         println!("Reopening database...");
 
         // Reopen and verify
-        let engine =
-            FileStorageEngine::open(&db_path, StorageConfig::default())
-                .await
-                .expect("reopen");
+        let engine = FileStorageEngine::open(&db_path).await.expect("reopen");
 
         {
             let sb = engine.superblock.read().await;
@@ -2087,17 +2247,21 @@ mod tests {
         );
     }
 
-    // ========== Registry Chaining Integration Tests ==========
+    // Registry Chaining Integration Tests
 
     #[tokio::test]
     async fn registry_insert_and_get_single_page() {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
 
         // Insert a few globals
         engine
@@ -2128,10 +2292,14 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
 
         engine
             .registry_insert("PATIENT".into(), PageId::from(100))
@@ -2157,10 +2325,14 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
 
         engine
             .registry_insert("A".into(), PageId::from(1))
@@ -2187,10 +2359,14 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
 
         engine
             .registry_insert("PATIENT".into(), PageId::from(100))
@@ -2214,10 +2390,14 @@ mod tests {
 
         // Create and populate
         {
-            let engine =
-                FileStorageEngine::create(&db_path, StorageConfig::default())
-                    .await
-                    .expect("create");
+            let engine = FileStorageEngine::create(
+                &db_path,
+                StorageConfig::default(),
+                3,
+                None,
+            )
+            .await
+            .expect("create");
 
             engine
                 .registry_insert("GLOBAL1".into(), PageId::from(100))
@@ -2233,10 +2413,7 @@ mod tests {
 
         // Reopen and verify
         {
-            let engine =
-                FileStorageEngine::open(&db_path, StorageConfig::default())
-                    .await
-                    .expect("open");
+            let engine = FileStorageEngine::open(&db_path).await.expect("open");
 
             assert_eq!(
                 engine.registry_get("GLOBAL1").await,
@@ -2254,10 +2431,14 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
 
         // Fill the first page until it can't accept any more entries.
         // Each entry "G{i:03}" = 5 chars = 2 + 5 + 8 = 15 bytes.
@@ -2306,10 +2487,14 @@ mod tests {
 
         // Create, fill, and persist
         let first_page_count = {
-            let engine =
-                FileStorageEngine::create(&db_path, StorageConfig::default())
-                    .await
-                    .expect("create");
+            let engine = FileStorageEngine::create(
+                &db_path,
+                StorageConfig::default(),
+                3,
+                None,
+            )
+            .await
+            .expect("create");
 
             // Fill first page until it's full
             let count = fill_first_registry_page(&engine).await;
@@ -2326,10 +2511,7 @@ mod tests {
 
         // Reopen and verify chain is loaded correctly
         {
-            let engine =
-                FileStorageEngine::open(&db_path, StorageConfig::default())
-                    .await
-                    .expect("open");
+            let engine = FileStorageEngine::open(&db_path).await.expect("open");
 
             // Check chain length
             {
@@ -2360,10 +2542,14 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
 
         // Fill first page until it's full
         fill_first_registry_page(&engine).await;
@@ -2393,10 +2579,14 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
 
         // Fill first page until it's full
         fill_first_registry_page(&engine).await;
@@ -2438,10 +2628,14 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
-        let engine =
-            FileStorageEngine::create(&db_path, StorageConfig::default())
-                .await
-                .expect("create");
+        let engine = FileStorageEngine::create(
+            &db_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
 
         // Insert 1000 globals (will need ~4 pages)
         let eng = &engine;
@@ -2489,10 +2683,14 @@ mod tests {
 
         // Create and populate
         {
-            let engine =
-                FileStorageEngine::create(&db_path, StorageConfig::default())
-                    .await
-                    .expect("create");
+            let engine = FileStorageEngine::create(
+                &db_path,
+                StorageConfig::default(),
+                3,
+                None,
+            )
+            .await
+            .expect("create");
 
             let eng = &engine;
             stream::iter(0..num_globals)
@@ -2509,10 +2707,7 @@ mod tests {
 
         // Reopen and verify
         {
-            let engine =
-                FileStorageEngine::open(&db_path, StorageConfig::default())
-                    .await
-                    .expect("open");
+            let engine = FileStorageEngine::open(&db_path).await.expect("open");
 
             let entries = engine.registry_entries().await;
             assert_eq!(entries.len(), num_globals);
@@ -2531,5 +2726,83 @@ mod tests {
                 Some(PageId::from(499))
             );
         }
+    }
+
+    #[tokio::test]
+    async fn concurrent_open_fails_with_database_locked() {
+        let dir = TempDir::new().expect("temp dir");
+
+        // Create and keep engine alive
+        let engine1 = FileStorageEngine::create(
+            dir.path(),
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
+
+        // Second open should fail with DatabaseLocked
+        let result = FileStorageEngine::open(dir.path()).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, StorageError::DatabaseLocked { .. }),
+            "expected DatabaseLocked, got: {err:?}"
+        );
+
+        drop(engine1);
+    }
+
+    #[tokio::test]
+    async fn lock_released_after_drop() {
+        let dir = TempDir::new().expect("temp dir");
+
+        // Create and drop engine
+        {
+            let _engine = FileStorageEngine::create(
+                dir.path(),
+                StorageConfig::default(),
+                3,
+                None,
+            )
+            .await
+            .expect("create");
+        }
+
+        // Second open should now succeed
+        let engine2 = FileStorageEngine::open(dir.path()).await;
+        assert!(engine2.is_ok(), "open failed: {:?}", engine2.unwrap_err());
+    }
+
+    #[tokio::test]
+    async fn concurrent_create_fails_with_database_locked() {
+        let dir = TempDir::new().expect("temp dir");
+
+        // Create first, keep alive
+        let engine1 = FileStorageEngine::create(
+            dir.path(),
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
+
+        // Second create should fail (either with "already exists" or "locked")
+        let result = FileStorageEngine::create(
+            dir.path(),
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await;
+
+        assert!(result.is_err());
+        // Could be either DatabaseLocked or InvalidOperation("database already exists")
+        // depending on timing; both are acceptable
+
+        drop(engine1);
     }
 }

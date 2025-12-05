@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Qualified payload variant constructors are first-class functions.\n\nvariant Box[T] = Full(T) | Empty\n\nfun main() {\n  let some = Option.Some\n  let ok = Result.Ok\n  let full = Box.Full\n\n  write some(42)\n  write ok(\"done\")\n  write full(true)\n}\n"
+---
+Option.Some(42)
+Result.Ok("done")
+Box.Full(true)

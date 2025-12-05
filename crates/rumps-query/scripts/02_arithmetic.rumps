@@ -1,0 +1,79 @@
+; Test: parse and evaluate arithmetic
+; Tests arithmetic operators with correct precedence
+
+fun main() {
+  ; Basic operations
+  let add = 10 + 5
+  write add
+  ; Expected: 15
+
+  let sub = 10 - 5
+  write sub
+  ; Expected: 5
+
+  let mul = 10 * 5
+  write mul
+  ; Expected: 50
+
+  ; Division requires Float operands
+  let div = 10.0 / 4.0
+  write div
+  ; Expected: 2.5
+
+  let intdiv = 10 // 4
+  write intdiv
+  ; Expected: 2
+
+  let modulo = 10 % 3
+  write modulo
+  ; Expected: 1
+
+  ; Precedence: mul/div before add/sub
+  let prec1 = 2 + 3 * 4
+  write prec1
+  ; Expected: 14 (not 20)
+
+  ; Division with floats
+  let prec2 = 10.0 - 6.0 / 2.0
+  write prec2
+  ; Expected: 7.0 (not 2.0)
+
+  ; Parentheses override precedence
+  let paren1 = (2 + 3) * 4
+  write paren1
+  ; Expected: 20
+
+  let paren2 = (10.0 - 6.0) / 2.0
+  write paren2
+  ; Expected: 2.0
+
+  ; Unary minus
+  let neg = -5
+  write neg
+  ; Expected: -5
+
+  let neg2 = 10 + -3
+  write neg2
+  ; Expected: 7
+
+  ; Nested operations (using floor division for integers)
+  let complex = ((1 + 2) * (3 + 4)) // 7
+  write complex
+  ; Expected: 3
+
+  ; Float arithmetic
+  let f1 = 3.14 * 2.0
+  write f1
+  ; Expected: 6.28
+
+  let f2 = 10.0 / 4.0
+  write f2
+  ; Expected: 2.5
+
+  ; Same-type arithmetic with explicit conversion
+  let mixed = (10 as Float) + 0.5
+  write mixed
+  ; Expected: 10.5
+
+  write "Arithmetic test complete"
+}

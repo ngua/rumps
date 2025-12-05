@@ -1,0 +1,6 @@
+#(deriving: Into)
+newtype UserId = Int
+
+fun main() {
+  write "bad"
+}

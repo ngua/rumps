@@ -1,0 +1,200 @@
+; String module primitives
+; Tests String.length, String.upper, String.lower, String.trim,
+; String.split, String.join, String.slice, String.contains, String.replace
+
+fun main() {
+  ; ============ String.length ============
+
+  write String.length("hello")  ; 5
+
+  let empty-str = ""
+  write String.length(empty-str)  ; 0
+
+  let single-char = "x"
+  write String.length(single-char)  ; 1
+
+  let with-spaces = "hello world"
+  write String.length(with-spaces)  ; 11
+
+  ; ============ String.upper ============
+
+  write String.upper("hello")  ; "HELLO"
+
+  let mixed-case = "Hello World"
+  write String.upper(mixed-case)  ; "HELLO WORLD"
+
+  write String.upper("ALREADY UPPER")  ; "ALREADY UPPER"
+
+  write String.upper("")  ; ""
+
+  let with-nums = "abc123"
+  write String.upper(with-nums)  ; "ABC123"
+
+  ; ============ String.lower ============
+
+  write String.lower("HELLO")  ; "hello"
+
+  let upper-mixed = "Hello World"
+  write String.lower(upper-mixed)  ; "hello world"
+
+  write String.lower("already lower")  ; "already lower"
+
+  write String.lower("")  ; ""
+
+  let lower-nums = "ABC123"
+  write String.lower(lower-nums)  ; "abc123"
+
+  ; ============ String.trim ============
+
+  write String.trim("  hello  ")  ; "hello"
+
+  let leading-space = "   world"
+  write String.trim(leading-space)  ; "world"
+
+  let trailing-space = "hello   "
+  write String.trim(trailing-space)  ; "hello"
+
+  write String.trim("no spaces")  ; "no spaces"
+
+  write String.trim("")  ; ""
+
+  let only-spaces = "     "
+  write String.trim(only-spaces)  ; ""
+
+  ; ============ String.split ============
+
+  let csv = "a,b,c"
+  let parts = String.split(csv, ",")
+  write :display(parts)  ; ["a", "b", "c"]
+
+  ; Split on space
+  let sentence = "hello world foo"
+  let words = String.split(sentence, " ")
+  write :display(words)  ; ["hello", "world", "foo"]
+
+  ; Split on multi-char delimiter
+  let multi-delim = "foo::bar::baz"
+  let multi-parts = String.split(multi-delim, "::")
+  write :display(multi-parts)  ; ["foo", "bar", "baz"]
+
+  ; Split with no delimiter found
+  let no-match = String.split("hello", ",")
+  write :display(no-match)  ; ["hello"]
+
+  ; Split empty string
+  let split-empty = String.split("", ",")
+  write :display(split-empty)  ; [""]
+
+  ; Split on empty delimiter (splits every char)
+  let split-chars = String.split("abc", "")
+  write :display(split-chars)  ; ["", "a", "b", "c", ""]
+
+  ; ============ String.join ============
+
+  let join-arr = ["a", "b", "c"]
+  let joined = String.join(join-arr, ",")
+  write joined  ; "a,b,c"
+
+  ; Join with space
+  let join-words = ["hello", "world"]
+  let joined-words = String.join(join-words, " ")
+  write joined-words  ; "hello world"
+
+  ; Join with empty delimiter
+  let join-no-sep = String.join(["a", "b", "c"], "")
+  write join-no-sep  ; "abc"
+
+  ; Join single element
+  let join-single = String.join(["alone"], ",")
+  write join-single  ; "alone"
+
+  ; Join empty array
+  let join-empty = String.join([], ",")
+  write join-empty  ; ""
+
+  ; ============ String.slice ============
+
+  let slice-str = "hello world"
+  write String.slice(slice-str, 0, 5)  ; "hello"
+  write String.slice(slice-str, 6, 11)  ; "world"
+
+  ; Slice middle
+  write String.slice(slice-str, 3, 8)  ; "lo wo"
+
+  ; Slice empty range
+  write String.slice(slice-str, 5, 5)  ; ""
+
+  ; Slice with clamped bounds
+  write String.slice("abc", 0, 100)  ; "abc"
+  write String.slice("abc", -5, 2)  ; "ab"
+
+  ; Slice from start
+  write String.slice("hello", 0, 3)  ; "hel"
+
+  ; ============ String.contains ============
+
+  let haystack = "hello world"
+  write String.contains(haystack, "wor")  ; true
+  write String.contains(haystack, "xyz")  ; false
+  write String.contains(haystack, "hello")  ; true
+  write String.contains(haystack, "world")  ; true
+
+  ; Contains empty string (always true)
+  write String.contains("hello", "")  ; true
+
+  ; Contains itself
+  write String.contains("abc", "abc")  ; true
+
+  ; Contains in empty string
+  write String.contains("", "x")  ; false
+  write String.contains("", "")  ; true
+
+  ; ============ String.replace ============
+
+  write String.replace("foo", "o", "a")  ; "faa"
+
+  let banana = "banana"
+  write String.replace(banana, "a", "o")  ; "bonono"
+
+  ; Replace substring
+  let greeting = "hello world"
+  write String.replace(greeting, "world", "there")  ; "hello there"
+
+  ; Replace not found
+  write String.replace("hello", "x", "y")  ; "hello"
+
+  ; Replace with empty
+  write String.replace("hello", "l", "")  ; "heo"
+
+  ; Replace empty pattern (inserts between chars)
+  write String.replace("ab", "", "-")  ; "-a-b-"
+
+  ; ============ Chaining operations ============
+
+  ; Upper then slice
+  let chain-str = "hello world"
+  let chain-upper = String.slice(String.upper(chain-str), 0, 5)
+  write chain-upper  ; "HELLO"
+
+  ; Trim then split
+  let messy = "  a,b,c  "
+  let clean-parts = String.split(String.trim(messy), ",")
+  write :display(clean-parts)  ; ["a", "b", "c"]
+
+  ; Split then join with different separator
+  let csv-to-tabs = String.join(String.split("a,b,c", ","), "\t")
+  write csv-to-tabs  ; "a	b	c"
+
+  ; ============ Pipeline usage ============
+
+  let pipeline-str = "  HELLO WORLD  "
+  let pipeline-result = pipeline-str
+    |> String.trim
+    |> String.lower
+  write pipeline-result  ; "hello world"
+
+  let pipeline-words = "apple,banana,cherry"
+    |> (s => String.split(s, ","))
+    |> (arr => String.join(arr, " - "))
+  write pipeline-words  ; "apple - banana - cherry"
+}

@@ -1,0 +1,21 @@
+; A class method can have only one default body.
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+  fun g(x: C) -> Int
+
+  #(default)
+  fun g(x: C) -> Int {
+    10
+  }
+
+  #(default)
+  fun g(x: C) -> Int {
+    20
+  }
+}
+
+fun main() {
+  write "bad"
+}

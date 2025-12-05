@@ -1,0 +1,8 @@
+#(required: fold, fold)
+class MyFold C {
+  fun fold(c: C) -> Int
+}
+
+fun main() {
+  write "bad"
+}

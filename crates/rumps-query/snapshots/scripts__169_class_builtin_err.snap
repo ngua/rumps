@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: implementing class for builtin type\n;\n; Builtin types already have class implementations, so user cannot\n; override them.\n\nCLASS Display FOR Int {\n  FUN display(n: Int) -> String {\n    \"custom: {n}\"\n  }\n}\n"
+---
+ERROR: cannot implement `Display` for builtin type `Int`

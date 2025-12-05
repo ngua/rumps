@@ -1,0 +1,112 @@
+; Test: Unit type and Option values
+; Tests blocks returning Unit, single-arm if returning Unit, and Option behavior
+
+; Function that expects an Option argument
+fun maybe-double(x: Option[Int]) -> Int {
+  (x ?? 0) * 2
+}
+
+fun main() {
+  ; === Block without tail returns Unit ===
+
+  let result = {
+    write "Side effect only"
+  }
+  write :display(result)
+  ; Expected: Unit
+
+  let result-2 = {
+    let x = 42
+    write x
+    ; No tail expression
+  }
+  write :display(result-2)
+  ; Expected: Unit
+
+  ; === Block with tail returns value ===
+
+  let result-3 = {
+    let x = 42
+    x
+  }
+  write result-3
+  ; Expected: 42
+
+  ; === Single-arm if returns Unit ===
+
+  ; Single-arm if with false condition (body not evaluated)
+  let cond-1 = if false {
+    write "never reached"
+  }
+  write :display(cond-1)
+  ; Expected: Unit
+
+  ; Single-arm if with true condition (body evaluated, must be Unit)
+  let cond-2 = if true {
+    write "side effect"
+  }
+  write :display(cond-2)
+  ; Expected: Unit
+
+  ; === Option values ===
+
+  ; Option.None
+  write :display(Option.None)
+  ; Expected: Option.None
+
+  ; Option.Some unwrapping with coalesce
+  write Option.Some(42) ?? 0
+  ; Expected: 42
+
+  ; Option.None fallback with coalesce
+  write Option.None ?? "fallback"
+  ; Expected: fallback
+
+  ; === Prefix `?` for Some wrapping ===
+
+  ; Basic usage: wrap a value in Some
+  let wrapped = ?42
+  write :display(wrapped)
+  ; Expected: Option.Some(42)
+
+  ; Unwrap with coalesce
+  write ?100 ?? 0
+  ; Expected: 100
+
+  ; Wrap a string
+  write :display(?"hello")
+  ; Expected: Option.Some(hello)
+
+  ; Nested `?` produces Option.Some(Option.Some(v))
+  ; Note: `??` is the coalesce operator, so use `?(?x)` for nesting
+  let nested = ?(?10)
+  write :display(nested)
+  ; Expected: Option.Some(Option.Some(10))
+
+  ; Unwrap outer layer
+  write :display(nested!)
+  ; Expected: Option.Some(10)
+
+  ; Fully unwrap nested
+  write nested!!
+  ; Expected: 10
+
+  ; Call with explicit Some
+  write maybe-double(Option.Some(5))
+  ; Expected: 10
+
+  ; Call with `?` wrap syntax
+  write maybe-double(?7)
+  ; Expected: 14
+
+  ; Call with None
+  write maybe-double(Option.None)
+  ; Expected: 0
+
+  ; Wrap an expression
+  let expr-result = ?(3 + 4)
+  write :display(expr-result)
+  ; Expected: Option.Some(7)
+
+  write "Unit and Option test complete"
+}

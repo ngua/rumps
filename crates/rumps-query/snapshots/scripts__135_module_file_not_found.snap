@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error test: module file not found\n\nMODULE Missing FROM \"../nonexistent/path/to/module.rumps\"\n"
+---
+ERROR: parse error at 37..94: cannot resolve module path `../nonexistent/path/to/module.rumps`: No such file or directory (os error 2)

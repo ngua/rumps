@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: manual `Eq` conflicts with derived `Eq`.\n\n#(deriving: Eq)\nvariant Box = Box(Int)\n\nclass Eq for Box {\n  fun eq(a: Box, b: Box) -> Bool {\n    true\n  }\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: duplicate `Eq` instance for type `Box`

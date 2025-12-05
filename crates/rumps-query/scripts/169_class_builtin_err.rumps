@@ -1,0 +1,12 @@
+; Error: implementing class for builtin type
+;
+; Builtin types already have class implementations, so user cannot
+; override them.
+
+fun main() { }
+
+class Display for Int {
+  fun display(n: Int) -> String {
+    "custom: {n}"
+  }
+}

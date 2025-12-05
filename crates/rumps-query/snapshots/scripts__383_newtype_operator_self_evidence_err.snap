@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Operator syntax cannot use its own class method.\n\nfun main() { }\n\nnewtype Count = Int\n\nclass Additive for Count {\n  fun zero() -> Count {\n    0\n  }\n\n  fun add(a: Count, b: Count) -> Count {\n    a + b\n  }\n}\n"
+---
+ERROR: cannot use a class method while defining that class for the same type

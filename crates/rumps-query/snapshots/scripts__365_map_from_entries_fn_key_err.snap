@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Map.from-entries` requires `Ord` keys.\n\nfun main() {\n  let f = (x: Int) -> Int => x + 1\n  let entries = [(f, \"bad\")]\n  let m = Map.from-entries(entries)\n  write m\n}\n"
+---
+ERROR: type `(Int) -> Int` does not satisfy `Ord` class

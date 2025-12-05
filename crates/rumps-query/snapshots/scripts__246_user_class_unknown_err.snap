@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: unknown class used in a constraint.\n\nfun foo[T: NonExistent](x: T) -> T {\n  x\n}\n\nfun main() {\n  write foo(42)\n}\n"
+---
+ERROR: 57..68: unknown class `NonExistent`

@@ -5,14 +5,34 @@ members = [
 ]
 resolver = "2"
 
+[workspace.lints.clippy]
+obfuscated_if_else = "allow"
+option_map_unit_fn = "allow"
+type_complexity = "allow"
+use_self = "warn"
+while_let_on_iterator = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+too_many_arguments = "deny"
+
 [workspace.dependencies]
+async-recursion = "1"
+async-trait = "0.1"
 criterion = { version = "0.5", features = ["async_tokio"] }
 either = "1.13"
-itertools = "*"
+futures = "0.3"
+itertools = "0.14"
+unicode-segmentation = "1.12"
 miette = "7.2"
 ordered-float = { version = "4.2", features = ["serde", "rand"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+smallvec = { version = "1", features = ["serde"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["fs"] }
 tokio-util = "0.7.9"
+nonempty = "0.10"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits", "parsing"] }

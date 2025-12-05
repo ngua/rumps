@@ -1,0 +1,8 @@
+; Residual equality constraints keep function-valued `let` bindings monomorphic.
+
+fun main() {
+  let f = x => if x { 1 } else { 2 }
+
+  write f(true)
+  write f(42)
+}

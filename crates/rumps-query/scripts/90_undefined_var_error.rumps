@@ -1,0 +1,7 @@
+; Test: Undefined variable error
+; Type checker should catch use of undefined variables
+
+fun main() {
+  ; This should fail: `y` is not defined
+  let x = y + 1
+}

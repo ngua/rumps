@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(options: cache-size = 127)\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 24..27: `cache-size` must be greater than `0` and a power of `2`

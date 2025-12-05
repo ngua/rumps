@@ -1,0 +1,7 @@
+; Explicit closure params may appear only in constraints.
+
+fun main() {
+  let f = [T: Display](x: Int) -> Int => x
+
+  write f(7)
+}

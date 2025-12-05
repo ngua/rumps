@@ -1,0 +1,5 @@
+; Tuple size mismatch
+
+fun main() {
+  let (a, b, c) = (1, 2)
+}

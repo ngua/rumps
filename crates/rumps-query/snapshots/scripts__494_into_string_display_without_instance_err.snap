@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module HiddenLabel {\n  #(deriving: Display)\n  +newtype Label = Int\n\n  +fun make(n: Int) -> HiddenLabel.Label {\n    n as HiddenLabel.Label\n  }\n}\n\nfun main() {\n  let x = HiddenLabel.make(7)\n  write x as String\n}\n"
+---
+ERROR: cannot cast `HiddenLabel.Label` to `String`

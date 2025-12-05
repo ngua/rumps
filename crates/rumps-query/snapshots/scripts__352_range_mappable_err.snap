@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; HKT `Mappable` rejects raw `Range`\n\nfun main() {\n  let xs = Mappable:map(x => x + 1, 1 .. 10)\n  write xs\n}\n"
+---
+ERROR: type mismatch: expected `Range`, got `T[U]`

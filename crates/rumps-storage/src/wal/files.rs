@@ -2,6 +2,7 @@
 //!
 //! Provides utilities for finding and ordering WAL files in a directory.
 
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use futures::stream::{self, StreamExt};
@@ -77,9 +78,7 @@ impl WalFileInfo {
     /// Returns `WalCorruption` if sequence gaps are detected between files.
     pub(crate) async fn discover(dir: &Path) -> Result<Vec<Self>> {
         match fs::read_dir(dir).await {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(Vec::new())
-            }
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(e.into()),
             Ok(entries) => {
                 // Unfold ReadDir into a stream of DirEntry

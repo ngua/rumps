@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Naked variant constructor with ambiguous constructor name.\n\nvariant A = Foo\nvariant B = Foo\n\nfun main() {\n  let x = .Foo\n  write x\n}\n"
+---
+ERROR: ambiguous variant constructor `.Foo`; defined in multiple types

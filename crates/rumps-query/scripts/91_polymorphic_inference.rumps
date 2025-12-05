@@ -1,0 +1,118 @@
+; Test: Polymorphic inference and generalization
+; Tests that the type checker correctly handles polymorphic functions
+
+fun main() {
+  ; Use at Int
+  let int-result = identity(42)
+  write int-result  ; 42
+
+  ; Use at String
+  let str-result = identity("hello")
+  write str-result  ; hello
+
+  ; Use at Bool
+  let bool-result = identity(true)
+  write bool-result  ; true
+
+  ; Use at Array[Int]
+  let arr-result = identity([1, 2, 3])
+  write :display(arr-result)  ; [1, 2, 3]
+
+  write const(1, "ignored")  ; 1
+  write const("kept", 999)   ; kept
+
+  let flipped-int-str = flip((1, "hello"))
+  write :display(flipped-int-str)  ; ("hello", 1)
+
+  let flipped-bool-float = flip((true, 3.14))
+  write :display(flipped-bool-float)  ; (3.14, true)
+
+  write apply-twice(inc, 0)           ; 2
+  write apply-twice(double-str, "a")  ; aaaa
+
+  let neg-triple = compose(negate, triple)
+  write neg-triple(5)  ; -15
+
+  write :display(wrap-some(42))       ; Option.Some(42)
+  write :display(wrap-some("hello"))  ; Option.Some("hello")
+  write :display(wrap-some(true))     ; Option.Some(true)
+
+  ; === Polymorphic with Mappable:map ===
+
+  ; Same closure structure, different element types
+  let nums = [1, 2, 3]
+  let strs = ["a", "b", "c"]
+
+  let mapped-nums = Mappable:map(x => identity(x), nums)
+  write :display(mapped-nums)  ; [1, 2, 3]
+
+  let mapped-strs = Mappable:map(x => identity(x), strs)
+  write :display(mapped-strs)  ; [a, b, c]
+
+  write :display(pair-with-zero("hello"))  ; ("hello", 0)
+  write :display(pair-with-zero(true))     ; (true, 0)
+
+  ; === Polymorphic empty array ===
+
+  let empty-int: Array[Int] = []
+  let empty-str: Array[String] = []
+
+  write :display(empty-int)   ; []
+  write :display(empty-str)   ; []
+
+  let p1 = make-pair(1, 2)
+  let p2 = make-pair("x", "y")
+  let p3 = make-pair(true, 3.14)
+
+  write :display(p1)  ; (1, 2)
+  write :display(p2)  ; ("x", "y")
+  write :display(p3)  ; (true, 3.14)
+
+  write "Polymorphic inference test complete"
+}
+
+; === Identity function at multiple types ===
+
+fun identity(x) { x }
+
+; === Const function at multiple types ===
+
+fun const(a, b) { a }
+
+; === Flip function ===
+
+fun flip(pair) { (pair.1, pair.0) }
+
+; === Generic higher-order function ===
+
+fun apply-twice(f, x) {
+  f(f(x))
+}
+
+fun inc(n: Int) -> Int { n + 1 }
+fun double-str(s: String) -> String { "{s}{s}" }
+
+; === Compose functions ===
+
+fun compose(f, g) {
+  x => f(g(x))
+}
+
+fun negate(n: Int) -> Int { 0 - n }
+fun triple(n: Int) -> Int { n * 3 }
+
+; === Polymorphic with Option ===
+
+fun wrap-some(x) {
+  Option.Some(x)
+}
+
+; === Generic function returning different types ===
+
+fun pair-with-zero(x) {
+  (x, 0)
+}
+
+; === Test generalization: same fn, multiple instantiations in sequence ===
+
+fun make-pair(a, b) { (a, b) }

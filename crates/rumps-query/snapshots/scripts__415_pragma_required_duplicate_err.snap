@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(required: fold, fold)\nclass MyFold C {\n  fun fold(c: C) -> Int\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 18..22: duplicate required method `fold`

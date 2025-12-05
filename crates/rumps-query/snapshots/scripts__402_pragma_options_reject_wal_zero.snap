@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(options: wal-max-file-size = 0)\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 31..32: `wal-max-file-size` must be greater than `0`

@@ -32,6 +32,7 @@
 //! [`reader`]: super::reader
 //! [`sync`]: WalWriter::sync
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -71,6 +72,24 @@ pub enum SyncMode {
     ///
     /// [`sync`]: WalWriter::sync
     Periodic(Duration),
+
+    /// Never explicitly sync; rely on OS page cache flush.
+    ///
+    /// Highest throughput, but a crash may lose recent commits.
+    /// Useful for batch imports, analytics workloads, or development.
+    Relaxed,
+}
+
+impl SyncMode {
+    /// Converts to raw `(mode, interval_ms)` for metadata serialization.
+    pub(crate) fn to_raw(self) -> (u8, u64) {
+        match self {
+            Self::Immediate => (0, 0),
+            Self::OnCommit => (1, 0),
+            Self::Periodic(d) => (2, d.as_millis() as u64),
+            Self::Relaxed => (3, 0),
+        }
+    }
 }
 
 /// Configuration for [`WalWriter`].
@@ -230,7 +249,7 @@ impl WalTask {
 
         waiters.into_iter().for_each(|w| {
             let r = err_msg.as_ref().map_or(Ok(()), |msg| {
-                Err(StorageError::IoGeneric(std::io::Error::other(msg.clone())))
+                Err(StorageError::IoGeneric(io::Error::other(msg.clone())))
             });
             let _ = w.send(r);
         });
@@ -311,7 +330,7 @@ impl WalTask {
                     let err_msg = e.to_string();
                     batch.into_iter().for_each(|(_, reply)| {
                         let _ = reply.send(Err(StorageError::IoGeneric(
-                            std::io::Error::other(err_msg.clone()),
+                            io::Error::other(err_msg.clone()),
                         )));
                     });
                 } else {
@@ -358,7 +377,7 @@ impl WalTask {
             let err_msg = e.to_string();
             batch.into_iter().for_each(|(_, reply)| {
                 let _ = reply.send(Err(StorageError::IoGeneric(
-                    std::io::Error::other(err_msg.clone()),
+                    io::Error::other(err_msg.clone()),
                 )));
             });
         } else {
@@ -375,7 +394,7 @@ impl WalTask {
                 let err_msg = e.to_string();
                 batch.into_iter().for_each(|(_, reply)| {
                     let _ = reply.send(Err(StorageError::IoGeneric(
-                        std::io::Error::other(err_msg.clone()),
+                        io::Error::other(err_msg.clone()),
                     )));
                 });
             } else {
@@ -666,6 +685,21 @@ impl WalWriter {
             .await
             .map_err(|_| StorageError::WalShutdown)?;
         rx.await.map_err(|_| StorageError::WalShutdown)?
+    }
+
+    /// Sync if the current mode requires it at commit time.
+    ///
+    /// - `Immediate`: No-op (already synced on append)
+    /// - `OnCommit`: Performs fsync
+    /// - `Periodic`: No-op (background task handles it)
+    /// - `Relaxed`: No-op (rely on OS page cache)
+    pub(crate) async fn sync_if_needed(&self) -> Result<()> {
+        match self.cfg.sync_mode {
+            SyncMode::OnCommit => self.sync().await,
+            SyncMode::Immediate | SyncMode::Periodic(_) | SyncMode::Relaxed => {
+                Ok(())
+            }
+        }
     }
 
     /// Force rotation to a new WAL file.

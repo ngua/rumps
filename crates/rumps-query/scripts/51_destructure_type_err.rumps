@@ -1,0 +1,5 @@
+; Wrong type for destructuring
+
+fun main() {
+  let (a, b) = 42
+}

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  let x: Int = Leak.zero()\n  write x\n}\n\nmodule Leak {\n  +newtype A = Int\n\n  +fun zero() -> Leak.A {\n    1\n  }\n}\n"
+---
+ERROR: type mismatch: expected `Int`, got `Leak.A`; private representation is not accessible

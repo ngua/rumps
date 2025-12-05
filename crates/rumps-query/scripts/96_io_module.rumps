@@ -1,0 +1,49 @@
+; Io module primitives
+; Tests Io.print, Io.println, Io.eprint, Io.eprintln
+;
+; NOTE: Io.get-line is not tested here because it blocks waiting for stdin.
+; It can be tested manually by running an interactive RUMPS session.
+
+fun main() {
+  ; ============ Test Io.println ============
+
+  ; This will print to stdout during test execution
+  let result = Io.println("Hello from Io.println")
+  write result is Unit  ; true
+
+  ; ============ Test Io.print ============
+
+  let result2 = Io.print("Hello from Io.print (no newline)")
+  write result2 is Unit  ; true
+
+  ; Print a newline after the previous print
+  let _ = Io.println("")
+
+  ; ============ Test Io.eprintln ============
+
+  ; This will print to stderr during test execution
+  let result3 = Io.eprintln("Hello from Io.eprintln")
+  write result3 is Unit  ; true
+
+  ; ============ Test Io.eprint ============
+
+  let result4 = Io.eprint("Hello from Io.eprint (no newline)")
+  write result4 is Unit  ; true
+
+  ; Print a newline to stderr after the previous eprint
+  let _ = Io.eprintln("")
+
+  ; ============ Chaining Io operations ============
+
+  ; Use with pipeline
+  let msg = "Hello world"
+  let _ = msg |> Io.println
+
+  ; Use with semicolon sequencing
+  {
+    Io.print("Line 1: ");
+    Io.println("value")
+  }
+
+  write "All Io tests passed"
+}

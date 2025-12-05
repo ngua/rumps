@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Naked variant constructor call requires a payload.\n\nfun main() {\n  let x = .Some()\n  write x\n}\n"
+---
+ERROR: missing arguments: expected 1 argument(s), got 0

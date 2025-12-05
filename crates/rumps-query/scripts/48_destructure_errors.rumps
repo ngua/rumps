@@ -1,0 +1,6 @@
+; Destructuring error cases
+
+fun main() {
+  ; Array destructuring not allowed in let (only in match)
+  let [a, b, c] = [1, 2, 3]
+}

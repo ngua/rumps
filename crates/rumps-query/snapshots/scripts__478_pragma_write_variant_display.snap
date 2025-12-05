@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Display)\nvariant Token = Token\n\nfun main() {\n  write Token.Token\n}\n"
+---
+Token.Token

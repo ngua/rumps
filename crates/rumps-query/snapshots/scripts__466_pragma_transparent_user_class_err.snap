@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(transparent)\nnewtype Label = Int\n\nclass Printable C {\n  fun show(x: C) -> String\n}\n\nfun show-it[T: Printable](x: T) -> String {\n  Printable:show(x)\n}\n\nfun main() {\n  let x: Label = 1\n  write show-it(x)\n}\n"
+---
+ERROR: type `Int` does not satisfy `Printable` class

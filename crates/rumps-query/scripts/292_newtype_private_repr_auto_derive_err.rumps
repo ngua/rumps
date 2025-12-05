@@ -1,0 +1,16 @@
+module AutoPriv {
+  +newtype A = Array[Int]
+
+  +fun make(xs: Array[Int]) -> AutoPriv.A {
+    xs as AutoPriv.A
+  }
+
+  +fun len(xs: AutoPriv.A) -> Int {
+    Iterable:length(xs)
+  }
+}
+
+fun main() {
+  let xs = AutoPriv.make([1, 2, 3])
+  write Iterable:length(xs)
+}

@@ -1,0 +1,29 @@
+; Test: import statement errors
+; Tests various error conditions for imports
+
+; Error: Import from non-existent module
+import NonExistent.{ foo }
+
+; Error: Import non-existent member
+import Math.{ nonexistent }
+
+; Error: Import private member from user module
+import Priv.{ internal }
+
+; Error: Exclusion without wildcard
+import Math.{ floor, -ceil }
+
+fun main() {
+  ; Error: Import must appear at top of scope
+  {
+    let x = 1
+    import Math.{ abs }
+  }
+}
+
+; Module must be defined for import to resolve
+module Priv {
+  let secret = 42
+  fun internal() -> Int { secret }
+  +fun public() -> Int { 1 }
+}

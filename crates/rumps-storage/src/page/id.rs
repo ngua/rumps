@@ -2,8 +2,9 @@
 
 use std::ops::Deref;
 
-use rumps_types::{Error, Result};
 use serde::{Deserialize, Serialize};
+
+use crate::error::{Result, StorageError};
 
 /// Identifier for a page in the data file.
 ///
@@ -42,7 +43,11 @@ impl PageId {
     pub(crate) fn from_page_num(n: u64) -> Result<Self> {
         n.checked_mul(super::PAGE_SIZE as u64)
             .map(Self)
-            .ok_or(Error::PageNumberOverflow(n))
+            .ok_or_else(|| {
+                StorageError::InvalidOperation(format!(
+                    "page number {n} overflows byte offset calculation"
+                ))
+            })
     }
 
     /// Get the page number (0-indexed).
@@ -102,8 +107,6 @@ impl From<PageId> for u64 {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use rumps_types::Error;
-
     use super::*;
     use crate::page::PAGE_SIZE;
 
@@ -152,6 +155,6 @@ mod tests {
         // Page number that would overflow when multiplied by PAGE_SIZE
         let huge = u64::MAX / PAGE_SIZE as u64 + 1;
         let err = PageId::from_page_num(huge).unwrap_err();
-        assert!(matches!(err, Error::PageNumberOverflow(_)));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
     }
 }

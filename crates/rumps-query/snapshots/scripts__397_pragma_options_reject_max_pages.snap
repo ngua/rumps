@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(options: max-pages = 128)\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 11..20: database option `max-pages` is rebuild-only

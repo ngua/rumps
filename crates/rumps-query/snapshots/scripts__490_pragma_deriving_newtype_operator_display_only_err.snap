@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Display)\nnewtype I = Int\n\nlet x: I = 10\n\nfun main() {\n  write x\n  write x + x\n}\n"
+---
+ERROR: type `I` does not satisfy `Additive` class

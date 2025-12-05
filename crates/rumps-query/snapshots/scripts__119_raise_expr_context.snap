@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test @RAISE in expression context (match arm)\n; The @RAISE branch is not taken, so we get the value 1\nLET x = MATCH Option.Some(1) {\n  Option.Some(n) => n\n  Option.None => @RAISE \"unreachable\"\n}\n@OUTPUT x\n"
+---
+1

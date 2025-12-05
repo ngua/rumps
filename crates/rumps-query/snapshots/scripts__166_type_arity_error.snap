@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Type arity error: `Option` requires 1 type argument\nLET x = Option.Some(1)\nWRITE x IS Option\n"
+---
+ERROR: type `Option` expects 1 type argument(s), got 0

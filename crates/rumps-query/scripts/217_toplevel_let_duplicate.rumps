@@ -1,0 +1,17 @@
+; Top-level `let` shadowing is allowed.
+
+fun foo() -> Int { 1 }
+
+let foo = "bar"
+
+let dup = 1
+let dup = dup + 1
+
+let empty = []
+let empty = 3
+
+fun main() {
+  write foo
+  write dup
+  write empty
+}

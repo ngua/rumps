@@ -1,0 +1,33 @@
+; User-defined class implemented for builtin types.
+;
+; Verifies that user-defined classes can have instances for
+; builtin types like `Int`, `String`, and `Bool`.
+
+class Describe C {
+  fun describe(x: C) -> String
+}
+
+class Describe for Int {
+  fun describe(x: Int) -> String {
+    "int({x})"
+  }
+}
+
+class Describe for String {
+  fun describe(x: String) -> String {
+    "str({x})"
+  }
+}
+
+class Describe for Bool {
+  fun describe(x: Bool) -> String {
+    if x { "yes" } else { "no" }
+  }
+}
+
+fun main() {
+  write Describe:describe(42)
+  write Describe:describe("hello")
+  write Describe:describe(true)
+  write Describe:describe(false)
+}

@@ -1,0 +1,5 @@
+#(options: max-pages = 128)
+
+fun main() {
+  write "bad"
+}

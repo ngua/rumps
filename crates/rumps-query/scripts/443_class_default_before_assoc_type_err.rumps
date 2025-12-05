@@ -1,0 +1,13 @@
+; `#(default)` only attaches to method bodies, not associated types.
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+
+  #(default)
+  newtype Element
+}
+
+fun main() {
+  write "bad"
+}

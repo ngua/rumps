@@ -1,6 +1,7 @@
 //! LRU page cache with dirty tracking.
 
 use std::collections::HashSet;
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -40,6 +41,8 @@ pub(crate) struct EvictedPage {
 /// Statistics for the page cache.
 #[derive(Debug, Clone, Default)]
 pub struct PageCacheStats {
+    /// Maximum number of pages the cache can hold.
+    pub max_capacity: usize,
     /// Number of cache hits.
     pub hits: u64,
     /// Number of cache misses.
@@ -277,15 +280,12 @@ impl PageCache {
 
     /// Get cache statistics.
     pub(crate) async fn stats(&self) -> PageCacheStats {
-        self.stats.read().await.clone()
+        let mut s = self.stats.read().await.clone();
+        s.max_capacity = self.capacity;
+        s
     }
 
-    /// Reset cache statistics.
-    pub(crate) async fn reset_stats(&self) {
-        *self.stats.write().await = PageCacheStats::default();
-    }
-
-    /// Calculate the hit rate (0.0 to 1.0).
+    /// Calculate the hit rate (`0.0` to `1.0`).
     pub(crate) async fn hit_rate(&self) -> f64 {
         let stats = self.stats.read().await;
         let total = stats.hits + stats.misses;
@@ -297,8 +297,8 @@ impl PageCache {
     }
 }
 
-impl std::fmt::Debug for PageCache {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for PageCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PageCache")
             .field("capacity", &self.capacity)
             .finish_non_exhaustive()
@@ -310,7 +310,7 @@ impl std::fmt::Debug for PageCache {
 mod tests {
     use std::collections::HashSet;
 
-    use rumps_types::Key;
+    use rumps_types::key;
 
     use super::*;
     use crate::node::NodeData;
@@ -318,7 +318,7 @@ mod tests {
 
     fn make_node(id: u64) -> Node {
         let mut node = Node::new_leaf();
-        node.keys.push(Key::from(vec![(id as i64).into()]));
+        node.keys.push(key![id as i64]);
         node.values
             .push(Arc::new(NodeData::new(Some((id as i64).into()), false)));
         node

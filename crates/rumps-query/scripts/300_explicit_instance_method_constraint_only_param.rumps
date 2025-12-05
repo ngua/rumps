@@ -1,0 +1,17 @@
+; Explicit instance method type params may appear only in constraints
+
+variant Box = Box
+
+class Weird C {
+  fun f[T: Display](x: C) -> String
+}
+
+class Weird for Box {
+  fun f[T: Display](x: Box) -> String {
+    "ok"
+  }
+}
+
+fun main() {
+  write Weird:f(Box.Box)
+}

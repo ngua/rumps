@@ -1,0 +1,62 @@
+//! Type checking, matching, and validation.
+
+use super::Interpreter;
+use crate::typecheck::Ty;
+use crate::value::{Payload, TypeDef, TypeId, Value};
+use crate::{ClassId, Result, Span};
+
+impl Interpreter<'_, '_> {
+    /// Perform type coercion for `as` casts with full value metadata.
+    pub(super) async fn coerce_value(
+        &mut self,
+        val: &Value,
+        target_base: TypeId,
+        target: &Ty,
+        span: Span,
+    ) -> Result<Payload> {
+        if self.registry.get_def(target_base).is_some_and(|def| {
+            matches!(def, TypeDef::Union { .. } | TypeDef::Alias { .. })
+        }) {
+            Ok(val.payload.clone())
+        } else {
+            let mid = self.arena.intern("into");
+            self.class_convert_value(ClassId::INTO, mid, val, target, span)
+                .await
+        }
+    }
+
+    /// Extract the `Ok` value from a `Result`.
+    ///
+    /// Callers must ensure this is only invoked on `Result.Ok` values.
+    pub(super) fn unwrap_result_ok(&self, result: &Payload) -> Result<Payload> {
+        match result {
+            Payload::Variant { tag: 0, vals } => Ok(vals
+                .first()
+                .and_then(|id| self.arena.payload(*id).cloned())
+                .unwrap_or_else(|| typechecked!("Result.Ok", "payload"))),
+            _ => typechecked!("unwrap_result_ok", "Result.Ok"),
+        }
+    }
+
+    /// Check whether a generated `read` result payload is `Result.Ok`.
+    pub(super) fn result_payload_is_ok(&self, result: &Payload) -> bool {
+        matches!(result, Payload::Variant { tag: 0, .. })
+    }
+
+    /// Extract the error message from a `Result.Err`.
+    pub(super) fn extract_result_err_msg(&self, result: &Payload) -> String {
+        match result {
+            Payload::Variant { tag: 1, vals } => vals
+                .first()
+                .and_then(|id| self.arena.payload(*id))
+                .and_then(|v| match v {
+                    Payload::String(sid) => {
+                        self.arena.get_str(*sid).map(str::to_owned)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| "unknown error".to_owned()),
+            _ => "unknown error".to_owned(),
+        }
+    }
+}

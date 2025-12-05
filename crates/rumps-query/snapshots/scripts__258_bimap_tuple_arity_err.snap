@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: kind mismatch for tuple constructor instances\n;\n; 1. `(T,)` has 1 element position but `Bimappable` requires kind 2\n; 2. `(,)` has 2 element positions but `Functor` requires kind 1\n\nclass Functor F {\n  fun fmap[A, B](f: (A) -> B, x: F[A]) -> F[B]\n}\n\nclass Bimappable for (T,) {\n  fun bimap(f, g, x) {\n    (f(x.0), g(x.1))\n  }\n}\n\nclass Functor for (,) {\n  fun fmap(f, x) {\n    (f(x.0), f(x.1))\n  }\n}\n\nfun main() { }\n"
+---
+ERROR: tuple constructor has 1 element position(s) but class `Bimappable` expects kind 2
+tuple constructor has 2 element position(s) but class `Functor` expects kind 1
+tuple constructor has 1 element position(s) but class `Bimappable` expects kind 2
+tuple constructor has 2 element position(s) but class `Functor` expects kind 1

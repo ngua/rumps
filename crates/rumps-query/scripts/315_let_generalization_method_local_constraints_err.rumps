@@ -1,0 +1,31 @@
+; Let-bound method values reject missing method-local constraints.
+
+variant Box[T] = Box(T)
+
+class Need C {
+  fun need(x: C) -> String
+}
+
+class Need for Int {
+  fun need(x: Int) -> String {
+    "int {x}"
+  }
+}
+
+class ShowBox F {
+  fun show[T: Need](x: F[T]) -> String
+}
+
+class ShowBox for Box {
+  fun show[T: Need](x: Box[T]) -> String {
+    match x {
+      Box.Box(v) => { Need:need(v) }
+    }
+  }
+}
+
+fun main() {
+  let show = ShowBox:show
+
+  write show(Box.Box("nope"))
+}

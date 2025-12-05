@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Lazy[T]` does not satisfy `Eq`.\n\nfun main() {\n  let x: Lazy[Int] = Lazy.Lazy(1)\n  let y: Lazy[Int] = Lazy.Lazy(1)\n  write :display(x == y)\n}\n"
+---
+ERROR: type `Lazy[Int]` does not satisfy `Eq` class

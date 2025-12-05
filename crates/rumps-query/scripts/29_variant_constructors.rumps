@@ -1,0 +1,107 @@
+; Variant constructor tests
+; Tests explicit construction of Option and Result variants
+
+fun main() {
+  ; === Option.Some ===
+
+  let some1 = Option.Some(42)
+  write :display(some1)
+  ; Expected: Option.Some(42)
+
+  let some2 = Option.Some("hello")
+  write :display(some2)
+  ; Expected: Option.Some(hello)
+
+  ; === Option.None ===
+
+  let none = Option.None
+  write :display(none)
+  ; Expected: Option.None
+
+  ; === Result.Ok ===
+
+  let ok1 = Result.Ok(100)
+  write :display(ok1)
+  ; Expected: Result.Ok(100)
+
+  let ok2 = Result.Ok("success")
+  write :display(ok2)
+  ; Expected: Result.Ok(success)
+
+  ; === Result.Err ===
+
+  let err1 = Result.Err("failed")
+  write :display(err1)
+  ; Expected: Result.Err(failed)
+
+  let err2 = Result.Err(404)
+  write :display(err2)
+  ; Expected: Result.Err(404)
+
+  ; === Nested variants ===
+
+  let nested1 = Option.Some(Result.Ok(1))
+  write :display(nested1)
+  ; Expected: Option.Some(Result.Ok(1))
+
+  let nested2 = Result.Ok(Option.Some("inner"))
+  write :display(nested2)
+  ; Expected: Result.Ok(Option.Some(inner))
+
+  let nested3 = Option.Some(Option.None)
+  write :display(nested3)
+  ; Expected: Option.Some(Option.None)
+
+  ; === Variants with expressions ===
+
+  let x = 10
+  let computed = Option.Some(x * 2)
+  write :display(computed)
+  ; Expected: Option.Some(20)
+
+  let cond = true
+  let conditional = Result.Ok(if cond { "yes" } else { "no" })
+  write :display(conditional)
+  ; Expected: Result.Ok(yes)
+
+  ; === Coalesce with explicit variants ===
+
+  let some-val = Option.Some(42)
+  write some-val ?? 0
+  ; Expected: 42
+
+  let none-val = Option.None
+  write none-val ?? 99
+  ; Expected: 99
+
+  let ok-val = Result.Ok("data")
+  write ok-val ?? "fallback"
+  ; Expected: data
+
+  let err-val = Result.Err("oops")
+  write err-val ?? "recovered"
+  ; Expected: recovered
+
+  ; === Variant in object ===
+
+  let obj = {
+    status: Result.Ok("active"),
+    value: Option.Some(123)
+  }
+  write :display(obj.status)
+  ; Expected: Result.Ok(active)
+  write :display(obj.value)
+  ; Expected: Option.Some(123)
+
+  ; === Variant in array ===
+
+  let arr = [Option.Some(1), Option.None, Option.Some(3)]
+  write :display(arr[0])
+  ; Expected: Option.Some(1)
+  write :display(arr[1])
+  ; Expected: Option.None
+  write :display(arr[2])
+  ; Expected: Option.Some(3)
+
+  write "Variant constructor tests complete"
+}

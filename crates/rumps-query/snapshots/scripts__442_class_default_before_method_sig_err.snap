@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `#(default)` only attaches to method bodies, not signatures.\n\n#(required: f)\nclass Optional C {\n  fun f(x: C) -> Int\n\n  #(default)\n  fun g(x: C) -> Int\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 122..132: `default` pragmas inside class definitions attach only to method definitions

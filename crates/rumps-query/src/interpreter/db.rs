@@ -1,0 +1,427 @@
+//! Database primitives: `@get`, `@set`, `@kill`, `@data`, and key construction.
+
+use std::sync::Arc;
+
+use async_recursion::async_recursion;
+use rumps_types::{DataStatus, Key, Name, Subscript};
+use smallvec::SmallVec;
+
+use super::Interpreter;
+use crate::ast::{DbRef, ExprId, Intrinsic, RefTarget, SubscriptElem, TxnId};
+use crate::value::{Payload, ValueId};
+use crate::{Result, Span};
+
+impl Interpreter<'_, '_> {
+    /// Evaluate a `DbRef` literal to a `Payload::Ref`.
+    ///
+    /// Evaluates all subscript expressions and creates a first-class `Ref` value.
+    pub(super) async fn ref_lit(
+        &mut self,
+        dbref: &DbRef,
+        span: Span,
+    ) -> Result<Payload> {
+        let (is_global, name_id) = match dbref {
+            DbRef::Local(n, _) => (false, *n),
+            DbRef::Global(n, _) => (true, *n),
+        };
+        let (_, subs) = dbref.split(&self.arena.strings);
+
+        // Evaluate subscripts and store them
+        let sub_ids = self.eval_subscripts(subs, span).await?;
+
+        Ok(Payload::Ref(is_global, name_id, sub_ids))
+    }
+
+    /// Dispatcher for all DB intrinsics (`@get`, `@set`, `@kill`, `@data`, `@order`, `@query`).
+    pub(super) async fn intrinsic(
+        &mut self,
+        op: Intrinsic,
+        rt: &RefTarget,
+        val: Option<ExprId>,
+        txn_id: Option<TxnId>,
+        span: Span,
+    ) -> Result<Payload> {
+        match op {
+            Intrinsic::Get => self.get(rt, txn_id, span).await,
+            Intrinsic::Set => {
+                let v = val.unwrap_or_else(|| invariant!("@set has value"));
+                self.set(rt, v, txn_id, span).await
+            }
+            Intrinsic::Kill => self.kill(rt, txn_id, span).await,
+            Intrinsic::Data => self.data(rt, txn_id).await,
+            Intrinsic::Order => self.order(rt, txn_id, span).await,
+            Intrinsic::Query => self.query(rt, txn_id, span).await,
+        }
+    }
+
+    /// Evaluate subscript elements and return a `SmallVec` of `ValueId`s.
+    async fn eval_subscripts(
+        &mut self,
+        subs: &[SubscriptElem],
+        span: Span,
+    ) -> Result<SmallVec<[ValueId; 4]>> {
+        let mut acc = SmallVec::with_capacity(subs.len());
+        self.eval_subscripts_acc(subs, &mut acc, span).await?;
+        Ok(acc)
+    }
+
+    /// Recursive helper for evaluating subscripts.
+    #[async_recursion]
+    async fn eval_subscripts_acc(
+        &mut self,
+        subs: &[SubscriptElem],
+        acc: &mut SmallVec<[ValueId; 4]>,
+        span: Span,
+    ) -> Result<()> {
+        match subs.split_first() {
+            None => Ok(()),
+            Some((head, tail)) => {
+                match head {
+                    SubscriptElem::Elem(id) => {
+                        let val = self.eval_payload(*id).await?;
+                        let meta = self.expr_meta(*id);
+                        let val_id = self.arena.add_typed(val, meta, span);
+                        acc.push(val_id);
+                    }
+                    SubscriptElem::Spread(id) => {
+                        let val = self.eval_payload(*id).await?;
+                        match &val {
+                            Payload::Array(elems) => {
+                                elems.iter().for_each(|elem_id| {
+                                    acc.push(*elem_id);
+                                });
+                            }
+                            _ => typechecked!("...spread", "Array[Subscript]"),
+                        }
+                    }
+                }
+                self.eval_subscripts_acc(tail, acc, span).await
+            }
+        }
+    }
+
+    /// Resolve a `RefTarget` to `(Name, Key)`.
+    ///
+    /// - `Inline(DbRef)`: extracts name and evaluates subscript expressions
+    /// - `Expr(ExprId)`: evaluates to `Payload::Ref` with pre-evaluated subscripts
+    async fn resolve_ref_target(
+        &mut self,
+        rt: &RefTarget,
+    ) -> Result<(Name, Key)> {
+        match rt {
+            RefTarget::Inline(dbref) => {
+                let (name, subs) = dbref.split(&self.arena.strings);
+                let key = self.build_key(subs).await?;
+                Ok((name, key))
+            }
+            RefTarget::Expr(e) => {
+                let val = self.eval_payload(*e).await?;
+                match &val {
+                    Payload::Ref(is_global, name_id, sub_ids) => {
+                        let name_str = self
+                            .arena
+                            .get_str(*name_id)
+                            .unwrap_or_else(|| invariant!("Ref name in arena"));
+                        let name = if *is_global {
+                            Name::global(name_str)
+                        } else {
+                            Name::local(name_str)
+                        };
+                        // Build key from pre-evaluated subscripts
+                        let key = sub_ids
+                            .iter()
+                            .map(|vid| {
+                                let v =
+                                    self.arena.payload(*vid).unwrap_or_else(
+                                        || invariant!("Ref subscript in arena"),
+                                    );
+                                self.subscript(v)
+                            })
+                            .collect::<Vec<_>>();
+                        Ok((name, Key::from(key)))
+                    }
+                    _ => typechecked!("RefTarget::Expr", "Payload::Ref"),
+                }
+            }
+        }
+    }
+
+    /// `@get` primitive; reads a value from a B-tree variable.
+    ///
+    /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
+    /// directly from the database.
+    pub(super) async fn get(
+        &mut self,
+        rt: &RefTarget,
+        txn_id: Option<TxnId>,
+        span: Span,
+    ) -> Result<Payload> {
+        let (name, key) = self.resolve_ref_target(rt).await?;
+
+        let opt_val = match txn_id.and_then(|id| self.txns.get(&id)) {
+            Some(txn) => txn.get(&name, &key).await.ok().flatten(),
+            None => self.db.get(&name, &key).await.ok().flatten(),
+        };
+
+        Ok(match opt_val {
+            None => self.make_none_storable(),
+            Some(sv) => {
+                let v = self.load(sv);
+                let vid = self.arena.add_typed(
+                    v,
+                    self.checked.types.meta_storable(),
+                    span,
+                );
+                self.make_some_storable(vid)
+            }
+        })
+    }
+
+    /// `@set` primitive; writes a value to a B-tree variable.
+    ///
+    /// Returns `Result[Unit, String]`. Globals require an active transaction
+    /// (enforced by typechecker). Locals can be set outside transactions.
+    pub(super) async fn set(
+        &mut self,
+        rt: &RefTarget,
+        expr_id: ExprId,
+        txn_id: Option<TxnId>,
+        span: Span,
+    ) -> Result<Payload> {
+        let (name, key) = self.resolve_ref_target(rt).await?;
+        let val = self.eval(expr_id).await?;
+        let storage_val = self.store(&val.payload);
+
+        // Global writes require transaction (typechecked); locals go direct
+        let res = if name.is_global() {
+            txn_id
+                .and_then(|id| self.txns.get(&id))
+                .unwrap_or_else(|| {
+                    typechecked!("global @set", "transaction context")
+                })
+                .set(&name, &key, storage_val)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            self.db
+                .set(&name, &key, storage_val)
+                .await
+                .map_err(|e| e.to_string())
+        };
+
+        Ok(match res {
+            Ok(()) => self.make_result_ok(Payload::Unit, span),
+            Err(e) => self.make_result_err(&format!("@set failed: {e}"), span),
+        })
+    }
+
+    /// `@kill` primitive; deletes a variable and its descendants.
+    ///
+    /// Returns `Result[Unit, String]`. Globals require an active transaction
+    /// (enforced by typechecker). Locals can be killed outside transactions.
+    pub(super) async fn kill(
+        &mut self,
+        rt: &RefTarget,
+        txn_id: Option<TxnId>,
+        span: Span,
+    ) -> Result<Payload> {
+        let (name, key) = self.resolve_ref_target(rt).await?;
+
+        // Global writes require transaction (typechecked); locals go direct
+        let res = if name.is_global() {
+            txn_id
+                .and_then(|id| self.txns.get(&id))
+                .unwrap_or_else(|| {
+                    typechecked!("global @kill", "transaction context")
+                })
+                .kill(&name, &key)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            self.db.kill(&name, &key).await.map_err(|e| e.to_string())
+        };
+
+        Ok(match res {
+            Ok(()) => self.make_result_ok(Payload::Unit, span),
+            Err(e) => self.make_result_err(&format!("@kill failed: {e}"), span),
+        })
+    }
+
+    /// `@data` primitive; queries existence status of a B-tree node.
+    ///
+    /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
+    /// directly from the database. Returns a `DataStatus` enum value.
+    pub(super) async fn data(
+        &mut self,
+        rt: &RefTarget,
+        txn_id: Option<TxnId>,
+    ) -> Result<Payload> {
+        let (name, key) = self.resolve_ref_target(rt).await?;
+
+        let status = match txn_id.and_then(|id| self.txns.get(&id)) {
+            Some(txn) => txn.data(&name, &key).await,
+            None => self.db.data(&name, &key).await,
+        }
+        .unwrap_or(DataStatus::NoData);
+
+        // Convert `DataStatus` to a runtime variant.
+        let variant_idx = match status {
+            DataStatus::NoData => 0,
+            DataStatus::HasValue => 1,
+            DataStatus::HasDescendants => 2,
+            DataStatus::Both => 3,
+        };
+        Ok(Payload::Variant {
+            tag: variant_idx,
+            vals: SmallVec::new(),
+        })
+    }
+
+    /// `@order` primitive; returns the next subscript at a given level.
+    ///
+    /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
+    /// directly from the database. Returns `Option[Subscript]`.
+    pub(super) async fn order(
+        &mut self,
+        rt: &RefTarget,
+        txn_id: Option<TxnId>,
+        span: Span,
+    ) -> Result<Payload> {
+        let (name, key) = self.resolve_ref_target(rt).await?;
+
+        // `@order items(1)` means "find next subscript after `1` at root level",
+        // so we split the key: prefix = [] (root), after = `Some(1)`.
+        let (prefix, after): (Key, Option<Subscript>) =
+            match key.as_slice().split_last() {
+                None => (Key::new(), None),
+                Some((last, init)) => {
+                    (Key::from(init.to_vec()), Some(last.clone()))
+                }
+            };
+
+        let opt_sub = match txn_id.and_then(|id| self.txns.get(&id)) {
+            Some(txn) => txn
+                .order(&name, &prefix, after.as_ref())
+                .await
+                .ok()
+                .flatten(),
+            None => self
+                .db
+                .order(&name, &prefix, after.as_ref())
+                .await
+                .ok()
+                .flatten(),
+        };
+
+        // Convert Option<Subscript> to Option[Subscript] value
+        match opt_sub {
+            None => Ok(self.make_none()),
+            Some(sub) => {
+                let val = self.value_from_subscript(sub);
+                let val_id = self.arena.add_typed(
+                    val,
+                    self.checked.types.meta_subscript(),
+                    span,
+                );
+                Ok(self.make_some(val_id))
+            }
+        }
+    }
+
+    /// `@query` primitive; returns the full key path to the next node.
+    ///
+    /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
+    /// directly from the database. Returns `Option[Array[Subscript]]`.
+    pub(super) async fn query(
+        &mut self,
+        rt: &RefTarget,
+        txn_id: Option<TxnId>,
+        span: Span,
+    ) -> Result<Payload> {
+        let (name, key) = self.resolve_ref_target(rt).await?;
+
+        // The `query` API takes `Option<&Key>` for the "after" position.
+        let after = if key.is_empty() { None } else { Some(&key) };
+
+        let opt_key = match txn_id.and_then(|id| self.txns.get(&id)) {
+            Some(txn) => txn.query(&name, after).await.ok().flatten(),
+            None => self.db.query(&name, after).await.ok().flatten(),
+        };
+
+        // Convert Option<Key> to Option[Array[Subscript]] value
+        match opt_key {
+            None => Ok(self.make_none()),
+            Some(k) => {
+                let arr = self.key_to_array(k, span);
+                let arr_id = self.add_payload(arr, span);
+                Ok(self.make_some(arr_id))
+            }
+        }
+    }
+
+    /// Convert a `Key` to an `Array[Subscript]` value.
+    fn key_to_array(&mut self, key: Key, span: Span) -> Payload {
+        let sub_meta = self.checked.types.meta_subscript();
+        let elem_ids = key
+            .into_iter()
+            .map(|sub| {
+                let v = self.value_from_subscript(sub);
+                self.arena.add_typed(v, sub_meta, span)
+            })
+            .collect();
+        Payload::Array(Arc::new(elem_ids))
+    }
+
+    /// Evaluate subscript elements and build a `Key`.
+    ///
+    /// Handles both regular subscripts (`Elem`) and spread syntax (`Spread`).
+    /// Spreads flatten an `Array[Subscript]` into the key.
+    pub(super) async fn build_key(
+        &mut self,
+        subs: &[SubscriptElem],
+    ) -> Result<Key> {
+        self.build_key_acc(subs, Vec::with_capacity(subs.len()))
+            .await
+    }
+
+    /// Recursive helper for building a key from subscript elements.
+    #[async_recursion]
+    async fn build_key_acc(
+        &mut self,
+        subs: &[SubscriptElem],
+        mut acc: Vec<Subscript>,
+    ) -> Result<Key> {
+        match subs.split_first() {
+            None => Ok(Key::from(acc)),
+            Some((head, tail)) => {
+                match head {
+                    SubscriptElem::Elem(id) => {
+                        let val = self.eval_payload(*id).await?;
+                        let sub = self.subscript(&val);
+                        acc.push(sub);
+                    }
+                    SubscriptElem::Spread(id) => {
+                        let val = self.eval_payload(*id).await?;
+                        // Extract subscripts from the array
+                        match &val {
+                            Payload::Array(elems) => {
+                                elems.iter().for_each(|elem_id| {
+                                    let elem = self
+                                        .arena
+                                        .payload(*elem_id)
+                                        .unwrap_or_else(|| {
+                                            invariant!("ValueId in arena")
+                                        });
+                                    let sub = self.subscript(elem);
+                                    acc.push(sub);
+                                });
+                            }
+                            _ => typechecked!("...spread", "Array[Subscript]"),
+                        }
+                    }
+                }
+                self.build_key_acc(tail, acc).await
+            }
+        }
+    }
+}

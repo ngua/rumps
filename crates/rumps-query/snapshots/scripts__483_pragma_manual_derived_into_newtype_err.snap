@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: manual `Into[String]` conflicts with derived `Into[String]`.\n\n#(deriving: Into[String])\nnewtype Label = Int\n\nclass Into[String] for Label {\n  fun into(x: Label) -> String {\n    \"label:{x}\"\n  }\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: duplicate `Into` instance for type `Label`

@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module ObjBypassPriv {\n  +newtype Person = { name: String, age: Int }\n\n  +fun make(name: String, age: Int) -> ObjBypassPriv.Person {\n    { name: name, age: age }\n  }\n\n  +fun name(p: ObjBypassPriv.Person) -> String {\n    p.name\n  }\n\n  +fun opt-name(p: ObjBypassPriv.Person) -> Option[String] {\n    p?.name\n  }\n\n  +fun spread(p: ObjBypassPriv.Person) -> ObjBypassPriv.Person {\n    { ...p }\n  }\n\n  +fun has-name(p: ObjBypassPriv.Person) -> Bool {\n    p is { name: String }\n  }\n}\n\nfun main() {\n  let p: ObjBypassPriv.Person = ObjBypassPriv.make(\"Ada\", 37)\n  write p.name\n  write p?.name ?? \"missing\"\n  let s = { ...p }\n  write p is { name: String }\n}\n"
+---
+ERROR: type `ObjBypassPriv.Person` has no fields
+type `ObjBypassPriv.Person` has no fields
+cannot spread type `ObjBypassPriv.Person` in object literal
+type `ObjBypassPriv.Person` has no fields

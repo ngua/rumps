@@ -1,0 +1,19 @@
+; class instance without import; should error with helpful suggestion
+
+fun main() {
+  ; No import; should error
+  let c = Shapes.Circle.Circle(3.14)
+  write :display(c)
+}
+
+module Shapes {
+  +variant Circle = Circle(Float)
+
+  class Display for Shapes.Circle {
+    fun display(c: Shapes.Circle) -> String {
+      match c {
+        Shapes.Circle.Circle(r) => { "Circle(r={r})" }
+      }
+    }
+  }
+}

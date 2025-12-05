@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Wrong type for destructuring\n\nfun main() {\n  let (a, b) = 42\n}\n"
+---
+ERROR: type `(T, U)` does not satisfy `Numeric` class

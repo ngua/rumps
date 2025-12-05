@@ -1,0 +1,23 @@
+; Missing superclass for a `Numeric` user instance.
+
+fun main() { }
+
+variant AddOnly = AddOnly(Int)
+
+class Additive for AddOnly {
+  fun zero() -> AddOnly {
+    AddOnly.AddOnly(0)
+  }
+
+  fun add(a: AddOnly, b: AddOnly) -> AddOnly {
+    match a {
+      AddOnly.AddOnly(x) => {
+        match b {
+          AddOnly.AddOnly(y) => { AddOnly.AddOnly(x + y) }
+        }
+      }
+    }
+  }
+}
+
+class Numeric for AddOnly { }

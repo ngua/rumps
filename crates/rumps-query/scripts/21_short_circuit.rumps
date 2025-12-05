@@ -1,0 +1,101 @@
+; Test: short-circuit evaluation
+; Uses @set side effects to verify RHS is/isn't evaluated
+
+fun main() {
+  ; === Setup ===
+  @set counter{} 0
+
+  ; === Short-circuit and (false and ...) ===
+  ; RHS should not be evaluated
+
+  @set counter{} 0
+  let r1 = false and {
+    @set counter{} 100
+    true
+  }
+  write :display(@get counter{})
+  ; Expected: 0 (block not evaluated)
+
+  ; === Non-short-circuit and (true and ...) ===
+  ; RHS SHOULD be evaluated
+
+  @set counter{} 0
+  let r2 = true and {
+    @set counter{} 200
+    true
+  }
+  write :display(@get counter{})
+  ; Expected: 200 (block was evaluated)
+
+  ; === Short-circuit or (true or ...) ===
+  ; RHS should not be evaluated
+
+  @set counter{} 0
+  let r3 = true or {
+    @set counter{} 300
+    false
+  }
+  write :display(@get counter{})
+  ; Expected: 0 (block not evaluated)
+
+  ; === Non-short-circuit or (false or ...) ===
+  ; RHS SHOULD be evaluated
+
+  @set counter{} 0
+  let r4 = false or {
+    @set counter{} 400
+    true
+  }
+  write :display(@get counter{})
+  ; Expected: 400 (block was evaluated)
+
+  ; === Chained short-circuit ===
+
+  @set counter{} 0
+  let r5 = false and {
+    @set counter{} 1
+    false
+  } and {
+    @set counter{} 2
+    true
+  }
+  write :display(@get counter{})
+  ; Expected: 0 (first false short-circuits entire chain)
+
+  @set counter{} 0
+  let r6 = true or {
+    @set counter{} 1
+    true
+  } or {
+    @set counter{} 2
+    false
+  }
+  write :display(@get counter{})
+  ; Expected: 0 (first true short-circuits entire chain)
+
+  ; === Mixed and/or ===
+
+  @set counter{} 0
+  let r7 = (false and {
+    @set counter{} 10
+    true
+  }) or {
+    @set counter{} 20
+    true
+  }
+  write :display(@get counter{})
+  ; Expected: 20 (and short-circuits, or evaluates RHS)
+
+  @set counter{} 0
+  let r8 = (true or {
+    @set counter{} 10
+    false
+  }) and {
+    @set counter{} 30
+    true
+  }
+  write :display(@get counter{})
+  ; Expected: 30 (or short-circuits, and evaluates RHS)
+
+  write "done"
+}

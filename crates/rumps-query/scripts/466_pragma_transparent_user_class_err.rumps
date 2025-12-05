@@ -1,0 +1,15 @@
+#(transparent)
+newtype Label = Int
+
+class Printable C {
+  fun show(x: C) -> String
+}
+
+fun show-it[T: Printable](x: T) -> String {
+  Printable:show(x)
+}
+
+fun main() {
+  let x: Label = 1
+  write show-it(x)
+}

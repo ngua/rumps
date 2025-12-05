@@ -1,0 +1,7 @@
+variant Token = Token
+union Readable = String | Token
+
+fun main() {
+  let x: Readable = "1"
+  write (x read Int)!
+}

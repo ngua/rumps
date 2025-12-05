@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: manual `Display` conflicts with derived `Display`.\n\n#(deriving: Display)\nvariant Box = Box(Int)\n\nclass Display for Box {\n  fun display(x: Box) -> String {\n    match x {\n      Box.Box(n) => { \"Box({n})\" }\n    }\n  }\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: duplicate `Display` instance for type `Box`

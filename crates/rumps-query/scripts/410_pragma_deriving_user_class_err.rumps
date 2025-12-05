@@ -1,0 +1,10 @@
+class MyEq C {
+  fun eq(a: C, b: C) -> Bool
+}
+
+#(deriving: MyEq)
+variant Mood = Happy | Sad
+
+fun main() {
+  write "bad"
+}

@@ -1,0 +1,49 @@
+; Conversion surfaces use normal class dispatch.
+
+#(deriving: Display)
+variant Secret = Secret(String)
+
+variant Token = Token
+
+variant Blob = Blob(Int)
+
+class Into[String] for Secret {
+  fun into(s: Secret) -> String {
+    match s {
+      Secret.Secret(_) => { "<secret>" }
+    }
+  }
+}
+
+class Into[String] for Token {
+  fun into(t: Token) -> String {
+    match t {
+      Token.Token => { "abc123" }
+    }
+  }
+}
+
+class Into[Json] for Blob {
+  fun into(b: Blob) -> Json {
+    match b {
+      Blob.Blob(n) => {
+        { "blob": n }
+      }
+    }
+  }
+}
+
+fun main() {
+  let s = Secret.Secret("boom")
+  let b = Blob.Blob(7)
+  write s as String
+  write (b as Json) as String
+  write Token.Token matches /\d+/
+  write { "one": b, "many": [Blob.Blob(1), "two"] } as String
+  write raise s catch e => {
+    match e {
+      Error.Raise(msg) => { msg }
+      _ => { "wrong error" }
+    }
+  }
+}

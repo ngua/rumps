@@ -1,0 +1,55 @@
+; Coalesce operator (??) tests
+; `??` unwraps Option.Some/Result.Ok or falls back to right operand
+
+fun main() {
+  ; === Option.None coalesces to fallback ===
+
+  ; Option.None falls back to right operand
+  write Option.None ?? "fallback1"
+  ; Expected: fallback1
+
+  ; Option.Some unwraps to its value
+  write Option.Some(42) ?? 0
+  ; Expected: 42
+
+  ; === Chained coalesce ===
+
+  ; Chain of None values falls through to final fallback
+  let result = Option.None ?? Option.None ?? 3
+  write result
+  ; Expected: 3
+
+  ; First non-None wins
+  let chain-2 = Option.None ?? Option.Some("found") ?? "default"
+  write chain-2
+  ; Expected: found
+
+  ; === Result coalesce ===
+
+  ; Result.Ok unwraps to its value
+  write Result.Ok(100) ?? 0
+  ; Expected: 100
+
+  ; Result.Err falls back to right operand
+  write Result.Err("oops") ?? 999
+  ; Expected: 999
+
+  ; === Coalesce in expressions ===
+
+  ; Coalesce result can be used in further expressions
+  let val = (Option.None ?? 5) + 1
+  write val
+  ; Expected: 6
+
+  ; Coalesce with string concatenation
+  let greeting = Option.None ?? "Hello"
+  write "{greeting} World"
+  ; Expected: Hello World
+
+  ; Coalesce with Option.Some in expression
+  let num = (Option.Some(10) ?? 0) * 2
+  write num
+  ; Expected: 20
+
+  write "Coalesce tests complete"
+}

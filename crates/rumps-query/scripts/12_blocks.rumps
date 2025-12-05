@@ -1,0 +1,75 @@
+; Test: block expressions
+; Tests block syntax with multiple statements and tail expressions
+
+fun main() {
+  ; Simple block with tail expression
+  let x = {
+    let a = 10
+    let b = 20
+    a + b
+  }
+  write x
+  ; Expected: 30
+
+  ; Block with no tail (returns None)
+  let y = {
+    write "Side effect"
+  }
+  ; y should be Option.None or unit
+
+  ; Nested blocks
+  let z = {
+    let outer = 5
+    {
+      let inner = 10
+      outer + inner
+    }
+  }
+  write z
+  ; Expected: 15
+
+  ; Block with @set (side effect, no return)
+  {
+    @set counter{} 0
+    @set counter{} 1
+    @set counter{} 2
+  }
+  let c = @get counter{}
+  write :display(c)
+  ; Expected: 2
+
+  ; Block scope isolation
+  let val = 100
+  {
+    let val = 200
+    write val
+    ; Expected: 200
+  }
+  write val
+  ; Expected: 100 (outer val unchanged due to let shadowing)
+
+  ; Block with conditional
+  let result = {
+    let score = 75
+    if score >= 70 {
+      "pass"
+    } else {
+      "fail"
+    }
+  }
+  write result
+  ; Expected: pass
+
+  ; Multiple statements before tail
+  let multi = {
+    let a = 1
+    let b = 2
+    let c = 3
+    write "Computing..."
+    a + b + c
+  }
+  write multi
+  ; Expected: Computing... then 6
+
+  write "Block test complete"
+}

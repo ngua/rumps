@@ -1,0 +1,7 @@
+; Test: undeclared type parameter error
+; Payload types must reference declared type params
+
+; This should fail: U is not declared
+variant Foo[T] = Bar(U)
+
+fun main() {}

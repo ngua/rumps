@@ -1,0 +1,33 @@
+; Arithmetic capability method references.
+
+fun main() {
+  write "direct add: {Additive:add(2, 3)}"
+  write "direct zero: {Additive[Int]:zero()}"
+  write "direct sub: {Subtractive:sub(8, 3)}"
+  write "direct mul: {Multiplicative:mul(4, 5)}"
+  write "direct one: {Multiplicative[Int]:one()}"
+  write "direct div: {Divisible:div(8, 2)}"
+  write "direct floor-div: {FloorDivisible:floor-div(8, 3)}"
+  write "direct mod: {FloorDivisible:mod(8, 3)}"
+  write "direct pow: {Powerable:pow(2, 5)}"
+
+  let add-fn = Additive:add
+  let zero-fn = Additive[Int]:zero
+  let sub-fn = Subtractive:sub
+  let mul-fn = Multiplicative:mul
+  let one-fn = Multiplicative[Int]:one
+  let div-fn = Divisible:div
+  let floor-div-fn = FloorDivisible:floor-div
+  let mod-fn = FloorDivisible:mod
+  let pow-fn = Powerable:pow
+
+  write "stored add: {add-fn(2, 3)}"
+  write "stored zero: {zero-fn()}"
+  write "stored sub: {sub-fn(8, 3)}"
+  write "stored mul: {mul-fn(4, 5)}"
+  write "stored one: {one-fn()}"
+  write "stored div: {div-fn(8, 2)}"
+  write "stored floor-div: {floor-div-fn(8, 3)}"
+  write "stored mod: {mod-fn(8, 3)}"
+  write "stored pow: {pow-fn(2, 5)}"
+}

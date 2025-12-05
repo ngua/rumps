@@ -1,0 +1,16 @@
+; Error: manual `Display` conflicts with derived `Display`.
+
+#(deriving: Display)
+variant Box = Box(Int)
+
+class Display for Box {
+  fun display(x: Box) -> String {
+    match x {
+      Box.Box(n) => { "Box({n})" }
+    }
+  }
+}
+
+fun main() {
+  write "bad"
+}

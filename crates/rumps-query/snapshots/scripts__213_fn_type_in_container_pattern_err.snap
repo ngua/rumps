@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Function types cannot appear in `is` patterns at any depth. Even when\n; nested inside a container (array, tuple, union, object field, or a\n; user-defined type argument), the typechecker walks the type\n; structurally and rejects it. Without this, a container could smuggle\n; a fn type past the top-level check and the runtime helper\n; `fn_value_matches` would again be asked a question it can't answer\n; for opaque callables.\n\nfun main() {\n  let v: Int | String = 1\n  match v {\n    fs is Array[((Int) -> Int)] => write \"got array of fns: {fs}\"\n    _ => write \"other\"\n  }\n}\n"
+---
+ERROR: function types cannot appear in `is` patterns

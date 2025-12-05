@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Lazy.force` extracts the delayed payload.\n\nfun main() {\n  write \"before\"\n  let x = Lazy.Lazy(mark())\n  write \"after\"\n  write Lazy.force(x)\n\n  let y = Lazy.Lazy(() => 7)\n  let f = Lazy.force(y)\n  write f()\n}\n\nfun mark() -> Int {\n  write \"forced\"\n  23\n}\n"
+---
+before
+after
+forced
+23
+7

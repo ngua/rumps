@@ -1,0 +1,10 @@
+; Calling `M.foo("hello")` must be rejected because `T` is
+; constrained to `Additive`. Module member constraint check.
+
+module M {
+  +fun foo[T: Additive](x: T) -> T { x + 1 }
+}
+
+fun main() {
+  write M.foo("hello")
+}

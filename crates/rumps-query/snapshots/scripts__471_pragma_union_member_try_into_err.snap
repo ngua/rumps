@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "variant Token = Token\nunion Readable = String | Token\n\nfun main() {\n  let x: Readable = \"1\"\n  write (x read Int)!\n}\n"
+---
+ERROR: cannot `read` `Token` as `Int`

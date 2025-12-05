@@ -1,0 +1,423 @@
+; Test: json type and access operators
+; Tests json literals, field access, type conversions, and heterogeneous arrays
+
+newtype Person = { name: String, age: Int }
+newtype Box[T] = { value: T }
+newtype Pair[A, B] = { first: A, second: B }
+newtype Address = { city: String, zip: Int }
+newtype Employee = { name: String, addr: Address }
+
+fun main() {
+  ; ============================================================
+  ; json LITERALS (quoted keys)
+  ; ============================================================
+
+  let j = { "name": "Alice", "age": 30, "active": true }
+
+  ; Type checking
+  write j is Json
+  ; Expected: true
+
+  ; ============================================================
+  ; json FIELD ACCESS (returns Json)
+  ; ============================================================
+
+  let name = j.name
+  write name is Json
+  ; Expected: true
+
+  ; Missing field returns Json null
+  let missing = j.missing
+  write missing is Json
+  ; Expected: true
+
+  ; ============================================================
+  ; NESTED json ACCESS
+  ; ============================================================
+
+  let nested = {
+    "user": {
+      "profile": {
+        "firstName": "Bob"
+      }
+    }
+  }
+
+  write nested.user.profile.firstName is Json
+  ; Expected: true
+
+  ; ============================================================
+  ; NATIVE OBJECTS (unquoted keys) vs json
+  ; ============================================================
+
+  let obj = { name: "Alice", age: 30 }
+  write obj is { name: String, age: Int }
+  ; Expected: true
+
+  ; Native object field access returns native type
+  write obj.name is String
+  ; Expected: true
+
+  ; ============================================================
+  ; json SCALAR EXTRACTION with .. (returns Option)
+  ; ============================================================
+
+  let data = { "a": 1, "b": 2, "c": 3 }
+  let a-scalar = data..a
+  write a-scalar is Option.Some(_)
+  ; Expected: true
+
+  ; Unwrap scalar extraction
+  write a-scalar!
+  ; Expected: 1
+
+  ; Another scalar extraction
+  let c-val = data..c
+  write c-val!
+  ; Expected: 3
+
+  ; Missing key with .. returns Option.None
+  let miss = data..missing
+  write miss is Option.None
+  ; Expected: true
+
+  ; Scalar extraction from string field
+  let strs = { "greeting": "hello" }
+  let s = strs..greeting
+  write s!
+  ; Expected: hello
+
+  ; Scalar extraction from bool field
+  let bools = { "flag": true }
+  let b = bools..flag
+  write b!
+  ; Expected: true
+
+  ; Scalar extraction from float field
+  let floats = { "pi": 3.14 }
+  let f = floats..pi
+  write f!
+  ; Expected: 3.14
+
+  ; ============================================================
+  ; DYNAMIC json ACCESS with -> and ->>
+  ; ============================================================
+
+  let key = "b"
+  let dyn = data->(key)
+  write dyn is Json
+  ; Expected: true
+
+  ; Dynamic scalar access with ->>(expr)
+  let key-c = "c"
+  let dyn-c = data->>(key-c)
+  write dyn-c!
+  ; Expected: 3
+
+  ; ============================================================
+  ; as Json COERCION (native -> Json)
+  ; ============================================================
+
+  ; Native object -> Json
+  let native-obj = { x: 1, y: 2 }
+  let json-obj = native-obj as Json
+  write json-obj is Json
+  ; Expected: true
+
+  ; Array -> Json
+  let arr = [1, 2, 3]
+  let json-arr = arr as Json
+  write json-arr is Json
+  ; Expected: true
+
+  ; Scalar -> Json
+  let int-json = 42 as Json
+  write int-json is Json
+  ; Expected: true
+
+  let str-json = "hello" as Json
+  write str-json is Json
+  ; Expected: true
+
+  let bool-json = true as Json
+  write bool-json is Json
+  ; Expected: true
+
+  ; ============================================================
+  ; Json read T CONVERSIONS (Json -> native)
+  ; ============================================================
+
+  let j-data = { "name": "John", "age": 30, "active": true, "score": 3.14 }
+
+  ; Json -> String
+  let name-result = j-data.name read String
+  write name-result is Result.Ok(_)
+  ; Expected: true
+  write name-result!
+  ; Expected: John
+
+  ; Json -> Int
+  let age-result = j-data.age read Int
+  write age-result is Result.Ok(_)
+  ; Expected: true
+  write age-result!
+  ; Expected: 30
+
+  ; Json -> Bool
+  let active-result = j-data.active read Bool
+  write active-result is Result.Ok(_)
+  ; Expected: true
+  write active-result!
+  ; Expected: true
+
+  ; Json -> Float
+  let score-result = j-data.score read Float
+  write score-result is Result.Ok(_)
+  ; Expected: true
+  write score-result!
+  ; Expected: 3.14
+
+  ; Json -> Object (structural type)
+  let obj-data = { "nested": { "a": 1, "b": 2 } }
+  let nested-result = obj-data.nested read { a: Int, b: Int }
+  write nested-result is Result.Ok(_)
+  ; Expected: true
+
+  ; read type mismatch returns Result.Err
+  let bad-int = j-data.name read Int
+  write bad-int is Result.Err(_)
+  ; Expected: true
+
+  ; read on missing field (json null) returns Result.Err for non-Option types
+  let null-data = { "other": 1 }
+  let null-read = null-data.missing read Int
+  write null-read is Result.Err(_)
+  ; Expected: true
+
+  ; ============================================================
+  ; HETEROGENEOUS ARRAYS -> Json
+  ; ============================================================
+
+  ; Mixed types become Json
+  let hetero = [1, "two", true, 3.14]
+  write hetero is Json
+  ; Expected: true
+
+  ; String mixed with other types
+  let str-mix = ["a", 1, "hello"]
+  write str-mix is Json
+  ; Expected: true
+
+  ; Two elements of different types
+  let two-mix = [42, "hello"]
+  write two-mix is Json
+  ; Expected: true
+
+  ; Homogeneous arrays stay as Array
+  let hom-int = [1, 2, 3]
+  write hom-int is Array[_]
+  ; Expected: true
+
+  let hom-str = ["a", "b", "c"]
+  write hom-str is Array[_]
+  ; Expected: true
+
+  ; ============================================================
+  ; `null` LITERAL IN json CONTEXTS
+  ; ============================================================
+
+  ; null in json object
+  let with-null = { "name": "Alice", "middle": null }
+  write with-null is Json
+  ; Expected: true
+
+  ; null in heterogeneous array
+  let arr-null = [1, null, "three"]
+  write arr-null is Json
+  ; Expected: true
+
+  ; Array with only null becomes Json
+  let null-only = [null, null]
+  write null-only is Json
+  ; Expected: true
+
+  ; Option.None -> null
+  let none-json = Option.None as Json
+  write none-json is Json
+  ; Expected: true
+
+  ; Option.Some(v) -> v
+  let some-json = Option.Some(42) as Json
+  write some-json is Json
+  ; Expected: true
+
+  ; Verify Option.Some unwraps to inner value (not tagged object)
+  let some-read = some-json read Int
+  write some-read!
+  ; Expected: 42
+
+  ; ============================================================
+  ; CHAR LITERALS
+  ; ============================================================
+
+  let ch = 'a'
+  write ch is Char
+  ; Expected: true
+
+  let newline = '\n'
+  write newline is Char
+  ; Expected: true
+
+  ; Char in array (homogeneous)
+  let chars = ['a', 'b', 'c']
+  write chars is Array[_]
+  ; Expected: true
+
+  ; ============================================================
+  ; json read INTO STRUCT TYPES
+  ; ============================================================
+
+  ; Read json into struct
+  let person-json = { "name": "Alice", "age": 30 }
+  let person-result = person-json read Person
+  write person-result is Result.Ok(_)
+  ; Expected: true
+
+  ; Read NATIVE object into structural type
+  let native-obj2 = { name: "Native", age: 25, extra: "ignored" }
+  let native-result = native-obj2 read { name: String, age: Int, extra: String }
+  write native-result is Result.Ok(_)
+  ; Expected: true
+
+  let native-person = native-result!
+  write native-person.name
+  ; Expected: Native
+  write native-person.age
+  ; Expected: 25
+
+  let person = person-result!
+  write person.name
+  ; Expected: Alice
+  write person.age
+  ; Expected: 30
+
+  ; Missing field returns Result.Err
+  let incomplete = { "name": "Bob" }
+  let incomplete-result = incomplete read Person
+  write incomplete-result is Result.Err(_)
+  ; Expected: true
+
+  ; Wrong field type returns Result.Err
+  let wrong-type = { "name": "Carol", "age": "thirty" }
+  let wrong-result = wrong-type read Person
+  write wrong-result is Result.Err(_)
+  ; Expected: true
+
+  ; ============================================================
+  ; json read INTO PARAMETRIC STRUCT TYPES
+  ; ============================================================
+
+  ; Read into Box[Int]
+  let box-json = { "value": 42 }
+  let box-result = box-json read Box[Int]
+  write box-result is Result.Ok(_)
+  ; Expected: true
+
+  let box-val = box-result!
+  write box-val.value
+  ; Expected: 42
+
+  ; Read into Box[String]
+  let str-box-json = { "value": "hello" }
+  let str-box-result = str-box-json read Box[String]
+  write str-box-result is Result.Ok(_)
+  ; Expected: true
+
+  write str-box-result!.value
+  ; Expected: hello
+
+  ; Multi-param struct
+  let pair-json = { "first": 1, "second": "one" }
+  let pair-result = pair-json read Pair[Int, String]
+  write pair-result is Result.Ok(_)
+  ; Expected: true
+
+  let pair-val = pair-result!
+  write pair-val.first
+  ; Expected: 1
+  write pair-val.second
+  ; Expected: one
+
+  ; ============================================================
+  ; json read INTO ARRAY[T]
+  ; ============================================================
+
+  let arr-json = [1, 2, 3] as Json
+  let arr-result = arr-json read Array[Int]
+  write arr-result is Result.Ok(_)
+  ; Expected: true
+
+  let arr-val = arr-result!
+  write arr-val is Array[_]
+  ; Expected: true
+  write Iterable:length(arr-val)
+  ; Expected: 3
+
+  ; Type mismatch in array element
+  let bad-arr = [1, "two", 3] as Json
+  let bad-arr-result = bad-arr read Array[Int]
+  write bad-arr-result is Result.Err(_)
+  ; Expected: true
+
+  ; ============================================================
+  ; json read INTO OPTION[T]
+  ; ============================================================
+
+  ; Non-null -> Some
+  let opt-json = 42 as Json
+  let opt-result = opt-json read Option[Int]
+  write opt-result is Result.Ok(_)
+  ; Expected: true
+
+  let opt-val = opt-result!
+  write opt-val is Option.Some(_)
+  ; Expected: true
+  write opt-val!
+  ; Expected: 42
+
+  ; null -> None
+  let null-json = { "value": null }
+  let null-opt-result = null-json.value read Option[Int]
+  write null-opt-result is Result.Ok(_)
+  ; Expected: true
+
+  let null-opt-val = null-opt-result!
+  write null-opt-val is Option.None
+  ; Expected: true
+
+  ; ============================================================
+  ; NESTED STRUCTS IN json read
+  ; ============================================================
+
+  let emp-json = {
+    "name": "Dave",
+    "addr": {
+      "city": "NYC",
+      "zip": 10001
+    }
+  }
+
+  let emp-result = emp-json read Employee
+  write emp-result is Result.Ok(_)
+  ; Expected: true
+
+  let emp = emp-result!
+  write emp.name
+  ; Expected: Dave
+  write emp.addr.city
+  ; Expected: NYC
+  write emp.addr.zip
+  ; Expected: 10001
+
+  write "json test complete"
+}

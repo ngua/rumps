@@ -1,0 +1,72 @@
+; Ordering type tests
+
+fun main() {
+  ; === Ordering variant construction ===
+
+  let lt = Ordering.Lt
+  let eq = Ordering.Eq
+  let gt = Ordering.Gt
+
+  write :display(lt)
+  write :display(eq)
+  write :display(gt)
+
+  ; === Pattern matching on Ordering ===
+
+  write describe(Ordering.Lt)
+  write describe(Ordering.Eq)
+  write describe(Ordering.Gt)
+
+  ; === Using Ordering as function result ===
+
+  write describe(compare-int(1, 2))
+  write describe(compare-int(2, 2))
+  write describe(compare-int(3, 2))
+
+  ; === Ordering in data structures ===
+
+  let orderings: Array[Ordering] = [Ordering.Lt, Ordering.Eq, Ordering.Gt]
+  write Iterable:length(orderings)
+
+  let mapped = Mappable:map(describe, orderings)
+  write :display(mapped)
+
+  ; === Ordering in match with guards ===
+
+  write classify(Ordering.Lt)
+  write classify(Ordering.Eq)
+  write classify(Ordering.Gt)
+
+  ; === Type annotation with Ordering ===
+
+  let typed: Ordering = Ordering.Gt
+  write describe(typed)
+
+  write describe(identity(Ordering.Eq))
+}
+
+fun describe(ord: Ordering) -> String {
+  match ord {
+    Ordering.Lt => { "less than" }
+    Ordering.Eq => { "equal" }
+    Ordering.Gt => { "greater than" }
+  }
+}
+
+fun compare-int(a: Int, b: Int) -> Ordering {
+  if a < b { Ordering.Lt } else {
+    if a == b { Ordering.Eq } else { Ordering.Gt }
+  }
+}
+
+fun classify(ord: Ordering) -> Int {
+  match ord {
+    Ordering.Lt => { -1 }
+    Ordering.Eq => { 0 }
+    Ordering.Gt => { 1 }
+  }
+}
+
+fun identity(ord: Ordering) -> Ordering {
+  ord
+}

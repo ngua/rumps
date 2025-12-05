@@ -1,0 +1,156 @@
+; User-defined Indexable class with associated type Index
+;
+; Tests implementing Indexable for user types with newtype Index = ...
+; to define the associated index type.
+
+fun main() {
+  ; === Usage (hoisted) ===
+
+  ; StringMap uses String as index type (via newtype Index = String)
+  let sm = StringMap.StringMap({ "a" => 1, "b" => 2, "c" => 3 })
+
+  ; Direct class method calls
+  write Indexable:index(sm, "a")
+  write :display(Indexable:get(sm, "b"))
+
+  ; Subscript syntax dispatches to user Indexable instance
+  write sm["a"]
+  write sm["c"]
+
+  ; Safe subscript (uses `get` method)
+  write :display(sm?["b"])
+  write :display(sm?["missing"])
+
+  let im = ({ 1 => "one", 2 => "two" } : IntMap)
+  write im[1]
+  write im[2]
+  write :display(im?[3])
+
+  let as-im = ({ 1 => "one" } : AsIntMap)
+  write as-im[1]
+  write :display(as-im?[2])
+
+  let bs = ({ "a" => 10, "b" => 20 } : Box[String, Int])
+  write Indexable:index(bs, "a")
+  write :display(Indexable:get(bs, "b"))
+  write bs["b"]
+  write :display(bs?["missing"])
+
+  let bi = ({ 1 => "one", 2 => "two" } : Box[Int, String])
+  write Indexable:index(bi, 1)
+  write :display(Indexable:get(bi, 2))
+  write bi[2]
+  write :display(bi?[3])
+
+  let tm = ({ 1 => "payload" } : TaggedMap)
+  write tm[1]
+  write :display(tm?[2])
+
+  let raw: Map[Int, String] = tm
+  write raw[1]
+  write :display(raw?[2])
+
+  ; Builtin `Map` uses `Indexable:Index = K` and `Indexable[V]`.
+  let m: Map[String, Int] = { "a" => 1 }
+  let map-index: Int = Indexable:index(m, "a")
+  write map-index
+
+  let map-get: Option[Int] = Indexable:get(m, "a")
+  write :display(map-get)
+
+  let map-missing: Option[Int] = m?["missing"]
+  write :display(map-missing)
+
+  let arr = [10]
+  let arr-index: Int = Indexable:index(arr, 0)
+  write arr-index
+
+  let arr-get: Option[Int] = Indexable:get(arr, 0)
+  write :display(arr-get)
+}
+
+; === Type and Class Definitions ===
+
+variant StringMap = StringMap(Map[String, Int])
+
+class Indexable[Int] for StringMap {
+  newtype Index = String
+
+  fun index(sm: StringMap, i: :Index) -> Int {
+    match sm {
+      StringMap.StringMap(m) => m[i]
+    }
+  }
+
+  fun get(sm: StringMap, i: :Index) -> Option[Int] {
+    match sm {
+      StringMap.StringMap(m) => m?[i]
+    }
+  }
+}
+
+; === Qualified Associated Type Syntax ===
+;
+; Associated types can also be referenced with the qualified form
+; `ClassName:AssocType` instead of the shorthand `:AssocType`.
+
+newtype IntMap = Map[Int, String]
+
+class Indexable[String] for IntMap {
+  newtype Index = Int
+
+  ; Uses qualified `Indexable:Index` instead of shorthand `:Index`
+  fun index(im: IntMap, i: Indexable:Index) -> String {
+    let m: Map[Int, String] = im
+    m[i]
+  }
+
+  fun get(im: IntMap, i: Indexable:Index) -> Option[String] {
+    let m: Map[Int, String] = im
+    m?[i]
+  }
+}
+
+newtype AsIntMap = Map[Int, String]
+
+class Indexable[String] for AsIntMap {
+  newtype Index = Int
+
+  fun index(im: AsIntMap, i: Indexable:Index) -> String {
+    (im as Map[Int, String])[i]
+  }
+
+  fun get(im: AsIntMap, i: Indexable:Index) -> Option[String] {
+    (im as Map[Int, String])?[i]
+  }
+}
+
+newtype Box[K, V] = Map[K, V]
+
+class Indexable[V] for Box[K, V] {
+  newtype Index = K
+
+  fun index(b: Box[K, V], i: :Index) -> V {
+    let m: Map[K, V] = b
+    m[i]
+  }
+
+  fun get(b: Box[K, V], i: Indexable:Index) -> Option[V] {
+    let m: Map[K, V] = b
+    m?[i]
+  }
+}
+
+newtype TaggedMap = Map[Int, String]
+
+class Indexable[String] for TaggedMap {
+  newtype Index = Int
+
+  fun index(m: TaggedMap, i: Indexable:Index) -> String {
+    "direct {i}"
+  }
+
+  fun get(m: TaggedMap, i: Indexable:Index) -> Option[String] {
+    Option.Some("safe {i}")
+  }
+}

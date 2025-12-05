@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error test: circular module imports\n\nMODULE Circular FROM \"../modules/lib/circular-a.rumps\"\n"
+---
+ERROR: parse error at 53..85: circular module import: `/home/rory/projects/rumps/crates/rumps-query/modules/lib/circular-a.rumps`

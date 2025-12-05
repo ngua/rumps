@@ -1,0 +1,9 @@
+; Union narrowing via type annotation should be rejected.
+; Use `match`/`is` for runtime type narrowing instead.
+
+fun main() {
+  let r = 1 ..= 10
+  ; `Iterable:reverse` on `Range` returns `Range`
+  let revd: Array[Char] = Iterable:reverse(r)
+  write :display(revd)
+}

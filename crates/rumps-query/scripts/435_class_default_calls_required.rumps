@@ -1,0 +1,26 @@
+; Default bodies may call required methods from the same class.
+
+variant Cell = Cell(Int)
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+  fun g(x: C) -> Int
+
+  #(default)
+  fun g(x) {
+    Optional:f(x) + 1
+  }
+}
+
+class Optional for Cell {
+  fun f(x: Cell) -> Int {
+    match x {
+      Cell.Cell(n) => { n }
+    }
+  }
+}
+
+fun main() {
+  write Optional:g(Cell.Cell(3))
+}

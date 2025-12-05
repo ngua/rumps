@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Module `let` shadowing is allowed.\n\nmodule M {\n  +fun len() -> Int { 1 }\n\n  +let len = Iterable:length\n  +let len = x => x + 1\n\n  +let value = 10\n  +let value = value + 32\n}\n\nfun main() {\n  write M.len(41)\n  write M.value\n}\n"
+---
+42
+42

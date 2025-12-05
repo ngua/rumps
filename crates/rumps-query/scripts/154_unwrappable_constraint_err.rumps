@@ -1,0 +1,11 @@
+; Test Unwrappable constraint error cases
+
+fun main() {
+  ; Calling with Int (not Option or Result) should error
+  write bad-unwrap(42)
+}
+
+; This should fail: Int is not Unwrappable
+fun bad-unwrap[T, F: Unwrappable](x: F[T]) -> T {
+  x!
+}

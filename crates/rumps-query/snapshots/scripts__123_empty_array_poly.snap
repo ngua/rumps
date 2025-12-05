@@ -1,0 +1,11 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Empty array with annotation + polymorphic function\n; Regression test for type variable collision bug where empty arrays\n; caused subsequent polymorphic function instantiation to fail\n\nfun main() {\n  ; Empty array creates a fresh type var that could collide with scheme vars\n  let nums: Array[Int] = []\n  let left = { \"x\" => 10, \"y\" => 20 }\n  write :display(Map.lookup(left, \"x\"))\n  write :display(Map.lookup(left, \"y\"))\n\n  ; Non-empty array for comparison (always worked)\n  let nums2: Array[Int] = [1, 2, 3]\n  let right = { \"a\" => 100, \"b\" => 200 }\n  write :display(Map.lookup(right, \"a\"))\n\n  ; Multiple empty collections in sequence\n  let empty1: Array[String] = []\n  let empty2: Array[Bool] = []\n  let empty3: Map[Int, String] = Map.empty()\n  let m = { \"key\" => 42 }\n  write :display(Map.lookup(m, \"key\"))\n\n  ; Polymorphic functions after empty arrays\n  let arr: Array[Float] = []\n  write Iterable:length(arr)\n  write :display(Mappable:map(x => x * 2, [1, 2, 3]))\n\n  write \"empty array + polymorphic OK\"\n}\n"
+---
+Option.Some(10)
+Option.Some(20)
+Option.Some(100)
+Option.Some(42)
+0
+[ 2, 4, 6 ]
+empty array + polymorphic OK

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Into)\nnewtype UserId = Int\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 12..16: `Into` expects 1 type argument(s), but received 0

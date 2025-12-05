@@ -1,0 +1,60 @@
+; Test: Closures
+; Tests closure definition, binding, and calling
+
+fun main() {
+  ; === Single parameter closure ===
+
+  let double = x => x * 2
+  write double(21)
+  ; Expected: 42
+
+  let identity = x => x
+  write identity(42)
+  ; Expected: 42
+
+  ; === Multi-parameter closure ===
+
+  let add = (a, b) => a + b
+  write add(10, 32)
+  ; Expected: 42
+
+  let triple = (a, b, c) => a + b + c
+  write triple(1, 2, 3)
+  ; Expected: 6
+
+  ; === Nullary closure ===
+
+  let const = () => 42
+  write const()
+  ; Expected: 42
+
+  ; === Typed parameter closure ===
+
+  let typed = (x: Int) => x + 1
+  write typed(41)
+  ; Expected: 42
+
+  let multi-typed = (x: Int, y: String) => y
+  write multi-typed(1, "hello")
+  ; Expected: "hello"
+
+  ; === Closure with return type ===
+
+  let with-ret = (x: Int) -> Int => x * x
+  write with-ret(6)
+  ; Expected: 36
+
+  ; === Nested closure in expression ===
+
+  let nested = (x => x + 1)
+  write nested(41)
+  ; Expected: 42
+
+  ; === Closure with complex body ===
+
+  let complex = (a, b) => { a * b + 1 }
+  write complex(5, 8)
+  ; Expected: 41
+
+  write "Closure test complete"
+}

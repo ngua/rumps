@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  write Option.Some(7) ?? mark(1)\n  write Option.None ?? mark(2)\n  write Result.Ok(9) ?? mark(3)\n  write Result.Err(\"x\") ?? mark(4)\n\n  let n = 5\n  write Option.None ?? (n + mark(6))\n}\n\nfun mark(i: Int) -> Int {\n  write \"rhs {i}\"\n  i\n}\n"
+---
+7
+rhs 2
+2
+9
+rhs 4
+4
+rhs 6
+11

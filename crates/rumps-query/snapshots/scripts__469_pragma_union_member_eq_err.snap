@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "variant Token = Token\nunion Equatable = Int | Token\n\nfun main() {\n  let a: Equatable = 1\n  let b: Equatable = 2\n  write a == b\n}\n"
+---
+ERROR: type `Token` does not satisfy `Eq` class

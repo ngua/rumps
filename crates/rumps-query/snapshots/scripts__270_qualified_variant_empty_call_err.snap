@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Qualified variant constructor call requires a payload.\n\nfun main() {\n  let x = Option.Some()\n  write x\n}\n"
+---
+ERROR: expected 1 argument(s), got 0

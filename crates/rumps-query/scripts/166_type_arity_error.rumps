@@ -1,0 +1,5 @@
+; Type arity error: `Option` requires 1 type argument
+fun main() {
+  let x = Option.Some(1)
+  write x is Option
+}

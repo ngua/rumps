@@ -1,0 +1,10 @@
+; Test raise in expression context (match arm)
+; The raise branch is not taken, so we get the value 1
+
+fun main() {
+  let x = match Option.Some(1) {
+    Option.Some(n) => n
+    Option.None => raise "unreachable"
+  }
+  write x
+}

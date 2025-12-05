@@ -1,0 +1,13 @@
+; Test that omitting required associated type produces a type error
+;
+; Indexable requires newtype Index = ... to be defined
+
+fun main() { }
+
+variant MyList = MyList(Array[Int])
+
+; Missing newtype Index = ... declaration; should error
+class Indexable[Int] for MyList {
+  fun index(xs: MyList, i: Int) -> Int { 0 }
+  fun get(xs: MyList, i: Int) -> Option[Int] { Option.None }
+}

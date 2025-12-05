@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Malformed HKT constructor applications must not truncate extra args\n\nfun bad[F: Mappable](x: F[Int, String]) {\n  write x\n}\n\nfun main() {\n  bad([1, 2, 3])\n}\n"
+---
+ERROR: expected 2 argument(s), got 1

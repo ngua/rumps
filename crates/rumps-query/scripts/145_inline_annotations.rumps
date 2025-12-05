@@ -1,0 +1,140 @@
+; Test: Inline type annotations
+; Tests `expr: Type` syntax for inline type annotations without requiring parens
+
+fun main() {
+  ; === Basic scalar annotations (no parens required) ===
+
+  write 42: Int
+  write "hello": String
+  write true: Bool
+  write 3.14: Float
+
+  ; With let bindings
+  let x = 10: Int
+  write x
+
+  let s = "world": String
+  write s
+
+  ; === Annotation with various whitespace ===
+
+  ; No space
+  let a = 1:Int
+  write a
+
+  ; Spaces around colon
+  let b = 2 : Int
+  write b
+
+  ; Space only before
+  let c = 3 :Int
+  write c
+
+  ; === Annotation inside parentheses ===
+
+  ; Single expression with annotation inside parens
+  let y = (100: Int)
+  write y
+
+  ; Nested parens
+  let z = ((200: Int))
+  write z
+
+  ; === Old syntax still works: `(expr): Type` ===
+
+  let old = (300): Int
+  write old
+
+  ; === Postfix operators then annotation ===
+
+  ; Field access then annotation
+  let obj = { a: { b: 10 } }
+  write obj.a.b: Int
+
+  ; Index then annotation
+  let arr = [1, 2, 3]
+  write arr[0]: Int
+
+  ; Unwrap then annotation
+  let opt = Option.Some(42)
+  write opt!: Int
+
+  ; === DB intrinsics with annotation ===
+
+  ; Setup a local db
+  let d = {}
+  @set d{"key"} 123
+
+  ; @get with annotation
+  let val = @get d{"key"}: Option[Storable]
+  write :display(val)
+
+  ; @get with unwrap then annotation
+  let unwrapped = @get d{"key"}!: Storable
+  write :display(unwrapped)
+
+  ; @data with annotation
+  let status = @data d{"key"}: DataStatus
+  write :display(status)
+
+  ; @order with annotation
+  let ord = @order d{""}: Option[Subscript]
+  write :display(ord)
+
+  ; === write with annotated operand ===
+
+  write 999: Int
+  write "test": String
+  write obj.a.b: Int
+
+  ; === Tuple annotation ===
+
+  ; Tuple with annotation (parens around tuple + annotation)
+  let tup = (1, 2): (Int, Int)
+  write :display(tup)
+
+  ; Tuple annotation inside parens
+  let tup2 = ((3, 4): (Int, Int))
+  write :display(tup2)
+
+  ; Access tuple element with annotation
+  write tup.0: Int
+
+  ; === Parameterized type annotations ===
+
+  let some = Option.Some(10): Option[Int]
+  write :display(some)
+
+  let none = Option.None: Option[String]
+  write :display(none)
+
+  let ok = Result.Ok(42): Result[Int, String]
+  write :display(ok)
+
+  let err = Result.Err("oops"): Result[Int, String]
+  write :display(err)
+
+  ; === Array annotations ===
+
+  let nums = [1, 2, 3]: Array[Int]
+  write :display(nums)
+
+  ; === Complex expressions ===
+
+  ; Arithmetic then annotation (annotation binds to `2` not to `1 + 2`)
+  ; So we need parens for the whole thing
+  let sum = (1 + 2: Int)
+  write sum
+
+  ; Chained postfix then annotation
+  let nested = { x: Option.Some({ y: 5 }) }
+  write nested.x!.y: Int
+
+  ; === Function return type inference with annotation ===
+
+  write double(5): Int
+
+  write "Inline annotation test complete"
+}
+
+fun double(n: Int) -> Int { n * 2 }

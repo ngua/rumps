@@ -1,0 +1,16 @@
+; Error: transparent `Eq` forwarding conflicts with manual `Eq`.
+
+#(transparent)
+newtype Count = Int
+
+class Eq for Count {
+  fun eq(a: Count, b: Count) -> Bool {
+    let x: Int = a
+    let y: Int = b
+    x == y
+  }
+}
+
+fun main() {
+  write "bad"
+}

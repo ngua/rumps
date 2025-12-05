@@ -1,0 +1,37 @@
+; Direct `:coalesce` calls before `??` lowering.
+
+fun main() {
+  let full: Box[Int] = Box.Full(7)
+  let empty: Box[Int] = Box.Empty
+
+  write :coalesce(full, Lazy.Lazy(forced()))
+  write :coalesce(empty, Lazy.Lazy(11))
+
+  let words: Box[String] = Box.Empty
+  write :coalesce(words, Lazy.Lazy("fallback"))
+
+  write :coalesce(Option.Some(3), Lazy.Lazy(forced()))
+  write :coalesce(Option.None, Lazy.Lazy(5))
+  write :coalesce(Result.Ok(13), Lazy.Lazy(forced()))
+  write :coalesce(Result.Err("no"), Lazy.Lazy(17))
+}
+
+variant Box[T] = Full(T) | Empty
+
+class Coalescable[T] for Box[T] {
+  fun coalesce(b: Box[T], rhs: Lazy[T]) -> T {
+    match b {
+      Box.Full(x) => { x }
+      Box.Empty => {
+        match rhs {
+          Lazy.Lazy(f) => { f() }
+        }
+      }
+    }
+  }
+}
+
+fun forced() -> Int {
+  write "forced"
+  1
+}

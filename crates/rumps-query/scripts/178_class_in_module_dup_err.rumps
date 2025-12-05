@@ -1,0 +1,20 @@
+; Duplicate class instance across modules; should error
+
+fun main() { }
+
+module A {
+  +variant MyInt = MyInt(Int)
+}
+
+module B {
+  class Display for A.MyInt {
+    fun display(x: A.MyInt) -> String { "B" }
+  }
+}
+
+module C {
+  ; Duplicate instance for same type
+  class Display for A.MyInt {
+    fun display(x: A.MyInt) -> String { "C" }
+  }
+}

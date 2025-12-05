@@ -1,0 +1,39 @@
+module ReadPrivTry {
+  +newtype A = Array[Int]
+
+  +fun wrap(xs: Array[Int]) -> ReadPrivTry.A {
+    xs as ReadPrivTry.A
+  }
+
+  +fun len(xs: ReadPrivTry.A) -> Int {
+    Iterable:length(xs)
+  }
+
+  class TryInto[ReadPrivTry.A] for Array[Int] {
+    fun try-into(xs: Array[Int]) -> Result[ReadPrivTry.A, String] {
+      Result.Ok(ReadPrivTry.wrap(xs))
+    }
+  }
+}
+
+module ReadPubTry {
+  +newtype A = +Array[Int]
+
+  +fun len(xs: ReadPubTry.A) -> Int {
+    Iterable:length(xs)
+  }
+}
+
+class TryInto[ReadPubTry.A] for Array[Int] {
+  fun try-into(xs: Array[Int]) -> Result[ReadPubTry.A, String] {
+    Result.Ok(xs as ReadPubTry.A)
+  }
+}
+
+fun main() {
+  let priv = ([1, 2, 3] read ReadPrivTry.A)!
+  write ReadPrivTry.len(priv)
+
+  let pub = ([4, 5, 6] read ReadPubTry.A)!
+  write ReadPubTry.len(pub)
+}

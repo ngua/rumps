@@ -1,0 +1,49 @@
+; Test: lex simple expressions
+; Tests basic tokenization of literals, identifiers, and operators
+
+fun main() {
+  ; Integer literals
+  let a = 42
+  let b = 0
+  let c = -123
+
+  ; Float literals
+  let d = 3.14
+  let e = 0.5
+  let f = -2.718
+
+  ; String literals
+  let s1 = "hello"
+  let s2 = "world with spaces"
+  let s3 = ""
+
+  ; Boolean keywords
+  let t = true
+  let f = false
+
+  ; Train-case identifier
+  let my-var = 100
+
+  ; All operators in one place
+  let x = 1 + 2 - 3 * 4 // 5 % 6
+  let cmp = 1 < 2
+  let eq = 3 == 3
+  let neq = 4 != 5
+  let ge = 10 >= 5
+  let le = 5 <= 10
+  let gt = 10 > 5
+  let lt = 5 < 10
+
+  ; Logical operators
+  let and1 = true and false
+  let or1 = true or false
+  let not1 = not true
+  let and2 = true && false
+  let or2 = true || false
+  let not2 = !false
+
+  ; String interpolation (replaces concat)
+  let concat = "{"hello"} {"world"}"
+
+  write "Lexer test complete"
+}

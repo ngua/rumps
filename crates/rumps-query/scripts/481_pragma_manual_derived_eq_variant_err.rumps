@@ -1,0 +1,14 @@
+; Error: manual `Eq` conflicts with derived `Eq`.
+
+#(deriving: Eq)
+variant Box = Box(Int)
+
+class Eq for Box {
+  fun eq(a: Box, b: Box) -> Bool {
+    true
+  }
+}
+
+fun main() {
+  write "bad"
+}

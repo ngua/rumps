@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Eq)\nlet x = 1\n\nvariant Mood = Happy | Sad\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 0..15: `deriving` pragmas attach only to `variant`, `newtype`, or `union`

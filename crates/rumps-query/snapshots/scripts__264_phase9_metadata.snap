@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Phase 9 expression metadata combinations\n\nfun main() {\n  write :bimap(x => x + 1, s => \"{s}!\", Result.Ok(1))\n  write :bimap(x => x + 1, s => \"{s}!\", Result.Err(\"no\"))\n}\n"
+---
+Result.Ok(2)
+Result.Err("no!")
