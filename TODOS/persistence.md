@@ -1204,77 +1204,7 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
 - [x] Update `Transaction::commit()` to use `TransactionManager` (see `transaction.rs:697-762`):
 - [x] Update `Transaction::rollback()` to use `TransactionManager` (see `transaction.rs:768-808`):
 - [x] Implement `Database` transaction API methods:
-  ```rust
-  impl Database {
-      /// Execute a function within a transaction context.
-      ///
-      /// The transaction auto-commits if the closure returns `Ok`, and
-      /// auto-rollbacks if it returns `Err`.
-      pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
-      where
-          F: FnOnce(&Transaction) -> Fut,
-          Fut: Future<Output = Result<R>>,
-      {
-          let txn = TransactionBuilder::default().begin(self).await?;
-          match f(&txn).await {
-              Ok(result) => {
-                  txn.commit().await?;
-                  Ok(result)
-              }
-              Err(e) => {
-                  txn.rollback().await?;
-                  Err(e)
-              }
-          }
-      }
-
-      /// Execute a function within a configured transaction context.
-      pub async fn transaction_with<F, Fut, R>(
-          &self,
-          builder: TransactionBuilder,
-          f: F,
-      ) -> Result<R>
-      where
-          F: FnOnce(&Transaction) -> Fut,
-          Fut: Future<Output = Result<R>>,
-      {
-          let txn = builder.begin(self).await?;
-          match f(&txn).await {
-              Ok(result) => {
-                  txn.commit().await?;
-                  Ok(result)
-              }
-              Err(e) => {
-                  txn.rollback().await?;
-                  Err(e)
-              }
-          }
-      }
-
-      /// Create a transaction builder for custom configuration.
-      pub fn build_transaction(&self) -> TransactionBuilder {
-          TransactionBuilder::default()
-      }
-  }
-  ```
 - [x] Enforce transaction requirements in `Database::set()` and `Database::kill()`:
-  ```rust
-  // In Database::set() (see database.rs:194-256)
-  // At the beginning, add:
-  if matches!(name, Name::Global(_)) {
-      // Check if we're being called from within a transaction
-      // For now, we can use thread-local storage to track the active transaction
-      // OR pass transaction ID as parameter
-      // If no active transaction:
-      // NOTE: NO EARLY RETURNS!
-      Err(StorageError::GlobalRequiresTransaction);
-  } else {
-     // Current code
-  }
-
-  // Similar check in Database::kill() (see database.rs:257-327)
-  ```
-
 - [x] Replace all `TransactionId::IMPLICIT` with actual transaction IDs:
   - Added internal methods: `set_with_txn()`, `kill_with_txn()`, `flush_with_txn()`
   - `Transaction::commit()` uses these internal methods with proper transaction ID
@@ -1410,23 +1340,20 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
 
 ## Future Considerations (Post-Goal 1)
 
-These are not part of the current plan but should be kept in mind:
+These are the current next steps (post persistence and basic DB):
 
-- **Advanced Concurrency**: Lock-free data structures, optimistic concurrency control (current plan uses Mutex for commit serialization)
-- **Group Commit**: Amortize fsync cost across multiple concurrent transactions. Current benchmarks show:
-  - Single-op transaction: ~195 µs (~5k ops/s) - dominated by fsync
-  - Batched 100 ops: ~3 ms total (~32k ops/s) - 6x throughput improvement
-
-  The ~100 µs baseline is fsync overhead. Group commit would batch WAL syncs for concurrent transactions, allowing multiple commits to share a single fsync. This is critical for high-throughput workloads where many small transactions commit simultaneously.
-- **Multi-Version Concurrency Control (MVCC)**: Full MVCC for better read concurrency (current plan uses snapshot isolation)
-- **Savepoints**: Nested transactions with partial rollback
+- **Query Language**: Parser and evaluator for MUMPS commands (rewrite old parser; see ./dsl.md for sketch in progress)
 - **Compression**: Compress nodes/pages to save disk space
 - **Encryption**: Optional encryption at rest
-- **Query Language**: Parser and evaluator for MUMPS commands (rewrite old parser)
 - **Networking**: Client-server protocol for remote access
+
+These are future considerations not yet planned:
+- **Advanced Concurrency**: Lock-free data structures, optimistic concurrency control (current plan uses Mutex for commit serialization)
+- **Multi-Version Concurrency Control (MVCC)**: Full MVCC for better read concurrency (current plan uses snapshot isolation)
+- **Savepoints**: Nested transactions with partial rollback
 - **Replication**: Multi-node deployment with data replication
 - **Distributed Transactions**: Two-phase commit for multi-node transactions
-- **$COLLECT Enhancements**:
+- **`COLLECT` Enhancements**:
   - Parallel processing with `buffer_unordered` for concurrent record processing:
     ```rust
     let results: Vec<_> = btree.collects(...)

@@ -450,7 +450,7 @@ impl From<TransactionTimestamp> for u64 {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[derive(Default)]
-pub(crate) enum IsolationLevel {
+pub enum IsolationLevel {
     /// Snapshot Isolation: Each transaction sees a consistent snapshot.
     ///
     /// This is the default and currently only supported level in RUMPS.
@@ -840,7 +840,7 @@ impl Default for TransactionManager {
 /// Defines how the system should respond when a transaction conflict
 /// is detected during commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub(crate) enum ConflictStrategy {
+pub enum ConflictStrategy {
     /// Abort the transaction on conflict (default).
     #[default]
     Abort,
@@ -868,7 +868,7 @@ pub(crate) enum ConflictStrategy {
     Deserialize,
     Default
 )]
-pub(crate) enum TransactionPriority {
+pub enum TransactionPriority {
     /// Low priority transaction.
     Low,
     /// Normal priority transaction (default).
@@ -895,7 +895,7 @@ pub(crate) enum TransactionPriority {
 /// let txn = builder.begin(&db).await?;
 /// ```
 #[derive(Debug, Clone)]
-pub(crate) struct TransactionBuilder {
+pub struct TransactionBuilder {
     isolation: IsolationLevel,
     conflict_strategy: ConflictStrategy,
     timeout: Option<u64>, // in ms
@@ -1081,6 +1081,271 @@ pub struct Transaction {
     start_time: Instant,
 }
 
+// Public API
+impl Transaction {
+    /// Gets a value from the database within this transaction's context.
+    ///
+    /// Checks the write buffer first for pending changes, then delegates
+    /// to the database if not found in the buffer.
+    ///
+    /// # Transaction Semantics
+    ///
+    /// - Reads see buffered writes from this transaction
+    /// - Reads respect deleted subtrees
+    /// - Reads are tracked in the read set for conflict detection
+    pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
+        *self.ops_count.write().await += 1;
+
+        let lookup_key = (name.clone(), key.clone());
+
+        // Check write buffer first
+        let buffered = {
+            let writes = self.writes.read().await;
+            writes.get(&lookup_key).cloned()
+        };
+
+        let result = match buffered {
+            Some(WriteOp::Set(data)) => {
+                // Track read
+                self.read_set.write().await.insert(lookup_key.clone());
+                data.value.clone().map(Some).ok_or_else(|| {
+                    StorageError::InvalidConfiguration(
+                        "Buffered set has no value".into(),
+                    )
+                })
+            }
+            Some(WriteOp::Delete | WriteOp::KillSubtree) => {
+                // Track read
+                self.read_set.write().await.insert(lookup_key);
+                Ok(None)
+            }
+            None => {
+                // Check if key is in a deleted subtree
+                let deleted = self.deleted_subtrees.read().await;
+                let is_deleted = deleted.iter().any(|(del_name, del_key)| {
+                    del_name == name && key.starts_with(del_key)
+                });
+
+                if is_deleted {
+                    self.read_set.write().await.insert(lookup_key);
+                    Ok(None)
+                } else {
+                    // Delegate to database (snapshot read)
+                    let val = self.db.get(name, key).await;
+
+                    // Track read
+                    self.read_set.write().await.insert(lookup_key);
+
+                    val
+                }
+            }
+        };
+
+        result
+    }
+
+    /// Sets a value in the transaction's write buffer.
+    ///
+    /// The change is not visible to other transactions until commit.
+    pub async fn set(&self, name: &Name, key: &Key, val: Value) -> Result<()> {
+        *self.ops_count.write().await += 1;
+
+        // Buffer the write
+        let mut writes = self.writes.write().await;
+        writes.insert(
+            (name.clone(), key.clone()),
+            WriteOp::Set(NodeData::with_value(val)),
+        );
+
+        Ok(())
+    }
+
+    /// Kills a key and all its descendants in the transaction's write buffer.
+    ///
+    /// The deletion is not visible to other transactions until commit.
+    pub async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
+        *self.ops_count.write().await += 1;
+
+        // Buffer the kill
+        let mut writes = self.writes.write().await;
+        writes.insert((name.clone(), key.clone()), WriteOp::KillSubtree);
+
+        // Track in deleted subtrees
+        let mut deleted = self.deleted_subtrees.write().await;
+        deleted.insert((name.clone(), key.clone()));
+
+        Ok(())
+    }
+
+    /// Checks the data status of a node within this transaction's context.
+    ///
+    /// Combines buffered writes with the database snapshot to determine
+    /// if a node has a value and/or descendants.
+    pub async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus> {
+        *self.ops_count.write().await += 1;
+
+        let lookup_key = (name.clone(), key.clone());
+
+        // Check write buffer
+        let buffered = {
+            let writes = self.writes.read().await;
+            writes.get(&lookup_key).cloned()
+        };
+
+        match buffered {
+            Some(WriteOp::Set(_)) => {
+                // Has value from buffered write
+                // TODO: Check for descendants in buffer
+                Ok(DataStatus::HasValue)
+            }
+            Some(WriteOp::Delete | WriteOp::KillSubtree) => {
+                Ok(DataStatus::NoData)
+            }
+            None => {
+                // Check if in deleted subtree
+                let deleted = self.deleted_subtrees.read().await;
+                let is_deleted = deleted.iter().any(|(del_name, del_key)| {
+                    del_name == name && key.starts_with(del_key)
+                });
+
+                if is_deleted {
+                    Ok(DataStatus::NoData)
+                } else {
+                    self.db.data(name, key).await
+                }
+            }
+        }
+    }
+
+    /// Returns the next key in lexicographic order within this transaction's context.
+    ///
+    /// Must merge snapshot iteration with buffered writes - buffered sets may
+    /// insert new keys, buffered kills may remove keys.
+    pub async fn order(
+        &self,
+        name: &Name,
+        after: Option<&Key>,
+    ) -> Result<Option<Key>> {
+        *self.ops_count.write().await += 1;
+
+        self.order_impl(name, after).await
+    }
+
+    /// Creates a stream of entries within this transaction's context.
+    ///
+    /// The stream reflects buffered writes combined with the snapshot.
+    /// Buffered sets may add entries, buffered kills may remove them.
+    ///
+    /// This implementation uses O(1) additional memory by:
+    /// - Holding an owned lock guard (not collecting the write buffer)
+    /// - Using key-based range iteration (O(log n) per access)
+    /// - Checking buffered membership via BTreeMap lookup
+    pub async fn collects<'a, P, F, T>(
+        &'a self,
+        name: &'a Name,
+        start: Option<&'a Key>,
+        pred: P,
+        extract: F,
+    ) -> Result<impl futures::stream::Stream<Item = Result<T>> + Send + 'a>
+    where
+        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + Clone + 'a,
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone + 'a,
+        T: Send + 'a,
+    {
+        *self.ops_count.write().await += 1;
+
+        // Get owned guard for writes - O(1) memory, no collection
+        let writes_guard = Arc::clone(&self.writes).read_owned().await;
+
+        // Build list of deleted subtrees for this name
+        let deleted = self.deleted_subtrees.read().await;
+        let deleted_list: Vec<Key> = deleted
+            .iter()
+            .filter_map(|(n, k)| if n == name { Some(k.clone()) } else { None })
+            .collect();
+        drop(deleted);
+
+        // Clone data for the predicate closure
+        let deleted_list_for_pred = deleted_list.clone();
+        let pred_clone = pred.clone();
+
+        // Create predicate that excludes deleted keys (checks writes via guard)
+        let pred_with_deletes = move |k: &Key, val: &Option<Value>| {
+            let in_deleted = deleted_list_for_pred
+                .iter()
+                .any(|del_key| k.starts_with(del_key));
+
+            if in_deleted {
+                false
+            } else {
+                pred_clone(k, val)
+            }
+        };
+
+        // Create extract_with_key to get (Key, T) pairs from snapshot
+        let extract_with_key = {
+            let extract = extract.clone();
+            move |k: &Key, val: &Option<Value>| {
+                extract(k, val).map(|t| (k.clone(), t))
+            }
+        };
+
+        // Get snapshot stream yielding (Key, T) pairs (lazy, not collected!)
+        let snapshot_stream = self
+            .db
+            .collects(name, start, pred_with_deletes, extract_with_key)
+            .await?;
+
+        // Create O(1) memory merge state
+        let state = MergeState {
+            writes_guard,
+            name: name.clone(),
+            last_buffered_key: None,
+            next_buffered: None,
+            extract,
+            pred,
+            start: start.cloned(),
+            deleted_subtrees: deleted_list,
+            snapshot: snapshot_stream.boxed(),
+            next_snapshot: None,
+            snapshot_error: None,
+        };
+
+        // Create a merge stream using unfold
+        let merged = stream::unfold(state, |mut state| async move {
+            state.next().await.map(|item| (item, state))
+        });
+
+        Ok(merged)
+    }
+
+    /// Collects all matching entries into a `Vec`.
+    ///
+    /// This is a convenience wrapper around `collects()` that collects
+    /// the stream into a vector. Useful when you need all results at once.
+    ///
+    /// The vector reflects buffered writes combined with the snapshot.
+    /// Buffered sets may add entries, buffered kills may remove them.
+    pub async fn collects_vec<P, F, T>(
+        &self,
+        name: &Name,
+        start: Option<&Key>,
+        pred: P,
+        extract: F,
+    ) -> Result<Vec<T>>
+    where
+        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + Clone,
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone,
+        T: Send,
+    {
+        self.collects(name, start, pred, extract)
+            .await?
+            .try_collect()
+            .await
+    }
+}
+
+// Internal methods
 impl Transaction {
     /// Commits the transaction, applying all buffered writes to the database.
     ///
@@ -1227,158 +1492,6 @@ impl Transaction {
         Err(StorageError::InvalidConfiguration(msg.into()))
     }
 
-    /// Gets a value from the database within this transaction's context.
-    ///
-    /// Checks the write buffer first for pending changes, then delegates
-    /// to the database if not found in the buffer.
-    ///
-    /// # Transaction Semantics
-    ///
-    /// - Reads see buffered writes from this transaction
-    /// - Reads respect deleted subtrees
-    /// - Reads are tracked in the read set for conflict detection
-    pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
-        *self.ops_count.write().await += 1;
-
-        let lookup_key = (name.clone(), key.clone());
-
-        // Check write buffer first
-        let buffered = {
-            let writes = self.writes.read().await;
-            writes.get(&lookup_key).cloned()
-        };
-
-        let result = match buffered {
-            Some(WriteOp::Set(data)) => {
-                // Track read
-                self.read_set.write().await.insert(lookup_key.clone());
-                data.value.clone().map(Some).ok_or_else(|| {
-                    StorageError::InvalidConfiguration(
-                        "Buffered set has no value".into(),
-                    )
-                })
-            }
-            Some(WriteOp::Delete | WriteOp::KillSubtree) => {
-                // Track read
-                self.read_set.write().await.insert(lookup_key);
-                Ok(None)
-            }
-            None => {
-                // Check if key is in a deleted subtree
-                let deleted = self.deleted_subtrees.read().await;
-                let is_deleted = deleted.iter().any(|(del_name, del_key)| {
-                    del_name == name && key.starts_with(del_key)
-                });
-
-                if is_deleted {
-                    self.read_set.write().await.insert(lookup_key);
-                    Ok(None)
-                } else {
-                    // Delegate to database (snapshot read)
-                    let val = self.db.get(name, key).await;
-
-                    // Track read
-                    self.read_set.write().await.insert(lookup_key);
-
-                    val
-                }
-            }
-        };
-
-        result
-    }
-
-    /// Sets a value in the transaction's write buffer.
-    ///
-    /// The change is not visible to other transactions until commit.
-    pub async fn set(&self, name: &Name, key: &Key, val: Value) -> Result<()> {
-        *self.ops_count.write().await += 1;
-
-        // Buffer the write
-        let mut writes = self.writes.write().await;
-        writes.insert(
-            (name.clone(), key.clone()),
-            WriteOp::Set(NodeData::with_value(val)),
-        );
-
-        Ok(())
-    }
-
-    /// Kills a key and all its descendants in the transaction's write buffer.
-    ///
-    /// The deletion is not visible to other transactions until commit.
-    pub async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
-        *self.ops_count.write().await += 1;
-
-        // Buffer the kill
-        let mut writes = self.writes.write().await;
-        writes.insert((name.clone(), key.clone()), WriteOp::KillSubtree);
-
-        // Track in deleted subtrees
-        let mut deleted = self.deleted_subtrees.write().await;
-        deleted.insert((name.clone(), key.clone()));
-
-        Ok(())
-    }
-
-    /// Checks the data status of a node within this transaction's context.
-    ///
-    /// Combines buffered writes with the database snapshot to determine
-    /// if a node has a value and/or descendants.
-    pub(crate) async fn data(
-        &self,
-        name: &Name,
-        key: &Key,
-    ) -> Result<DataStatus> {
-        *self.ops_count.write().await += 1;
-
-        let lookup_key = (name.clone(), key.clone());
-
-        // Check write buffer
-        let buffered = {
-            let writes = self.writes.read().await;
-            writes.get(&lookup_key).cloned()
-        };
-
-        match buffered {
-            Some(WriteOp::Set(_)) => {
-                // Has value from buffered write
-                // TODO: Check for descendants in buffer
-                Ok(DataStatus::HasValue)
-            }
-            Some(WriteOp::Delete | WriteOp::KillSubtree) => {
-                Ok(DataStatus::NoData)
-            }
-            None => {
-                // Check if in deleted subtree
-                let deleted = self.deleted_subtrees.read().await;
-                let is_deleted = deleted.iter().any(|(del_name, del_key)| {
-                    del_name == name && key.starts_with(del_key)
-                });
-
-                if is_deleted {
-                    Ok(DataStatus::NoData)
-                } else {
-                    self.db.data(name, key).await
-                }
-            }
-        }
-    }
-
-    /// Returns the next key in lexicographic order within this transaction's context.
-    ///
-    /// Must merge snapshot iteration with buffered writes - buffered sets may
-    /// insert new keys, buffered kills may remove keys.
-    pub async fn order(
-        &self,
-        name: &Name,
-        after: Option<&Key>,
-    ) -> Result<Option<Key>> {
-        *self.ops_count.write().await += 1;
-
-        self.order_impl(name, after).await
-    }
-
     /// Internal recursive implementation of `order()`.
     ///
     /// Uses async recursion to avoid `loop` with `break`/`continue`.
@@ -1452,119 +1565,6 @@ impl Transaction {
                 }
             }
         })
-    }
-
-    /// Creates a stream of entries within this transaction's context.
-    ///
-    /// The stream reflects buffered writes combined with the snapshot.
-    /// Buffered sets may add entries, buffered kills may remove them.
-    ///
-    /// This implementation uses O(1) additional memory by:
-    /// - Holding an owned lock guard (not collecting the write buffer)
-    /// - Using key-based range iteration (O(log n) per access)
-    /// - Checking buffered membership via BTreeMap lookup
-    pub async fn collects<'a, P, F, T>(
-        &'a self,
-        name: &'a Name,
-        start: Option<&'a Key>,
-        pred: P,
-        extract: F,
-    ) -> Result<impl futures::stream::Stream<Item = Result<T>> + Send + 'a>
-    where
-        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + Clone + 'a,
-        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone + 'a,
-        T: Send + 'a,
-    {
-        *self.ops_count.write().await += 1;
-
-        // Get owned guard for writes - O(1) memory, no collection
-        let writes_guard = Arc::clone(&self.writes).read_owned().await;
-
-        // Build list of deleted subtrees for this name
-        let deleted = self.deleted_subtrees.read().await;
-        let deleted_list: Vec<Key> = deleted
-            .iter()
-            .filter_map(|(n, k)| if n == name { Some(k.clone()) } else { None })
-            .collect();
-        drop(deleted);
-
-        // Clone data for the predicate closure
-        let deleted_list_for_pred = deleted_list.clone();
-        let pred_clone = pred.clone();
-
-        // Create predicate that excludes deleted keys (checks writes via guard)
-        let pred_with_deletes = move |k: &Key, val: &Option<Value>| {
-            let in_deleted = deleted_list_for_pred
-                .iter()
-                .any(|del_key| k.starts_with(del_key));
-
-            if in_deleted {
-                false
-            } else {
-                pred_clone(k, val)
-            }
-        };
-
-        // Create extract_with_key to get (Key, T) pairs from snapshot
-        let extract_with_key = {
-            let extract = extract.clone();
-            move |k: &Key, val: &Option<Value>| {
-                extract(k, val).map(|t| (k.clone(), t))
-            }
-        };
-
-        // Get snapshot stream yielding (Key, T) pairs (lazy, not collected!)
-        let snapshot_stream = self
-            .db
-            .collects(name, start, pred_with_deletes, extract_with_key)
-            .await?;
-
-        // Create O(1) memory merge state
-        let state = MergeState {
-            writes_guard,
-            name: name.clone(),
-            last_buffered_key: None,
-            next_buffered: None,
-            extract,
-            pred,
-            start: start.cloned(),
-            deleted_subtrees: deleted_list,
-            snapshot: snapshot_stream.boxed(),
-            next_snapshot: None,
-            snapshot_error: None,
-        };
-
-        // Create a merge stream using unfold
-        let merged = stream::unfold(state, |mut state| async move {
-            state.next().await.map(|item| (item, state))
-        });
-
-        Ok(merged)
-    }
-
-    /// Collects all matching entries into a `Vec`.
-    ///
-    /// This is a convenience wrapper around `collects()` that collects
-    /// the stream into a vector. Useful when you need all results at once.
-    ///
-    /// The vector reflects buffered writes combined with the snapshot.
-    /// Buffered sets may add entries, buffered kills may remove them.
-    pub async fn collects_vec<P, F, T>(
-        &self,
-        name: &Name,
-        start: Option<&Key>,
-        pred: P,
-        extract: F,
-    ) -> Result<Vec<T>>
-    where
-        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + Clone,
-        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone,
-        T: Send,
-    {
-        self.collects(name, start, pred, extract)
-            .await?
-            .try_collect()
-            .await
     }
 }
 

@@ -93,7 +93,7 @@ impl Database {
     /// ```ignore
     /// let db = Database::in_memory()?;
     /// ```
-    pub(crate) fn in_memory() -> Result<Self> {
+    pub fn in_memory() -> Result<Self> {
         Self::with_btree(
             Arc::new(BTreeBuilder::default().build()?),
             Arc::new(TransactionManager::default()),
@@ -167,29 +167,6 @@ impl Database {
         Ok(db)
     }
 
-    /// Closes the database, flushing all data and releasing resources.
-    ///
-    /// This method consumes `self` to ensure the database cannot be used
-    /// after closing. All pending writes are flushed to disk before closing.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// db.close().await?;
-    /// ```
-    pub(crate) async fn close(self) -> Result<()> {
-        // Flush all pending writes
-        self.flush().await?;
-
-        // Shutdown periodic sync task if running
-        if let Some(storage) = self.storage.as_ref() {
-            storage.shutdown_sync_task();
-        }
-
-        // Storage engine will be dropped, closing files
-        Ok(())
-    }
-
     /// Sets a value in the database.
     ///
     /// **Note**: Writes to globals require a transaction. Use `db.transaction()`
@@ -214,12 +191,7 @@ impl Database {
     ///     Ok(())
     /// }).await?;
     /// ```
-    pub(crate) async fn set(
-        &self,
-        name: &Name,
-        key: &Key,
-        val: Value,
-    ) -> Result<()> {
+    pub async fn set(&self, name: &Name, key: &Key, val: Value) -> Result<()> {
         // Globals require transactions
         if matches!(name, Name::Global(_)) {
             Err(StorageError::GlobalRequiresTransaction)
@@ -242,60 +214,6 @@ impl Database {
         }
     }
 
-    /// Deletes a key and all its descendants from the database.
-    ///
-    /// **Note**: Writes to globals require a transaction. Use `db.transaction()`
-    /// or create a `Transaction` manually. Direct calls for globals will error.
-    ///
-    /// For locals (in-memory only), this deletes from the B-tree directly.
-    ///
-    /// # Errors
-    ///
-    /// Returns `GlobalRequiresTransaction` if attempting to write to a global
-    /// variable without a transaction.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // For locals (no transaction needed):
-    /// db.kill(&local!("TEMP"), &key![1]).await?;
-    ///
-    /// // For globals (use transaction):
-    /// db.transaction(|txn| async move {
-    ///     txn.kill(&global!("PATIENT"), &key![123]).await?;
-    ///     Ok(())
-    /// }).await?;
-    /// ```
-    pub(crate) async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
-        // Globals require transactions
-        if matches!(name, Name::Global(_)) {
-            Err(StorageError::GlobalRequiresTransaction)
-        } else {
-            // Locals can be deleted directly (no WAL, no persistence)
-            let opt_root = self.get_root(name).await?;
-            match opt_root {
-                None => Ok(()),
-                Some(root) => {
-                    let ctx = TransactionContext::new(
-                        TransactionId::IMPLICIT,
-                        TransactionTimestamp::from(0),
-                    );
-
-                    let opt_new_root =
-                        self.btree.kill_at(root, key, &ctx).await?;
-
-                    match opt_new_root {
-                        Some(new_root) if new_root != root => {
-                            self.update_root(name, new_root).await
-                        }
-                        None => self.remove_root(name).await.map(|_| ()),
-                        _ => Ok(()),
-                    }
-                }
-            }
-        }
-    }
-
     /// Gets a value from the database (read-only, no WAL logging).
     ///
     /// Returns `None` if the variable or key doesn't exist.
@@ -305,11 +223,7 @@ impl Database {
     /// ```ignore
     /// let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
     /// ```
-    pub(crate) async fn get(
-        &self,
-        name: &Name,
-        key: &Key,
-    ) -> Result<Option<Value>> {
+    pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
         let opt_root = self.get_root(name).await?;
         match opt_root {
             Some(root) => self.btree.get_at(root, key, None).await,
@@ -327,11 +241,7 @@ impl Database {
     /// ```ignore
     /// let status = db.data(&global!("PATIENT"), &key![123]).await?;
     /// ```
-    pub(crate) async fn data(
-        &self,
-        name: &Name,
-        key: &Key,
-    ) -> Result<DataStatus> {
+    pub async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus> {
         let opt_root = self.get_root(name).await?;
         match opt_root {
             Some(root) => self.btree.data_at(root, key, None).await,
@@ -353,7 +263,7 @@ impl Database {
     /// // Get next key after [123]
     /// let next = db.order(&global!("PATIENT"), Some(&key![123])).await?;
     /// ```
-    pub(crate) async fn order(
+    pub async fn order(
         &self,
         name: &Name,
         after: Option<&Key>,
@@ -461,31 +371,6 @@ impl Database {
         }
     }
 
-    /// Flushes all dirty pages and metadata to disk.
-    ///
-    /// For persistent databases, this:
-    /// 1. Syncs the WAL to disk (durability!)
-    /// 2. Flushes all dirty pages to the data file
-    ///
-    /// This does NOT write any transaction records - it's a general-purpose
-    /// flush for housekeeping (e.g., before `close()`). Transaction commits
-    /// use `flush_with_txn()` which writes the appropriate `TxnCommit` record.
-    ///
-    /// For in-memory databases, this is a no-op.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// db.flush().await?;
-    /// ```
-    pub(crate) async fn flush(&self) -> Result<()> {
-        if let Some(storage) = self.storage.as_ref() {
-            storage.wal_sync().await?;
-            storage.flush().await?;
-        }
-        Ok(())
-    }
-
     /// Executes a function within a transaction context.
     ///
     /// The transaction auto-commits if the closure returns `Ok`, and
@@ -552,23 +437,9 @@ impl Database {
             }
         }
     }
-
-    /// Creates a transaction builder for custom configuration.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let txn = db.build_transaction()
-    ///     .timeout(5000)
-    ///     .begin(&db)
-    ///     .await?;
-    /// ```
-    pub(crate) fn build_transaction(&self) -> TransactionBuilder {
-        TransactionBuilder::default()
-    }
 }
 
-// Internal methods for transaction support
+// Internal methods
 impl Database {
     /// Sets a value with an explicit transaction ID.
     ///
@@ -703,10 +574,72 @@ impl Database {
         }
         Ok(())
     }
-}
 
-// Private helpers
-impl Database {
+    /// Closes the database, flushing all data and releasing resources.
+    ///
+    /// This method consumes `self` to ensure the database cannot be used
+    /// after closing. All pending writes are flushed to disk before closing.
+    pub(crate) async fn close(self) -> Result<()> {
+        self.flush().await?;
+
+        if let Some(storage) = self.storage.as_ref() {
+            storage.shutdown_sync_task();
+        }
+
+        Ok(())
+    }
+
+    /// Deletes a key and all its descendants from the database.
+    ///
+    /// **Note**: Writes to globals require a transaction. Use `db.transaction()`
+    /// or create a `Transaction` manually. Direct calls for globals will error.
+    ///
+    /// For locals (in-memory only), this deletes from the B-tree directly.
+    pub(crate) async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
+        if matches!(name, Name::Global(_)) {
+            Err(StorageError::GlobalRequiresTransaction)
+        } else {
+            let opt_root = self.get_root(name).await?;
+            match opt_root {
+                None => Ok(()),
+                Some(root) => {
+                    let ctx = TransactionContext::new(
+                        TransactionId::IMPLICIT,
+                        TransactionTimestamp::from(0),
+                    );
+
+                    let opt_new_root =
+                        self.btree.kill_at(root, key, &ctx).await?;
+
+                    match opt_new_root {
+                        Some(new_root) if new_root != root => {
+                            self.update_root(name, new_root).await
+                        }
+                        None => self.remove_root(name).await.map(|_| ()),
+                        _ => Ok(()),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Flushes all dirty pages and metadata to disk.
+    ///
+    /// For persistent databases, this syncs the WAL and flushes dirty pages.
+    /// For in-memory databases, this is a no-op.
+    pub(crate) async fn flush(&self) -> Result<()> {
+        if let Some(storage) = self.storage.as_ref() {
+            storage.wal_sync().await?;
+            storage.flush().await?;
+        }
+        Ok(())
+    }
+
+    /// Creates a transaction builder for custom configuration.
+    pub(crate) fn build_transaction(&self) -> TransactionBuilder {
+        TransactionBuilder::default()
+    }
+
     /// Returns the underlying B-tree.
     fn btree(&self) -> Arc<BTree> {
         Arc::clone(&self.btree)
