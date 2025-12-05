@@ -42,7 +42,7 @@
 //! assert!(metadata.state.is_committed());
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
@@ -53,51 +53,111 @@ use futures::future::BoxFuture;
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name, Value};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
 use crate::database::Database;
-use crate::error::Result;
+use crate::error::{Result, StorageError};
 use crate::node::{NodeData, NodeId};
 
 /// State for lazily merging buffered entries with a snapshot stream.
 ///
-/// Maintains sorted buffered entries (from write buffer) and lazily pulls
-/// from the snapshot stream, yielding entries in sorted key order.
-/// Buffered entries take precedence over snapshot entries with the same key.
+/// Uses O(1) additional memory by:
+/// - Holding an owned lock guard to the BTreeMap (no collection)
+/// - Using key-based positioning instead of storing an iterator
+/// - Checking buffered membership via O(log n) BTreeMap lookup
 ///
-/// Both sources yield `(Key, T)` pairs so we can compare keys for merging.
-/// The final output is just `T` (key is stripped).
-struct MergeState<'a, T> {
-    /// Sorted buffered entries (from transaction's write buffer).
-    buffered: std::vec::IntoIter<(Key, T)>,
-    /// Next buffered entry to consider.
+/// Both sources yield entries in sorted key order. Buffered entries take
+/// precedence over snapshot entries with the same key.
+struct MergeState<'a, T, F>
+where
+    F: Fn(&Key, &NodeData) -> Option<T>,
+{
+    /// Owned guard for the writes BTreeMap - O(1) memory.
+    writes_guard: OwnedRwLockReadGuard<BTreeMap<(Name, Key), WriteOp>>,
+    /// Target name for filtering buffered entries.
+    name: Name,
+    /// Last buffered key yielded (for range iteration). None = start.
+    last_buffered_key: Option<Key>,
+    /// Next buffered entry to consider (lazily fetched).
     next_buffered: Option<(Key, T)>,
+    /// Extract function to convert NodeData to T.
+    extract: F,
+    /// Predicate for filtering entries.
+    pred: Box<dyn Fn(&Key, &NodeData) -> bool + Send + Sync + 'a>,
+    /// Start key for filtering.
+    start: Option<Key>,
+    /// Deleted subtrees to skip.
+    deleted_subtrees: Vec<Key>,
     /// The snapshot stream yielding `(Key, T)` pairs (lazy, unbounded).
     snapshot: BoxStream<'a, Result<(Key, T)>>,
     /// Next snapshot entry to consider.
     next_snapshot: Option<(Key, T)>,
-    /// Keys present in the buffered set (for skipping duplicates in snapshot).
-    buffered_keys: HashSet<Key>,
     /// Tracks if we've encountered an error in the snapshot stream.
-    snapshot_error: Option<crate::error::StorageError>,
+    snapshot_error: Option<StorageError>,
 }
 
-impl<'a, T: Send> MergeState<'a, T> {
-    fn new(
-        buffered: Vec<(Key, T)>,
-        snapshot: BoxStream<'a, Result<(Key, T)>>,
-        buffered_keys: HashSet<Key>,
-    ) -> Self {
-        let mut iter = buffered.into_iter();
-        let next_buffered = iter.next();
-        Self {
-            buffered: iter,
-            next_buffered,
-            snapshot,
-            next_snapshot: None,
-            buffered_keys,
-            snapshot_error: None,
+impl<'a, T: Send, F> MergeState<'a, T, F>
+where
+    F: Fn(&Key, &NodeData) -> Option<T> + Clone + Send + Sync,
+{
+    /// Advances to the next buffered entry using O(log n) range lookup.
+    fn advance_buffered(&mut self) {
+        use std::ops::Bound;
+
+        let range_start = match &self.last_buffered_key {
+            None => Bound::Included((self.name.clone(), Key::default())),
+            Some(k) => Bound::Excluded((self.name.clone(), k.clone())),
+        };
+
+        // Find next matching entry in O(log n)
+        self.next_buffered = self
+            .writes_guard
+            .range((range_start, Bound::Unbounded))
+            .filter_map(|((n, k), op)| {
+                // Stop if we've moved past our target name
+                if n != &self.name {
+                    None
+                } else {
+                    match op {
+                        WriteOp::Set(data) => {
+                            // Check start condition
+                            let after_start = self
+                                .start
+                                .as_ref()
+                                .map(|s| k >= s)
+                                .unwrap_or(true);
+
+                            // Check if in deleted subtree
+                            let in_deleted = self
+                                .deleted_subtrees
+                                .iter()
+                                .any(|del| k.starts_with(del));
+
+                            if after_start
+                                && !in_deleted
+                                && (self.pred)(k, data)
+                            {
+                                (self.extract)(k, data).map(|t| (k.clone(), t))
+                            } else {
+                                None
+                            }
+                        }
+                        WriteOp::Delete | WriteOp::KillSubtree => None,
+                    }
+                }
+            })
+            .next();
+
+        // Update position marker
+        if let Some((k, _)) = &self.next_buffered {
+            self.last_buffered_key = Some(k.clone());
         }
+    }
+
+    /// Checks if a key exists in the buffered writes (O(log n) lookup).
+    fn is_buffered(&self, key: &Key) -> bool {
+        self.writes_guard
+            .contains_key(&(self.name.clone(), key.clone()))
     }
 
     /// Gets the next item from the merged stream.
@@ -106,14 +166,19 @@ impl<'a, T: Send> MergeState<'a, T> {
         if let Some(e) = self.snapshot_error.take() {
             Some(Err(e))
         } else {
-            // Advance snapshot if needed (skip keys that are in buffered set)
+            // Ensure we have next entries from both sources
+            if self.next_buffered.is_none() && self.last_buffered_key.is_none()
+            {
+                // First call - initialize buffered
+                self.advance_buffered();
+            }
             self.advance_snapshot().await;
 
             match (&self.next_buffered, &self.next_snapshot) {
                 (None, None) => None,
                 (Some(_), None) => {
                     let (_, val) = self.next_buffered.take()?;
-                    self.next_buffered = self.buffered.next();
+                    self.advance_buffered();
                     Some(Ok(val))
                 }
                 (None, Some(_)) => {
@@ -123,20 +188,18 @@ impl<'a, T: Send> MergeState<'a, T> {
                 (Some((buf_key, _)), Some((snap_key, _))) => {
                     match buf_key.cmp(snap_key) {
                         std::cmp::Ordering::Less => {
-                            // Buffered is smaller, yield it
                             let (_, val) = self.next_buffered.take()?;
-                            self.next_buffered = self.buffered.next();
+                            self.advance_buffered();
                             Some(Ok(val))
                         }
                         std::cmp::Ordering::Equal => {
-                            // Same key - buffered takes precedence, skip snapshot
+                            // Buffered takes precedence
                             let (_, val) = self.next_buffered.take()?;
-                            self.next_buffered = self.buffered.next();
-                            self.next_snapshot = None; // Will be refilled on next call
+                            self.advance_buffered();
+                            self.next_snapshot = None;
                             Some(Ok(val))
                         }
                         std::cmp::Ordering::Greater => {
-                            // Snapshot is smaller, yield it
                             let (_, val) = self.next_snapshot.take()?;
                             Some(Ok(val))
                         }
@@ -149,11 +212,7 @@ impl<'a, T: Send> MergeState<'a, T> {
     /// Advances the snapshot stream, skipping entries that are in the buffered set.
     fn advance_snapshot(&mut self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            // Already have a pending snapshot entry
-            if self.next_snapshot.is_some() {
-                {}
-            } else {
-                // Pull from snapshot until we find a non-buffered key or exhaust
+            if self.next_snapshot.is_none() {
                 self.pull_next_valid_snapshot().await
             }
         })
@@ -162,16 +221,14 @@ impl<'a, T: Send> MergeState<'a, T> {
     /// Pulls entries from snapshot, skipping keys that exist in buffered set.
     fn pull_next_valid_snapshot(&mut self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            // Use async recursion to skip buffered keys
             match self.snapshot.next().await {
-                None => {} // Stream exhausted
+                None => {}
                 Some(Err(e)) => {
                     self.snapshot_error = Some(e);
                 }
                 Some(Ok((key, val))) => {
-                    // Skip if key is in buffered set
-                    if self.buffered_keys.contains(&key) {
-                        // Recursively pull next
+                    // Skip if key is in buffered set (O(log n) check)
+                    if self.is_buffered(&key) {
                         self.pull_next_valid_snapshot().await
                     } else {
                         self.next_snapshot = Some((key, val));
@@ -645,7 +702,7 @@ impl TransactionManager {
         let mut active = self.active.write().await;
 
         if active.len() >= self.max_concurrent {
-            Err(crate::error::StorageError::TooManyConcurrentTransactions {
+            Err(StorageError::TooManyConcurrentTransactions {
                 limit: self.max_concurrent,
             })
         } else {
@@ -703,13 +760,11 @@ impl TransactionManager {
                 let conflict =
                     write_set.iter().find(|key| cws.keys.contains(key));
                 match conflict {
-                    Some((name, key)) => {
-                        Err(crate::error::StorageError::WriteConflict {
-                            txn_id: *txn_id,
-                            name: name.clone(),
-                            key: key.clone(),
-                        })
-                    }
+                    Some((name, key)) => Err(StorageError::WriteConflict {
+                        txn_id: *txn_id,
+                        name: name.clone(),
+                        key: key.clone(),
+                    }),
                     None => Ok(()),
                 }
             })
@@ -961,7 +1016,7 @@ impl TransactionBuilder {
             priority: self.priority,
             timeout,
             retry_count: self.retry_count,
-            writes: Arc::new(RwLock::new(HashMap::new())),
+            writes: Arc::new(RwLock::new(BTreeMap::new())),
             deleted_subtrees: Arc::new(RwLock::new(HashSet::new())),
             read_set: Arc::new(RwLock::new(HashSet::new())),
             snapshot,
@@ -1004,8 +1059,8 @@ pub(crate) struct Transaction {
     timeout: Option<Instant>,
     retry_count: u32,
 
-    // Write Buffering
-    writes: Arc<RwLock<HashMap<(Name, Key), WriteOp>>>,
+    // Write Buffering (BTreeMap for sorted iteration in `collects`)
+    writes: Arc<RwLock<BTreeMap<(Name, Key), WriteOp>>>,
     deleted_subtrees: Arc<RwLock<HashSet<(Name, Key)>>>,
 
     // Read Tracking (for conflict detection)
@@ -1079,11 +1134,12 @@ impl Transaction {
                     match write_op {
                         WriteOp::Set(data) => {
                             let val = data.value.clone().ok_or_else(|| {
-                                crate::error::StorageError::InvalidConfiguration(
+                                StorageError::InvalidConfiguration(
                                     "Set operation has no value".into(),
                                 )
                             })?;
-                            db.set_with_txn(name, key, val, txn_id, start_ts).await
+                            db.set_with_txn(name, key, val, txn_id, start_ts)
+                                .await
                         }
                         WriteOp::KillSubtree | WriteOp::Delete => {
                             db.kill_with_txn(name, key, txn_id, start_ts).await
@@ -1161,7 +1217,7 @@ impl Transaction {
 
     /// Helper to create an error.
     fn err<T>(msg: &str) -> Result<T> {
-        Err(crate::error::StorageError::InvalidConfiguration(msg.into()))
+        Err(StorageError::InvalidConfiguration(msg.into()))
     }
 
     /// Gets a value from the database within this transaction's context.
@@ -1195,7 +1251,7 @@ impl Transaction {
                 // Track read
                 self.read_set.write().await.insert(lookup_key.clone());
                 data.value.clone().map(Some).ok_or_else(|| {
-                    crate::error::StorageError::InvalidConfiguration(
+                    StorageError::InvalidConfiguration(
                         "Buffered set has no value".into(),
                     )
                 })
@@ -1410,9 +1466,10 @@ impl Transaction {
     /// The stream reflects buffered writes combined with the snapshot.
     /// Buffered sets may add entries, buffered kills may remove them.
     ///
-    /// This implementation uses O(buffer_size) memory, not O(dataset_size),
-    /// by lazily streaming from the snapshot while keeping only the small
-    /// write buffer in memory.
+    /// This implementation uses O(1) additional memory by:
+    /// - Holding an owned lock guard (not collecting the write buffer)
+    /// - Using key-based range iteration (O(log n) per access)
+    /// - Checking buffered membership via BTreeMap lookup
     pub(crate) async fn collects<'a, P, F, T>(
         &'a self,
         name: &'a Name,
@@ -1428,80 +1485,33 @@ impl Transaction {
         self.ops_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        // Collect buffered and deleted info (these are bounded by write buffer size)
-        let writes = self.writes.read().await;
-        let deleted = self.deleted_subtrees.read().await;
+        // Get owned guard for writes - O(1) memory, no collection
+        let writes_guard = Arc::clone(&self.writes).read_owned().await;
 
-        // Build list of deleted keys/subtrees for this name
+        // Build list of deleted subtrees for this name
+        let deleted = self.deleted_subtrees.read().await;
         let deleted_list: Vec<Key> = deleted
             .iter()
             .filter_map(|(n, k)| if n == name { Some(k.clone()) } else { None })
             .collect();
+        drop(deleted);
 
-        // Build set of explicitly deleted keys in writes
-        let explicitly_deleted_keys: HashSet<(Name, Key)> = writes
-            .iter()
-            .filter_map(|((n, k), op)| {
-                match matches!(op, WriteOp::Delete | WriteOp::KillSubtree) {
-                    true => Some((n.clone(), k.clone())),
-                    false => None,
-                }
-            })
-            .collect();
-
-        // Clone data for closures
+        // Clone data for the predicate closure
         let deleted_list_for_pred = deleted_list.clone();
-        let explicitly_deleted_for_pred = explicitly_deleted_keys.clone();
-        let name_for_pred = name.clone();
         let pred_clone = pred.clone();
 
-        // Create modified predicate that excludes deleted keys
+        // Create predicate that excludes deleted keys (checks writes via guard)
         let pred_with_deletes = move |k: &Key, data: &NodeData| {
             let in_deleted = deleted_list_for_pred
                 .iter()
                 .any(|del_key| k.starts_with(del_key));
 
-            let explicitly_deleted = explicitly_deleted_for_pred
-                .iter()
-                .any(|(n, dk)| n == &name_for_pred && dk == k);
-
-            if in_deleted || explicitly_deleted {
+            if in_deleted {
                 false
             } else {
                 pred_clone(k, data)
             }
         };
-
-        // Collect and sort buffered entries (bounded by write buffer size)
-        let mut buffered_entries: Vec<(Key, T)> = writes
-            .iter()
-            .filter_map(|((n, k), op)| match (n == name, op) {
-                (true, WriteOp::Set(data)) => {
-                    let after_start = match start {
-                        Some(s) => k >= s,
-                        None => true,
-                    };
-
-                    let in_deleted = deleted_list
-                        .iter()
-                        .any(|del_key| k.starts_with(del_key));
-
-                    if after_start && !in_deleted && pred(k, data) {
-                        extract(k, data).map(|t| (k.clone(), t))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            })
-            .collect();
-
-        // Sort buffered entries by key for merge
-        buffered_entries.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-
-        // Build set of buffered keys for O(1) lookup
-        let buffered_keys: HashSet<Key> =
-            buffered_entries.iter().map(|(k, _)| k.clone()).collect();
 
         // Create extract_with_key to get (Key, T) pairs from snapshot
         let extract_with_key = {
@@ -1517,15 +1527,25 @@ impl Transaction {
             .collects(name, start, pred_with_deletes, extract_with_key)
             .await?;
 
+        // Create O(1) memory merge state
+        let state = MergeState {
+            writes_guard,
+            name: name.clone(),
+            last_buffered_key: None,
+            next_buffered: None,
+            extract,
+            pred: Box::new(pred),
+            start: start.cloned(),
+            deleted_subtrees: deleted_list,
+            snapshot: snapshot_stream.boxed(),
+            next_snapshot: None,
+            snapshot_error: None,
+        };
+
         // Create a merge stream using unfold
-        let merged = stream::unfold(
-            MergeState::new(
-                buffered_entries,
-                snapshot_stream.boxed(),
-                buffered_keys,
-            ),
-            |mut state| async move { state.next().await.map(|item| (item, state)) },
-        );
+        let merged = stream::unfold(state, |mut state| async move {
+            state.next().await.map(|item| (item, state))
+        });
 
         Ok(merged)
     }

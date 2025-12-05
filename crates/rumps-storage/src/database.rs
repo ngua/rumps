@@ -32,7 +32,7 @@ use tokio::sync::RwLock;
 
 use crate::btree::{BTree, BTreeBuilder};
 use crate::engine::{AsyncStorageEngine, FileStorageEngine, StorageConfig};
-use crate::error::Result;
+use crate::error::{Result, StorageError};
 use crate::node::{NodeData, NodeId};
 use crate::transaction::{
     Transaction, TransactionBuilder, TransactionContext, TransactionId,
@@ -222,7 +222,7 @@ impl Database {
     ) -> Result<()> {
         // Globals require transactions
         if matches!(name, Name::Global(_)) {
-            Err(crate::error::StorageError::GlobalRequiresTransaction)
+            Err(StorageError::GlobalRequiresTransaction)
         } else {
             // Locals can be modified directly (no WAL, no persistence)
             let root = self.ensure_root(name).await?;
@@ -269,7 +269,7 @@ impl Database {
     pub(crate) async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
         // Globals require transactions
         if matches!(name, Name::Global(_)) {
-            Err(crate::error::StorageError::GlobalRequiresTransaction)
+            Err(StorageError::GlobalRequiresTransaction)
         } else {
             // Locals can be deleted directly (no WAL, no persistence)
             let opt_root = self.get_root(name).await?;
@@ -454,9 +454,12 @@ impl Database {
     /// Flushes all dirty pages and metadata to disk.
     ///
     /// For persistent databases, this:
-    /// 1. Writes a TxnCommit record to the WAL
-    /// 2. Syncs the WAL to disk (durability!)
-    /// 3. Flushes all dirty pages to the data file
+    /// 1. Syncs the WAL to disk (durability!)
+    /// 2. Flushes all dirty pages to the data file
+    ///
+    /// This does NOT write any transaction records - it's a general-purpose
+    /// flush for housekeeping (e.g., before `close()`). Transaction commits
+    /// use `flush_with_txn()` which writes the appropriate `TxnCommit` record.
     ///
     /// For in-memory databases, this is a no-op.
     ///
@@ -467,14 +470,6 @@ impl Database {
     /// ```
     pub(crate) async fn flush(&self) -> Result<()> {
         if let Some(storage) = self.storage.as_ref() {
-            // Write commit record to WAL with IMPLICIT transaction ID
-            // (used only for recovery operations, not user transactions)
-            storage
-                .wal_append(&WalRecord::TxnCommit {
-                    txn_id: TransactionId::IMPLICIT,
-                })
-                .await?;
-
             storage.wal_sync().await?;
             storage.flush().await?;
         }
@@ -754,7 +749,7 @@ impl Database {
 
                         // Apply set operation (value from new NodeData)
                         let new_val = new.value.clone().ok_or_else(|| {
-                            crate::error::StorageError::InvalidConfiguration(
+                            StorageError::InvalidConfiguration(
                                 "Set operation in WAL has no value".into(),
                             )
                         })?;
@@ -1196,7 +1191,7 @@ mod tests {
             .await;
         assert!(matches!(
             result,
-            Err(crate::error::StorageError::GlobalRequiresTransaction)
+            Err(StorageError::GlobalRequiresTransaction)
         ));
     }
 
@@ -1269,7 +1264,7 @@ mod tests {
                 )
                 .await?;
                 // Simulate error
-                Err(crate::error::StorageError::InvalidOperation(
+                Err(StorageError::InvalidOperation(
                     "intentional failure".into(),
                 ))
             })
@@ -1328,10 +1323,7 @@ mod tests {
         // A commits second - should fail with WriteConflict
         let result = txn_a.commit().await;
         assert!(
-            matches!(
-                result,
-                Err(crate::error::StorageError::WriteConflict { .. })
-            ),
+            matches!(result, Err(StorageError::WriteConflict { .. })),
             "Expected WriteConflict, got {:?}",
             result
         );
