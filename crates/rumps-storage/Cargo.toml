@@ -29,12 +29,7 @@ tokio-test = "0.4"
 bench = ["criterion", "tempfile"]
 
 [[bench]]
-name = "btree_bench"
-harness = false
-required-features = ["bench"]
-
-[[bench]]
-name = "wal_bench"
+name = "database_bench"
 harness = false
 required-features = ["bench"]
 

@@ -1042,7 +1042,7 @@ impl TransactionBuilder {
 /// }).await?;
 /// ```
 #[derive(Clone)]
-pub(crate) struct Transaction {
+pub struct Transaction {
     // Identity & Lifecycle
     id: TransactionId,
     state: Arc<RwLock<TransactionState>>,
@@ -1229,11 +1229,7 @@ impl Transaction {
     /// - Reads see buffered writes from this transaction
     /// - Reads respect deleted subtrees
     /// - Reads are tracked in the read set for conflict detection
-    pub(crate) async fn get(
-        &self,
-        name: &Name,
-        key: &Key,
-    ) -> Result<Option<Value>> {
+    pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
         *self.ops_count.write().await += 1;
 
         let lookup_key = (name.clone(), key.clone());
@@ -1287,12 +1283,7 @@ impl Transaction {
     /// Sets a value in the transaction's write buffer.
     ///
     /// The change is not visible to other transactions until commit.
-    pub(crate) async fn set(
-        &self,
-        name: &Name,
-        key: &Key,
-        val: Value,
-    ) -> Result<()> {
+    pub async fn set(&self, name: &Name, key: &Key, val: Value) -> Result<()> {
         *self.ops_count.write().await += 1;
 
         // Buffer the write
@@ -1308,7 +1299,7 @@ impl Transaction {
     /// Kills a key and all its descendants in the transaction's write buffer.
     ///
     /// The deletion is not visible to other transactions until commit.
-    pub(crate) async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
+    pub async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
         *self.ops_count.write().await += 1;
 
         // Buffer the kill
@@ -1370,7 +1361,7 @@ impl Transaction {
     ///
     /// Must merge snapshot iteration with buffered writes - buffered sets may
     /// insert new keys, buffered kills may remove keys.
-    pub(crate) async fn order(
+    pub async fn order(
         &self,
         name: &Name,
         after: Option<&Key>,
@@ -1464,7 +1455,7 @@ impl Transaction {
     /// - Holding an owned lock guard (not collecting the write buffer)
     /// - Using key-based range iteration (O(log n) per access)
     /// - Checking buffered membership via BTreeMap lookup
-    pub(crate) async fn collects<'a, P, F, T>(
+    pub async fn collects<'a, P, F, T>(
         &'a self,
         name: &'a Name,
         start: Option<&'a Key>,
@@ -1550,7 +1541,7 @@ impl Transaction {
     ///
     /// The vector reflects buffered writes combined with the snapshot.
     /// Buffered sets may add entries, buffered kills may remove them.
-    pub(crate) async fn collects_vec<P, F, T>(
+    pub async fn collects_vec<P, F, T>(
         &self,
         name: &Name,
         start: Option<&Key>,

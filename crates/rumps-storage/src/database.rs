@@ -58,7 +58,7 @@ use crate::wal::{WalOp, WalReader, WalRecord};
 /// `Database` is designed for shared access via `Arc<Database>`. All
 /// operations use interior mutability with `RwLock` for concurrent access.
 #[derive(Clone)]
-pub(crate) struct Database {
+pub struct Database {
     /// Name → root `NodeId` mapping.
     ///
     /// For globals with persistent storage, entries are lazy-loaded from
@@ -110,7 +110,7 @@ impl Database {
     /// ```ignore
     /// let db = Database::create("./data").await?;
     /// ```
-    pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Self> {
+    pub async fn create(path: impl AsRef<Path>) -> Result<Self> {
         let storage = Arc::new(
             FileStorageEngine::create(path.as_ref(), StorageConfig::default())
                 .await?,
@@ -141,7 +141,7 @@ impl Database {
     /// ```ignore
     /// let db = Database::open("./data").await?;
     /// ```
-    pub(crate) async fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let storage = Arc::new(
             FileStorageEngine::open(path.as_ref(), StorageConfig::default())
                 .await?,
@@ -394,7 +394,7 @@ impl Database {
     ///     println!("Value: {:?}", v);
     /// }
     /// ```
-    pub(crate) async fn collects<'a, P, F, T>(
+    pub async fn collects<'a, P, F, T>(
         &'a self,
         name: &'a Name,
         start: Option<&'a Key>,
@@ -428,7 +428,7 @@ impl Database {
     /// * `start` - Optional key to start iteration after (exclusive)
     /// * `pred` - Predicate returning `true` to include entry, `false` to skip
     /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
-    pub(crate) async fn collects_vec<P, F, T>(
+    pub async fn collects_vec<P, F, T>(
         &self,
         name: &Name,
         start: Option<&Key>,
@@ -489,7 +489,7 @@ impl Database {
     ///     Ok(())
     /// }).await?;
     /// ```
-    pub(crate) async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
+    pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
     where
         F: FnOnce(Transaction) -> Fut,
         Fut: std::future::Future<Output = Result<R>>,
@@ -521,7 +521,7 @@ impl Database {
     ///     Ok(())
     /// }).await?;
     /// ```
-    pub(crate) async fn transaction_with<F, Fut, R>(
+    pub async fn transaction_with<F, Fut, R>(
         &self,
         builder: TransactionBuilder,
         f: F,

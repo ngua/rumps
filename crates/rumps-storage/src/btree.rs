@@ -15,11 +15,8 @@ use crate::engine;
 use crate::error::{Result, StorageError};
 use crate::node::{Node, NodeData, NodeId};
 
-#[cfg(any(test, feature = "bench"))]
+#[cfg(test)]
 mod tests;
-
-#[cfg(feature = "bench")]
-pub use tests::benches;
 
 /// Statistics tracking for B-tree operations.
 #[derive(Debug, Clone, Default)]

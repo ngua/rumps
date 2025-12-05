@@ -1413,6 +1413,11 @@ to `BTree.*_at()` methods with different `TransactionContext` configurations.
 These are not part of the current plan but should be kept in mind:
 
 - **Advanced Concurrency**: Lock-free data structures, optimistic concurrency control (current plan uses Mutex for commit serialization)
+- **Group Commit**: Amortize fsync cost across multiple concurrent transactions. Current benchmarks show:
+  - Single-op transaction: ~195 µs (~5k ops/s) - dominated by fsync
+  - Batched 100 ops: ~3 ms total (~32k ops/s) - 6x throughput improvement
+
+  The ~100 µs baseline is fsync overhead. Group commit would batch WAL syncs for concurrent transactions, allowing multiple commits to share a single fsync. This is critical for high-throughput workloads where many small transactions commit simultaneously.
 - **Multi-Version Concurrency Control (MVCC)**: Full MVCC for better read concurrency (current plan uses snapshot isolation)
 - **Savepoints**: Nested transactions with partial rollback
 - **Compression**: Compress nodes/pages to save disk space
