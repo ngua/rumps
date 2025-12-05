@@ -193,8 +193,44 @@ fn bench_order(c: &mut Criterion) {
     });
 }
 
-// NOTE: `collects` benchmark omitted - the method exposes internal `NodeData` type
-// which needs API cleanup before it can be benchmarked externally.
+/// Benchmark `collects` stream iteration.
+fn bench_collects(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let dir = TempDir::new().unwrap();
+    let db = rt.block_on(Database::create(dir.path())).unwrap();
+    let name = global!("BENCH");
+
+    // Setup: insert 1000 keys
+    rt.block_on(async {
+        db.transaction(|txn| {
+            let n = name.clone();
+            async move { insert_keys(&txn, &n, 1000).await }
+        })
+        .await
+        .unwrap();
+    });
+
+    c.bench_function("collects_1000", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                db.transaction(|txn| {
+                    let n = name.clone();
+                    async move {
+                        let vals: Vec<Value> = txn
+                            .collects(&n, None, |_, _| true, |_, v| v.clone())
+                            .await?
+                            .try_collect()
+                            .await?;
+                        black_box(vals.len());
+                        Ok(())
+                    }
+                })
+                .await
+                .unwrap();
+            })
+        })
+    });
+}
 
 /// Benchmark `kill` operation.
 fn bench_kill(c: &mut Criterion) {
@@ -261,6 +297,7 @@ criterion_group!(
     bench_set_batch,
     bench_get,
     bench_order,
+    bench_collects,
     bench_kill,
 );
 

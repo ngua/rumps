@@ -373,8 +373,8 @@ impl Database {
     ///
     /// # Type Parameters
     ///
-    /// * `P` - Predicate: `(&Key, &NodeData) -> bool` (include if `true`)
-    /// * `F` - Extract: `(&Key, &NodeData) -> Option<T>` (transform entry)
+    /// * `P` - Predicate: `(&Key, &Option<Value>) -> bool` (include if `true`)
+    /// * `F` - Extract: `(&Key, &Option<Value>) -> Option<T>` (transform entry)
     /// * `T` - Output type yielded by the stream
     ///
     /// # Examples
@@ -386,7 +386,7 @@ impl Database {
     ///     &global!("PATIENT"),
     ///     None,
     ///     |key, _| key.len() == 2,  // Only keys with 2 subscripts
-    ///     |key, data| data.value.clone(),  // Extract value
+    ///     |key, val| val.clone(),   // Extract value
     /// ).await?;
     ///
     /// while let Some(value) = stream.next().await {
@@ -402,15 +402,20 @@ impl Database {
         extract: F,
     ) -> Result<impl Stream<Item = Result<T>> + Send + 'a>
     where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync + 'a,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
+        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + 'a,
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
+        // Wrap user's closures to adapt to internal NodeData interface
+        let pred_wrap = move |k: &Key, data: &NodeData| pred(k, &data.value);
+        let extract_wrap =
+            move |k: &Key, data: &NodeData| extract(k, &data.value);
+
         let opt_root = self.get_root(name).await?;
         let s = match opt_root {
             Some(root) => self
                 .btree
-                .collects_at(root, start, pred, extract, None)
+                .collects_at(root, start, pred_wrap, extract_wrap, None)
                 .boxed(),
             None => stream::empty().boxed(),
         };
@@ -436,15 +441,20 @@ impl Database {
         extract: F,
     ) -> Result<Vec<T>>
     where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
+        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync,
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync,
         T: Send,
     {
+        // Wrap user's closures to adapt to internal NodeData interface
+        let pred_wrap = move |k: &Key, data: &NodeData| pred(k, &data.value);
+        let extract_wrap =
+            move |k: &Key, data: &NodeData| extract(k, &data.value);
+
         let opt_root = self.get_root(name).await?;
         match opt_root {
             Some(root) => {
                 self.btree
-                    .collects_vec_at(root, start, pred, extract, None)
+                    .collects_vec_at(root, start, pred_wrap, extract_wrap, None)
                     .await
             }
             None => Ok(Vec::new()),

@@ -67,9 +67,10 @@ use crate::node::{NodeData, NodeId};
 ///
 /// Both sources yield entries in sorted key order. Buffered entries take
 /// precedence over snapshot entries with the same key.
-struct MergeState<'a, T, F>
+struct MergeState<'a, T, F, P>
 where
-    F: Fn(&Key, &NodeData) -> Option<T>,
+    F: Fn(&Key, &Option<Value>) -> Option<T>,
+    P: Fn(&Key, &Option<Value>) -> bool,
 {
     /// Owned guard for the writes BTreeMap - O(1) memory.
     writes_guard: OwnedRwLockReadGuard<BTreeMap<(Name, Key), WriteOp>>,
@@ -79,10 +80,10 @@ where
     last_buffered_key: Option<Key>,
     /// Next buffered entry to consider (lazily fetched).
     next_buffered: Option<(Key, T)>,
-    /// Extract function to convert NodeData to T.
+    /// Extract function to convert `Option<Value>` to `T`.
     extract: F,
     /// Predicate for filtering entries.
-    pred: Box<dyn Fn(&Key, &NodeData) -> bool + Send + Sync + 'a>,
+    pred: P,
     /// Start key for filtering.
     start: Option<Key>,
     /// Deleted subtrees to skip.
@@ -95,9 +96,10 @@ where
     snapshot_error: Option<StorageError>,
 }
 
-impl<'a, T: Send, F> MergeState<'a, T, F>
+impl<'a, T: Send, F, P> MergeState<'a, T, F, P>
 where
-    F: Fn(&Key, &NodeData) -> Option<T> + Clone + Send + Sync,
+    F: Fn(&Key, &Option<Value>) -> Option<T> + Clone + Send + Sync,
+    P: Fn(&Key, &Option<Value>) -> bool + Send + Sync,
 {
     /// Advances to the next buffered entry using O(log n) range lookup.
     fn advance_buffered(&mut self) {
@@ -134,9 +136,10 @@ where
 
                             if after_start
                                 && !in_deleted
-                                && (self.pred)(k, data)
+                                && (self.pred)(k, &data.value)
                             {
-                                (self.extract)(k, data).map(|t| (k.clone(), t))
+                                (self.extract)(k, &data.value)
+                                    .map(|t| (k.clone(), t))
                             } else {
                                 None
                             }
@@ -1463,8 +1466,8 @@ impl Transaction {
         extract: F,
     ) -> Result<impl futures::stream::Stream<Item = Result<T>> + Send + 'a>
     where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync + Clone + 'a,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + Clone + 'a,
+        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + Clone + 'a,
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone + 'a,
         T: Send + 'a,
     {
         *self.ops_count.write().await += 1;
@@ -1485,7 +1488,7 @@ impl Transaction {
         let pred_clone = pred.clone();
 
         // Create predicate that excludes deleted keys (checks writes via guard)
-        let pred_with_deletes = move |k: &Key, data: &NodeData| {
+        let pred_with_deletes = move |k: &Key, val: &Option<Value>| {
             let in_deleted = deleted_list_for_pred
                 .iter()
                 .any(|del_key| k.starts_with(del_key));
@@ -1493,15 +1496,15 @@ impl Transaction {
             if in_deleted {
                 false
             } else {
-                pred_clone(k, data)
+                pred_clone(k, val)
             }
         };
 
         // Create extract_with_key to get (Key, T) pairs from snapshot
         let extract_with_key = {
             let extract = extract.clone();
-            move |k: &Key, data: &NodeData| {
-                extract(k, data).map(|t| (k.clone(), t))
+            move |k: &Key, val: &Option<Value>| {
+                extract(k, val).map(|t| (k.clone(), t))
             }
         };
 
@@ -1518,7 +1521,7 @@ impl Transaction {
             last_buffered_key: None,
             next_buffered: None,
             extract,
-            pred: Box::new(pred),
+            pred,
             start: start.cloned(),
             deleted_subtrees: deleted_list,
             snapshot: snapshot_stream.boxed(),
@@ -1549,8 +1552,8 @@ impl Transaction {
         extract: F,
     ) -> Result<Vec<T>>
     where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync + Clone,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + Clone,
+        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + Clone,
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone,
         T: Send,
     {
         self.collects(name, start, pred, extract)
