@@ -407,7 +407,7 @@ mod tests {
 #[cfg(feature = "bench")]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 pub mod benches {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::RwLock;
     use std::time::Duration;
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
@@ -452,10 +452,15 @@ pub mod benches {
                     .await
                     .unwrap()
             });
-            let counter = AtomicU64::new(0);
+            let counter = RwLock::new(0u64);
 
             b.iter(|| {
-                let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                let txn_id = {
+                    let mut c = counter.write().unwrap();
+                    let v = *c;
+                    *c += 1;
+                    v
+                };
                 rt.block_on(async {
                     let rec = WalRecord::TxnBegin {
                         txn_id: txn_id.into(),
@@ -478,10 +483,15 @@ pub mod benches {
                     .await
                     .unwrap()
             });
-            let counter = AtomicU64::new(0);
+            let counter = RwLock::new(0u64);
 
             b.iter(|| {
-                let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                let txn_id = {
+                    let mut c = counter.write().unwrap();
+                    let v = *c;
+                    *c += 1;
+                    v
+                };
                 rt.block_on(async {
                     let rec = make_set_record(txn_id, 100);
                     writer.append(&rec).await.unwrap();
@@ -502,10 +512,15 @@ pub mod benches {
                     .await
                     .unwrap()
             });
-            let counter = AtomicU64::new(0);
+            let counter = RwLock::new(0u64);
 
             b.iter(|| {
-                let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                let txn_id = {
+                    let mut c = counter.write().unwrap();
+                    let v = *c;
+                    *c += 1;
+                    v
+                };
                 rt.block_on(async {
                     let rec = make_set_record(txn_id, 1024);
                     writer.append(&rec).await.unwrap();
@@ -534,10 +549,15 @@ pub mod benches {
                     .await
                     .unwrap()
             });
-            let counter = AtomicU64::new(0);
+            let counter = RwLock::new(0u64);
 
             b.iter(|| {
-                let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                let txn_id = {
+                    let mut c = counter.write().unwrap();
+                    let v = *c;
+                    *c += 1;
+                    v
+                };
                 rt.block_on(async {
                     writer
                         .append(&WalRecord::TxnBegin {
@@ -583,10 +603,15 @@ pub mod benches {
                             .await
                             .unwrap()
                     });
-                    let counter = AtomicU64::new(0);
+                    let counter = RwLock::new(0u64);
 
                     b.iter(|| {
-                        let txn_id = counter.fetch_add(1, Ordering::Relaxed);
+                        let txn_id = {
+                            let mut c = counter.write().unwrap();
+                            let v = *c;
+                            *c += 1;
+                            v
+                        };
                         rt.block_on(async {
                             writer
                                 .append(&WalRecord::TxnBegin {
@@ -768,14 +793,18 @@ pub mod benches {
                                     .await
                                     .unwrap()
                             });
-                            let counter = AtomicU64::new(0);
+                            let counter = RwLock::new(0u64);
 
                             // Spawn n concurrent tasks, each doing append + sync
                             let handles: Vec<_> = (0..n)
                                 .map(|_| {
                                     let w = Arc::clone(&writer);
-                                    let id =
-                                        counter.fetch_add(1, Ordering::Relaxed);
+                                    let id = {
+                                        let mut c = counter.write().unwrap();
+                                        let v = *c;
+                                        *c += 1;
+                                        v
+                                    };
                                     tokio::spawn(async move {
                                         w.append(&WalRecord::TxnBegin {
                                             txn_id: id.into(),

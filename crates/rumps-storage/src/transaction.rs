@@ -45,7 +45,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::ops::Deref;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -1020,7 +1019,7 @@ impl TransactionBuilder {
             deleted_subtrees: Arc::new(RwLock::new(HashSet::new())),
             read_set: Arc::new(RwLock::new(HashSet::new())),
             snapshot,
-            ops_count: Arc::new(AtomicU64::new(0)),
+            ops_count: Arc::new(RwLock::new(0)),
             start_time: Instant::now(),
         })
     }
@@ -1070,7 +1069,7 @@ pub(crate) struct Transaction {
     snapshot: Arc<Snapshot>,
 
     // Metrics
-    ops_count: Arc<AtomicU64>,
+    ops_count: Arc<RwLock<u64>>,
     start_time: Instant,
 }
 
@@ -1235,8 +1234,7 @@ impl Transaction {
         name: &Name,
         key: &Key,
     ) -> Result<Option<Value>> {
-        self.ops_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.ops_count.write().await += 1;
 
         let lookup_key = (name.clone(), key.clone());
 
@@ -1295,8 +1293,7 @@ impl Transaction {
         key: &Key,
         val: Value,
     ) -> Result<()> {
-        self.ops_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.ops_count.write().await += 1;
 
         // Buffer the write
         let mut writes = self.writes.write().await;
@@ -1312,8 +1309,7 @@ impl Transaction {
     ///
     /// The deletion is not visible to other transactions until commit.
     pub(crate) async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
-        self.ops_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.ops_count.write().await += 1;
 
         // Buffer the kill
         let mut writes = self.writes.write().await;
@@ -1335,8 +1331,7 @@ impl Transaction {
         name: &Name,
         key: &Key,
     ) -> Result<DataStatus> {
-        self.ops_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.ops_count.write().await += 1;
 
         let lookup_key = (name.clone(), key.clone());
 
@@ -1380,8 +1375,7 @@ impl Transaction {
         name: &Name,
         after: Option<&Key>,
     ) -> Result<Option<Key>> {
-        self.ops_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.ops_count.write().await += 1;
 
         self.order_impl(name, after).await
     }
@@ -1482,8 +1476,7 @@ impl Transaction {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + Clone + 'a,
         T: Send + 'a,
     {
-        self.ops_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.ops_count.write().await += 1;
 
         // Get owned guard for writes - O(1) memory, no collection
         let writes_guard = Arc::clone(&self.writes).read_owned().await;

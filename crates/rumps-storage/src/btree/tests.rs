@@ -1255,7 +1255,7 @@ pub mod benches {
     use rumps_types::{key, Value};
     use tokio::runtime::Runtime;
 
-    use crate::btree::{BTree, BTreeBuilder};
+    use crate::btree::BTreeBuilder;
     use crate::node::NodeData;
 
     /// Runs all B-tree benchmarks.
@@ -1265,7 +1265,7 @@ pub mod benches {
         // Benchmark: create_tree / delete_tree lifecycle
         c.bench_function("btree_create_delete_tree", |b| {
             b.iter_batched(
-                BTree::default,
+                || BTreeBuilder::default().build().unwrap(),
                 |btree| {
                     rt.block_on(async {
                         let root = btree.create_tree().await.unwrap();

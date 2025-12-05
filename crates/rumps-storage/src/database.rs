@@ -932,6 +932,49 @@ impl Database {
     }
 }
 
+/// Automatic cleanup on drop.
+///
+/// When the last `Database` handle to a storage engine is dropped, this
+/// implementation flushes all pending writes to disk. This provides a
+/// safety net for cleanup, similar to how dropping a file handle closes it.
+///
+/// # How it works
+///
+/// - Uses `Arc::strong_count` to detect if this is the last handle
+/// - Uses `tokio::task::block_in_place` to safely block on async I/O
+/// - Errors are printed to stderr (no panic in drop)
+///
+/// # Explicit close
+///
+/// For proper error handling, call `db.close().await` explicitly. The `Drop`
+/// impl is a best-effort fallback, not a replacement for explicit cleanup.
+impl Drop for Database {
+    fn drop(&mut self) {
+        // Only flush if we're the last Database handle to this storage.
+        self.storage
+            .as_ref()
+            .filter(|s| Arc::strong_count(s) == 1)
+            .into_iter()
+            .for_each(|storage| {
+                let result = tokio::runtime::Handle::try_current()
+                    .map_err(|e| StorageError::InvalidOperation(e.to_string()))
+                    .and_then(|handle| {
+                        tokio::task::block_in_place(|| {
+                            handle.block_on(async {
+                                storage.wal_sync().await?;
+                                storage.flush().await
+                            })
+                        })
+                    });
+
+                if let Err(e) = result {
+                    eprintln!("rumps: failed to flush database on drop: {e}");
+                }
+                storage.shutdown_sync_task();
+            });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rumps_types::{global, local};
