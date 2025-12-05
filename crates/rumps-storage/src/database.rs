@@ -32,7 +32,7 @@
 //! // Read from global (no transaction needed for reads)
 //! let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
 //! assert_eq!(name, Some(Value::from("Bob")));
-//! # Ok::<(), rumps_storage::StorageError>(())
+//! # Ok::<(), rumps_storage::Error>(())
 //! # });
 //! ```
 //!
@@ -50,7 +50,7 @@
 //!
 //! // Later, reopen it
 //! let db = Database::open("./my_data").await?;
-//! # Ok::<(), rumps_storage::StorageError>(())
+//! # Ok::<(), rumps_storage::Error>(())
 //! # });
 //! ```
 //!
@@ -69,7 +69,7 @@
 //!     .min_degree(5)
 //!     .create("./data")
 //!     .await?;
-//! # Ok::<(), rumps_storage::StorageError>(())
+//! # Ok::<(), rumps_storage::Error>(())
 //! # });
 //! ```
 //!
@@ -109,14 +109,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Name, Value};
+use rumps_types::{DataStatus, Key, Name, Result, Value};
 use tokio::sync::RwLock;
 
 use crate::btree::{BTree, BTreeBuilder, BTreeStats};
 use crate::engine::{
     AsyncStorageEngine, FileStorageEngine, StorageConfig, StorageMetadata,
 };
-use crate::error::{Result, StorageError};
+use crate::error::StorageError;
 use crate::node::{NodeData, NodeId};
 use crate::page::PageCacheStats;
 use crate::transaction::{
@@ -167,7 +167,7 @@ pub struct DatabaseStats {
 ///
 /// // Later, just open - config is restored automatically
 /// let db = Database::open("./data").await?;
-/// # Ok::<(), rumps_storage::StorageError>(())
+/// # Ok::<(), rumps_storage::Error>(())
 /// # });
 /// ```
 ///
@@ -179,7 +179,7 @@ pub struct DatabaseStats {
 /// let db = Database::builder()
 ///     .min_degree(5)
 ///     .in_memory()?;
-/// # Ok::<(), rumps_storage::StorageError>(())
+/// # Ok::<(), rumps_storage::Error>(())
 /// ```
 ///
 /// # Configuration Persistence
@@ -265,10 +265,10 @@ impl DatabaseBuilder {
         if let Some(bytes) = self.max_memory_bytes {
             builder = builder.max_memory_bytes(bytes);
         }
-        Database::with_btree(
+        Ok(Database::with_btree(
             Arc::new(builder.build()?),
             Arc::new(TransactionManager::default()),
-        )
+        )?)
     }
 
     /// Creates a new persistent database at the specified path.
@@ -359,7 +359,7 @@ impl Database {
     /// let db = Database::builder()
     ///     .min_degree(5)
     ///     .in_memory()?;
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// ```
     ///
     /// [`in_memory()`]: Self::in_memory
@@ -389,14 +389,14 @@ impl Database {
     ///
     /// let val = db.get(&local!("CACHE"), &key!["user", 123]).await?;
     /// assert_eq!(val, Some(Value::from("cached_data")));
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub fn in_memory() -> Result<Self> {
-        Self::with_btree(
+        Ok(Self::with_btree(
             Arc::new(BTreeBuilder::default().build()?),
             Arc::new(TransactionManager::default()),
-        )
+        )?)
     }
 
     /// Creates a new persistent database at the specified path.
@@ -422,7 +422,7 @@ impl Database {
     ///     txn.set(&global!("CONFIG"), &key!["version"], Value::from(1)).await?;
     ///     Ok(())
     /// }).await?;
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     ///
@@ -469,7 +469,7 @@ impl Database {
     ///
     /// // Read previously stored data
     /// let version = db.get(&global!("CONFIG"), &key!["version"]).await?;
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -529,13 +529,13 @@ impl Database {
     ///     txn.set(&global!("PATIENT"), &key![123], Value::from("Bob")).await?;
     ///     Ok(())
     /// }).await?;
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub async fn set(&self, name: &Name, key: &Key, val: Value) -> Result<()> {
         // Globals require transactions
         if matches!(name, Name::Global(_)) {
-            Err(StorageError::GlobalRequiresTransaction)
+            Err(StorageError::GlobalRequiresTransaction.into())
         } else {
             // Locals can be modified directly (no WAL, no persistence)
             let root = self.ensure_root(name).await?;
@@ -574,15 +574,15 @@ impl Database {
     ///
     /// let missing = db.get(&local!("DATA"), &key![999]).await?;
     /// assert_eq!(missing, None);
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
         let opt_root = self.get_root(name).await?;
-        match opt_root {
-            Some(root) => self.btree.get_at(root, key, None).await,
-            None => Ok(None),
-        }
+        Ok(match opt_root {
+            Some(root) => self.btree.get_at(root, key, None).await?,
+            None => None,
+        })
     }
 
     /// Checks the data status of a node (MUMPS `$DATA`).
@@ -611,15 +611,15 @@ impl Database {
     /// // Non-existent key
     /// let status = db.data(&local!("DATA"), &key![999]).await?;
     /// assert_eq!(status, DataStatus::NoData);
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus> {
         let opt_root = self.get_root(name).await?;
-        match opt_root {
-            Some(root) => self.btree.data_at(root, key, None).await,
-            None => Ok(DataStatus::NoData),
-        }
+        Ok(match opt_root {
+            Some(root) => self.btree.data_at(root, key, None).await?,
+            None => DataStatus::NoData,
+        })
     }
 
     /// Returns the next key in lexicographic order (MUMPS `$ORDER`).
@@ -650,7 +650,7 @@ impl Database {
     /// // Numeric ordering: `2 < 10`
     /// let next = db.order(&local!("DATA"), Some(&key![2])).await?;
     /// assert_eq!(next, Some(key![10]));
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub async fn order(
@@ -659,10 +659,10 @@ impl Database {
         after: Option<&Key>,
     ) -> Result<Option<Key>> {
         let opt_root = self.get_root(name).await?;
-        match opt_root {
-            Some(root) => self.btree.order_at(root, after, None).await,
-            None => Ok(None),
-        }
+        Ok(match opt_root {
+            Some(root) => self.btree.order_at(root, after, None).await?,
+            None => None,
+        })
     }
 
     /// Creates a stream of entries from the tree (RUMPS `$COLLECT`).
@@ -704,7 +704,7 @@ impl Database {
     ///     results.push(val?);
     /// }
     /// assert_eq!(results.len(), 2);
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub async fn collects<'a, P, F, T>(
@@ -729,6 +729,7 @@ impl Database {
             Some(root) => self
                 .btree
                 .collects_at(root, start, pred_wrap, extract_wrap, None)
+                .map(|r| r.map_err(Into::into))
                 .boxed(),
             None => stream::empty().boxed(),
         };
@@ -764,14 +765,14 @@ impl Database {
             move |k: &Key, data: &NodeData| extract(k, &data.value);
 
         let opt_root = self.get_root(name).await?;
-        match opt_root {
+        Ok(match opt_root {
             Some(root) => {
                 self.btree
                     .collects_vec_at(root, start, pred_wrap, extract_wrap, None)
-                    .await
+                    .await?
             }
-            None => Ok(Vec::new()),
-        }
+            None => Vec::new(),
+        })
     }
 
     /// Executes a function within a transaction context.
@@ -797,7 +798,7 @@ impl Database {
     /// // Values are visible after commit
     /// let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
     /// assert_eq!(name, Some(Value::from("Bob")));
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
@@ -837,7 +838,7 @@ impl Database {
     ///     txn.set(&global!("PATIENT"), &key![1], Value::from("data")).await?;
     ///     Ok(())
     /// }).await?;
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub async fn transaction_with<F, Fut, R>(
@@ -878,7 +879,7 @@ impl Database {
     ///
     /// assert!(stats.in_memory);
     /// assert_eq!(stats.active_txns, 0);
-    /// # Ok::<(), rumps_storage::StorageError>(())
+    /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
     pub async fn debug(&self) -> DatabaseStats {
@@ -914,7 +915,7 @@ impl Database {
         val: Value,
         txn_id: TransactionId,
         start_ts: TransactionTimestamp,
-    ) -> Result<()> {
+    ) -> crate::error::Result<()> {
         let root = self.ensure_root(name).await?;
 
         let old_data = {
@@ -954,7 +955,7 @@ impl Database {
         key: &Key,
         txn_id: TransactionId,
         start_ts: TransactionTimestamp,
-    ) -> Result<()> {
+    ) -> crate::error::Result<()> {
         let opt_root = self.get_root(name).await?;
         match opt_root {
             None => Ok(()),
@@ -981,7 +982,7 @@ impl Database {
                             .collect::<Vec<_>>()
                             .await
                             .into_iter()
-                            .collect::<Result<Vec<_>>>()?;
+                            .collect::<crate::error::Result<Vec<_>>>()?;
 
                         entries.extend(descendants);
                         Some(entries)
@@ -1027,7 +1028,7 @@ impl Database {
     pub(crate) async fn flush_with_txn(
         &self,
         txn_id: TransactionId,
-    ) -> Result<()> {
+    ) -> crate::error::Result<()> {
         if let Some(storage) = self.storage.as_ref() {
             storage.wal_append(&WalRecord::TxnCommit { txn_id }).await?;
 
@@ -1041,7 +1042,7 @@ impl Database {
     ///
     /// This method consumes `self` to ensure the database cannot be used
     /// after closing. All pending writes are flushed to disk before closing.
-    pub(crate) async fn close(self) -> Result<()> {
+    pub(crate) async fn close(self) -> crate::error::Result<()> {
         self.flush().await?;
 
         if let Some(storage) = self.storage.as_ref() {
@@ -1057,7 +1058,11 @@ impl Database {
     /// or create a `Transaction` manually. Direct calls for globals will error.
     ///
     /// For locals (in-memory only), this deletes from the B-tree directly.
-    pub(crate) async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
+    pub(crate) async fn kill(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> crate::error::Result<()> {
         if matches!(name, Name::Global(_)) {
             Err(StorageError::GlobalRequiresTransaction)
         } else {
@@ -1089,7 +1094,7 @@ impl Database {
     ///
     /// For persistent databases, this syncs the WAL and flushes dirty pages.
     /// For in-memory databases, this is a no-op.
-    pub(crate) async fn flush(&self) -> Result<()> {
+    pub(crate) async fn flush(&self) -> crate::error::Result<()> {
         if let Some(storage) = self.storage.as_ref() {
             storage.wal_sync().await?;
             storage.flush().await?;
@@ -1113,7 +1118,7 @@ impl Database {
     fn with_btree(
         btree: Arc<BTree>,
         txn_manager: Arc<TransactionManager>,
-    ) -> Result<Self> {
+    ) -> crate::error::Result<Self> {
         Ok(Self {
             roots: Arc::new(RwLock::new(BTreeMap::new())),
             btree,
@@ -1126,7 +1131,7 @@ impl Database {
     ///
     /// This is called during `open()` to bring the database to a consistent
     /// state after a crash or unclean shutdown.
-    async fn recover(&self, path: &Path) -> Result<()> {
+    async fn recover(&self, path: &Path) -> crate::error::Result<()> {
         let wal_dir = path.join("wal");
 
         // Run WAL recovery
@@ -1213,7 +1218,10 @@ impl Database {
     ///
     /// - `Ok(Some(root))` - Root exists
     /// - `Ok(None)` - Variable doesn't exist
-    async fn get_root(&self, name: &Name) -> Result<Option<NodeId>> {
+    async fn get_root(
+        &self,
+        name: &Name,
+    ) -> crate::error::Result<Option<NodeId>> {
         // Check cache first
         let cached = {
             let roots = self.roots.read().await;
@@ -1258,7 +1266,7 @@ impl Database {
     /// # Returns
     ///
     /// The root `NodeId` for the variable (existing or newly created).
-    async fn ensure_root(&self, name: &Name) -> Result<NodeId> {
+    async fn ensure_root(&self, name: &Name) -> crate::error::Result<NodeId> {
         // Check cache first, and lazy-load from registry if needed
         let existing = self.get_root(name).await?;
 
@@ -1298,7 +1306,10 @@ impl Database {
     /// the B-tree for that. This only removes the name → root mapping.
     ///
     /// For persistent globals, also removes from the registry.
-    async fn remove_root(&self, name: &Name) -> Result<Option<NodeId>> {
+    async fn remove_root(
+        &self,
+        name: &Name,
+    ) -> crate::error::Result<Option<NodeId>> {
         let removed = self.roots.write().await.remove(name);
 
         // For globals with storage, remove from registry
@@ -1314,7 +1325,11 @@ impl Database {
     ///
     /// Called after operations that change the tree structure (splits,
     /// merges) which may result in a new root `NodeId`.
-    async fn update_root(&self, name: &Name, new_root: NodeId) -> Result<()> {
+    async fn update_root(
+        &self,
+        name: &Name,
+        new_root: NodeId,
+    ) -> crate::error::Result<()> {
         {
             let mut roots = self.roots.write().await;
             roots.insert(name.clone(), new_root);
@@ -1639,7 +1654,9 @@ mod tests {
             .await;
         assert!(matches!(
             result,
-            Err(StorageError::GlobalRequiresTransaction)
+            Err(rumps_types::Error::Storage(
+                StorageError::GlobalRequiresTransaction
+            ))
         ));
     }
 
@@ -1712,8 +1729,10 @@ mod tests {
                 )
                 .await?;
                 // Simulate error
-                Err(StorageError::InvalidOperation(
-                    "intentional failure".into(),
+                Err(rumps_types::Error::Storage(
+                    StorageError::InvalidOperation(
+                        "intentional failure".into(),
+                    ),
                 ))
             })
             .await;

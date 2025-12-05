@@ -37,9 +37,9 @@ pub(crate) mod wal;
 pub use btree::BTreeStats;
 pub use database::{Database, DatabaseBuilder, DatabaseStats};
 pub use engine::{StorageConfig, StorageMetadata};
-pub use error::{Result, StorageError};
+pub use error::{Error, StorageError};
 pub use page::PageCacheStats;
-pub use rumps_types::DataStatus;
+pub use rumps_types::{DataStatus, Result};
 pub use transaction::{
     ConflictStrategy, IsolationLevel, Transaction, TransactionBuilder,
     TransactionContext, TransactionPriority,

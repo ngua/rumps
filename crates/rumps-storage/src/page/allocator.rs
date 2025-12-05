@@ -2,10 +2,10 @@
 
 use std::collections::HashSet;
 
-use rumps_types::{Error, Result};
 use tokio::sync::RwLock;
 
 use super::PageId;
+use crate::error::{Result, StorageError};
 
 /// Result of attempting to mark a page as allocated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,18 +287,21 @@ impl PageAllocator {
         max_pages: Option<u64>,
         reserved: &[u64],
     ) -> Result<Self> {
-        Bitmap::from_bytes(bytes).map_or(Err(Error::InvalidBitmap), |bitmap| {
-            let allocated = bitmap.count_ones();
-            Ok(Self {
-                state: RwLock::new(PageAllocatorState {
-                    bitmap,
-                    allocated,
-                    search_hint: 0,
-                }),
-                max_pages,
-                reserved: RwLock::new(reserved.iter().copied().collect()),
-            })
-        })
+        Bitmap::from_bytes(bytes).map_or(
+            Err(StorageError::InvalidOperation("invalid bitmap".into())),
+            |bitmap| {
+                let allocated = bitmap.count_ones();
+                Ok(Self {
+                    state: RwLock::new(PageAllocatorState {
+                        bitmap,
+                        allocated,
+                        search_hint: 0,
+                    }),
+                    max_pages,
+                    reserved: RwLock::new(reserved.iter().copied().collect()),
+                })
+            },
+        )
     }
 
     /// Serialize the bitmap to bytes for persistence.
@@ -315,7 +318,10 @@ impl PageAllocator {
         // Check limit (inside lock to prevent races)
         if let Some(max) = self.max_pages {
             if state.allocated >= max {
-                Err(Error::PageLimitExceeded(max))
+                Err(StorageError::MemoryLimitExceeded {
+                    used: state.allocated as usize,
+                    limit: max as usize,
+                })
             } else {
                 Self::allocate_inner(&mut state)
             }
@@ -358,11 +364,13 @@ impl PageAllocator {
         let reserved = self.reserved.read().await;
         if reserved.contains(&page_num) {
             // Use specific error for page 0, generic for others
-            if page_num == 0 {
-                Err(Error::CannotFreeHeaderPage)
-            } else {
-                Err(Error::CannotFreeReservedPage(page_num))
-            }
+            Err(StorageError::InvalidOperation(
+                if page_num == 0 {
+                    "cannot free header page".into()
+                } else {
+                    format!("cannot free reserved page {page_num}")
+                },
+            ))
         } else {
             drop(reserved);
             let idx = page_num as usize;
@@ -370,10 +378,14 @@ impl PageAllocator {
 
             match state.bitmap.clear(idx) {
                 ClearBitResult::OutOfBounds => {
-                    Err(Error::PageOutOfBounds(page_num))
+                    Err(StorageError::InvalidOperation(format!(
+                        "page {page_num} is out of bounds"
+                    )))
                 }
                 ClearBitResult::WasUnset => {
-                    Err(Error::PageNotAllocated(page_num))
+                    Err(StorageError::InvalidOperation(format!(
+                        "page {page_num} is not allocated"
+                    )))
                 }
                 ClearBitResult::WasSet => {
                     state.allocated = state.allocated.saturating_sub(1);
@@ -413,7 +425,9 @@ impl PageAllocator {
 
         // Reject absurdly large page numbers to prevent memory exhaustion.
         if page_num >= Self::MAX_TRACKABLE_PAGES {
-            Err(Error::PageOutOfBounds(page_num))
+            Err(StorageError::InvalidOperation(format!(
+                "page {page_num} is out of bounds"
+            )))
         } else {
             let idx = page_num as usize;
             let mut state = self.state.write().await;
@@ -486,8 +500,6 @@ impl std::fmt::Debug for PageAllocator {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, unused_must_use)]
 mod tests {
-    use rumps_types::Error;
-
     use super::*;
 
     #[tokio::test]
@@ -715,7 +727,7 @@ mod tests {
         let id = PageId::from_page_num(10).unwrap();
         let err = alloc.free(id).await.unwrap_err();
 
-        assert!(matches!(err, Error::PageNotAllocated(10)));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
     }
 
     #[tokio::test]
@@ -728,7 +740,7 @@ mod tests {
         // Try to free again
         let err = alloc.free(p).await.unwrap_err();
 
-        assert!(matches!(err, Error::PageNotAllocated(_)));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
     }
 
     #[tokio::test]
@@ -739,7 +751,7 @@ mod tests {
         let id = PageId::from_page_num(1000).unwrap();
         let err = alloc.free(id).await.unwrap_err();
 
-        assert!(matches!(err, Error::PageOutOfBounds(1000)));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
     }
 
     #[tokio::test]
@@ -757,7 +769,7 @@ mod tests {
 
         // Next allocation should fail
         let err = alloc.allocate().await.unwrap_err();
-        assert!(matches!(err, Error::PageLimitExceeded(5)));
+        assert!(matches!(err, StorageError::MemoryLimitExceeded { .. }));
     }
 
     #[tokio::test]
@@ -782,7 +794,7 @@ mod tests {
         // But still at limit after that
         assert!(matches!(
             alloc.allocate().await.unwrap_err(),
-            Error::PageLimitExceeded(5)
+            StorageError::MemoryLimitExceeded { .. }
         ));
     }
 
@@ -790,7 +802,7 @@ mod tests {
     async fn allocator_from_bytes_empty_bitmap() {
         let empty: &[u8] = &[];
         let err = PageAllocator::from_bytes(empty, None, &[0]).unwrap_err();
-        assert!(matches!(err, Error::InvalidBitmap));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
     }
 
     #[tokio::test]
@@ -798,7 +810,7 @@ mod tests {
         let alloc = PageAllocator::with_reserved(64, None, &[0]);
         let page_zero = PageId::from_page_num(0).unwrap();
         let err = alloc.free(page_zero).await.unwrap_err();
-        assert!(matches!(err, Error::CannotFreeHeaderPage));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
     }
 
     #[tokio::test]
@@ -811,7 +823,7 @@ mod tests {
 
         // Cannot allocate any more
         let err = alloc.allocate().await.unwrap_err();
-        assert!(matches!(err, Error::PageLimitExceeded(1)));
+        assert!(matches!(err, StorageError::MemoryLimitExceeded { .. }));
     }
 
     #[tokio::test]
@@ -907,20 +919,20 @@ mod tests {
             .free(PageId::from_page_num(5).unwrap())
             .await
             .unwrap_err();
-        assert!(matches!(err, Error::CannotFreeReservedPage(5)));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
 
         let err = alloc
             .free(PageId::from_page_num(10).unwrap())
             .await
             .unwrap_err();
-        assert!(matches!(err, Error::CannotFreeReservedPage(10)));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
 
         // Page 0 returns specific error
         let err = alloc
             .free(PageId::from_page_num(0).unwrap())
             .await
             .unwrap_err();
-        assert!(matches!(err, Error::CannotFreeHeaderPage));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
     }
 
     #[tokio::test]
@@ -936,7 +948,7 @@ mod tests {
 
         // Now it cannot be freed
         let err = alloc.free(p).await.unwrap_err();
-        assert!(matches!(err, Error::CannotFreeReservedPage(_)));
+        assert!(matches!(err, StorageError::InvalidOperation(_)));
     }
 
     #[tokio::test]

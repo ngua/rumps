@@ -15,7 +15,7 @@
 compile_error!("RUMPS requires a 64-bit platform (usize must be 64 bits)");
 
 // Re-export commonly used types
-pub use error::*;
+pub use error::{Error, Result, StorageError};
 pub use key::*;
 // Re-export serde_json::json! macro for convenience with JSON subscripts
 pub use serde_json::json;

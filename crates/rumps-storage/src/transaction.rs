@@ -50,12 +50,12 @@ use std::time::Instant;
 
 use futures::future::BoxFuture;
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Name, Value};
+use rumps_types::{DataStatus, Key, Name, Result, Value};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
 use crate::database::Database;
-use crate::error::{Result, StorageError};
+use crate::error::StorageError;
 use crate::node::{NodeData, NodeId};
 
 /// State for lazily merging buffered entries with a snapshot stream.
@@ -88,7 +88,7 @@ where
     /// Deleted subtrees to skip.
     deleted_subtrees: Vec<Key>,
     /// The snapshot stream yielding `(Key, T)` pairs (lazy, unbounded).
-    snapshot: BoxStream<'a, Result<(Key, T)>>,
+    snapshot: BoxStream<'a, crate::error::Result<(Key, T)>>,
     /// Next snapshot entry to consider.
     next_snapshot: Option<(Key, T)>,
     /// Tracks if we've encountered an error in the snapshot stream.
@@ -179,7 +179,7 @@ where
     fn yield_buffered_or_skip(
         &mut self,
         skip_snapshot: bool,
-    ) -> BoxFuture<'_, Option<Result<T>>> {
+    ) -> BoxFuture<'_, Option<crate::error::Result<T>>> {
         Box::pin(async move {
             let opt_val = self.next_buffered.take().and_then(|(_, v)| v);
             if skip_snapshot {
@@ -194,7 +194,7 @@ where
     }
 
     /// Core merge logic with O(n + m) complexity.
-    fn next_impl(&mut self) -> BoxFuture<'_, Option<Result<T>>> {
+    fn next_impl(&mut self) -> BoxFuture<'_, Option<crate::error::Result<T>>> {
         Box::pin(async move {
             match self.snapshot_error.take() {
                 Some(e) => Some(Err(e)),
@@ -241,7 +241,7 @@ where
     }
 
     /// Gets the next item from the merged stream.
-    async fn next(&mut self) -> Option<Result<T>> {
+    async fn next(&mut self) -> Option<crate::error::Result<T>> {
         self.next_impl().await
     }
 }
@@ -705,7 +705,7 @@ impl TransactionManager {
     pub(crate) async fn register(
         &self,
         metadata: TransactionMetadata,
-    ) -> Result<()> {
+    ) -> crate::error::Result<()> {
         let mut active = self.active.write().await;
 
         if active.len() >= self.max_concurrent {
@@ -719,14 +719,20 @@ impl TransactionManager {
     }
 
     /// Marks a transaction as completed (committed).
-    pub(crate) async fn complete(&self, txn_id: TransactionId) -> Result<()> {
+    pub(crate) async fn complete(
+        &self,
+        txn_id: TransactionId,
+    ) -> crate::error::Result<()> {
         let mut active = self.active.write().await;
         active.remove(&txn_id);
         Ok(())
     }
 
     /// Marks a transaction as aborted.
-    pub(crate) async fn abort(&self, txn_id: TransactionId) -> Result<()> {
+    pub(crate) async fn abort(
+        &self,
+        txn_id: TransactionId,
+    ) -> crate::error::Result<()> {
         let mut active = self.active.write().await;
         active.remove(&txn_id);
         Ok(())
@@ -755,7 +761,7 @@ impl TransactionManager {
         start_ts: TransactionTimestamp,
         _read_set: &HashSet<(Name, Key)>,
         write_set: &HashSet<(Name, Key)>,
-    ) -> Result<()> {
+    ) -> crate::error::Result<()> {
         let committed = self.committed_writes.read().await;
 
         // Check if any transaction that committed after our start timestamp
@@ -785,7 +791,7 @@ impl TransactionManager {
     pub(crate) async fn record_commit(
         &self,
         write_set: HashSet<(Name, Key)>,
-    ) -> Result<TransactionTimestamp> {
+    ) -> crate::error::Result<TransactionTimestamp> {
         let commit_ts = self.current_timestamp().await;
 
         // Only record if there were actual writes
@@ -925,7 +931,7 @@ pub enum TransactionPriority {
 ///     txn.set(&global!("DATA"), &key![1], Value::from("test")).await?;
 ///     Ok(())
 /// }).await?;
-/// # Ok::<(), rumps_storage::StorageError>(())
+/// # Ok::<(), rumps_storage::Error>(())
 /// # });
 /// ```
 #[derive(Debug, Clone)]
@@ -1096,7 +1102,7 @@ impl TransactionBuilder {
 /// // After commit, values are visible outside the transaction
 /// let val = db.get(&global!("DATA"), &key![1]).await?;
 /// assert_eq!(val, Some(Value::from("hello")));
-/// # Ok::<(), rumps_storage::StorageError>(())
+/// # Ok::<(), rumps_storage::Error>(())
 /// # });
 /// ```
 #[derive(Clone)]
@@ -1154,15 +1160,19 @@ impl Transaction {
             writes.get(&lookup_key).cloned()
         };
 
-        let result = match buffered {
+        match buffered {
             Some(WriteOp::Set(data)) => {
                 // Track read
                 self.read_set.write().await.insert(lookup_key.clone());
-                data.value.clone().map(Some).ok_or_else(|| {
-                    StorageError::InvalidConfiguration(
-                        "Buffered set has no value".into(),
-                    )
-                })
+                data.value
+                    .clone()
+                    .map(Some)
+                    .ok_or_else(|| {
+                        StorageError::InvalidConfiguration(
+                            "Buffered set has no value".into(),
+                        )
+                    })
+                    .map_err(Into::into)
             }
             Some(WriteOp::Delete | WriteOp::KillSubtree) => {
                 // Track read
@@ -1176,22 +1186,17 @@ impl Transaction {
                     del_name == name && key.starts_with(del_key)
                 });
 
+                // Track read
+                self.read_set.write().await.insert(lookup_key);
+
                 if is_deleted {
-                    self.read_set.write().await.insert(lookup_key);
                     Ok(None)
                 } else {
                     // Delegate to database (snapshot read)
-                    let val = self.db.get(name, key).await;
-
-                    // Track read
-                    self.read_set.write().await.insert(lookup_key);
-
-                    val
+                    self.db.get(name, key).await
                 }
             }
-        };
-
-        result
+        }
     }
 
     /// Sets a value in the transaction's write buffer.
@@ -1341,10 +1346,16 @@ impl Transaction {
         };
 
         // Get snapshot stream yielding (Key, T) pairs (lazy, not collected!)
+        // Map from public Error to internal StorageError
         let snapshot_stream = self
             .db
             .collects(name, start, pred_with_deletes, extract_with_key)
-            .await?;
+            .await?
+            .map(|r| {
+                r.map_err(|e| match e {
+                    rumps_types::Error::Storage(se) => se,
+                })
+            });
 
         // Create O(1) memory merge state
         let state = MergeState {
@@ -1362,9 +1373,11 @@ impl Transaction {
         };
 
         // Create a merge stream using unfold
+        // Map from internal StorageError to public Error
         let merged = stream::unfold(state, |mut state| async move {
             state.next().await.map(|item| (item, state))
-        });
+        })
+        .map(|r| r.map_err(Into::into));
 
         Ok(merged)
     }
@@ -1409,7 +1422,7 @@ impl Transaction {
     /// - Conflict detection fails (based on conflict strategy)
     /// - Any write operation fails
     /// - Flush to disk fails
-    pub(crate) async fn commit(self) -> Result<()> {
+    pub(crate) async fn commit(self) -> crate::error::Result<()> {
         // Check transaction state
         {
             let state = self.state.read().await;
@@ -1495,7 +1508,7 @@ impl Transaction {
     ///
     /// This is automatically called when a transaction is dropped without
     /// being committed.
-    pub(crate) async fn rollback(self) -> Result<()> {
+    pub(crate) async fn rollback(self) -> crate::error::Result<()> {
         // Check transaction state
         {
             let state = self.state.read().await;
@@ -1538,7 +1551,7 @@ impl Transaction {
     }
 
     /// Helper to create an error.
-    fn err<T>(msg: &str) -> Result<T> {
+    fn err<T>(msg: &str) -> crate::error::Result<T> {
         Err(StorageError::InvalidConfiguration(msg.into()))
     }
 

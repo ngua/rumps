@@ -508,7 +508,7 @@ impl AsyncStorageEngine for FileStorageEngine {
 
             // Deserialize
             let node: Node = bincode::deserialize(&buf).map_err(|e| {
-                StorageError::InvalidOperation(format!("deserialize node: {e}"))
+                StorageError::Serialization(format!("deserialize node: {e}"))
             })?;
 
             // Add to cache (clean, since it came from disk)
@@ -1501,10 +1501,7 @@ impl FileStorageEngine {
                         reg.insert_unchecked(name.clone(), root)
                     });
                     drop(chain);
-                    self.page_alloc
-                        .free(new_pid)
-                        .await
-                        .map_err(StorageError::from)
+                    self.page_alloc.free(new_pid).await
                 }
                 None => {
                     // No existing space - use our newly allocated page

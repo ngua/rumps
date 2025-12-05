@@ -25,7 +25,7 @@
 //! // Read values
 //! let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
 //! assert_eq!(name, Some(Value::from("Alice")));
-//! # Ok::<(), rumps::StorageError>(())
+//! # Ok::<(), rumps::Error>(())
 //! # });
 //! ```
 //!
@@ -52,10 +52,11 @@ pub use rumps_storage::{
     Database,
     DatabaseBuilder,
     DatabaseStats,
+    // Error handling
+    Error,
     IsolationLevel,
     // Storage engine
     PageCacheStats,
-    // Error handling
     Result,
     StorageConfig,
     StorageError,
