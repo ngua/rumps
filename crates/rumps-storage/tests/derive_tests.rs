@@ -12,9 +12,10 @@ use rumps_derive::{
 use rumps_storage::orm::{RumpsRead, RumpsWrite};
 use rumps_storage::Database;
 use rumps_types::orm::{
-    FromSubscript as _, FromValue as _, ToSubscript as _, ToValue as _,
+    FromSubscript as _, FromValue as _, ToSubscript as _, ToSubscript as _,
+    ToValue as _,
 };
-use rumps_types::{global, Key, Subscript, Value};
+use rumps_types::{global, key, Key, Subscript, Value};
 
 /// Basic struct with derive macros
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]

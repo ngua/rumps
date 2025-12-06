@@ -45,9 +45,6 @@ pub trait ToRumps {
     /// The global name this type is stored under (e.g., `"user"` for `^user`).
     const GLOBAL: &'static str;
 
-    /// Number of subscripts in the key (for composite keys).
-    const KEY_LEN: usize = 1;
-
     /// Extracts the key portion from the struct.
     ///
     /// This is used to identify a record for lookups and deletes.
@@ -113,9 +110,6 @@ pub trait ToRumps {
 pub trait FromRumps: Sized {
     /// The global name to query.
     const GLOBAL: &'static str;
-
-    /// Number of subscripts in the key (for composite keys).
-    const KEY_LEN: usize = 1;
 
     /// Reconstruct from an iterator of key-value pairs.
     ///
@@ -458,33 +452,44 @@ impl RumpsWrite for Transaction {
 /// we detect a new record boundary. More memory-efficient than collecting all
 /// pairs first.
 ///
-/// The record boundary is determined by `T::KEY_LEN` - the number of subscripts
-/// that form the record's key. For composite keys like `(dept_id, emp_id)`,
-/// `KEY_LEN` would be `2`.
+/// Record boundaries are detected by inferring the key length from the first
+/// entry in the stream:
+/// - If the first entry is a marker (empty string value), its key length is the key length
+/// - Otherwise, assume the last subscript is a field name (key length = `len - 1`)
 async fn stream_and_parse<T, S>(stream: S) -> Result<Vec<T>>
 where
     T: FromRumps,
     S: futures::Stream<Item = Result<(Key, Value)>> + Send,
 {
-    // State: (current prefix, current pairs, parsed results)
-    type State<T> = (Option<Key>, Vec<(Key, Value)>, Vec<T>);
+    // State: (inferred key_len, current prefix, current pairs, parsed results)
+    type State<T> = (Option<usize>, Option<Key>, Vec<(Key, Value)>, Vec<T>);
 
-    // Extract the first `KEY_LEN` subscripts as the record prefix
-    let extract_prefix = |k: &Key| -> Option<Key> {
-        (k.len() >= T::KEY_LEN).then(|| {
-            Key::from(
-                (0..T::KEY_LEN)
-                    .filter_map(|i| k.get(i).cloned())
-                    .collect::<Vec<_>>(),
-            )
-        })
-    };
+    let is_empty_string =
+        |v: &Value| matches!(v, Value::String(s) if s.is_empty());
 
-    let (maybe_prefix, pairs, mut results): State<T> = Box::pin(stream)
+    let (_, maybe_prefix, pairs, mut results): State<T> = Box::pin(stream)
         .try_fold(
-            (None, Vec::new(), Vec::new()),
-            |(cur_prefix, mut cur_pairs, mut results), (k, v)| {
-                let prefix = extract_prefix(&k);
+            (None, None, Vec::new(), Vec::new()),
+            |(key_len, cur_prefix, mut cur_pairs, mut results), (k, v)| {
+                // Infer key_len from first entry
+                let key_len = key_len.unwrap_or_else(|| {
+                    // If first entry is a marker (empty value), its key IS the prefix
+                    // Otherwise, assume last subscript is field name
+                    if is_empty_string(&v) {
+                        k.len()
+                    } else {
+                        k.len().saturating_sub(1)
+                    }
+                });
+
+                // Extract prefix using inferred key_len
+                let prefix = (k.len() >= key_len).then(|| {
+                    Key::from(
+                        (0..key_len)
+                            .filter_map(|i| k.get(i).cloned())
+                            .collect::<Vec<_>>(),
+                    )
+                });
 
                 let res: Result<State<T>> = match (&cur_prefix, &prefix) {
                     (Some(p), Some(f)) if p != f => {
@@ -493,13 +498,18 @@ where
                             .map_err(rumps_types::Error::from)
                             .map(|rec| {
                                 results.push(rec);
-                                (prefix, vec![(k, v)], results)
+                                (Some(key_len), prefix, vec![(k, v)], results)
                             })
                     }
                     _ => {
                         // Same record or first entry
                         cur_pairs.push((k, v));
-                        Ok((prefix.or(cur_prefix), cur_pairs, results))
+                        Ok((
+                            Some(key_len),
+                            prefix.or(cur_prefix),
+                            cur_pairs,
+                            results,
+                        ))
                     }
                 };
 

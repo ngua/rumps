@@ -25,7 +25,6 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                         quote! {
                             impl #impl_generics ::rumps_storage::orm::ToRumps for #name #ty_generics #where_clause {
                                 const GLOBAL: &'static str = #global;
-                                const KEY_LEN: usize = <#inner as ::rumps_storage::orm::ToRumps>::KEY_LEN;
 
                                 fn to_key(&self) -> ::rumps_types::Key {
                                     <#inner as ::rumps_storage::orm::ToRumps>::to_key(&self.0)
@@ -72,12 +71,10 @@ fn expand_named(
 
     let to_key_body = gen_to_key(&fields);
     let to_pairs_body = gen_to_pairs(&fields);
-    let key_len = fields.key_fields.len();
 
     Ok(quote! {
         impl #impl_generics ::rumps_storage::orm::ToRumps for #name #ty_generics #where_clause {
             const GLOBAL: &'static str = #global;
-            const KEY_LEN: usize = #key_len;
 
             fn to_key(&self) -> ::rumps_types::Key {
                 #to_key_body
