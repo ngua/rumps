@@ -2090,6 +2090,28 @@ enum MixedUnitRename {
     FourthOption, // -> "FourthOption"
 }
 
+/// Unit enum with container-level `rename_all` for ToValue/FromValue
+#[derive(Debug, Clone, PartialEq, ToValue, FromValue)]
+#[rumps(rename_all = "lowercase")]
+enum PriorityValue {
+    Low,    // -> "low"
+    Medium, // -> "medium"
+    High,   // -> "high"
+    #[rumps(rename = "CRITICAL")]
+    Urgent, // -> "CRITICAL" (override)
+}
+
+/// Unit enum with container-level `rename_all` for ToSubscript/FromSubscript
+#[derive(Debug, Clone, PartialEq, ToSubscript, FromSubscript)]
+#[rumps(rename_all = "snake-case")]
+enum StatusSubscript {
+    InProgress, // -> "in_progress"
+    OnHold,     // -> "on_hold"
+    Completed,  // -> "completed"
+    #[rumps(rename = "CANCELLED")]
+    WasCancelled, // -> "CANCELLED" (override)
+}
+
 #[tokio::test]
 async fn test_field_level_case_transformation() {
     let db = Database::in_memory().unwrap();
@@ -2235,4 +2257,67 @@ fn test_unit_enum_field_level_case_transformation() {
         MixedUnitRename::from_val(&Value::String("FourthOption".into())),
         Ok(MixedUnitRename::FourthOption)
     );
+}
+
+#[test]
+fn test_unit_enum_variant_rename_override_value() {
+    // Test container-level rename_all = "lowercase" with variant override
+    assert_eq!(PriorityValue::Low.to_val(), Value::String("low".into()));
+    assert_eq!(
+        PriorityValue::Medium.to_val(),
+        Value::String("medium".into())
+    );
+    assert_eq!(PriorityValue::High.to_val(), Value::String("high".into()));
+    // Test variant-level override with literal string
+    assert_eq!(
+        PriorityValue::Urgent.to_val(),
+        Value::String("CRITICAL".into())
+    );
+
+    // Test FromValue round-trip
+    assert_eq!(
+        PriorityValue::from_val(&Value::String("low".into())),
+        Ok(PriorityValue::Low)
+    );
+    assert_eq!(
+        PriorityValue::from_val(&Value::String("CRITICAL".into())),
+        Ok(PriorityValue::Urgent)
+    );
+
+    // Error: original variant name shouldn't work when renamed
+    assert!(PriorityValue::from_val(&Value::String("Urgent".into())).is_err());
+}
+
+#[test]
+fn test_unit_enum_variant_rename_override_subscript() {
+    // Test container-level rename_all = "snake-case" with variant override
+    assert_eq!(
+        StatusSubscript::InProgress.to_sub(),
+        Subscript::String("in_progress".into())
+    );
+    assert_eq!(
+        StatusSubscript::OnHold.to_sub(),
+        Subscript::String("on_hold".into())
+    );
+    // Test variant-level override with literal string
+    assert_eq!(
+        StatusSubscript::WasCancelled.to_sub(),
+        Subscript::String("CANCELLED".into())
+    );
+
+    // Test FromSubscript round-trip
+    assert_eq!(
+        StatusSubscript::from_sub(&Subscript::String("in_progress".into())),
+        Ok(StatusSubscript::InProgress)
+    );
+    assert_eq!(
+        StatusSubscript::from_sub(&Subscript::String("CANCELLED".into())),
+        Ok(StatusSubscript::WasCancelled)
+    );
+
+    // Error: original variant name shouldn't work when renamed
+    assert!(StatusSubscript::from_sub(&Subscript::String(
+        "WasCancelled".into()
+    ))
+    .is_err());
 }
