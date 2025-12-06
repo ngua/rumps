@@ -82,29 +82,56 @@ pub use rumps_types::{
     Value,
 };
 
-/// ORM-like traits for converting Rust types to/from RUMPS storage.
+/// ORM-like traits and derive macros for converting Rust types to/from RUMPS storage.
 ///
 /// This module re-exports traits from both `rumps-types::orm` and
 /// `rumps-storage::orm` for convenient access, including derive macros.
 ///
-/// # Example
+/// # Derive Macros
 ///
-/// ```ignore
-/// use rumps::orm::{ToRumps, FromRumps, RumpsRead, RumpsWrite};
+/// With the `derive` feature (enabled by default), you get access to:
 ///
-/// #[derive(ToRumps, FromRumps)]
-/// #[rumps(global = "user")]
-/// struct User {
-///     #[rumps(key)]
-///     id: u64,
-///     name: String,
-/// }
-/// ```
+/// - [`ToRumps`] / [`FromRumps`] - Convert structs/enums to/from RUMPS key-value pairs
+/// - [`ToValue`] / [`FromValue`] - Convert unit enums or newtypes to/from RUMPS values
+/// - [`ToSubscript`] / [`FromSubscript`] - Convert unit enums or newtypes to/from subscripts
+///
+/// # Container Attributes
+///
+/// Attributes on structs or enums:
+///
+/// - `#[rumps(global = "name")]` - **Required for `ToRumps`/`FromRumps`**. The global name
+///   for storage (e.g., `"patient"` for `^patient`).
+/// - `#[rumps(rename_all = "case")]` - Apply a naming convention to all fields/variants.
+///   Supported: `"snake-case"`, `"camel-case"`, `"pascal-case"`, `"train-case"` (kebab),
+///   `"lowercase"`, `"uppercase"`, `"screaming-snake-case"`.
+///
+/// # Field Attributes
+///
+/// - `#[rumps(key)]` - Field is part of the key path (not stored as a value).
+/// - `#[rumps(key, order = N)]` - Explicit ordering for composite keys.
+/// - `#[rumps(flatten)]` - Inline nested struct fields at the current level.
+/// - `#[rumps(subtree)]` - Store nested struct as a subtree (adds field name to key path).
+/// - `#[rumps(rename = "x")]` - Rename this field. Can be a literal or case convention.
+/// - `#[rumps(skip)]` - Don't persist this field (uses `Default::default()` on read).
+/// - `#[rumps(default)]` - Use `Default::default()` if field is missing on read.
+/// - `#[rumps(default = expr)]` - Use the given expression if field is missing on read.
+///
+/// # Variant Attributes (for enums)
+///
+/// - `#[rumps(rename = "x")]` - Rename this variant's tag.
+/// - `#[rumps(rename_all = "case")]` - Apply naming convention to fields within this variant.
+#[cfg_attr(feature = "derive", doc = include_str!("orm_derive.md"))]
 pub mod orm {
     // From rumps-types: primitive conversion traits and error types
-    // From rumps-storage: struct conversion traits, extension traits, and derive macros
+    // From rumps-storage: struct conversion traits and extension traits
+    // Note: This also re-exports FromRumps/ToRumps derive macros when `derive` feature is enabled
     pub use rumps_storage::orm::{
         FromRumps, RumpsRead, RumpsWrite, Sealed, ToRumps,
+    };
+    // Re-export remaining derive macros (traits with same names already exported above)
+    #[cfg(feature = "derive")]
+    pub use rumps_storage::orm::{
+        FromSubscript, FromValue, ToSubscript, ToValue,
     };
     pub use rumps_types::orm::{
         DecodeError, FromSubscript, FromValue, IntoKey, ToSubscript, ToValue,
