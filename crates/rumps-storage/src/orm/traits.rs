@@ -1,4 +1,28 @@
 //! Core ORM traits for RUMPS.
+//!
+//! # Storage Layout
+//!
+//! Records are stored as a tree of key-value pairs under a global. The derive
+//! macro writes an **empty-string marker** at the record's prefix key to ensure
+//! the record exists even if all fields are optional/`None`.
+//!
+//! For example, a `Person { id: 42, name: "Alice", email: "a@b.com" }` is stored as:
+//!
+//! ```text
+//! ^person(42)         = ""              <- marker (empty string)
+//! ^person(42, "name") = "Alice"
+//! ^person(42, "email") = "a@b.com"
+//! ```
+//!
+//! The marker serves two purposes:
+//! 1. Ensures records with all-optional fields still exist in storage
+//! 2. Enables efficient record boundary detection when streaming multiple records
+//!
+//! # Compatibility with Manual Writes
+//!
+//! The ORM can also read data written directly via [`Transaction::set`] without
+//! markers. In this case, record boundaries are inferred from the key structure
+//! (assuming the last subscript is a field name).
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -53,6 +77,12 @@ pub trait ToRumps {
     /// Expands the struct into key-value pairs.
     ///
     /// The `prefix` is prepended to each key (typically the record's key fields).
+    ///
+    /// # Marker
+    ///
+    /// The derive macro implementation writes an empty-string marker at the
+    /// exact `prefix` key (i.e., `(prefix.clone(), Value::String("".into()))`).
+    /// This ensures the record exists even if all fields are `Option::None`.
     fn to_pairs(&self, prefix: &Key) -> Vec<(Key, Value)>;
 }
 
@@ -561,7 +591,12 @@ mod tests {
             let mut age_key = prefix.clone();
             age_key.push("age".to_sub());
 
-            vec![(name_key, self.name.to_val()), (age_key, self.age.to_val())]
+            // Include marker at prefix (as derive macro does)
+            vec![
+                (prefix.clone(), Value::String(String::new())),
+                (name_key, self.name.to_val()),
+                (age_key, self.age.to_val()),
+            ]
         }
     }
 

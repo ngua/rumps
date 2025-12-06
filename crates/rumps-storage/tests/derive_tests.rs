@@ -12,8 +12,7 @@ use rumps_derive::{
 use rumps_storage::orm::{RumpsRead, RumpsWrite};
 use rumps_storage::Database;
 use rumps_types::orm::{
-    FromSubscript as _, FromValue as _, ToSubscript as _, ToSubscript as _,
-    ToValue as _,
+    FromSubscript as _, FromValue as _, ToSubscript as _, ToValue as _,
 };
 use rumps_types::{global, key, Key, Subscript, Value};
 
@@ -691,4 +690,353 @@ async fn test_newtype_to_rumps() {
 
     let fetched_person2: Option<Person> = db.one(100u64).await.unwrap();
     assert_eq!(fetched_person2, Some(person2));
+}
+
+// =============================================================================
+// Tests for reading manually-written data (no ORM markers)
+//
+// These tests verify that the ORM can read data written directly via
+// `txn.set()` without the empty-string marker that ORM `insert()` writes.
+// This exercises the heuristic fallback path in `stream_and_parse`.
+// =============================================================================
+
+/// Struct for reading manually-written "raw_user" data
+#[derive(Debug, Clone, PartialEq, FromRumps)]
+#[rumps(global = "raw_user")]
+struct RawUser {
+    #[rumps(key)]
+    id: u64,
+    name: String,
+    email: String,
+}
+
+/// Struct for reading manually-written composite key data
+#[derive(Debug, Clone, PartialEq, FromRumps)]
+#[rumps(global = "raw_order")]
+struct RawOrder {
+    #[rumps(key, order = 0)]
+    customer_id: u64,
+    #[rumps(key, order = 1)]
+    order_id: u64,
+    product: String,
+    qty: u32,
+}
+
+/// Struct with optional fields for reading sparse manual data
+#[derive(Debug, Clone, PartialEq, FromRumps)]
+#[rumps(global = "raw_config")]
+struct RawConfig {
+    #[rumps(key)]
+    name: String,
+    value: Option<String>,
+    #[rumps(default = 0)]
+    version: u32,
+}
+
+#[tokio::test]
+async fn test_manual_write_single_record_one() {
+    let db = Database::in_memory().unwrap();
+
+    // Write data manually WITHOUT the ORM marker
+    db.transaction(|txn| async move {
+        // ^raw_user(1, "name") = "Alice"
+        // ^raw_user(1, "email") = "alice@test.com"
+        // Note: No marker at ^raw_user(1) = ""
+        txn.set(
+            &global!("raw_user"),
+            &key![1i64, "name"],
+            Value::String("Alice".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("raw_user"),
+            &key![1i64, "email"],
+            Value::String("alice@test.com".into()),
+        )
+        .await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Read back using ORM
+    let user: Option<RawUser> = db.one(1u64).await.unwrap();
+    assert!(user.is_some());
+    let u = user.unwrap();
+    assert_eq!(u.id, 1);
+    assert_eq!(u.name, "Alice");
+    assert_eq!(u.email, "alice@test.com");
+}
+
+#[tokio::test]
+async fn test_manual_write_multiple_records_all() {
+    let db = Database::in_memory().unwrap();
+
+    // Write multiple records manually WITHOUT markers
+    db.transaction(|txn| async move {
+        // User 1
+        txn.set(
+            &global!("raw_user"),
+            &key![1i64, "name"],
+            Value::String("Alice".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("raw_user"),
+            &key![1i64, "email"],
+            Value::String("alice@test.com".into()),
+        )
+        .await?;
+
+        // User 2
+        txn.set(
+            &global!("raw_user"),
+            &key![2i64, "name"],
+            Value::String("Bob".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("raw_user"),
+            &key![2i64, "email"],
+            Value::String("bob@test.com".into()),
+        )
+        .await?;
+
+        // User 3
+        txn.set(
+            &global!("raw_user"),
+            &key![3i64, "name"],
+            Value::String("Charlie".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("raw_user"),
+            &key![3i64, "email"],
+            Value::String("charlie@test.com".into()),
+        )
+        .await?;
+
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Read all using ORM
+    let users: Vec<RawUser> = db.all().await.unwrap();
+    assert_eq!(users.len(), 3);
+    assert_eq!(users[0].name, "Alice");
+    assert_eq!(users[1].name, "Bob");
+    assert_eq!(users[2].name, "Charlie");
+}
+
+#[tokio::test]
+async fn test_manual_write_composite_key_query() {
+    let db = Database::in_memory().unwrap();
+
+    // Write orders with composite keys manually
+    db.transaction(|txn| async move {
+        // Customer 1, Order 1
+        txn.set(
+            &global!("raw_order"),
+            &key![1i64, 1i64, "product"],
+            Value::String("Widget".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("raw_order"),
+            &key![1i64, 1i64, "qty"],
+            Value::Integer(5),
+        )
+        .await?;
+
+        // Customer 1, Order 2
+        txn.set(
+            &global!("raw_order"),
+            &key![1i64, 2i64, "product"],
+            Value::String("Gadget".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("raw_order"),
+            &key![1i64, 2i64, "qty"],
+            Value::Integer(3),
+        )
+        .await?;
+
+        // Customer 2, Order 1
+        txn.set(
+            &global!("raw_order"),
+            &key![2i64, 1i64, "product"],
+            Value::String("Gizmo".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("raw_order"),
+            &key![2i64, 1i64, "qty"],
+            Value::Integer(10),
+        )
+        .await?;
+
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Get specific order by composite key
+    let order: Option<RawOrder> = db.one((1u64, 2u64)).await.unwrap();
+    assert!(order.is_some());
+    let o = order.unwrap();
+    assert_eq!(o.customer_id, 1);
+    assert_eq!(o.order_id, 2);
+    assert_eq!(o.product, "Gadget");
+    assert_eq!(o.qty, 3);
+
+    // Query all orders for customer 1
+    let cust1_orders: Vec<RawOrder> = db.query((1u64,)).await.unwrap();
+    assert_eq!(cust1_orders.len(), 2);
+    assert_eq!(cust1_orders[0].product, "Widget");
+    assert_eq!(cust1_orders[1].product, "Gadget");
+
+    // Get all orders
+    let all_orders: Vec<RawOrder> = db.all().await.unwrap();
+    assert_eq!(all_orders.len(), 3);
+}
+
+#[tokio::test]
+async fn test_manual_write_sparse_data_with_defaults() {
+    let db = Database::in_memory().unwrap();
+
+    // Write sparse config entries - some fields missing
+    db.transaction(|txn| async move {
+        // Config with all fields
+        txn.set(
+            &global!("raw_config"),
+            &key!["full", "value"],
+            Value::String("enabled".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("raw_config"),
+            &key!["full", "version"],
+            Value::Integer(2),
+        )
+        .await?;
+
+        // Config with only value (version uses default)
+        txn.set(
+            &global!("raw_config"),
+            &key!["partial", "value"],
+            Value::String("some_val".into()),
+        )
+        .await?;
+
+        // Config with only version (value is Option, defaults to None)
+        txn.set(
+            &global!("raw_config"),
+            &key!["minimal", "version"],
+            Value::Integer(1),
+        )
+        .await?;
+
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Read all configs
+    let configs: Vec<RawConfig> = db.all().await.unwrap();
+    assert_eq!(configs.len(), 3);
+
+    // Full config
+    let full = configs.iter().find(|c| c.name == "full").unwrap();
+    assert_eq!(full.value, Some("enabled".into()));
+    assert_eq!(full.version, 2);
+
+    // Partial config (version defaults to 0)
+    let partial = configs.iter().find(|c| c.name == "partial").unwrap();
+    assert_eq!(partial.value, Some("some_val".into()));
+    assert_eq!(partial.version, 0);
+
+    // Minimal config (value defaults to None)
+    let minimal = configs.iter().find(|c| c.name == "minimal").unwrap();
+    assert_eq!(minimal.value, None);
+    assert_eq!(minimal.version, 1);
+}
+
+#[tokio::test]
+async fn test_manual_write_exists_check() {
+    let db = Database::in_memory().unwrap();
+
+    // Write one record manually
+    db.transaction(|txn| async move {
+        txn.set(
+            &global!("raw_user"),
+            &key![42i64, "name"],
+            Value::String("Test".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("raw_user"),
+            &key![42i64, "email"],
+            Value::String("test@test.com".into()),
+        )
+        .await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Check existence
+    assert!(db.exists::<RawUser, _>(42u64).await.unwrap());
+    assert!(!db.exists::<RawUser, _>(99u64).await.unwrap());
+}
+
+#[tokio::test]
+async fn test_mixed_orm_and_manual_writes() {
+    let db = Database::in_memory().unwrap();
+
+    // Insert via ORM (will write marker)
+    db.transaction(|txn| async move {
+        txn.insert(&Person {
+            id: 1,
+            name: "ORM Alice".into(),
+            email: "orm@test.com".into(),
+        })
+        .await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Insert via manual write (no marker)
+    db.transaction(|txn| async move {
+        txn.set(
+            &global!("person"),
+            &key![2i64, "name"],
+            Value::String("Manual Bob".into()),
+        )
+        .await?;
+        txn.set(
+            &global!("person"),
+            &key![2i64, "email"],
+            Value::String("manual@test.com".into()),
+        )
+        .await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Read all - both should work
+    let people: Vec<Person> = db.all().await.unwrap();
+    assert_eq!(people.len(), 2);
+    assert_eq!(people[0].name, "ORM Alice");
+    assert_eq!(people[1].name, "Manual Bob");
+
+    // Read individual records
+    let p1: Option<Person> = db.one(1u64).await.unwrap();
+    assert_eq!(p1.as_ref().map(|p| p.name.as_str()), Some("ORM Alice"));
+
+    let p2: Option<Person> = db.one(2u64).await.unwrap();
+    assert_eq!(p2.as_ref().map(|p| p.name.as_str()), Some("Manual Bob"));
 }
