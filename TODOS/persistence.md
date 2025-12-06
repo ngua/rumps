@@ -1649,4 +1649,56 @@ optionally swap paths. This is a major operation and should be rare.
 
 ---
 
-Last Updated: 2025-12-03
+Last Updated: 2025-12-06
+
+---
+
+## Notes for README
+
+### In-Memory Databases: ACI without D
+
+When using `Database::in_memory()`, writes to globals still require transactions and provide full **ACI** guarantees:
+
+- **Atomicity**: Writes are buffered until commit; rollback discards all changes
+- **Consistency**: Conflict detection prevents write-write conflicts between concurrent transactions
+- **Isolation**: Snapshot isolation ensures transactions see consistent state
+
+The only difference from persistent databases is **no Durability** - data is lost when the database is dropped. Specifically:
+
+- No WAL logging (the `if let (Name::Global(_), Some(storage))` guards skip WAL ops)
+- `flush_with_txn()` is a no-op
+- No disk I/O whatsoever
+
+This is intentional and useful for:
+- Testing (fast, isolated tests without disk cleanup)
+- Caching (transactional semantics for in-memory data)
+- Temporary workspaces
+
+The "ceremony" of transactions for in-memory globals is still enforced and meaningful for concurrent access - you get proper multi-transaction coordination, just without persistence.
+
+### Database Configuration is Immutable After Creation
+
+When you create a persistent database with `Database::builder()...create(path)`, all configuration (cache size, sync mode, min degree, etc.) is stored in the database's metadata page. On subsequent opens, you **must** use `Database::open(path)` - the stored config is restored automatically.
+
+```rust
+// Create with custom config - stored in metadata page
+let db = Database::builder()
+    .min_degree(5)
+    .cache_size(4096)
+    .create("./data")
+    .await?;
+db.close().await?;
+
+// Later: just open - config restored automatically
+let db = Database::open("./data").await?;  // ✅ Correct
+
+// DON'T try to re-create with different options!
+let db = Database::builder()
+    .min_degree(10)  // ⚠️ Different from stored config
+    .create("./data")  // This would overwrite/corrupt!
+    .await?;
+```
+
+This is why `DatabaseBuilder` has no `open()` method - there's no need to specify config when opening since it's already stored.
+
+**Changing config on existing databases**: A `Database::migrate()` API is planned (see "Configuration Migration" in Future Considerations) but not yet implemented. For now, if you need different config, you must create a new database and manually migrate the data.
