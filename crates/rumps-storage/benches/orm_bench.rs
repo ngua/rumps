@@ -181,6 +181,41 @@ fn bench_orm_insert_batch(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark `insert_many` operations.
+fn bench_orm_insert_many(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("orm_insert_many");
+
+    [10u64, 100, 1000].into_iter().for_each(|batch_size| {
+        group.throughput(Throughput::Elements(batch_size));
+        group.bench_function(format!("{batch_size}_records"), |b| {
+            b.iter_batched(
+                || {
+                    let dir = TempDir::new().unwrap();
+                    let db = rt.block_on(Database::create(dir.path())).unwrap();
+                    let users: Vec<User> =
+                        (0..batch_size).map(make_user).collect();
+                    (dir, db, users)
+                },
+                |(_dir, db, users)| {
+                    rt.block_on(async {
+                        db.transaction(|txn| async move {
+                            txn.insert_many(&users).await?;
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                    })
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+    });
+
+    group.finish();
+}
+
 /// Benchmark `one` operation.
 fn bench_orm_one(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
@@ -387,6 +422,7 @@ criterion_group!(
     benches,
     bench_orm_insert,
     bench_orm_insert_batch,
+    bench_orm_insert_many,
     bench_orm_one,
     bench_orm_exists,
     bench_orm_all_1k,

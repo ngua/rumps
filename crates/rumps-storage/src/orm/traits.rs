@@ -229,6 +229,11 @@ pub trait RumpsWrite: Sealed {
     where
         T: ToRumps + Sync;
 
+    /// Inserts multiple records efficiently in a single batch.
+    async fn insert_many<T>(&self, vals: &[T]) -> Result<()>
+    where
+        T: ToRumps + Sync;
+
     /// Deletes a record by key.
     async fn delete<T, K>(&self, key: K) -> Result<()>
     where
@@ -424,6 +429,28 @@ impl RumpsWrite for Transaction {
         futures::future::try_join_all(pairs.into_iter().map(|(k, v)| {
             let name = name.clone();
             async move { self.set(&name, &k, v).await }
+        }))
+        .await?;
+
+        Ok(())
+    }
+
+    async fn insert_many<T>(&self, vals: &[T]) -> Result<()>
+    where
+        T: ToRumps + Sync,
+    {
+        let name = global!(T::GLOBAL);
+
+        // Flatten all pairs from all values into one batch
+        futures::future::try_join_all(vals.iter().flat_map(|val| {
+            let key = val.to_key();
+            val.to_pairs(&key)
+                .into_iter()
+                .map(|(k, v)| {
+                    let name = name.clone();
+                    async move { self.set(&name, &k, v).await }
+                })
+                .collect::<Vec<_>>()
         }))
         .await?;
 
@@ -797,5 +824,55 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_many() {
+        let db = Database::in_memory().unwrap();
+
+        let users = vec![
+            User {
+                id: 1,
+                name: "Alice".into(),
+                age: 30,
+            },
+            User {
+                id: 2,
+                name: "Bob".into(),
+                age: 25,
+            },
+            User {
+                id: 3,
+                name: "Charlie".into(),
+                age: 35,
+            },
+        ];
+
+        // Insert all via insert_many
+        db.transaction(|txn| {
+            let users = users.clone();
+            async move {
+                txn.insert_many(&users).await?;
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+        // Verify all records
+        let all: Vec<User> = db.all().await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            all.iter().find(|u| u.id == 1).map(|u| &u.name),
+            Some(&"Alice".to_string())
+        );
+        assert_eq!(
+            all.iter().find(|u| u.id == 2).map(|u| &u.name),
+            Some(&"Bob".to_string())
+        );
+        assert_eq!(
+            all.iter().find(|u| u.id == 3).map(|u| &u.name),
+            Some(&"Charlie".to_string())
+        );
     }
 }
