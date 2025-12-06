@@ -1504,3 +1504,734 @@ async fn test_enum_field_skip_attr() {
         })
     );
 }
+
+// =============================================================================
+// Tests for rename_all attribute
+// =============================================================================
+
+/// Struct with snake_case field renaming
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "snake_item", rename_all = "snake-case")]
+struct SnakeCaseItem {
+    #[rumps(key)]
+    item_id: u64,
+    item_name: String,         // -> "item_name"
+    is_active: bool,           // -> "is_active"
+    created_at_timestamp: u64, // -> "created_at_timestamp"
+}
+
+/// Struct with camelCase field renaming
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "camel_item", rename_all = "camel-case")]
+struct CamelCaseItem {
+    #[rumps(key)]
+    item_id: u64,
+    item_name: String,         // -> "itemName"
+    is_active: bool,           // -> "isActive"
+    created_at_timestamp: u64, // -> "createdAtTimestamp"
+}
+
+/// Struct with train-case (kebab-case) field renaming
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "kebab_item", rename_all = "train-case")]
+struct TrainCaseItem {
+    #[rumps(key)]
+    item_id: u64,
+    item_name: String, // -> "item-name"
+    is_active: bool,   // -> "is-active"
+    created_at: u64,   // -> "created-at"
+}
+
+/// Struct with uppercase field renaming
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "upper_item", rename_all = "uppercase")]
+struct UppercaseItem {
+    #[rumps(key)]
+    item_id: u64,
+    name: String, // -> "NAME"
+    active: bool, // -> "ACTIVE"
+}
+
+/// Struct with lowercase field renaming
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "lower_item", rename_all = "lowercase")]
+struct LowercaseItem {
+    #[rumps(key)]
+    ItemId: u64,
+    Name: String, // -> "name"
+    Active: bool, // -> "active"
+}
+
+/// Struct with SCREAMING_SNAKE_CASE field renaming
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "scream_item", rename_all = "screaming-snake-case")]
+struct ScreamingSnakeItem {
+    #[rumps(key)]
+    item_id: u64,
+    item_name: String, // -> "ITEM_NAME"
+    is_active: bool,   // -> "IS_ACTIVE"
+}
+
+/// Enum with snake_case variant renaming
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "snake_status", rename_all = "snake-case")]
+enum SnakeCaseStatus {
+    IsActive,                         // -> "is_active"
+    IsPending,                        // -> "is_pending"
+    WasTerminated { reason: String }, // -> "was_terminated"
+}
+
+/// Unit enum with rename_all for ToValue/FromValue
+#[derive(Debug, Clone, PartialEq, ToValue, FromValue)]
+#[rumps(rename_all = "snake-case")]
+enum SnakeCaseUnitEnum {
+    FirstOption,  // -> "first_option"
+    SecondOption, // -> "second_option"
+    ThirdOption,  // -> "third_option"
+}
+
+/// Unit enum with rename_all for ToSubscript/FromSubscript
+#[derive(Debug, Clone, PartialEq, ToSubscript, FromSubscript)]
+#[rumps(rename_all = "camel-case")]
+enum CamelCaseSubscriptEnum {
+    LowPriority,  // -> "lowPriority"
+    HighPriority, // -> "highPriority"
+}
+
+/// Enum with variant-level rename_all override
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "mixed_case", rename_all = "snake-case")]
+enum MixedCaseEnum {
+    SimpleVariant, // -> "simple_variant"
+    #[rumps(rename_all = "camel-case")]
+    ComplexVariant {
+        field_one: String, // -> "fieldOne" (variant override)
+        field_two: u32,    // -> "fieldTwo"
+    },
+    AnotherVariant {
+        some_field: String, // -> "some_field" (container default)
+    },
+}
+
+/// Enum with explicit rename combined with rename_all
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "rename_combo", rename_all = "snake-case")]
+enum RenameCombined {
+    #[rumps(rename = "custom_name")]
+    OriginalName, // -> "custom_name" (explicit overrides rename_all)
+    AnotherName, // -> "another_name" (rename_all applies)
+}
+
+/// Struct with rename on field overriding rename_all
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "field_override", rename_all = "camel-case")]
+struct FieldOverride {
+    #[rumps(key)]
+    id: u64,
+    normal_field: String, // -> "normalField" (rename_all)
+    #[rumps(rename = "CUSTOM")]
+    override_field: String, // -> "CUSTOM" (explicit rename)
+}
+
+#[tokio::test]
+async fn test_snake_case_struct_fields() {
+    let db = Database::in_memory().unwrap();
+
+    let item = SnakeCaseItem {
+        item_id: 1,
+        item_name: "Widget".into(),
+        is_active: true,
+        created_at_timestamp: 12345,
+    };
+
+    db.transaction(|txn| {
+        let i = item.clone();
+        async move {
+            txn.insert(&i).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Verify roundtrip
+    let fetched: Option<SnakeCaseItem> = db.one(1u64).await.unwrap();
+    assert_eq!(fetched, Some(item));
+
+    // Verify keys use snake_case (fields already snake_case stay same)
+    let key = key![1i64, "item_name"];
+    let val = db.get(&global!("snake_item"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::String("Widget".into())));
+}
+
+#[tokio::test]
+async fn test_camel_case_struct_fields() {
+    let db = Database::in_memory().unwrap();
+
+    let item = CamelCaseItem {
+        item_id: 1,
+        item_name: "Gadget".into(),
+        is_active: false,
+        created_at_timestamp: 67890,
+    };
+
+    db.transaction(|txn| {
+        let i = item.clone();
+        async move {
+            txn.insert(&i).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Verify roundtrip
+    let fetched: Option<CamelCaseItem> = db.one(1u64).await.unwrap();
+    assert_eq!(fetched, Some(item));
+
+    // Verify keys use camelCase
+    let key = key![1i64, "itemName"];
+    let val = db.get(&global!("camel_item"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::String("Gadget".into())));
+
+    let key2 = key![1i64, "isActive"];
+    let val2 = db.get(&global!("camel_item"), &key2).await.unwrap();
+    assert_eq!(val2, Some(Value::Boolean(false)));
+}
+
+#[tokio::test]
+async fn test_train_case_struct_fields() {
+    let db = Database::in_memory().unwrap();
+
+    let item = TrainCaseItem {
+        item_id: 1,
+        item_name: "Gizmo".into(),
+        is_active: true,
+        created_at: 99999,
+    };
+
+    db.transaction(|txn| {
+        let i = item.clone();
+        async move {
+            txn.insert(&i).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Verify roundtrip
+    let fetched: Option<TrainCaseItem> = db.one(1u64).await.unwrap();
+    assert_eq!(fetched, Some(item));
+
+    // Verify keys use train-case (kebab-case)
+    let key = key![1i64, "item-name"];
+    let val = db.get(&global!("kebab_item"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::String("Gizmo".into())));
+}
+
+#[tokio::test]
+async fn test_uppercase_struct_fields() {
+    let db = Database::in_memory().unwrap();
+
+    let item = UppercaseItem {
+        item_id: 1,
+        name: "THING".into(),
+        active: true,
+    };
+
+    db.transaction(|txn| {
+        let i = item.clone();
+        async move {
+            txn.insert(&i).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<UppercaseItem> = db.one(1u64).await.unwrap();
+    assert_eq!(fetched, Some(item));
+
+    // Verify keys use UPPERCASE
+    let key = key![1i64, "NAME"];
+    let val = db.get(&global!("upper_item"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::String("THING".into())));
+}
+
+#[tokio::test]
+async fn test_lowercase_struct_fields() {
+    let db = Database::in_memory().unwrap();
+
+    let item = LowercaseItem {
+        ItemId: 1,
+        Name: "thing".into(),
+        Active: false,
+    };
+
+    db.transaction(|txn| {
+        let i = item.clone();
+        async move {
+            txn.insert(&i).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<LowercaseItem> = db.one(1u64).await.unwrap();
+    assert_eq!(fetched, Some(item));
+
+    // Verify keys use lowercase
+    let key = key![1i64, "name"];
+    let val = db.get(&global!("lower_item"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::String("thing".into())));
+}
+
+#[tokio::test]
+async fn test_screaming_snake_case_struct_fields() {
+    let db = Database::in_memory().unwrap();
+
+    let item = ScreamingSnakeItem {
+        item_id: 1,
+        item_name: "SCREAMER".into(),
+        is_active: true,
+    };
+
+    db.transaction(|txn| {
+        let i = item.clone();
+        async move {
+            txn.insert(&i).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<ScreamingSnakeItem> = db.one(1u64).await.unwrap();
+    assert_eq!(fetched, Some(item));
+
+    // Verify keys use SCREAMING_SNAKE_CASE
+    let key = key![1i64, "ITEM_NAME"];
+    let val = db.get(&global!("scream_item"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::String("SCREAMER".into())));
+
+    let key2 = key![1i64, "IS_ACTIVE"];
+    let val2 = db.get(&global!("scream_item"), &key2).await.unwrap();
+    assert_eq!(val2, Some(Value::Boolean(true)));
+}
+
+#[tokio::test]
+async fn test_snake_case_enum_variants() {
+    let db = Database::in_memory().unwrap();
+
+    let status = SnakeCaseStatus::IsActive;
+
+    db.transaction(|txn| {
+        let s = status.clone();
+        async move {
+            txn.insert(&s).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Key uses snake_case variant name
+    let fetched: Option<SnakeCaseStatus> = db.one("is_active").await.unwrap();
+    assert_eq!(fetched, Some(SnakeCaseStatus::IsActive));
+
+    // Test struct variant
+    let term = SnakeCaseStatus::WasTerminated {
+        reason: "layoff".into(),
+    };
+
+    db.transaction(|txn| {
+        let t = term.clone();
+        async move {
+            txn.insert(&t).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<SnakeCaseStatus> =
+        db.one("was_terminated").await.unwrap();
+    assert_eq!(fetched, Some(term));
+}
+
+#[test]
+fn test_unit_enum_rename_all_to_value() {
+    // ToValue
+    assert_eq!(
+        SnakeCaseUnitEnum::FirstOption.to_val(),
+        Value::String("first_option".into())
+    );
+    assert_eq!(
+        SnakeCaseUnitEnum::SecondOption.to_val(),
+        Value::String("second_option".into())
+    );
+    assert_eq!(
+        SnakeCaseUnitEnum::ThirdOption.to_val(),
+        Value::String("third_option".into())
+    );
+
+    // FromValue
+    assert_eq!(
+        SnakeCaseUnitEnum::from_val(&Value::String("first_option".into())),
+        Ok(SnakeCaseUnitEnum::FirstOption)
+    );
+    assert_eq!(
+        SnakeCaseUnitEnum::from_val(&Value::String("second_option".into())),
+        Ok(SnakeCaseUnitEnum::SecondOption)
+    );
+
+    // Invalid - original name shouldn't work
+    assert!(
+        SnakeCaseUnitEnum::from_val(&Value::String("FirstOption".into()))
+            .is_err()
+    );
+}
+
+#[test]
+fn test_unit_enum_rename_all_to_subscript() {
+    // ToSubscript
+    assert_eq!(
+        CamelCaseSubscriptEnum::LowPriority.to_sub(),
+        Subscript::String("lowPriority".into())
+    );
+    assert_eq!(
+        CamelCaseSubscriptEnum::HighPriority.to_sub(),
+        Subscript::String("highPriority".into())
+    );
+
+    // FromSubscript
+    assert_eq!(
+        CamelCaseSubscriptEnum::from_sub(&Subscript::String(
+            "lowPriority".into()
+        )),
+        Ok(CamelCaseSubscriptEnum::LowPriority)
+    );
+    assert_eq!(
+        CamelCaseSubscriptEnum::from_sub(&Subscript::String(
+            "highPriority".into()
+        )),
+        Ok(CamelCaseSubscriptEnum::HighPriority)
+    );
+
+    // Invalid - original name shouldn't work
+    assert!(CamelCaseSubscriptEnum::from_sub(&Subscript::String(
+        "LowPriority".into()
+    ))
+    .is_err());
+}
+
+#[tokio::test]
+async fn test_variant_rename_all_override() {
+    let db = Database::in_memory().unwrap();
+
+    // Test variant with different rename_all than container
+    let complex = MixedCaseEnum::ComplexVariant {
+        field_one: "value1".into(),
+        field_two: 42,
+    };
+
+    db.transaction(|txn| {
+        let c = complex.clone();
+        async move {
+            txn.insert(&c).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Variant name uses container's rename_all (snake_case)
+    let fetched: Option<MixedCaseEnum> =
+        db.one("complex_variant").await.unwrap();
+    assert_eq!(fetched, Some(complex));
+
+    // Field names use variant's rename_all (camelCase)
+    let key = key!["complex_variant", "fieldOne"];
+    let val = db.get(&global!("mixed_case"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::String("value1".into())));
+
+    // Test variant without override (uses container default)
+    let another = MixedCaseEnum::AnotherVariant {
+        some_field: "test".into(),
+    };
+
+    db.transaction(|txn| {
+        let a = another.clone();
+        async move {
+            txn.insert(&a).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Field names use container's rename_all (snake_case)
+    let key2 = key!["another_variant", "some_field"];
+    let val2 = db.get(&global!("mixed_case"), &key2).await.unwrap();
+    assert_eq!(val2, Some(Value::String("test".into())));
+}
+
+#[tokio::test]
+async fn test_explicit_rename_overrides_rename_all() {
+    let db = Database::in_memory().unwrap();
+
+    // Test enum variant with explicit rename
+    db.transaction(|txn| async move {
+        txn.insert(&RenameCombined::OriginalName).await?;
+        txn.insert(&RenameCombined::AnotherName).await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Explicit rename takes precedence
+    let fetched1: Option<RenameCombined> = db.one("custom_name").await.unwrap();
+    assert_eq!(fetched1, Some(RenameCombined::OriginalName));
+
+    // rename_all applies when no explicit rename
+    let fetched2: Option<RenameCombined> =
+        db.one("another_name").await.unwrap();
+    assert_eq!(fetched2, Some(RenameCombined::AnotherName));
+}
+
+#[tokio::test]
+async fn test_field_rename_overrides_rename_all() {
+    let db = Database::in_memory().unwrap();
+
+    let item = FieldOverride {
+        id: 1,
+        normal_field: "normal".into(),
+        override_field: "override".into(),
+    };
+
+    db.transaction(|txn| {
+        let i = item.clone();
+        async move {
+            txn.insert(&i).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<FieldOverride> = db.one(1u64).await.unwrap();
+    assert_eq!(fetched, Some(item));
+
+    // Normal field uses rename_all (camelCase)
+    let key1 = key![1i64, "normalField"];
+    let val1 = db.get(&global!("field_override"), &key1).await.unwrap();
+    assert_eq!(val1, Some(Value::String("normal".into())));
+
+    // Override field uses explicit rename
+    let key2 = key![1i64, "CUSTOM"];
+    let val2 = db.get(&global!("field_override"), &key2).await.unwrap();
+    assert_eq!(val2, Some(Value::String("override".into())));
+}
+
+// =============================================================================
+// Tests for field-level rename with case transformation
+// =============================================================================
+
+/// Struct with per-field case transformations
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "mixed_field")]
+struct MixedFieldRename {
+    #[rumps(key)]
+    id: u64,
+    // Apply snake_case to just this field
+    #[rumps(rename = "snake-case")]
+    SomeFieldName: String, // -> "some_field_name"
+    // Apply camelCase to just this field
+    #[rumps(rename = "camel-case")]
+    another_field_here: String, // -> "anotherFieldHere"
+    // Literal rename (not a case keyword)
+    #[rumps(rename = "custom_literal")]
+    third_field: String, // -> "custom_literal"
+    // No rename - uses field name as-is
+    plain_field: String, // -> "plain_field"
+}
+
+/// Enum with per-variant case transformations
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "mixed_variant")]
+enum MixedVariantRename {
+    // Apply snake_case to just this variant
+    #[rumps(rename = "snake-case")]
+    SomeVariantName, // -> "some_variant_name"
+    // Apply camelCase to just this variant
+    #[rumps(rename = "camel-case")]
+    AnotherVariantHere {
+        val: u32,
+    }, // -> "anotherVariantHere"
+    // Literal rename
+    #[rumps(rename = "custom_tag")]
+    ThirdVariant, // -> "custom_tag"
+    // No rename - uses variant name as-is
+    PlainVariant, // -> "PlainVariant"
+}
+
+/// Unit enum with per-variant case transformations
+#[derive(Debug, Clone, PartialEq, ToValue, FromValue)]
+enum MixedUnitRename {
+    #[rumps(rename = "snake-case")]
+    FirstOption, // -> "first_option"
+    #[rumps(rename = "uppercase")]
+    SecondOption, // -> "SECONDOPTION"
+    #[rumps(rename = "literal_name")]
+    ThirdOption, // -> "literal_name"
+    FourthOption, // -> "FourthOption"
+}
+
+#[tokio::test]
+async fn test_field_level_case_transformation() {
+    let db = Database::in_memory().unwrap();
+
+    let item = MixedFieldRename {
+        id: 1,
+        SomeFieldName: "snake".into(),
+        another_field_here: "camel".into(),
+        third_field: "literal".into(),
+        plain_field: "plain".into(),
+    };
+
+    db.transaction(|txn| {
+        let i = item.clone();
+        async move {
+            txn.insert(&i).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Verify roundtrip
+    let fetched: Option<MixedFieldRename> = db.one(1u64).await.unwrap();
+    assert_eq!(fetched, Some(item));
+
+    // Verify snake_case transformation on SomeFieldName
+    let key1 = key![1i64, "some_field_name"];
+    let val1 = db.get(&global!("mixed_field"), &key1).await.unwrap();
+    assert_eq!(val1, Some(Value::String("snake".into())));
+
+    // Verify camelCase transformation on another_field_here
+    let key2 = key![1i64, "anotherFieldHere"];
+    let val2 = db.get(&global!("mixed_field"), &key2).await.unwrap();
+    assert_eq!(val2, Some(Value::String("camel".into())));
+
+    // Verify literal rename on third_field
+    let key3 = key![1i64, "custom_literal"];
+    let val3 = db.get(&global!("mixed_field"), &key3).await.unwrap();
+    assert_eq!(val3, Some(Value::String("literal".into())));
+
+    // Verify no rename on plain_field
+    let key4 = key![1i64, "plain_field"];
+    let val4 = db.get(&global!("mixed_field"), &key4).await.unwrap();
+    assert_eq!(val4, Some(Value::String("plain".into())));
+}
+
+#[tokio::test]
+async fn test_variant_level_case_transformation() {
+    let db = Database::in_memory().unwrap();
+
+    // Test snake_case variant
+    db.transaction(|txn| async move {
+        txn.insert(&MixedVariantRename::SomeVariantName).await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<MixedVariantRename> =
+        db.one("some_variant_name").await.unwrap();
+    assert_eq!(fetched, Some(MixedVariantRename::SomeVariantName));
+
+    // Test camelCase variant
+    db.transaction(|txn| async move {
+        txn.insert(&MixedVariantRename::AnotherVariantHere { val: 42 })
+            .await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<MixedVariantRename> =
+        db.one("anotherVariantHere").await.unwrap();
+    assert_eq!(
+        fetched,
+        Some(MixedVariantRename::AnotherVariantHere { val: 42 })
+    );
+
+    // Test literal rename variant
+    db.transaction(|txn| async move {
+        txn.insert(&MixedVariantRename::ThirdVariant).await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<MixedVariantRename> =
+        db.one("custom_tag").await.unwrap();
+    assert_eq!(fetched, Some(MixedVariantRename::ThirdVariant));
+
+    // Test no rename variant
+    db.transaction(|txn| async move {
+        txn.insert(&MixedVariantRename::PlainVariant).await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<MixedVariantRename> =
+        db.one("PlainVariant").await.unwrap();
+    assert_eq!(fetched, Some(MixedVariantRename::PlainVariant));
+}
+
+#[test]
+fn test_unit_enum_field_level_case_transformation() {
+    // Test snake_case
+    assert_eq!(
+        MixedUnitRename::FirstOption.to_val(),
+        Value::String("first_option".into())
+    );
+    assert_eq!(
+        MixedUnitRename::from_val(&Value::String("first_option".into())),
+        Ok(MixedUnitRename::FirstOption)
+    );
+
+    // Test uppercase
+    assert_eq!(
+        MixedUnitRename::SecondOption.to_val(),
+        Value::String("SECONDOPTION".into())
+    );
+    assert_eq!(
+        MixedUnitRename::from_val(&Value::String("SECONDOPTION".into())),
+        Ok(MixedUnitRename::SecondOption)
+    );
+
+    // Test literal
+    assert_eq!(
+        MixedUnitRename::ThirdOption.to_val(),
+        Value::String("literal_name".into())
+    );
+    assert_eq!(
+        MixedUnitRename::from_val(&Value::String("literal_name".into())),
+        Ok(MixedUnitRename::ThirdOption)
+    );
+
+    // Test no rename
+    assert_eq!(
+        MixedUnitRename::FourthOption.to_val(),
+        Value::String("FourthOption".into())
+    );
+    assert_eq!(
+        MixedUnitRename::from_val(&Value::String("FourthOption".into())),
+        Ok(MixedUnitRename::FourthOption)
+    );
+}

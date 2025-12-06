@@ -9,12 +9,15 @@
 //! - `#[derive(ToSubscript)]` - Convert unit enums or newtypes to RUMPS subscripts
 //! - `#[derive(FromSubscript)]` - Parse unit enums or newtypes from RUMPS subscripts
 //!
-//! # Struct Attributes
+//! # Container Attributes
 //!
-//! Container-level attributes on the struct:
+//! Attributes on structs or enums:
 //!
-//! - `#[rumps(global = "name")]` - **Required**. The global name for storage (e.g., `"patient"`
-//!   for `^patient`).
+//! - `#[rumps(global = "name")]` - **Required for ToRumps/FromRumps**. The global name for
+//!   storage (e.g., `"patient"` for `^patient`).
+//! - `#[rumps(rename_all = "case")]` - Apply a naming convention to all fields/variants.
+//!   Supported values: `"snake-case"`, `"camel-case"`, `"pascal-case"`, `"train-case"` (kebab),
+//!   `"lowercase"`, `"uppercase"`, `"screaming-snake-case"`.
 //!
 //! # Field Attributes
 //!
@@ -22,10 +25,18 @@
 //! - `#[rumps(key, order = N)]` - Explicit ordering for composite keys.
 //! - `#[rumps(flatten)]` - Inline nested struct fields at the current level.
 //! - `#[rumps(subtree)]` - Store nested struct as a subtree (adds field name to key path).
-//! - `#[rumps(rename = "x")]` - Use a custom name for the subscript.
+//! - `#[rumps(rename = "x")]` - Rename this field. Can be:
+//!   - A literal string: `rename = "custom_name"` → stores as `"custom_name"`
+//!   - A case convention: `rename = "snake-case"` → applies snake_case to field name
 //! - `#[rumps(skip)]` - Don't persist this field (uses `Default::default()` on read).
 //! - `#[rumps(default)]` - Use `Default::default()` if field is missing on read.
 //! - `#[rumps(default = expr)]` - Use the given expression if field is missing on read.
+//!
+//! # Variant Attributes (for enums)
+//!
+//! - `#[rumps(rename = "x")]` - Rename this variant's tag. Can be a literal or case convention.
+//! - `#[rumps(rename_all = "case")]` - Apply a naming convention to fields within this variant,
+//!   overriding the container's `rename_all`.
 //!
 //! # Examples
 //!
@@ -86,6 +97,61 @@
 //!     Low,
 //!     Medium,
 //!     High,
+//! }
+//! ```
+//!
+//! ## Renaming with `rename_all`
+//!
+//! Apply consistent naming conventions to fields and variants:
+//!
+//! ```ignore
+//! // Snake case for struct fields
+//! #[derive(ToRumps, FromRumps)]
+//! #[rumps(global = "user", rename_all = "camel-case")]
+//! struct User {
+//!     #[rumps(key)]
+//!     user_id: u64,
+//!     first_name: String,  // stored as "firstName"
+//!     last_name: String,   // stored as "lastName"
+//! }
+//!
+//! // Snake case for enum variants
+//! #[derive(ToRumps, FromRumps)]
+//! #[rumps(global = "status", rename_all = "snake-case")]
+//! enum Status {
+//!     IsActive,            // tag: "is_active"
+//!     WasCancelled,        // tag: "was_cancelled"
+//! }
+//!
+//! // Unit enum with rename_all
+//! #[derive(ToValue, FromValue)]
+//! #[rumps(rename_all = "lowercase")]
+//! enum Priority {
+//!     Low,                 // stored as "low"
+//!     High,                // stored as "high"
+//! }
+//!
+//! // Variant-level override
+//! #[derive(ToRumps, FromRumps)]
+//! #[rumps(global = "event", rename_all = "snake-case")]
+//! enum Event {
+//!     UserCreated { user_id: u64 },           // fields: "user_id"
+//!     #[rumps(rename_all = "camel-case")]
+//!     OrderPlaced { order_id: u64 },          // fields: "orderId" (override)
+//! }
+//!
+//! // Field-level case transformation
+//! #[derive(ToRumps, FromRumps)]
+//! #[rumps(global = "mixed")]
+//! struct MixedFields {
+//!     #[rumps(key)]
+//!     id: u64,
+//!     #[rumps(rename = "snake-case")]
+//!     SomeFieldName: String,     // -> "some_field_name"
+//!     #[rumps(rename = "camel-case")]
+//!     another_field: String,     // -> "anotherField"
+//!     #[rumps(rename = "custom")]
+//!     third: String,             // -> "custom" (literal)
 //! }
 //! ```
 //!

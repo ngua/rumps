@@ -7,6 +7,116 @@ use quote::ToTokens;
 use syn::spanned::Spanned;
 use syn::{Attribute, Expr, Ident, LitInt, LitStr, Token};
 
+/// Case convention for renaming identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RenameAll {
+    /// Keep original identifier name (default).
+    #[default]
+    None,
+    /// `snake_case`
+    SnakeCase,
+    /// `camelCase`
+    CamelCase,
+    /// `PascalCase`
+    PascalCase,
+    /// `train-case` (aka kebab-case)
+    TrainCase,
+    /// `lowercase`
+    Lowercase,
+    /// `UPPERCASE`
+    Uppercase,
+    /// `SCREAMING_SNAKE_CASE`
+    ScreamingSnakeCase,
+}
+
+impl RenameAll {
+    /// Parse from attribute literal (e.g., `"snake-case"`).
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "snake-case" | "snake_case" => Some(Self::SnakeCase),
+            "camel-case" | "camelCase" => Some(Self::CamelCase),
+            "pascal-case" | "PascalCase" => Some(Self::PascalCase),
+            "train-case" | "kebab-case" => Some(Self::TrainCase),
+            "lowercase" => Some(Self::Lowercase),
+            "uppercase" | "UPPERCASE" => Some(Self::Uppercase),
+            "screaming-snake-case" | "SCREAMING_SNAKE_CASE" => {
+                Some(Self::ScreamingSnakeCase)
+            }
+            _ => None,
+        }
+    }
+
+    /// Apply this renaming convention to an identifier.
+    pub fn apply(&self, s: &str) -> String {
+        match self {
+            Self::None => s.to_owned(),
+            Self::SnakeCase => to_snake_case(s),
+            Self::CamelCase => to_camel_case(s),
+            Self::PascalCase => to_pascal_case(s),
+            Self::TrainCase => to_train_case(s),
+            Self::Lowercase => s.to_lowercase(),
+            Self::Uppercase => s.to_uppercase(),
+            Self::ScreamingSnakeCase => to_screaming_snake_case(s),
+        }
+    }
+}
+
+/// Convert to `snake_case`.
+fn to_snake_case(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    s.chars().enumerate().for_each(|(i, c)| {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    });
+    out
+}
+
+/// Convert to `camelCase`.
+fn to_camel_case(s: &str) -> String {
+    let snake = to_snake_case(s);
+    let mut cap_next = false;
+    snake
+        .chars()
+        .filter_map(|c| {
+            if c == '_' {
+                cap_next = true;
+                None
+            } else if cap_next {
+                cap_next = false;
+                Some(c.to_ascii_uppercase())
+            } else {
+                Some(c)
+            }
+        })
+        .collect()
+}
+
+/// Convert to `PascalCase`.
+fn to_pascal_case(s: &str) -> String {
+    let camel = to_camel_case(s);
+    let mut chars = camel.chars();
+    chars
+        .next()
+        .map(|c| c.to_ascii_uppercase().to_string() + chars.as_str())
+        .unwrap_or_default()
+}
+
+/// Convert to `train-case` (kebab-case).
+fn to_train_case(s: &str) -> String {
+    to_snake_case(s).replace('_', "-")
+}
+
+/// Convert to `SCREAMING_SNAKE_CASE`.
+fn to_screaming_snake_case(s: &str) -> String {
+    to_snake_case(s).to_uppercase()
+}
+
 /// Container-level attributes (on struct or enum).
 #[derive(Debug, Default)]
 pub struct ContainerAttrs {
@@ -14,6 +124,12 @@ pub struct ContainerAttrs {
     pub global: Option<LitStr>,
     /// For enums: tag field name for adjacently-tagged representation.
     pub tag: Option<LitStr>,
+    /// For enums: content field name (used with `tag` for adjacent tagging).
+    pub content: Option<LitStr>,
+    /// Case convention for variant/field names.
+    pub rename_all: RenameAll,
+    /// For enums: use untagged representation (no variant discriminator).
+    pub untagged: bool,
 }
 
 impl ContainerAttrs {
@@ -30,6 +146,24 @@ impl ContainerAttrs {
                     } else if meta.path.is_ident("tag") {
                         meta.input.parse::<Token![=]>()?;
                         acc.tag = Some(meta.input.parse()?);
+                        Ok(())
+                    } else if meta.path.is_ident("content") {
+                        meta.input.parse::<Token![=]>()?;
+                        acc.content = Some(meta.input.parse()?);
+                        Ok(())
+                    } else if meta.path.is_ident("rename_all") {
+                        meta.input.parse::<Token![=]>()?;
+                        let lit: LitStr = meta.input.parse()?;
+                        acc.rename_all = RenameAll::from_str(&lit.value())
+                            .ok_or_else(|| meta.error(format!(
+                                "unknown rename_all value: `{}` (expected one of: \
+                                 snake-case, camel-case, pascal-case, train-case, \
+                                 lowercase, uppercase, screaming-snake-case)",
+                                lit.value()
+                            )))?;
+                        Ok(())
+                    } else if meta.path.is_ident("untagged") {
+                        acc.untagged = true;
                         Ok(())
                     } else {
                         Err(meta.error(format!(
@@ -141,6 +275,8 @@ impl FieldAttrs {
 pub struct VariantAttrs {
     /// Custom name for the variant tag subscript.
     pub rename: Option<String>,
+    /// Case convention for fields within this variant (overrides container).
+    pub rename_all: Option<RenameAll>,
 }
 
 impl VariantAttrs {
@@ -154,6 +290,20 @@ impl VariantAttrs {
                         meta.input.parse::<Token![=]>()?;
                         let lit: LitStr = meta.input.parse()?;
                         acc.rename = Some(lit.value());
+                        Ok(())
+                    } else if meta.path.is_ident("rename_all") {
+                        meta.input.parse::<Token![=]>()?;
+                        let lit: LitStr = meta.input.parse()?;
+                        acc.rename_all = Some(
+                            RenameAll::from_str(&lit.value()).ok_or_else(|| {
+                                meta.error(format!(
+                                    "unknown rename_all value: `{}` (expected one of: \
+                                     snake-case, camel-case, pascal-case, train-case, \
+                                     lowercase, uppercase, screaming-snake-case)",
+                                    lit.value()
+                                ))
+                            })?,
+                        );
                         Ok(())
                     } else {
                         Err(meta.error(format!(
@@ -178,12 +328,20 @@ pub struct FieldInfo {
 }
 
 impl FieldInfo {
-    /// Subscript name for this field (renamed or field name).
-    pub fn subscript_name(&self) -> String {
-        self.attrs
-            .rename
-            .clone()
-            .unwrap_or_else(|| self.ident.to_string())
+    /// Subscript name for this field.
+    ///
+    /// If `#[rumps(rename = "...")]` is set:
+    /// - If it's a case convention (e.g., `"snake-case"`), apply that to the field name
+    /// - Otherwise, use it as a literal string
+    ///
+    /// If no rename is set, apply `rename_all` to the field name.
+    pub fn subscript_name(&self, rename_all: RenameAll) -> String {
+        match &self.attrs.rename {
+            Some(r) => RenameAll::from_str(r)
+                .map(|case| case.apply(&self.ident.to_string()))
+                .unwrap_or_else(|| r.clone()),
+            None => rename_all.apply(&self.ident.to_string()),
+        }
     }
 
     /// Key order (explicit or positional).
@@ -281,12 +439,20 @@ pub struct VariantInfo {
 }
 
 impl VariantInfo {
-    /// Tag name for this variant (renamed or variant name).
-    pub fn tag_name(&self) -> String {
-        self.attrs
-            .rename
-            .clone()
-            .unwrap_or_else(|| self.ident.to_string())
+    /// Tag name for this variant.
+    ///
+    /// If `#[rumps(rename = "...")]` is set:
+    /// - If it's a case convention (e.g., `"snake-case"`), apply that to the variant name
+    /// - Otherwise, use it as a literal string
+    ///
+    /// If no rename is set, apply `rename_all` to the variant name.
+    pub fn tag_name(&self, rename_all: RenameAll) -> String {
+        match &self.attrs.rename {
+            Some(r) => RenameAll::from_str(r)
+                .map(|case| case.apply(&self.ident.to_string()))
+                .unwrap_or_else(|| r.clone()),
+            None => rename_all.apply(&self.ident.to_string()),
+        }
     }
 }
 

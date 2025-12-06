@@ -5,7 +5,8 @@ use quote::quote;
 use syn::{DeriveInput, Fields};
 
 use crate::attrs::{
-    parse_variants, ContainerAttrs, ParsedFields, VariantFields, VariantInfo,
+    parse_variants, ContainerAttrs, ParsedFields, RenameAll, VariantFields,
+    VariantInfo,
 };
 
 pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -52,7 +53,15 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             let container = ContainerAttrs::from_attrs(&input.attrs)?;
             let global = container.global_or_err(input.ident.span())?;
             let variants = parse_variants(&data.variants)?;
-            expand_enum(name, impl_generics, ty_generics, where_clause, global, &variants)
+            expand_enum(
+                name,
+                impl_generics,
+                ty_generics,
+                where_clause,
+                global,
+                &variants,
+                &container,
+            )
         }
         syn::Data::Union(_) => Err(syn::Error::new_spanned(
             input,
@@ -72,9 +81,10 @@ fn expand_named(
     let container = ContainerAttrs::from_attrs(&input.attrs)?;
     let global = container.global_or_err(input.ident.span())?;
     let fields = ParsedFields::from_named(f)?;
+    let rename_all = container.rename_all;
 
     let to_key_body = gen_to_key(&fields);
-    let to_pairs_body = gen_to_pairs(&fields);
+    let to_pairs_body = gen_to_pairs(&fields, rename_all);
 
     Ok(quote! {
         impl #impl_generics ::rumps_storage::orm::ToRumps for #name #ty_generics #where_clause {
@@ -113,7 +123,7 @@ fn gen_to_key(fields: &ParsedFields) -> TokenStream {
 }
 
 /// Generate the `to_pairs` method body.
-fn gen_to_pairs(fields: &ParsedFields) -> TokenStream {
+fn gen_to_pairs(fields: &ParsedFields, rename_all: RenameAll) -> TokenStream {
     let mut statements = Vec::new();
 
     // Initialize result vector with a marker at the prefix itself.
@@ -127,7 +137,7 @@ fn gen_to_pairs(fields: &ParsedFields) -> TokenStream {
     // Value fields: store at prefix + field_name
     fields.value_fields.iter().for_each(|f| {
         let ident = &f.ident;
-        let sub_name = f.subscript_name();
+        let sub_name = f.subscript_name(rename_all);
         let ty = &f.ty;
 
         // Check if this is an Option<T>
@@ -177,7 +187,7 @@ fn gen_to_pairs(fields: &ParsedFields) -> TokenStream {
     // Subtree fields: call nested to_pairs with prefix + field_name
     fields.subtree_fields.iter().for_each(|f| {
         let ident = &f.ident;
-        let sub_name = f.subscript_name();
+        let sub_name = f.subscript_name(rename_all);
         let ty = &f.ty;
         let is_option = is_option_type(ty);
 
@@ -229,15 +239,18 @@ fn expand_enum(
     where_clause: Option<&syn::WhereClause>,
     global: &syn::LitStr,
     variants: &[VariantInfo],
+    container: &ContainerAttrs,
 ) -> syn::Result<TokenStream> {
+    let rename_all = container.rename_all;
+
     let to_key_arms = variants
         .iter()
-        .map(|v| gen_enum_to_key_arm(v))
+        .map(|v| gen_enum_to_key_arm(v, rename_all))
         .collect::<Vec<_>>();
 
     let to_pairs_arms = variants
         .iter()
-        .map(|v| gen_enum_to_pairs_arm(v))
+        .map(|v| gen_enum_to_pairs_arm(v, rename_all))
         .collect::<Vec<_>>();
 
     Ok(quote! {
@@ -260,9 +273,9 @@ fn expand_enum(
 }
 
 /// Generate a single `to_key` match arm for an enum variant.
-fn gen_enum_to_key_arm(v: &VariantInfo) -> TokenStream {
+fn gen_enum_to_key_arm(v: &VariantInfo, rename_all: RenameAll) -> TokenStream {
     let var_ident = &v.ident;
-    let tag = v.tag_name();
+    let tag = v.tag_name(rename_all);
 
     match &v.fields {
         VariantFields::Unit => {
@@ -342,9 +355,14 @@ fn gen_enum_to_key_arm(v: &VariantInfo) -> TokenStream {
 /// - Embedded: parent calls `to_pairs(subtree_prefix)` where prefix does NOT include tag
 ///
 /// We detect which case by checking if `prefix.get(0)` equals the variant's tag.
-fn gen_enum_to_pairs_arm(v: &VariantInfo) -> TokenStream {
+fn gen_enum_to_pairs_arm(
+    v: &VariantInfo,
+    rename_all: RenameAll,
+) -> TokenStream {
     let var_ident = &v.ident;
-    let tag = v.tag_name();
+    let tag = v.tag_name(rename_all);
+    // For struct variant fields, use variant's rename_all if specified, else container's
+    let field_rename = v.attrs.rename_all.unwrap_or(rename_all);
 
     // Generate the prefix computation that handles both top-level and embedded cases
     let prefix_setup = quote! {
@@ -436,7 +454,7 @@ fn gen_enum_to_pairs_arm(v: &VariantInfo) -> TokenStream {
             // Value fields - use effective_prefix
             pf.value_fields.iter().for_each(|f| {
                 let ident = &f.ident;
-                let sub_name = f.subscript_name();
+                let sub_name = f.subscript_name(field_rename);
                 let ty = &f.ty;
                 let is_option = is_option_type(ty);
 
@@ -483,7 +501,7 @@ fn gen_enum_to_pairs_arm(v: &VariantInfo) -> TokenStream {
             // Subtree fields - use effective_prefix
             pf.subtree_fields.iter().for_each(|f| {
                 let ident = &f.ident;
-                let sub_name = f.subscript_name();
+                let sub_name = f.subscript_name(field_rename);
                 let ty = &f.ty;
                 let is_option = is_option_type(ty);
 

@@ -5,6 +5,28 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, Fields};
 
+use crate::attrs::{ContainerAttrs, RenameAll, VariantAttrs};
+
+/// Get the serialized name for a variant.
+///
+/// If `#[rumps(rename = "...")]` is set:
+/// - If it's a case convention (e.g., `"snake-case"`), apply that to the variant name
+/// - Otherwise, use it as a literal string
+///
+/// If no rename is set, apply `rename_all` to the variant name.
+fn variant_name(
+    ident: &str,
+    attrs: &VariantAttrs,
+    rename_all: RenameAll,
+) -> String {
+    match &attrs.rename {
+        Some(r) => RenameAll::from_str(r)
+            .map(|case| case.apply(ident))
+            .unwrap_or_else(|| r.clone()),
+        None => rename_all.apply(ident),
+    }
+}
+
 /// Expand `#[derive(ToValue)]` for unit enums or newtype structs.
 pub fn expand_to_value(input: &DeriveInput) -> syn::Result<TokenStream> {
     let name = &input.ident;
@@ -12,32 +34,39 @@ pub fn expand_to_value(input: &DeriveInput) -> syn::Result<TokenStream> {
         input.generics.split_for_impl();
 
     match &input.data {
-        syn::Data::Enum(data) => data
-            .variants
-            .iter()
-            .try_fold(Vec::new(), |mut arms, v| match &v.fields {
-                Fields::Unit => {
-                    let var = &v.ident;
-                    let s = var.to_string();
-                    arms.push(quote! { Self::#var => ::rumps_types::Value::String(#s.into()), });
-                    Ok(arms)
-                }
-                _ => Err(syn::Error::new_spanned(
-                    v,
-                    "ToValue cannot be derived for enums with data variants. \
-                     Data enums expand to multiple key-value pairs; use ToRumps instead. \
-                     For custom serialization (e.g., JSON), implement ToValue manually.",
-                )),
-            })
-            .map(|arms| {
-                quote! {
-                    impl #impl_generics ::rumps_types::orm::ToValue for #name #ty_generics #where_clause {
-                        fn to_val(&self) -> ::rumps_types::Value {
-                            match self { #(#arms)* }
+        syn::Data::Enum(data) => {
+            let container = ContainerAttrs::from_attrs(&input.attrs)?;
+            let rename_all = container.rename_all;
+
+            data.variants
+                .iter()
+                .try_fold(Vec::new(), |mut arms, v| match &v.fields {
+                    Fields::Unit => {
+                        let var = &v.ident;
+                        let vattrs = VariantAttrs::from_attrs(&v.attrs)?;
+                        let s = variant_name(&var.to_string(), &vattrs, rename_all);
+                        arms.push(
+                            quote! { Self::#var => ::rumps_types::Value::String(#s.into()), },
+                        );
+                        Ok(arms)
+                    }
+                    _ => Err(syn::Error::new_spanned(
+                        v,
+                        "ToValue cannot be derived for enums with data variants. \
+                         Data enums expand to multiple key-value pairs; use ToRumps instead. \
+                         For custom serialization (e.g., JSON), implement ToValue manually.",
+                    )),
+                })
+                .map(|arms| {
+                    quote! {
+                        impl #impl_generics ::rumps_types::orm::ToValue for #name #ty_generics #where_clause {
+                            fn to_val(&self) -> ::rumps_types::Value {
+                                match self { #(#arms)* }
+                            }
                         }
                     }
-                }
-            }),
+                })
+        }
 
         syn::Data::Struct(data) => match &data.fields {
             Fields::Unnamed(f) if f.unnamed.len() == 1 => f
@@ -76,7 +105,19 @@ pub fn expand_from_value(input: &DeriveInput) -> syn::Result<TokenStream> {
 
     match &input.data {
         syn::Data::Enum(data) => {
-            let expected: Vec<_> = data.variants.iter().map(|v| v.ident.to_string()).collect();
+            let container = ContainerAttrs::from_attrs(&input.attrs)?;
+            let rename_all = container.rename_all;
+
+            // Collect expected variant names for error message
+            let expected: Vec<String> = data
+                .variants
+                .iter()
+                .filter_map(|v| {
+                    VariantAttrs::from_attrs(&v.attrs)
+                        .ok()
+                        .map(|vattrs| variant_name(&v.ident.to_string(), &vattrs, rename_all))
+                })
+                .collect();
             let expected_msg = expected.join(", ");
 
             data.variants
@@ -84,7 +125,8 @@ pub fn expand_from_value(input: &DeriveInput) -> syn::Result<TokenStream> {
                 .try_fold(Vec::new(), |mut arms, v| match &v.fields {
                     Fields::Unit => {
                         let var = &v.ident;
-                        let s = var.to_string();
+                        let vattrs = VariantAttrs::from_attrs(&v.attrs)?;
+                        let s = variant_name(&var.to_string(), &vattrs, rename_all);
                         arms.push(quote! { #s => ::std::result::Result::Ok(Self::#var), });
                         Ok(arms)
                     }
@@ -152,31 +194,38 @@ pub fn expand_to_subscript(input: &DeriveInput) -> syn::Result<TokenStream> {
         input.generics.split_for_impl();
 
     match &input.data {
-        syn::Data::Enum(data) => data
-            .variants
-            .iter()
-            .try_fold(Vec::new(), |mut arms, v| match &v.fields {
-                Fields::Unit => {
-                    let var = &v.ident;
-                    let s = var.to_string();
-                    arms.push(quote! { Self::#var => ::rumps_types::Subscript::String(#s.into()), });
-                    Ok(arms)
-                }
-                _ => Err(syn::Error::new_spanned(
-                    v,
-                    "ToSubscript cannot be derived for enums with data variants. \
-                     Data enums expand to multiple key-value pairs; use ToRumps instead.",
-                )),
-            })
-            .map(|arms| {
-                quote! {
-                    impl #impl_generics ::rumps_types::orm::ToSubscript for #name #ty_generics #where_clause {
-                        fn to_sub(&self) -> ::rumps_types::Subscript {
-                            match self { #(#arms)* }
+        syn::Data::Enum(data) => {
+            let container = ContainerAttrs::from_attrs(&input.attrs)?;
+            let rename_all = container.rename_all;
+
+            data.variants
+                .iter()
+                .try_fold(Vec::new(), |mut arms, v| match &v.fields {
+                    Fields::Unit => {
+                        let var = &v.ident;
+                        let vattrs = VariantAttrs::from_attrs(&v.attrs)?;
+                        let s = variant_name(&var.to_string(), &vattrs, rename_all);
+                        arms.push(
+                            quote! { Self::#var => ::rumps_types::Subscript::String(#s.into()), },
+                        );
+                        Ok(arms)
+                    }
+                    _ => Err(syn::Error::new_spanned(
+                        v,
+                        "ToSubscript cannot be derived for enums with data variants. \
+                         Data enums expand to multiple key-value pairs; use ToRumps instead.",
+                    )),
+                })
+                .map(|arms| {
+                    quote! {
+                        impl #impl_generics ::rumps_types::orm::ToSubscript for #name #ty_generics #where_clause {
+                            fn to_sub(&self) -> ::rumps_types::Subscript {
+                                match self { #(#arms)* }
+                            }
                         }
                     }
-                }
-            }),
+                })
+        }
 
         syn::Data::Struct(data) => match &data.fields {
             Fields::Unnamed(f) if f.unnamed.len() == 1 => f
@@ -215,7 +264,19 @@ pub fn expand_from_subscript(input: &DeriveInput) -> syn::Result<TokenStream> {
 
     match &input.data {
         syn::Data::Enum(data) => {
-            let expected: Vec<_> = data.variants.iter().map(|v| v.ident.to_string()).collect();
+            let container = ContainerAttrs::from_attrs(&input.attrs)?;
+            let rename_all = container.rename_all;
+
+            // Collect expected variant names for error message
+            let expected: Vec<String> = data
+                .variants
+                .iter()
+                .filter_map(|v| {
+                    VariantAttrs::from_attrs(&v.attrs)
+                        .ok()
+                        .map(|vattrs| variant_name(&v.ident.to_string(), &vattrs, rename_all))
+                })
+                .collect();
             let expected_msg = expected.join(", ");
 
             data.variants
@@ -223,7 +284,8 @@ pub fn expand_from_subscript(input: &DeriveInput) -> syn::Result<TokenStream> {
                 .try_fold(Vec::new(), |mut arms, v| match &v.fields {
                     Fields::Unit => {
                         let var = &v.ident;
-                        let s = var.to_string();
+                        let vattrs = VariantAttrs::from_attrs(&v.attrs)?;
+                        let s = variant_name(&var.to_string(), &vattrs, rename_all);
                         arms.push(quote! { #s => ::std::result::Result::Ok(Self::#var), });
                         Ok(arms)
                     }

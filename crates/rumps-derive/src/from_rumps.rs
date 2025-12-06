@@ -5,8 +5,8 @@ use quote::{format_ident, quote};
 use syn::{DeriveInput, Fields};
 
 use crate::attrs::{
-    parse_variants, ContainerAttrs, DefaultValue, ParsedFields, VariantFields,
-    VariantInfo,
+    parse_variants, ContainerAttrs, DefaultValue, ParsedFields, RenameAll,
+    VariantFields, VariantInfo,
 };
 
 pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -55,7 +55,15 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             let container = ContainerAttrs::from_attrs(&input.attrs)?;
             let global = container.global_or_err(input.ident.span())?;
             let variants = parse_variants(&data.variants)?;
-            expand_enum(name, impl_generics, ty_generics, where_clause, global, &variants)
+            expand_enum(
+                name,
+                impl_generics,
+                ty_generics,
+                where_clause,
+                global,
+                &variants,
+                &container,
+            )
         }
         syn::Data::Union(_) => Err(syn::Error::new_spanned(
             input,
@@ -75,8 +83,9 @@ fn expand_named(
     let container = ContainerAttrs::from_attrs(&input.attrs)?;
     let global = container.global_or_err(input.ident.span())?;
     let fields = ParsedFields::from_named(f)?;
+    let rename_all = container.rename_all;
 
-    let from_pairs_body = gen_from_pairs(&fields, name);
+    let from_pairs_body = gen_from_pairs(&fields, name, rename_all);
 
     Ok(quote! {
         impl #impl_generics ::rumps_storage::orm::FromRumps for #name #ty_generics #where_clause {
@@ -99,6 +108,7 @@ fn expand_named(
 fn gen_from_pairs(
     fields: &ParsedFields,
     struct_name: &syn::Ident,
+    rename_all: RenameAll,
 ) -> TokenStream {
     // Extract key fields from prefix
     let key_field_extractions: Vec<_> = fields
@@ -119,7 +129,7 @@ fn gen_from_pairs(
         .collect();
 
     // Generate the fold-based iteration for value, flatten, and subtree fields
-    let pairs_processing = gen_pairs_fold(fields);
+    let pairs_processing = gen_pairs_fold(fields, rename_all);
 
     // Build flatten fields from collected pairs
     let flatten_field_builds: Vec<_> = fields
@@ -159,7 +169,7 @@ fn gen_from_pairs(
             let ident = &f.ident;
             let ty = &f.ty;
             let var_name = format_ident!("{}_pairs", ident);
-            let sub_name = f.subscript_name();
+            let sub_name = f.subscript_name(rename_all);
             let inner_ty = extract_option_inner(ty);
 
             match inner_ty {
@@ -277,7 +287,7 @@ fn gen_from_pairs(
 
 /// Generate the `try_fold` iteration that processes all pairs.
 /// Uses an explicit accumulator tuple to avoid mutable capture issues.
-fn gen_pairs_fold(fields: &ParsedFields) -> TokenStream {
+fn gen_pairs_fold(fields: &ParsedFields, rename_all: RenameAll) -> TokenStream {
     let has_value_fields = !fields.value_fields.is_empty();
     let has_flatten_fields = !fields.flatten_fields.is_empty();
     let has_subtree_fields = !fields.subtree_fields.is_empty();
@@ -294,7 +304,7 @@ fn gen_pairs_fold(fields: &ParsedFields) -> TokenStream {
         gen_accumulator_parts(fields);
 
     // Generate the match arms for updating the accumulator
-    let update_logic = gen_update_logic(fields);
+    let update_logic = gen_update_logic(fields, rename_all);
 
     // Generate field name bindings from accumulator results
     let field_bindings = gen_field_bindings(fields);
@@ -411,7 +421,10 @@ fn gen_accumulator_parts(
 
 /// Generate the update logic inside the fold closure.
 /// Uses `__acc_` prefixed variable names to match the accumulator.
-fn gen_update_logic(fields: &ParsedFields) -> TokenStream {
+fn gen_update_logic(
+    fields: &ParsedFields,
+    rename_all: RenameAll,
+) -> TokenStream {
     let has_flatten = !fields.flatten_fields.is_empty();
 
     // Flatten fields get ALL pairs (cloned)
@@ -430,7 +443,7 @@ fn gen_update_logic(fields: &ParsedFields) -> TokenStream {
         .iter()
         .map(|f| {
             let acc_var = format_ident!("__acc_{}", f.ident);
-            let sub_name = f.subscript_name();
+            let sub_name = f.subscript_name(rename_all);
             let ty = &f.ty;
             let inner_ty = extract_option_inner(ty).unwrap_or(ty);
             quote! {
@@ -449,7 +462,7 @@ fn gen_update_logic(fields: &ParsedFields) -> TokenStream {
         .iter()
         .map(|f| {
             let acc_var = format_ident!("__acc_{}_pairs", f.ident);
-            let sub_name = f.subscript_name();
+            let sub_name = f.subscript_name(rename_all);
             quote! {
                 ::std::option::Option::Some(s) if s == &::rumps_types::Subscript::from(#sub_name) => {
                     #acc_var.push((k, v));
@@ -511,17 +524,20 @@ fn expand_enum(
     where_clause: Option<&syn::WhereClause>,
     global: &syn::LitStr,
     variants: &[VariantInfo],
+    container: &ContainerAttrs,
 ) -> syn::Result<TokenStream> {
     let enum_name_str = name.to_string();
+    let rename_all = container.rename_all;
 
     // Generate match arms for each variant
     let variant_arms = variants
         .iter()
-        .map(|v| gen_enum_from_pairs_arm(v))
+        .map(|v| gen_enum_from_pairs_arm(v, rename_all))
         .collect::<Vec<_>>();
 
     // Collect all variant tag names for error message
-    let variant_names: Vec<_> = variants.iter().map(|v| v.tag_name()).collect();
+    let variant_names: Vec<_> =
+        variants.iter().map(|v| v.tag_name(rename_all)).collect();
     let variant_list = variant_names.join(", ");
 
     Ok(quote! {
@@ -594,9 +610,14 @@ fn expand_enum(
 }
 
 /// Generate a single `from_pairs` match arm for an enum variant.
-fn gen_enum_from_pairs_arm(v: &VariantInfo) -> TokenStream {
+fn gen_enum_from_pairs_arm(
+    v: &VariantInfo,
+    rename_all: RenameAll,
+) -> TokenStream {
     let var_ident = &v.ident;
-    let tag = v.tag_name();
+    let tag = v.tag_name(rename_all);
+    // For struct variant fields, use variant's rename_all if specified, else container's
+    let field_rename = v.attrs.rename_all.unwrap_or(rename_all);
 
     match &v.fields {
         VariantFields::Unit => {
@@ -667,7 +688,8 @@ fn gen_enum_from_pairs_arm(v: &VariantInfo) -> TokenStream {
         }
         VariantFields::Struct(pf) => {
             // Struct variant: process like a regular struct but with tag_prefix
-            let field_processing = gen_enum_struct_variant_body(pf, var_ident);
+            let field_processing =
+                gen_enum_struct_variant_body(pf, var_ident, field_rename);
             quote! {
                 #tag => {
                     #field_processing
@@ -681,6 +703,7 @@ fn gen_enum_from_pairs_arm(v: &VariantInfo) -> TokenStream {
 fn gen_enum_struct_variant_body(
     fields: &ParsedFields,
     var_ident: &syn::Ident,
+    rename_all: RenameAll,
 ) -> TokenStream {
     // Key fields extracted from the prefix (after the tag)
     let key_field_extractions: Vec<_> = fields
@@ -709,7 +732,7 @@ fn gen_enum_struct_variant_body(
         .map(|f| {
             let ident = &f.ident;
             let ty = &f.ty;
-            let sub_name = f.subscript_name();
+            let sub_name = f.subscript_name(rename_all);
             let field_name = ident.to_string();
             let is_option = is_option_type(ty);
             let inner_ty = extract_option_inner(ty).unwrap_or(ty);
