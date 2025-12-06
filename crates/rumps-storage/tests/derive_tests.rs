@@ -1358,3 +1358,149 @@ async fn test_enum_all_variants_in_same_global() {
     let all: Vec<EmploymentStatus> = db.all().await.unwrap();
     assert_eq!(all.len(), 3);
 }
+
+// =============================================================================
+// Enum field attribute tests
+// =============================================================================
+
+/// Enum with default field values
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "task")]
+enum Task {
+    Pending,
+    InProgress {
+        assignee: String,
+        #[rumps(default)]
+        priority: u32,
+        #[rumps(default = 100)]
+        timeout: u32,
+    },
+}
+
+/// Enum with skip and rename on fields
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "record")]
+enum Record {
+    Simple {
+        val: String,
+    },
+    Complex {
+        #[rumps(rename = "v")]
+        value: String,
+        #[rumps(skip)]
+        cached: u32,
+    },
+}
+
+#[tokio::test]
+async fn test_enum_field_default_attr() {
+    let db = Database::in_memory().unwrap();
+
+    // Insert a task with all fields
+    let task = Task::InProgress {
+        assignee: "Alice".into(),
+        priority: 5,
+        timeout: 300,
+    };
+
+    db.transaction(|txn| {
+        let t = task.clone();
+        async move {
+            txn.insert(&t).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Verify roundtrip with all fields
+    let fetched: Option<Task> = db.one("InProgress").await.unwrap();
+    assert_eq!(fetched, Some(task));
+
+    // Now manually delete the priority and timeout fields
+    db.transaction(|txn| async move {
+        txn.kill(&global!("task"), &key!["InProgress", "priority"])
+            .await?;
+        txn.kill(&global!("task"), &key!["InProgress", "timeout"])
+            .await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Fetch again - should get defaults
+    let fetched: Option<Task> = db.one("InProgress").await.unwrap();
+    assert_eq!(
+        fetched,
+        Some(Task::InProgress {
+            assignee: "Alice".into(),
+            priority: 0,  // Default::default()
+            timeout: 100, // default = 100
+        })
+    );
+}
+
+#[tokio::test]
+async fn test_enum_field_rename_attr() {
+    let db = Database::in_memory().unwrap();
+
+    let rec = Record::Complex {
+        value: "hello".into(),
+        cached: 42,
+    };
+
+    db.transaction(|txn| {
+        let r = rec.clone();
+        async move {
+            txn.insert(&r).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Verify the field is stored with renamed key "v" not "value"
+    let renamed_key = key!["Complex", "v"];
+    let val = db.get(&global!("record"), &renamed_key).await.unwrap();
+    assert_eq!(val, Some(Value::String("hello".into())));
+
+    // Original name should NOT exist
+    let orig_key = key!["Complex", "value"];
+    let val = db.get(&global!("record"), &orig_key).await.unwrap();
+    assert_eq!(val, None);
+}
+
+#[tokio::test]
+async fn test_enum_field_skip_attr() {
+    let db = Database::in_memory().unwrap();
+
+    let rec = Record::Complex {
+        value: "test".into(),
+        cached: 999,
+    };
+
+    db.transaction(|txn| {
+        let r = rec.clone();
+        async move {
+            txn.insert(&r).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // The "cached" field should NOT be stored
+    let cached_key = key!["Complex", "cached"];
+    let val = db.get(&global!("record"), &cached_key).await.unwrap();
+    assert_eq!(val, None);
+
+    // Roundtrip should restore cached to Default::default() (0)
+    let fetched: Option<Record> = db.one("Complex").await.unwrap();
+    assert_eq!(
+        fetched,
+        Some(Record::Complex {
+            value: "test".into(),
+            cached: 0, // Default, not 999
+        })
+    );
+}
