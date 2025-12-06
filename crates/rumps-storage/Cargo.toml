@@ -36,6 +36,11 @@ name = "database_bench"
 harness = false
 required-features = ["bench"]
 
+[[bench]]
+name = "orm_bench"
+harness = false
+required-features = ["bench", "derive"]
+
 [lints.rust]
 dead_code = "allow"
 
