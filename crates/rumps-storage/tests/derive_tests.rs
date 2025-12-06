@@ -1040,3 +1040,321 @@ async fn test_mixed_orm_and_manual_writes() {
     let p2: Option<Person> = db.one(2u64).await.unwrap();
     assert_eq!(p2.as_ref().map(|p| p.name.as_str()), Some("Manual Bob"));
 }
+
+// =============================================================================
+// Tests for data-carrying enums (ToRumps/FromRumps)
+// =============================================================================
+
+/// Enum with unit and struct variants
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "status")]
+enum EmploymentStatus {
+    Active,
+    OnLeave { reason: String },
+    Terminated { date: u64, reason: String },
+}
+
+/// Enum with tuple variants
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "message")]
+enum Message {
+    Text(String),
+    Binary(Vec<u8>),
+    Coords(i32, i32),
+}
+
+/// Top-level enum with per-variant keys
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "entity")]
+enum Entity {
+    User {
+        #[rumps(key)]
+        id: u64,
+        name: String,
+        email: String,
+    },
+    Product {
+        #[rumps(key)]
+        sku: String,
+        price: f64,
+    },
+}
+
+/// Enum with renamed variants
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "event")]
+enum Event {
+    #[rumps(rename = "created")]
+    Created { ts: u64 },
+    #[rumps(rename = "updated")]
+    Updated { ts: u64, by: String },
+}
+
+/// Struct with embedded enum field
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "worker")]
+struct Worker {
+    #[rumps(key)]
+    id: u64,
+    name: String,
+    #[rumps(subtree)]
+    status: EmploymentStatus,
+}
+
+#[tokio::test]
+async fn test_enum_unit_variant_roundtrip() {
+    let db = Database::in_memory().unwrap();
+
+    let status = EmploymentStatus::Active;
+
+    db.transaction(|txn| {
+        let s = status.clone();
+        async move {
+            txn.insert(&s).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // The key is just ["Active"]
+    let fetched: Option<EmploymentStatus> = db.one("Active").await.unwrap();
+    assert_eq!(fetched, Some(EmploymentStatus::Active));
+}
+
+#[tokio::test]
+async fn test_enum_struct_variant_roundtrip() {
+    let db = Database::in_memory().unwrap();
+
+    let status = EmploymentStatus::OnLeave {
+        reason: "vacation".into(),
+    };
+
+    db.transaction(|txn| {
+        let s = status.clone();
+        async move {
+            txn.insert(&s).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // The key is ["OnLeave"]
+    let fetched: Option<EmploymentStatus> = db.one("OnLeave").await.unwrap();
+    assert_eq!(fetched, Some(status));
+
+    // Verify storage layout: ^status("OnLeave", "reason") = "vacation"
+    let reason_key = key!["OnLeave", "reason"];
+    let val = db.get(&global!("status"), &reason_key).await.unwrap();
+    assert_eq!(val, Some(Value::String("vacation".into())));
+}
+
+#[tokio::test]
+async fn test_enum_struct_variant_multiple_fields() {
+    let db = Database::in_memory().unwrap();
+
+    let status = EmploymentStatus::Terminated {
+        date: 1234567890,
+        reason: "layoff".into(),
+    };
+
+    db.transaction(|txn| {
+        let s = status.clone();
+        async move {
+            txn.insert(&s).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<EmploymentStatus> = db.one("Terminated").await.unwrap();
+    assert_eq!(fetched, Some(status));
+}
+
+#[tokio::test]
+async fn test_enum_single_tuple_variant() {
+    let db = Database::in_memory().unwrap();
+
+    let msg = Message::Text("hello world".into());
+
+    db.transaction(|txn| {
+        let m = msg.clone();
+        async move {
+            txn.insert(&m).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<Message> = db.one("Text").await.unwrap();
+    assert_eq!(fetched, Some(msg));
+
+    // Verify storage: single-field tuple stores value directly
+    // ^message("Text") = "hello world"
+    let key = key!["Text"];
+    let val = db.get(&global!("message"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::String("hello world".into())));
+}
+
+#[tokio::test]
+async fn test_enum_multi_tuple_variant() {
+    let db = Database::in_memory().unwrap();
+
+    let msg = Message::Coords(10, 20);
+
+    db.transaction(|txn| {
+        let m = msg.clone();
+        async move {
+            txn.insert(&m).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<Message> = db.one("Coords").await.unwrap();
+    assert_eq!(fetched, Some(msg));
+
+    // Verify storage: multi-field tuple uses numeric indices
+    // ^message("Coords", 0) = 10
+    // ^message("Coords", 1) = 20
+    let key0 = key!["Coords", 0i64];
+    let val0 = db.get(&global!("message"), &key0).await.unwrap();
+    assert_eq!(val0, Some(Value::Integer(10)));
+
+    let key1 = key!["Coords", 1i64];
+    let val1 = db.get(&global!("message"), &key1).await.unwrap();
+    assert_eq!(val1, Some(Value::Integer(20)));
+}
+
+#[tokio::test]
+async fn test_enum_with_per_variant_keys() {
+    let db = Database::in_memory().unwrap();
+
+    let user = Entity::User {
+        id: 42,
+        name: "Alice".into(),
+        email: "alice@example.com".into(),
+    };
+    let product = Entity::Product {
+        sku: "SKU-001".into(),
+        price: 29.99,
+    };
+
+    db.transaction(|txn| {
+        let u = user.clone();
+        let p = product.clone();
+        async move {
+            txn.insert(&u).await?;
+            txn.insert(&p).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // User key is ["User", 42]
+    let fetched_user: Option<Entity> = db.one(("User", 42u64)).await.unwrap();
+    assert_eq!(fetched_user, Some(user));
+
+    // Product key is ["Product", "SKU-001"]
+    let fetched_product: Option<Entity> =
+        db.one(("Product", "SKU-001")).await.unwrap();
+    assert_eq!(fetched_product, Some(product));
+
+    // Query all Users
+    let users: Vec<Entity> = db.query(("User",)).await.unwrap();
+    assert_eq!(users.len(), 1);
+
+    // Query all entities
+    let all: Vec<Entity> = db.all().await.unwrap();
+    assert_eq!(all.len(), 2);
+}
+
+#[tokio::test]
+async fn test_enum_variant_rename() {
+    let db = Database::in_memory().unwrap();
+
+    let event = Event::Created { ts: 1000 };
+
+    db.transaction(|txn| {
+        let e = event.clone();
+        async move {
+            txn.insert(&e).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Key uses renamed tag "created" not "Created"
+    let fetched: Option<Event> = db.one("created").await.unwrap();
+    assert_eq!(fetched, Some(event));
+
+    // Verify storage uses renamed tag
+    let key = key!["created", "ts"];
+    let val = db.get(&global!("event"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::Integer(1000)));
+}
+
+#[tokio::test]
+async fn test_struct_with_embedded_enum() {
+    let db = Database::in_memory().unwrap();
+
+    let worker = Worker {
+        id: 1,
+        name: "Bob".into(),
+        status: EmploymentStatus::OnLeave {
+            reason: "sick leave".into(),
+        },
+    };
+
+    db.transaction(|txn| {
+        let w = worker.clone();
+        async move {
+            txn.insert(&w).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<Worker> = db.one(1u64).await.unwrap();
+    assert_eq!(fetched, Some(worker));
+
+    // Verify storage layout:
+    // ^worker(1, "name") = "Bob"
+    // ^worker(1, "status", "OnLeave", "reason") = "sick leave"
+    let reason_key = key![1i64, "status", "OnLeave", "reason"];
+    let val = db.get(&global!("worker"), &reason_key).await.unwrap();
+    assert_eq!(val, Some(Value::String("sick leave".into())));
+}
+
+#[tokio::test]
+async fn test_enum_all_variants_in_same_global() {
+    let db = Database::in_memory().unwrap();
+
+    // Insert all variant types
+    db.transaction(|txn| async move {
+        txn.insert(&EmploymentStatus::Active).await?;
+        txn.insert(&EmploymentStatus::OnLeave {
+            reason: "vacation".into(),
+        })
+        .await?;
+        txn.insert(&EmploymentStatus::Terminated {
+            date: 1000,
+            reason: "resignation".into(),
+        })
+        .await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Get all - should find all 3 variants
+    let all: Vec<EmploymentStatus> = db.all().await.unwrap();
+    assert_eq!(all.len(), 3);
+}

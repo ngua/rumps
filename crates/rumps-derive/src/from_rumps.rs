@@ -4,7 +4,10 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{DeriveInput, Fields};
 
-use crate::attrs::{ContainerAttrs, DefaultValue, ParsedFields};
+use crate::attrs::{
+    parse_variants, ContainerAttrs, DefaultValue, ParsedFields, VariantFields,
+    VariantInfo,
+};
 
 pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let name = &input.ident;
@@ -48,10 +51,12 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                 "FromRumps cannot be derived for unit structs",
             )),
         },
-        syn::Data::Enum(_) => Err(syn::Error::new_spanned(
-            input,
-            "FromRumps cannot be derived for enums; use FromValue for unit enums",
-        )),
+        syn::Data::Enum(data) => {
+            let container = ContainerAttrs::from_attrs(&input.attrs)?;
+            let global = container.global_or_err(input.ident.span())?;
+            let variants = parse_variants(&data.variants)?;
+            expand_enum(name, impl_generics, ty_generics, where_clause, global, &variants)
+        }
         syn::Data::Union(_) => Err(syn::Error::new_spanned(
             input,
             "FromRumps cannot be derived for unions",
@@ -495,5 +500,311 @@ fn extract_option_inner(ty: &syn::Type) -> Option<&syn::Type> {
             })?
         }
         _ => None,
+    }
+}
+
+/// Expand `FromRumps` derive for enums.
+fn expand_enum(
+    name: &syn::Ident,
+    impl_generics: syn::ImplGenerics,
+    ty_generics: syn::TypeGenerics,
+    where_clause: Option<&syn::WhereClause>,
+    global: &syn::LitStr,
+    variants: &[VariantInfo],
+) -> syn::Result<TokenStream> {
+    let enum_name_str = name.to_string();
+
+    // Generate match arms for each variant
+    let variant_arms = variants
+        .iter()
+        .map(|v| gen_enum_from_pairs_arm(v))
+        .collect::<Vec<_>>();
+
+    // Collect all variant tag names for error message
+    let variant_names: Vec<_> = variants.iter().map(|v| v.tag_name()).collect();
+    let variant_list = variant_names.join(", ");
+
+    Ok(quote! {
+        impl #impl_generics ::rumps_storage::orm::FromRumps for #name #ty_generics #where_clause {
+            const GLOBAL: &'static str = #global;
+
+            fn from_pairs<__I>(
+                prefix: &::rumps_types::Key,
+                mut pairs: __I,
+            ) -> ::std::result::Result<Self, ::rumps_types::orm::DecodeError>
+            where
+                __I: ::std::iter::Iterator<Item = (::rumps_types::Key, ::rumps_types::Value)>,
+            {
+                // Collect all pairs for analysis
+                let all_pairs: ::std::vec::Vec<_> = pairs.collect();
+
+                // Determine the variant tag. Two cases:
+                // 1. Top-level: `prefix` = `[tag, key_fields...]` (from `to_key()`)
+                //    -> tag is at `prefix.get(0)`
+                // 2. Embedded: `prefix` = `[parent_stuff..., field_name]` (subtree)
+                //    -> tag is at `first_pair.key.get(prefix.len())`
+                //
+                // We detect which case by checking if `prefix.get(0)` is a known variant tag.
+                let tag_from_prefix = prefix.get(0).and_then(|s| match s {
+                    ::rumps_types::Subscript::String(st) => ::std::option::Option::Some(st.as_str()),
+                    _ => ::std::option::Option::None,
+                });
+
+                // Check if prefix[0] is one of our variant tags
+                let known_tags: &[&str] = &[#(#variant_names),*];
+                let is_top_level = tag_from_prefix
+                    .map(|t| known_tags.contains(&t))
+                    .unwrap_or(false);
+
+                let (tag, effective_prefix) = if is_top_level {
+                    // Top-level: tag is in prefix, use prefix as-is
+                    (tag_from_prefix.unwrap(), prefix.clone())
+                } else {
+                    // Embedded: extract tag from pairs, build effective_prefix
+                    let t = all_pairs
+                        .first()
+                        .and_then(|(k, _)| k.get(prefix.len()))
+                        .and_then(|s| match s {
+                            ::rumps_types::Subscript::String(st) => ::std::option::Option::Some(st.as_str()),
+                            _ => ::std::option::Option::None,
+                        })
+                        .ok_or_else(|| ::rumps_types::orm::DecodeError::Custom(
+                            ::std::format!("missing variant tag for enum {}", #enum_name_str)
+                        ))?;
+                    let mut ep = prefix.clone();
+                    ep.push(::rumps_types::Subscript::from(t));
+                    (t, ep)
+                };
+
+                // Use effective_prefix in the match arms
+                let prefix = &effective_prefix;
+
+                match tag {
+                    #(#variant_arms)*
+                    other => ::std::result::Result::Err(::rumps_types::orm::DecodeError::Custom(
+                        ::std::format!(
+                            "unknown {} variant: `{}` (expected one of: {})",
+                            #enum_name_str, other, #variant_list
+                        )
+                    )),
+                }
+            }
+        }
+    })
+}
+
+/// Generate a single `from_pairs` match arm for an enum variant.
+fn gen_enum_from_pairs_arm(v: &VariantInfo) -> TokenStream {
+    let var_ident = &v.ident;
+    let tag = v.tag_name();
+
+    match &v.fields {
+        VariantFields::Unit => {
+            // Unit variant: just return the variant
+            quote! {
+                #tag => ::std::result::Result::Ok(Self::#var_ident),
+            }
+        }
+        VariantFields::Tuple(fields) => {
+            match fields.len() {
+                1 => {
+                    // Single-field tuple: value is stored directly at prefix
+                    let ty = &fields[0].ty;
+                    quote! {
+                        #tag => {
+                            // Find the value at exactly prefix
+                            let val = all_pairs
+                                .iter()
+                                .find(|(k, _)| k == prefix)
+                                .map(|(_, v)| v)
+                                .ok_or_else(|| ::rumps_types::orm::DecodeError::MissingField {
+                                    field: "0"
+                                })?;
+                            let field_0 = <#ty as ::rumps_types::orm::FromValue>::from_val(val)?;
+                            ::std::result::Result::Ok(Self::#var_ident(field_0))
+                        }
+                    }
+                }
+                _ => {
+                    // Multi-field tuple: values at numeric indices
+                    let field_extractions: Vec<_> = fields
+                        .iter()
+                        .map(|f| {
+                            let idx = f.index;
+                            let ty = &f.ty;
+                            let var_name = format_ident!("field_{}", idx);
+                            let idx_i64 = idx as i64;
+                            quote! {
+                                let #var_name: #ty = {
+                                    let mut k = prefix.clone();
+                                    k.push(::rumps_types::Subscript::from(#idx_i64));
+                                    let val = all_pairs
+                                        .iter()
+                                        .find(|(key, _)| key == &k)
+                                        .map(|(_, v)| v)
+                                        .ok_or_else(|| ::rumps_types::orm::DecodeError::MissingField {
+                                            field: stringify!(#idx)
+                                        })?;
+                                    <#ty as ::rumps_types::orm::FromValue>::from_val(val)?
+                                };
+                            }
+                        })
+                        .collect();
+
+                    let field_names: Vec<_> = fields
+                        .iter()
+                        .map(|f| format_ident!("field_{}", f.index))
+                        .collect();
+
+                    quote! {
+                        #tag => {
+                            #(#field_extractions)*
+                            ::std::result::Result::Ok(Self::#var_ident(#(#field_names),*))
+                        }
+                    }
+                }
+            }
+        }
+        VariantFields::Struct(pf) => {
+            // Struct variant: process like a regular struct but with tag_prefix
+            let field_processing = gen_enum_struct_variant_body(pf, var_ident);
+            quote! {
+                #tag => {
+                    #field_processing
+                }
+            }
+        }
+    }
+}
+
+/// Generate the body for parsing a struct variant.
+fn gen_enum_struct_variant_body(
+    fields: &ParsedFields,
+    var_ident: &syn::Ident,
+) -> TokenStream {
+    // Key fields extracted from the prefix (after the tag)
+    let key_field_extractions: Vec<_> = fields
+        .key_fields
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let ident = &f.ident;
+            let ty = &f.ty;
+            let field_name = ident.to_string();
+            // Key fields come after the variant tag in prefix
+            let pos = i + 1; // +1 because position 0 is the variant tag
+            quote! {
+                let #ident: #ty = prefix
+                    .get(#pos)
+                    .ok_or_else(|| ::rumps_types::orm::DecodeError::MissingField { field: #field_name })
+                    .and_then(::rumps_types::orm::FromSubscript::from_sub)?;
+            }
+        })
+        .collect();
+
+    // Value fields
+    let value_field_extractions: Vec<_> = fields
+        .value_fields
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            let ty = &f.ty;
+            let sub_name = f.subscript_name();
+            let field_name = ident.to_string();
+            let is_option = is_option_type(ty);
+            let inner_ty = extract_option_inner(ty).unwrap_or(ty);
+
+            if is_option {
+                quote! {
+                    let #ident: #ty = {
+                        let mut k = prefix.clone();
+                        k.push(::rumps_types::Subscript::from(#sub_name));
+                        all_pairs
+                            .iter()
+                            .find(|(key, _)| key == &k)
+                            .map(|(_, v)| <#inner_ty as ::rumps_types::orm::FromValue>::from_val(v))
+                            .transpose()?
+                    };
+                }
+            } else {
+                match &f.attrs.default {
+                    Some(DefaultValue::Trait) => quote! {
+                        let #ident: #ty = {
+                            let mut k = prefix.clone();
+                            k.push(::rumps_types::Subscript::from(#sub_name));
+                            all_pairs
+                                .iter()
+                                .find(|(key, _)| key == &k)
+                                .map(|(_, v)| <#ty as ::rumps_types::orm::FromValue>::from_val(v))
+                                .transpose()?
+                                .unwrap_or_default()
+                        };
+                    },
+                    Some(DefaultValue::Expr(expr)) => quote! {
+                        let #ident: #ty = {
+                            let mut k = prefix.clone();
+                            k.push(::rumps_types::Subscript::from(#sub_name));
+                            all_pairs
+                                .iter()
+                                .find(|(key, _)| key == &k)
+                                .map(|(_, v)| <#ty as ::rumps_types::orm::FromValue>::from_val(v))
+                                .transpose()?
+                                .unwrap_or_else(|| #expr)
+                        };
+                    },
+                    None => quote! {
+                        let #ident: #ty = {
+                            let mut k = prefix.clone();
+                            k.push(::rumps_types::Subscript::from(#sub_name));
+                            let val = all_pairs
+                                .iter()
+                                .find(|(key, _)| key == &k)
+                                .map(|(_, v)| v)
+                                .ok_or_else(|| ::rumps_types::orm::DecodeError::MissingField {
+                                    field: #field_name
+                                })?;
+                            <#ty as ::rumps_types::orm::FromValue>::from_val(val)?
+                        };
+                    },
+                }
+            }
+        })
+        .collect();
+
+    // Skip fields
+    let skip_field_vars: Vec<_> = fields
+        .skip_fields
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            let ty = &f.ty;
+            match &f.attrs.default {
+                Some(DefaultValue::Expr(expr)) => quote! {
+                    let #ident: #ty = #expr;
+                },
+                _ => quote! {
+                    let #ident: #ty = ::std::default::Default::default();
+                },
+            }
+        })
+        .collect();
+
+    // TODO: flatten and subtree fields for enum variants (future enhancement)
+    // For now, we don't support flatten/subtree in enum struct variants
+
+    // Build variant constructor
+    let all_field_names: Vec<_> = fields
+        .key_fields
+        .iter()
+        .chain(fields.value_fields.iter())
+        .chain(fields.skip_fields.iter())
+        .map(|f| &f.ident)
+        .collect();
+
+    quote! {
+        #(#key_field_extractions)*
+        #(#value_field_extractions)*
+        #(#skip_field_vars)*
+        ::std::result::Result::Ok(Self::#var_ident { #(#all_field_names),* })
     }
 }

@@ -24,7 +24,9 @@ pub fn expand_to_value(input: &DeriveInput) -> syn::Result<TokenStream> {
                 }
                 _ => Err(syn::Error::new_spanned(
                     v,
-                    "ToValue can only be derived for unit enums",
+                    "ToValue cannot be derived for enums with data variants. \
+                     Data enums expand to multiple key-value pairs; use ToRumps instead. \
+                     For custom serialization (e.g., JSON), implement ToValue manually.",
                 )),
             })
             .map(|arms| {
@@ -88,7 +90,9 @@ pub fn expand_from_value(input: &DeriveInput) -> syn::Result<TokenStream> {
                     }
                     _ => Err(syn::Error::new_spanned(
                         v,
-                        "FromValue can only be derived for unit enums",
+                        "FromValue cannot be derived for enums with data variants. \
+                         Data enums expand to multiple key-value pairs; use FromRumps instead. \
+                         For custom deserialization (e.g., JSON), implement FromValue manually.",
                     )),
                 })
                 .map(|arms| {
@@ -160,7 +164,8 @@ pub fn expand_to_subscript(input: &DeriveInput) -> syn::Result<TokenStream> {
                 }
                 _ => Err(syn::Error::new_spanned(
                     v,
-                    "ToSubscript can only be derived for unit enums",
+                    "ToSubscript cannot be derived for enums with data variants. \
+                     Data enums expand to multiple key-value pairs; use ToRumps instead.",
                 )),
             })
             .map(|arms| {
@@ -224,7 +229,8 @@ pub fn expand_from_subscript(input: &DeriveInput) -> syn::Result<TokenStream> {
                     }
                     _ => Err(syn::Error::new_spanned(
                         v,
-                        "FromSubscript can only be derived for unit enums",
+                        "FromSubscript cannot be derived for enums with data variants. \
+                         Data enums expand to multiple key-value pairs; use FromRumps instead.",
                     )),
                 })
                 .map(|arms| {

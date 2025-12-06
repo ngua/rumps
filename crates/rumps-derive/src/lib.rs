@@ -102,6 +102,177 @@
 //! #[derive(ToSubscript, FromSubscript)]
 //! struct Email(String);
 //! ```
+//!
+//! # Data-Carrying Enums
+//!
+//! Enums with variants that carry data can derive `ToRumps` and `FromRumps`.
+//! This is different from unit enums, which derive `ToValue`/`FromValue`.
+//!
+//! ## Why Data Enums Can't Be Values
+//!
+//! A RUMPS `Value` is a single scalar (string, integer, float, boolean, bytes, JSON).
+//! Data-carrying enums naturally expand to **multiple** key-value pairs because they
+//! need to store:
+//! 1. Which variant is active (the "tag")
+//! 2. The data within that variant (potentially multiple fields)
+//!
+//! This is fundamentally a tree structure, not a scalar value. Therefore:
+//! - **Unit enums** → derive `ToValue`/`FromValue` (variant name as string)
+//! - **Data enums** → derive `ToRumps`/`FromRumps` (tree of key-value pairs)
+//!
+//! If you need a data enum as a single value, serialize it yourself (e.g., to JSON):
+//!
+//! ```ignore
+//! // Manual implementation for JSON serialization
+//! impl ToValue for MyEnum {
+//!     fn to_val(&self) -> Value {
+//!         Value::Json(serde_json::to_value(self).unwrap())
+//!     }
+//! }
+//! ```
+//!
+//! ## Basic Data Enum
+//!
+//! ```ignore
+//! use rumps_derive::{ToRumps, FromRumps};
+//!
+//! #[derive(ToRumps, FromRumps)]
+//! #[rumps(global = "status")]
+//! enum EmploymentStatus {
+//!     Active,                              // Unit variant
+//!     OnLeave { reason: String },          // Struct variant
+//!     Terminated { date: String, reason: Option<String> },
+//! }
+//! ```
+//!
+//! ## Storage Layout
+//!
+//! The variant tag (name) becomes the first subscript in the key path:
+//!
+//! | Rust                                      | Storage                           |
+//! |-------------------------------------------|-----------------------------------|
+//! | `EmploymentStatus::Active`                | `^status["Active"] = ""`          |
+//! | `EmploymentStatus::OnLeave { reason }`    | `^status["OnLeave"] = ""`         |
+//! |                                           | `^status["OnLeave","reason"] = r` |
+//!
+//! ## Variant Types
+//!
+//! ### Unit Variants
+//!
+//! ```ignore
+//! Active,  // Stored as ^global["Active"] = ""
+//! ```
+//!
+//! ### Struct Variants
+//!
+//! ```ignore
+//! OnLeave {
+//!     reason: String,
+//!     #[rumps(default)]
+//!     expected_return: Option<String>,
+//! },
+//! // Stored as:
+//! //   ^global["OnLeave"] = ""
+//! //   ^global["OnLeave","reason"] = "sick leave"
+//! //   ^global["OnLeave","expected_return"] = "2024-01-15" (if present)
+//! ```
+//!
+//! ### Tuple Variants
+//!
+//! Single-field tuples store the value directly:
+//!
+//! ```ignore
+//! Error(String),  // ^global["Error"] = "something went wrong"
+//! ```
+//!
+//! Multi-field tuples use numeric indices:
+//!
+//! ```ignore
+//! Point(f64, f64, f64),
+//! // Stored as:
+//! //   ^global["Point"] = ""
+//! //   ^global["Point",0] = 1.0
+//! //   ^global["Point",1] = 2.0
+//! //   ^global["Point",2] = 3.0
+//! ```
+//!
+//! ## Per-Variant Keys
+//!
+//! Struct variants can have key fields, making each instance uniquely addressable:
+//!
+//! ```ignore
+//! #[derive(ToRumps, FromRumps)]
+//! #[rumps(global = "entity")]
+//! enum Entity {
+//!     Person {
+//!         #[rumps(key)]
+//!         id: u64,
+//!         name: String,
+//!     },
+//!     Product {
+//!         #[rumps(key)]
+//!         sku: String,
+//!         name: String,
+//!     },
+//! }
+//!
+//! // Entity::Person { id: 123, name: "Alice" }
+//! // Key: ["Person", 123]
+//! // Storage:
+//! //   ^entity["Person",123] = ""
+//! //   ^entity["Person",123,"name"] = "Alice"
+//! ```
+//!
+//! ## Variant Rename
+//!
+//! Use `#[rumps(rename = "...")]` to customize the tag stored in the database:
+//!
+//! ```ignore
+//! #[derive(ToRumps, FromRumps)]
+//! #[rumps(global = "event")]
+//! enum Event {
+//!     #[rumps(rename = "USR")]
+//!     UserCreated { id: u64 },
+//!
+//!     #[rumps(rename = "SYS")]
+//!     SystemEvent { code: String },
+//! }
+//! // UserCreated stored as ^event["USR",...]
+//! ```
+//!
+//! ## Embedded Enums (Subtrees)
+//!
+//! Enums can be embedded in structs using `#[rumps(subtree)]`:
+//!
+//! ```ignore
+//! #[derive(ToRumps, FromRumps)]
+//! #[rumps(global = "worker")]
+//! struct Worker {
+//!     #[rumps(key)]
+//!     id: u64,
+//!     name: String,
+//!     #[rumps(subtree)]
+//!     status: EmploymentStatus,
+//! }
+//!
+//! // Worker { id: 1, name: "Bob", status: OnLeave { reason: "vacation" } }
+//! // Storage:
+//! //   ^worker[1] = ""
+//! //   ^worker[1,"name"] = "Bob"
+//! //   ^worker[1,"status","OnLeave"] = ""
+//! //   ^worker[1,"status","OnLeave","reason"] = "vacation"
+//! ```
+//!
+//! ## Variant Attributes
+//!
+//! On enum variants:
+//! - `#[rumps(rename = "x")]` - Custom tag name in storage
+//!
+//! On fields within variants:
+//! - `#[rumps(key)]` - Field is part of the key (struct variants only)
+//! - `#[rumps(default)]` - Use `Default::default()` if missing
+//! - `#[rumps(default = expr)]` - Use expression if missing
+//! - `#[rumps(skip)]` - Don't persist this field
 
 mod attrs;
 mod from_rumps;

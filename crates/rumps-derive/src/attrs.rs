@@ -136,6 +136,37 @@ impl FieldAttrs {
     }
 }
 
+/// Variant-level attributes (on enum variants).
+#[derive(Debug, Default, Clone)]
+pub struct VariantAttrs {
+    /// Custom name for the variant tag subscript.
+    pub rename: Option<String>,
+}
+
+impl VariantAttrs {
+    pub fn from_attrs(attrs: &[Attribute]) -> syn::Result<Self> {
+        attrs
+            .iter()
+            .filter(|a| a.path().is_ident("rumps"))
+            .try_fold(Self::default(), |mut acc, attr| {
+                attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("rename") {
+                        meta.input.parse::<Token![=]>()?;
+                        let lit: LitStr = meta.input.parse()?;
+                        acc.rename = Some(lit.value());
+                        Ok(())
+                    } else {
+                        Err(meta.error(format!(
+                            "unknown rumps variant attribute: `{}`",
+                            meta.path.to_token_stream()
+                        )))
+                    }
+                })?;
+                Ok(acc)
+            })
+    }
+}
+
 /// Parsed field information.
 #[derive(Debug)]
 pub struct FieldInfo {
@@ -220,4 +251,80 @@ impl ParsedFields {
             skip_fields,
         })
     }
+}
+
+/// Variant field types.
+#[derive(Debug)]
+pub enum VariantFields {
+    /// Unit variant: `Active`.
+    Unit,
+    /// Tuple variant: `Error(String)` or `Point(i32, i32)`.
+    Tuple(Vec<TupleFieldInfo>),
+    /// Struct variant: `User { name: String, age: u32 }`.
+    Struct(ParsedFields),
+}
+
+/// Tuple field information (unnamed fields).
+#[derive(Debug)]
+pub struct TupleFieldInfo {
+    pub ty: syn::Type,
+    pub attrs: FieldAttrs,
+    pub index: usize,
+}
+
+/// Parsed variant information.
+#[derive(Debug)]
+pub struct VariantInfo {
+    pub ident: Ident,
+    pub attrs: VariantAttrs,
+    pub fields: VariantFields,
+}
+
+impl VariantInfo {
+    /// Tag name for this variant (renamed or variant name).
+    pub fn tag_name(&self) -> String {
+        self.attrs
+            .rename
+            .clone()
+            .unwrap_or_else(|| self.ident.to_string())
+    }
+}
+
+/// Parse all variants of an enum.
+pub fn parse_variants(
+    variants: &syn::punctuated::Punctuated<syn::Variant, Token![,]>,
+) -> syn::Result<Vec<VariantInfo>> {
+    variants
+        .iter()
+        .map(|v| {
+            let attrs = VariantAttrs::from_attrs(&v.attrs)?;
+            let fields = match &v.fields {
+                syn::Fields::Unit => VariantFields::Unit,
+                syn::Fields::Unnamed(uf) => {
+                    let tuple_fields = uf
+                        .unnamed
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| {
+                            let attrs = FieldAttrs::from_attrs(&f.attrs)?;
+                            Ok(TupleFieldInfo {
+                                ty: f.ty.clone(),
+                                attrs,
+                                index: i,
+                            })
+                        })
+                        .collect::<syn::Result<Vec<_>>>()?;
+                    VariantFields::Tuple(tuple_fields)
+                }
+                syn::Fields::Named(nf) => {
+                    VariantFields::Struct(ParsedFields::from_named(nf)?)
+                }
+            };
+            Ok(VariantInfo {
+                ident: v.ident.clone(),
+                attrs,
+                fields,
+            })
+        })
+        .collect()
 }
