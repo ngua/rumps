@@ -251,16 +251,11 @@ impl RumpsRead for Database {
         let name = global!(T::GLOBAL);
         let prefix = key.into_key();
 
-        // Stream entries under this prefix and collect
+        // Use prefix-optimized collection (seeks to prefix, terminates early)
         let pairs: Vec<(Key, Value)> = self
-            .collects(
-                &name,
-                None,
-                |k, _| k.starts_with(&prefix),
-                |k, v| v.clone().map(|val| (k.clone(), val)),
-            )
-            .await?
-            .try_collect()
+            .collects_prefix_vec(&name, &prefix, |k, v| {
+                v.clone().map(|val| (k.clone(), val))
+            })
             .await?;
 
         if pairs.is_empty() {
@@ -348,16 +343,11 @@ impl RumpsRead for Transaction {
         let name = global!(T::GLOBAL);
         let prefix = key.into_key();
 
-        // Stream entries under this prefix and collect
+        // Use prefix-based collection (merges buffered writes correctly)
         let pairs: Vec<(Key, Value)> = self
-            .collects(
-                &name,
-                None,
-                |k, _| k.starts_with(&prefix),
-                |k, v| v.clone().map(|val| (k.clone(), val)),
-            )
-            .await?
-            .try_collect()
+            .collects_prefix_vec(&name, &prefix, |k, v| {
+                v.clone().map(|val| (k.clone(), val))
+            })
             .await?;
 
         if pairs.is_empty() {

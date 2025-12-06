@@ -541,6 +541,73 @@ impl BTree {
             .try_collect()
             .await
     }
+
+    /// Collects entries matching a key prefix into a `Vec`.
+    ///
+    /// Unlike `collects_vec_at`, this method **stops iteration** as soon as
+    /// a key is encountered that doesn't start with the prefix. This is much
+    /// more efficient for prefix-based queries because it doesn't scan the
+    /// entire tree after the prefix range.
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - Root `NodeId` of the tree
+    /// * `prefix` - The key prefix to match
+    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<T>` containing all extracted values from entries whose keys
+    /// start with `prefix`.
+    pub(crate) async fn collects_prefix_vec_at<F, T>(
+        &self,
+        root: NodeId,
+        prefix: &Key,
+        extract: F,
+    ) -> Result<Vec<T>>
+    where
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
+        T: Send,
+    {
+        self.collects_prefix_at(root, prefix, extract)
+            .try_collect()
+            .await
+    }
+
+    /// Creates a stream of entries matching a key prefix.
+    ///
+    /// This method efficiently iterates entries whose keys start with `prefix`,
+    /// terminating as soon as a non-matching key is encountered. The iteration
+    /// seeks to the prefix position first (O(log n)), then yields matching
+    /// entries until the prefix range ends.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F` - Extract function: `(&Key, &NodeData) -> Option<T>`
+    /// * `T` - Output type yielded by the stream
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - Root `NodeId` of the tree
+    /// * `prefix` - The key prefix to match
+    /// * `extract` - Transforms matching entries into output type `T`
+    ///
+    /// # Returns
+    ///
+    /// A `Stream` that yields `Result<T>` for each entry whose key starts
+    /// with `prefix`.
+    pub(crate) fn collects_prefix_at<'a, F, T>(
+        &'a self,
+        root: NodeId,
+        prefix: &'a Key,
+        extract: F,
+    ) -> impl Stream<Item = Result<T>> + Send + 'a
+    where
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        self.collects_prefix_internal(root, prefix, extract)
+    }
 }
 
 // Public utilities
@@ -1085,6 +1152,139 @@ impl BTree {
                 // Predicate returned false - recurse to skip
                 self.collects_find_next(root, Some(key), pred, extract)
                     .await
+            }
+        })
+    }
+
+    /// Internal implementation for prefix-based collection with early termination.
+    ///
+    /// This method:
+    /// 1. First checks and yields the entry at the exact prefix key (if exists)
+    /// 2. Then iterates entries after the prefix, yielding while keys match
+    /// 3. Terminates as soon as a key doesn't start with the prefix
+    fn collects_prefix_internal<'a, F, T>(
+        &'a self,
+        root: NodeId,
+        prefix: &'a Key,
+        extract: F,
+    ) -> impl Stream<Item = Result<T>> + Send + 'a
+    where
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        let extract = Arc::new(extract);
+
+        // State machine:
+        // - `Some(None)` = haven't checked the prefix key yet
+        // - `Some(Some(key))` = last key yielded, check successor
+        // - `None` = stream exhausted
+        let init_state: Option<Option<Key>> = Some(None);
+
+        futures::stream::unfold(init_state, move |state| {
+            let extract = Arc::clone(&extract);
+
+            async move {
+                match state {
+                    None => None, // Stream exhausted
+                    Some(None) => {
+                        // First iteration: check the exact prefix key
+                        self.collects_prefix_first(
+                            root,
+                            prefix,
+                            extract.as_ref(),
+                        )
+                        .await
+                    }
+                    Some(Some(cursor)) => {
+                        // Subsequent iterations: find next entry after cursor
+                        self.collects_prefix_next(
+                            root,
+                            prefix,
+                            &cursor,
+                            extract.as_ref(),
+                        )
+                        .await
+                    }
+                }
+            }
+        })
+    }
+
+    /// Helper for `collects_prefix_internal`: handle the first entry (exact prefix).
+    fn collects_prefix_first<'a, F, T>(
+        &'a self,
+        root: NodeId,
+        prefix: &'a Key,
+        extract: &'a F,
+    ) -> BoxFuture<'a, Option<(Result<T>, Option<Option<Key>>)>>
+    where
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        Box::pin(async move {
+            // Check if exact prefix key exists
+            match self.get_internal(root, prefix).await {
+                Err(e) => Some((Err(e), None)), // Error, terminate
+                Ok(None) => {
+                    // No entry at prefix, try to find first entry after prefix
+                    self.collects_prefix_next(root, prefix, prefix, extract)
+                        .await
+                }
+                Ok(Some(data)) => {
+                    // Entry exists at prefix
+                    match extract(prefix, &data) {
+                        Some(val) => {
+                            // Yield and continue from prefix
+                            Some((Ok(val), Some(Some(prefix.clone()))))
+                        }
+                        None => {
+                            // Skip this entry, find next
+                            self.collects_prefix_next(
+                                root, prefix, prefix, extract,
+                            )
+                            .await
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Helper for `collects_prefix_internal`: find next entry after cursor.
+    fn collects_prefix_next<'a, F, T>(
+        &'a self,
+        root: NodeId,
+        prefix: &'a Key,
+        cursor: &'a Key,
+        extract: &'a F,
+    ) -> BoxFuture<'a, Option<(Result<T>, Option<Option<Key>>)>>
+    where
+        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        Box::pin(async move {
+            // Find entry after cursor
+            match self.get_next_internal(root, Some(cursor)).await {
+                Err(e) => Some((Err(e), None)), // Error, terminate
+                Ok(None) => None,               // No more entries, terminate
+                Ok(Some((key, data))) => {
+                    // Check if key still starts with prefix
+                    if key.starts_with(prefix) {
+                        match extract(&key, &data) {
+                            Some(val) => Some((Ok(val), Some(Some(key)))),
+                            None => {
+                                // Skip, find next
+                                self.collects_prefix_next(
+                                    root, prefix, &key, extract,
+                                )
+                                .await
+                            }
+                        }
+                    } else {
+                        // Key doesn't match prefix - TERMINATE (the key optimization!)
+                        None
+                    }
+                }
             }
         })
     }
