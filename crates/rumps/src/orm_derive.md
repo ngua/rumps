@@ -198,3 +198,26 @@ struct Worker {
 // ^worker[1, "status", "OnLeave"] = ""
 // ^worker[1, "status", "OnLeave", "reason"] = "vacation"
 ```
+
+## Untagged Enums
+
+Use `#[rumps(untagged)]` when you don't want the variant name stored in the key.
+Variants are tried in declaration order on deserialization:
+
+```text
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "value", untagged)]
+enum JsonValue {
+    Null,                    // Matches empty data
+    Number(f64),             // Matches single numeric value
+    Text(String),            // Matches single string value
+    Object { data: String }, // Matches struct with "data" field
+}
+
+// Number: ^value[] = 42.0  (no variant tag)
+// Text:   ^value[] = "hello"
+// Object: ^value["data"] = "contents"
+```
+
+**Note**: For untagged enums, ensure variants have distinguishable structures.
+The first matching variant (in declaration order) wins during deserialization.

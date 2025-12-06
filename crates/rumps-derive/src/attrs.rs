@@ -268,6 +268,33 @@ impl FieldAttrs {
                 Ok(acc)
             })
     }
+
+    /// Validate that there are no conflicting attribute combinations.
+    pub fn validate(&self, span: Span) -> syn::Result<()> {
+        let conflicts: &[(&str, bool, &str, bool)] = &[
+            ("key", self.key, "skip", self.skip),
+            ("key", self.key, "flatten", self.flatten),
+            ("key", self.key, "subtree", self.subtree),
+            ("flatten", self.flatten, "subtree", self.subtree),
+            ("skip", self.skip, "flatten", self.flatten),
+            ("skip", self.skip, "subtree", self.subtree),
+        ];
+
+        conflicts
+            .iter()
+            .find(|(_, a, _, b)| *a && *b)
+            .map(|(na, _, nb, _)| {
+                Err(syn::Error::new(
+                    span,
+                    format!(
+                        "conflicting attributes: `#[rumps({})]` and `#[rumps({})]` \
+                         cannot be used together",
+                        na, nb
+                    ),
+                ))
+            })
+            .unwrap_or(Ok(()))
+    }
 }
 
 /// Variant-level attributes (on enum variants).
@@ -373,6 +400,7 @@ impl ParsedFields {
             .enumerate()
             .map(|(i, f)| {
                 let attrs = FieldAttrs::from_attrs(&f.attrs)?;
+                attrs.validate(f.span())?;
                 Ok(FieldInfo {
                     ident: f.ident.clone().ok_or_else(|| {
                         syn::Error::new(f.span(), "expected named field")
@@ -473,6 +501,7 @@ pub fn parse_variants(
                         .enumerate()
                         .map(|(i, f)| {
                             let attrs = FieldAttrs::from_attrs(&f.attrs)?;
+                            attrs.validate(f.span())?;
                             Ok(TupleFieldInfo {
                                 ty: f.ty.clone(),
                                 attrs,

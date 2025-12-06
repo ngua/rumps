@@ -2371,3 +2371,241 @@ fn test_unit_enum_variant_rename_override_subscript() {
     ))
     .is_err());
 }
+
+// =============================================================================
+// Untagged enum tests
+// =============================================================================
+
+/// Untagged enum with unit variant
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "untagged_unit", untagged)]
+enum UntaggedUnit {
+    Empty,
+}
+
+/// Untagged enum with single-field tuple variants
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "json_val", untagged)]
+enum JsonValue {
+    Null,
+    Number(f64),
+    Text(String),
+}
+
+/// Untagged enum with struct variants
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "response", untagged)]
+enum ApiResponse {
+    Success { data: String },
+    Error { code: u32, msg: String },
+}
+
+/// Untagged enum with key fields
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "keyed_untagged", untagged)]
+enum KeyedUntagged {
+    ById {
+        #[rumps(key)]
+        id: u64,
+        name: String,
+    },
+    ByName {
+        #[rumps(key)]
+        name: String,
+        count: u32,
+    },
+}
+
+#[tokio::test]
+async fn test_untagged_unit_variant() {
+    let db = Database::in_memory().unwrap();
+
+    let val = UntaggedUnit::Empty;
+
+    db.transaction(|txn| {
+        let v = val.clone();
+        async move {
+            txn.insert(&v).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Untagged unit: key is empty, just a marker at root
+    let fetched: Option<UntaggedUnit> = db.one(Key::new()).await.unwrap();
+    assert_eq!(fetched, Some(UntaggedUnit::Empty));
+}
+
+#[tokio::test]
+async fn test_untagged_single_tuple_number() {
+    let db = Database::in_memory().unwrap();
+
+    let val = JsonValue::Number(42.5);
+
+    db.transaction(|txn| {
+        let v = val.clone();
+        async move {
+            txn.insert(&v).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Verify storage: no tag, value stored directly at root
+    let key = Key::new();
+    let stored = db.get(&global!("json_val"), &key).await.unwrap();
+    assert_eq!(stored, Some(Value::from(42.5)));
+
+    // Round-trip
+    let fetched: Option<JsonValue> = db.one(Key::new()).await.unwrap();
+    assert_eq!(fetched, Some(JsonValue::Number(42.5)));
+}
+
+#[tokio::test]
+async fn test_untagged_single_tuple_text() {
+    let db = Database::in_memory().unwrap();
+
+    let val = JsonValue::Text("hello".into());
+
+    db.transaction(|txn| {
+        let v = val.clone();
+        async move {
+            txn.insert(&v).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Round-trip
+    let fetched: Option<JsonValue> = db.one(Key::new()).await.unwrap();
+    assert_eq!(fetched, Some(JsonValue::Text("hello".into())));
+}
+
+#[tokio::test]
+async fn test_untagged_struct_variant() {
+    let db = Database::in_memory().unwrap();
+
+    let val = ApiResponse::Success { data: "ok".into() };
+
+    db.transaction(|txn| {
+        let v = val.clone();
+        async move {
+            txn.insert(&v).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Verify storage: ^response["data"] = "ok" (no variant tag)
+    let key = key!["data"];
+    let stored = db.get(&global!("response"), &key).await.unwrap();
+    assert_eq!(stored, Some(Value::String("ok".into())));
+
+    // Round-trip
+    let fetched: Option<ApiResponse> = db.one(Key::new()).await.unwrap();
+    assert_eq!(fetched, Some(val));
+}
+
+#[tokio::test]
+async fn test_untagged_error_variant() {
+    let db = Database::in_memory().unwrap();
+
+    let val = ApiResponse::Error {
+        code: 404,
+        msg: "not found".into(),
+    };
+
+    db.transaction(|txn| {
+        let v = val.clone();
+        async move {
+            txn.insert(&v).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Verify storage: ^response["code"] = 404, ^response["msg"] = "not found"
+    let code_key = key!["code"];
+    let code_val = db.get(&global!("response"), &code_key).await.unwrap();
+    assert_eq!(code_val, Some(Value::Integer(404)));
+
+    let msg_key = key!["msg"];
+    let msg_val = db.get(&global!("response"), &msg_key).await.unwrap();
+    assert_eq!(msg_val, Some(Value::String("not found".into())));
+
+    // Round-trip
+    let fetched: Option<ApiResponse> = db.one(Key::new()).await.unwrap();
+    assert_eq!(fetched, Some(val));
+}
+
+#[tokio::test]
+async fn test_untagged_with_keys() {
+    let db = Database::in_memory().unwrap();
+
+    let by_id = KeyedUntagged::ById {
+        id: 42,
+        name: "Alice".into(),
+    };
+    let by_name = KeyedUntagged::ByName {
+        name: "Bob".into(),
+        count: 10,
+    };
+
+    db.transaction(|txn| {
+        let a = by_id.clone();
+        let b = by_name.clone();
+        async move {
+            txn.insert(&a).await?;
+            txn.insert(&b).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // ById: key is just [42], field stored at [42, "name"]
+    let key = key![42i64, "name"];
+    let val = db.get(&global!("keyed_untagged"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::String("Alice".into())));
+
+    // ByName: key is just ["Bob"], field stored at ["Bob", "count"]
+    let key = key!["Bob", "count"];
+    let val = db.get(&global!("keyed_untagged"), &key).await.unwrap();
+    assert_eq!(val, Some(Value::Integer(10)));
+
+    // Round-trip
+    let fetched1: Option<KeyedUntagged> = db.one(42u64).await.unwrap();
+    assert_eq!(fetched1, Some(by_id));
+
+    let fetched2: Option<KeyedUntagged> = db.one("Bob").await.unwrap();
+    assert_eq!(fetched2, Some(by_name));
+}
+
+#[tokio::test]
+async fn test_untagged_variant_order_matters() {
+    // Test that variants are tried in declaration order
+    // Null comes first and matches empty data
+    let db = Database::in_memory().unwrap();
+
+    // Insert just a marker (empty data)
+    db.transaction(|txn| async move {
+        txn.set(
+            &global!("json_val"),
+            &Key::new(),
+            Value::String(String::new()),
+        )
+        .await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // Should parse as Null (first variant that matches empty)
+    let fetched: Option<JsonValue> = db.one(Key::new()).await.unwrap();
+    assert_eq!(fetched, Some(JsonValue::Null));
+}

@@ -104,6 +104,8 @@ pub use rumps_types::{
 /// - `#[rumps(rename_all = "case")]` - Apply a naming convention to all fields/variants.
 ///   Supported: `"snake-case"`, `"camel-case"`, `"pascal-case"`, `"train-case"` (kebab),
 ///   `"lowercase"`, `"uppercase"`, `"screaming-snake-case"`.
+/// - `#[rumps(untagged)]` - **(Enums only)** Don't store variant tag in key; try variants
+///   in order during deserialization.
 ///
 /// # Field Attributes
 ///

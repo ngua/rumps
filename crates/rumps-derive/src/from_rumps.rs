@@ -526,6 +526,39 @@ fn expand_enum(
     variants: &[VariantInfo],
     container: &ContainerAttrs,
 ) -> syn::Result<TokenStream> {
+    if container.untagged {
+        expand_untagged_enum(
+            name,
+            impl_generics,
+            ty_generics,
+            where_clause,
+            global,
+            variants,
+            container,
+        )
+    } else {
+        expand_tagged_enum(
+            name,
+            impl_generics,
+            ty_generics,
+            where_clause,
+            global,
+            variants,
+            container,
+        )
+    }
+}
+
+/// Expand `FromRumps` for tagged enums (default behavior).
+fn expand_tagged_enum(
+    name: &syn::Ident,
+    impl_generics: syn::ImplGenerics,
+    ty_generics: syn::TypeGenerics,
+    where_clause: Option<&syn::WhereClause>,
+    global: &syn::LitStr,
+    variants: &[VariantInfo],
+    container: &ContainerAttrs,
+) -> syn::Result<TokenStream> {
     let enum_name_str = name.to_string();
     let rename_all = container.rename_all;
 
@@ -574,6 +607,7 @@ fn expand_enum(
 
                 let (tag, effective_prefix) = if is_top_level {
                     // Top-level: tag is in prefix, use prefix as-is
+                    // Safe: is_top_level is only true when tag_from_prefix.is_some()
                     (tag_from_prefix.unwrap(), prefix.clone())
                 } else {
                     // Embedded: extract tag from pairs, build effective_prefix
@@ -607,6 +641,298 @@ fn expand_enum(
             }
         }
     })
+}
+
+/// Expand `FromRumps` for untagged enums.
+///
+/// Untagged enums try each variant in declaration order until one succeeds.
+fn expand_untagged_enum(
+    name: &syn::Ident,
+    impl_generics: syn::ImplGenerics,
+    ty_generics: syn::TypeGenerics,
+    where_clause: Option<&syn::WhereClause>,
+    global: &syn::LitStr,
+    variants: &[VariantInfo],
+    container: &ContainerAttrs,
+) -> syn::Result<TokenStream> {
+    let enum_name_str = name.to_string();
+    let rename_all = container.rename_all;
+
+    // Generate try-parse expressions for each variant
+    let try_variants: Vec<_> = variants
+        .iter()
+        .map(|v| gen_untagged_try_variant(v, rename_all))
+        .collect();
+
+    // Collect variant names for error message
+    let variant_names: Vec<_> =
+        variants.iter().map(|v| v.ident.to_string()).collect();
+    let variant_list = variant_names.join(", ");
+
+    Ok(quote! {
+        impl #impl_generics ::rumps_storage::orm::FromRumps for #name #ty_generics #where_clause {
+            const GLOBAL: &'static str = #global;
+
+            fn from_pairs<__I>(
+                prefix: &::rumps_types::Key,
+                pairs: __I,
+            ) -> ::std::result::Result<Self, ::rumps_types::orm::DecodeError>
+            where
+                __I: ::std::iter::Iterator<Item = (::rumps_types::Key, ::rumps_types::Value)>,
+            {
+                // Collect all pairs for analysis (needed for multiple parse attempts)
+                let all_pairs: ::std::vec::Vec<_> = pairs.collect();
+
+                // Try each variant in order until one succeeds
+                #(#try_variants)*
+
+                // All variants failed
+                ::std::result::Result::Err(::rumps_types::orm::DecodeError::Custom(
+                    ::std::format!(
+                        "data did not match any {} variant (tried: {})",
+                        #enum_name_str, #variant_list
+                    )
+                ))
+            }
+        }
+    })
+}
+
+/// Generate a try-parse block for one variant of an untagged enum.
+fn gen_untagged_try_variant(
+    v: &VariantInfo,
+    rename_all: RenameAll,
+) -> TokenStream {
+    let var_ident = &v.ident;
+    let field_rename = v.attrs.rename_all.unwrap_or(rename_all);
+
+    match &v.fields {
+        VariantFields::Unit => {
+            // Unit variant: succeeds if pairs is empty or contains only a marker
+            quote! {
+                {
+                    let is_empty_or_marker = all_pairs.is_empty()
+                        || (all_pairs.len() == 1
+                            && all_pairs.first()
+                                .map(|(k, v)| {
+                                    k == prefix
+                                        && matches!(v, ::rumps_types::Value::String(s) if s.is_empty())
+                                })
+                                .unwrap_or(false));
+
+                    if is_empty_or_marker {
+                        return ::std::result::Result::Ok(Self::#var_ident);
+                    }
+                }
+            }
+        }
+        VariantFields::Tuple(fields) if fields.len() == 1 => {
+            // Single-field tuple: try to parse the value directly
+            // Use nested match to extract type safely
+            fields.first().map(|f| &f.ty).map_or_else(
+                || quote! {},
+                |ty| {
+                    quote! {
+                        {
+                            // Try to find value at prefix
+                            let val_opt = all_pairs
+                                .iter()
+                                .find(|(k, _)| k == prefix)
+                                .map(|(_, v)| v);
+
+                            if let ::std::option::Option::Some(val) = val_opt {
+                                if let ::std::result::Result::Ok(field_0) =
+                                    <#ty as ::rumps_types::orm::FromValue>::from_val(val)
+                                {
+                                    return ::std::result::Result::Ok(Self::#var_ident(field_0));
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+        }
+        VariantFields::Tuple(fields) => {
+            // Multi-field tuple: try to parse each field by index
+            let field_parsers: Vec<_> = fields
+                .iter()
+                .filter(|f| !f.attrs.key)
+                .map(|f| {
+                    let idx = f.index;
+                    let ty = &f.ty;
+                    let binding = quote::format_ident!("__f{}", idx);
+                    quote! {
+                        let #binding = {
+                            let mut k = prefix.clone();
+                            k.push(::rumps_types::Subscript::from(#idx as i64));
+                            all_pairs
+                                .iter()
+                                .find(|(pk, _)| pk == &k)
+                                .ok_or(())
+                                .and_then(|(_, v)| {
+                                    <#ty as ::rumps_types::orm::FromValue>::from_val(v)
+                                        .map_err(|_| ())
+                                })?
+                        };
+                    }
+                })
+                .collect();
+
+            let bindings: Vec<_> = fields
+                .iter()
+                .filter(|f| !f.attrs.key)
+                .map(|f| {
+                    let idx = f.index;
+                    quote::format_ident!("__f{}", idx)
+                })
+                .collect();
+
+            quote! {
+                {
+                    let try_result: ::std::result::Result<Self, ()> = (|| {
+                        #(#field_parsers)*
+                        ::std::result::Result::Ok(Self::#var_ident(#(#bindings),*))
+                    })();
+
+                    if let ::std::result::Result::Ok(val) = try_result {
+                        return ::std::result::Result::Ok(val);
+                    }
+                }
+            }
+        }
+        VariantFields::Struct(pf) => {
+            // Struct variant: try to parse required fields
+            let required_parsers: Vec<_> = pf
+                .value_fields
+                .iter()
+                .filter(|f| !is_option_type(&f.ty) && f.attrs.default.is_none())
+                .map(|f| {
+                    let ident = &f.ident;
+                    let ty = &f.ty;
+                    let sub_name = f.subscript_name(field_rename);
+                    quote! {
+                        let #ident = {
+                            let mut k = prefix.clone();
+                            k.push(::rumps_types::Subscript::from(#sub_name));
+                            all_pairs
+                                .iter()
+                                .find(|(pk, _)| pk == &k)
+                                .ok_or(())
+                                .and_then(|(_, v)| {
+                                    <#ty as ::rumps_types::orm::FromValue>::from_val(v)
+                                        .map_err(|_| ())
+                                })?
+                        };
+                    }
+                })
+                .collect();
+
+            let optional_parsers: Vec<_> = pf
+                .value_fields
+                .iter()
+                .filter(|f| is_option_type(&f.ty) || f.attrs.default.is_some())
+                .map(|f| {
+                    let ident = &f.ident;
+                    let ty = &f.ty;
+                    let sub_name = f.subscript_name(field_rename);
+                    let is_opt = is_option_type(ty);
+                    let inner_ty = if is_opt {
+                        extract_option_inner(ty)
+                            .cloned()
+                            .unwrap_or_else(|| ty.clone())
+                    } else {
+                        ty.clone()
+                    };
+
+                    let default_expr = f.attrs.default.as_ref().map(|d| match d {
+                        DefaultValue::Trait => quote! { ::std::default::Default::default() },
+                        DefaultValue::Expr(e) => quote! { #e },
+                    });
+
+                    if is_opt {
+                        quote! {
+                            let #ident = {
+                                let mut k = prefix.clone();
+                                k.push(::rumps_types::Subscript::from(#sub_name));
+                                all_pairs
+                                    .iter()
+                                    .find(|(pk, _)| pk == &k)
+                                    .and_then(|(_, v)| {
+                                        <#inner_ty as ::rumps_types::orm::FromValue>::from_val(v).ok()
+                                    })
+                            };
+                        }
+                    } else {
+                        quote! {
+                            let #ident = {
+                                let mut k = prefix.clone();
+                                k.push(::rumps_types::Subscript::from(#sub_name));
+                                all_pairs
+                                    .iter()
+                                    .find(|(pk, _)| pk == &k)
+                                    .and_then(|(_, v)| {
+                                        <#ty as ::rumps_types::orm::FromValue>::from_val(v).ok()
+                                    })
+                                    .unwrap_or_else(|| #default_expr)
+                            };
+                        }
+                    }
+                })
+                .collect();
+
+            // Key field extraction from prefix
+            let key_parsers: Vec<_> = pf
+                .key_fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    let ident = &f.ident;
+                    let ty = &f.ty;
+                    quote! {
+                        let #ident = prefix.get(#i)
+                            .ok_or(())
+                            .and_then(|s| {
+                                <#ty as ::rumps_types::orm::FromSubscript>::from_sub(s)
+                                    .map_err(|_| ())
+                            })?;
+                    }
+                })
+                .collect();
+
+            let skip_defaults: Vec<_> = pf
+                .skip_fields
+                .iter()
+                .map(|f| {
+                    let ident = &f.ident;
+                    quote! { let #ident = ::std::default::Default::default(); }
+                })
+                .collect();
+
+            let all_idents: Vec<_> = pf
+                .key_fields
+                .iter()
+                .chain(pf.value_fields.iter())
+                .chain(pf.skip_fields.iter())
+                .map(|f| &f.ident)
+                .collect();
+
+            quote! {
+                {
+                    let try_result: ::std::result::Result<Self, ()> = (|| {
+                        #(#key_parsers)*
+                        #(#required_parsers)*
+                        #(#optional_parsers)*
+                        #(#skip_defaults)*
+                        ::std::result::Result::Ok(Self::#var_ident { #(#all_idents),* })
+                    })();
+
+                    if let ::std::result::Result::Ok(val) = try_result {
+                        return ::std::result::Result::Ok(val);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Generate a single `from_pairs` match arm for an enum variant.

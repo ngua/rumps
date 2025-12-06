@@ -242,15 +242,16 @@ fn expand_enum(
     container: &ContainerAttrs,
 ) -> syn::Result<TokenStream> {
     let rename_all = container.rename_all;
+    let untagged = container.untagged;
 
     let to_key_arms = variants
         .iter()
-        .map(|v| gen_enum_to_key_arm(v, rename_all))
+        .map(|v| gen_enum_to_key_arm(v, rename_all, untagged))
         .collect::<Vec<_>>();
 
     let to_pairs_arms = variants
         .iter()
-        .map(|v| gen_enum_to_pairs_arm(v, rename_all))
+        .map(|v| gen_enum_to_pairs_arm(v, rename_all, untagged))
         .collect::<Vec<_>>();
 
     Ok(quote! {
@@ -273,16 +274,27 @@ fn expand_enum(
 }
 
 /// Generate a single `to_key` match arm for an enum variant.
-fn gen_enum_to_key_arm(v: &VariantInfo, rename_all: RenameAll) -> TokenStream {
+fn gen_enum_to_key_arm(
+    v: &VariantInfo,
+    rename_all: RenameAll,
+    untagged: bool,
+) -> TokenStream {
     let var_ident = &v.ident;
     let tag = v.tag_name(rename_all);
 
     match &v.fields {
         VariantFields::Unit => {
-            quote! {
-                Self::#var_ident => ::rumps_types::Key::from(
-                    ::std::vec![::rumps_types::Subscript::from(#tag)]
-                ),
+            if untagged {
+                // Untagged unit: empty key
+                quote! {
+                    Self::#var_ident => ::rumps_types::Key::new(),
+                }
+            } else {
+                quote! {
+                    Self::#var_ident => ::rumps_types::Key::from(
+                        ::std::vec![::rumps_types::Subscript::from(#tag)]
+                    ),
+                }
             }
         }
         VariantFields::Tuple(fields) => {
@@ -302,11 +314,14 @@ fn gen_enum_to_key_arm(v: &VariantInfo, rename_all: RenameAll) -> TokenStream {
                 .map(|(_, b)| quote! { ::rumps_types::orm::ToSubscript::to_sub(#b) })
                 .collect();
 
-            let all_subs = std::iter::once(
-                quote! { ::rumps_types::Subscript::from(#tag) },
-            )
-            .chain(key_subs)
-            .collect::<Vec<_>>();
+            let all_subs = if untagged {
+                // Untagged: only key fields
+                key_subs
+            } else {
+                std::iter::once(quote! { ::rumps_types::Subscript::from(#tag) })
+                    .chain(key_subs)
+                    .collect::<Vec<_>>()
+            };
 
             quote! {
                 Self::#var_ident(#(#bindings),*) => ::rumps_types::Key::from(
@@ -326,11 +341,14 @@ fn gen_enum_to_key_arm(v: &VariantInfo, rename_all: RenameAll) -> TokenStream {
                 })
                 .collect();
 
-            let all_subs = std::iter::once(
-                quote! { ::rumps_types::Subscript::from(#tag) },
-            )
-            .chain(key_subs)
-            .collect::<Vec<_>>();
+            let all_subs = if untagged {
+                // Untagged: only key fields
+                key_subs
+            } else {
+                std::iter::once(quote! { ::rumps_types::Subscript::from(#tag) })
+                    .chain(key_subs)
+                    .collect::<Vec<_>>()
+            };
 
             // Handle empty key fields - can't do `{ , .. }`
             let pattern = if field_idents.is_empty() {
@@ -358,6 +376,7 @@ fn gen_enum_to_key_arm(v: &VariantInfo, rename_all: RenameAll) -> TokenStream {
 fn gen_enum_to_pairs_arm(
     v: &VariantInfo,
     rename_all: RenameAll,
+    untagged: bool,
 ) -> TokenStream {
     let var_ident = &v.ident;
     let tag = v.tag_name(rename_all);
@@ -365,17 +384,24 @@ fn gen_enum_to_pairs_arm(
     let field_rename = v.attrs.rename_all.unwrap_or(rename_all);
 
     // Generate the prefix computation that handles both top-level and embedded cases
-    let prefix_setup = quote! {
-        let tag_sub = ::rumps_types::Subscript::from(#tag);
-        // Check if prefix already starts with this variant's tag (top-level case)
-        // vs needs the tag added (embedded case)
-        let effective_prefix = if prefix.get(0) == ::std::option::Option::Some(&tag_sub) {
-            prefix.clone()
-        } else {
-            let mut p = prefix.clone();
-            p.push(tag_sub);
-            p
-        };
+    let prefix_setup = if untagged {
+        // Untagged: no tag in prefix, just use prefix directly
+        quote! {
+            let effective_prefix = prefix.clone();
+        }
+    } else {
+        quote! {
+            let tag_sub = ::rumps_types::Subscript::from(#tag);
+            // Check if prefix already starts with this variant's tag (top-level case)
+            // vs needs the tag added (embedded case)
+            let effective_prefix = if prefix.get(0) == ::std::option::Option::Some(&tag_sub) {
+                prefix.clone()
+            } else {
+                let mut p = prefix.clone();
+                p.push(tag_sub);
+                p
+            };
+        }
     };
 
     match &v.fields {
