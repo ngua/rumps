@@ -41,6 +41,7 @@ mod sealed;
 mod traits;
 
 // Re-export derive macros (they can share names with traits - different namespaces)
+#[cfg(feature = "derive")]
 pub use rumps_derive::{
     FromRumps, FromSubscript, FromValue, ToRumps, ToSubscript, ToValue,
 };

@@ -4,6 +4,7 @@
 //! generate code referencing `::rumps_storage`, which requires the crate
 //! to be seen as an external dependency.
 
+#![cfg(feature = "derive")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rumps_derive::{
