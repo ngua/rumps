@@ -4,10 +4,10 @@
 //!
 //! - `#[derive(ToRumps)]` - Convert structs to RUMPS key-value pairs
 //! - `#[derive(FromRumps)]` - Parse structs from RUMPS key-value pairs
-//! - `#[derive(ToValue)]` - Convert unit enums to RUMPS values
-//! - `#[derive(FromValue)]` - Parse unit enums from RUMPS values
-//! - `#[derive(ToSubscript)]` - Convert unit enums to RUMPS subscripts
-//! - `#[derive(FromSubscript)]` - Parse unit enums from RUMPS subscripts
+//! - `#[derive(ToValue)]` - Convert unit enums or newtypes to RUMPS values
+//! - `#[derive(FromValue)]` - Parse unit enums or newtypes from RUMPS values
+//! - `#[derive(ToSubscript)]` - Convert unit enums or newtypes to RUMPS subscripts
+//! - `#[derive(FromSubscript)]` - Parse unit enums or newtypes from RUMPS subscripts
 //!
 //! # Struct Attributes
 //!
@@ -88,6 +88,20 @@
 //!     High,
 //! }
 //! ```
+//!
+//! ## Newtype structs
+//!
+//! Newtypes transparently delegate to their inner type:
+//!
+//! ```ignore
+//! use rumps_derive::{ToValue, FromValue, ToSubscript, FromSubscript};
+//!
+//! #[derive(ToValue, FromValue)]
+//! struct UserId(u64);
+//!
+//! #[derive(ToSubscript, FromSubscript)]
+//! struct Email(String);
+//! ```
 
 mod attrs;
 mod from_rumps;
@@ -97,16 +111,25 @@ mod value;
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput};
 
-/// Derive `ToRumps` for a struct.
+/// Derive `ToRumps` for a struct or newtype.
 ///
 /// This generates an implementation of `rumps_storage::orm::ToRumps` that
 /// converts the struct into RUMPS key-value pairs.
 ///
-/// # Requirements
+/// # Named Structs
 ///
+/// For named structs:
 /// - Must have `#[rumps(global = "name")]` attribute
 /// - At least one field must have `#[rumps(key)]`
-/// - Cannot be used on enums, tuple structs, or unit structs
+///
+/// # Newtype Structs
+///
+/// For newtypes, delegates to the inner type's `ToRumps` impl:
+///
+/// ```ignore
+/// #[derive(ToRumps)]
+/// struct WrappedUser(User);  // Delegates to User's impl
+/// ```
 ///
 /// # Example
 ///
@@ -128,15 +151,24 @@ pub fn derive_to_rumps(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Derive `FromRumps` for a struct.
+/// Derive `FromRumps` for a struct or newtype.
 ///
 /// This generates an implementation of `rumps_storage::orm::FromRumps` that
 /// reconstructs the struct from RUMPS key-value pairs.
 ///
-/// # Requirements
+/// # Named Structs
 ///
+/// For named structs:
 /// - Must have `#[rumps(global = "name")]` attribute
-/// - Cannot be used on enums, tuple structs, or unit structs
+///
+/// # Newtype Structs
+///
+/// For newtypes, delegates to the inner type's `FromRumps` impl:
+///
+/// ```ignore
+/// #[derive(FromRumps)]
+/// struct WrappedUser(User);  // Delegates to User's impl
+/// ```
 ///
 /// # Example
 ///
@@ -159,15 +191,17 @@ pub fn derive_from_rumps(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Derive `ToValue` for a unit enum.
+/// Derive `ToValue` for a unit enum or newtype struct.
 ///
-/// This generates an implementation of `rumps_types::orm::ToValue` that
-/// converts enum variants to string values (using the variant name).
+/// This generates an implementation of `rumps_types::orm::ToValue`.
+///
+/// For unit enums, variant names are converted to string values.
+/// For newtypes, delegates to the inner type's `ToValue` impl.
 ///
 /// # Requirements
 ///
-/// - Must be an enum
-/// - All variants must be unit variants (no fields)
+/// - Unit enum: all variants must have no fields
+/// - Newtype: single-field tuple struct where the field implements `ToValue`
 ///
 /// # Example
 ///
@@ -189,15 +223,17 @@ pub fn derive_to_value(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Derive `FromValue` for a unit enum.
+/// Derive `FromValue` for a unit enum or newtype struct.
 ///
-/// This generates an implementation of `rumps_types::orm::FromValue` that
-/// parses enum variants from string values.
+/// This generates an implementation of `rumps_types::orm::FromValue`.
+///
+/// For unit enums, parses variant names from string values.
+/// For newtypes, delegates to the inner type's `FromValue` impl.
 ///
 /// # Requirements
 ///
-/// - Must be an enum
-/// - All variants must be unit variants (no fields)
+/// - Unit enum: all variants must have no fields
+/// - Newtype: single-field tuple struct where the field implements `FromValue`
 ///
 /// # Example
 ///
@@ -219,15 +255,17 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Derive `ToSubscript` for a unit enum.
+/// Derive `ToSubscript` for a unit enum or newtype struct.
 ///
-/// This generates an implementation of `rumps_types::orm::ToSubscript` that
-/// converts enum variants to string subscripts (using the variant name).
+/// This generates an implementation of `rumps_types::orm::ToSubscript`.
+///
+/// For unit enums, variant names are converted to string subscripts.
+/// For newtypes, delegates to the inner type's `ToSubscript` impl.
 ///
 /// # Requirements
 ///
-/// - Must be an enum
-/// - All variants must be unit variants (no fields)
+/// - Unit enum: all variants must have no fields
+/// - Newtype: single-field tuple struct where the field implements `ToSubscript`
 ///
 /// # Example
 ///
@@ -249,15 +287,17 @@ pub fn derive_to_subscript(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Derive `FromSubscript` for a unit enum.
+/// Derive `FromSubscript` for a unit enum or newtype struct.
 ///
-/// This generates an implementation of `rumps_types::orm::FromSubscript` that
-/// parses enum variants from string subscripts.
+/// This generates an implementation of `rumps_types::orm::FromSubscript`.
+///
+/// For unit enums, parses variant names from string subscripts.
+/// For newtypes, delegates to the inner type's `FromSubscript` impl.
 ///
 /// # Requirements
 ///
-/// - Must be an enum
-/// - All variants must be unit variants (no fields)
+/// - Unit enum: all variants must have no fields
+/// - Newtype: single-field tuple struct where the field implements `FromSubscript`
 ///
 /// # Example
 ///

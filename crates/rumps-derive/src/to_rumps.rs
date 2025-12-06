@@ -11,36 +11,61 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let (impl_generics, ty_generics, where_clause) =
         input.generics.split_for_impl();
 
-    let container = ContainerAttrs::from_attrs(&input.attrs)?;
-    let global = container.global_or_err(input.ident.span())?;
-
-    let fields = match &input.data {
+    match &input.data {
         syn::Data::Struct(data) => match &data.fields {
-            Fields::Named(f) => ParsedFields::from_named(f)?,
-            Fields::Unnamed(_) => {
-                return Err(syn::Error::new_spanned(
-                    input,
-                    "ToRumps cannot be derived for tuple structs",
-                ))
-            }
-            Fields::Unit => {
-                return Err(syn::Error::new_spanned(
-                    input,
-                    "ToRumps cannot be derived for unit structs",
-                ))
-            }
+            Fields::Named(f) => expand_named(input, name, impl_generics, ty_generics, where_clause, f),
+            Fields::Unnamed(f) if f.unnamed.len() == 1 => f
+                .unnamed
+                .first()
+                .ok_or_else(|| syn::Error::new_spanned(input, "expected single field"))
+                .map(|field| {
+                    let inner = &field.ty;
+                    quote! {
+                        impl #impl_generics ::rumps_storage::orm::ToRumps for #name #ty_generics #where_clause {
+                            const GLOBAL: &'static str = <#inner as ::rumps_storage::orm::ToRumps>::GLOBAL;
+                            const KEY_LEN: usize = <#inner as ::rumps_storage::orm::ToRumps>::KEY_LEN;
+
+                            fn to_key(&self) -> ::rumps_types::Key {
+                                <#inner as ::rumps_storage::orm::ToRumps>::to_key(&self.0)
+                            }
+
+                            fn to_pairs(&self, prefix: &::rumps_types::Key) -> ::std::vec::Vec<(::rumps_types::Key, ::rumps_types::Value)> {
+                                <#inner as ::rumps_storage::orm::ToRumps>::to_pairs(&self.0, prefix)
+                            }
+                        }
+                    }
+                }),
+            Fields::Unnamed(_) => Err(syn::Error::new_spanned(
+                input,
+                "ToRumps can only be derived for newtype structs (single-field tuple structs)",
+            )),
+            Fields::Unit => Err(syn::Error::new_spanned(
+                input,
+                "ToRumps cannot be derived for unit structs",
+            )),
         },
-        syn::Data::Enum(_) => return Err(syn::Error::new_spanned(
+        syn::Data::Enum(_) => Err(syn::Error::new_spanned(
             input,
             "ToRumps cannot be derived for enums; use ToValue for unit enums",
         )),
-        syn::Data::Union(_) => {
-            return Err(syn::Error::new_spanned(
-                input,
-                "ToRumps cannot be derived for unions",
-            ))
-        }
-    };
+        syn::Data::Union(_) => Err(syn::Error::new_spanned(
+            input,
+            "ToRumps cannot be derived for unions",
+        )),
+    }
+}
+
+fn expand_named(
+    input: &DeriveInput,
+    name: &syn::Ident,
+    impl_generics: syn::ImplGenerics,
+    ty_generics: syn::TypeGenerics,
+    where_clause: Option<&syn::WhereClause>,
+    f: &syn::FieldsNamed,
+) -> syn::Result<TokenStream> {
+    let container = ContainerAttrs::from_attrs(&input.attrs)?;
+    let global = container.global_or_err(input.ident.span())?;
+    let fields = ParsedFields::from_named(f)?;
 
     let to_key_body = gen_to_key(&fields);
     let to_pairs_body = gen_to_pairs(&fields);

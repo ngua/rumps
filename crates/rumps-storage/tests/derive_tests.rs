@@ -139,6 +139,18 @@ enum Priority {
     High,
 }
 
+/// Newtype wrapper for ToValue/FromValue
+#[derive(Debug, Clone, PartialEq, ToValue, FromValue)]
+struct UserId(u64);
+
+/// Newtype wrapper for ToSubscript/FromSubscript
+#[derive(Debug, Clone, PartialEq, ToSubscript, FromSubscript)]
+struct Email(String);
+
+/// Newtype wrapper for ToRumps/FromRumps
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+struct WrappedPerson(Person);
+
 #[tokio::test]
 async fn test_derive_basic_struct() {
     let db = Database::in_memory().unwrap();
@@ -584,4 +596,67 @@ async fn test_derive_subtree() {
         Key::from(vec![1i64.to_sub(), "contact".to_sub(), "phone".to_sub()]);
     let val = db.get(&global!("vendor"), &phone_key).await.unwrap();
     assert_eq!(val, Some(Value::String("555-1234".into())));
+}
+
+#[test]
+fn test_newtype_to_value() {
+    // ToValue - delegates to inner u64
+    assert_eq!(UserId(42).to_val(), Value::Integer(42));
+    assert_eq!(UserId(0).to_val(), Value::Integer(0));
+
+    // FromValue - delegates to inner u64
+    assert_eq!(UserId::from_val(&Value::Integer(42)), Ok(UserId(42)));
+    assert_eq!(UserId::from_val(&Value::Integer(0)), Ok(UserId(0)));
+
+    // Error cases
+    assert!(UserId::from_val(&Value::String("not a number".into())).is_err());
+}
+
+#[test]
+fn test_newtype_to_subscript() {
+    // ToSubscript - delegates to inner String
+    assert_eq!(
+        Email("test@example.com".into()).to_sub(),
+        Subscript::String("test@example.com".into())
+    );
+
+    // FromSubscript - delegates to inner String
+    assert_eq!(
+        Email::from_sub(&Subscript::String("test@example.com".into())),
+        Ok(Email("test@example.com".into()))
+    );
+
+    // Error cases
+    assert!(Email::from_sub(&Subscript::from(42)).is_err());
+}
+
+#[tokio::test]
+async fn test_newtype_to_rumps() {
+    let db = Database::in_memory().unwrap();
+
+    let person = Person {
+        id: 99,
+        name: "Wrapped Alice".into(),
+        email: "walice@example.com".into(),
+    };
+    let wrapped = WrappedPerson(person.clone());
+
+    // Insert via newtype
+    db.transaction(|txn| {
+        let w = wrapped.clone();
+        async move {
+            txn.insert(&w).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Read back as WrappedPerson
+    let fetched: Option<WrappedPerson> = db.one(99u64).await.unwrap();
+    assert_eq!(fetched, Some(wrapped.clone()));
+
+    // Read back as Person (same storage)
+    let fetched_inner: Option<Person> = db.one(99u64).await.unwrap();
+    assert_eq!(fetched_inner, Some(person));
 }
