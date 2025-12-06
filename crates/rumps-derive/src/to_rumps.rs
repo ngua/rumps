@@ -439,11 +439,10 @@ fn gen_enum_to_pairs_arm(
             }
         }
         VariantFields::Struct(pf) => {
-            // Collect all field idents for destructuring
+            // Collect field idents for destructuring (excluding key_fields - they're in the prefix)
             let all_field_idents: Vec<_> = pf
-                .key_fields
+                .value_fields
                 .iter()
-                .chain(pf.value_fields.iter())
                 .chain(pf.flatten_fields.iter())
                 .chain(pf.subtree_fields.iter())
                 .map(|f| &f.ident)

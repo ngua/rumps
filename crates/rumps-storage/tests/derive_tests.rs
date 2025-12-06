@@ -1553,14 +1553,23 @@ struct UppercaseItem {
     active: bool, // -> "ACTIVE"
 }
 
-/// Struct with lowercase field renaming
+/// Struct with lowercase field renaming (keeps underscores)
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
 #[rumps(global = "lower_item", rename_all = "lowercase")]
 struct LowercaseItem {
     #[rumps(key)]
-    ItemId: u64,
-    Name: String, // -> "name"
-    Active: bool, // -> "active"
+    item_id: u64,
+    item_name: String, // -> "item_name"
+    is_active: bool,   // -> "is_active"
+}
+
+/// Enum with lowercase variant renaming
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "lower_status", rename_all = "lowercase")]
+enum LowercaseStatus {
+    IsActive,                         // -> "isactive"
+    IsPending,                        // -> "ispending"
+    WasTerminated { reason: String }, // -> "wasterminated"
 }
 
 /// Struct with SCREAMING_SNAKE_CASE field renaming
@@ -1765,9 +1774,9 @@ async fn test_lowercase_struct_fields() {
     let db = Database::in_memory().unwrap();
 
     let item = LowercaseItem {
-        ItemId: 1,
-        Name: "thing".into(),
-        Active: false,
+        item_id: 1,
+        item_name: "thing".into(),
+        is_active: false,
     };
 
     db.transaction(|txn| {
@@ -1783,10 +1792,51 @@ async fn test_lowercase_struct_fields() {
     let fetched: Option<LowercaseItem> = db.one(1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
-    // Verify keys use lowercase
-    let key = key![1i64, "name"];
+    // Verify keys use lowercase (keeps underscores)
+    let key = key![1i64, "item_name"];
     let val = db.get(&global!("lower_item"), &key).await.unwrap();
     assert_eq!(val, Some(Value::String("thing".into())));
+}
+
+#[tokio::test]
+async fn test_lowercase_enum_variants() {
+    let db = Database::in_memory().unwrap();
+
+    let status = LowercaseStatus::IsActive;
+
+    db.transaction(|txn| {
+        let s = status.clone();
+        async move {
+            txn.insert(&s).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Key uses lowercase variant name: "IsActive" -> "isactive"
+    let fetched: Option<LowercaseStatus> = db.one("isactive").await.unwrap();
+    assert_eq!(fetched, Some(LowercaseStatus::IsActive));
+
+    // Test struct variant
+    let term = LowercaseStatus::WasTerminated {
+        reason: "timeout".into(),
+    };
+
+    db.transaction(|txn| {
+        let t = term.clone();
+        async move {
+            txn.insert(&t).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // "WasTerminated" -> "wasterminated"
+    let fetched: Option<LowercaseStatus> =
+        db.one("wasterminated").await.unwrap();
+    assert_eq!(fetched, Some(term));
 }
 
 #[tokio::test]
@@ -2046,12 +2096,12 @@ async fn test_field_rename_overrides_rename_all() {
 struct MixedFieldRename {
     #[rumps(key)]
     id: u64,
-    // Apply snake_case to just this field
-    #[rumps(rename = "snake-case")]
-    SomeFieldName: String, // -> "some_field_name"
     // Apply camelCase to just this field
     #[rumps(rename = "camel-case")]
-    another_field_here: String, // -> "anotherFieldHere"
+    some_field_name: String, // -> "someFieldName"
+    // Apply UPPERCASE to just this field (keeps underscores)
+    #[rumps(rename = "uppercase")]
+    another_field: String, // -> "ANOTHER_FIELD"
     // Literal rename (not a case keyword)
     #[rumps(rename = "custom_literal")]
     third_field: String, // -> "custom_literal"
@@ -2118,8 +2168,8 @@ async fn test_field_level_case_transformation() {
 
     let item = MixedFieldRename {
         id: 1,
-        SomeFieldName: "snake".into(),
-        another_field_here: "camel".into(),
+        some_field_name: "camel".into(),
+        another_field: "upper".into(),
         third_field: "literal".into(),
         plain_field: "plain".into(),
     };
@@ -2138,15 +2188,15 @@ async fn test_field_level_case_transformation() {
     let fetched: Option<MixedFieldRename> = db.one(1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
-    // Verify snake_case transformation on SomeFieldName
-    let key1 = key![1i64, "some_field_name"];
+    // Verify camelCase transformation on some_field_name
+    let key1 = key![1i64, "someFieldName"];
     let val1 = db.get(&global!("mixed_field"), &key1).await.unwrap();
-    assert_eq!(val1, Some(Value::String("snake".into())));
+    assert_eq!(val1, Some(Value::String("camel".into())));
 
-    // Verify camelCase transformation on another_field_here
-    let key2 = key![1i64, "anotherFieldHere"];
+    // Verify UPPERCASE transformation on another_field (keeps underscores)
+    let key2 = key![1i64, "ANOTHER_FIELD"];
     let val2 = db.get(&global!("mixed_field"), &key2).await.unwrap();
-    assert_eq!(val2, Some(Value::String("camel".into())));
+    assert_eq!(val2, Some(Value::String("upper".into())));
 
     // Verify literal rename on third_field
     let key3 = key![1i64, "custom_literal"];
