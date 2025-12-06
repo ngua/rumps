@@ -14,29 +14,32 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     match &input.data {
         syn::Data::Struct(data) => match &data.fields {
             Fields::Named(f) => expand_named(input, name, impl_generics, ty_generics, where_clause, f),
-            Fields::Unnamed(f) if f.unnamed.len() == 1 => f
-                .unnamed
-                .first()
-                .ok_or_else(|| syn::Error::new_spanned(input, "expected single field"))
-                .map(|field| {
-                    let inner = &field.ty;
-                    quote! {
-                        impl #impl_generics ::rumps_storage::orm::FromRumps for #name #ty_generics #where_clause {
-                            const GLOBAL: &'static str = <#inner as ::rumps_storage::orm::FromRumps>::GLOBAL;
-                            const KEY_LEN: usize = <#inner as ::rumps_storage::orm::FromRumps>::KEY_LEN;
+            Fields::Unnamed(f) if f.unnamed.len() == 1 => {
+                let container = ContainerAttrs::from_attrs(&input.attrs)?;
+                let global = container.global_or_err(input.ident.span())?;
+                f.unnamed
+                    .first()
+                    .ok_or_else(|| syn::Error::new_spanned(input, "expected single field"))
+                    .map(|field| {
+                        let inner = &field.ty;
+                        quote! {
+                            impl #impl_generics ::rumps_storage::orm::FromRumps for #name #ty_generics #where_clause {
+                                const GLOBAL: &'static str = #global;
+                                const KEY_LEN: usize = <#inner as ::rumps_storage::orm::FromRumps>::KEY_LEN;
 
-                            fn from_pairs<__I>(
-                                prefix: &::rumps_types::Key,
-                                pairs: __I,
-                            ) -> ::std::result::Result<Self, ::rumps_types::orm::DecodeError>
-                            where
-                                __I: ::std::iter::Iterator<Item = (::rumps_types::Key, ::rumps_types::Value)>,
-                            {
-                                <#inner as ::rumps_storage::orm::FromRumps>::from_pairs(prefix, pairs).map(Self)
+                                fn from_pairs<__I>(
+                                    prefix: &::rumps_types::Key,
+                                    pairs: __I,
+                                ) -> ::std::result::Result<Self, ::rumps_types::orm::DecodeError>
+                                where
+                                    __I: ::std::iter::Iterator<Item = (::rumps_types::Key, ::rumps_types::Value)>,
+                                {
+                                    <#inner as ::rumps_storage::orm::FromRumps>::from_pairs(prefix, pairs).map(Self)
+                                }
                             }
                         }
-                    }
-                }),
+                    })
+            }
             Fields::Unnamed(_) => Err(syn::Error::new_spanned(
                 input,
                 "FromRumps can only be derived for newtype structs (single-field tuple structs)",

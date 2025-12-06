@@ -147,9 +147,15 @@ struct UserId(u64);
 #[derive(Debug, Clone, PartialEq, ToSubscript, FromSubscript)]
 struct Email(String);
 
-/// Newtype wrapper for ToRumps/FromRumps
+/// Newtype wrapper for ToRumps/FromRumps with separate storage
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "wrapped_person")]
 struct WrappedPerson(Person);
+
+/// Newtype wrapper that shares storage with Person
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "person")]
+struct PersonAlias(Person);
 
 #[tokio::test]
 async fn test_derive_basic_struct() {
@@ -634,6 +640,7 @@ fn test_newtype_to_subscript() {
 async fn test_newtype_to_rumps() {
     let db = Database::in_memory().unwrap();
 
+    // Test 1: Default behavior - newtype has separate storage
     let person = Person {
         id: 99,
         name: "Wrapped Alice".into(),
@@ -641,7 +648,6 @@ async fn test_newtype_to_rumps() {
     };
     let wrapped = WrappedPerson(person.clone());
 
-    // Insert via newtype
     db.transaction(|txn| {
         let w = wrapped.clone();
         async move {
@@ -652,11 +658,36 @@ async fn test_newtype_to_rumps() {
     .await
     .unwrap();
 
-    // Read back as WrappedPerson
+    // Read back as WrappedPerson (stored in "WrappedPerson" global)
     let fetched: Option<WrappedPerson> = db.one(99u64).await.unwrap();
-    assert_eq!(fetched, Some(wrapped.clone()));
+    assert_eq!(fetched, Some(wrapped));
 
-    // Read back as Person (same storage)
-    let fetched_inner: Option<Person> = db.one(99u64).await.unwrap();
-    assert_eq!(fetched_inner, Some(person));
+    // Person global should be empty (separate storage)
+    let fetched_person: Option<Person> = db.one(99u64).await.unwrap();
+    assert_eq!(fetched_person, None);
+
+    // Test 2: Explicit shared storage via #[rumps(global = "person")]
+    let person2 = Person {
+        id: 100,
+        name: "Aliased Bob".into(),
+        email: "bob@example.com".into(),
+    };
+    let alias = PersonAlias(person2.clone());
+
+    db.transaction(|txn| {
+        let a = alias.clone();
+        async move {
+            txn.insert(&a).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    // Both types can read the same data
+    let fetched_alias: Option<PersonAlias> = db.one(100u64).await.unwrap();
+    assert_eq!(fetched_alias, Some(alias));
+
+    let fetched_person2: Option<Person> = db.one(100u64).await.unwrap();
+    assert_eq!(fetched_person2, Some(person2));
 }

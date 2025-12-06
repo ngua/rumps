@@ -124,11 +124,18 @@ use syn::{parse_macro_input, DeriveInput};
 ///
 /// # Newtype Structs
 ///
-/// For newtypes, delegates to the inner type's `ToRumps` impl:
+/// For newtypes, delegates to the inner type's `ToRumps` impl for key/pairs
+/// generation, but requires an explicit `global` to prevent accidental
+/// data overwrites:
 ///
 /// ```ignore
 /// #[derive(ToRumps)]
-/// struct WrappedUser(User);  // Delegates to User's impl
+/// #[rumps(global = "wrapped_user")]  // Required - separate storage
+/// struct WrappedUser(User);
+///
+/// #[derive(ToRumps)]
+/// #[rumps(global = "user")]  // Shares storage with User
+/// struct UserAlias(User);
 /// ```
 ///
 /// # Example
@@ -163,11 +170,13 @@ pub fn derive_to_rumps(input: TokenStream) -> TokenStream {
 ///
 /// # Newtype Structs
 ///
-/// For newtypes, delegates to the inner type's `FromRumps` impl:
+/// For newtypes, delegates to the inner type's `FromRumps` impl for parsing,
+/// but requires an explicit `global` to prevent reading from wrong storage:
 ///
 /// ```ignore
 /// #[derive(FromRumps)]
-/// struct WrappedUser(User);  // Delegates to User's impl
+/// #[rumps(global = "wrapped_user")]  // Required
+/// struct WrappedUser(User);
 /// ```
 ///
 /// # Example

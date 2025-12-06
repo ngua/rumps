@@ -14,27 +14,30 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     match &input.data {
         syn::Data::Struct(data) => match &data.fields {
             Fields::Named(f) => expand_named(input, name, impl_generics, ty_generics, where_clause, f),
-            Fields::Unnamed(f) if f.unnamed.len() == 1 => f
-                .unnamed
-                .first()
-                .ok_or_else(|| syn::Error::new_spanned(input, "expected single field"))
-                .map(|field| {
-                    let inner = &field.ty;
-                    quote! {
-                        impl #impl_generics ::rumps_storage::orm::ToRumps for #name #ty_generics #where_clause {
-                            const GLOBAL: &'static str = <#inner as ::rumps_storage::orm::ToRumps>::GLOBAL;
-                            const KEY_LEN: usize = <#inner as ::rumps_storage::orm::ToRumps>::KEY_LEN;
+            Fields::Unnamed(f) if f.unnamed.len() == 1 => {
+                let container = ContainerAttrs::from_attrs(&input.attrs)?;
+                let global = container.global_or_err(input.ident.span())?;
+                f.unnamed
+                    .first()
+                    .ok_or_else(|| syn::Error::new_spanned(input, "expected single field"))
+                    .map(|field| {
+                        let inner = &field.ty;
+                        quote! {
+                            impl #impl_generics ::rumps_storage::orm::ToRumps for #name #ty_generics #where_clause {
+                                const GLOBAL: &'static str = #global;
+                                const KEY_LEN: usize = <#inner as ::rumps_storage::orm::ToRumps>::KEY_LEN;
 
-                            fn to_key(&self) -> ::rumps_types::Key {
-                                <#inner as ::rumps_storage::orm::ToRumps>::to_key(&self.0)
-                            }
+                                fn to_key(&self) -> ::rumps_types::Key {
+                                    <#inner as ::rumps_storage::orm::ToRumps>::to_key(&self.0)
+                                }
 
-                            fn to_pairs(&self, prefix: &::rumps_types::Key) -> ::std::vec::Vec<(::rumps_types::Key, ::rumps_types::Value)> {
-                                <#inner as ::rumps_storage::orm::ToRumps>::to_pairs(&self.0, prefix)
+                                fn to_pairs(&self, prefix: &::rumps_types::Key) -> ::std::vec::Vec<(::rumps_types::Key, ::rumps_types::Value)> {
+                                    <#inner as ::rumps_storage::orm::ToRumps>::to_pairs(&self.0, prefix)
+                                }
                             }
                         }
-                    }
-                }),
+                    })
+            }
             Fields::Unnamed(_) => Err(syn::Error::new_spanned(
                 input,
                 "ToRumps can only be derived for newtype structs (single-field tuple structs)",
