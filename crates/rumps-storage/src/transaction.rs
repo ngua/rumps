@@ -1421,7 +1421,7 @@ impl Transaction {
     /// * `name` - The variable name (global or local)
     /// * `prefix` - The key prefix to match
     /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
-    pub async fn collects_prefix_vec<F, T>(
+    pub(crate) async fn collects_prefix_vec<F, T>(
         &self,
         name: &Name,
         prefix: &Key,

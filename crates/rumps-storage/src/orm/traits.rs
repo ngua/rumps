@@ -277,14 +277,9 @@ impl RumpsRead for Database {
         let name = global!(T::GLOBAL);
         let prefix = key.into_key();
 
-        // Just check if any entry exists - take first only
+        // Use prefix-optimized stream (seeks to prefix, terminates early)
         let first = self
-            .collects(
-                &name,
-                None,
-                |k, _| k.starts_with(&prefix),
-                |k, _| Some(k.clone()),
-            )
+            .collects_prefix(&name, &prefix, |k, _| Some(k.clone()))
             .await?
             .boxed()
             .next()
@@ -364,25 +359,15 @@ impl RumpsRead for Transaction {
         T: FromRumps + Send,
         K: IntoKey + Send,
     {
-        use futures::StreamExt;
-
         let name = global!(T::GLOBAL);
         let prefix = key.into_key();
 
-        // Just check if any entry exists - take first only
-        let first = self
-            .collects(
-                &name,
-                None,
-                |k, _| k.starts_with(&prefix),
-                |k, _| Some(k.clone()),
-            )
-            .await?
-            .boxed()
-            .next()
-            .await;
+        // Use prefix-based collection and check if any entry exists
+        let entries: Vec<Key> = self
+            .collects_prefix_vec(&name, &prefix, |k, _| Some(k.clone()))
+            .await?;
 
-        Ok(first.is_some())
+        Ok(!entries.is_empty())
     }
 
     async fn all<T>(&self) -> Result<Vec<T>>
