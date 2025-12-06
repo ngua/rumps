@@ -4,18 +4,21 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::orm::DecodeError;
 use crate::{Key, Name};
 
 /// The main error type for RUMPS operations.
 ///
 /// This is the top-level error type returned by all public RUMPS APIs.
-/// Currently wraps [`StorageError`], but may include additional variants
-/// in the future (e.g., query errors, validation errors).
 #[derive(Debug, Error)]
 pub enum Error {
     /// Storage layer error.
     #[error(transparent)]
     Storage(#[from] StorageError),
+
+    /// ORM decode error (type conversion failure).
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
 }
 
 /// Result type for RUMPS operations.

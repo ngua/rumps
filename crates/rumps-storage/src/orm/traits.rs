@@ -244,10 +244,7 @@ impl RumpsRead for Database {
         } else {
             T::from_pairs(&prefix, pairs.into_iter())
                 .map(Some)
-                .map_err(|e| {
-                    rumps_types::StorageError::Serialization(e.to_string())
-                        .into()
-                })
+                .map_err(Into::into)
         }
     }
 
@@ -344,10 +341,7 @@ impl RumpsRead for Transaction {
         } else {
             T::from_pairs(&prefix, pairs.into_iter())
                 .map(Some)
-                .map_err(|e| {
-                    rumps_types::StorageError::Serialization(e.to_string())
-                        .into()
-                })
+                .map_err(Into::into)
         }
     }
 
@@ -496,13 +490,7 @@ where
                     (Some(p), Some(f)) if p != f => {
                         // Record boundary - parse accumulated pairs
                         T::from_pairs(p, cur_pairs.into_iter())
-                            .map_err(|e| {
-                                rumps_types::Error::from(
-                                    rumps_types::StorageError::Serialization(
-                                        e.to_string(),
-                                    ),
-                                )
-                            })
+                            .map_err(rumps_types::Error::from)
                             .map(|rec| {
                                 results.push(rec);
                                 (prefix, vec![(k, v)], results)
@@ -525,11 +513,7 @@ where
         .filter(|_| !pairs.is_empty())
         .map(|prefix| {
             T::from_pairs(&prefix, pairs.into_iter())
-                .map_err(|e| {
-                    rumps_types::Error::from(
-                        rumps_types::StorageError::Serialization(e.to_string()),
-                    )
-                })
+                .map_err(rumps_types::Error::from)
                 .map(|rec| results.push(rec))
         })
         .transpose()?;

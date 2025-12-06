@@ -1354,6 +1354,9 @@ impl Transaction {
             .map(|r| {
                 r.map_err(|e| match e {
                     rumps_types::Error::Storage(se) => se,
+                    other => rumps_types::StorageError::Serialization(
+                        other.to_string(),
+                    ),
                 })
             });
 
