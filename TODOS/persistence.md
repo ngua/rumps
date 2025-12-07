@@ -9,9 +9,12 @@
 These are the current next steps (post persistence and basic DB):
 
 - **Query Language**: Parser and evaluator for MUMPS commands (rewrite old parser; see ./dsl.md for sketch in progress)
-- **Compression**: Compress nodes/pages to save disk space
-- **Encryption**: Optional encryption at rest
 - **Networking**: Client-server protocol for remote access
+
+These are the potential next steps (post query layer and networking):
+
+- **Compression**: Compress nodes/pages to save disk space (see [persistence/compression.md](persistence/compression.md))
+- **Encryption**: Optional encryption at rest (see [persistence/encryption.md](persistence/encryption.md))
 
 These are future considerations not yet planned:
 - **Advanced Concurrency**: Lock-free data structures, optimistic concurrency control (current plan uses Mutex for commit serialization)
