@@ -1,0 +1,6 @@
+error: ToRumps cannot be derived for unit structs
+ --> tests/ui/unit_struct.rs:4:1
+  |
+4 | / #[rumps(global = "test")]
+5 | | struct UnitStruct;
+  | |__________________^

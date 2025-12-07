@@ -1,0 +1,5 @@
+error: unknown rumps field attribute: `foobar`
+ --> tests/ui/unknown_field_attr.rs:8:13
+  |
+8 |     #[rumps(foobar)]
+  |             ^^^^^^

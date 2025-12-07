@@ -1,0 +1,5 @@
+error: unknown rename_all value: `invalid-case` (expected one of: snake-case, camel-case, pascal-case, train-case, lowercase, uppercase, screaming-snake-case)
+ --> tests/ui/invalid_rename_all.rs:4:26
+  |
+4 | #[rumps(global = "test", rename_all = "invalid-case")]
+  |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^

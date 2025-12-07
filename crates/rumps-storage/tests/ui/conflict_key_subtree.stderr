@@ -1,0 +1,6 @@
+error: conflicting attributes: `#[rumps(key)]` and `#[rumps(subtree)]` cannot be used together
+ --> tests/ui/conflict_key_subtree.rs:6:5
+  |
+6 | /     #[rumps(key, subtree)]
+7 | |     id: u64,
+  | |___________^
