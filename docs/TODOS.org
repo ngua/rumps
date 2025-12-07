@@ -3,7 +3,11 @@
   - [ ] Entire persistence layer, in-memory ~BTree~, ~Database~ abstraction, etc...
   - [X] "ORM" for easier access+query from Rust
   - [ ] Some example executables
+- [ ] Query language (WIP, see [[file:~/projects/rumps/TODOS/dsl.md][dsl.md]])
+  - [ ] Syntax highlighters
+    - [ ] Emacs
+    - [ ] Vim/Neovim
+    - [ ] VSC
 - [ ] Compression (compress nodes+pages)
 - [ ] Encryption (optional encryption at rest)
-- [ ] Query language (WIP, see [[file:~/projects/rumps/TODOS/dsl.md][dsl.md]])
 - [ ] ~rumps-remote~ or similar

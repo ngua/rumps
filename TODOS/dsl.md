@@ -176,53 +176,433 @@ TRANSACTION {
 }
 ```
 
+## Fundamental Primitive: COLLECT
+
+The `COLLECT` primitive is the **foundation for ALL iteration** in RUMPS. It creates a lazy stream from a B-tree variable that can be transformed, filtered, and consumed.
+
+### Basic Syntax Forms
+
+#### 1. Block Form
+```rumps
+COLLECT ^DATA
+  WHERE condition
+  SELECT transformation
+  ACTION
+```
+
+#### 2. Pipeline Form
+```rumps
+^DATA
+  |> COLLECT WHERE condition
+  |> SELECT transformation
+  |> ACTION
+```
+
+Both forms are equivalent and can be used interchangeably based on preference and readability.
+
+## Stream Operations
+
+All operations are composable and can be chained together. Operations are **lazy** - they don't execute until a terminal operation (like `OUTPUT` or `INTO`) is reached.
+
+### Filtering Operations
+
+#### WHERE - Filter by predicate
+```rumps
+COLLECT ^PATIENT
+  WHERE key[0] > 100 AND key[0] < 200
+  WHERE has-value  ; Multiple WHERE clauses are ANDed together
+```
+
+#### WHILE - Take while condition is true (early termination)
+```rumps
+COLLECT ^LOG
+  WHILE key[0] <= "2025-01-01"  ; Stops at first false condition
+```
+
+#### FILTER - Post-selection filtering
+```rumps
+COLLECT ^PATIENT
+  SELECT GET(^PATIENT(key[0],"NAME"))
+  FILTER value.contains("Smith")
+```
+
+### Transformation Operations
+
+#### SELECT - Transform each element
+```rumps
+; Simple selection
+COLLECT ^DATA
+  SELECT value
+
+; Field extraction
+COLLECT ^PATIENT
+  SELECT GET(^PATIENT(key[0],"NAME"))
+
+; Object construction
+COLLECT ^PATIENT
+  SELECT {
+    id: key[0],
+    name: GET(^PATIENT(key[0],"NAME")),
+    dob: GET(^PATIENT(key[0],"DOB"))
+  }
+```
+
+#### MAP - Alias for SELECT (for familiarity)
+```rumps
+COLLECT ^DATA
+  MAP process-record
+```
+
+### Limiting Operations
+
+#### TAKE - Take first N elements
+```rumps
+COLLECT ^LOG
+  TAKE 100
+```
+
+#### SKIP - Skip first N elements
+```rumps
+COLLECT ^LOG
+  SKIP 100
+  TAKE 50  ; Get items 101-150
+```
+
+#### TAKE_WHILE / SKIP_WHILE - Conditional limiting
+```rumps
+COLLECT ^DATA
+  SKIP_WHILE value < 0
+  TAKE_WHILE value < 1000
+```
+
+### Aggregation Operations
+
+#### AGGREGATE - Multiple aggregations at once
+```rumps
+COLLECT ^SALES
+  SELECT GET(^SALES(key[0],"AMOUNT"))
+  AGGREGATE
+    COUNT INTO total-sales
+    SUM INTO total-revenue
+    AVG INTO avg-sale
+    MIN INTO min-sale
+    MAX INTO max-sale
+```
+
+#### COUNT - Count elements
+```rumps
+COLLECT ^PATIENT
+  COUNT INTO patient-count
+```
+
+#### REDUCE - Custom reduction
+```rumps
+COLLECT ^DATA
+  REDUCE WITH custom-reducer INITIAL 0 INTO result
+```
+
+### Grouping Operations
+
+#### GROUP BY - Group elements by key
+```rumps
+COLLECT ^VISITS
+  WHERE key[1] == "2025"
+  GROUP BY key[0]  ; Group by patient ID
+  AGGREGATE COUNT INTO visit-counts
+```
+
+### Ordering Operations
+
+#### SORT BY - Sort stream
+```rumps
+COLLECT ^PATIENT
+  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
+  SORT BY name ASC
+```
+
+#### REVERSE - Reverse stream order
+```rumps
+COLLECT ^DATA
+  REVERSE
+```
+
+### Join Operations
+
+#### JOIN - Join with another variable
+```rumps
+COLLECT ^ORDER
+  JOIN ^CUSTOMER ON key[0] == ^CUSTOMER.key[0]
+  SELECT { order: value, customer: ^CUSTOMER.value }
+```
+
+### Parallel Processing
+
+#### PARALLEL - Process in parallel
+```rumps
+COLLECT ^RECORDS
+  PARALLEL 10  ; Process up to 10 records concurrently
+  MAP expensive-op
+```
+
+## Terminal Operations
+
+Terminal operations consume the stream and produce a result.
+
+### INTO - Collect into variable
+```rumps
+COLLECT ^DATA
+  SELECT value
+  INTO results  ; Local variable
+
+COLLECT ^DATA
+  SELECT value
+  INTO ^PROCESSED  ; Global variable (requires transaction)
+```
+
+### OUTPUT - Write to console (with formatting options)
+
+The `OUTPUT` operation in RUMPS supports multiple formatting options for flexible console output.
+
+#### Simple Output
+```rumps
+COLLECT ^DATA
+  OUTPUT  ; Each item on new line
+```
+
+#### Template Output
+```rumps
+COLLECT ^PATIENT
+  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
+  OUTPUT "Patient #{id}: {name}"
+```
+
+#### Formatted Output
+```rumps
+; JSON format
+COLLECT ^CONFIG
+  OUTPUT AS JSON
+
+; Table format
+COLLECT ^STATS
+  OUTPUT AS TABLE HEADERS ["Date", "Count", "Average"]
+
+; CSV format
+COLLECT ^DATA
+  OUTPUT WITH SEPARATOR ","
+
+; XML format (future)
+COLLECT ^DATA
+  OUTPUT AS XML ROOT "records" ELEMENT "record"
+```
+
+#### Output Targets
+```rumps
+; Standard error
+COLLECT ^ERRORS
+  OUTPUT TO ERROR
+
+; File output (future)
+COLLECT ^DATA
+  OUTPUT TO FILE "/tmp/output.txt"
+
+; Network output (future)
+COLLECT ^METRICS
+  OUTPUT TO HTTP "https://metrics.example.com/api"
+```
+
+#### Extended Output Examples
+```rumps
+; Simple output - each item on a new line
+COLLECT ^DATA
+  OUTPUT
+
+; Template-based formatting with field interpolation
+COLLECT ^PATIENT
+  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
+  OUTPUT "ID: {id} - Name: {name}"
+
+; JSON output for structured data
+COLLECT ^CONFIG
+  SELECT { key: key, value: value }
+  OUTPUT AS JSON
+
+; Table formatting for reports
+COLLECT ^STATS
+  SELECT { date: key[0], total: value.sum, avg: value.avg }
+  OUTPUT AS TABLE HEADERS ["Date", "Total", "Average"]
+
+; Custom separators and formatting
+COLLECT ^LIST
+  OUTPUT WITH SEPARATOR ", "  ; Output as comma-separated values
+
+; Conditional output
+COLLECT ^ERRORS
+  WHERE value.severity == "HIGH"
+  OUTPUT TO ERROR  ; Write to stderr instead of stdout
+```
+
+This declarative output approach eliminates the need for manual formatting loops and provides consistent, reusable output patterns.
+
+### FOREACH - Side effects
+```rumps
+COLLECT ^TASKS
+  FOREACH process-task  ; Execute function for each element
+```
+
+## Complete Examples
+
+### Example 1: Find patients with recent visits
+```rumps
+; Traditional MUMPS approach (NOT supported in RUMPS)
+; SET COUNT=0
+; FOR  SET PID=$ORDER(^PATIENT(PID)) QUIT:PID=""  DO
+; . SET LASTVISIT=$GET(^PATIENT(PID,"LASTVISIT"))
+; . IF LASTVISIT>20250101 DO
+; . . SET COUNT=COUNT+1
+; . . WRITE "Patient ",PID," last visited on ",LASTVISIT,!
+
+; RUMPS declarative approach
+COLLECT ^PATIENT
+  WHERE has-descendants
+  SELECT {
+    id: key[0],
+    last-visit: GET(^PATIENT(key[0],"LASTVISIT"))
+  }
+  FILTER last-visit > 20250101
+  OUTPUT "Patient {id} last visited on {last-visit}"
+
+; Get count
+COLLECT ^PATIENT
+  WHERE has-descendants
+  FILTER GET(^PATIENT(key[0],"LASTVISIT")) > 20250101
+  COUNT INTO recent-count
+```
+
+### Example 2: Top 10 customers by order value
+```rumps
+^ORDERS
+  |> COLLECT
+  |> GROUP BY GET(^ORDERS(key[0],"CUSTOMER-ID"))
+  |> AGGREGATE SUM GET(^ORDERS(key[0],"AMOUNT")) INTO total
+  |> SORT BY total DESC
+  |> TAKE 10
+  |> JOIN ^CUSTOMER ON group-key
+  |> SELECT {
+       customer-name: GET(^CUSTOMER(group-key,"NAME")),
+       total-orders: total
+     }
+  |> OUTPUT AS TABLE HEADERS ["Customer", "Total Orders"]
+```
+
+### Example 3: ETL Pipeline
+```rumps
+; Extract, transform, and load data
+TRANSACTION {
+  COLLECT ^RAW-DATA
+    WHERE key[0] >= last-processed-id
+    PARALLEL 5
+    MAP validate-record
+    FILTER is-valid
+    MAP transform-record
+    SELECT {
+      id: generate-id(),
+      data: transformed-val,
+      processed-at: Time.now()
+    }
+    INTO ^PROCESSED-DATA
+
+  SET last-processed-id = LAST(^RAW-DATA)
+}
+```
+
+## Comparison with Traditional MUMPS
+
+### Summary Table
+
+| Pattern             | Traditional MUMPS                | RUMPS DSL                 | Benefits               |
+|---------------------|----------------------------------|---------------------------|------------------------|
+| Simple iteration    | `FOR SET I=$O(^D(I)) Q:I="" DO`  | `COLLECT ^D`              | Cleaner syntax         |
+| Filtering           | `IF` statements in loop body     | `WHERE` / `FILTER`        | Declarative intent     |
+| Counting            | Manual counter variable          | `COUNT INTO`              | No state management    |
+| First N items       | Counter with `QUIT`              | `TAKE n`                  | Clear intent           |
+| Aggregation         | Manual accumulator variables     | `AGGREGATE` operations    | Built-in operations    |
+| Output              | Multiple `WRITE` statements      | `OUTPUT` with templates   | Flexible formatting    |
+| Parallel processing | Not available                    | `PARALLEL n`              | Automatic optimization |
+| Error handling      | Manual checks                    | Stream error propagation  | Consistent handling    |
+
+### Detailed Pattern Comparison
+
+The following table shows common MUMPS iteration patterns and their conceptual RUMPS equivalents:
+
+| Traditional MUMPS (Imperative) | Future RUMPS DSL (Declarative) | Description |
+|--------------------------------|--------------------------------|-------------|
+| ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. WRITE ID,!` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  SELECT key[0]`<br/>`  OUTPUT` | Iterate through all top-level keys |
+| ```mumps```<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`WRITE "Total: ",CNT,!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  COUNT INTO tot`<br/>`WRITE "Total: ",tot,!` | Count entries |
+| ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. IF ID>100 QUIT`<br/>`. ; Process ID` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  WHILE key[0] <= 100`<br/>`  ; Process automatically` | Early termination with condition |
+| ```mumps```<br/>`SET I=0`<br/>`FOR  SET ID=$ORDER(^LOG(ID)) QUIT:ID=""  DO`<br/>`. SET I=I+1`<br/>`. IF I>10 QUIT`<br/>`. ; Process first 10` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  TAKE 10`<br/>`  ; Process automatically` | Take first N entries |
+| ```mumps```<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. IF NAME["Smith" DO`<br/>`. . ; Process Smith patients` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  WHERE has-descendants`<br/>`  SELECT GET(^PAT(key[0],"NAME"))`<br/>`  FILTER value.contains("Smith")`<br/>`  ; Process automatically` | Filter with condition |
+| ```mumps```<br/>`KILL RESULTS`<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`. SET RESULTS(CNT)=$GET(^DATA(ID,"VAL"))` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  SELECT GET(^DATA(key[0],"VAL"))`<br/>`  INTO RESULTS` | Collect into array |
+| ```mumps```<br/>`FOR  SET D=$ORDER(^LOG(2025,D)) QUIT:D=""  DO`<br/>`. FOR  SET T=$ORDER(^LOG(2025,D,T)) QUIT:T=""  DO`<br/>`. . ; Process each timestamp` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  WHERE key[0] == 2025 AND key.len == 3`<br/>`  ; All 2025 timestamps, flat` | Nested iteration (flattened) |
+| ```mumps```<br/>`; Complex aggregation`<br/>`SET TOT=0,CNT=0`<br/>`FOR  SET ID=$ORDER(^SALE(ID)) QUIT:ID=""  DO`<br/>`. SET AMT=$GET(^SALE(ID,"AMOUNT"))`<br/>`. SET TOT=TOT+AMT,CNT=CNT+1`<br/>`SET AVG=TOT/CNT` | ```rumps```<br/>`COLLECT ^SALE`<br/>`  SELECT GET(^SALE(key[0],"AMOUNT"))`<br/>`  AGGREGATE`<br/>`    SUM INTO total`<br/>`    COUNT INTO count`<br/>`    AVG INTO average` | Aggregation operations |
+| ```mumps```<br/>`; Display all patient info`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. SET DOB=$GET(^PAT(ID,"DOB"))`<br/>`. WRITE "Patient ",ID,": ",NAME`<br/>`. WRITE " (DOB: ",DOB,")",!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  SELECT {`<br/>`    id: key[0],`<br/>`    name: GET(^PAT(key[0],"NAME")),`<br/>`    dob: GET(^PAT(key[0],"DOB"))`<br/>`  }`<br/>`  OUTPUT "Patient {id}: {name} (DOB: {dob})"` | Console output with formatting |
+
+### Key Advantages of RUMPS `COLLECT` Approach
+
+1. **No Manual State**: No need for iteration variables, counters, or manual loop control
+2. **Declarative Intent**: The code expresses *what* you want, not *how* to iterate
+3. **Automatic Optimization**: The runtime can optimize streaming, batching, and parallelization
+4. **Composable Operations**: Stream operations naturally chain together
+5. **Memory Efficient**: Lazy evaluation means data isn't loaded until needed
+6. **Type Hints**: Optional annotations validated at runtime for documentation and error catching
+
+
 ## Operators
 
 RUMPS modernizes MUMPS operators, making them more readable and consistent with modern programming languages.
 
 ### Operator Comparison Table
 
-| Category              | MUMPS           | RUMPS                | Description          | Notes              |
-|-----------------------|-----------------|----------------------|----------------------|--------------------|
-| **Arithmetic**        |                 |                      |                      |                    |
-| Addition              | `+`             | `+`                  | Add two numbers      | Same               |
-| Subtraction           | `-`             | `-`                  | Subtract             | Same               |
-| Multiplication        | `*`             | `*`                  | Multiply             | Same               |
-| Division              | `/`             | `/`                  | Divide (float)       | Same               |
-| Integer Division      | `\`             | `//`                 | Integer division     | More intuitive     |
-| Modulo                | `#`             | `%`                  | Remainder            | Standard notation  |
-| Exponentiation        | `**`            | `^` or `**`          | Power                | Both supported     |
-| **String**            |                 |                      |                      |                    |
-| Concatenation         | `_`             | `+` or `++`          | String concat        | More intuitive     |
-| Contains              | `[`             | `contains`           | Substring check      | Clearer            |
-| Not Contains          | `']`            | `!contains`          | Not substring        | Clearer            |
-| Follows               | `]`             | `>`                  | String comparison    | Context-aware      |
-| Pattern Match         | `?`             | `matches` or `~`     | Regex match          | Modern regex       |
-| **Comparison**        |                 |                      |                      |                    |
-| Equals                | `=`             | `==`                 | Equality             | Consistent         |
-| Not Equals            | `'=`            | `!=` or `≠`          | Inequality           | Standard           |
-| Less Than             | `<`             | `<`                  | Less than            | Same               |
-| Greater Than          | `>`             | `>`                  | Greater than         | Same               |
-| Less or Equal         | `<=` or `'>`    | `<=` or `≤`          | Less or equal        | Standard           |
-| Greater or Equal      | `>=` or `'<`    | `>=` or `≥`          | Greater or equal     | Standard           |
-| **Logical**           |                 |                      |                      |                    |
-| And                   | `&` or `&&`     | `AND` or `&&`        | Logical AND          | Clearer            |
-| Or                    | `!` or `!!`     | `OR` or `\|\|`       | Logical OR           | Standard           |
-| Not                   | `'`             | `NOT` or `!`         | Logical NOT          | Standard           |
-| **Special**           |                 |                      |                      |                    |
-| Indirection           | `@`             | `@` or `eval`        | Dynamic evaluation   | Enhanced           |
-| Global Prefix         | `^`             | `^`                  | Global variable      | Same               |
-| Function Prefix       | `$`             | `$`                  | Built-in function    | Same               |
-| **Assignment**        |                 |                      |                      |                    |
-| Set                   | `SET` or `S`    | `SET` or `=`         | Assignment           | Flexible           |
-| Kill                  | `KILL` or `K`   | `KILL` or `DELETE`   | Delete variable      | Options            |
-| **New in RUMPS**      |                 |                      |                      |                    |
-| Null Coalesce         | N/A             | `??`                 | Default if null      | `a ?? b`           |
-| Optional Chain        | N/A             | `?.`                 | Safe navigation      | `obj?.field`       |
-| Pipe                  | N/A             | `\|>`                | Pipeline operator    | Functional         |
-| Range                 | N/A             | `..`                 | Range operator       | `1..10`            |
-| Spread                | N/A             | `...`                | Spread operator      | `...array`         |
-| Type Check            | N/A             | `is`                 | Type checking        | `x is Number`      |
+| Category         | MUMPS         | RUMPS              | Description        | Notes             |
+|------------------|---------------|--------------------|--------------------|-------------------|
+| **Arithmetic**   |               |                    |                    |                   |
+| Addition         | `+`           | `+`                | Add two numbers    | Same              |
+| Subtraction      | `-`           | `-`                | Subtract           | Same              |
+| Multiplication   | `*`           | `*`                | Multiply           | Same              |
+| Division         | `/`           | `/`                | Divide (float)     | Same              |
+| Integer Division | `\`           | `//`               | Integer division   | More intuitive    |
+| Modulo           | `#`           | `%`                | Remainder          | Standard notation |
+| Exponentiation   | `**`          | `^` or `**`        | Power              | Both supported    |
+| **String**       |               |                    |                    |                   |
+| Concatenation    | `_`           | `++`               | String concat      | More intuitive    |
+| Contains         | `[`           | `contains`         | Substring check    | Clearer           |
+| Not Contains     | `']`          | `!contains`        | Not substring      | Clearer           |
+| Follows          | `]`           | `>`                | String comparison  | Context-aware     |
+| Pattern Match    | `?`           | `matches` or `~`   | Regex match        | Modern regex      |
+| **Comparison**   |               |                    |                    |                   |
+| Equals           | `=`           | `==`               | Equality           | Consistent        |
+| Not Equals       | `'=`          | `!=` or `≠`        | Inequality         | Standard          |
+| Less Than        | `<`           | `<`                | Less than          | Same              |
+| Greater Than     | `>`           | `>`                | Greater than       | Same              |
+| Less or Equal    | `<=` or `'>`  | `<=` or `≤`        | Less or equal      | Standard          |
+| Greater or Equal | `>=` or `'<`  | `>=` or `≥`        | Greater or equal   | Standard          |
+| **Logical**      |               |                    |                    |                   |
+| And              | `&` or `&&`   | `AND` or `&&`      | Logical AND        | Clearer           |
+| Or               | `!` or `!!`   | `OR` or `\|\|`     | Logical OR         | Standard          |
+| Not              | `'`           | `NOT` or `!`       | Logical NOT        | Standard          |
+| **Special**      |               |                    |                    |                   |
+| Indirection      | `@`           | `@` or `eval`      | Dynamic evaluation | Enhanced          |
+| Global Prefix    | `^`           | `^`                | Global variable    | Same              |
+| Function Prefix  | `$`           |                    | Built-in function  | Removed           |
+| **Assignment**   |               |                    |                    |                   |
+| Set              | `SET` or `S`  | `SET` or `=`       | Assignment         | Flexible          |
+| Kill             | `KILL` or `K` | `KILL` or `DELETE` | Delete variable    | Options           |
+| **New in RUMPS** |               |                    |                    |                   |
+| Null Coalesce    | N/A           | `??`               | Default if null    | `a ?? b`          |
+| Optional Chain   | N/A           | `?.`               | Safe navigation    | `obj?.field`      |
+| Pipe             | N/A           | `\|>`              | Pipeline operator  | Functional        |
+| Range            | N/A           | `..`               | Range operator     | `1..10`           |
+| Spread           | N/A           | `...`              | Spread operator    | `...array`        |
+| Type Check       | N/A           | `is`               | Type checking      | `x is Number`     |
 
 ### Operator Usage Examples
 
@@ -248,7 +628,7 @@ IF name["Smith" WRITE "Found Smith"
 IF text?1N.N WRITE "All numbers"
 
 ; RUMPS style (clearer)
-SET fullname = first + " " + last  ; or first ++ " " ++ last
+SET fullname = first + " " ++ last
 IF name contains "Smith" { OUTPUT "Found Smith" }
 IF text matches /^\d+$/ { OUTPUT "All numbers" }
 ```
@@ -288,8 +668,8 @@ SET city = patient?.address?.city ?? "N/A"
   |> OUTPUT
 
 ; Range operator
-FOR i IN 1..100 {  ; If we add traditional loops as alternative
-  ; Process
+1..100 FOREACH i => {
+  ; Process with closure
 }
 
 ; Spread operator in collections
@@ -584,9 +964,9 @@ SET result = (data || defaults)..name    ; Merge first, then access
 SET result = data || (defaults..name)    ; Access first, then merge (different!)
 ```
 
-## Procedures
+## Functions
 
-Procedures are named, reusable blocks of code. They can accept arguments, perform computations, and yield a result.
+Functions are named, reusable blocks of code. They can accept arguments, perform computations, and yield a result.
 
 ### Basic Syntax
 
@@ -596,7 +976,7 @@ PROCEDURE <name> (<args>) DO
 END
 ```
 
-### Simple Procedures
+### Simple Functions
 
 ```rumps
 PROCEDURE greet (name) DO
@@ -614,7 +994,7 @@ END
 
 The last expression in a procedure body is its result (no explicit `RETURN`).
 
-### Calling Procedures
+### Calling Functions
 
 ```rumps
 ; Direct call
@@ -633,7 +1013,7 @@ SET area = square(side) * 4
   |> OUTPUT
 ```
 
-### Multi-Statement Procedures
+### Multi-Statement Functions
 
 Use `;` or newlines to separate statements. The final expression is the result:
 
@@ -653,9 +1033,9 @@ PROCEDURE process-patient (id) DO
 END
 ```
 
-### Procedures with Side Effects
+### Functions with Side Effects
 
-Procedures that perform side effects but don't need to yield a value:
+Functions that perform side effects but don't need to yield a value:
 
 ```rumps
 PROCEDURE log-access (user, resource) DO
@@ -673,9 +1053,9 @@ PROCEDURE notify-all (msg) DO
 END
 ```
 
-### Procedures in Stream Operations
+### Functions in Stream Operations
 
-Procedures integrate naturally with `COLLECT` streams:
+Functions integrate naturally with `COLLECT` streams:
 
 ```rumps
 PROCEDURE is-adult (record) DO
@@ -693,7 +1073,7 @@ COLLECT ^PERSONS
   OUTPUT
 ```
 
-### Recursive Procedures
+### Recursive Functions
 
 ```rumps
 PROCEDURE factorial (n) DO
@@ -711,30 +1091,24 @@ PROCEDURE tree-sum (node-key) DO
 END
 ```
 
-### Closures / Anonymous Procedures (Future)
+### Closures / Anonymous Functions
 
-For inline use in streams:
+For inline use in streams, etc...:
 
 ```rumps
-; Potential syntax options:
-
 ; Arrow syntax
 COLLECT ^DATA
-  MAP (x) => x * 2
-  FILTER (x) => x > 10
-
-; Block syntax
-COLLECT ^DATA
-  MAP { |x| x * 2 }
-  FILTER { |x| x > 10 }
-
-; DO syntax (consistent with procedures)
-COLLECT ^DATA
-  MAP DO (x) x * 2 END
-  FILTER DO (x) x > 10 END
+  MAP x => x * 2
+  FILTER x => x > 10
 ```
 
-**Open question**: Which anonymous procedure syntax to adopt?
+More complex expressions can allow braces in the closure body, e.g.
+
+```rumps
+MAP x => {
+  ; Complex body here
+}
+```
 
 ## Namespaces
 
@@ -1129,385 +1503,6 @@ END
 ```
 
 **Resolved**: All type checking is **runtime only**. RUMPS is an interpreted query language—type annotations are validated when code executes, not at parse time.
-
-## Fundamental Primitive: COLLECT
-
-The `COLLECT` primitive is the **foundation for ALL iteration** in RUMPS. It creates a lazy stream from a B-tree variable that can be transformed, filtered, and consumed.
-
-### Basic Syntax Forms
-
-#### 1. Block Form
-```rumps
-COLLECT ^DATA
-  WHERE condition
-  SELECT transformation
-  ACTION
-```
-
-#### 2. Pipeline Form
-```rumps
-^DATA
-  |> COLLECT WHERE condition
-  |> SELECT transformation
-  |> ACTION
-```
-
-Both forms are equivalent and can be used interchangeably based on preference and readability.
-
-## Stream Operations
-
-All operations are composable and can be chained together. Operations are **lazy** - they don't execute until a terminal operation (like `OUTPUT` or `INTO`) is reached.
-
-### Filtering Operations
-
-#### WHERE - Filter by predicate
-```rumps
-COLLECT ^PATIENT
-  WHERE key[0] > 100 AND key[0] < 200
-  WHERE has-value  ; Multiple WHERE clauses are ANDed together
-```
-
-#### WHILE - Take while condition is true (early termination)
-```rumps
-COLLECT ^LOG
-  WHILE key[0] <= "2025-01-01"  ; Stops at first false condition
-```
-
-#### FILTER - Post-selection filtering
-```rumps
-COLLECT ^PATIENT
-  SELECT GET(^PATIENT(key[0],"NAME"))
-  FILTER value.contains("Smith")
-```
-
-### Transformation Operations
-
-#### SELECT - Transform each element
-```rumps
-; Simple selection
-COLLECT ^DATA
-  SELECT value
-
-; Field extraction
-COLLECT ^PATIENT
-  SELECT GET(^PATIENT(key[0],"NAME"))
-
-; Object construction
-COLLECT ^PATIENT
-  SELECT {
-    id: key[0],
-    name: GET(^PATIENT(key[0],"NAME")),
-    dob: GET(^PATIENT(key[0],"DOB"))
-  }
-```
-
-#### MAP - Alias for SELECT (for familiarity)
-```rumps
-COLLECT ^DATA
-  MAP process-record
-```
-
-### Limiting Operations
-
-#### TAKE - Take first N elements
-```rumps
-COLLECT ^LOG
-  TAKE 100
-```
-
-#### SKIP - Skip first N elements
-```rumps
-COLLECT ^LOG
-  SKIP 100
-  TAKE 50  ; Get items 101-150
-```
-
-#### TAKE_WHILE / SKIP_WHILE - Conditional limiting
-```rumps
-COLLECT ^DATA
-  SKIP_WHILE value < 0
-  TAKE_WHILE value < 1000
-```
-
-### Aggregation Operations
-
-#### AGGREGATE - Multiple aggregations at once
-```rumps
-COLLECT ^SALES
-  SELECT GET(^SALES(key[0],"AMOUNT"))
-  AGGREGATE
-    COUNT INTO total-sales
-    SUM INTO total-revenue
-    AVG INTO avg-sale
-    MIN INTO min-sale
-    MAX INTO max-sale
-```
-
-#### COUNT - Count elements
-```rumps
-COLLECT ^PATIENT
-  COUNT INTO patient-count
-```
-
-#### REDUCE - Custom reduction
-```rumps
-COLLECT ^DATA
-  REDUCE WITH custom-reducer INITIAL 0 INTO result
-```
-
-### Grouping Operations
-
-#### GROUP BY - Group elements by key
-```rumps
-COLLECT ^VISITS
-  WHERE key[1] == "2025"
-  GROUP BY key[0]  ; Group by patient ID
-  AGGREGATE COUNT INTO visit-counts
-```
-
-### Ordering Operations
-
-#### SORT BY - Sort stream
-```rumps
-COLLECT ^PATIENT
-  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
-  SORT BY name ASC
-```
-
-#### REVERSE - Reverse stream order
-```rumps
-COLLECT ^DATA
-  REVERSE
-```
-
-### Join Operations
-
-#### JOIN - Join with another variable
-```rumps
-COLLECT ^ORDER
-  JOIN ^CUSTOMER ON key[0] == ^CUSTOMER.key[0]
-  SELECT { order: value, customer: ^CUSTOMER.value }
-```
-
-### Parallel Processing
-
-#### PARALLEL - Process in parallel
-```rumps
-COLLECT ^RECORDS
-  PARALLEL 10  ; Process up to 10 records concurrently
-  MAP expensive-op
-```
-
-## Terminal Operations
-
-Terminal operations consume the stream and produce a result.
-
-### INTO - Collect into variable
-```rumps
-COLLECT ^DATA
-  SELECT value
-  INTO results  ; Local variable
-
-COLLECT ^DATA
-  SELECT value
-  INTO ^PROCESSED  ; Global variable (requires transaction)
-```
-
-### OUTPUT - Write to console
-
-The `OUTPUT` operation in RUMPS supports multiple formatting options for flexible console output.
-
-#### Simple Output
-```rumps
-COLLECT ^DATA
-  OUTPUT  ; Each item on new line
-```
-
-#### Template Output
-```rumps
-COLLECT ^PATIENT
-  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
-  OUTPUT "Patient #{id}: {name}"
-```
-
-#### Formatted Output
-```rumps
-; JSON format
-COLLECT ^CONFIG
-  OUTPUT AS JSON
-
-; Table format
-COLLECT ^STATS
-  OUTPUT AS TABLE HEADERS ["Date", "Count", "Average"]
-
-; CSV format
-COLLECT ^DATA
-  OUTPUT WITH SEPARATOR ","
-
-; XML format (future)
-COLLECT ^DATA
-  OUTPUT AS XML ROOT "records" ELEMENT "record"
-```
-
-#### Output Targets
-```rumps
-; Standard error
-COLLECT ^ERRORS
-  OUTPUT TO ERROR
-
-; File output (future)
-COLLECT ^DATA
-  OUTPUT TO FILE "/tmp/output.txt"
-
-; Network output (future)
-COLLECT ^METRICS
-  OUTPUT TO HTTP "https://metrics.example.com/api"
-```
-
-#### Extended Output Examples
-```rumps
-; Simple output - each item on a new line
-COLLECT ^DATA
-  OUTPUT
-
-; Template-based formatting with field interpolation
-COLLECT ^PATIENT
-  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
-  OUTPUT "ID: {id} - Name: {name}"
-
-; JSON output for structured data
-COLLECT ^CONFIG
-  SELECT { key: key, value: value }
-  OUTPUT AS JSON
-
-; Table formatting for reports
-COLLECT ^STATS
-  SELECT { date: key[0], total: value.sum, avg: value.avg }
-  OUTPUT AS TABLE HEADERS ["Date", "Total", "Average"]
-
-; Custom separators and formatting
-COLLECT ^LIST
-  OUTPUT WITH SEPARATOR ", "  ; Output as comma-separated values
-
-; Conditional output
-COLLECT ^ERRORS
-  WHERE value.severity == "HIGH"
-  OUTPUT TO ERROR  ; Write to stderr instead of stdout
-```
-
-This declarative output approach eliminates the need for manual formatting loops and provides consistent, reusable output patterns.
-
-### FOREACH - Side effects
-```rumps
-COLLECT ^TASKS
-  FOREACH process-task  ; Execute function for each element
-```
-
-## Complete Examples
-
-### Example 1: Find patients with recent visits
-```rumps
-; Traditional MUMPS approach (NOT supported in RUMPS)
-; SET COUNT=0
-; FOR  SET PID=$ORDER(^PATIENT(PID)) QUIT:PID=""  DO
-; . SET LASTVISIT=$GET(^PATIENT(PID,"LASTVISIT"))
-; . IF LASTVISIT>20250101 DO
-; . . SET COUNT=COUNT+1
-; . . WRITE "Patient ",PID," last visited on ",LASTVISIT,!
-
-; RUMPS declarative approach
-COLLECT ^PATIENT
-  WHERE has-descendants
-  SELECT {
-    id: key[0],
-    last-visit: GET(^PATIENT(key[0],"LASTVISIT"))
-  }
-  FILTER last-visit > 20250101
-  OUTPUT "Patient {id} last visited on {last-visit}"
-
-; Get count
-COLLECT ^PATIENT
-  WHERE has-descendants
-  FILTER GET(^PATIENT(key[0],"LASTVISIT")) > 20250101
-  COUNT INTO recent-count
-```
-
-### Example 2: Top 10 customers by order value
-```rumps
-^ORDERS
-  |> COLLECT
-  |> GROUP BY GET(^ORDERS(key[0],"CUSTOMER-ID"))
-  |> AGGREGATE SUM GET(^ORDERS(key[0],"AMOUNT")) INTO total
-  |> SORT BY total DESC
-  |> TAKE 10
-  |> JOIN ^CUSTOMER ON group-key
-  |> SELECT {
-       customer-name: GET(^CUSTOMER(group-key,"NAME")),
-       total-orders: total
-     }
-  |> OUTPUT AS TABLE HEADERS ["Customer", "Total Orders"]
-```
-
-### Example 3: ETL Pipeline
-```rumps
-; Extract, transform, and load data
-TRANSACTION {
-  COLLECT ^RAW-DATA
-    WHERE key[0] >= last-processed-id
-    PARALLEL 5
-    MAP validate-record
-    FILTER is-valid
-    MAP transform-record
-    SELECT {
-      id: generate-id(),
-      data: transformed-val,
-      processed-at: Time.now()
-    }
-    INTO ^PROCESSED-DATA
-
-  SET last-processed-id = LAST(^RAW-DATA)
-}
-```
-
-## Comparison with Traditional MUMPS
-
-### Summary Table
-
-| Pattern             | Traditional MUMPS                | RUMPS DSL                 | Benefits               |
-|---------------------|----------------------------------|---------------------------|------------------------|
-| Simple iteration    | `FOR SET I=$O(^D(I)) Q:I="" DO`  | `COLLECT ^D`              | Cleaner syntax         |
-| Filtering           | `IF` statements in loop body     | `WHERE` / `FILTER`        | Declarative intent     |
-| Counting            | Manual counter variable          | `COUNT INTO`              | No state management    |
-| First N items       | Counter with `QUIT`              | `TAKE n`                  | Clear intent           |
-| Aggregation         | Manual accumulator variables     | `AGGREGATE` operations    | Built-in operations    |
-| Output              | Multiple `WRITE` statements      | `OUTPUT` with templates   | Flexible formatting    |
-| Parallel processing | Not available                    | `PARALLEL n`              | Automatic optimization |
-| Error handling      | Manual checks                    | Stream error propagation  | Consistent handling    |
-
-### Detailed Pattern Comparison
-
-The following table shows common MUMPS iteration patterns and their conceptual RUMPS equivalents:
-
-| Traditional MUMPS (Imperative) | Future RUMPS DSL (Declarative) | Description |
-|--------------------------------|--------------------------------|-------------|
-| ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. WRITE ID,!` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  SELECT key[0]`<br/>`  OUTPUT` | Iterate through all top-level keys |
-| ```mumps```<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`WRITE "Total: ",CNT,!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  COUNT INTO tot`<br/>`WRITE "Total: ",tot,!` | Count entries |
-| ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. IF ID>100 QUIT`<br/>`. ; Process ID` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  WHILE key[0] <= 100`<br/>`  ; Process automatically` | Early termination with condition |
-| ```mumps```<br/>`SET I=0`<br/>`FOR  SET ID=$ORDER(^LOG(ID)) QUIT:ID=""  DO`<br/>`. SET I=I+1`<br/>`. IF I>10 QUIT`<br/>`. ; Process first 10` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  TAKE 10`<br/>`  ; Process automatically` | Take first N entries |
-| ```mumps```<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. IF NAME["Smith" DO`<br/>`. . ; Process Smith patients` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  WHERE has-descendants`<br/>`  SELECT GET(^PAT(key[0],"NAME"))`<br/>`  FILTER value.contains("Smith")`<br/>`  ; Process automatically` | Filter with condition |
-| ```mumps```<br/>`KILL RESULTS`<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`. SET RESULTS(CNT)=$GET(^DATA(ID,"VAL"))` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  SELECT GET(^DATA(key[0],"VAL"))`<br/>`  INTO RESULTS` | Collect into array |
-| ```mumps```<br/>`FOR  SET D=$ORDER(^LOG(2025,D)) QUIT:D=""  DO`<br/>`. FOR  SET T=$ORDER(^LOG(2025,D,T)) QUIT:T=""  DO`<br/>`. . ; Process each timestamp` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  WHERE key[0] == 2025 AND key.len == 3`<br/>`  ; All 2025 timestamps, flat` | Nested iteration (flattened) |
-| ```mumps```<br/>`; Complex aggregation`<br/>`SET TOT=0,CNT=0`<br/>`FOR  SET ID=$ORDER(^SALE(ID)) QUIT:ID=""  DO`<br/>`. SET AMT=$GET(^SALE(ID,"AMOUNT"))`<br/>`. SET TOT=TOT+AMT,CNT=CNT+1`<br/>`SET AVG=TOT/CNT` | ```rumps```<br/>`COLLECT ^SALE`<br/>`  SELECT GET(^SALE(key[0],"AMOUNT"))`<br/>`  AGGREGATE`<br/>`    SUM INTO total`<br/>`    COUNT INTO count`<br/>`    AVG INTO average` | Aggregation operations |
-| ```mumps```<br/>`; Display all patient info`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. SET DOB=$GET(^PAT(ID,"DOB"))`<br/>`. WRITE "Patient ",ID,": ",NAME`<br/>`. WRITE " (DOB: ",DOB,")",!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  SELECT {`<br/>`    id: key[0],`<br/>`    name: GET(^PAT(key[0],"NAME")),`<br/>`    dob: GET(^PAT(key[0],"DOB"))`<br/>`  }`<br/>`  OUTPUT "Patient {id}: {name} (DOB: {dob})"` | Console output with formatting |
-
-### Key Advantages of RUMPS `COLLECT` Approach
-
-1. **No Manual State**: No need for iteration variables, counters, or manual loop control
-2. **Declarative Intent**: The code expresses *what* you want, not *how* to iterate
-3. **Automatic Optimization**: The runtime can optimize streaming, batching, and parallelization
-4. **Composable Operations**: Stream operations naturally chain together
-5. **Memory Efficient**: Lazy evaluation means data isn't loaded until needed
-6. **Type Hints**: Optional annotations validated at runtime for documentation and error catching
 
 ## Implementation Phases
 
