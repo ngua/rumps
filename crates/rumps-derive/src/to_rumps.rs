@@ -2,6 +2,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::spanned::Spanned;
 use syn::{DeriveInput, Fields};
 
 use crate::attrs::{
@@ -81,6 +82,7 @@ fn expand_named(
     let container = ContainerAttrs::from_attrs(&input.attrs)?;
     let global = container.global_or_err(input.ident.span())?;
     let fields = ParsedFields::from_named(f)?;
+    fields.require_key_field(f.span())?;
     let rename_all = container.rename_all;
 
     let to_key_body = gen_to_key(&fields);

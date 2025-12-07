@@ -437,6 +437,26 @@ impl ParsedFields {
             skip_fields,
         })
     }
+
+    /// Validate that at least one field is marked as `#[rumps(key)]`.
+    ///
+    /// Key fields form the unique identifier (subscript path) for each record.
+    /// Without at least one key, all records would share the same empty path,
+    /// causing overwrites and preventing individual record retrieval.
+    ///
+    /// This should be called for top-level struct derives. Enum variants
+    /// don't require keys since they have discriminant tags.
+    pub fn require_key_field(&self, span: Span) -> syn::Result<()> {
+        if self.key_fields.is_empty() {
+            Err(syn::Error::new(
+                span,
+                "at least one field must be marked with `#[rumps(key)]` to \
+                 form a unique subscript path for each record",
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Variant field types.
