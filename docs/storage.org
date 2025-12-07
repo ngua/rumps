@@ -1,6 +1,16 @@
 #+TITLE: RUMPS Storage Layer
-#+AUTHOR: RUMPS Project
-#+OPTIONS: toc:3
+
+* Table of Contents :toc@1@gh:
+- [[#overview][Overview]]
+- [[#general-architecture][General Architecture]]
+- [[#page-storage][Page Storage]]
+- [[#write-ahead-logging-wal][Write-Ahead Logging (WAL)]]
+- [[#b-tree-structure][B-Tree Structure]]
+- [[#globals-vs-locals][Globals vs Locals]]
+- [[#transactions][Transactions]]
+- [[#file-layout][File Layout]]
+- [[#limits][Limits]]
+- [[#summary][Summary]]
 
 * Overview
 RUMPS stores all data using a /persistent B-tree/ backed by a paged storage engine with write-ahead logging. Unlike traditional MUMPS implementations that vary in their storage backends, RUMPS uses a unified architecture where:
@@ -8,6 +18,7 @@ RUMPS stores all data using a /persistent B-tree/ backed by a paged storage engi
 - All data (globals and locals) is stored as /complete key paths/ in sorted B-trees
 - The same tree structure is used in-memory and on-disk (just serialized differently)
 - Persistence is handled via a standard WAL + page cache approach
+- Note that most MUMPS implementations use a B+-tree (i.e values only in terminal nodes), whereas RUMPS uses a B-tree (see more below)
 
 This document explains how the storage layer works from the bottom up: from raw pages on disk, through the B-tree structure, up to the logical database operations.
 
@@ -16,22 +27,22 @@ Before diving into implementation details, it helps to understand /what/ we're s
 
 In MUMPS (and RUMPS), all data lives in /sparse multi-dimensional arrays/ called "globals" (persistent) and "locals" (ephemeral). A global like =^PATIENT= is essentially a tree where each node can hold both a value /and/ children:
 
-#+BEGIN_EXAMPLE
+#+begin_example
 ^PATIENT(123)           = "Active"         ; Patient 123 has a status value
 ^PATIENT(123,"NAME")    = "John Doe"       ; ...and also has children
 ^PATIENT(123,"DOB")     = "1974-08-09"
 ^PATIENT(123,"ADDR")    = "123 Main St"
-#+END_EXAMPLE
+#+end_example
 
 This creates the logical structure:
 
-#+BEGIN_EXAMPLE
+#+begin_example
 ^PATIENT
   └─ 123 = "Active"
       ├─ "ADDR" = "123 Main St"
       ├─ "DOB"  = "1974-08-09"
       └─ "NAME" = "John Doe"
-#+END_EXAMPLE
+#+end_example
 
 *** Inherent Sorting
 All data is /inherently sorted/. The subscripts =[123, "ADDR"]=, =[123, "DOB"]=, =[123, "NAME"]= are stored in order according to RUMPS' /extended collation/:
@@ -55,11 +66,10 @@ To preserve hierarchy information (needed for operations like =DATA= which asks 
 | Both         | ~Some(v)~ | ~true~            | =Both= (MUMPS =11=)          |
 
 When you insert =^PATIENT(123,"NAME")=, RUMPS automatically creates an ancestor entry for =^PATIENT(123)= with ~has_descendants = true~. This makes hierarchy queries trivial—no tree scanning required.
+* General Architecture
+RUMPS uses a three-layer architecture that separates concerns between the =Database= abstraction, the B-tree, and on-disk storage:
 
-* Architecture
-RUMPS uses a three-layer architecture that separates concerns cleanly:
-
-#+BEGIN_EXAMPLE
+#+begin_example
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  DATABASE LAYER                                                             │
 │  ─────────────────────────────────────────────────────────────────────────  │
@@ -86,27 +96,27 @@ RUMPS uses a three-layer architecture that separates concerns cleanly:
 │  Bitmap allocator for page management                                       │
 │  Global registry (name → root page mapping)                                 │
 └─────────────────────────────────────────────────────────────────────────────┘
-#+END_EXAMPLE
+#+end_example
 
 ** Why This Separation?
-1. *Database = Logical Coordinator*
+1. *Database == Logical Coordinator*
    - Knows about variable =Name=s (like =^PATIENT=)
    - Logs /logical/ WAL records that include Names for meaningful recovery
    - Manages namespace mapping with lazy-loading from registry
      - If this were moved down to the B-Tree, we would need to load /all/ global roots immediately into memory
 
-2. *B-Tree = Pure Tree Operations*
+2. *B-Tree == Pure Tree Operations*
    - Operates ONLY on =NodeId=s with zero knowledge of =Name=s or WAL
    - Implements B-tree algorithms (split, merge, search, delete)
    - Only marks pages dirty—never writes to disk directly
    - Simple, testable, focused on tree correctness
 
-3. *Storage = Physical I/O*
+3. *Storage == Physical I/O*
    - Handles actual disk reads/writes
    - Manages page cache, WAL files, registry
    - Provides durability guarantees
 
-*Critical rule*: WAL records need variable =Name= s for crash recovery (e.g., "replay SET to =^PATIENT="). Only the Database layer has both Names and the B-tree context, so WAL logging /must/ happen there.
+*Critical rule*: WAL records need variable =Name= s for crash recovery (e.g., "replay =SET= to =^PATIENT="). Only the Database layer has both Names and the B-tree context, so WAL logging /must/ happen there.
 
 * Page Storage
 The storage layer organizes the data file as a sequence of fixed-size /pages/ (=4 KB= each). Every disk read or write operates on whole pages—this aligns with how operating systems and SSDs work, making I/O efficient. B-tree nodes, the allocator bitmap, and the global registry are all stored as pages.
@@ -114,7 +124,7 @@ The storage layer organizes the data file as a sequence of fixed-size /pages/ (=
 ** Page Layout
 The data file is organized as a sequence of pages:
 
-#+BEGIN_EXAMPLE
+#+begin_example
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  DATA FILE                                                               │
 ├──────────────────────────────────────────────────────────────────────────┤
@@ -123,7 +133,7 @@ The data file is organized as a sequence of pages:
 │  Page 2: Global registry root                                            │
 │  Page 3+: B-tree nodes, overflow pages, etc.                             │
 └──────────────────────────────────────────────────────────────────────────┘
-#+END_EXAMPLE
+#+end_example
 
 *** Superblock (Page 0)
 The superblock contains database metadata:
@@ -141,18 +151,18 @@ The superblock contains database metadata:
 *** Allocator Bitmap (Page 1+)
 Tracks which pages are allocated vs free. Each bit represents one page:
 
-#+BEGIN_EXAMPLE
+#+begin_example
 Byte 0:  [1][1][1][0][0][0][0][0]  ← Pages 0-7 (first 3 used: superblock, allocator, registry)
 Byte 1:  [1][1][1][1][0][0][0][0]  ← Pages 8-15 (4 used for B-tree nodes)
 ...
-#+END_EXAMPLE
+#+end_example
 
 When allocating, we scan for a =0= bit, set it to =1=, and return that page ID. When deallocating, we set the bit back to =0=.
 
 *** Global Registry (Page 2+)
 Maps global names to their B-tree root pages:
 
-#+BEGIN_EXAMPLE
+#+begin_example
 ┌────────────────────────────────────────────────────────────────┐
 │ REGISTRY PAGE                                                  │
 ├────────────────────────────────────────────────────────────────┤
@@ -167,14 +177,14 @@ Maps global names to their B-tree root pages:
 │   key_count: u64                                               │
 │   last_modified: u64                                           │
 └────────────────────────────────────────────────────────────────┘
-#+END_EXAMPLE
+#+end_example
 
 When the database opens, we /lazily/ load globals from this registry. The first access to =^PATIENT= reads the registry, finds the root page, and caches it.
 
 ** Page Cache
 Reading from disk for every operation would be painfully slow. The storage layer maintains an LRU (Least Recently Used) page cache:
 
-#+BEGIN_EXAMPLE
+#+begin_example
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  PAGE CACHE                                                             │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -186,7 +196,7 @@ Reading from disk for every operation would be painfully slow. The storage layer
 │    - last_access: Instant    (for LRU eviction)                         │
 │    - pin_count: usize        (prevents eviction while in use)           │
 └─────────────────────────────────────────────────────────────────────────┘
-#+END_EXAMPLE
+#+end_example
 
 *** Read Path
 1. Check cache for page
@@ -219,7 +229,7 @@ Only /after/ the WAL is durable can we:
 If we crash after step 2 but before step 4, recovery replays the WAL to reconstruct the changes.
 
 ** WAL Record Types
-#+BEGIN_EXAMPLE
+#+begin_example
 ┌────────────────────────────────────────────────────────────────────────┐
 │  WAL RECORD TYPES                                                      │
 ├────────────────────────────────────────────────────────────────────────┤
@@ -241,7 +251,7 @@ If we crash after step 2 but before step 4, recovery replays the WAL to reconstr
 │  CHECKPOINT { wal_sequence, page_count }                               │
 │    - Marks a consistent snapshot (allows WAL truncation)               │
 └────────────────────────────────────────────────────────────────────────┘
-#+END_EXAMPLE
+#+end_example
 
 Each record also contains:
 - ~sequence~: Monotonically increasing sequence number
@@ -249,7 +259,7 @@ Each record also contains:
 - ~length~: Record size (enables skipping corrupted records)
 
 ** WAL File Format
-#+BEGIN_EXAMPLE
+#+begin_example
 ┌────────────────────────────────────────────────────────────────────────┐
 │  WAL FILE: wal/wal-00001.log                                           │
 ├────────────────────────────────────────────────────────────────────────┤
@@ -266,7 +276,7 @@ Each record also contains:
 │    record_type: u8                                                     │
 │    payload: [u8; ...]                                                  │
 └────────────────────────────────────────────────────────────────────────┘
-#+END_EXAMPLE
+#+end_example
 
 ** Group Commit
 Writing and =fsync=ing after every single operation would be slow. The WAL uses /group commit/:
@@ -309,7 +319,7 @@ On database open:
 5. Re-apply to B-tree and page cache
 6. Optionally checkpoint to clean up
 
-#+BEGIN_EXAMPLE
+#+begin_example
 WAL on disk after crash:
   [SET ^A(1)=X] [TXN_COMMIT 1] [SET ^B(2)=Y] [SET ^B(3)=Z] <crash>
                       ↑                                        ↑
@@ -319,7 +329,7 @@ Recovery replays:
   - SET ^A(1)=X ✓ (committed)
   - SET ^B(2)=Y ✗ (no commit)
   - SET ^B(3)=Z ✗ (no commit)
-#+END_EXAMPLE
+#+end_example
 
 * B-Tree Structure
 The B-tree is where the actual key-value data lives. Each global (=^PATIENT=, =^ORDER=, etc.) has its own B-tree.
@@ -336,7 +346,7 @@ For a B-tree with minimum degree =t= (default =t = 3=):
 | Key ordering                 | Sorted ascending within each node               |
 
 ** Node Structure
-#+BEGIN_EXAMPLE
+#+begin_example
 ┌───────────────────────────────────────────────────────────────────────────────────────────┐
 │  B-TREE NODE                                                                              │
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
@@ -353,7 +363,7 @@ For a B-tree with minimum degree =t= (default =t = 3=):
 │           ↓         ↓         ↓          ↓           ↓                                    │
 │         <1       1..1A     1A..1B      1B..2        >2                                    │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
-#+END_EXAMPLE
+#+end_example
 
 *** NodeData
 
@@ -386,7 +396,7 @@ We chose B-tree because:
 
 ** Operations
 *** SET (Insert/Update)
-#+BEGIN_EXAMPLE
+#+begin_example
 SET ^PATIENT(123,"NAME") = "John Doe"
 
 1. Ensure ancestors exist:
@@ -398,10 +408,10 @@ SET ^PATIENT(123,"NAME") = "John Doe"
 
 3. Handle root split if needed:
    - If root becomes full, split and create new root
-#+END_EXAMPLE
+#+end_example
 
 *** GET (Retrieve)
-#+BEGIN_EXAMPLE
+#+begin_example
 GET ^PATIENT(123,"NAME")
 
 1. Start at root
@@ -410,10 +420,10 @@ GET ^PATIENT(123,"NAME")
 4. If not found:
    - If leaf: return None
    - If internal: descend to appropriate child, repeat
-#+END_EXAMPLE
+#+end_example
 
 *** KILL (Delete Subtree)
-#+BEGIN_EXAMPLE
+#+begin_example
 KILL ^PATIENT(123)   ; Removes patient 123 and ALL their fields
 
 1. Find all keys with prefix Key([123])
@@ -427,21 +437,21 @@ KILL ^PATIENT(123)   ; Removes patient 123 and ALL their fields
 3. Update ancestor has_descendants flags if no siblings remain
 
 4. Rebalance (merge/borrow) as needed
-#+END_EXAMPLE
+#+end_example
 
 *** ORDER (Next Key)
-#+BEGIN_EXAMPLE
+#+begin_example
 ORDER(^PATIENT(123)) → 124   ; Next patient after 123
 
 1. Find Key([123]) in tree
 2. Return next key in sorted order: Key([124])
 3. Caller extracts subscript: 124
-#+END_EXAMPLE
+#+end_example
 
 ** Node Splitting
 When a node reaches =2t-1= keys, split at the median:
 
-#+BEGIN_EXAMPLE
+#+begin_example
 Before (min_degree=3, 5 keys):
   Node: [10, 20, 30, 40, 50]
               ↑
@@ -451,14 +461,14 @@ After:
   Left:   [10, 20]
   Median: 30 → promoted to parent (WITH its value!)
   Right:  [40, 50]
-#+END_EXAMPLE
+#+end_example
 
 Note: The median's /value/ is also promoted. This is B-tree semantics—the value moves with the key, not just a separator.
 
 ** Node Merging
 When siblings are both at minimum size, merge them:
 
-#+BEGIN_EXAMPLE
+#+begin_example
 Before:
   Parent: [..., 30, ...]
                / \
@@ -468,7 +478,7 @@ After (merged into left):
   Merged: [10, 20, 30, 40, 50]
                    ↑
           separator from parent
-#+END_EXAMPLE
+#+end_example
 
 The separator key (=30=) and its value come down from the parent.
 
@@ -480,13 +490,15 @@ RUMPS distinguishes two namespaces:
 | Globals | =^=    | Disk-backed  | Yes         | Yes        |
 | Locals  | (none) | Memory-only  | No          | No         |
 
-** Globals (=^NAME=)
+** Globals
+- These are represented with a caret-prefix, e.g. =^NAME=
 - Persisted to disk via WAL and page cache
 - Lazy-loaded from registry on first access
 - Survive database restarts
 - Require explicit transactions for writes
 
-** Locals (=NAME=)
+** Locals
+- These are represented /without/ a caret-prefix, e.g. =^NAME=
 - Memory-only, never touch disk
 - Discarded when database closes
 - Fast, ephemeral storage for session state
@@ -502,7 +514,7 @@ All writes to globals /must/ occur within transactions. This ensures:
 - *Consistency*: Database is never left in partial state
 
 ** Transaction Flow
-#+BEGIN_EXAMPLE
+#+begin_example
 1. Begin transaction
    - Allocate TransactionId
    - Log TXN_BEGIN to WAL
@@ -521,7 +533,7 @@ All writes to globals /must/ occur within transactions. This ensures:
    - Log TXN_ROLLBACK to WAL
    - Undo changes using old_data from WAL records
    - Clear dirty flags
-#+END_EXAMPLE
+#+end_example
 
 ** Sync Modes
 The storage layer supports different durability/performance tradeoffs:
@@ -537,14 +549,14 @@ Default is ~OnCommit~—you get durability when you commit, with group commit fo
 * File Layout
 A RUMPS database directory looks like:
 
-#+BEGIN_EXAMPLE
+#+begin_example
 mydb/
 ├── data.db            # Main data file (pages: superblock, allocator, registry, B-trees)
 └── wal/
     ├── wal-00001.log  # WAL segment 1
     ├── wal-00002.log  # WAL segment 2 (current)
     └── ...
-#+END_EXAMPLE
+#+end_example
 
 Concurrent access is managed via =RwLock= on the file handle—no separate lock file.
 
@@ -564,9 +576,7 @@ Old WAL segments are deleted after checkpoints:
 3. Automatic cleanup runs after each checkpoint
 
 * Limits
-
 ** Maximum Database Size
-
 The allocator bitmap uses a three-level indirect scheme similar to Unix inodes:
 
 | *Level*          | *Bitmap Pages*    | *Calculation*            |
@@ -576,13 +586,14 @@ The allocator bitmap uses a three-level indirect scheme similar to Unix inodes:
 | Double indirect  | 262,144           | =512 × 512=              |
 | *Total*          | *263,056*         |                          |
 
-Each bitmap page tracks =PAGE_SIZE × 8 = 32,768= pages. With the default =4 KB= page size:
+Each bitmap page tracks =PAGE_SIZE × 8 = 32,768= pages. So, with the default =4 KB= page size:
 
 - *Max pages*: =263,056 × 32,768 ≈ 8.6 billion=
 - *Max database size*: =~32 TiB=
 
-** Maximum Globals
+Note that these limits apply to the /default/ settings. Page size can be increased by settings the ~RUMPS_PAGE_SIZE~ env var at compile time.
 
+** Maximum Globals
 The global registry uses page chaining—when one page fills up, a new page is allocated and linked. This means there's no hard limit on the number of globals.
 
 Each registry page holds ~4070 bytes of entries. Entry size is =10 + name_length= bytes, so:
