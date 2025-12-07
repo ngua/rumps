@@ -28,7 +28,7 @@ SET PATIENT_ID = 123
 ```
 
 **Reserved keywords** (cannot be used as variable names):
-`SET`, `GET`, `KILL`, `COLLECT`, `PROCEDURE`, `TRANSACTION`, `IF`, `ELSE`, `WHERE`, `SELECT`, `INTO`, `OUTPUT`, `INTO` etc.
+`SET`, `GET`, `KILL`, `COLLECT`, `FUN`, `TRANSACTION`, `IF`, `ELSE`, `WHERE`, `SELECT`, `INTO`, `OUTPUT`, `INTO` etc.
 
 ### Train-Case Support
 
@@ -37,7 +37,7 @@ RUMPS supports **train-case** (kebab-case) identifiers, which are common in Lisp
 ```rumps
 SET my-var = 123
 SET last-visit-date = Time.now()
-PROCEDURE compute-total (items) DO ... END
+FUN compute-total (items) { ... }
 ```
 
 **Important**: Because `-` can appear in identifiers, the subtraction operator **requires spaces**:
@@ -156,7 +156,7 @@ TRANSACTION {
 ```rumps
 TRANSACTION {
   ; Built-in transaction context
-  SET ^AUDIT(Txn.id, "USER") = Session.user
+  ; SET ^AUDIT(Txn.id, "USER") = Session.user       For if/when user support
   SET ^AUDIT(Txn.id, "TIME") = Txn.start-time
   SET ^AUDIT(Txn.id, "OPERATIONS") = Txn.op-count
 }
@@ -166,13 +166,16 @@ TRANSACTION {
 ```rumps
 TRANSACTION {
   SET ^CRITICAL(id) = value
-} ON ERROR {
+} ON ERROR error => {
   ; Error handling block
-  LOG "Transaction failed: " + Error.message
-  ALERT admin-user
+  set dir = Io.env("LOG_DIR") ? "./logs"
+  OUTPUT TO FILE 
+    "{dir}/err.log" 
+    "Transaction failed: {error.message}" 
+  ; ALERT admin-user                                    For if/when multi-user support
 } FINALLY {
   ; Cleanup code that always runs
-  RELEASE locks
+  ; RELEASE locks                                       What would this do?
 }
 ```
 
@@ -971,28 +974,28 @@ Functions are named, reusable blocks of code. They can accept arguments, perform
 ### Basic Syntax
 
 ```rumps
-PROCEDURE <name> (<args>) DO
+FUN <name> (<args>) {
   <body>
-END
+}
 ```
 
 ### Simple Functions
 
 ```rumps
-PROCEDURE greet (name) DO
+FUN greet (name) {
   OUTPUT "Hello, " + name + "!"
-END
+}
 
-PROCEDURE add (a, b) DO
+FUN add (a, b) {
   a + b
-END
+}
 
-PROCEDURE square (x) DO
+FUN square (x) {
   x * x
-END
+}
 ```
 
-The last expression in a procedure body is its result (no explicit `RETURN`).
+The last expression in a function body is its result (no explicit `RETURN`).
 
 ### Calling Functions
 
@@ -1018,7 +1021,7 @@ SET area = square(side) * 4
 Use `;` or newlines to separate statements. The final expression is the result:
 
 ```rumps
-PROCEDURE process-patient (id) DO
+FUN process-patient (id) {
   SET name = GET(^PATIENT(id, "NAME"))
   SET age = GET(^PATIENT(id, "AGE"))
   SET visits = COLLECT ^VISITS
@@ -1030,7 +1033,7 @@ PROCEDURE process-patient (id) DO
     age: age,
     visit-count: visits
   }
-END
+}
 ```
 
 ### Functions with Side Effects
@@ -1038,19 +1041,19 @@ END
 Functions that perform side effects but don't need to yield a value:
 
 ```rumps
-PROCEDURE log-access (user, resource) DO
+FUN log-access (user, resource) {
   TRANSACTION {
     SET ^AUDIT(Time.now(), user) = resource
   }
-END
+}
 
-PROCEDURE notify-all (msg) DO
+FUN notify-all (msg) {
   COLLECT ^USERS
     WHERE value..active == true
     FOREACH user => {
       send-notification(user..id, msg)
     }
-END
+}
 ```
 
 ### Functions in Stream Operations
@@ -1058,13 +1061,13 @@ END
 Functions integrate naturally with `COLLECT` streams:
 
 ```rumps
-PROCEDURE is-adult (record) DO
+FUN is-adult (record) {
   record..age >= 18
-END
+}
 
-PROCEDURE format-name (record) DO
+FUN format-name (record) {
   record..last + ", " + record..first
-END
+}
 
 ; Use in pipeline
 COLLECT ^PERSONS
@@ -1076,19 +1079,19 @@ COLLECT ^PERSONS
 ### Recursive Functions
 
 ```rumps
-PROCEDURE factorial (n) DO
+FUN factorial (n) {
   IF n <= 1 { 1 }
   ELSE { n * factorial(n - 1) }
-END
+}
 
-PROCEDURE tree-sum (node-key) DO
+FUN tree-sum (node-key) {
   SET val = GET(^TREE(node-key, "VALUE")) ?? 0
   SET children-sum = COLLECT ^TREE(node-key, "CHILDREN")
     MAP tree-sum
     AGGREGATE SUM
 
   val + children-sum
-END
+}
 ```
 
 ### Closures / Anonymous Functions
@@ -1117,15 +1120,15 @@ RUMPS uses **PascalCase namespaces** with dot notation for organizing functions 
 ### Defining Namespaces
 
 ```rumps
-NAMESPACE MyUtils DO
-  PROCEDURE double (x: Int) -> Int DO
+NAMESPACE MyUtils {
+  FUN double (x: Int) -> Int {
     x * 2
-  END
+  }
 
-  PROCEDURE triple (x: Int) -> Int DO
+  FUN triple (x: Int) -> Int {
     x * 3
-  END
-END
+  }
+}
 
 ; Usage
 SET result = MyUtils.double(21)  ; 42
@@ -1218,13 +1221,15 @@ SET result = MyUtils.double(21)  ; 42
 
 #### `Io` — Input/Output (Future)
 
-| Function                 | Description        |
-|--------------------------|--------------------|
-| `Io.read-file(path)`     | Read file contents |
-| `Io.write-file(path, s)` | Write to file      |
-| `Io.stdin()`             | Read from stdin    |
-| `Io.print(s)`            | Print to stdout    |
-| `Io.eprint(s)`           | Print to stderr    |
+| Function                 | Description               |
+|--------------------------|---------------------------|
+| `Io.read-file(path)`     | Read file contents        |
+| `Io.write-file(path, s)` | Write to file             |
+| `Io.stdin()`             | Read from stdin           |
+| `Io.print(s)`            | Print to stdout           |
+| `Io.eprint(s)`           | Print to stderr           |
+| `Io.env(x)`              | Try to get `x` as env var |
+|                          |                           |
 
 ### Namespace Imports
 
@@ -1349,24 +1354,24 @@ Type annotations are **optional hints** that the interpreter validates at runtim
 
 ```rumps
 ; Untyped (no runtime validation)
-PROCEDURE add (a, b) DO
+FUN add (a, b) {
   a + b
-END
+}
 
 ; Typed arguments (runtime error if wrong type passed)
-PROCEDURE add (a: Int, b: Int) DO
+FUN add (a: Int, b: Int) {
   a + b
-END
+}
 
 ; Typed arguments and return (validates both input and output)
-PROCEDURE add (a: Int, b: Int) -> Int DO
+FUN add (a: Int, b: Int) -> Int {
   a + b
-END
+}
 
 ; Complex types
-PROCEDURE process (data: Json.Object) -> Json.Array DO
+FUN process (data: Json.Object) -> Json.Array {
   Json.values(data)
-END
+}
 ```
 
 When a type annotation is violated, the interpreter raises a runtime error with a clear message indicating the expected vs actual type.
@@ -1449,35 +1454,35 @@ SET s = 3.14 as String
 
 ```rumps
 ; Array of specific type
-PROCEDURE sum (nums: Array[Int]) -> Int DO
+FUN sum (nums: Array[Int]) -> Int {
   nums |> AGGREGATE SUM
-END
+}
 
 ; Optional/nullable return
-PROCEDURE find (id: Int) -> Option[String] DO
+FUN find (id: Int) -> Option[String] {
   GET(^DATA(id, "NAME"))
-END
+}
 
 ; Result type for fallible operations
-PROCEDURE parse-int (s: String) -> Result[Int, String] DO
+FUN parse-int (s: String) -> Result[Int, String] {
   ; returns Ok[Int] or Err[String]
-END
+}
 
 ; Stream processing with known element type
-PROCEDURE get-names () -> Stream[String] DO
+FUN get-names () -> Stream[String] {
   COLLECT ^PATIENTS
     SELECT value..name
-END
+}
 
-; Procedure as first-class value
-PROCEDURE apply-twice (f: Proc[Int, Int], x: Int) -> Int DO
+; Function as first-class value
+FUN apply-twice (f: Proc[Int, Int], x: Int) -> Int {
   f(f(x))
-END
+}
 
 ; Map type
-PROCEDURE word-count (words: Array[String]) -> Map[String, Int] DO
+FUN word-count (words: Array[String]) -> Map[String, Int] {
   ; ...
-END
+}
 ```
 
 ### Structural Object Types (Future)
@@ -1486,9 +1491,9 @@ For objects with known shape:
 
 ```rumps
 ; Inline structural type
-PROCEDURE process (patient: {name: String, age: Int}) DO
+FUN process (patient: {name: String, age: Int}) {
   OUTPUT patient..name
-END
+}
 
 ; Type alias
 TYPE Patient = {
@@ -1497,9 +1502,9 @@ TYPE Patient = {
   active: Bool
 }
 
-PROCEDURE admit (p: Patient) DO
+FUN admit (p: Patient) {
   ; ...
-END
+}
 ```
 
 **Resolved**: All type checking is **runtime only**. RUMPS is an interpreted query language—type annotations are validated when code executes, not at parse time.
