@@ -1,0 +1,6 @@
+error: conflicting attributes: `#[rumps(skip)]` and `#[rumps(subtree)]` cannot be used together
+ --> tests/ui/conflict_skip_subtree.rs:8:5
+  |
+8 | /     #[rumps(skip, subtree)]
+9 | |     data: String,
+  | |________________^

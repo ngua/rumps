@@ -1,0 +1,6 @@
+error: conflicting attributes: `#[rumps(key)]` and `#[rumps(flatten)]` cannot be used together
+ --> tests/ui/conflict_key_flatten.rs:6:5
+  |
+6 | /     #[rumps(key, flatten)]
+7 | |     id: u64,
+  | |___________^

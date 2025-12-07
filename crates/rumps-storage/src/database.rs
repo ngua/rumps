@@ -775,6 +775,78 @@ impl Database {
         })
     }
 
+    /// Collects all entries matching a key prefix into a `Vec`.
+    ///
+    /// This method is optimized for prefix-based queries: it seeks directly
+    /// to the prefix position and **stops iteration** as soon as a key is
+    /// encountered that doesn't start with the prefix. This is much more
+    /// efficient than `collects_vec` with a prefix predicate for sparse data.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The variable name (global or local)
+    /// * `prefix` - The key prefix to match
+    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
+    pub(crate) async fn collects_prefix_vec<F, T>(
+        &self,
+        name: &Name,
+        prefix: &Key,
+        extract: F,
+    ) -> Result<Vec<T>>
+    where
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync,
+        T: Send,
+    {
+        let extract_wrap =
+            move |k: &Key, data: &NodeData| extract(k, &data.value);
+
+        let opt_root = self.get_root(name).await?;
+        Ok(match opt_root {
+            Some(root) => {
+                self.btree
+                    .collects_prefix_vec_at(root, prefix, extract_wrap)
+                    .await?
+            }
+            None => Vec::new(),
+        })
+    }
+
+    /// Creates a stream of entries matching a key prefix.
+    ///
+    /// This method is optimized for prefix-based queries: it seeks directly
+    /// to the prefix position and **stops iteration** as soon as a key is
+    /// encountered that doesn't start with the prefix.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The variable name (global or local)
+    /// * `prefix` - The key prefix to match
+    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
+    pub(crate) async fn collects_prefix<'a, F, T>(
+        &'a self,
+        name: &'a Name,
+        prefix: &'a Key,
+        extract: F,
+    ) -> Result<impl Stream<Item = Result<T>> + Send + 'a>
+    where
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        let extract_wrap =
+            move |k: &Key, data: &NodeData| extract(k, &data.value);
+
+        let opt_root = self.get_root(name).await?;
+        let s = match opt_root {
+            Some(root) => self
+                .btree
+                .collects_prefix_at(root, prefix, extract_wrap)
+                .map(|r| r.map_err(Into::into))
+                .boxed(),
+            None => stream::empty().boxed(),
+        };
+        Ok(s)
+    }
+
     /// Executes a function within a transaction context.
     ///
     /// The transaction auto-commits if the closure returns `Ok`, and

@@ -350,14 +350,14 @@ mod private {
 
 /// Read operations for types implementing `FromRumps`
 #[async_trait]
-pub trait DatabaseReadExt: private::Sealed {
+pub trait RumpsRead: private::Sealed {
     /// Get a single record by key
-    async fn get<T: FromRumps>(&self, key: impl IntoKey) -> Result<Option<T>, Error>;
+    async fn one<T: FromRumps>(&self, key: impl IntoKey) -> Result<Option<T>, Error>;
 
     /// Check if a record exists
     async fn exists<T: FromRumps>(&self, key: impl IntoKey) -> Result<bool, Error>;
 
-    /// Iterate all records of type `T`
+    /// Get all records of type `T`
     async fn all<T: FromRumps>(&self) -> Result<Vec<T>, Error>;
 
     /// Query records matching a key prefix
@@ -370,8 +370,8 @@ pub trait DatabaseReadExt: private::Sealed {
     async fn count<T: FromRumps>(&self, prefix: impl IntoKey) -> Result<usize, Error>;
 }
 
-impl DatabaseReadExt for Database { /* ... */ }
-impl DatabaseReadExt for Transaction<'_> { /* ... */ }
+impl RumpsRead for Database { /* ... */ }
+impl RumpsRead for Transaction<'_> { /* ... */ }
 ```
 
 ### Write Operations (Transaction only)
@@ -381,24 +381,18 @@ This enforces at compile time that writes go through transactions:
 ```rust
 /// Write operations for types implementing `ToRumps`
 #[async_trait]
-pub trait TransactionWriteExt: private::Sealed {
+pub trait RumpsWrite: private::Sealed {
     /// Insert a new record
-    async fn insert<T: ToRumps>(&mut self, val: &T) -> Result<(), Error>;
+    async fn insert<T: ToRumps>(&self, val: &T) -> Result<(), Error>;
 
     /// Delete a record by key
-    async fn delete<T: ToRumps>(&mut self, key: impl IntoKey) -> Result<(), Error>;
-
-    /// Update a record (read-modify-write)
-    async fn update<T, F>(&mut self, key: impl IntoKey, f: F) -> Result<(), Error>
-    where
-        T: ToRumps + FromRumps,
-        F: FnOnce(&mut T);
+    async fn delete<T: ToRumps>(&self, key: impl IntoKey) -> Result<(), Error>;
 
     /// Insert or update
-    async fn upsert<T: ToRumps>(&mut self, val: &T) -> Result<(), Error>;
+    async fn upsert<T: ToRumps>(&self, val: &T) -> Result<(), Error>;
 }
 
-impl TransactionWriteExt for Transaction<'_> { /* ... */ }
+impl RumpsWrite for Transaction<'_> { /* ... */ }
 // NOT implemented for Database - writes require transactions!
 ```
 
@@ -449,8 +443,8 @@ impl<A: ToSubscript, B: ToSubscript, C: ToSubscript> IntoKey for (A, B, C) {
 This enables:
 
 ```rust
-db.get::<Patient>(123).await?;                    // Single key
-db.get::<Patient>((123, "cardio")).await?;        // Composite key
+db.one::<Patient>(123).await?;                    // Single key
+db.one::<Patient>((123, "cardio")).await?;        // Composite key
 db.query::<Patient>(("cardio",)).await?;          // Prefix query
 ```
 
@@ -481,19 +475,19 @@ db.transaction(|txn| async {
 }).await?;
 
 // Read
-let patient: Option<Patient> = db.get(123).await?;
+let patient: Option<Patient> = db.one(123).await?;
 
-// Update
+// Update (read-modify-write pattern)
 db.transaction(|txn| async {
-    txn.update::<Patient, _>(123, |p| {
-        p.age = 31;
-    }).await?;
+    let mut p: Patient = txn.one(123).await?.unwrap();
+    p.age = 31;
+    txn.upsert(&p).await?;
     Ok(())
 }).await?;
 
 // Delete
 db.transaction(|txn| async {
-    txn.delete::<Patient>(123).await?;
+    txn.delete::<Patient, _>(123).await?;
     Ok(())
 }).await?;
 
@@ -515,7 +509,7 @@ struct Patient {
 }
 
 // Get specific patient
-let p: Option<Patient> = db.get(("cardio", 123)).await?;
+let p: Option<Patient> = db.one(("cardio", 123)).await?;
 
 // Query all patients in cardiology
 let cardio_patients: Vec<Patient> = db.query::<Patient>(("cardio",)).await?;
@@ -665,20 +659,20 @@ This would allow iterating `patient.visits` without loading all into memory.
 ## Implementation Phases
 
 ### Phase 1: Core Traits
-- [ ] Define `ToSubscript`, `FromSubscript` in `rumps-types`
-- [ ] Define `ToValue`, `FromValue` in `rumps-types`
-- [ ] Implement for primitive types
-- [ ] Define `DecodeError` type
+- [x] Define `ToSubscript`, `FromSubscript` in `rumps-types`
+- [x] Define `ToValue`, `FromValue` in `rumps-types`
+- [x] Implement for primitive types
+- [x] Define `DecodeError` type
 
 ### Phase 2: Tree Traits
-- [ ] Define `ToRumps`, `FromRumps` in `rumps-storage`
-- [ ] Define `IntoKey` helper trait
-- [ ] Manual implementations for test structs
+- [x] Define `ToRumps`, `FromRumps` in `rumps-storage`
+- [x] Define `IntoKey` helper trait
+- [x] Manual implementations for test structs
 
 ### Phase 3: Extension Traits
-- [ ] Define `DatabaseReadExt` trait
-- [ ] Define `TransactionWriteExt` trait
-- [ ] Implement for `Database` and `Transaction`
+- [x] Define `RumpsRead` trait
+- [x] Define `RumpsWrite` trait
+- [x] Implement for `Database` and `Transaction`
 
 ### Phase 4: Derive Macros
 - [ ] Create `rumps-derive` crate
@@ -770,21 +764,22 @@ This is the key ergonomic win. The split is important:
 // Reads: available everywhere
 #[async_trait]
 pub trait RumpsRead: private::Sealed {
-    async fn get<T: FromRumps>(&self, key: impl IntoKey) -> Result<Option<T>, Error>;
-    async fn all<T: FromRumps>(&self) -> Result<Vec<T>, Error>;  // Vec for simplicity initially
+    async fn one<T: FromRumps>(&self, key: impl IntoKey) -> Result<Option<T>, Error>;
+    async fn all<T: FromRumps>(&self) -> Result<Vec<T>, Error>;
     async fn exists<T: FromRumps>(&self, key: impl IntoKey) -> Result<bool, Error>;
+    async fn query<T: FromRumps>(&self, prefix: impl IntoKey) -> Result<Vec<T>, Error>;
 }
 
 // Writes: Transaction only (compile-time enforcement!)
 #[async_trait]
 pub trait RumpsWrite: private::Sealed {
-    async fn insert<T: ToRumps>(&mut self, val: &T) -> Result<(), Error>;
-    async fn delete<T: ToRumps>(&mut self, key: impl IntoKey) -> Result<(), Error>;
-    async fn upsert<T: ToRumps>(&mut self, val: &T) -> Result<(), Error>;
+    async fn insert<T: ToRumps>(&self, val: &T) -> Result<(), Error>;
+    async fn delete<T: ToRumps>(&self, key: impl IntoKey) -> Result<(), Error>;
+    async fn upsert<T: ToRumps>(&self, val: &T) -> Result<(), Error>;
 }
 ```
 
-Skip `update` initially—users can `get` + modify + `upsert`. Less magic, fewer edge cases.
+Skip `update` initially—users can `one` + modify + `upsert`. Less magic, fewer edge cases.
 
 ### Derive Macro: Start Minimal
 
@@ -810,12 +805,12 @@ Defer for later:
 
 ### Suggested Implementation Order
 
-1. **`ToSubscript`/`FromSubscript`** for primitives (trivial, test the pattern)
-2. **`ToValue`/`FromValue`** for primitives (similar)
-3. **`IntoKey`** tuple impls (mechanical but important for ergonomics)
-4. **Manual `ToRumps`/`FromRumps`** impl for a test struct (validate the design)
-5. **`RumpsRead` trait** + impl for `Database` (biggest value-add)
-6. **`RumpsWrite` trait** + impl for `Transaction`
+1. ~~**`ToSubscript`/`FromSubscript`** for primitives (trivial, test the pattern)~~ ✓
+2. ~~**`ToValue`/`FromValue`** for primitives (similar)~~ ✓
+3. ~~**`IntoKey`** tuple impls (mechanical but important for ergonomics)~~ ✓
+4. ~~**Manual `ToRumps`/`FromRumps`** impl for a test struct (validate the design)~~ ✓
+5. ~~**`RumpsRead` trait** + impl for `Database` (biggest value-add)~~ ✓
+6. ~~**`RumpsWrite` trait** + impl for `Transaction`~~ ✓
 7. **`#[derive(ToRumps)]`** — codegen for step 4
 8. **`#[derive(FromRumps)]`** — inverse of step 7
 
@@ -868,7 +863,7 @@ db.transaction(|txn| async {
 }).await?;
 
 // Read works on db directly
-let user: Option<User> = db.get(1).await?;
+let user: Option<User> = db.one(1).await?;
 let users: Vec<User> = db.all().await?;
 ```
 

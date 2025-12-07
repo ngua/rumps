@@ -1,0 +1,5 @@
+error: unknown rumps container attribute: `foobar`
+ --> tests/ui/unknown_container_attr.rs:4:26
+  |
+4 | #[rumps(global = "test", foobar)]
+  |                          ^^^^^^

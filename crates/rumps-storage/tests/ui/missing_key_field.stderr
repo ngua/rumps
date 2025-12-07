@@ -1,0 +1,9 @@
+error: at least one field must be marked with `#[rumps(key)]` to form a unique subscript path for each record
+ --> tests/ui/missing_key_field.rs:5:19
+  |
+5 |   struct NoKeyField {
+  |  ___________________^
+6 | |     name: String,
+7 | |     value: u32,
+8 | | }
+  | |_^

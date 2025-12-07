@@ -5,10 +5,15 @@ edition = "2021"
 
 [dependencies]
 rumps-types = { path = "../rumps-types" }
-rumps-storage = { path = "../rumps-storage" }
+rumps-storage = { path = "../rumps-storage", default-features = false }
+rumps-derive = { path = "../rumps-derive", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[features]
+default = ["derive"]
+derive = ["rumps-derive", "rumps-storage/derive"]
 
 [lints.clippy]
 obfuscated_if_else = "allow"

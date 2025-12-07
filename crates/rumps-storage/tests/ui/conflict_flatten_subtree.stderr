@@ -1,0 +1,6 @@
+error: conflicting attributes: `#[rumps(flatten)]` and `#[rumps(subtree)]` cannot be used together
+ --> tests/ui/conflict_flatten_subtree.rs:8:5
+  |
+8 | /     #[rumps(flatten, subtree)]
+9 | |     data: String,
+  | |________________^

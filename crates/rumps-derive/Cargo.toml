@@ -1,0 +1,23 @@
+[package]
+name = "rumps-derive"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+rumps-types = { path = "../rumps-types" }
+
+[lints.clippy]
+obfuscated_if_else = "allow"
+option_map_unit_fn = "allow"
+type_complexity = "allow"
+use_self = "warn"
+unwrap_used = "deny"
+expect_used = "deny"

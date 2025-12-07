@@ -1,0 +1,6 @@
+error: conflicting attributes: `#[rumps(key)]` and `#[rumps(skip)]` cannot be used together
+ --> tests/ui/conflict_key_skip.rs:6:5
+  |
+6 | /     #[rumps(key, skip)]
+7 | |     id: u64,
+  | |___________^

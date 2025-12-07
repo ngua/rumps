@@ -1,0 +1,6 @@
+error: ToRumps can only be derived for newtype structs (single-field tuple structs)
+ --> tests/ui/multi_field_tuple.rs:4:1
+  |
+4 | / #[rumps(global = "test")]
+5 | | struct MultiFieldTuple(u64, String);
+  | |____________________________________^

@@ -1,0 +1,6 @@
+error: conflicting attributes: `#[rumps(skip)]` and `#[rumps(flatten)]` cannot be used together
+ --> tests/ui/conflict_skip_flatten.rs:8:5
+  |
+8 | /     #[rumps(skip, flatten)]
+9 | |     data: String,
+  | |________________^

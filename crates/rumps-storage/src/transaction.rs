@@ -1354,6 +1354,9 @@ impl Transaction {
             .map(|r| {
                 r.map_err(|e| match e {
                     rumps_types::Error::Storage(se) => se,
+                    other => rumps_types::StorageError::Serialization(
+                        other.to_string(),
+                    ),
                 })
             });
 
@@ -1405,6 +1408,37 @@ impl Transaction {
             .await?
             .try_collect()
             .await
+    }
+
+    /// Collects all entries matching a key prefix into a `Vec`.
+    ///
+    /// This method is optimized for prefix-based queries. It uses the
+    /// existing merge logic to combine buffered writes with the snapshot,
+    /// filtering by the given prefix.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The variable name (global or local)
+    /// * `prefix` - The key prefix to match
+    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
+    pub(crate) async fn collects_prefix_vec<F, T>(
+        &self,
+        name: &Name,
+        prefix: &Key,
+        extract: F,
+    ) -> Result<Vec<T>>
+    where
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone,
+        T: Send,
+    {
+        let prefix_owned = prefix.clone();
+        self.collects_vec(
+            name,
+            None,
+            move |k, _| k.starts_with(&prefix_owned),
+            extract,
+        )
+        .await
     }
 }
 
