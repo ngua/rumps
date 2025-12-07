@@ -258,9 +258,15 @@ pub trait RumpsWrite: Sealed {
         K: IntoKey + Send;
 
     /// Inserts or updates a record.
-    async fn upsert<T>(&self, val: &T) -> Result<()>
+    ///
+    /// If the record doesn't exist, inserts `val`. If it exists, applies the
+    /// callback `f` to the existing record:
+    /// - `Some(new)` → replaces with `new`
+    /// - `None` → deletes the record
+    async fn upsert<T, F>(&self, val: T, f: F) -> Result<()>
     where
-        T: ToRumps + Sync;
+        T: ToRumps + FromRumps + Sync + Send,
+        F: FnOnce(&T) -> Option<T> + Send;
 }
 
 #[async_trait]
@@ -486,12 +492,26 @@ impl RumpsWrite for Transaction {
         self.kill(&name, &prefix).await
     }
 
-    async fn upsert<T>(&self, val: &T) -> Result<()>
+    async fn upsert<T, F>(&self, val: T, f: F) -> Result<()>
     where
-        T: ToRumps + Sync,
+        T: ToRumps + FromRumps + Sync + Send,
+        F: FnOnce(&T) -> Option<T> + Send,
     {
-        // For now, just insert (overwrites existing values)
-        self.insert(val).await
+        let key = val.to_key();
+
+        match self.one::<T, _>(key.clone()).await? {
+            None => self.insert(&val).await,
+            Some(ref old) => {
+                let name = global!(<T as ToRumps>::GLOBAL);
+                match f(old) {
+                    Some(ref new) => {
+                        self.kill(&name, &key).await?;
+                        self.insert(new).await
+                    }
+                    None => self.kill(&name, &key).await,
+                }
+            }
+        }
     }
 }
 
@@ -876,7 +896,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_upsert() {
+    async fn test_upsert_insert_when_not_exists() {
+        let db = Database::in_memory().unwrap();
+
+        // Upsert when record doesn't exist - should insert
+        db.transaction(|txn| async move {
+            txn.upsert(
+                User {
+                    id: 1,
+                    name: "Alice".into(),
+                    age: 30,
+                },
+                |_| panic!("callback should not be called when record doesn't exist"),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let user: Option<User> = db.one(1u64).await.unwrap();
+        assert_eq!(user.as_ref().map(|u| &u.name), Some(&"Alice".to_string()));
+        assert_eq!(user.as_ref().map(|u| u.age), Some(30));
+    }
+
+    #[tokio::test]
+    async fn test_upsert_update_when_exists() {
         let db = Database::in_memory().unwrap();
 
         // Insert initial
@@ -892,12 +937,43 @@ mod tests {
         .await
         .unwrap();
 
-        // Upsert with new values
+        // Upsert with callback that modifies existing
         db.transaction(|txn| async move {
-            txn.upsert(&User {
+            txn.upsert(
+                User {
+                    id: 1,
+                    name: "ignored".into(),
+                    age: 999,
+                },
+                |existing| {
+                    Some(User {
+                        id: existing.id,
+                        name: "Alicia".into(),
+                        age: existing.age + 1,
+                    })
+                },
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let user: Option<User> = db.one(1u64).await.unwrap();
+        assert_eq!(user.as_ref().map(|u| &u.name), Some(&"Alicia".to_string()));
+        assert_eq!(user.as_ref().map(|u| u.age), Some(31));
+    }
+
+    #[tokio::test]
+    async fn test_upsert_delete_when_callback_returns_none() {
+        let db = Database::in_memory().unwrap();
+
+        // Insert initial
+        db.transaction(|txn| async move {
+            txn.insert(&User {
                 id: 1,
-                name: "Alicia".into(),
-                age: 31,
+                name: "Alice".into(),
+                age: 30,
             })
             .await?;
             Ok(())
@@ -905,10 +981,24 @@ mod tests {
         .await
         .unwrap();
 
-        // Verify updated
+        // Upsert with callback that returns None - should delete
+        db.transaction(|txn| async move {
+            txn.upsert(
+                User {
+                    id: 1,
+                    name: "ignored".into(),
+                    age: 999,
+                },
+                |_| None,
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
         let user: Option<User> = db.one(1u64).await.unwrap();
-        assert_eq!(user.as_ref().map(|u| &u.name), Some(&"Alicia".to_string()));
-        assert_eq!(user.as_ref().map(|u| u.age), Some(31));
+        assert!(user.is_none());
     }
 
     #[tokio::test]
