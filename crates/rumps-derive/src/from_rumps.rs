@@ -27,7 +27,10 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                     .map(|field| {
                         let inner = &field.ty;
                         quote! {
-                            impl #impl_generics ::rumps_storage::orm::FromRumps for #name #ty_generics #where_clause {
+                            impl #impl_generics ::rumps_storage::orm::FromRumps
+                                for #name #ty_generics
+                            #where_clause
+                            {
                                 const GLOBAL: &'static str = #global;
 
                                 fn from_pairs<__I>(
@@ -37,7 +40,7 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                                 where
                                     __I: ::std::iter::Iterator<Item = (::rumps_types::Key, ::rumps_types::Value)>,
                                 {
-                                    <#inner as ::rumps_storage::orm::FromRumps>::from_pairs(prefix, pairs).map(Self)
+                                  <#inner as ::rumps_storage::orm::FromRumps>::from_pairs(prefix, pairs).map(Self)
                                 }
                             }
                         }
@@ -90,7 +93,10 @@ fn expand_named(
     let from_pairs_body = gen_from_pairs(&fields, name, rename_all);
 
     Ok(quote! {
-        impl #impl_generics ::rumps_storage::orm::FromRumps for #name #ty_generics #where_clause {
+        impl #impl_generics ::rumps_storage::orm::FromRumps
+            for #name #ty_generics
+        #where_clause
+        {
             const GLOBAL: &'static str = #global;
 
             fn from_pairs<__I>(
@@ -100,7 +106,7 @@ fn expand_named(
             where
                 __I: ::std::iter::Iterator<Item = (::rumps_types::Key, ::rumps_types::Value)>,
             {
-                #from_pairs_body
+              #from_pairs_body
             }
         }
     })
@@ -294,38 +300,40 @@ fn gen_pairs_fold(fields: &ParsedFields, rename_all: RenameAll) -> TokenStream {
     let has_flatten_fields = !fields.flatten_fields.is_empty();
     let has_subtree_fields = !fields.subtree_fields.is_empty();
 
-    // If no fields need processing, just consume the iterator
     if !has_value_fields && !has_flatten_fields && !has_subtree_fields {
-        return quote! {
+        // No fields need processing, just consume the iterator
+        quote! {
             pairs.for_each(|_| {});
-        };
-    }
+        }
+    } else {
+        // Generate accumulator tuple type and initial value
+        let (acc_types, acc_inits, acc_patterns, acc_returns) =
+            gen_accumulator_parts(fields);
 
-    // Generate accumulator tuple type and initial value
-    let (acc_types, acc_inits, acc_patterns, acc_returns) =
-        gen_accumulator_parts(fields);
+        // Generate the match arms for updating the accumulator
+        let update_logic = gen_update_logic(fields, rename_all);
 
-    // Generate the match arms for updating the accumulator
-    let update_logic = gen_update_logic(fields, rename_all);
+        // Generate field name bindings from accumulator results
+        let field_bindings = gen_field_bindings(fields);
 
-    // Generate field name bindings from accumulator results
-    let field_bindings = gen_field_bindings(fields);
-
-    // Use trailing commas to handle single-element tuples correctly
-    quote! {
-        let (#(#acc_patterns,)*) = pairs.try_fold(
-            (#(#acc_inits,)*),
-            |(#(mut #acc_patterns,)*), (k, v)| -> ::std::result::Result<(#(#acc_types,)*), ::rumps_types::orm::DecodeError> {
-                if k.starts_with(prefix) {
-                    let suffix_start = prefix.len();
-                    #update_logic
+        // Use trailing commas to handle single-element tuples correctly
+        quote! {
+            let (#(#acc_patterns,)*) = pairs.try_fold(
+                (#(#acc_inits,)*),
+                |(#(mut #acc_patterns,)*), (k, v)|
+                    -> ::std::result::Result<(#(#acc_types,)*), ::rumps_types::orm::DecodeError>
+                {
+                  if k.starts_with(prefix) {
+                      let suffix_start = prefix.len();
+                      #update_logic
+                  }
+                  ::std::result::Result::Ok((#(#acc_returns,)*))
                 }
-                ::std::result::Result::Ok((#(#acc_returns,)*))
-            }
-        )?;
+            )?;
 
-        // Rename accumulator vars back to field names
-        #field_bindings
+            // Rename accumulator vars back to field names
+            #field_bindings
+        }
     }
 }
 
@@ -576,7 +584,10 @@ fn expand_tagged_enum(
     let variant_list = variant_names.join(", ");
 
     Ok(quote! {
-        impl #impl_generics ::rumps_storage::orm::FromRumps for #name #ty_generics #where_clause {
+        impl #impl_generics ::rumps_storage::orm::FromRumps
+            for #name #ty_generics
+        #where_clause
+        {
             const GLOBAL: &'static str = #global;
 
             fn from_pairs<__I>(
@@ -586,60 +597,60 @@ fn expand_tagged_enum(
             where
                 __I: ::std::iter::Iterator<Item = (::rumps_types::Key, ::rumps_types::Value)>,
             {
-                // Collect all pairs for analysis
-                let all_pairs: ::std::vec::Vec<_> = pairs.collect();
+              // Collect all pairs for analysis
+              let all_pairs: ::std::vec::Vec<_> = pairs.collect();
 
-                // Determine the variant tag. Two cases:
-                // 1. Top-level: `prefix` = `[tag, key_fields...]` (from `to_key()`)
-                //    -> tag is at `prefix.get(0)`
-                // 2. Embedded: `prefix` = `[parent_stuff..., field_name]` (subtree)
-                //    -> tag is at `first_pair.key.get(prefix.len())`
-                //
-                // We detect which case by checking if `prefix.get(0)` is a known variant tag.
-                let tag_from_prefix = prefix.get(0).and_then(|s| match s {
-                    ::rumps_types::Subscript::String(st) => ::std::option::Option::Some(st.as_str()),
-                    _ => ::std::option::Option::None,
-                });
+              // Determine the variant tag. Two cases:
+              // 1. Top-level: `prefix` = `[tag, key_fields...]` (from `to_key()`)
+              //    -> tag is at `prefix.get(0)`
+              // 2. Embedded: `prefix` = `[parent_stuff..., field_name]` (subtree)
+              //    -> tag is at `first_pair.key.get(prefix.len())`
+              //
+              // We detect which case by checking if `prefix.get(0)` is a known variant tag.
+              let tag_from_prefix = prefix.get(0).and_then(|s| match s {
+                  ::rumps_types::Subscript::String(st) => ::std::option::Option::Some(st.as_str()),
+                  _ => ::std::option::Option::None,
+              });
 
-                // Check if prefix[0] is one of our variant tags
-                let known_tags: &[&str] = &[#(#variant_names),*];
-                let is_top_level = tag_from_prefix
-                    .map(|t| known_tags.contains(&t))
-                    .unwrap_or(false);
+              // Check if prefix[0] is one of our variant tags
+              let known_tags: &[&str] = &[#(#variant_names),*];
+              let is_top_level = tag_from_prefix
+                  .map(|t| known_tags.contains(&t))
+                  .unwrap_or(false);
 
-                let (tag, effective_prefix) = if is_top_level {
-                    // Top-level: tag is in prefix, use prefix as-is
-                    // Safe: is_top_level is only true when tag_from_prefix.is_some()
-                    (tag_from_prefix.unwrap(), prefix.clone())
-                } else {
-                    // Embedded: extract tag from pairs, build effective_prefix
-                    let t = all_pairs
-                        .first()
-                        .and_then(|(k, _)| k.get(prefix.len()))
-                        .and_then(|s| match s {
-                            ::rumps_types::Subscript::String(st) => ::std::option::Option::Some(st.as_str()),
-                            _ => ::std::option::Option::None,
-                        })
-                        .ok_or_else(|| ::rumps_types::orm::DecodeError::Custom(
-                            ::std::format!("missing variant tag for enum {}", #enum_name_str)
-                        ))?;
-                    let mut ep = prefix.clone();
-                    ep.push(::rumps_types::Subscript::from(t));
-                    (t, ep)
-                };
+              let (tag, effective_prefix) = if is_top_level {
+                  // Top-level: tag is in prefix, use prefix as-is
+                  // Safe: is_top_level is only true when tag_from_prefix.is_some()
+                  (tag_from_prefix.unwrap(), prefix.clone())
+              } else {
+                  // Embedded: extract tag from pairs, build effective_prefix
+                  let t = all_pairs
+                      .first()
+                      .and_then(|(k, _)| k.get(prefix.len()))
+                      .and_then(|s| match s {
+                          ::rumps_types::Subscript::String(st) => ::std::option::Option::Some(st.as_str()),
+                          _ => ::std::option::Option::None,
+                      })
+                      .ok_or_else(|| ::rumps_types::orm::DecodeError::Custom(
+                          ::std::format!("missing variant tag for enum {}", #enum_name_str)
+                      ))?;
+                  let mut ep = prefix.clone();
+                  ep.push(::rumps_types::Subscript::from(t));
+                  (t, ep)
+              };
 
-                // Use effective_prefix in the match arms
-                let prefix = &effective_prefix;
+              // Use effective_prefix in the match arms
+              let prefix = &effective_prefix;
 
-                match tag {
-                    #(#variant_arms)*
-                    other => ::std::result::Result::Err(::rumps_types::orm::DecodeError::Custom(
-                        ::std::format!(
-                            "unknown {} variant: `{}` (expected one of: {})",
-                            #enum_name_str, other, #variant_list
-                        )
-                    )),
-                }
+              match tag {
+                  #(#variant_arms)*
+                  other => ::std::result::Result::Err(::rumps_types::orm::DecodeError::Custom(
+                      ::std::format!(
+                          "unknown {} variant: `{}` (expected one of: {})",
+                          #enum_name_str, other, #variant_list
+                      )
+                  )),
+              }
             }
         }
     })
@@ -660,7 +671,7 @@ fn expand_untagged_enum(
     let enum_name_str = name.to_string();
     let rename_all = container.rename_all;
 
-    // Generate try-parse expressions for each variant
+    // Generate try-parse expressions for each variant (each returns Option<Self>)
     let try_variants: Vec<_> = variants
         .iter()
         .map(|v| gen_untagged_try_variant(v, rename_all))
@@ -672,7 +683,10 @@ fn expand_untagged_enum(
     let variant_list = variant_names.join(", ");
 
     Ok(quote! {
-        impl #impl_generics ::rumps_storage::orm::FromRumps for #name #ty_generics #where_clause {
+        impl #impl_generics ::rumps_storage::orm::FromRumps
+            for #name #ty_generics
+        #where_clause
+        {
             const GLOBAL: &'static str = #global;
 
             fn from_pairs<__I>(
@@ -682,25 +696,26 @@ fn expand_untagged_enum(
             where
                 __I: ::std::iter::Iterator<Item = (::rumps_types::Key, ::rumps_types::Value)>,
             {
-                // Collect all pairs for analysis (needed for multiple parse attempts)
-                let all_pairs: ::std::vec::Vec<_> = pairs.collect();
+              // Collect all pairs for analysis (needed for multiple parse attempts)
+              let all_pairs: ::std::vec::Vec<_> = pairs.collect();
 
-                // Try each variant in order until one succeeds
-                #(#try_variants)*
-
-                // All variants failed
-                ::std::result::Result::Err(::rumps_types::orm::DecodeError::Custom(
-                    ::std::format!(
-                        "data did not match any {} variant (tried: {})",
-                        #enum_name_str, #variant_list
-                    )
-                ))
+              // Try each variant in order using or_else chain
+              ::std::option::Option::<Self>::None
+                  #(.or_else(|| #try_variants))*
+                  .ok_or_else(|| ::rumps_types::orm::DecodeError::Custom(
+                      ::std::format!(
+                          "data did not match any {} variant (tried: {})",
+                          #enum_name_str, #variant_list
+                      )
+                  ))
             }
         }
     })
 }
 
-/// Generate a try-parse block for one variant of an untagged enum.
+/// Generate a try-parse expression for one variant of an untagged enum.
+///
+/// Returns `Option<Self>` - `Some` if parsing succeeded, `None` to try next variant.
 fn gen_untagged_try_variant(
     v: &VariantInfo,
     rename_all: RenameAll,
@@ -722,34 +737,24 @@ fn gen_untagged_try_variant(
                                 })
                                 .unwrap_or(false));
 
-                    if is_empty_or_marker {
-                        return ::std::result::Result::Ok(Self::#var_ident);
-                    }
+                    is_empty_or_marker.then(|| Self::#var_ident)
                 }
             }
         }
         VariantFields::Tuple(fields) if fields.len() == 1 => {
             // Single-field tuple: try to parse the value directly
-            // Use nested match to extract type safely
             fields.first().map(|f| &f.ty).map_or_else(
-                || quote! {},
+                || quote! { ::std::option::Option::None },
                 |ty| {
                     quote! {
-                        {
-                            // Try to find value at prefix
-                            let val_opt = all_pairs
-                                .iter()
-                                .find(|(k, _)| k == prefix)
-                                .map(|(_, v)| v);
-
-                            if let ::std::option::Option::Some(val) = val_opt {
-                                if let ::std::result::Result::Ok(field_0) =
-                                    <#ty as ::rumps_types::orm::FromValue>::from_val(val)
-                                {
-                                    return ::std::result::Result::Ok(Self::#var_ident(field_0));
-                                }
-                            }
-                        }
+                        all_pairs
+                            .iter()
+                            .find(|(k, _)| k == prefix)
+                            .and_then(|(_, v)| {
+                                <#ty as ::rumps_types::orm::FromValue>::from_val(v)
+                                    .ok()
+                                    .map(Self::#var_ident)
+                            })
                     }
                 },
             )
@@ -790,16 +795,10 @@ fn gen_untagged_try_variant(
                 .collect();
 
             quote! {
-                {
-                    let try_result: ::std::result::Result<Self, ()> = (|| {
-                        #(#field_parsers)*
-                        ::std::result::Result::Ok(Self::#var_ident(#(#bindings),*))
-                    })();
-
-                    if let ::std::result::Result::Ok(val) = try_result {
-                        return ::std::result::Result::Ok(val);
-                    }
-                }
+                (|| -> ::std::result::Result<Self, ()> {
+                    #(#field_parsers)*
+                    ::std::result::Result::Ok(Self::#var_ident(#(#bindings),*))
+                })().ok()
             }
         }
         VariantFields::Struct(pf) => {
@@ -919,19 +918,13 @@ fn gen_untagged_try_variant(
                 .collect();
 
             quote! {
-                {
-                    let try_result: ::std::result::Result<Self, ()> = (|| {
-                        #(#key_parsers)*
-                        #(#required_parsers)*
-                        #(#optional_parsers)*
-                        #(#skip_defaults)*
-                        ::std::result::Result::Ok(Self::#var_ident { #(#all_idents),* })
-                    })();
-
-                    if let ::std::result::Result::Ok(val) = try_result {
-                        return ::std::result::Result::Ok(val);
-                    }
-                }
+                (|| -> ::std::result::Result<Self, ()> {
+                    #(#key_parsers)*
+                    #(#required_parsers)*
+                    #(#optional_parsers)*
+                    #(#skip_defaults)*
+                    ::std::result::Result::Ok(Self::#var_ident { #(#all_idents),* })
+                })().ok()
             }
         }
     }
@@ -1140,14 +1133,123 @@ fn gen_enum_struct_variant_body(
         })
         .collect();
 
-    // TODO: flatten and subtree fields for enum variants (future enhancement)
-    // For now, we don't support flatten/subtree in enum struct variants
+    // Flatten fields: pass all pairs at current prefix to nested FromRumps.
+    //
+    // Edge case for `Option<T>` flatten fields in enum struct variants:
+    //
+    // Unlike subtree fields (which have a distinct sub-prefix), flatten fields
+    // share the same prefix as the variant's other fields. When an `Option<T>`
+    // flatten field was serialized as `None`, the inner type's fields are absent,
+    // but other variant fields (and the variant marker) still exist at the prefix.
+    //
+    // Example: `enum E { V { title: String, #[flatten] loc: Option<Loc> } }`
+    // - Serialized with `loc: Some(...)`: pairs at `["V", "title"]`, `["V", "city"]`, etc.
+    // - Serialized with `loc: None`: only `["V"]` marker and `["V", "title"]`
+    //
+    // On deserialization with `loc: None`, filtering by prefix yields non-empty
+    // pairs (the marker + title), but parsing `Loc` fails due to missing fields.
+    // We use `.ok()` to convert parse failures to `None`, since wrapping in
+    // `Option` indicates the user expects the value may be absent.
+    //
+    // This differs from regular struct flatten, where pairs are partitioned
+    // more precisely during the fold-based iteration.
+    let flatten_field_extractions: Vec<_> = fields
+        .flatten_fields
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            let ty = &f.ty;
+            let inner_ty = extract_option_inner(ty);
+
+            match inner_ty {
+                Some(inner) => quote! {
+                    let #ident: #ty = {
+                        let pairs_vec: ::std::vec::Vec<_> = all_pairs
+                            .iter()
+                            .filter(|(k, _)| k.starts_with(prefix))
+                            .cloned()
+                            .collect();
+                        <#inner as ::rumps_storage::orm::FromRumps>::from_pairs(
+                            prefix,
+                            pairs_vec.into_iter()
+                        ).ok()
+                    };
+                },
+                None => quote! {
+                    let #ident: #ty = {
+                        let pairs_vec: ::std::vec::Vec<_> = all_pairs
+                            .iter()
+                            .filter(|(k, _)| k.starts_with(prefix))
+                            .cloned()
+                            .collect();
+                        <#ty as ::rumps_storage::orm::FromRumps>::from_pairs(
+                            prefix,
+                            pairs_vec.into_iter()
+                        )?
+                    };
+                },
+            }
+        })
+        .collect();
+
+    // Subtree fields: filter pairs under `prefix + subscript_name`
+    let subtree_field_extractions: Vec<_> = fields
+        .subtree_fields
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            let ty = &f.ty;
+            let sub_name = f.subscript_name(rename_all);
+            let inner_ty = extract_option_inner(ty);
+
+            match inner_ty {
+                Some(inner) => quote! {
+                    let #ident: #ty = {
+                        let mut sub_prefix = prefix.clone();
+                        sub_prefix.push(::rumps_types::Subscript::from(#sub_name));
+                        let pairs_vec: ::std::vec::Vec<_> = all_pairs
+                            .iter()
+                            .filter(|(k, _)| k.starts_with(&sub_prefix))
+                            .cloned()
+                            .collect();
+                        if pairs_vec.is_empty() {
+                            ::std::option::Option::None
+                        } else {
+                            ::std::option::Option::Some(
+                                <#inner as ::rumps_storage::orm::FromRumps>::from_pairs(
+                                    &sub_prefix,
+                                    pairs_vec.into_iter()
+                                )?
+                            )
+                        }
+                    };
+                },
+                None => quote! {
+                    let #ident: #ty = {
+                        let mut sub_prefix = prefix.clone();
+                        sub_prefix.push(::rumps_types::Subscript::from(#sub_name));
+                        let pairs_vec: ::std::vec::Vec<_> = all_pairs
+                            .iter()
+                            .filter(|(k, _)| k.starts_with(&sub_prefix))
+                            .cloned()
+                            .collect();
+                        <#ty as ::rumps_storage::orm::FromRumps>::from_pairs(
+                            &sub_prefix,
+                            pairs_vec.into_iter()
+                        )?
+                    };
+                },
+            }
+        })
+        .collect();
 
     // Build variant constructor
     let all_field_names: Vec<_> = fields
         .key_fields
         .iter()
         .chain(fields.value_fields.iter())
+        .chain(fields.flatten_fields.iter())
+        .chain(fields.subtree_fields.iter())
         .chain(fields.skip_fields.iter())
         .map(|f| &f.ident)
         .collect();
@@ -1155,6 +1257,8 @@ fn gen_enum_struct_variant_body(
     quote! {
         #(#key_field_extractions)*
         #(#value_field_extractions)*
+        #(#flatten_field_extractions)*
+        #(#subtree_field_extractions)*
         #(#skip_field_vars)*
         ::std::result::Result::Ok(Self::#var_ident { #(#all_field_names),* })
     }

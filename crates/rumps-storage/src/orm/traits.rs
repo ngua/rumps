@@ -144,6 +144,12 @@ pub trait FromRumps: Sized {
     /// Reconstruct from an iterator of key-value pairs.
     ///
     /// The `prefix` is the key prefix for this record (the key fields).
+    ///
+    /// # Ordering
+    ///
+    /// The `pairs` iterator yields entries in key-collation order (from the
+    /// B-tree). Implementations should preserve this order when building
+    /// nested collections and **must not** use unordered types like `HashMap`.
     fn from_pairs<I>(
         prefix: &Key,
         pairs: I,
@@ -157,6 +163,17 @@ pub trait FromRumps: Sized {
 /// This trait is implemented for both [`Database`] and [`Transaction`],
 /// allowing reads from either context.
 ///
+/// # Ordering Guarantee
+///
+/// Methods returning multiple records ([`all`](Self::all), [`query`](Self::query))
+/// **must** return results in key-collation order. This is a fundamental property
+/// inherited from RUMPS's B-tree storage — data is stored sorted, so no explicit
+/// sorting is required or desired.
+///
+/// Implementations **must not** use unordered collections (e.g., `HashMap`,
+/// `HashSet`) in code paths that produce results. Use `Vec`, `BTreeMap`, or
+/// other ordered types only.
+///
 /// # Example
 ///
 /// ```ignore
@@ -167,7 +184,7 @@ pub trait FromRumps: Sized {
 /// // Get a single record by key
 /// let user: Option<User> = db.one::<User, _>(123u64).await?;
 ///
-/// // Get all records of this type
+/// // Get all records of this type (returned in key order)
 /// let users: Vec<User> = db.all::<User>().await?;
 ///
 /// // Check if a record exists
@@ -488,12 +505,90 @@ impl RumpsWrite for Transaction {
 /// entry in the stream:
 /// - If the first entry is a marker (empty string value), its key length is the key length
 /// - Otherwise, assume the last subscript is a field name (key length = `len - 1`)
+///
+/// # State Machine
+///
+/// The function uses `try_fold` with a 4-tuple state:
+///
+/// ```text
+/// State = (key_len, cur_prefix, cur_pairs, results)
+///          ^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^
+///          |        |           |          Fully parsed records
+///          |        |           Pairs accumulated for current record
+///          |        Key prefix of current record (e.g., `[42]` for user 42)
+///          Inferred key length (number of subscripts forming the primary key)
+/// ```
+///
+/// ## Key Length Inference
+///
+/// On the first pair, we infer `key_len` to determine record boundaries:
+///
+/// ```text
+/// Case 1: First pair is a marker (derive macro format)
+///   ^user(42)         = ""        <- marker, key = [42], key_len = 1
+///   ^user(42, "name") = "Alice"
+///   ^user(42, "age")  = 30
+///
+/// Case 2: No marker (manual writes)
+///   ^user(42, "name") = "Alice"   <- first pair, key = [42, "name"], key_len = 1
+///   ^user(42, "age")  = 30
+/// ```
+///
+/// ## State Transitions
+///
+/// For each incoming `(key, value)` pair:
+///
+/// ```text
+///                              ┌─────────────────────────────┐
+///                              │ Extract prefix from key     │
+///                              │ (first `key_len` subscripts)│
+///                              └─────────────┬───────────────┘
+///                                            │
+///                     ┌──────────────────────┴──────────────────────┐
+///                     ▼                                             ▼
+///          ┌──────────────────────┐                    ┌──────────────────────┐
+///          │ prefix == cur_prefix │                    │ prefix != cur_prefix │
+///          │ (same record)        │                    │ (record boundary)    │
+///          └──────────┬───────────┘                    └──────────┬───────────┘
+///                     │                                           │
+///                     ▼                                           ▼
+///          ┌──────────────────────┐                    ┌──────────────────────┐
+///          │ Accumulate pair:     │                    │ 1. Parse cur_pairs   │
+///          │ cur_pairs.push(k, v) │                    │    into record       │
+///          └──────────────────────┘                    │ 2. Push to results   │
+///                                                      │ 3. Reset cur_pairs   │
+///                                                      │    with new (k, v)   │
+///                                                      │ 4. Update cur_prefix │
+///                                                      └──────────────────────┘
+/// ```
+///
+/// ## Example Trace
+///
+/// Input stream for two users:
+/// ```text
+/// ^user(1)         = ""
+/// ^user(1, "name") = "Alice"
+/// ^user(2)         = ""           <- boundary! prefix [2] != [1]
+/// ^user(2, "name") = "Bob"
+/// (end of stream)
+/// ```
+///
+/// State evolution:
+/// ```text
+/// Initial:  (None, None, [], [])
+/// After 1:  (Some(1), Some([1]), [(1,"")], [])
+/// After 2:  (Some(1), Some([1]), [(1,""), (1,"name","Alice")], [])
+/// After 3:  (Some(1), Some([2]), [(2,"")], [User{id:1, name:"Alice"}])
+///           ^^^^^^^^ boundary detected, parsed user 1
+/// After 4:  (Some(1), Some([2]), [(2,""), (2,"name","Bob")], [User{...}])
+/// Final:    parse remaining pairs -> [User{id:1}, User{id:2}]
+/// ```
 async fn stream_and_parse<T, S>(stream: S) -> Result<Vec<T>>
 where
     T: FromRumps,
     S: futures::Stream<Item = Result<(Key, Value)>> + Send,
 {
-    // State: (inferred key_len, current prefix, current pairs, parsed results)
+    // State tuple: (inferred key_len, current prefix, current pairs, parsed results)
     type State<T> = (Option<usize>, Option<Key>, Vec<(Key, Value)>, Vec<T>);
 
     let is_empty_string =
@@ -503,10 +598,16 @@ where
         .try_fold(
             (None, None, Vec::new(), Vec::new()),
             |(key_len, cur_prefix, mut cur_pairs, mut results), (k, v)| {
-                // Infer key_len from first entry
+                // Key Length Inference (first pair only)
+                //
+                // `key_len` determines how many leading subscripts form the record's
+                // primary key. Once inferred, it's fixed for the entire stream.
                 let key_len = key_len.unwrap_or_else(|| {
-                    // If first entry is a marker (empty value), its key IS the prefix
-                    // Otherwise, assume last subscript is field name
+                    // Marker case: `^user(42) = ""` -> key_len = 1
+                    // The key IS the prefix, no field subscript present.
+                    //
+                    // Non-marker case: `^user(42, "name") = "Alice"` -> key_len = 1
+                    // Last subscript is field name, so prefix = key[..len-1].
                     if is_empty_string(&v) {
                         k.len()
                     } else {
@@ -514,7 +615,10 @@ where
                     }
                 });
 
-                // Extract prefix using inferred key_len
+                // Prefix Extraction
+                //
+                // Take the first `key_len` subscripts to get the record's prefix.
+                // E.g., for key `[42, "name"]` with key_len=1, prefix = `[42]`.
                 let prefix = (k.len() >= key_len).then(|| {
                     Key::from(
                         (0..key_len)
@@ -523,21 +627,25 @@ where
                     )
                 });
 
+                // State Transition
                 let res: Result<State<T>> = match (&cur_prefix, &prefix) {
+                    // Record boundary: prefix changed from previous pair.
+                    // Parse the accumulated pairs into a record, then start fresh.
                     (Some(p), Some(f)) if p != f => {
-                        // Record boundary - parse accumulated pairs
                         T::from_pairs(p, cur_pairs.into_iter())
                             .map_err(rumps_types::Error::from)
                             .map(|rec| {
                                 results.push(rec);
+                                // Start new accumulator with this pair
                                 (Some(key_len), prefix, vec![(k, v)], results)
                             })
                     }
+                    // Same record (or first entry): accumulate this pair.
                     _ => {
-                        // Same record or first entry
                         cur_pairs.push((k, v));
                         Ok((
                             Some(key_len),
+                            // First entry: set prefix; otherwise keep current
                             prefix.or(cur_prefix),
                             cur_pairs,
                             results,
@@ -550,7 +658,10 @@ where
         )
         .await?;
 
-    // Parse final accumulated record
+    // Final Record
+    //
+    // The loop above only parses when it sees a NEW prefix. The last record's
+    // pairs are still in `pairs` and need to be parsed here.
     maybe_prefix
         .filter(|_| !pairs.is_empty())
         .map(|prefix| {

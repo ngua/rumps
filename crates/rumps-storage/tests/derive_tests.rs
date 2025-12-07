@@ -2609,3 +2609,171 @@ async fn test_untagged_variant_order_matters() {
     let fetched: Option<JsonValue> = db.one(Key::new()).await.unwrap();
     assert_eq!(fetched, Some(JsonValue::Null));
 }
+
+// =============================================================================
+// Tests for enum struct variants with flatten/subtree
+// =============================================================================
+
+/// Nested struct for flatten tests (key type matches variant tag type - String).
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "_nested")]
+struct GeoLoc {
+    #[rumps(key)]
+    _tag: String, // Must be String to match enum variant tag type
+    city: String,
+    country: String,
+}
+
+/// Nested struct for subtree tests (key type matches variant tag type - String).
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "_nested")]
+struct MetaInfo {
+    #[rumps(key)]
+    _tag: String, // Must be String to match enum variant tag type
+    created_at: u64,
+    updated_at: u64,
+}
+
+/// Enum with struct variant containing flatten field.
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "ev_record")]
+enum EvRecord {
+    Empty,
+    WithLocation {
+        name: String,
+        #[rumps(flatten)]
+        loc: GeoLoc,
+    },
+}
+
+/// Enum with struct variant containing subtree field.
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "ev_item")]
+enum EvItem {
+    Simple {
+        name: String,
+    },
+    WithMeta {
+        name: String,
+        #[rumps(subtree)]
+        meta: MetaInfo,
+    },
+}
+
+/// Enum with struct variant containing optional flatten field.
+#[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "ev_entry")]
+enum EvEntry {
+    Basic {
+        title: String,
+    },
+    WithOptLoc {
+        title: String,
+        #[rumps(flatten)]
+        loc: Option<GeoLoc>,
+    },
+}
+
+#[tokio::test]
+async fn test_enum_struct_variant_flatten_roundtrip() {
+    let db = Database::in_memory().unwrap();
+
+    let record = EvRecord::WithLocation {
+        name: "HQ".into(),
+        loc: GeoLoc {
+            _tag: "WithLocation".into(), // Must match variant tag
+            city: "NYC".into(),
+            country: "USA".into(),
+        },
+    };
+
+    db.transaction(|txn| {
+        let r = record.clone();
+        async move {
+            txn.insert(&r).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<EvRecord> = db.one("WithLocation").await.unwrap();
+    assert_eq!(fetched, Some(record));
+}
+
+#[tokio::test]
+async fn test_enum_struct_variant_subtree_roundtrip() {
+    let db = Database::in_memory().unwrap();
+
+    let item = EvItem::WithMeta {
+        name: "Widget".into(),
+        meta: MetaInfo {
+            _tag: "WithMeta".into(), // Must match variant tag
+            created_at: 1000,
+            updated_at: 2000,
+        },
+    };
+
+    db.transaction(|txn| {
+        let i = item.clone();
+        async move {
+            txn.insert(&i).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<EvItem> = db.one("WithMeta").await.unwrap();
+    assert_eq!(fetched, Some(item));
+}
+
+#[tokio::test]
+async fn test_enum_struct_variant_optional_flatten_some() {
+    let db = Database::in_memory().unwrap();
+
+    let entry = EvEntry::WithOptLoc {
+        title: "Office".into(),
+        loc: Some(GeoLoc {
+            _tag: "WithOptLoc".into(), // Must match variant tag
+            city: "LA".into(),
+            country: "USA".into(),
+        }),
+    };
+
+    db.transaction(|txn| {
+        let e = entry.clone();
+        async move {
+            txn.insert(&e).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<EvEntry> = db.one("WithOptLoc").await.unwrap();
+    assert_eq!(fetched, Some(entry));
+}
+
+#[tokio::test]
+async fn test_enum_struct_variant_optional_flatten_none() {
+    let db = Database::in_memory().unwrap();
+
+    let entry = EvEntry::WithOptLoc {
+        title: "Remote".into(),
+        loc: None,
+    };
+
+    db.transaction(|txn| {
+        let e = entry.clone();
+        async move {
+            txn.insert(&e).await?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let fetched: Option<EvEntry> = db.one("WithOptLoc").await.unwrap();
+    assert_eq!(fetched, Some(entry));
+}
