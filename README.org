@@ -9,9 +9,14 @@
   - [[#rust-api][Rust API]]
   - [[#query-language][Query language]]
 - [[#wtf-is-rumps][WTF is RUMPS?]]
+  - [[#mumps][MUMPS]]
   - [[#core-concepts][Core concepts]]
   - [[#core-operations][Core operations]]
+- [[#using-rumps][Using RUMPS]]
+  - [[#rust-api-1][Rust API]]
+  - [[#query-language-1][Query language]]
 - [[#comparison-to-other-database-systems][Comparison to other database systems]]
+- [[#license][License]]
 - [[#disclaimer][Disclaimer]]
 
 * Quick start
@@ -23,6 +28,8 @@
   use futures::TryStreamExt;
   use rumps::{Database, DataStatus, Key, Subscript, global, key, value};
 
+  // NOTE: RUMPS is fully async, as also explained below; currently, it only
+  // supports `tokio`
   #[tokio::main]
   async fn main() -> rumps::Result<()> {
       // Create a persistent database
@@ -55,14 +62,16 @@
           .collects(
               &global!("PATIENT"),
               None,
+              // Predicate to extract data
               |k, _| k.len() == 2 && k.get(1) == Some(&Subscript::from("NAME")),
+              // Mapping/transformation of data
               |_, v| v.as_ref()?.as_str().map(str::to_uppercase),
           )
           .await?
           .try_collect()
           .await?;
 
-      // Results come out sorted by key, not insertion order
+      // Results come out sorted by _key_, _not_ insertion order
       assert_eq!(names, vec!["ALICE", "BOB", "CAROL"]);
 
       Ok(())
@@ -71,6 +80,7 @@
 ** Query language
 *WIP*: The query language is nowhere near completion
 * WTF is RUMPS?
+** MUMPS
 ** Core concepts
 ** Core operations
 *** =GET=
@@ -79,5 +89,11 @@
 *** =DATA=
 *** =ORDER=
 *** =COLLECT=
+* Using RUMPS
+** Rust API
+*** "ORM" API
+** Query language
 * Comparison to other database systems
+* License
+Licensed under either of [[file:LICENSES/APACHE][Apache License, Version 2.0]] or [[file:LICENSES/MIT][MIT license]] at your option.
 * Disclaimer
