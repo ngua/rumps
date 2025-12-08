@@ -67,15 +67,15 @@ Database::migrate("./data")
 
 **Safe vs Unsafe Configuration Changes**:
 
-| Config Field        | Safe to Change? | Reason                                    |
-|---------------------|-----------------|-------------------------------------------|
-| `cache_size`        | Yes             | Runtime-only, no data impact              |
-| `sync_mode`         | Yes             | Durability policy, no data impact         |
-| `wal_max_file_size` | Yes             | File rotation threshold only              |
-| `max_pages`         | Conditional     | Can increase; decrease requires data fits |
-| `max_memory_bytes`  | Conditional     | Can increase; decrease may cause eviction |
-| `min_degree`        | No              | Affects B-tree node structure             |
-| `page_size`         | No              | Would require full data rewrite           |
+| Config Field        | Safe to Change? | Reason                                    | Notes                                              |
+|---------------------|-----------------|-------------------------------------------|----------------------------------------------------|
+| `cache_size`        | Yes             | Runtime-only, no data impact              |                                                    |
+| `sync_mode`         | Yes             | Durability policy, no data impact         |                                                    |
+| `wal_max_file_size` | Yes             | File rotation threshold only              |                                                    |
+| `max_pages`         | Conditional     | Can increase; decrease requires data fits |                                                    |
+| `max_memory_bytes`  | Conditional     | Can increase; decrease may cause eviction |                                                    |
+| `min_degree`        | No              | Affects B-tree node structure             |                                                    |
+| `PAGE_SIZE`         | N/A             | Would require full data rewrite           | This is a compile-time constant, not config option |
 
 **Implementation Sketch**:
 
@@ -87,6 +87,9 @@ pub struct DatabaseMigration {
     wal_max_file_size: Option<u64>,
     max_pages: Option<Option<u64>>,
     max_memory_bytes: Option<Option<usize>>,
+    // For future `Database::rebuild` support, to avoid duplicating
+    // types
+    min_degree: Option<usize>,
 }
 
 impl Database {
@@ -98,6 +101,7 @@ impl Database {
             wal_max_file_size: None,
             max_pages: None,
             max_memory_bytes: None,
+            min_degree: None,
         }
     }
 }
@@ -114,6 +118,8 @@ impl DatabaseMigration {
         // 1. Open storage engine (no DB, just raw access)
         // 2. Read current MetadataPage
         // 3. Validate changes are safe
+        //  - E.g. `min_degree` is never safe for `migrate`,
+        //    this requires `Database::rebuild`
         // 4. Update MetadataPage fields
         // 5. Write updated MetadataPage to disk
         // 6. Close storage
