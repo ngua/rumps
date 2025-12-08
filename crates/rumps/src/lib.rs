@@ -7,24 +7,24 @@
 //!
 //! ```
 //! # tokio_test::block_on(async {
-//! use rumps::{Database, global, local, key, Value};
+//! use rumps::{Database, global, local, key, value};
 //!
 //! // Create an in-memory database
 //! let db = Database::in_memory()?;
 //!
 //! // Locals can be set directly (no transaction needed)
-//! db.set(&local!("CACHE"), &key!["user", 123], Value::from("data")).await?;
+//! db.set(&local!("CACHE"), &key!["user", 123], value!("data")).await?;
 //!
 //! // Globals require transactions
 //! db.transaction(|txn| async move {
-//!     txn.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Alice")).await?;
-//!     txn.set(&global!("PATIENT"), &key![123, "AGE"], Value::from(30)).await?;
+//!     txn.set(&global!("PATIENT"), &key![123, "NAME"], value!("Alice")).await?;
+//!     txn.set(&global!("PATIENT"), &key![123, "AGE"], value!(30)).await?;
 //!     Ok(())
 //! }).await?;
 //!
 //! // Read values
 //! let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
-//! assert_eq!(name, Some(Value::from("Alice")));
+//! assert_eq!(name, Some(value!("Alice")));
 //! # Ok::<(), rumps::Error>(())
 //! # });
 //! ```
@@ -39,7 +39,8 @@
 //! - [`global!`] - Create a global variable name: `global!("PATIENT")` → `^PATIENT`
 //! - [`local!`] - Create a local variable name: `local!("TEMP")` → `TEMP`
 //! - [`key!`] - Create a key path: `key![123, "NAME"]` → `(123, NAME)`
-//! - [`json`] - Create JSON values for subscripts or values
+//! - [`value!`] - Create a value: `value!(42)` → `Value::Integer(42)`
+//! - [`json`] - Create JSON values for subscripts or values (re-exported from `serde_json`)
 
 // Re-export types from rumps-storage
 pub use rumps_storage::{
@@ -74,6 +75,7 @@ pub use rumps_types::{
     json,
     key,
     local,
+    value,
     // Core types
     DataStatus,
     Key,

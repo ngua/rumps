@@ -356,6 +356,56 @@ impl From<serde_json::Value> for Value {
     }
 }
 
+/// Convenience macro for constructing [`Value`] instances.
+///
+/// This macro simplifies the creation of values by automatically converting
+/// expressions into `Value` via the `From` trait. It accepts any type that
+/// implements `Into<Value>`, including:
+///
+/// - `bool` → `Value::Boolean`
+/// - `i32`, `i64` → `Value::Integer`
+/// - `f64` → `Value::Double`
+/// - `char` → `Value::Char`
+/// - `&str`, `String` → `Value::String`
+/// - `serde_json::Value` → `Value::Json` (use with `json!` macro)
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::{value, json, Value};
+/// use ordered_float::OrderedFloat;
+///
+/// // Boolean
+/// let b = value!(true);
+/// assert_eq!(b, Value::Boolean(true));
+///
+/// // Integer
+/// let i = value!(42);
+/// assert_eq!(i, Value::Integer(42));
+///
+/// // Double
+/// let d = value!(3.14);
+/// assert_eq!(d, Value::Double(OrderedFloat(3.14)));
+///
+/// // Char
+/// let c = value!('A');
+/// assert_eq!(c, Value::Char('A'));
+///
+/// // String
+/// let s = value!("hello");
+/// assert_eq!(s, Value::String("hello".to_string()));
+///
+/// // JSON (compose with json! macro)
+/// let j = value!(json!({"key": "value"}));
+/// assert!(j.is_json());
+/// ```
+#[macro_export]
+macro_rules! value {
+    ($val:expr) => {
+        $crate::Value::from($val)
+    };
+}
+
 /// Encoding module for Value serialization/deserialization.
 ///
 /// This module contains the compact binary encoding logic for Value types,
@@ -1334,5 +1384,85 @@ mod tests {
             assert_eq!(decoded, *value);
             assert_eq!(offset, expected.len());
         });
+    }
+
+    #[test]
+    fn test_value_macro() {
+        use crate::json;
+
+        // Boolean
+        let b = value!(true);
+        assert_eq!(b, Value::Boolean(true));
+
+        let b = value!(false);
+        assert_eq!(b, Value::Boolean(false));
+
+        // Integer from i32
+        let i = value!(42i32);
+        assert_eq!(i, Value::Integer(42));
+
+        // Integer from i64
+        let i = value!(123i64);
+        assert_eq!(i, Value::Integer(123));
+
+        // Integer (inferred as i32)
+        let i = value!(99);
+        assert_eq!(i, Value::Integer(99));
+
+        // Negative integer
+        let i = value!(-10);
+        assert_eq!(i, Value::Integer(-10));
+
+        // Double
+        let d = value!(3.14);
+        assert_eq!(d, Value::Double(OrderedFloat(3.14)));
+
+        let d = value!(-2.5);
+        assert_eq!(d, Value::Double(OrderedFloat(-2.5)));
+
+        // Char
+        let c = value!('A');
+        assert_eq!(c, Value::Char('A'));
+
+        let c = value!('☺');
+        assert_eq!(c, Value::Char('☺'));
+
+        // String from &str
+        let s = value!("hello");
+        assert_eq!(s, Value::String("hello".to_string()));
+
+        // String from String
+        let s = value!("world".to_string());
+        assert_eq!(s, Value::String("world".to_string()));
+
+        // JSON (composed with json! macro)
+        let j = value!(json!({"key": "value"}));
+        assert!(j.is_json());
+        assert_eq!(j.as_json().unwrap()["key"], "value");
+
+        let j = value!(json!([1, 2, 3]));
+        assert!(j.is_json());
+
+        let j = value!(json!(null));
+        assert!(j.is_json());
+    }
+
+    #[test]
+    fn test_value_macro_with_variables() {
+        let flag = true;
+        let v = value!(flag);
+        assert_eq!(v, Value::Boolean(true));
+
+        let num = 42i64;
+        let v = value!(num);
+        assert_eq!(v, Value::Integer(42));
+
+        let text = "test";
+        let v = value!(text);
+        assert_eq!(v, Value::String("test".to_string()));
+
+        let ch = 'X';
+        let v = value!(ch);
+        assert_eq!(v, Value::Char('X'));
     }
 }
