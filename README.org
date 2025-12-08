@@ -1,0 +1,83 @@
+#+HTML: <p align="center">
+#+HTML:   <img src="stuff/rumps-title.svg" alt="R U M P S" width="800">
+#+HTML: </p>
+
+#+HTML: <hr style="border:0; border-top:1px solid #bbb; margin-top:0.4em; margin-bottom:1.2em;">
+
+* Table of Contents :toc@2@gh:
+- [[#quick-start][Quick start]]
+  - [[#rust-api][Rust API]]
+  - [[#query-language][Query language]]
+- [[#wtf-is-rumps][WTF is RUMPS?]]
+  - [[#core-concepts][Core concepts]]
+  - [[#core-operations][Core operations]]
+- [[#comparison-to-other-database-systems][Comparison to other database systems]]
+- [[#disclaimer][Disclaimer]]
+
+* Quick start
+** Rust API
+1. Get RUMPS somehow
+   - *NOTE*: I haven't put any of the RUMPS crates on ~crates.io~ yet, so you'll need to use it as a Git crate
+2. Start writing your sweet, sweet data to RUMPS; this is a minimal example: much more explanation is below on the different operations:
+  #+begin_src rust
+  use futures::TryStreamExt;
+  use rumps::{Database, DataStatus, Key, Subscript, global, key, value};
+
+  #[tokio::main]
+  async fn main() -> rumps::Result<()> {
+      // Create a persistent database
+      let db = Database::create("./my_data").await?;
+
+      // Writes to globals require a transaction
+      db.transaction(|txn| async move {
+          // Insert patients out of order
+          txn.set(&global!("PATIENT"), &key![3, "NAME"], value!("carol")).await?;
+          txn.set(&global!("PATIENT"), &key![1, "NAME"], value!("alice")).await?;
+          txn.set(&global!("PATIENT"), &key![2, "NAME"], value!("bob")).await?;
+          Ok(())
+      }).await?;
+
+      // All reads work outside transactions
+      let name = db.get(&global!("PATIENT"), &key![1, "NAME"]).await?;
+      assert_eq!(name, Some(value!("alice")));
+
+      // `ORDER`: get next key in sorted order
+      let first = db.order(&global!("PATIENT"), None).await?;
+      assert_eq!(first, Some(key![1, "NAME"]));
+
+      // `DATA`: check if a node has value/descendants
+      let status = db.data(&global!("PATIENT"), &key![1]).await?;
+      assert_eq!(status, DataStatus::HasDescendants);
+
+      // `COLLECT`: stream records - ALWAYS yields in sorted key order;
+      // sorting is inherent to RUMPS data storage
+      let names: Vec<String> = db
+          .collects(
+              &global!("PATIENT"),
+              None,
+              |k, _| k.len() == 2 && k.get(1) == Some(&Subscript::from("NAME")),
+              |_, v| v.as_ref()?.as_str().map(str::to_uppercase),
+          )
+          .await?
+          .try_collect()
+          .await?;
+
+      // Results come out sorted by key, not insertion order
+      assert_eq!(names, vec!["ALICE", "BOB", "CAROL"]);
+
+      Ok(())
+  }
+  #+end_src
+** Query language
+*WIP*: The query language is nowhere near completion
+* WTF is RUMPS?
+** Core concepts
+** Core operations
+*** =GET=
+*** =SET=
+*** =KILL=
+*** =DATA=
+*** =ORDER=
+*** =COLLECT=
+* Comparison to other database systems
+* Disclaimer
