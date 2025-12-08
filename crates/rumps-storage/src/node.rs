@@ -662,7 +662,7 @@ impl From<Node> for NodeRaw {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use rumps_types::key;
+    use rumps_types::{key, value};
 
     use super::*;
 
@@ -677,8 +677,8 @@ mod tests {
 
     #[test]
     fn test_node_data_with_value() {
-        let node = NodeData::with_value(Value::Integer(42));
-        assert_eq!(node.value, Some(Value::Integer(42)));
+        let node = NodeData::with_value(value!(42));
+        assert_eq!(node.value, Some(value!(42)));
         assert_eq!(node.has_descendants, false);
     }
 
@@ -702,13 +702,13 @@ mod tests {
         assert_eq!(intermediate.has_descendants, true);
 
         // Leaf
-        let leaf = NodeData::new(Some(Value::String("test".into())), false);
-        assert_eq!(leaf.value, Some(Value::String("test".into())));
+        let leaf = NodeData::new(Some(value!("test")), false);
+        assert_eq!(leaf.value, Some(value!("test")));
         assert_eq!(leaf.has_descendants, false);
 
         // Both
-        let both = NodeData::new(Some(Value::Boolean(true)), true);
-        assert_eq!(both.value, Some(Value::Boolean(true)));
+        let both = NodeData::new(Some(value!(true)), true);
+        assert_eq!(both.value, Some(value!(true)));
         assert_eq!(both.has_descendants, true);
     }
 
@@ -717,34 +717,33 @@ mod tests {
     #[test]
     fn test_node_data_is_empty() {
         assert!(NodeData::empty().is_empty());
-        assert!(!NodeData::with_value(Value::Integer(1)).is_empty());
+        assert!(!NodeData::with_value(value!(1)).is_empty());
         assert!(!NodeData::with_descendants().is_empty());
-        assert!(!NodeData::new(Some(Value::Integer(1)), true).is_empty());
+        assert!(!NodeData::new(Some(value!(1)), true).is_empty());
     }
 
     #[test]
     fn test_node_data_has_value() {
         assert!(!NodeData::empty().has_value());
-        assert!(NodeData::with_value(Value::Integer(1)).has_value());
+        assert!(NodeData::with_value(value!(1)).has_value());
         assert!(!NodeData::with_descendants().has_value());
-        assert!(NodeData::new(Some(Value::Integer(1)), true).has_value());
+        assert!(NodeData::new(Some(value!(1)), true).has_value());
     }
 
     #[test]
     fn test_node_data_has_only_value() {
         assert!(!NodeData::empty().has_only_value());
-        assert!(NodeData::with_value(Value::Integer(1)).has_only_value());
+        assert!(NodeData::with_value(value!(1)).has_only_value());
         assert!(!NodeData::with_descendants().has_only_value());
-        assert!(!NodeData::new(Some(Value::Integer(1)), true).has_only_value());
+        assert!(!NodeData::new(Some(value!(1)), true).has_only_value());
     }
 
     #[test]
     fn test_node_data_has_only_descendants() {
         assert!(!NodeData::empty().has_only_descendants());
-        assert!(!NodeData::with_value(Value::Integer(1)).has_only_descendants());
+        assert!(!NodeData::with_value(value!(1)).has_only_descendants());
         assert!(NodeData::with_descendants().has_only_descendants());
-        assert!(!NodeData::new(Some(Value::Integer(1)), true)
-            .has_only_descendants());
+        assert!(!NodeData::new(Some(value!(1)), true).has_only_descendants());
     }
 
     // Serialization Tests
@@ -767,7 +766,7 @@ mod tests {
 
     #[test]
     fn test_node_data_serialization_leaf() {
-        let node = NodeData::with_value(Value::Integer(42));
+        let node = NodeData::with_value(value!(42));
         let bytes = bincode::serialize(&node).unwrap();
         // 8 bytes length prefix + 1 byte tag + encoded value
         assert!(bytes.len() > 9);
@@ -776,7 +775,7 @@ mod tests {
 
     #[test]
     fn test_node_data_serialization_both() {
-        let node = NodeData::new(Some(Value::String("test".into())), true);
+        let node = NodeData::new(Some(value!("test")), true);
         let bytes = bincode::serialize(&node).unwrap();
         // 8 bytes length prefix + 1 byte tag + encoded value
         assert!(bytes.len() > 9);
@@ -788,15 +787,13 @@ mod tests {
         let test_cases = vec![
             NodeData::empty(),
             NodeData::with_descendants(),
-            NodeData::with_value(Value::Boolean(true)),
-            NodeData::with_value(Value::Integer(42)),
-            NodeData::with_value(Value::Double(3.14.into())),
-            NodeData::with_value(Value::Char('x')),
-            NodeData::with_value(Value::String("hello".into())),
-            NodeData::with_value(Value::Json(
-                serde_json::json!({"key": "value"}),
-            )),
-            NodeData::new(Some(Value::Integer(99)), true),
+            NodeData::with_value(value!(true)),
+            NodeData::with_value(value!(42)),
+            NodeData::with_value(value!(3.14)),
+            NodeData::with_value(value!('x')),
+            NodeData::with_value(value!("hello")),
+            NodeData::with_value(value!(serde_json::json!({"key": "value"}))),
+            NodeData::new(Some(value!(99)), true),
         ];
 
         test_cases.into_iter().for_each(|original| {
@@ -819,11 +816,11 @@ mod tests {
         assert_eq!(intermediate_bytes.len(), 9);
 
         // Leaf and Both nodes will be larger due to Value encoding
-        let leaf = NodeData::with_value(Value::Integer(1));
+        let leaf = NodeData::with_value(value!(1));
         let leaf_bytes = bincode::serialize(&leaf).unwrap();
         assert!(leaf_bytes.len() > 9);
 
-        let both = NodeData::new(Some(Value::Integer(1)), true);
+        let both = NodeData::new(Some(value!(1)), true);
         let both_bytes = bincode::serialize(&both).unwrap();
         assert!(both_bytes.len() > 9);
     }
@@ -832,7 +829,7 @@ mod tests {
 
     #[test]
     fn test_node_data_empty_string() {
-        let node = NodeData::with_value(Value::String("".into()));
+        let node = NodeData::with_value(value!(""));
         let bytes = bincode::serialize(&node).unwrap();
         let deserialized: NodeData = bincode::deserialize(&bytes).unwrap();
         assert_eq!(node, deserialized);
@@ -841,18 +838,18 @@ mod tests {
     #[test]
     fn test_node_data_all_value_types() {
         let value_types = vec![
-            Value::Boolean(false),
-            Value::Boolean(true),
-            Value::Integer(i64::MIN),
-            Value::Integer(i64::MAX),
-            Value::Double(0.0.into()),
-            Value::Double((-0.0).into()),
-            Value::Char('\0'),
-            Value::Char('🦀'),
-            Value::String("".into()),
-            Value::String("multi\nline\tstring".into()),
-            Value::Json(serde_json::json!(null)),
-            Value::Json(serde_json::json!({"nested": {"data": [1, 2, 3]}})),
+            value!(false),
+            value!(true),
+            value!(i64::MIN),
+            value!(i64::MAX),
+            value!(0.0),
+            value!(-0.0),
+            value!('\0'),
+            value!('🦀'),
+            value!(""),
+            value!("multi\nline\tstring"),
+            value!(serde_json::json!(null)),
+            value!(serde_json::json!({"nested": {"data": [1, 2, 3]}})),
         ];
 
         value_types.into_iter().for_each(|value| {
@@ -867,7 +864,7 @@ mod tests {
     fn test_node_data_large_values() {
         // Large string
         let large_string = "x".repeat(10000);
-        let node = NodeData::with_value(Value::String(large_string.clone()));
+        let node = NodeData::with_value(value!(large_string.clone()));
         let bytes = bincode::serialize(&node).unwrap();
         let deserialized: NodeData = bincode::deserialize(&bytes).unwrap();
         assert_eq!(node, deserialized);
@@ -876,7 +873,7 @@ mod tests {
         let large_json = serde_json::json!({
             "data": vec![0; 1000],
         });
-        let node = NodeData::with_value(Value::Json(large_json.clone()));
+        let node = NodeData::with_value(value!(large_json.clone()));
         let bytes = bincode::serialize(&node).unwrap();
         let deserialized: NodeData = bincode::deserialize(&bytes).unwrap();
         assert_eq!(node, deserialized);
@@ -934,8 +931,8 @@ mod tests {
             keys: vec![key![123, "NAME"], key![124, "NAME"]],
             children: vec![],
             values: vec![
-                NodeData::with_value(Value::String("John".into())),
-                NodeData::with_value(Value::String("Jane".into())),
+                NodeData::with_value(value!("John")),
+                NodeData::with_value(value!("Jane")),
             ],
             is_leaf: true,
         };
@@ -983,16 +980,16 @@ mod tests {
             NodeRaw {
                 keys: vec![key!["A"]],
                 children: vec![],
-                values: vec![NodeData::with_value(Value::Integer(42))],
+                values: vec![NodeData::with_value(value!(42))],
                 is_leaf: true,
             },
             NodeRaw {
                 keys: vec![key![1, "a"], key![1, "b"], key![2, "a"]],
                 children: vec![],
                 values: vec![
-                    NodeData::with_value(Value::Boolean(true)),
-                    NodeData::with_value(Value::Double(3.14.into())),
-                    NodeData::new(Some(Value::Char('x')), true),
+                    NodeData::with_value(value!(true)),
+                    NodeData::with_value(value!(3.14)),
+                    NodeData::new(Some(value!('x')), true),
                 ],
                 is_leaf: true,
             },
@@ -1010,7 +1007,7 @@ mod tests {
         let leaf = NodeRaw {
             keys: vec![key!["test"]],
             children: vec![],
-            values: vec![NodeData::with_value(Value::Integer(1))],
+            values: vec![NodeData::with_value(value!(1))],
             is_leaf: true,
         };
 
@@ -1050,15 +1047,13 @@ mod tests {
 
         // Add first entry
         node.keys.push(key!["A"]);
-        node.values
-            .push(Arc::new(NodeData::with_value(Value::Integer(1))));
+        node.values.push(Arc::new(NodeData::with_value(value!(1))));
         let one_entry_size = node.serialized_size();
         assert!(one_entry_size > empty_size);
 
         // Add second entry
         node.keys.push(key!["B"]);
-        node.values
-            .push(Arc::new(NodeData::with_value(Value::Integer(2))));
+        node.values.push(Arc::new(NodeData::with_value(value!(2))));
         let two_entry_size = node.serialized_size();
         assert!(two_entry_size > one_entry_size);
     }
@@ -1069,8 +1064,8 @@ mod tests {
             keys: vec![key![123, "NAME"], key![124, "NAME"]],
             children: vec![],
             values: vec![
-                Arc::new(NodeData::with_value(Value::String("John".into()))),
-                Arc::new(NodeData::with_value(Value::String("Jane".into()))),
+                Arc::new(NodeData::with_value(value!("John"))),
+                Arc::new(NodeData::with_value(value!("Jane"))),
             ],
             is_leaf: true,
         };
@@ -1085,7 +1080,7 @@ mod tests {
     fn test_node_would_fit_empty_node() {
         let node = Node::new_leaf();
         let key = key!["TEST"];
-        let value = NodeData::with_value(Value::Integer(42));
+        let value = NodeData::with_value(value!(42));
 
         // Should fit in a 4KB page
         assert!(node.would_fit(&key, &value, 4096));
@@ -1101,12 +1096,11 @@ mod tests {
         // Add several entries
         (0..10).for_each(|i| {
             node.keys.push(key![i]);
-            node.values
-                .push(Arc::new(NodeData::with_value(Value::Integer(i))));
+            node.values.push(Arc::new(NodeData::with_value(value!(i))));
         });
 
         let key = key!["NEW"];
-        let value = NodeData::with_value(Value::String("test".into()));
+        let value = NodeData::with_value(value!("test"));
 
         // Should fit in a large page
         assert!(node.would_fit(&key, &value, 10000));
@@ -1121,7 +1115,7 @@ mod tests {
         let node = Node::new_leaf();
         let key = key!["LARGE"];
         let large_string = "x".repeat(5000);
-        let value = NodeData::with_value(Value::String(large_string));
+        let value = NodeData::with_value(value!(large_string));
 
         // Should not fit in a 4KB page
         assert!(!node.would_fit(&key, &value, 4096));
@@ -1180,12 +1174,8 @@ mod tests {
                 keys: vec![key![123, "NAME"], key![124, "DOB"]],
                 children: vec![],
                 values: vec![
-                    Arc::new(NodeData::with_value(Value::String(
-                        "John".into(),
-                    ))),
-                    Arc::new(NodeData::with_value(Value::String(
-                        "1980".into(),
-                    ))),
+                    Arc::new(NodeData::with_value(value!("John"))),
+                    Arc::new(NodeData::with_value(value!("1980"))),
                 ],
                 is_leaf: true,
             };
@@ -1229,17 +1219,13 @@ mod tests {
                 ],
                 children: vec![],
                 values: vec![
-                    Arc::new(NodeData::with_value(Value::Boolean(true))),
-                    Arc::new(NodeData::with_value(Value::Integer(-42))),
-                    Arc::new(NodeData::with_value(Value::Double(
-                        3.14159.into(),
-                    ))),
-                    Arc::new(NodeData::with_value(Value::Char('🦀'))),
-                    Arc::new(NodeData::with_value(Value::String(
-                        "hello".into(),
-                    ))),
-                    Arc::new(NodeData::with_value(Value::Json(
-                        serde_json::json!({"nested": [1, 2, 3]}),
+                    Arc::new(NodeData::with_value(value!(true))),
+                    Arc::new(NodeData::with_value(value!(-42))),
+                    Arc::new(NodeData::with_value(value!(3.14159))),
+                    Arc::new(NodeData::with_value(value!('🦀'))),
+                    Arc::new(NodeData::with_value(value!("hello"))),
+                    Arc::new(NodeData::with_value(value!(
+                        serde_json::json!({"nested": [1, 2, 3]})
                     ))),
                 ],
                 is_leaf: true,
@@ -1262,8 +1248,8 @@ mod tests {
                 values: vec![
                     Arc::new(NodeData::empty()),
                     Arc::new(NodeData::with_descendants()),
-                    Arc::new(NodeData::with_value(Value::Integer(1))),
-                    Arc::new(NodeData::new(Some(Value::Integer(2)), true)),
+                    Arc::new(NodeData::with_value(value!(1))),
+                    Arc::new(NodeData::new(Some(value!(2)), true)),
                 ],
                 is_leaf: true,
             };
@@ -1281,10 +1267,8 @@ mod tests {
                 ],
                 children: vec![],
                 values: vec![
-                    Arc::new(NodeData::with_value(Value::String(
-                        "deep".into(),
-                    ))),
-                    Arc::new(NodeData::with_value(Value::Integer(12345))),
+                    Arc::new(NodeData::with_value(value!("deep"))),
+                    Arc::new(NodeData::with_value(value!(12345))),
                 ],
                 is_leaf: true,
             };
@@ -1311,9 +1295,7 @@ mod tests {
             let node = Node {
                 keys: vec![key!["test"]],
                 children: vec![],
-                values: vec![Arc::new(NodeData::with_value(Value::Integer(
-                    42,
-                )))],
+                values: vec![Arc::new(NodeData::with_value(value!(42)))],
                 is_leaf: true,
             };
             let bytes = bincode::serialize(&node).unwrap();

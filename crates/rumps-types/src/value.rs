@@ -59,25 +59,25 @@
 //! ## Example Usage
 //!
 //! ```
-//! use rumps_types::Value;
+//! use rumps_types::{value, Value};
 //!
-//! // Create values of different types
-//! let name = Value::String("Alice".to_string());
-//! let age = Value::Integer(42);
-//! let active = Value::Boolean(true);
-//! let temp = Value::Double(98.6.into());
+//! // Create values using the `value!` macro
+//! let name = value!("Alice");
+//! let age = value!(42);
+//! let active = value!(true);
+//! let temp = value!(98.6);
 //!
-//! // Values can be converted from Rust primitives
+//! // Values can also be converted from Rust primitives
 //! let v1: Value = "test".into();
 //! let v2: Value = 123.into();
 //! let v3: Value = true.into();
 //! let v4: Value = 3.14.into();
 //!
 //! // Values are fully ordered
-//! assert!(Value::Boolean(true) < Value::Integer(0));
-//! assert!(Value::Integer(100) < Value::Double(100.1.into()));
-//! assert!(Value::Double(999.9.into()) < Value::Char('A'));
-//! assert!(Value::Char('Z') < Value::String("A".to_string()));
+//! assert!(value!(true) < value!(0));
+//! assert!(value!(100) < value!(100.1));
+//! assert!(value!(999.9) < value!('A'));
+//! assert!(value!('Z') < value!("A"));
 //! ```
 
 use std::{cmp, fmt};
@@ -96,14 +96,14 @@ use ordered_float::OrderedFloat;
 /// # Examples
 ///
 /// ```
-/// use rumps_types::Value;
+/// use rumps_types::{value, json};
 ///
-/// let str_val = Value::String("Hello".to_string());
-/// let int_val = Value::Integer(42);
-/// let dbl_val = Value::Double(3.14.into());
-/// let char_val = Value::Char('A');
-/// let bool_val = Value::Boolean(true);
-/// let json_val = Value::Json(serde_json::json!({"key": "value"}));
+/// let str_val = value!("Hello");
+/// let int_val = value!(42);
+/// let dbl_val = value!(3.14);
+/// let char_val = value!('A');
+/// let bool_val = value!(true);
+/// let json_val = value!(json!({"key": "value"}));
 ///
 /// // Values are ordered
 /// assert!(bool_val < int_val);
@@ -955,12 +955,12 @@ mod tests {
 
     #[test]
     fn test_value_creation() {
-        let bool_val = Value::Boolean(true);
-        let int_val = Value::Integer(42);
-        let dbl_val = Value::Double(OrderedFloat(3.14));
-        let char_val = Value::Char('A');
-        let str_val = Value::String("test".to_string());
-        let json_val = Value::Json(serde_json::json!({"key": "value"}));
+        let bool_val = value!(true);
+        let int_val = value!(42);
+        let dbl_val = value!(3.14);
+        let char_val = value!('A');
+        let str_val = value!("test");
+        let json_val = value!(serde_json::json!({"key": "value"}));
 
         assert!(bool_val.is_boolean());
         assert!(int_val.is_integer());
@@ -972,7 +972,7 @@ mod tests {
 
     #[test]
     fn test_value_type_checks() {
-        let bool_val = Value::Boolean(true);
+        let bool_val = value!(true);
         assert!(bool_val.is_boolean());
         assert!(!bool_val.is_integer());
         assert!(!bool_val.is_double());
@@ -980,7 +980,7 @@ mod tests {
         assert!(!bool_val.is_string());
         assert!(!bool_val.is_json());
 
-        let int_val = Value::Integer(42);
+        let int_val = value!(42);
         assert!(!int_val.is_boolean());
         assert!(int_val.is_integer());
         assert!(!int_val.is_double());
@@ -988,7 +988,7 @@ mod tests {
         assert!(!int_val.is_string());
         assert!(!int_val.is_json());
 
-        let dbl_val = Value::Double(OrderedFloat(3.14));
+        let dbl_val = value!(3.14);
         assert!(!dbl_val.is_boolean());
         assert!(!dbl_val.is_integer());
         assert!(dbl_val.is_double());
@@ -996,7 +996,7 @@ mod tests {
         assert!(!dbl_val.is_string());
         assert!(!dbl_val.is_json());
 
-        let char_val = Value::Char('X');
+        let char_val = value!('X');
         assert!(!char_val.is_boolean());
         assert!(!char_val.is_integer());
         assert!(!char_val.is_double());
@@ -1004,7 +1004,7 @@ mod tests {
         assert!(!char_val.is_string());
         assert!(!char_val.is_json());
 
-        let str_val = Value::String("test".to_string());
+        let str_val = value!("test");
         assert!(!str_val.is_boolean());
         assert!(!str_val.is_integer());
         assert!(!str_val.is_double());
@@ -1012,7 +1012,7 @@ mod tests {
         assert!(str_val.is_string());
         assert!(!str_val.is_json());
 
-        let json_val = Value::Json(serde_json::json!({"key": "value"}));
+        let json_val = value!(serde_json::json!({"key": "value"}));
         assert!(!json_val.is_boolean());
         assert!(!json_val.is_integer());
         assert!(!json_val.is_double());
@@ -1023,7 +1023,7 @@ mod tests {
 
     #[test]
     fn test_value_accessors() {
-        let bool_val = Value::Boolean(true);
+        let bool_val = value!(true);
         assert_eq!(bool_val.as_boolean(), Some(true));
         assert_eq!(bool_val.as_integer(), None);
         assert_eq!(bool_val.as_double(), None);
@@ -1031,7 +1031,7 @@ mod tests {
         assert_eq!(bool_val.as_string(), None);
         assert_eq!(bool_val.as_json(), None);
 
-        let int_val = Value::Integer(42);
+        let int_val = value!(42);
         assert_eq!(int_val.as_boolean(), None);
         assert_eq!(int_val.as_integer(), Some(42));
         assert_eq!(int_val.as_double(), None);
@@ -1039,7 +1039,7 @@ mod tests {
         assert_eq!(int_val.as_string(), None);
         assert_eq!(int_val.as_json(), None);
 
-        let dbl_val = Value::Double(OrderedFloat(3.14));
+        let dbl_val = value!(3.14);
         assert_eq!(dbl_val.as_boolean(), None);
         assert_eq!(dbl_val.as_integer(), None);
         assert_eq!(dbl_val.as_double(), Some(3.14));
@@ -1047,7 +1047,7 @@ mod tests {
         assert_eq!(dbl_val.as_string(), None);
         assert_eq!(dbl_val.as_json(), None);
 
-        let char_val = Value::Char('Z');
+        let char_val = value!('Z');
         assert_eq!(char_val.as_boolean(), None);
         assert_eq!(char_val.as_integer(), None);
         assert_eq!(char_val.as_double(), None);
@@ -1055,7 +1055,7 @@ mod tests {
         assert_eq!(char_val.as_string(), None);
         assert_eq!(char_val.as_json(), None);
 
-        let str_val = Value::String("test".to_string());
+        let str_val = value!("test");
         assert_eq!(str_val.as_boolean(), None);
         assert_eq!(str_val.as_integer(), None);
         assert_eq!(str_val.as_double(), None);
@@ -1063,7 +1063,7 @@ mod tests {
         assert_eq!(str_val.as_string(), Some("test"));
         assert_eq!(str_val.as_json(), None);
 
-        let json_val = Value::Json(serde_json::json!({"key": "value"}));
+        let json_val = value!(serde_json::json!({"key": "value"}));
         assert_eq!(json_val.as_boolean(), None);
         assert_eq!(json_val.as_integer(), None);
         assert_eq!(json_val.as_double(), None);
@@ -1076,31 +1076,23 @@ mod tests {
     #[test]
     fn test_value_ordering() {
         // Same-type ordering
-        assert!(Value::Boolean(false) < Value::Boolean(true));
-        assert!(Value::Integer(10) < Value::Integer(20));
-        assert!(
-            Value::Double(OrderedFloat(3.14))
-                < Value::Double(OrderedFloat(3.15))
-        );
-        assert!(Value::Char('A') < Value::Char('Z'));
-        assert!(
-            Value::String("a".to_string()) < Value::String("b".to_string())
-        );
+        assert!(value!(false) < value!(true));
+        assert!(value!(10) < value!(20));
+        assert!(value!(3.14) < value!(3.15));
+        assert!(value!('A') < value!('Z'));
+        assert!(value!("a") < value!("b"));
         // JSON ordering by string representation
         assert!(
-            Value::Json(serde_json::json!({"a": 1}))
-                < Value::Json(serde_json::json!({"b": 1}))
+            value!(serde_json::json!({"a": 1}))
+                < value!(serde_json::json!({"b": 1}))
         );
 
         // Cross-type ordering: Boolean < Integer < Double < Char < String < Json
-        assert!(Value::Boolean(true) < Value::Integer(0));
-        assert!(Value::Integer(100) < Value::Double(OrderedFloat(0.1)));
-        assert!(Value::Double(OrderedFloat(999.9)) < Value::Char('A'));
-        assert!(Value::Char('Z') < Value::String("A".to_string()));
-        assert!(
-            Value::String("zzz".to_string())
-                < Value::Json(serde_json::json!({}))
-        );
+        assert!(value!(true) < value!(0));
+        assert!(value!(100) < value!(0.1));
+        assert!(value!(999.9) < value!('A'));
+        assert!(value!('Z') < value!("A"));
+        assert!(value!("zzz") < value!(serde_json::json!({})));
     }
 
     #[test]
@@ -1184,40 +1176,38 @@ mod tests {
     fn test_value_serialization_roundtrip() {
         // Test each variant round-trips correctly
         let test_values = vec![
-            Value::Boolean(false),
-            Value::Boolean(true),
-            Value::Integer(0),
-            Value::Integer(1),
-            Value::Integer(127),
-            Value::Integer(128),
-            Value::Integer(-1),
-            Value::Integer(-112),
-            Value::Integer(-113),
-            Value::Integer(1000000),
-            Value::Integer(-1000000),
-            Value::Integer(i64::MAX),
-            Value::Integer(i64::MIN),
-            Value::Double(OrderedFloat(0.0)),
-            Value::Double(OrderedFloat(3.14)),
-            Value::Double(OrderedFloat(-2.5)),
-            Value::Double(OrderedFloat(f64::MAX)),
-            Value::Double(OrderedFloat(f64::MIN)),
-            Value::Char('A'),
-            Value::Char('0'),
-            Value::Char('€'),
-            Value::Char('𝄞'), // Musical note - 4-byte UTF-8 char
-            Value::String(String::new()),
-            Value::String("hello".to_string()),
-            Value::String("a".repeat(1000)),
-            Value::Json(serde_json::json!(null)),
-            Value::Json(serde_json::json!(true)),
-            Value::Json(serde_json::json!(42)),
-            Value::Json(serde_json::json!("string")),
-            Value::Json(serde_json::json!({"key": "value"})),
-            Value::Json(serde_json::json!([1, 2, 3])),
-            Value::Json(
-                serde_json::json!({"nested": {"deep": {"value": 123}}}),
-            ),
+            value!(false),
+            value!(true),
+            value!(0),
+            value!(1),
+            value!(127),
+            value!(128),
+            value!(-1),
+            value!(-112),
+            value!(-113),
+            value!(1000000),
+            value!(-1000000),
+            value!(i64::MAX),
+            value!(i64::MIN),
+            value!(0.0),
+            value!(3.14),
+            value!(-2.5),
+            value!(f64::MAX),
+            value!(f64::MIN),
+            value!('A'),
+            value!('0'),
+            value!('€'),
+            value!('𝄞'), // Musical note - 4-byte UTF-8 char
+            value!(""),
+            value!("hello"),
+            Value::String("a".repeat(1000)), // Keep Value:: for computed string
+            value!(serde_json::json!(null)),
+            value!(serde_json::json!(true)),
+            value!(serde_json::json!(42)),
+            value!(serde_json::json!("string")),
+            value!(serde_json::json!({"key": "value"})),
+            value!(serde_json::json!([1, 2, 3])),
+            value!(serde_json::json!({"nested": {"deep": {"value": 123}}})),
         ];
 
         test_values.iter().for_each(|value| {
@@ -1239,55 +1229,29 @@ mod tests {
         // so actual sizes are 8 bytes larger than our compact encoding
 
         // Booleans: 1 byte data + 8 byte bincode overhead = 9 bytes
-        assert_eq!(
-            bincode::serialize(&Value::Boolean(false)).unwrap().len(),
-            9
-        );
-        assert_eq!(bincode::serialize(&Value::Boolean(true)).unwrap().len(), 9);
+        assert_eq!(bincode::serialize(&value!(false)).unwrap().len(), 9);
+        assert_eq!(bincode::serialize(&value!(true)).unwrap().len(), 9);
 
         // Small positive integers: 1 byte data + 8 byte overhead = 9 bytes
-        assert_eq!(bincode::serialize(&Value::Integer(0)).unwrap().len(), 9);
-        assert_eq!(bincode::serialize(&Value::Integer(1)).unwrap().len(), 9);
-        assert_eq!(bincode::serialize(&Value::Integer(127)).unwrap().len(), 9);
+        assert_eq!(bincode::serialize(&value!(0)).unwrap().len(), 9);
+        assert_eq!(bincode::serialize(&value!(1)).unwrap().len(), 9);
+        assert_eq!(bincode::serialize(&value!(127)).unwrap().len(), 9);
 
         // Small negative integers: 1 byte data + 8 byte overhead = 9 bytes
-        assert_eq!(bincode::serialize(&Value::Integer(-1)).unwrap().len(), 9);
-        assert_eq!(bincode::serialize(&Value::Integer(-112)).unwrap().len(), 9);
+        assert_eq!(bincode::serialize(&value!(-1)).unwrap().len(), 9);
+        assert_eq!(bincode::serialize(&value!(-112)).unwrap().len(), 9);
 
         // Larger integers: (2-3 bytes data) + 8 byte overhead
-        assert_eq!(bincode::serialize(&Value::Integer(128)).unwrap().len(), 11); // 3 + 8
-        assert_eq!(
-            bincode::serialize(&Value::Integer(-113)).unwrap().len(),
-            11
-        ); // 3 + 8
+        assert_eq!(bincode::serialize(&value!(128)).unwrap().len(), 11); // 3 + 8
+        assert_eq!(bincode::serialize(&value!(-113)).unwrap().len(), 11); // 3 + 8
 
         // Doubles: 9 bytes data + 8 byte overhead = 17 bytes
-        assert_eq!(
-            bincode::serialize(&Value::Double(OrderedFloat(0.0)))
-                .unwrap()
-                .len(),
-            17
-        );
-        assert_eq!(
-            bincode::serialize(&Value::Double(OrderedFloat(3.14)))
-                .unwrap()
-                .len(),
-            17
-        );
+        assert_eq!(bincode::serialize(&value!(0.0)).unwrap().len(), 17);
+        assert_eq!(bincode::serialize(&value!(3.14)).unwrap().len(), 17);
 
         // Strings: (tag + varint length + content) + 8 byte overhead
-        assert_eq!(
-            bincode::serialize(&Value::String(String::new()))
-                .unwrap()
-                .len(),
-            10
-        ); // 2 + 8
-        assert_eq!(
-            bincode::serialize(&Value::String("hello".to_string()))
-                .unwrap()
-                .len(),
-            15
-        ); // 7 + 8
+        assert_eq!(bincode::serialize(&value!("")).unwrap().len(), 10); // 2 + 8
+        assert_eq!(bincode::serialize(&value!("hello")).unwrap().len(), 15); // 7 + 8
     }
 
     #[test]
@@ -1295,15 +1259,15 @@ mod tests {
         // Test boundary values
         let boundary_values = vec![
             // Boundary between small and large positive integers
-            Value::Integer(126),
-            Value::Integer(127),
-            Value::Integer(128),
-            Value::Integer(129),
+            value!(126),
+            value!(127),
+            value!(128),
+            value!(129),
             // Boundary between small and large negative integers
-            Value::Integer(-111),
-            Value::Integer(-112),
-            Value::Integer(-113),
-            Value::Integer(-114),
+            value!(-111),
+            value!(-112),
+            value!(-113),
+            value!(-114),
         ];
 
         boundary_values.iter().for_each(|value| {
@@ -1344,9 +1308,9 @@ mod tests {
         use std::collections::HashMap;
 
         // Test that JSON values can be used as HashMap keys through Hash trait
-        let json1 = Value::Json(serde_json::json!({"a": 1}));
-        let json2 = Value::Json(serde_json::json!({"a": 1}));
-        let json3 = Value::Json(serde_json::json!({"b": 2}));
+        let json1 = value!(serde_json::json!({"a": 1}));
+        let json2 = value!(serde_json::json!({"a": 1}));
+        let json3 = value!(serde_json::json!({"b": 2}));
 
         let map = HashMap::from([
             (json1.clone(), "value1"),

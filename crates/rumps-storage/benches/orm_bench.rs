@@ -13,7 +13,7 @@ use rumps_storage::Database;
 use rumps_types::orm::{
     DecodeError, FromSubscript, FromValue, ToSubscript, ToValue,
 };
-use rumps_types::{Key, Value};
+use rumps_types::{value, Key, Value};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -44,7 +44,7 @@ impl ToRumps for User {
         age_key.push("age".to_sub());
 
         vec![
-            (prefix.clone(), Value::String(String::new())),
+            (prefix.clone(), value!("")),
             (name_key, self.name.to_val()),
             (email_key, self.email.to_val()),
             (age_key, self.age.to_val()),

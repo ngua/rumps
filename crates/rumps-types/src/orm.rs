@@ -680,6 +680,7 @@ impl IntoKey for &Key {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::key;
 
     // ToSubscript / FromSubscript tests
 
@@ -819,8 +820,7 @@ mod tests {
 
     #[test]
     fn test_key_identity() {
-        let original =
-            Key::from(vec![Subscript::from(1), Subscript::from("test")]);
+        let original = key![1, "test"];
         let key: Key = original.clone().into_key();
         assert_eq!(key, original);
     }

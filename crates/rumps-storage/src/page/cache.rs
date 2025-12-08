@@ -305,7 +305,7 @@ impl std::fmt::Debug for PageCache {
 mod tests {
     use std::collections::HashSet;
 
-    use rumps_types::Key;
+    use rumps_types::key;
 
     use super::*;
     use crate::node::NodeData;
@@ -313,7 +313,7 @@ mod tests {
 
     fn make_node(id: u64) -> Node {
         let mut node = Node::new_leaf();
-        node.keys.push(Key::from(vec![(id as i64).into()]));
+        node.keys.push(key![id as i64]);
         node.values
             .push(Arc::new(NodeData::new(Some((id as i64).into()), false)));
         node

@@ -15,7 +15,7 @@ use rumps_storage::Database;
 use rumps_types::orm::{
     FromSubscript as _, FromValue as _, ToSubscript as _, ToValue as _,
 };
-use rumps_types::{global, key, Key, Subscript, Value};
+use rumps_types::{global, key, value, Key, Subscript};
 
 /// Basic struct with derive macros
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
@@ -311,9 +311,9 @@ async fn test_derive_renamed_field() {
 
     // Verify the key uses "desc" not "description"
     // (Check via raw storage access)
-    let desc_key = Key::from(vec![1i64.to_sub(), "desc".to_sub()]);
+    let desc_key = key![1i64, "desc"];
     let val = db.get(&global!("item"), &desc_key).await.unwrap();
-    assert_eq!(val, Some(Value::String("A fancy widget".into())));
+    assert_eq!(val, Some(value!("A fancy widget")));
 }
 
 #[tokio::test]
@@ -348,27 +348,18 @@ async fn test_derive_skipped_field() {
 #[test]
 fn test_unit_enum_to_value() {
     // ToValue
-    assert_eq!(Status::Active.to_val(), Value::String("Active".into()));
-    assert_eq!(Status::Inactive.to_val(), Value::String("Inactive".into()));
-    assert_eq!(Status::Pending.to_val(), Value::String("Pending".into()));
+    assert_eq!(Status::Active.to_val(), value!("Active"));
+    assert_eq!(Status::Inactive.to_val(), value!("Inactive"));
+    assert_eq!(Status::Pending.to_val(), value!("Pending"));
 
     // FromValue
-    assert_eq!(
-        Status::from_val(&Value::String("Active".into())),
-        Ok(Status::Active)
-    );
-    assert_eq!(
-        Status::from_val(&Value::String("Inactive".into())),
-        Ok(Status::Inactive)
-    );
-    assert_eq!(
-        Status::from_val(&Value::String("Pending".into())),
-        Ok(Status::Pending)
-    );
+    assert_eq!(Status::from_val(&value!("Active")), Ok(Status::Active));
+    assert_eq!(Status::from_val(&value!("Inactive")), Ok(Status::Inactive));
+    assert_eq!(Status::from_val(&value!("Pending")), Ok(Status::Pending));
 
     // Invalid value
-    assert!(Status::from_val(&Value::String("Unknown".into())).is_err());
-    assert!(Status::from_val(&Value::Integer(42)).is_err());
+    assert!(Status::from_val(&value!("Unknown")).is_err());
+    assert!(Status::from_val(&value!(42)).is_err());
 }
 
 #[test]
@@ -499,9 +490,8 @@ async fn test_derive_default_values() {
     // We'll use raw set operations to skip some fields
     db.transaction(|txn| async move {
         // Only set the marker at prefix, no theme or page_size
-        let prefix = Key::from(vec![2i64.to_sub()]);
-        txn.set(&global!("settings"), &prefix, Value::String(String::new()))
-            .await?;
+        let prefix = key![2i64];
+        txn.set(&global!("settings"), &prefix, value!("")).await?;
         Ok(())
     })
     .await
@@ -553,9 +543,9 @@ async fn test_derive_flatten() {
 
     // Verify storage layout: flattened fields are at same level
     // ^customer(1, "street") should exist (not ^customer(1, "addr", "street"))
-    let street_key = Key::from(vec![1i64.to_sub(), "street".to_sub()]);
+    let street_key = key![1i64, "street"];
     let val = db.get(&global!("customer"), &street_key).await.unwrap();
-    assert_eq!(val, Some(Value::String("123 Main St".into())));
+    assert_eq!(val, Some(value!("123 Main St")));
 }
 
 #[tokio::test]
@@ -599,24 +589,23 @@ async fn test_derive_subtree() {
 
     // Verify storage layout: subtree fields are nested under field name
     // ^vendor(1, "contact", "phone") should exist
-    let phone_key =
-        Key::from(vec![1i64.to_sub(), "contact".to_sub(), "phone".to_sub()]);
+    let phone_key = key![1i64, "contact", "phone"];
     let val = db.get(&global!("vendor"), &phone_key).await.unwrap();
-    assert_eq!(val, Some(Value::String("555-1234".into())));
+    assert_eq!(val, Some(value!("555-1234")));
 }
 
 #[test]
 fn test_newtype_to_value() {
     // ToValue - delegates to inner u64
-    assert_eq!(UserId(42).to_val(), Value::Integer(42));
-    assert_eq!(UserId(0).to_val(), Value::Integer(0));
+    assert_eq!(UserId(42).to_val(), value!(42));
+    assert_eq!(UserId(0).to_val(), value!(0));
 
     // FromValue - delegates to inner u64
-    assert_eq!(UserId::from_val(&Value::Integer(42)), Ok(UserId(42)));
-    assert_eq!(UserId::from_val(&Value::Integer(0)), Ok(UserId(0)));
+    assert_eq!(UserId::from_val(&value!(42)), Ok(UserId(42)));
+    assert_eq!(UserId::from_val(&value!(0)), Ok(UserId(0)));
 
     // Error cases
-    assert!(UserId::from_val(&Value::String("not a number".into())).is_err());
+    assert!(UserId::from_val(&value!("not a number")).is_err());
 }
 
 #[test]
@@ -743,16 +732,12 @@ async fn test_manual_write_single_record_one() {
         // ^raw_user(1, "name") = "Alice"
         // ^raw_user(1, "email") = "alice@test.com"
         // Note: No marker at ^raw_user(1) = ""
-        txn.set(
-            &global!("raw_user"),
-            &key![1i64, "name"],
-            Value::String("Alice".into()),
-        )
-        .await?;
+        txn.set(&global!("raw_user"), &key![1i64, "name"], value!("Alice"))
+            .await?;
         txn.set(
             &global!("raw_user"),
             &key![1i64, "email"],
-            Value::String("alice@test.com".into()),
+            value!("alice@test.com"),
         )
         .await?;
         Ok(())
@@ -776,44 +761,32 @@ async fn test_manual_write_multiple_records_all() {
     // Write multiple records manually WITHOUT markers
     db.transaction(|txn| async move {
         // User 1
-        txn.set(
-            &global!("raw_user"),
-            &key![1i64, "name"],
-            Value::String("Alice".into()),
-        )
-        .await?;
+        txn.set(&global!("raw_user"), &key![1i64, "name"], value!("Alice"))
+            .await?;
         txn.set(
             &global!("raw_user"),
             &key![1i64, "email"],
-            Value::String("alice@test.com".into()),
+            value!("alice@test.com"),
         )
         .await?;
 
         // User 2
-        txn.set(
-            &global!("raw_user"),
-            &key![2i64, "name"],
-            Value::String("Bob".into()),
-        )
-        .await?;
+        txn.set(&global!("raw_user"), &key![2i64, "name"], value!("Bob"))
+            .await?;
         txn.set(
             &global!("raw_user"),
             &key![2i64, "email"],
-            Value::String("bob@test.com".into()),
+            value!("bob@test.com"),
         )
         .await?;
 
         // User 3
-        txn.set(
-            &global!("raw_user"),
-            &key![3i64, "name"],
-            Value::String("Charlie".into()),
-        )
-        .await?;
+        txn.set(&global!("raw_user"), &key![3i64, "name"], value!("Charlie"))
+            .await?;
         txn.set(
             &global!("raw_user"),
             &key![3i64, "email"],
-            Value::String("charlie@test.com".into()),
+            value!("charlie@test.com"),
         )
         .await?;
 
@@ -840,43 +813,31 @@ async fn test_manual_write_composite_key_query() {
         txn.set(
             &global!("raw_order"),
             &key![1i64, 1i64, "product"],
-            Value::String("Widget".into()),
+            value!("Widget"),
         )
         .await?;
-        txn.set(
-            &global!("raw_order"),
-            &key![1i64, 1i64, "qty"],
-            Value::Integer(5),
-        )
-        .await?;
+        txn.set(&global!("raw_order"), &key![1i64, 1i64, "qty"], value!(5))
+            .await?;
 
         // Customer 1, Order 2
         txn.set(
             &global!("raw_order"),
             &key![1i64, 2i64, "product"],
-            Value::String("Gadget".into()),
+            value!("Gadget"),
         )
         .await?;
-        txn.set(
-            &global!("raw_order"),
-            &key![1i64, 2i64, "qty"],
-            Value::Integer(3),
-        )
-        .await?;
+        txn.set(&global!("raw_order"), &key![1i64, 2i64, "qty"], value!(3))
+            .await?;
 
         // Customer 2, Order 1
         txn.set(
             &global!("raw_order"),
             &key![2i64, 1i64, "product"],
-            Value::String("Gizmo".into()),
+            value!("Gizmo"),
         )
         .await?;
-        txn.set(
-            &global!("raw_order"),
-            &key![2i64, 1i64, "qty"],
-            Value::Integer(10),
-        )
-        .await?;
+        txn.set(&global!("raw_order"), &key![2i64, 1i64, "qty"], value!(10))
+            .await?;
 
         Ok(())
     })
@@ -913,21 +874,17 @@ async fn test_manual_write_sparse_data_with_defaults() {
         txn.set(
             &global!("raw_config"),
             &key!["full", "value"],
-            Value::String("enabled".into()),
+            value!("enabled"),
         )
         .await?;
-        txn.set(
-            &global!("raw_config"),
-            &key!["full", "version"],
-            Value::Integer(2),
-        )
-        .await?;
+        txn.set(&global!("raw_config"), &key!["full", "version"], value!(2))
+            .await?;
 
         // Config with only value (version uses default)
         txn.set(
             &global!("raw_config"),
             &key!["partial", "value"],
-            Value::String("some_val".into()),
+            value!("some_val"),
         )
         .await?;
 
@@ -935,7 +892,7 @@ async fn test_manual_write_sparse_data_with_defaults() {
         txn.set(
             &global!("raw_config"),
             &key!["minimal", "version"],
-            Value::Integer(1),
+            value!(1),
         )
         .await?;
 
@@ -970,16 +927,12 @@ async fn test_manual_write_exists_check() {
 
     // Write one record manually
     db.transaction(|txn| async move {
-        txn.set(
-            &global!("raw_user"),
-            &key![42i64, "name"],
-            Value::String("Test".into()),
-        )
-        .await?;
+        txn.set(&global!("raw_user"), &key![42i64, "name"], value!("Test"))
+            .await?;
         txn.set(
             &global!("raw_user"),
             &key![42i64, "email"],
-            Value::String("test@test.com".into()),
+            value!("test@test.com"),
         )
         .await?;
         Ok(())
@@ -1014,13 +967,13 @@ async fn test_mixed_orm_and_manual_writes() {
         txn.set(
             &global!("person"),
             &key![2i64, "name"],
-            Value::String("Manual Bob".into()),
+            value!("Manual Bob"),
         )
         .await?;
         txn.set(
             &global!("person"),
             &key![2i64, "email"],
-            Value::String("manual@test.com".into()),
+            value!("manual@test.com"),
         )
         .await?;
         Ok(())
@@ -1148,7 +1101,7 @@ async fn test_enum_struct_variant_roundtrip() {
     // Verify storage layout: ^status("OnLeave", "reason") = "vacation"
     let reason_key = key!["OnLeave", "reason"];
     let val = db.get(&global!("status"), &reason_key).await.unwrap();
-    assert_eq!(val, Some(Value::String("vacation".into())));
+    assert_eq!(val, Some(value!("vacation")));
 }
 
 #[tokio::test]
@@ -1197,7 +1150,7 @@ async fn test_enum_single_tuple_variant() {
     // ^message("Text") = "hello world"
     let key = key!["Text"];
     let val = db.get(&global!("message"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::String("hello world".into())));
+    assert_eq!(val, Some(value!("hello world")));
 }
 
 #[tokio::test]
@@ -1224,11 +1177,11 @@ async fn test_enum_multi_tuple_variant() {
     // ^message("Coords", 1) = 20
     let key0 = key!["Coords", 0i64];
     let val0 = db.get(&global!("message"), &key0).await.unwrap();
-    assert_eq!(val0, Some(Value::Integer(10)));
+    assert_eq!(val0, Some(value!(10)));
 
     let key1 = key!["Coords", 1i64];
     let val1 = db.get(&global!("message"), &key1).await.unwrap();
-    assert_eq!(val1, Some(Value::Integer(20)));
+    assert_eq!(val1, Some(value!(20)));
 }
 
 #[tokio::test]
@@ -1298,7 +1251,7 @@ async fn test_enum_variant_rename() {
     // Verify storage uses renamed tag
     let key = key!["created", "ts"];
     let val = db.get(&global!("event"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::Integer(1000)));
+    assert_eq!(val, Some(value!(1000)));
 }
 
 #[tokio::test]
@@ -1331,7 +1284,7 @@ async fn test_struct_with_embedded_enum() {
     // ^worker(1, "status", "OnLeave", "reason") = "sick leave"
     let reason_key = key![1i64, "status", "OnLeave", "reason"];
     let val = db.get(&global!("worker"), &reason_key).await.unwrap();
-    assert_eq!(val, Some(Value::String("sick leave".into())));
+    assert_eq!(val, Some(value!("sick leave")));
 }
 
 #[tokio::test]
@@ -1463,7 +1416,7 @@ async fn test_enum_field_rename_attr() {
     // Verify the field is stored with renamed key "v" not "value"
     let renamed_key = key!["Complex", "v"];
     let val = db.get(&global!("record"), &renamed_key).await.unwrap();
-    assert_eq!(val, Some(Value::String("hello".into())));
+    assert_eq!(val, Some(value!("hello")));
 
     // Original name should NOT exist
     let orig_key = key!["Complex", "value"];
@@ -1671,7 +1624,7 @@ async fn test_snake_case_struct_fields() {
     // Verify keys use snake_case (fields already snake_case stay same)
     let key = key![1i64, "item_name"];
     let val = db.get(&global!("snake_item"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::String("Widget".into())));
+    assert_eq!(val, Some(value!("Widget")));
 }
 
 #[tokio::test]
@@ -1702,11 +1655,11 @@ async fn test_camel_case_struct_fields() {
     // Verify keys use camelCase
     let key = key![1i64, "itemName"];
     let val = db.get(&global!("camel_item"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::String("Gadget".into())));
+    assert_eq!(val, Some(value!("Gadget")));
 
     let key2 = key![1i64, "isActive"];
     let val2 = db.get(&global!("camel_item"), &key2).await.unwrap();
-    assert_eq!(val2, Some(Value::Boolean(false)));
+    assert_eq!(val2, Some(value!(false)));
 }
 
 #[tokio::test]
@@ -1737,7 +1690,7 @@ async fn test_train_case_struct_fields() {
     // Verify keys use train-case (kebab-case)
     let key = key![1i64, "item-name"];
     let val = db.get(&global!("kebab_item"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::String("Gizmo".into())));
+    assert_eq!(val, Some(value!("Gizmo")));
 }
 
 #[tokio::test]
@@ -1766,7 +1719,7 @@ async fn test_uppercase_struct_fields() {
     // Verify keys use UPPERCASE
     let key = key![1i64, "NAME"];
     let val = db.get(&global!("upper_item"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::String("THING".into())));
+    assert_eq!(val, Some(value!("THING")));
 }
 
 #[tokio::test]
@@ -1795,7 +1748,7 @@ async fn test_lowercase_struct_fields() {
     // Verify keys use lowercase (keeps underscores)
     let key = key![1i64, "item_name"];
     let val = db.get(&global!("lower_item"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::String("thing".into())));
+    assert_eq!(val, Some(value!("thing")));
 }
 
 #[tokio::test]
@@ -1865,11 +1818,11 @@ async fn test_screaming_snake_case_struct_fields() {
     // Verify keys use SCREAMING_SNAKE_CASE
     let key = key![1i64, "ITEM_NAME"];
     let val = db.get(&global!("scream_item"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::String("SCREAMER".into())));
+    assert_eq!(val, Some(value!("SCREAMER")));
 
     let key2 = key![1i64, "IS_ACTIVE"];
     let val2 = db.get(&global!("scream_item"), &key2).await.unwrap();
-    assert_eq!(val2, Some(Value::Boolean(true)));
+    assert_eq!(val2, Some(value!(true)));
 }
 
 #[tokio::test]
@@ -1917,32 +1870,29 @@ fn test_unit_enum_rename_all_to_value() {
     // ToValue
     assert_eq!(
         SnakeCaseUnitEnum::FirstOption.to_val(),
-        Value::String("first_option".into())
+        value!("first_option")
     );
     assert_eq!(
         SnakeCaseUnitEnum::SecondOption.to_val(),
-        Value::String("second_option".into())
+        value!("second_option")
     );
     assert_eq!(
         SnakeCaseUnitEnum::ThirdOption.to_val(),
-        Value::String("third_option".into())
+        value!("third_option")
     );
 
     // FromValue
     assert_eq!(
-        SnakeCaseUnitEnum::from_val(&Value::String("first_option".into())),
+        SnakeCaseUnitEnum::from_val(&value!("first_option")),
         Ok(SnakeCaseUnitEnum::FirstOption)
     );
     assert_eq!(
-        SnakeCaseUnitEnum::from_val(&Value::String("second_option".into())),
+        SnakeCaseUnitEnum::from_val(&value!("second_option")),
         Ok(SnakeCaseUnitEnum::SecondOption)
     );
 
     // Invalid - original name shouldn't work
-    assert!(
-        SnakeCaseUnitEnum::from_val(&Value::String("FirstOption".into()))
-            .is_err()
-    );
+    assert!(SnakeCaseUnitEnum::from_val(&value!("FirstOption")).is_err());
 }
 
 #[test]
@@ -2006,7 +1956,7 @@ async fn test_variant_rename_all_override() {
     // Field names use variant's rename_all (camelCase)
     let key = key!["complex_variant", "fieldOne"];
     let val = db.get(&global!("mixed_case"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::String("value1".into())));
+    assert_eq!(val, Some(value!("value1")));
 
     // Test variant without override (uses container default)
     let another = MixedCaseEnum::AnotherVariant {
@@ -2026,7 +1976,7 @@ async fn test_variant_rename_all_override() {
     // Field names use container's rename_all (snake_case)
     let key2 = key!["another_variant", "some_field"];
     let val2 = db.get(&global!("mixed_case"), &key2).await.unwrap();
-    assert_eq!(val2, Some(Value::String("test".into())));
+    assert_eq!(val2, Some(value!("test")));
 }
 
 #[tokio::test]
@@ -2078,12 +2028,12 @@ async fn test_field_rename_overrides_rename_all() {
     // Normal field uses rename_all (camelCase)
     let key1 = key![1i64, "normalField"];
     let val1 = db.get(&global!("field_override"), &key1).await.unwrap();
-    assert_eq!(val1, Some(Value::String("normal".into())));
+    assert_eq!(val1, Some(value!("normal")));
 
     // Override field uses explicit rename
     let key2 = key![1i64, "CUSTOM"];
     let val2 = db.get(&global!("field_override"), &key2).await.unwrap();
-    assert_eq!(val2, Some(Value::String("override".into())));
+    assert_eq!(val2, Some(value!("override")));
 }
 
 // =============================================================================
@@ -2191,22 +2141,22 @@ async fn test_field_level_case_transformation() {
     // Verify camelCase transformation on some_field_name
     let key1 = key![1i64, "someFieldName"];
     let val1 = db.get(&global!("mixed_field"), &key1).await.unwrap();
-    assert_eq!(val1, Some(Value::String("camel".into())));
+    assert_eq!(val1, Some(value!("camel")));
 
     // Verify UPPERCASE transformation on another_field (keeps underscores)
     let key2 = key![1i64, "ANOTHER_FIELD"];
     let val2 = db.get(&global!("mixed_field"), &key2).await.unwrap();
-    assert_eq!(val2, Some(Value::String("upper".into())));
+    assert_eq!(val2, Some(value!("upper")));
 
     // Verify literal rename on third_field
     let key3 = key![1i64, "custom_literal"];
     let val3 = db.get(&global!("mixed_field"), &key3).await.unwrap();
-    assert_eq!(val3, Some(Value::String("literal".into())));
+    assert_eq!(val3, Some(value!("literal")));
 
     // Verify no rename on plain_field
     let key4 = key![1i64, "plain_field"];
     let val4 = db.get(&global!("mixed_field"), &key4).await.unwrap();
-    assert_eq!(val4, Some(Value::String("plain".into())));
+    assert_eq!(val4, Some(value!("plain")));
 }
 
 #[tokio::test]
@@ -2271,40 +2221,40 @@ fn test_unit_enum_field_level_case_transformation() {
     // Test snake_case
     assert_eq!(
         MixedUnitRename::FirstOption.to_val(),
-        Value::String("first_option".into())
+        value!("first_option")
     );
     assert_eq!(
-        MixedUnitRename::from_val(&Value::String("first_option".into())),
+        MixedUnitRename::from_val(&value!("first_option")),
         Ok(MixedUnitRename::FirstOption)
     );
 
     // Test uppercase
     assert_eq!(
         MixedUnitRename::SecondOption.to_val(),
-        Value::String("SECONDOPTION".into())
+        value!("SECONDOPTION")
     );
     assert_eq!(
-        MixedUnitRename::from_val(&Value::String("SECONDOPTION".into())),
+        MixedUnitRename::from_val(&value!("SECONDOPTION")),
         Ok(MixedUnitRename::SecondOption)
     );
 
     // Test literal
     assert_eq!(
         MixedUnitRename::ThirdOption.to_val(),
-        Value::String("literal_name".into())
+        value!("literal_name")
     );
     assert_eq!(
-        MixedUnitRename::from_val(&Value::String("literal_name".into())),
+        MixedUnitRename::from_val(&value!("literal_name")),
         Ok(MixedUnitRename::ThirdOption)
     );
 
     // Test no rename
     assert_eq!(
         MixedUnitRename::FourthOption.to_val(),
-        Value::String("FourthOption".into())
+        value!("FourthOption")
     );
     assert_eq!(
-        MixedUnitRename::from_val(&Value::String("FourthOption".into())),
+        MixedUnitRename::from_val(&value!("FourthOption")),
         Ok(MixedUnitRename::FourthOption)
     );
 }
@@ -2312,30 +2262,24 @@ fn test_unit_enum_field_level_case_transformation() {
 #[test]
 fn test_unit_enum_variant_rename_override_value() {
     // Test container-level rename_all = "lowercase" with variant override
-    assert_eq!(PriorityValue::Low.to_val(), Value::String("low".into()));
-    assert_eq!(
-        PriorityValue::Medium.to_val(),
-        Value::String("medium".into())
-    );
-    assert_eq!(PriorityValue::High.to_val(), Value::String("high".into()));
+    assert_eq!(PriorityValue::Low.to_val(), value!("low"));
+    assert_eq!(PriorityValue::Medium.to_val(), value!("medium"));
+    assert_eq!(PriorityValue::High.to_val(), value!("high"));
     // Test variant-level override with literal string
-    assert_eq!(
-        PriorityValue::Urgent.to_val(),
-        Value::String("CRITICAL".into())
-    );
+    assert_eq!(PriorityValue::Urgent.to_val(), value!("CRITICAL"));
 
     // Test FromValue round-trip
     assert_eq!(
-        PriorityValue::from_val(&Value::String("low".into())),
+        PriorityValue::from_val(&value!("low")),
         Ok(PriorityValue::Low)
     );
     assert_eq!(
-        PriorityValue::from_val(&Value::String("CRITICAL".into())),
+        PriorityValue::from_val(&value!("CRITICAL")),
         Ok(PriorityValue::Urgent)
     );
 
     // Error: original variant name shouldn't work when renamed
-    assert!(PriorityValue::from_val(&Value::String("Urgent".into())).is_err());
+    assert!(PriorityValue::from_val(&value!("Urgent")).is_err());
 }
 
 #[test]
@@ -2456,7 +2400,7 @@ async fn test_untagged_single_tuple_number() {
     // Verify storage: no tag, value stored directly at root
     let key = Key::new();
     let stored = db.get(&global!("json_val"), &key).await.unwrap();
-    assert_eq!(stored, Some(Value::from(42.5)));
+    assert_eq!(stored, Some(value!(42.5)));
 
     // Round-trip
     let fetched: Option<JsonValue> = db.one(Key::new()).await.unwrap();
@@ -2503,7 +2447,7 @@ async fn test_untagged_struct_variant() {
     // Verify storage: ^response["data"] = "ok" (no variant tag)
     let key = key!["data"];
     let stored = db.get(&global!("response"), &key).await.unwrap();
-    assert_eq!(stored, Some(Value::String("ok".into())));
+    assert_eq!(stored, Some(value!("ok")));
 
     // Round-trip
     let fetched: Option<ApiResponse> = db.one(Key::new()).await.unwrap();
@@ -2532,11 +2476,11 @@ async fn test_untagged_error_variant() {
     // Verify storage: ^response["code"] = 404, ^response["msg"] = "not found"
     let code_key = key!["code"];
     let code_val = db.get(&global!("response"), &code_key).await.unwrap();
-    assert_eq!(code_val, Some(Value::Integer(404)));
+    assert_eq!(code_val, Some(value!(404)));
 
     let msg_key = key!["msg"];
     let msg_val = db.get(&global!("response"), &msg_key).await.unwrap();
-    assert_eq!(msg_val, Some(Value::String("not found".into())));
+    assert_eq!(msg_val, Some(value!("not found")));
 
     // Round-trip
     let fetched: Option<ApiResponse> = db.one(Key::new()).await.unwrap();
@@ -2571,12 +2515,12 @@ async fn test_untagged_with_keys() {
     // ById: key is just [42], field stored at [42, "name"]
     let key = key![42i64, "name"];
     let val = db.get(&global!("keyed_untagged"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::String("Alice".into())));
+    assert_eq!(val, Some(value!("Alice")));
 
     // ByName: key is just ["Bob"], field stored at ["Bob", "count"]
     let key = key!["Bob", "count"];
     let val = db.get(&global!("keyed_untagged"), &key).await.unwrap();
-    assert_eq!(val, Some(Value::Integer(10)));
+    assert_eq!(val, Some(value!(10)));
 
     // Round-trip
     let fetched1: Option<KeyedUntagged> = db.one(42u64).await.unwrap();
@@ -2594,12 +2538,8 @@ async fn test_untagged_variant_order_matters() {
 
     // Insert just a marker (empty data)
     db.transaction(|txn| async move {
-        txn.set(
-            &global!("json_val"),
-            &Key::new(),
-            Value::String(String::new()),
-        )
-        .await?;
+        txn.set(&global!("json_val"), &Key::new(), value!(""))
+            .await?;
         Ok(())
     })
     .await

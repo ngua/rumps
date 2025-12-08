@@ -1837,7 +1837,7 @@ mod tests {
     #[tokio::test]
     async fn write_write_conflict_detection() {
         let db = Database::in_memory().unwrap();
-        let name = rumps_types::Name::global("TEST");
+        let name = rumps_types::global!("TEST");
         let key = rumps_types::key![1];
 
         // Start transaction A (will commit second)
@@ -1875,7 +1875,7 @@ mod tests {
     #[tokio::test]
     async fn non_overlapping_writes_no_conflict() {
         let db = Database::in_memory().unwrap();
-        let name = rumps_types::Name::global("TEST");
+        let name = rumps_types::global!("TEST");
 
         // Start both transactions
         let txn_a = db.build_transaction().begin(&db).await.unwrap();

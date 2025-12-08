@@ -11,7 +11,7 @@ use criterion::{
 };
 use futures::{StreamExt, TryStreamExt};
 use rumps_storage::{Database, Transaction};
-use rumps_types::{global, key, Name, Value};
+use rumps_types::{global, key, value, Name, Value};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -25,7 +25,7 @@ async fn insert_keys(
         .then(|i| {
             let t = txn;
             let n = name;
-            async move { t.set(n, &key![i], Value::Integer(i)).await }
+            async move { t.set(n, &key![i], value!(i)).await }
         })
         .try_collect::<Vec<_>>()
         .await?;
@@ -67,7 +67,7 @@ fn bench_set_single(c: &mut Criterion) {
                 db.transaction(|txn| {
                     let n = name.clone();
                     async move {
-                        txn.set(&n, &key![i], Value::Integer(i)).await?;
+                        txn.set(&n, &key![i], value!(i)).await?;
                         Ok(())
                     }
                 })
@@ -292,12 +292,8 @@ fn bench_kill(c: &mut Criterion) {
                                     let t = &txn;
                                     let n = &n;
                                     async move {
-                                        t.set(
-                                            n,
-                                            &key!["prefix", i],
-                                            Value::Integer(i),
-                                        )
-                                        .await
+                                        t.set(n, &key!["prefix", i], value!(i))
+                                            .await
                                     }
                                 })
                                 .try_collect::<Vec<_>>()
