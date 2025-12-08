@@ -1,5 +1,3 @@
-// TODO: Remove this once Phase 4-5 are implemented and all methods are actually used
-#![allow(dead_code)]
 #![allow(clippy::only_used_in_recursion)]
 
 use std::collections::HashMap;
@@ -147,9 +145,6 @@ impl NodeAllocator for DiskNodeAllocator {
 /// - `RwLock` enables concurrent reads with exclusive writes
 /// - Async from day one prevents breaking API changes when adding disk I/O
 ///
-/// In Phase 2-3, this is pure in-memory storage. In Phase 4, it becomes
-/// a page cache with lazy loading from disk.
-///
 /// # Thread Safety
 ///
 /// The `BTree` is designed to be shared across threads using `Arc<BTree>`.
@@ -176,10 +171,7 @@ impl NodeAllocator for DiskNodeAllocator {
 /// # });
 /// ```
 pub(crate) struct BTree {
-    /// Async-aware node storage pool.
-    ///
-    /// In Phase 2-3, this holds all nodes in memory. In Phase 4, it becomes
-    /// a page cache with LRU eviction, where nodes are lazy-loaded from disk.
+    /// Async-aware node storage pool (page cache with LRU eviction).
     ///
     /// Uses `tokio::sync::RwLock` for async-compatible concurrent access:
     /// - Multiple readers can access simultaneously
@@ -349,12 +341,9 @@ impl BTree {
         value: rumps_types::Value,
         _ctx: &crate::TransactionContext,
     ) -> Result<NodeId> {
-        // NOTE: BTree doesn't implement transaction logic. Phase 5 snapshot isolation
-        // happens at the Transaction layer (write buffering + read-from-buffer-first).
-        // Context is accepted for metadata only (stores txn_id for future MVCC).
-        //
-        // Future MVCC: Will store version chains (multiple versions per key) and use
-        // ctx.start_timestamp to determine which version to overwrite/update.
+        // NOTE: BTree doesn't implement transaction logic. Snapshot isolation happens
+        // at the Transaction layer (write buffering + read-from-buffer-first).
+        // Context is accepted for metadata only (stores `txn_id` for future MVCC).
         self.set_internal(root, key, NodeData::with_value(value))
             .await
     }
@@ -362,7 +351,7 @@ impl BTree {
     /// Gets a value from the tree rooted at `root`.
     ///
     /// Always reads committed state. Optional transaction context is for metadata
-    /// only (Phase 5 snapshot isolation happens at Transaction layer).
+    /// only (snapshot isolation happens at Transaction layer).
     ///
     /// # Examples
     ///
@@ -375,13 +364,9 @@ impl BTree {
         key: &Key,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<Option<rumps_types::Value>> {
-        // NOTE: BTree always reads committed state. Phase 5 snapshot isolation happens
-        // at Transaction layer (Transaction.get() checks write buffer first, then calls
+        // NOTE: BTree always reads committed state. Snapshot isolation happens at
+        // Transaction layer (`Transaction.get()` checks write buffer first, then calls
         // this).
-        //
-        // Future MVCC: Will store version chains and use ctx.start_timestamp to select
-        // the most recent version visible to the transaction (filter out versions created
-        // after start_timestamp or by uncommitted transactions).
         self.get_internal(root, key)
             .await
             .map(|opt| opt.and_then(|data| data.value.clone()))
@@ -393,7 +378,7 @@ impl BTree {
     /// became empty after the deletion.
     ///
     /// Modifies committed state directly. Transaction context is for metadata
-    /// only (Phase 5 write buffering happens at Transaction layer).
+    /// only (write buffering happens at Transaction layer).
     ///
     /// # Examples
     ///
@@ -409,13 +394,9 @@ impl BTree {
         key: &Key,
         _ctx: &crate::TransactionContext,
     ) -> Result<Option<NodeId>> {
-        // NOTE: BTree modifies committed state directly. Phase 5 buffering happens at
-        // Transaction layer (Transaction.kill() buffers, commit applies via db.kill()).
-        // Context accepted for metadata only (stores txn_id for future MVCC).
-        //
-        // Future MVCC: Will mark versions as deleted (tombstones) with ctx.txn_id and
-        // timestamp rather than physically removing them immediately. Vacuum process will
-        // clean up versions no longer visible to any active transaction.
+        // NOTE: BTree modifies committed state directly. Buffering happens at
+        // Transaction layer (`Transaction.kill()` buffers, commit applies via `db.kill()`).
+        // Context accepted for metadata only (stores `txn_id` for future MVCC).
         self.kill_internal(root, key).await
     }
 
@@ -435,8 +416,7 @@ impl BTree {
         key: &Key,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<DataStatus> {
-        // NOTE: Phase 5 snapshot isolation at Transaction layer (checks write buffer).
-        // Future MVCC: Will use ctx.start_timestamp to select visible version.
+        // NOTE: Snapshot isolation at Transaction layer (checks write buffer).
         self.data_internal(root, key).await
     }
 
@@ -455,8 +435,8 @@ impl BTree {
         after: Option<&Key>,
         _ctx: Option<&crate::TransactionContext>,
     ) -> Result<Option<Key>> {
-        // NOTE: Phase 5 snapshot isolation at Transaction layer (merges write buffer
-        // with committed state). Future MVCC: Will filter visible versions by timestamp.
+        // NOTE: Snapshot isolation at Transaction layer (merges write buffer
+        // with committed state).
         self.order_internal(root, after).await
     }
 
@@ -503,7 +483,6 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        // Phase 5.4 will add transaction snapshot isolation here
         self.collects_internal(root, start, pred, extract)
     }
 
@@ -643,7 +622,7 @@ impl BTree {
                 {
                     let mut nodes = self.nodes.write().await;
                     nodes.insert(id, node.clone());
-                    // TODO Phase 4.7: Implement LRU eviction if cache is full
+                    // TODO: Implement LRU eviction if cache is full
                 }
 
                 Ok(node)
@@ -1413,7 +1392,7 @@ impl BTree {
     /// This is an internal helper method used by tree traversal operations.
     /// It looks up the node in the in-memory `HashMap` and clones it.
     ///
-    /// For cache-aware loading that will support disk persistence in Phase 4,
+    /// For cache-aware loading that supports disk persistence,
     /// use `load_node()` instead.
     ///
     /// # Errors

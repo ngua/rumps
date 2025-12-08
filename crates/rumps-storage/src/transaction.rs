@@ -278,10 +278,10 @@ where
 pub(crate) struct TransactionId(u64);
 
 impl TransactionId {
-    /// The implicit transaction ID used for Phase 4.6.
+    /// The implicit transaction ID.
     ///
-    /// Until Phase 5 implements full multi-transaction support, all operations
-    /// use this single implicit transaction ID for WAL logging.
+    /// Used for single-transaction WAL logging when full multi-transaction
+    /// support is not required.
     pub(crate) const IMPLICIT: Self = Self(0);
 }
 
@@ -572,14 +572,11 @@ impl fmt::Display for TransactionMetadata {
 /// - Write operations (SET, KILL) require a transaction context
 /// - Read operations (GET, DATA, ORDER) can optionally use a transaction context
 ///
-/// # Phase 5 Note
-///
-/// This is currently a minimal stub. When full transaction support is implemented,
-/// this will include:
+/// Includes:
 /// - Write buffers for uncommitted changes
 /// - Snapshot isolation metadata
 /// - Conflict detection state
-/// - Links to the WAL (Write-Ahead Log)
+/// - Links to the WAL
 #[derive(Debug, Clone)]
 pub struct TransactionContext {
     /// Unique transaction identifier

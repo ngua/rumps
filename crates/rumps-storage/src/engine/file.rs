@@ -237,7 +237,7 @@ impl FileStorageEngine {
             let (recovery, reader) =
                 WalReader::open(&wal_dir).await?.recover().await?;
 
-            // TODO(Phase 4.4): Apply recovery.committed_ops to page cache/data file
+            // TODO: Apply recovery.committed_ops to page cache/data file
             let _ = recovery.uncommitted_txns;
 
             // Convert reader to writer using stored WAL config

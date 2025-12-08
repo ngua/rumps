@@ -280,12 +280,7 @@ impl PageCache {
         self.stats.read().await.clone()
     }
 
-    /// Reset cache statistics.
-    pub(crate) async fn reset_stats(&self) {
-        *self.stats.write().await = PageCacheStats::default();
-    }
-
-    /// Calculate the hit rate (0.0 to 1.0).
+    /// Calculate the hit rate (`0.0` to `1.0`).
     pub(crate) async fn hit_rate(&self) -> f64 {
         let stats = self.stats.read().await;
         let total = stats.hits + stats.misses;
