@@ -85,9 +85,25 @@
 *WIP*: The query language is nowhere near completion
 * WTF is RUMPS?
 ** MUMPS
+RUMPS is born from the MUMPS database system and programming language (RUMPS has not yet implemented that second part). MUMPS was essentially NoSQL before NoSQL (making RUMPS NoSQL ...after NoSQL). Rather than store relational tables as SQL does, MUMPS and RUMPS store *sparse*, *sorted*, *hierarchical trees* of data (these are called "global" variables, see below for what a variable is). Data is addressed by /key/: each /key/ is a list of /subscripts/ in the tree:
+
+#+HTML: <p align="center">
+#+HTML:   <img src="stuff/storage-diagram.svg" alt="RUMPS storage model">
+#+HTML: </p>
+
+(For what things like =^PATIENT= mean, see below on "variables".)
+
+This storage model is essentially the same between MUMPS and RUMPS. MUMPS traditionally used a B+-tree for its physical storage, but RUMPS uses a pure B-tree (i.e. nodes can hold values directly as well as descendants).
+
+What I find so fascinating about this, and what inspired me to make RUMPS, is that the /logical model/ (hierarchical sparse trees and their operations) and the /physical model/ (B-tree) are essentially the same shape. Operations like =ORDER= ("next key in sorted order", see below) are /literally/ what B-trees do. That is, the user thinks in /tree traversal/. Whereas with SQL, the logical and physical models are totally decoupled. This is also why hierarchical or document-like data is suitable and typically fast for MUMPS or RUMPS; there's no impedance mismatch between the user's thought and storage operations.
+
+There are additional essential properties of RUMPS that are inherited from MUMPS:
+- Sparse :: There is no need to fill gaps, pad, etc...; for example, if /only/ keys =1=, =2=, =10= are set, there is no padding for =3= through =9=
+- Sorted :: Iteration always yields keys /in order/; there is no need for post-hoc sorting, ever
+- Hierarchical :: Unlimited nesting depth
+
 ** Core concepts
 *** "Variables"
-*** Collation order
 *** RUMPS-specific things
 **** Async first
 **** ACID guarantees
