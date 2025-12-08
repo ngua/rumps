@@ -5,22 +5,26 @@
 #+HTML: <hr style="border:0; border-top:1px solid #bbb; margin-top:0.4em; margin-bottom:1.2em;">
 
 * Table of Contents :toc@2@gh:
-- [[#quick-start][Quick start]]
-  - [[#rust-api][Rust API]]
-  - [[#query-language][Query language]]
+- [[#introduction][Introduction]]
+  - [[#quick-start][Quick start]]
 - [[#wtf-is-rumps][WTF is RUMPS?]]
   - [[#mumps][MUMPS]]
   - [[#core-concepts][Core concepts]]
-  - [[#core-operations][Core operations]]
 - [[#using-rumps][Using RUMPS]]
-  - [[#rust-api-1][Rust API]]
-  - [[#query-language-1][Query language]]
+  - [[#core-operations][Core operations]]
+  - [[#rust-api][Rust API]]
+  - [[#query-language][Query language]]
+- [[#use-cases][Use cases]]
+  - [[#where-rumps-is-a-good-fit][Where RUMPS is a good fit]]
+  - [[#where-rumps-is-a-bad-fit][Where RUMPS is a bad fit]]
 - [[#comparison-to-other-database-systems][Comparison to other database systems]]
-- [[#license][License]]
+- [[#licenses][License(s)]]
 - [[#disclaimer][Disclaimer]]
 
-* Quick start
-** Rust API
+* Introduction
+*RUMPS* is a re-imagining of MUMPS-style database systems. It diverges quite a bit from traditional MUMPS, particularly in its (WIP) query language, explicit transaction support, etc... Read on to find out more. If you don't know what MUMPS is, [[https://en.wikipedia.org/wiki/MUMPS][this]] is a good introduction. RUMPS has many of MUMPS' core concepts, e.g. collation order, a similar storage model, etc..., but either expands on or diverges wildly from them. RUMPS is a bit of a bizarre mishmash of MUMPS, SQLite (more so when the query language is done), and something else. See [[#wtf-is-rumps][WTF is RUMPS?]] for more details.
+** Quick start
+*** Rust API
 1. Get RUMPS somehow
    - *NOTE*: I haven't put any of the RUMPS crates on ~crates.io~ yet, so you'll need to use it as a Git crate
 2. Start writing your sweet, sweet data to RUMPS; this is a minimal example: much more explanation is below on the different operations:
@@ -77,11 +81,19 @@
       Ok(())
   }
   #+end_src
-** Query language
+*** Query language
 *WIP*: The query language is nowhere near completion
 * WTF is RUMPS?
 ** MUMPS
 ** Core concepts
+*** "Variables"
+*** Collation order
+*** RUMPS-specific things
+**** Async first
+**** ACID guarantees
+***** In-memory: ACI
+**** Expanded types and collation order
+* Using RUMPS
 ** Core operations
 *** =GET=
 *** =SET=
@@ -89,11 +101,14 @@
 *** =DATA=
 *** =ORDER=
 *** =COLLECT=
-* Using RUMPS
 ** Rust API
 *** "ORM" API
 ** Query language
+*WIP*. Nowhere near done. RUMPS can only be used from Rust at the moment.
+* Use cases
+** Where RUMPS is a good fit
+** Where RUMPS is a bad fit
 * Comparison to other database systems
-* License
+* License(s)
 Licensed under either of [[file:LICENSES/APACHE][Apache License, Version 2.0]] or [[file:LICENSES/MIT][MIT license]] at your option.
 * Disclaimer
