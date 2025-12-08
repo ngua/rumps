@@ -2,9 +2,24 @@
 
 ## Overview
 
-This document outlines the design considerations for adding encryption at rest to RUMPS storage.
+This document outlines the design considerations for adding **encryption at rest** to RUMPS storage.
 
-**Difficulty assessment**: Medium - the architecture has good abstraction points, but multiple serialization boundaries require careful handling.
+**Scope**: This design protects data *on disk* — it does **not** protect data in use. While the database is open:
+- Decrypted data lives in memory (page cache, WAL buffers, application structs)
+- Encryption keys reside in process memory
+- An attacker with access to the running process can read plaintext data directly
+
+**What this protects against**:
+- Stolen or decommissioned storage media
+- Unauthorized filesystem access (backup tapes, snapshots, cloud storage)
+- Forensic recovery from discarded disks
+
+**What this does NOT protect against**:
+- Attackers with root/admin access to the running system
+- Memory disclosure vulnerabilities in the application
+- Physical access to a running machine
+
+**Difficulty assessment**: Medium — the architecture has good abstraction points, but multiple serialization boundaries require careful handling.
 
 ---
 
@@ -134,6 +149,99 @@ pub struct MetadataPage {
 
 ---
 
+## Security Considerations
+
+### Threat Model
+
+This encryption scheme assumes:
+- The attacker does **not** have access to the running RUMPS process
+- The attacker has access to the storage medium (disk, backup, snapshot)
+- The key is securely managed outside the storage layer
+
+If an attacker can attach a debugger, read `/proc/[pid]/mem`, or exploit a memory bug, they can extract keys or read decrypted data directly. This is inherent to any in-process encryption — mitigations exist but cannot eliminate the risk entirely.
+
+### Memory Attack Vectors
+
+| Vector            | Description                                   | Mitigation                                  |
+|-------------------|-----------------------------------------------|---------------------------------------------|
+| Core dumps        | Key appears in crash dump files               | `MADV_DONTDUMP` / disable core dumps        |
+| Swap/hibernation  | Key written to disk with swapped pages        | `mlock()` to pin key in RAM                 |
+| `/proc/[pid]/mem` | Privileged process reads memory               | OS hardening, reduced privileges            |
+| Cold boot         | RAM contents persist briefly after power loss | Physical security; limited mitigation       |
+| Spectre-class     | Side-channel extraction                       | CPU mitigations; limited in-process defense |
+| Heap bugs         | Use-after-free / overflow leaking key         | `zeroize` on drop; careful memory handling  |
+
+### Recommended Key Handling
+
+Use the `secrecy` and `zeroize` crates to reduce exposure:
+
+```rust
+use secrecy::{ExposeSecret, Secret};
+use zeroize::Zeroizing;
+
+pub struct EncryptedStorageEngine<C: Cipher> {
+    inner: Arc<FileStorageEngine>,
+    // Key wrapped in Secret — zeroizes on drop, won't appear in Debug/Display
+    key: Secret<Zeroizing<[u8; 32]>>,
+    cipher: C,
+}
+
+impl<C: Cipher> EncryptedStorageEngine<C> {
+    fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
+        // Expose key only when needed, briefly
+        self.cipher.encrypt(self.key.expose_secret(), data)
+    }
+}
+```
+
+### Optional Hardening: `mlock`
+
+Prevent the key from being swapped to disk:
+
+```rust
+use memsec::mlock;
+
+// During initialization
+let key_buf: [u8; 32] = derive_key(...);
+unsafe {
+    // Pin in RAM — may fail if ulimit restricts locked memory
+    if mlock(key_buf.as_ptr(), key_buf.len()).is_err() {
+        // Log warning; continue without mlock (still functional, less secure)
+    }
+}
+```
+
+**Note**: `mlock` requires sufficient `RLIMIT_MEMLOCK`. Consider documenting this for deployments requiring hardened key handling.
+
+### Recommended Crates
+
+| Crate     | Purpose                                                   | Recommendation                                            |
+|-----------|-----------------------------------------------------------|-----------------------------------------------------------|
+| `secrecy` | Wraps secrets; zeroizes on drop; blocks `Debug`/`Display` | **Use** — lightweight, well-maintained                    |
+| `zeroize` | Trait for secure memory zeroing                           | **Use** — dependency of `secrecy`, also useful standalone |
+| `memsec`  | `mlock`, `mprotect`, secure allocators                    | **Optional** — use for `mlock` hardening if needed        |
+| `secrets` | Alternative to `secrecy` with `mlock` built-in            | Consider if `memsec` is too low-level                     |
+
+**Recommendation**: Use `secrecy` + `zeroize` as the baseline. Add `memsec::mlock` for deployments requiring swap protection. Avoid rolling custom solutions.
+
+```toml
+# Cargo.toml
+[dependencies]
+secrecy = { version = "0.8", features = ["zeroize"] }
+zeroize = { version = "1", features = ["derive"] }
+memsec = "0.7"  # Optional, for mlock
+```
+
+### What We Explicitly Do NOT Provide
+
+- **Key management**: External responsibility (KMS, HSM, passphrase derivation)
+- **Key rotation**: Application must handle re-encryption
+- **Memory encryption**: Keys and plaintext exist in process memory
+- **Tamper evidence**: AEAD provides integrity, not tamper logging
+- **Secure enclaves**: No SGX/TrustZone integration (future consideration?)
+
+---
+
 ## Performance Considerations
 
 1. **Hardware acceleration**: Use `aes` crate with `aes-ni` feature for hardware AES
@@ -144,10 +252,12 @@ pub struct MetadataPage {
 
 ## Estimated Effort
 
-| Task                             | Effort   |
-|----------------------------------|----------|
-| `EncryptedStorageEngine` wrapper | 2-3 days |
-| WAL encryption                   | 3-5 days |
-| Metadata/format changes          | 1-2 days |
-| Test coverage                    | 3-4 days |
-| **Total**                        | ~2 weeks |
+| Task                             | Effort     |
+|----------------------------------|------------|
+| `EncryptedStorageEngine` wrapper | 2-3 days   |
+| WAL encryption                   | 3-5 days   |
+| Metadata/format changes          | 1-2 days   |
+| Key handling (`secrecy`/`mlock`) | 1-2 days   |
+| Test coverage                    | 3-4 days   |
+| Security documentation           | 0.5 days   |
+| **Total**                        | ~2.5 weeks |
