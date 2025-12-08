@@ -593,14 +593,14 @@ RUMPS modernizes MUMPS operators, making them more readable and consistent with 
 | Or               | `!` or `!!`   | `OR` or `\|\|`     | Logical OR         | Standard          |
 | Not              | `'`           | `NOT` or `!`       | Logical NOT        | Standard          |
 | **Special**      |               |                    |                    |                   |
-| Indirection      | `@`           | `@` or `eval`      | Dynamic evaluation | Enhanced          |
+| Indirection      | `@`           |                    | Dynamic evaluation | Removed           |
 | Global Prefix    | `^`           | `^`                | Global variable    | Same              |
 | Function Prefix  | `$`           |                    | Built-in function  | Removed           |
 | **Assignment**   |               |                    |                    |                   |
 | Set              | `SET` or `S`  | `SET` or `=`       | Assignment         | Flexible          |
 | Kill             | `KILL` or `K` | `KILL` or `DELETE` | Delete variable    | Options           |
 | **New in RUMPS** |               |                    |                    |                   |
-| Null Coalesce    | N/A           | `??`               | Default if null    | `a ?? b`          |
+| Null Coalesce    | N/A           | `??`               | Default if `None`  | `a ?? b`          |
 | Optional Chain   | N/A           | `?.`               | Safe navigation    | `obj?.field`      |
 | Pipe             | N/A           | `\|>`              | Pipeline operator  | Functional        |
 | Range            | N/A           | `..`               | Range operator     | `1..10`           |
@@ -945,7 +945,7 @@ COLLECT ^ORDERS
 ; Transform nested structures
 COLLECT ^RECORDS
   SELECT value #>> ["metadata", "tags"]
-  FILTER value != null
+  FILTER value != Option.None
   INTO tag-list
 ```
 
@@ -1198,8 +1198,8 @@ SET result = MyUtils.double(21)  ; 42
 
 | Function                 | Description          | Example                                   |
 |--------------------------|----------------------|-------------------------------------------|
-| `Option.some(v)`         | Wrap value           | `Option.some(42)` → `Some(42)`            |
-| `Option.none()`          | Empty option         | `Option.none()` → `None`                  |
+| `Option.Some(v)`         | Wrap value           | `Option.Some(42)` → `Some(42)`            |
+| `Option.None`            | Empty option         | `Option.None` → `None`                    |
 | `Option.is-some(o)`      | Check if Some        | `Option.is-some(Some(1))` → `true`        |
 | `Option.is-none(o)`      | Check if None        | `Option.is-none(None)` → `true`           |
 | `Option.unwrap(o)`       | Get value or panic   | `Option.unwrap(Some(1))` → `1`            |
@@ -1210,8 +1210,8 @@ SET result = MyUtils.double(21)  ; 42
 
 | Function                 | Description          | Example                                   |
 |--------------------------|----------------------|-------------------------------------------|
-| `Result.ok(v)`           | Success value        | `Result.ok(42)` → `Ok(42)`                |
-| `Result.err(e)`          | Error value          | `Result.err("fail")` → `Err("fail")`      |
+| `Result.Ok(v)`           | Success value        | `Result.Ok(42)` → `Ok(42)`                |
+| `Result.Err(e)`          | Error value          | `Result.Err("fail")` → `Err("fail")`      |
 | `Result.is-ok(r)`        | Check if Ok          | `Result.is-ok(Ok(1))` → `true`            |
 | `Result.is-err(r)`       | Check if Err         | `Result.is-err(Err("x"))` → `true`        |
 | `Result.unwrap(r)`       | Get value or panic   | `Result.unwrap(Ok(1))` → `1`              |
@@ -1221,15 +1221,15 @@ SET result = MyUtils.double(21)  ; 42
 
 #### `Io` — Input/Output (Future)
 
-| Function                 | Description               |
-|--------------------------|---------------------------|
-| `Io.read-file(path)`     | Read file contents        |
-| `Io.write-file(path, s)` | Write to file             |
-| `Io.stdin()`             | Read from stdin           |
-| `Io.print(s)`            | Print to stdout           |
-| `Io.eprint(s)`           | Print to stderr           |
-| `Io.env(x)`              | Try to get `x` as env var |
-|                          |                           |
+| Function                 | Description                                   |
+|--------------------------|-----------------------------------------------|
+| `Io.read-file(path)`     | Read file contents                            |
+| `Io.write-file(path, s)` | Write to file                                 |
+| `Io.stdin()`             | Read from stdin                               |
+| `Io.print(s)`            | Print to stdout  (alias for `OUTPUT`)         |
+| `Io.eprint(s)`           | Print to stderr (alias for `OUTPUT TO ERROR`) |
+| `Io.env(x)`              | Try to get `x` as env var                     |
+|                          |                                               |
 
 ### Namespace Imports
 
@@ -1263,13 +1263,13 @@ Native types are the core RUMPS types with full type tracking.
 
 #### Primitives
 
-| Type     | Description           | Examples               |
-|----------|-----------------------|------------------------|
-| `Null`   | Null/undefined value  | `null`                 |
-| `Bool`   | Boolean               | `true`, `false`        |
-| `Int`    | Integer               | `42`, `-7`, `0`        |
-| `Float`  | Floating-point number | `3.14`, `-0.5`, `1e10` |
-| `String` | Text string           | `"hello"`, `""`        |
+| Type     | Description           | Examples                        |
+|----------|-----------------------|---------------------------------|
+| `Option` | Nullable value        | `Option.Some(_)`, `Option.None` |
+| `Bool`   | Boolean               | `true`, `false`                 |
+| `Int`    | Integer               | `42`, `-7`, `0`                 |
+| `Float`  | Floating-point number | `3.14`, `-0.5`, `1e10`          |
+| `String` | Text string           | `"hello"`, `""`                 |
 
 #### Collections
 
@@ -1310,15 +1310,15 @@ Native types are the core RUMPS types with full type tracking.
 
 JSON types represent dynamic data from parsing or external sources. They mirror JSON's structure but are distinct from native types.
 
-| Type          | Description                           | Native Equivalent   |
-|---------------|---------------------------------------|---------------------|
-| `Json`        | Any JSON value                        | `Any`               |
-| `Json.Null`   | JSON null                             | `Null`              |
-| `Json.Bool`   | JSON boolean                          | `Bool`              |
-| `Json.Number` | JSON number (no int/float distinction)| `Number`            |
-| `Json.String` | JSON string                           | `String`            |
-| `Json.Array`  | JSON array (heterogeneous)            | `Array[Json]`       |
-| `Json.Object` | JSON object (string keys)             | `Map[String, Json]` |
+| Type          | Description                            | Native Equivalent   |
+|---------------|----------------------------------------|---------------------|
+| `Json`        | Any JSON value                         | `Any`               |
+| `Json.Null`   | JSON null                              | `Option.None`       |
+| `Json.Bool`   | JSON boolean                           | `Bool`              |
+| `Json.Number` | JSON number (no int/float distinction) | `Number`            |
+| `Json.String` | JSON string                            | `String`            |
+| `Json.Array`  | JSON array (heterogeneous)             | `Array[Json]`       |
+| `Json.Object` | JSON object (string keys)              | `Map[String, Json]` |
 
 ### Native vs JSON
 
@@ -1385,7 +1385,7 @@ IF value is String {
   OUTPUT "It's a string: " + value
 } ELSE IF value is Number {
   OUTPUT "It's a number: " + String.from(value)
-} ELSE IF value is Null {
+} ELSE IF value is Option.None {
   OUTPUT "It's null"
 }
 ```
@@ -1425,9 +1425,9 @@ This is a deliberate departure from traditional MUMPS (where everything was stri
 
 #### Truthy/Falsy Values
 
-| Falsy                                         | Truthy         |
-|-----------------------------------------------|----------------|
-| `null`, `false`, `0`, `0.0`, `""`, `[]`, `{}` | Everything else|
+| Falsy                                                | Truthy          |
+|------------------------------------------------------|-----------------|
+| `Option.None`, `false`, `0`, `0.0`, `""`, `[]`, `{}` | Everything else |
 
 #### Explicit Conversion
 
