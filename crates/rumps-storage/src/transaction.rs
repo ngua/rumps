@@ -43,10 +43,10 @@
 //! ```
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
+use std::{fmt, future};
 
 use futures::future::BoxFuture;
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
@@ -905,39 +905,54 @@ pub enum TransactionPriority {
     High,
 }
 
-/// Builder for creating transactions with custom configuration.
+/// Builder for creating and configuring transactions.
 ///
-/// Provides a fluent API for configuring transaction properties before
-/// beginning the transaction. All properties have sensible defaults.
+/// Created via [`Database::build_transaction()`]. Provides a fluent API for
+/// configuring transaction properties before execution.
 ///
 /// # Examples
 ///
 /// ```
 /// # tokio_test::block_on(async {
-/// use rumps_storage::{Database, TransactionBuilder, TransactionPriority, ConflictStrategy};
-/// use rumps_types::{global, key, Value};
+/// use rumps_storage::{Database, TransactionPriority, ConflictStrategy};
+/// use rumps_types::{global, key, value};
 ///
 /// let db = Database::in_memory()?;
 ///
-/// let builder = TransactionBuilder::default()
+/// db.build_transaction()
 ///     .conflict(ConflictStrategy::Retry(3))
 ///     .timeout(5000)
-///     .priority(TransactionPriority::High);
-///
-/// db.transaction_with(builder, |txn| async move {
-///     txn.set(&global!("DATA"), &key![1], Value::from("test")).await?;
-///     Ok(())
-/// }).await?;
+///     .priority(TransactionPriority::High)
+///     .begin(|txn| async move {
+///         txn.set(&global!("DATA"), &key![1], value!("test")).await?;
+///         Ok(())
+///     })
+///     .await?;
 /// # Ok::<(), rumps_storage::Error>(())
 /// # });
 /// ```
-#[derive(Debug, Clone)]
+///
+/// [`Database::build_transaction()`]: crate::Database::build_transaction
 pub struct TransactionBuilder {
+    db: Database,
     isolation: IsolationLevel,
     conflict_strategy: ConflictStrategy,
-    timeout: Option<u64>, // in ms
+    timeout: Option<u64>,
     priority: TransactionPriority,
     retry_count: u32,
+}
+
+impl fmt::Debug for TransactionBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TransactionBuilder")
+            .field("db", &"<Database>")
+            .field("isolation", &self.isolation)
+            .field("conflict_strategy", &self.conflict_strategy)
+            .field("timeout", &self.timeout)
+            .field("priority", &self.priority)
+            .field("retry_count", &self.retry_count)
+            .finish()
+    }
 }
 
 /// Write operation types for the transaction write buffer.
@@ -971,9 +986,11 @@ pub(crate) struct Snapshot {
     pub(crate) roots: HashMap<Name, NodeId>,
 }
 
-impl Default for TransactionBuilder {
-    fn default() -> Self {
+impl TransactionBuilder {
+    /// Creates a new builder for the given database.
+    pub(crate) fn new(db: Database) -> Self {
         Self {
+            db,
             isolation: IsolationLevel::SnapshotIsolation,
             conflict_strategy: ConflictStrategy::Abort,
             timeout: None,
@@ -981,9 +998,7 @@ impl Default for TransactionBuilder {
             retry_count: 0,
         }
     }
-}
 
-impl TransactionBuilder {
     /// Sets the isolation level for the transaction.
     pub fn isolation(mut self, lvl: IsolationLevel) -> Self {
         self.isolation = lvl;
@@ -1014,21 +1029,37 @@ impl TransactionBuilder {
         self
     }
 
+    /// Begins a transaction and executes the given function.
+    ///
+    /// The transaction auto-commits if the closure returns `Ok`, and
+    /// auto-rollbacks if it returns `Err`.
+    pub async fn begin<F, Fut, R>(self, f: F) -> Result<R>
+    where
+        F: FnOnce(Transaction) -> Fut,
+        Fut: future::Future<Output = Result<R>>,
+    {
+        let txn = self.start().await?;
+        match f(txn.clone()).await {
+            Ok(result) => {
+                txn.commit().await?;
+                Ok(result)
+            }
+            Err(e) => {
+                txn.rollback().await?;
+                Err(e)
+            }
+        }
+    }
+
     /// Creates and initializes a new transaction with the configured settings.
     ///
-    /// # What it does
+    /// This is the low-level method used internally by [`begin`]. It returns
+    /// a `Transaction` that must be manually committed or rolled back.
     ///
-    /// 1. Generates a unique `TransactionId` (monotonically increasing)
-    /// 2. Captures the current database timestamp for snapshot isolation
-    /// 3. Takes a read-only snapshot of the database state at this moment
-    /// 4. Initializes empty write buffer for staging changes
-    /// 5. Registers transaction with the database's `TransactionManager`
-    /// 6. Starts optional timeout timer if configured
-    /// 7. Logs transaction start to WAL (for recovery tracking)
-    /// 8. Returns `Transaction` struct in `Active` state
-    ///
-    /// The returned `Transaction` holds a clone of the `Database` (cheap via `Arc` fields).
-    pub async fn begin(self, db: &Database) -> Result<Transaction> {
+    /// [`begin`]: Self::begin
+    pub(crate) async fn start(self) -> Result<Transaction> {
+        let db = &self.db;
+
         // Allocate unique transaction ID from manager
         let id = db.txn_manager.allocate_txn_id().await;
 
@@ -1054,7 +1085,7 @@ impl TransactionBuilder {
             id,
             state: Arc::new(RwLock::new(TransactionState::Active)),
             start_timestamp: start_ts,
-            db: db.clone(),
+            db: self.db,
             isolation: self.isolation,
             conflict_strategy: self.conflict_strategy,
             priority: self.priority,
@@ -1593,9 +1624,7 @@ impl Transaction {
         &'a self,
         name: &'a Name,
         after: Option<&'a Key>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<Key>>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<Option<Key>>> {
         Box::pin(async move {
             // Get snapshot view from database
             let snapshot_candidate = self.db.order(name, after).await?;

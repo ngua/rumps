@@ -924,61 +924,7 @@ impl Database {
         F: FnOnce(Transaction) -> Fut,
         Fut: std::future::Future<Output = Result<R>>,
     {
-        let txn = TransactionBuilder::default().begin(self).await?;
-        match f(txn.clone()).await {
-            Ok(result) => {
-                txn.commit().await?;
-                Ok(result)
-            }
-            Err(e) => {
-                txn.rollback().await?;
-                Err(e)
-            }
-        }
-    }
-
-    /// Executes a function within a configured transaction context.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # tokio_test::block_on(async {
-    /// use rumps_storage::{Database, TransactionBuilder, TransactionPriority};
-    /// use rumps_types::{global, key, Value};
-    ///
-    /// let db = Database::in_memory()?;
-    ///
-    /// let builder = TransactionBuilder::default()
-    ///     .timeout(5000)
-    ///     .priority(TransactionPriority::High);
-    ///
-    /// db.transaction_with(builder, |txn| async move {
-    ///     txn.set(&global!("PATIENT"), &key![1], Value::from("data")).await?;
-    ///     Ok(())
-    /// }).await?;
-    /// # Ok::<(), rumps_storage::Error>(())
-    /// # });
-    /// ```
-    pub async fn transaction_with<F, Fut, R>(
-        &self,
-        builder: TransactionBuilder,
-        f: F,
-    ) -> Result<R>
-    where
-        F: FnOnce(Transaction) -> Fut,
-        Fut: std::future::Future<Output = Result<R>>,
-    {
-        let txn = builder.begin(self).await?;
-        match f(txn.clone()).await {
-            Ok(result) => {
-                txn.commit().await?;
-                Ok(result)
-            }
-            Err(e) => {
-                txn.rollback().await?;
-                Err(e)
-            }
-        }
+        self.build_transaction().begin(f).await
     }
 
     /// Returns diagnostic statistics for the database.
@@ -1207,8 +1153,33 @@ impl Database {
     }
 
     /// Creates a transaction builder for custom configuration.
-    pub(crate) fn build_transaction(&self) -> TransactionBuilder {
-        TransactionBuilder::default()
+    ///
+    /// Returns a [`BoundTransactionBuilder`] that provides a fluent API for
+    /// configuring and executing transactions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::{Database, TransactionPriority, ConflictStrategy};
+    /// use rumps_types::{global, key, value};
+    ///
+    /// let db = Database::in_memory()?;
+    ///
+    /// db.build_transaction()
+    ///     .timeout(5000)
+    ///     .priority(TransactionPriority::High)
+    ///     .conflict(ConflictStrategy::Retry(3))
+    ///     .begin(|txn| async move {
+    ///         txn.set(&global!("DATA"), &key![1], value!("test")).await?;
+    ///         Ok(())
+    ///     })
+    ///     .await?;
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    pub fn build_transaction(&self) -> TransactionBuilder {
+        TransactionBuilder::new(self.clone())
     }
 
     /// Returns the underlying B-tree.
@@ -1886,10 +1857,10 @@ mod tests {
         let key = rumps_types::key![1];
 
         // Start transaction A (will commit second)
-        let txn_a = db.build_transaction().begin(&db).await.unwrap();
+        let txn_a = db.build_transaction().start().await.unwrap();
 
         // Start transaction B (will commit first)
-        let txn_b = db.build_transaction().begin(&db).await.unwrap();
+        let txn_b = db.build_transaction().start().await.unwrap();
 
         // Both write to the same key
         txn_a
@@ -1923,8 +1894,8 @@ mod tests {
         let name = rumps_types::global!("TEST");
 
         // Start both transactions
-        let txn_a = db.build_transaction().begin(&db).await.unwrap();
-        let txn_b = db.build_transaction().begin(&db).await.unwrap();
+        let txn_a = db.build_transaction().start().await.unwrap();
+        let txn_b = db.build_transaction().start().await.unwrap();
 
         // Write to different keys
         txn_a
@@ -1945,6 +1916,165 @@ mod tests {
         let val2 = db.get(&name, &rumps_types::key![2]).await.unwrap();
         assert_eq!(val1, Some(rumps_types::Value::from("A")));
         assert_eq!(val2, Some(rumps_types::Value::from("B")));
+    }
+
+    mod fluent_builder {
+        use super::*;
+
+        #[tokio::test]
+        async fn basic_transaction_works() {
+            let db = Database::in_memory().unwrap();
+            let name = rumps_types::global!("TEST");
+            let key = rumps_types::key![1];
+
+            let (n, k) = (name.clone(), key.clone());
+            db.build_transaction()
+                .begin(|txn| async move {
+                    txn.set(&n, &k, rumps_types::Value::from("hello")).await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+
+            let val = db.get(&name, &key).await.unwrap();
+            assert_eq!(val, Some(rumps_types::Value::from("hello")));
+        }
+
+        #[tokio::test]
+        async fn transaction_with_timeout() {
+            let db = Database::in_memory().unwrap();
+            let name = rumps_types::global!("TEST");
+            let key = rumps_types::key![1];
+
+            let (n, k) = (name.clone(), key.clone());
+            db.build_transaction()
+                .timeout(5000)
+                .begin(|txn| async move {
+                    txn.set(&n, &k, rumps_types::Value::from("timed")).await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+
+            let val = db.get(&name, &key).await.unwrap();
+            assert_eq!(val, Some(rumps_types::Value::from("timed")));
+        }
+
+        #[tokio::test]
+        async fn transaction_with_priority() {
+            use crate::TransactionPriority;
+
+            let db = Database::in_memory().unwrap();
+            let name = rumps_types::global!("TEST");
+            let key = rumps_types::key![1];
+
+            let (n, k) = (name.clone(), key.clone());
+            db.build_transaction()
+                .priority(TransactionPriority::High)
+                .begin(|txn| async move {
+                    txn.set(&n, &k, rumps_types::Value::from("high")).await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+
+            let val = db.get(&name, &key).await.unwrap();
+            assert_eq!(val, Some(rumps_types::Value::from("high")));
+        }
+
+        #[tokio::test]
+        async fn chained_config_works() {
+            use crate::{ConflictStrategy, TransactionPriority};
+
+            let db = Database::in_memory().unwrap();
+            let name = rumps_types::global!("TEST");
+            let key = rumps_types::key![1];
+
+            let (n, k) = (name.clone(), key.clone());
+            db.build_transaction()
+                .timeout(10000)
+                .priority(TransactionPriority::High)
+                .conflict(ConflictStrategy::Retry(3))
+                .retries(5)
+                .begin(|txn| async move {
+                    txn.set(&n, &k, rumps_types::Value::from("chained"))
+                        .await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+
+            let val = db.get(&name, &key).await.unwrap();
+            assert_eq!(val, Some(rumps_types::Value::from("chained")));
+        }
+
+        #[tokio::test]
+        async fn transaction_rollback_on_error() {
+            let db = Database::in_memory().unwrap();
+            let name = rumps_types::global!("TEST");
+            let key = rumps_types::key![1];
+
+            // First set a value
+            let (n, k) = (name.clone(), key.clone());
+            db.build_transaction()
+                .begin(|txn| async move {
+                    txn.set(&n, &k, rumps_types::Value::from("original"))
+                        .await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+
+            // Try to update but fail
+            let (n, k) = (name.clone(), key.clone());
+            let result: Result<()> = db
+                .build_transaction()
+                .begin(|txn| async move {
+                    txn.set(&n, &k, rumps_types::Value::from("updated"))
+                        .await?;
+                    Err(rumps_types::Error::Storage(
+                        StorageError::InvalidOperation("intentional".into()),
+                    ))
+                })
+                .await;
+
+            assert!(result.is_err());
+
+            // Value should still be original
+            let val = db.get(&name, &key).await.unwrap();
+            assert_eq!(val, Some(rumps_types::Value::from("original")));
+        }
+
+        #[tokio::test]
+        async fn transaction_returns_value() {
+            let db = Database::in_memory().unwrap();
+            let name = rumps_types::global!("TEST");
+            let key = rumps_types::key![1];
+
+            let (n, k) = (name.clone(), key.clone());
+            db.build_transaction()
+                .begin(|txn| async move {
+                    txn.set(&n, &k, rumps_types::Value::from(42i64)).await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+
+            let (n, k) = (name.clone(), key.clone());
+            let result: i64 = db
+                .build_transaction()
+                .begin(|txn| async move {
+                    let val = txn.get(&n, &k).await?;
+                    match val {
+                        Some(rumps_types::Value::Integer(n)) => Ok(n),
+                        _ => Ok(0),
+                    }
+                })
+                .await
+                .unwrap();
+
+            assert_eq!(result, 42);
+        }
     }
 
     mod config_persistence {

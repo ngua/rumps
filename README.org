@@ -30,7 +30,7 @@
 2. Start writing your sweet, sweet data to RUMPS; this is a minimal example: much more explanation is below on the different operations:
   #+begin_src rust
   use futures::TryStreamExt;
-  use rumps::{Database, DataStatus, Key, Subscript, global, key, value};
+  use rumps::{Database, DataStatus, Key, Subscript, global, key, value, TransactionPriority};
 
   // NOTE: RUMPS is fully async, as also explained below; currently, it only
   // supports `tokio`
@@ -47,6 +47,16 @@
           txn.set(&global!("PATIENT"), &key![2, "NAME"], value!("bob")).await?;
           Ok(())
       }).await?;
+
+      // Transactions can be configured with custom parameters, e.g. timeout,
+      // priority, etc...
+      db.build_transaction()
+          .timeout(5000)  // 5 second timeout
+          .priority(TransactionPriority::High)
+          .begin(|txn| async move {
+              txn.set(&global!("AUDIT"), &key![1], value!("logged")).await?;
+              Ok(())
+          }).await?;
 
       // All reads work outside transactions
       let name = db.get(&global!("PATIENT"), &key![1, "NAME"]).await?;
