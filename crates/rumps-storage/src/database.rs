@@ -105,8 +105,9 @@
 //! [`Name`]: rumps_types::Name
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name, Result, Value};
@@ -300,7 +301,7 @@ impl DatabaseBuilder {
             btree: Arc::new(builder.build()?),
             storage: Some(storage),
             txn_manager: Arc::new(TransactionManager::default()),
-            closed: Arc::new(std::sync::RwLock::new(false)),
+            closed: Arc::new(StdRwLock::new(false)),
         })
     }
 }
@@ -347,11 +348,11 @@ pub struct Database {
 
     /// Whether [`close()`] has been called.
     ///
-    /// Used by `Drop` to avoid redundant cleanup. Uses `std::sync::RwLock`
+    /// Used by `Drop` to avoid redundant cleanup. Uses `StdRwLock`
     /// (not tokio) so it can be checked synchronously in `Drop`.
     ///
     /// [`close()`]: Self::close
-    closed: Arc<std::sync::RwLock<bool>>,
+    closed: Arc<StdRwLock<bool>>,
 }
 
 // Public API
@@ -456,7 +457,7 @@ impl Database {
             btree,
             storage: Some(storage),
             txn_manager: Arc::new(TransactionManager::default()),
-            closed: Arc::new(std::sync::RwLock::new(false)),
+            closed: Arc::new(StdRwLock::new(false)),
         })
     }
 
@@ -502,7 +503,7 @@ impl Database {
             btree,
             storage: Some(Arc::clone(&storage)),
             txn_manager: Arc::new(TransactionManager::default()),
-            closed: Arc::new(std::sync::RwLock::new(false)),
+            closed: Arc::new(StdRwLock::new(false)),
         };
 
         // Run WAL recovery and replay committed operations
@@ -922,7 +923,7 @@ impl Database {
     pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
     where
         F: FnOnce(Transaction) -> Fut,
-        Fut: std::future::Future<Output = Result<R>>,
+        Fut: Future<Output = Result<R>>,
     {
         self.build_transaction().begin(f).await
     }
@@ -1199,7 +1200,7 @@ impl Database {
             btree,
             storage: None,
             txn_manager,
-            closed: Arc::new(std::sync::RwLock::new(false)),
+            closed: Arc::new(StdRwLock::new(false)),
         })
     }
 

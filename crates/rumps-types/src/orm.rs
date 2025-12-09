@@ -37,6 +37,7 @@
 //! assert_eq!(key.len(), 2);
 //! ```
 
+use std::error::Error;
 use std::fmt;
 
 use ordered_float::OrderedFloat;
@@ -106,7 +107,7 @@ impl fmt::Display for DecodeError {
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl Error for DecodeError {}
 
 /// Convert to a subscript (part of a key).
 pub trait ToSubscript {

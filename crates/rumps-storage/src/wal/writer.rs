@@ -32,6 +32,7 @@
 //! [`reader`]: super::reader
 //! [`sync`]: WalWriter::sync
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -230,7 +231,7 @@ impl WalTask {
 
         waiters.into_iter().for_each(|w| {
             let r = err_msg.as_ref().map_or(Ok(()), |msg| {
-                Err(StorageError::IoGeneric(std::io::Error::other(msg.clone())))
+                Err(StorageError::IoGeneric(io::Error::other(msg.clone())))
             });
             let _ = w.send(r);
         });
@@ -311,7 +312,7 @@ impl WalTask {
                     let err_msg = e.to_string();
                     batch.into_iter().for_each(|(_, reply)| {
                         let _ = reply.send(Err(StorageError::IoGeneric(
-                            std::io::Error::other(err_msg.clone()),
+                            io::Error::other(err_msg.clone()),
                         )));
                     });
                 } else {
@@ -358,7 +359,7 @@ impl WalTask {
             let err_msg = e.to_string();
             batch.into_iter().for_each(|(_, reply)| {
                 let _ = reply.send(Err(StorageError::IoGeneric(
-                    std::io::Error::other(err_msg.clone()),
+                    io::Error::other(err_msg.clone()),
                 )));
             });
         } else {
@@ -375,7 +376,7 @@ impl WalTask {
                 let err_msg = e.to_string();
                 batch.into_iter().for_each(|(_, reply)| {
                     let _ = reply.send(Err(StorageError::IoGeneric(
-                        std::io::Error::other(err_msg.clone()),
+                        io::Error::other(err_msg.clone()),
                     )));
                 });
             } else {

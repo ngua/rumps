@@ -1,6 +1,7 @@
 //! Bitmap-based page allocator.
 
 use std::collections::HashSet;
+use std::fmt;
 
 use tokio::sync::RwLock;
 
@@ -489,8 +490,8 @@ impl PageAllocator {
     }
 }
 
-impl std::fmt::Debug for PageAllocator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for PageAllocator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PageAllocator")
             .field("max_pages", &self.max_pages)
             .finish_non_exhaustive()

@@ -1,5 +1,6 @@
 //! Error types for RUMPS.
 
+use std::io;
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -76,12 +77,12 @@ pub enum StorageError {
         /// Path involved.
         path: PathBuf,
         /// Underlying I/O error.
-        source: std::io::Error,
+        source: io::Error,
     },
 
     /// Generic I/O error (without context).
     #[error("I/O error: {0}")]
-    IoGeneric(#[from] std::io::Error),
+    IoGeneric(#[from] io::Error),
 
     /// Serialization error
     #[error("Serialization error: {0}")]

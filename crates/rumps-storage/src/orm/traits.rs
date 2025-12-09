@@ -24,6 +24,8 @@
 //! markers. In this case, record boundaries are inferred from the key structure
 //! (assuming the last subscript is a field name).
 
+use std::future;
+
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use rumps_types::orm::{DecodeError, IntoKey};
@@ -673,7 +675,7 @@ where
                     }
                 };
 
-                std::future::ready(res)
+                future::ready(res)
             },
         )
         .await?;

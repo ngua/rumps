@@ -1,5 +1,7 @@
 //! Global registry page mapping global names to their B-tree root pages.
 
+use std::str;
+
 use crate::error::{Result, StorageError};
 use crate::page::PageId;
 
@@ -275,7 +277,7 @@ impl GlobalRegistry {
 
                 let name = buf
                     .get(off..off + name_len as usize)
-                    .and_then(|s| std::str::from_utf8(s).ok())
+                    .and_then(|s| str::from_utf8(s).ok())
                     .map(String::from)
                     .ok_or_else(|| {
                         StorageError::InvalidOperation(format!(

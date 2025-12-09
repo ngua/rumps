@@ -1,5 +1,7 @@
 //! Superblock and database metadata structures.
 
+use std::iter;
+
 use crate::error::{Result, StorageError};
 use crate::page::{self, PageId};
 
@@ -332,7 +334,7 @@ impl Superblock {
     /// and indirect page pointers. Caller must also check indirect page
     /// contents for additional reserved pages.
     pub(crate) fn reserved_page_nums(&self) -> Vec<u64> {
-        std::iter::once(0u64)
+        iter::once(0u64)
             .chain(self.direct_bitmap_ids.iter().map(|pid| pid.page_num()))
             .chain(self.single_indirect.iter().map(|pid| pid.page_num()))
             .chain(self.double_indirect.iter().map(|pid| pid.page_num()))

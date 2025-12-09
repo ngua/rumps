@@ -81,7 +81,8 @@
 //! assert!(key1 < key100);  // NOT "100" < "2" as with strings!
 //! ```
 
-use std::{cmp, fmt};
+use std::hash::{Hash, Hasher};
+use std::{cmp, fmt, mem, slice, vec};
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -232,9 +233,9 @@ pub enum Subscript {
 }
 
 // Manual Hash implementation since serde_json::Value doesn't implement Hash
-impl std::hash::Hash for Subscript {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
+impl Hash for Subscript {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        mem::discriminant(self).hash(state);
         match self {
             Self::Boolean(b) => b.hash(state),
             Self::Number(n) => n.hash(state),
@@ -711,7 +712,7 @@ impl FromIterator<Subscript> for Key {
 
 impl IntoIterator for Key {
     type Item = Subscript;
-    type IntoIter = std::vec::IntoIter<Subscript>;
+    type IntoIter = vec::IntoIter<Subscript>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -720,7 +721,7 @@ impl IntoIterator for Key {
 
 impl<'a> IntoIterator for &'a Key {
     type Item = &'a Subscript;
-    type IntoIter = std::slice::Iter<'a, Subscript>;
+    type IntoIter = slice::Iter<'a, Subscript>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()

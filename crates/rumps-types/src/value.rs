@@ -80,7 +80,8 @@
 //! assert!(value!('Z') < value!("A"));
 //! ```
 
-use std::{cmp, fmt};
+use std::hash::{Hash, Hasher};
+use std::{cmp, fmt, mem};
 
 use ordered_float::OrderedFloat;
 
@@ -221,9 +222,9 @@ impl Value {
 }
 
 // Manual Hash implementation since serde_json::Value doesn't implement Hash
-impl std::hash::Hash for Value {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        mem::discriminant(self).hash(state);
         match self {
             Self::Boolean(b) => b.hash(state),
             Self::Integer(i) => i.hash(state),

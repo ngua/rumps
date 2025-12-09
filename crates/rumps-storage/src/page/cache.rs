@@ -1,6 +1,7 @@
 //! LRU page cache with dirty tracking.
 
 use std::collections::HashSet;
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -292,8 +293,8 @@ impl PageCache {
     }
 }
 
-impl std::fmt::Debug for PageCache {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for PageCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PageCache")
             .field("capacity", &self.capacity)
             .finish_non_exhaustive()

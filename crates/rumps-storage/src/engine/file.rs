@@ -1,9 +1,11 @@
 //! File-based storage engine with WAL and page cache.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use futures::stream::TryStreamExt;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
@@ -101,8 +103,8 @@ pub(crate) struct FileStorageEngine {
     sync_task_abort: Option<tokio::task::AbortHandle>,
 }
 
-impl std::fmt::Debug for FileStorageEngine {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for FileStorageEngine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileStorageEngine")
             .field("data_dir", &self.data_dir)
             .field("cache_size", &self.cfg.cache_size)
@@ -722,13 +724,7 @@ impl FileStorageEngine {
         path: &'a Path,
         bm_ids: &'a mut Vec<PageId>,
         reserved: &'a mut Vec<u64>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Vec<IndirectPage>>>
-                + Send
-                + 'a,
-        >,
-    > {
+    ) -> BoxFuture<'a, Result<Vec<IndirectPage>>> {
         Box::pin(async move {
             match entries.split_first() {
                 None => Ok(Vec::new()),
@@ -766,9 +762,7 @@ impl FileStorageEngine {
         file: &'a mut File,
         page_ids: &'a [PageId],
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<Vec<u8>>> {
         Box::pin(async move {
             match page_ids.split_first() {
                 None => Ok(Vec::new()),
@@ -818,14 +812,7 @@ impl FileStorageEngine {
         file: &'a mut File,
         start_pid: PageId,
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Vec<(PageId, GlobalRegistry)>>,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> BoxFuture<'a, Result<Vec<(PageId, GlobalRegistry)>>> {
         Box::pin(async move {
             let buf =
                 Self::read_page_at(file, start_pid.byte_offset(), path).await?;
@@ -1013,9 +1000,7 @@ impl FileStorageEngine {
         pids: &'a [PageId],
         pages: &'a [IndirectPage],
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             match (pids.split_first(), pages.split_first()) {
                 (Some((&pid, rest_pids)), Some((page, rest_pages))) => {
@@ -1037,9 +1022,7 @@ impl FileStorageEngine {
         file: &'a RwLock<File>,
         pages: &'a [(PageId, Vec<u8>)],
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             match pages.split_first() {
                 None => Ok(()),
@@ -1621,9 +1604,7 @@ impl FileStorageEngine {
         file: &'a RwLock<File>,
         pages: &'a [(PageId, GlobalRegistry)],
         path: &'a Path,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
-    > {
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             match pages.split_first() {
                 None => Ok(()),

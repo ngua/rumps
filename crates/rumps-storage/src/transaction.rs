@@ -42,10 +42,11 @@
 //! assert!(metadata.state.is_committed());
 //! ```
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ops::Deref;
+use std::ops::{Bound, Deref};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{fmt, future};
 
 use futures::future::BoxFuture;
@@ -106,8 +107,6 @@ where
     /// (Set, Delete, KillSubtree) so the merge logic can properly hide
     /// snapshot entries without per-entry `is_buffered` checks.
     fn advance_buffered(&mut self) {
-        use std::ops::Bound;
-
         let range_start = match &self.last_buffered_key {
             None => Bound::Included((self.name.clone(), Key::default())),
             Some(k) => Bound::Excluded((self.name.clone(), k.clone())),
@@ -223,13 +222,13 @@ where
                             self.next_snapshot.take().map(|(_, val)| Ok(val))
                         }
                         (Some(bk), Some(sk)) => match bk.cmp(&sk) {
-                            std::cmp::Ordering::Less => {
+                            Ordering::Less => {
                                 self.yield_buffered_or_skip(false).await
                             }
-                            std::cmp::Ordering::Equal => {
+                            Ordering::Equal => {
                                 self.yield_buffered_or_skip(true).await
                             }
-                            std::cmp::Ordering::Greater => self
+                            Ordering::Greater => self
                                 .next_snapshot
                                 .take()
                                 .map(|(_, val)| Ok(val)),
@@ -1079,7 +1078,7 @@ impl TransactionBuilder {
         // Calculate timeout deadline
         let timeout = self
             .timeout
-            .map(|ms| Instant::now() + std::time::Duration::from_millis(ms));
+            .map(|ms| Instant::now() + Duration::from_millis(ms));
 
         Ok(Transaction {
             id,
