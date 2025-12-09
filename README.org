@@ -17,7 +17,9 @@
 - [[#use-cases][Use cases]]
   - [[#where-rumps-is-a-good-fit][Where RUMPS is a good fit]]
   - [[#where-rumps-is-a-bad-fit][Where RUMPS is a bad fit]]
-- [[#comparison-to-other-database-systems][Comparison to other database systems]]
+- [[#rumps-vs-sql][RUMPS vs SQL]]
+  - [[#key-differences][Key differences]]
+  - [[#similarities][Similarities]]
 - [[#licenses][License(s)]]
 - [[#disclaimer][Disclaimer]]
 
@@ -30,7 +32,7 @@
 2. Start writing your sweet, sweet data to RUMPS; this is a minimal example: much more explanation is below on the different operations:
   #+begin_src rust
   use futures::TryStreamExt;
-  use rumps::{Database, DataStatus, Key, Subscript, global, key, value, TransactionPriority};
+  use rumps::*;
 
   // NOTE: RUMPS is fully async, as also explained below; currently, it only
   // supports `tokio`
@@ -38,6 +40,8 @@
   async fn main() -> rumps::Result<()> {
       // Create a persistent database
       let db = Database::create("./my_data").await?;
+      // You can later re-open
+      // let db = Database::open("./my_data").await?;
 
       // Writes to globals require a transaction
       db.transaction(|txn| async move {
@@ -88,6 +92,11 @@
       // Results come out sorted by _key_, _not_ insertion order
       assert_eq!(names, vec!["ALICE", "BOB", "CAROL"]);
 
+      // Not strictly necessary; `Database` has a `Drop` implementation that
+      // cleans up resources when the strong `Arc` count is 1. However, to
+      // ensure resource cleanup, `Database::close` can be called
+      db.close()
+
       Ok(())
   }
   #+end_src
@@ -109,32 +118,505 @@ What I find so fascinating about this, and what inspired me to make RUMPS, is th
 
 There are additional essential properties of RUMPS that are inherited from MUMPS:
 - Sparse :: There is no need to fill gaps, pad, etc...; for example, if /only/ keys =1=, =2=, =10= are set, there is no padding for =3= through =9=
-- Sorted :: Iteration always yields keys /in order/; there is no need for post-hoc sorting, ever
-- Hierarchical :: Unlimited nesting depth
-
+- Sorted :: Iteration always yields keys /in order/ and there is no need for post-hoc sorting, ever; this is based on the /collation order/, explained below
+- Hierarchical :: Theoretically unlimited nesting depth (although limited in practice; keys consisting of one million subscripts may not be the best idea)
 ** Core concepts
+These concepts are borrowed from MUMPS; where RUMPS differs explicitly from MUMPS, I will note it. Otherwise, read "RUMPS" as "RUMPS (as with MUMPS)".
 *** "Variables"
+In most languages, a "variable" is a name bound to a single value. In RUMPS, a variable is a /name bound to an entire tree/. The name (=^PATIENT= or =TEMP=) identifies the tree root; subscripts (=(123, "NAME")=) navigate to /nodes/ within it. A variable can be bound at the root node or any arbitrary key path under it. Using the query language syntax:
+
+#+begin_src rumps
+SET ^P = "root"              ; value at root node (empty path)
+SET ^P(1) = "child"          ; value at node [1]
+SET ^P(1,"A") = "deeper"     ; value at node [1, "A"]
+#+end_src
+
+All three are "the variable =^P=", i.e. nodes in the same tree. A node can hold a value /and/ have children simultaneously (=^P(1)= stores ="child"= while =^P(1,"A")= exists beneath it).
+**** Globals vs. locals
+RUMPS distinguishes between two types of variables, locals and globals. A global variable is persisted to the database, while locals are ephemeral, i.e. held in memory only and disappear once the session ends. In the query language, globals and locals are distinguished by a preceding caret on the former, e.g. =^PATIENT= is a global, while =PATIENT= is a local.
+
+In mosty examples, variables are upper-case; however, lowercase, camel-case, etc..., all work as well.
+
+For RUMPS specifically:
+- *Globals* (=^NAME=)
+  - are persisted to disk via WAL + page cache
+  - MUST be called from a =Transaction= context, i.e. you cannot write to globals outside of a transaction
+- *Locals* (=NAME=)
+  - exist in memory only and are discarded when the database is dropped
+  - can be written to outside of transactions
+
+Otherwise, both types of variables use the /same/ B-tree implementation and support identical operations (with the caveat that global operations occur within a =Database::transaction= context; however, the underlying B-tree operations are the same).
+*** Keys and subscripts
+A *key* is a path through the tree, i.e. how you /address/ it starting from its root (a local or global variable). It's a sequence of *subscripts* that address a specific node. For example, in =^PATIENT(123, "NAME")=, the *key* is =(123, "NAME")=, which consists of two *subscripts*: the number =123= and the string ="NAME"=.
+
+In the Rust API, keys are built using the =key!= macro:
+
+#+begin_src rust
+use rumps::*;
+
+// A key with two subscripts: integer 123, then string "NAME"
+let k = key![123, "NAME"];
+
+// Keys can have any number of subscripts
+let deep = key![1, "CONTACT", "ADDRESS", "CITY"];
+
+// Empty keys address the root node of a variable
+let root = key![];
+#+end_src
+
+Keys are ordered lexicographically by their subscripts, which means iteration (via =ORDER= or =COLLECT=) yields keys in a predictable, sorted order.
+**** Subscript types
+RUMPS subscripts are represented by the =Subscript= enum. Unlike traditional MUMPS where everything was stringly-typed, RUMPS supports explicit types:
+
+| *Type*               | *Rust API*                            | *Notes*                                |
+|----------------------+---------------------------------------+----------------------------------------|
+| =Subscript::Boolean= | =Subscript::from(true)=               | =false= < =true=                       |
+| =Subscript::Number=  | =Subscript::from(123)= or =from(1.5)= | Integers and floats; numeric ordering  |
+| =Subscript::Char=    | =Subscript::from('A')=                | Single UTF-8 character                 |
+| =Subscript::String=  | =Subscript::from("foo")=              | UTF-8 string; lexicographic ordering   |
+| =Subscript::Json=    | =Subscript::Json(json!({...}))=       | Arbitrary JSON; ordered by string repr |
+
+Although subscripts can be constructed manually via =Subscript::from=, it's easier and better to use the =key!= macro, since all operations on the DB (see below) require or reference /keys/, not individual subscripts.
+
+The =key!= macro will also handle type conversions automatically:
+
+#+begin_src rust
+// These all work heterogeneously with the `key!` macro
+let k = key![true, 123, 'X', "NAME", json!({"active": true})];
+#+end_src
+**** Subscript vs. node value
+This distinction may confuse people used to other DB systems: subscripts and values /look similar/ but /serve different purposes/.
+
+- Subscripts :: Components of a /key/; they define /where/ data lives in the tree. Think of them as the "address" or "path"
+- Values :: The actual data stored /at/ a node. Think of them as the "payload"
+
+Both support similar types (booleans, numbers, strings, JSON, etc...), but they're used differently:
+
+#+begin_src rust
+use rumps::*;
+
+db.transaction(|txn| async move {
+    // The _KEY_ is [123, "NAME"]; consists of two _SUBSCRIPTS_
+    // The _VALUE_ is "Alice"; what's stored at that location
+    txn.set(
+        &global!("PATIENT"),
+        &key![123, "NAME"],  // subscripts: 123 and "NAME"
+        value!("Alice"),     // value: the string "Alice"
+    ).await?;
+    Ok(())
+}).await?;
+#+end_src
+
+Because subscripts participate in /ordering and traversal/, we require this distinction. When you call =ORDER= or =COLLECT=, RUMPS walks through keys in sorted subscript order. Values just exist at the node; they don't affect iteration order.
+
+Another way to think about it: in a filesystem analogy, subscripts are like directory and file names (they form the path, or /key/), while values are like file contents (what's stored there).
+
+#+begin_src rumps
+SET ^PATIENT(1,"NAME") = "Alice"
+;
+;            ^^^^^^^^    ^^^^^^^
+;            subscripts  value
+;            (the path)  (the data)
+#+end_src
+*** Value types
+As noted above, nodes hold /values/. This is the actual data stored in the DB and has no bearing on traversal semantics.
+
+RUMPS supports several =Value= types that can be stored at nodes. Unlike MUMPS, values are /not/ stored as strings and coerced, but serialized and deserialized as natively supported types:
+- =Value::Boolean=
+- =Value::Integer=
+- =Value::Float= (as an =OrderedFloat=, i.e. NaN cannot be represented)
+- =Value::Char=
+- =Value::String=
+- =Value::Json=
+
+RUMPS adds support for a few =Value= types that don't exist in MUMPS:
+- =Value::Boolean=: fairly self-explanatory for why this might be desirable
+- =Value::Char=: figured it might be nice for e.g. single-character flags and storage is very cheap (vs. storing a whole =Value::String= with one character)
+- =Value::Json=: this one might seem a bit stranger, but it allows for storing chunks of data at paths if you want to; for example, storing an entire array or object at a node
+*** Collation
+/Collation order/ is the rule that determines how keys are sorted. Since RUMPS stores all data in *sorted* B-trees, iteration primitives (i.e. =ORDER=, =COLLECT=) always yields keys *in this order*, so no explicit sorting is needed.
+
+Traditional MUMPS treats everything as strings with quirky numeric coercion. RUMPS uses proper types with a well-defined collation:
+
+| *Type*    | *Collation*                                       |
+|-----------+---------------------------------------------------|
+| =Boolean= | =false= < =true=                                  |
+| =Number=  | Numeric order: =-10= < =0= < =1.5= < =10= < =100= |
+| =Char=    | Unicode code point order                          |
+| =String=  | Lexicographic (dictionary) order                  |
+| =Json=    | By JSON string representation                     |
+
+This first column follows the order of cross-type collation, i.e. =Boolean= < =Number= < =Char= < =String= < =Json=.
+
+So =key![false]= sorts before =key![0]=, which sorts before =key!['a']=, which sorts before =key!["a"]=.
+
+This makes numeric subscripts sort correctly. =^VAR(10)= comes /before/ =^VAR(100)= because =10 < 100= numerically. In string-based systems like traditional MUMPS (where everything was essentially stringly-typed), ="100"= < ="10"= lexicographically (the character ='0'= comes before ='1'=). This makes range queries on numeric IDs, timestamps, etc..., work more intuitively in RUMPS.
+
+#+begin_src rust
+// Numeric collation makes range queries intuitive
+db.transaction(|txn| async move {
+    txn.set(&global!("X"), &key![100], value!("c")).await?;
+    txn.set(&global!("X"), &key![2], value!("a")).await?;
+    txn.set(&global!("X"), &key![10], value!("b")).await?;
+    Ok(())
+}).await?;
+
+// ORDER returns: 2, then 10, then 100 (numeric order, not "10" < "100" < "2")
+let first = db.order(&global!("X"), None).await?;
+assert_eq!(first, Some(key![2]));
+#+end_src
 *** RUMPS-specific things
 **** Async first
+RUMPS is built on Rust's async ecosystem (=tokio=) from the ground up. All I/O operations -- reads, writes, WAL flushes -- are non-blocking. The asynchronous nature of RUMPS isn't a bolted-on async wrapper or afterthought: it's baked in from the page cache to transaction commit, i.e. the entire process.
+
+This may or may not suit your needs. For one, =tokio= *is required* to run RUMPS. I might try to make it runtme-agnostic in the future, but for now, you'd need to use =tokio= to use RUMPS.
 **** ACID guarantees
+RUMPS provides ACID semantics for writes to globals. I'm not going to try to guarantee that RUMPS will not destroy your data, but I have tried to design it to be provide ACID guarantees:
+
+- *Atomicity*: All operations within a transaction succeed together or fail together. Writes are buffered until commit; on rollback, changes are discarded. No partial writes are ever visible.
+- *Consistency*: Conflict detection prevents write-write conflicts between concurrent transactions. B-tree invariants are maintained through all operations.
+- *Isolation*: Snapshot isolation by default: each transaction sees a consistent snapshot as of transaction start. Readers never block writers; writers never block readers.
+- *Durability*: Write-Ahead Logging (WAL) ensures committed transactions survive crashes. The sequence is: WAL write → =fsync= → commit acknowledged → flush to data file. Note that WAL is currently the only option.
+
+There are configurable WAL sync modes that trade durability for performance:
+| *Mode*        | *Behavior*                       | *Durability*     |
+|---------------+----------------------------------+------------------|
+| =Immediate=   | an =fsync= after every WAL write | Highest          |
+| =OnCommit=    | an =fsync= on transaction commit | Good (*default*) |
+| =Periodic(n)= | an =fsync= every =n= ms          | Lower            |
+
+=rumps::SyncMode::OnCommit= is the default setting. However, you can create a database with different options:
+
+#+begin_src rust
+use rumps::{Database, SyncMode};
+
+// Configure sync mode at creation time
+let db = Database::builder()
+    .sync_mode(SyncMode::Immediate)  // Maximum durability
+    .create("./data")
+    .await?;
+#+end_src
 ***** In-memory: ACI
-**** Expanded types and collation order
+When using =Database::in_memory()=, writes to globals still require transactions and provide full *ACI* guarantees. The only difference is no durability (data is lost when the database is dropped).
+
+- *Atomicity*: Writes are buffered until commit; rollback discards all changes
+- *Consistency*: Conflict detection still prevents write-write conflicts
+- *Isolation*: Snapshot isolation ensures transactions see consistent state
+
+This is useful for:
+- *Testing*: Fast, isolated tests without disk cleanup
+- *Caching*: Transactional semantics for in-memory data with hierarchical structure
+- *Temporary workspaces*: Scratch space that doesn't need persistence
+
+#+begin_src rust
+let db = Database::in_memory()?;
+
+// Still need transactions for globals; you get proper multi-transaction
+// coordination, just without persistence
+db.transaction(|txn| async move {
+    txn.set(&global!("CACHE"), &key!["user", 123], value!("data")).await?;
+    Ok(())
+}).await?;
+
+// Locals never need transactions, regardless
+db.set(&local!("TEMP"), &key![1], value!("scratch")).await?;
+#+end_src
 * Using RUMPS
 ** Core operations
+These are the fundamental building blocks for working with RUMPS data. All operations work on /keys/ within a /variable/ (global or local).
+
+In the following "transaction context" means if the operation works outside of a transaction or not. /All/ read-only operations work within and outside transactions; i.e. "not required" does not imply that they do not /work/ inside transactions (they do).
 *** =GET=
+Retrieves the value at a specific key. Returns =None= if the key doesn't exist.
+
+*Transaction context*: Not required for reads. Works outside transactions.
+
+#+begin_src rust
+// Assuming ^PATIENT(123,"NAME") = "Alice" exists
+let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
+assert_eq!(name, Some(value!("Alice")));
+
+// Non-existent keys return None
+let missing = db.get(&global!("PATIENT"), &key![999]).await?;
+assert_eq!(missing, None);
+#+end_src
 *** =SET=
+Stores a value at a specific key. Creates the key if it doesn't exist, overwrites if it does.
+
+*Transaction context*: *Required* for globals. Locals can be set directly.
+
+#+begin_src rust
+// Globals require a transaction
+db.transaction(|txn| async move {
+    txn.set(&global!("PATIENT"), &key![123, "NAME"], value!("Alice")).await?;
+    txn.set(&global!("PATIENT"), &key![123, "AGE"], value!(30)).await?;
+    Ok(())
+}).await?;
+
+// Locals can be set directly (no persistence)
+db.set(&local!("TEMP"), &key![1], value!("scratch")).await?;
+#+end_src
 *** =KILL=
+Deletes a key /and all its descendants/. This is a subtree deletion. If you =KILL= =^P(1)=, then =^P(1,"A")=, =^P(1,"B","C")=, etc..., are all gone.
+
+*Transaction context*: *Required* for globals. Locals can be killed directly.
+
+#+begin_src rust
+// Assuming ^DATA(1,"A"), ^DATA(1,"B"), ^DATA(1,"B","C") exist
+db.transaction(|txn| async move {
+    txn.kill(&global!("DATA"), &key![1]).await?;
+    Ok(())
+}).await?;
+
+// All descendants of [1] are now gone
+assert_eq!(db.get(&global!("DATA"), &key![1, "A"]).await?, None);
+assert_eq!(db.get(&global!("DATA"), &key![1, "B"]).await?, None);
+assert_eq!(db.get(&global!("DATA"), &key![1, "B", "C"]).await?, None);
+#+end_src
 *** =DATA=
+Checks the /existence status/ of a node: does it have a value? Does it have descendants? Both? Neither? This corresponds to MUMPS's =$DATA= function and returns one of four states:
+| Status                  | Meaning                              |
+|-------------------------+--------------------------------------|
+| =NoData= (~0~)          | Key doesn't exist                    |
+| =HasValue= (~1~)        | Key has a value but no children      |
+| =HasDescendants= (~10~) | Key has children but no value itself |
+| =Both= (~11~)           | Key has both a value and children    |
+
+(The numeric codes are what MUMPS traditionally used; RUMPS uses a proper =DataStatus= enum instead.)
+
+*Transaction context*: Not required. Works outside transactions.
+
+#+begin_src rust
+// Assuming ^P(1,"NAME") = "Alice" exists
+let status = db.data(&global!("P"), &key![1]).await?;
+assert_eq!(status, DataStatus::HasDescendants);  // [1] has children but no value
+
+let status = db.data(&global!("P"), &key![1, "NAME"]).await?;
+assert_eq!(status, DataStatus::HasValue);  // [1,"NAME"] has a value
+
+let status = db.data(&global!("P"), &key![999]).await?;
+assert_eq!(status, DataStatus::NoData);  // doesn't exist
+#+end_src
 *** =ORDER=
+Returns the /next key/ in sorted order after a given key. Pass =None= to get the first key. This how iteration over keys in MUMPS worked; you'd typically call =ORDER= in a loop to walk through all keys. However, RUMPS has a more declarative way to do this (see =COLLECT= below).
+
+*Transaction context*: Not required. Works outside transactions.
+
+#+begin_src rust
+// Assuming ^X(1), ^X(2), ^X(10) exist (inserted in any order)
+let first = db.order(&global!("X"), None).await?;
+assert_eq!(first, Some(key![1]));  // first key
+
+let next = db.order(&global!("X"), Some(&key![1])).await?;
+assert_eq!(next, Some(key![2]));  // next after [1]
+
+let next = db.order(&global!("X"), Some(&key![2])).await?;
+assert_eq!(next, Some(key![10]));  // 2 < 10 numerically
+
+let next = db.order(&global!("X"), Some(&key![10])).await?;
+assert_eq!(next, None);  // no more keys
+#+end_src
+
+To iterate /all/ keys, you /could/ call =ORDER= repeatedly until =None=:
+
+#+begin_src rust
+let mut cur = db.order(&global!("X"), None).await?;
+
+while let Some(k) = cur {
+    println!("Key: {:?}", k);
+    cur = db.order(&global!("X"), Some(&k)).await?;
+}
+#+end_src
+
+This mimics traditional MUMPS iteration. However, for most use cases, =COLLECT= (below) is cleaner and more idiomatic.
 *** =COLLECT=
+=COLLECT= takes a predicate (which entries to include) and an extractor (how to transform them), then produces a stream of results. Results are /always/ in sorted key order.
+
+*This is a RUMPS extension*; traditional MUMPS doesn't have this. Instead, you'd write imperative loops with =$ORDER=. RUMPS provides =COLLECT= as a declarative, stream-based alternative that's more idiomatic for Rust and modern programming.
+
+Why the extension? A few reasons:
+1. *Composability*: Streams chain naturally with =.map()=, =.filter()=, =.take()=, etc.
+2. *Laziness*: Doesn't load everything into memory; yields entries on demand
+3. *Async-native*: Works seamlessly with Rust's async ecosystem
+4. *Functional style*: Separates "what to collect" from "how to process it"
+
+*Transaction context*: Not required. Works outside transactions as it is read-only.
+
+**** Collecting all keys
+The simplest use: get all key-value pairs from a variable.
+
+#+begin_src rust
+// Stream-based
+let mut stream = db.collects(
+    &global!("X"),
+    None,
+    |_, _| true,  // include all
+    |k, v| Some((k.clone(), v.clone())),
+).await?;
+
+while let Some(item) = stream.next().await {
+    let (key, val) = item?;
+    println!("{:?} = {:?}", key, val);
+}
+
+// Or collect to Vec directly
+let all: Vec<(Key, Option<Value>)> = db
+    .collects_vec(&global!("X"), None, |_, _| true, |k, v| Some((k.clone(), v.clone())))
+    .await?;
+#+end_src
+
+**** Filtering by key structure
+#+begin_src rust
+// Assuming ^P(1,"NAME")="Alice", ^P(2,"NAME")="Bob", ^P(3,"NAME")="Carol"
+use futures::TryStreamExt;
+
+let names: Vec<String> = db
+    .collects(
+        &global!("P"),
+        None,
+        |k, _| k.len() == 2 && k.get(1) == Some(&Subscript::from("NAME")),
+        |_, v| v.as_ref()?.as_str().map(str::to_owned),
+    )
+    .await?
+    .try_collect()
+    .await?;
+
+assert_eq!(names, vec!["Alice", "Bob", "Carol"]);  // sorted by key
+#+end_src
+
+**** Filtering and transformation
+#+begin_src rust
+// Same data as above; get patients with ID > 1, uppercase names
+let names: Vec<String> = db
+    .collects(
+        &global!("P"),
+        None,
+        |k, _| {
+            k.len() == 2
+                && k.get(0).and_then(|s| s.as_i64()).is_some_and(|id| id > 1)
+                && k.get(1) == Some(&Subscript::from("NAME"))
+        },
+        |_, v| v.as_ref()?.as_str().map(|s| s.to_uppercase()),
+    )
+    .await?
+    .try_collect()
+    .await?;
+
+assert_eq!(names, vec!["BOB", "CAROL"]);
+#+end_src
+
+**** Collecting into a Vec directly
+#+begin_src rust
+// collects_vec is a convenience wrapper
+let vals: Vec<Value> = db
+    .collects_vec(&global!("P"), None, |k, _| k.len() == 2, |_, v| v.clone())
+    .await?;
+#+end_src
+
+**** Streaming with early termination
+#+begin_src rust
+use futures::StreamExt;
+
+// Standard stream combinators work
+let first_two: Vec<String> = db
+    .collects(&global!("P"), None, |_, _| true, |k, _| Some(format!("{:?}", k)))
+    .await?
+    .take(2)
+    .try_collect()
+    .await?;
+#+end_src
 ** Rust API
-*** "ORM" API
+*** ORM
 ** Query language
 *WIP*. Nowhere near done. RUMPS can only be used from Rust at the moment.
 * Use cases
 ** Where RUMPS is a good fit
+*** Hierarchical or nested data
+The tree-shaped storage model maps directly to naturally hierarchical data:
+- *Medical records* =^PATIENT(id, "VISITS", date, "DIAGNOSIS")=: nested visits, labs, prescriptions per patient
+  - This is, historically and to date, where MUMPS has been popular. Patient records may vary /wildly/ and defining a preset schema is a non-starter
+- *Org structures* =^ORG(dept, team, employee)=: traverse by department or drill into individuals
+- *File system metadata* =^FS(path, component, ...)=: arbitrary nesting depth
+- *Configuration trees* =^CONFIG(section, subsection, key)=: nested settings with natural grouping
+
+One key advantage in this cases is that no joins are required; the hierarchy /is/ the data model.
+*** Sparse or irregular data
+In SQL, every row has every column (even if =NULL=). In RUMPS, absent keys simply don't exist (which is why we describe it as "sparse"), so there is zero storage overhead for absent fields:
+
+#+begin_src text
+; Patient 123 has 3 fields
+^PATIENT(123,"NAME") = "Alice"
+^PATIENT(123,"DOB") = "1990-01-01"
+^PATIENT(123,"PHONE") = "555-1234"
+
+; Patient 456 has different fields entirely
+^PATIENT(456,"NAME") = "Bob"
+^PATIENT(456,"FAX") = "555-9999"
+^PATIENT(456,"EMERGENCY","NAME") = "Carol"
+^PATIENT(456,"EMERGENCY","PHONE") = "555-0000"
+#+end_src
+
+This makes RUMPS well-suited for:
+- Entities with many optional fields (only present keys consume space)
+- Survey responses where most questions are skipped
+- Feature flags per user or tenant
+- Or any other domain where "shape" varies between records
+*** Evolving or unknown schema
+No migrations, no =ALTER TABLE=; you can add new "fields" (subscripts) whenever you want. This is good for:
+- Rapid prototyping where structure isn't finalized
+- Multi-tenant systems with tenant-specific fields
+- Log/event storage with varying payloads
+- Any situation where you don't know the schema upfront
+*** Key-range workloads
+Because data is stored in sorted key order, range scans are efficient:
+- *Time-series* :: =^LOG(2025, 01, 15, timestamp)=; date-range scans are just prefix iteration
+- *Audit trails* :: =^AUDIT(entity, action, time)=; query by entity, then by time
+- *Leaderboards* :: Sorted sets come naturally; iterate top N via =ORDER=
+*** Document-like access patterns
+In RUMOS, you can retrieve entire subtrees in one traversal. With this there's no ORM impedance mismatch; nested structures map directly to nested keys. If your data looks like JSON, RUMPS can handle it without serializing/deserializing entire documents. RUMPS also specifically gives you the option of storing globs of document-like data via the =Value::Json= for when you really want JSON at a particular key path.
+*** Low-ceremony applications
+When SQL DDL feels like overkill:
+- Embedded databases for CLI tools or small services (similar use case to SQLite)
+  - By "embedded", I mean embedded into the application, not embedded /devices/. RUMPS requires =std= and =tokio=; it doesn't work for =no_std= or embedded device targets
+- Prototypes that may evolve into larger systems
+- Situations where you want transactional semantics without schema overhead
 ** Where RUMPS is a bad fit
-* Comparison to other database systems
+*** Flat key-value storage
+If you just need =get(key) -> Option<Value>= with no hierarchy or range queries, RUMPS is overkill. A =HashMap= with =RwLock=, =DashMap=, or =sled= will be faster and simpler. RUMPS shines when your keys have /structure/ you want to query.
+*** Simple memoization or function caching
+Caching pure function results by input hash doesn't need transactions, range queries, or hierarchical access. Use =moka=, =cached=, or a simple LRU cache crate instead.
+*** TTL-based expiration
+RUMPS has no built-in key expiration. You /can/ implement time-based cleanup via =ORDER= iteration, but it's manual. If you need TTL natively, Redis or =moka= are better fits.
+*** Nanosecond-scale hot paths
+B-tree traversal and async machinery add overhead vs. lock-free hash maps. For millions of tiny ops/sec on flat data, raw =DashMap= wins. RUMPS is better suited for microsecond-scale structured operations.
+*** Relational data with complex joins
+MUMPS-style databases excel at hierarchical traversal, not relational algebra. If you need multi-table joins, aggregations, or SQL semantics, use SQLite or Postgres. RUMPS /can/ model relations, but you're hand-rolling the join logic.
+*** =no_std= or embedded targets
+RUMPS requires =std= and =tokio=. For microcontrollers or =no_std= environments, look elsewhere.
+*** Production workloads requiring proven reliability
+RUMPS is experimental and under active development. For production systems that need battle-tested reliability, use established alternatives.
+* RUMPS vs SQL
+** Key differences
+| *Aspect*           | *RUMPS*                                                   | *SQL*                                         |
+|--------------------+-----------------------------------------------------------+-----------------------------------------------|
+| Data model         | Hierarchical sparse trees (globals)                       | Relational tables with rows/columns           |
+| Schema             | Schema-less; structure emerges from keys                  | Strict schema defined upfront                 |
+| Query model        | Tree-navigation primitives (=ORDER=, =COLLECT=)           | Declarative set operations (=SELECT=, =JOIN=) |
+| Keys               | Compound subscript paths (e.g., =^PATIENT(123,"NAME")=)   | Primary/foreign key relationships             |
+| Joins              | Hierarchical nesting eliminates most joins                | Explicit =JOIN= operations required           |
+| Node structure     | Nodes can have /both/ a value AND children simultaneously | Cells hold single values only                 |
+| Storage            | Unified key-value B-tree; one structure for everything    | Separate tables, each with own storage        |
+| Iteration          | Stream-based (=COLLECT=) or tree traversal (=ORDER=)      | Set-based =WHERE= clauses                     |
+| Collation          | Extended: =bool= < =number= < =string= (=10= < =100=)     | Type-specific; string ="10"= > ="100"=        |
+| Namespaces         | Globals (=^NAME=) vs Locals (=NAME=)                      | Tables within schemas/databases               |
+
+** Similarities
+Despite the different paradigms, RUMPS and SQL share several capabilities:
+- *ACID transactions*: Both provide atomicity, consistency, isolation, durability
+- *Filtering*: RUMPS predicates in =COLLECT= work like SQL =WHERE=
+- *Sorted access*: Both can iterate data in sorted order (RUMPS by default; SQL via =ORDER BY=)
+- *Concurrent access*: Both handle multiple simultaneous readers/writers
+- *Indexing*: RUMPS's sorted keys act as implicit indices; SQL has explicit index creation
 * License(s)
 Licensed under either of [[file:LICENSES/APACHE][Apache License, Version 2.0]] or [[file:LICENSES/MIT][MIT license]] at your option.
 * Disclaimer
