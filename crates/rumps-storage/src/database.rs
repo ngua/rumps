@@ -300,6 +300,7 @@ impl DatabaseBuilder {
             btree: Arc::new(builder.build()?),
             storage: Some(storage),
             txn_manager: Arc::new(TransactionManager::default()),
+            closed: Arc::new(std::sync::RwLock::new(false)),
         })
     }
 }
@@ -343,6 +344,14 @@ pub struct Database {
 
     /// Transaction manager for coordinating concurrent transactions.
     pub(crate) txn_manager: Arc<TransactionManager>,
+
+    /// Whether [`close()`] has been called.
+    ///
+    /// Used by `Drop` to avoid redundant cleanup. Uses `std::sync::RwLock`
+    /// (not tokio) so it can be checked synchronously in `Drop`.
+    ///
+    /// [`close()`]: Self::close
+    closed: Arc<std::sync::RwLock<bool>>,
 }
 
 // Public API
@@ -447,6 +456,7 @@ impl Database {
             btree,
             storage: Some(storage),
             txn_manager: Arc::new(TransactionManager::default()),
+            closed: Arc::new(std::sync::RwLock::new(false)),
         })
     }
 
@@ -492,12 +502,48 @@ impl Database {
             btree,
             storage: Some(Arc::clone(&storage)),
             txn_manager: Arc::new(TransactionManager::default()),
+            closed: Arc::new(std::sync::RwLock::new(false)),
         };
 
         // Run WAL recovery and replay committed operations
         db.recover(path.as_ref()).await?;
 
         Ok(db)
+    }
+
+    /// Closes the database, flushing all data and releasing resources.
+    ///
+    /// This method consumes `self` to ensure the database cannot be used
+    /// after closing. All pending writes are flushed to disk before closing.
+    ///
+    /// Note that calling this explicitly is essentially the same as `drop`ping
+    /// the DB; once the DB is closed, it's `Drop` implementation will not
+    /// run (to avoid rundundancy)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    ///
+    /// let db = Database::create("./my_data").await?;
+    /// // ... use database ...
+    /// db.close().await?;
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    pub async fn close(self) -> crate::error::Result<()> {
+        // Mark as closed so Drop doesn't do redundant work.
+        // If poisoned, proceed anyway - the flag is still usable.
+        *self.closed.write().unwrap_or_else(|e| e.into_inner()) = true;
+
+        self.flush().await?;
+
+        if let Some(storage) = self.storage.as_ref() {
+            storage.shutdown_sync_task();
+        }
+
+        Ok(())
     }
 
     /// Sets a value in the database.
@@ -1110,20 +1156,6 @@ impl Database {
         Ok(())
     }
 
-    /// Closes the database, flushing all data and releasing resources.
-    ///
-    /// This method consumes `self` to ensure the database cannot be used
-    /// after closing. All pending writes are flushed to disk before closing.
-    pub(crate) async fn close(self) -> crate::error::Result<()> {
-        self.flush().await?;
-
-        if let Some(storage) = self.storage.as_ref() {
-            storage.shutdown_sync_task();
-        }
-
-        Ok(())
-    }
-
     /// Deletes a key and all its descendants from the database.
     ///
     /// **Note**: Writes to globals require a transaction. Use `db.transaction()`
@@ -1196,6 +1228,7 @@ impl Database {
             btree,
             storage: None,
             txn_manager,
+            closed: Arc::new(std::sync::RwLock::new(false)),
         })
     }
 
@@ -1432,38 +1465,50 @@ impl Database {
 ///
 /// # How it works
 ///
+/// - Skips cleanup if [`close()`] was already called
 /// - Uses `Arc::strong_count` to detect if this is the last handle
 /// - Uses `tokio::task::block_in_place` to safely block on async I/O
 /// - Errors are printed to stderr (no panic in drop)
 ///
 /// # Explicit close
 ///
-/// For proper error handling, call `db.close().await` explicitly. The `Drop`
+/// For proper error handling, call [`close()`] explicitly. The `Drop`
 /// impl is a best-effort fallback, not a replacement for explicit cleanup.
+///
+/// [`close()`]: Self::close
 impl Drop for Database {
     fn drop(&mut self) {
-        // Only flush if we're the last Database handle to this storage.
-        self.storage
-            .as_ref()
-            .filter(|s| Arc::strong_count(s) == 1)
-            .into_iter()
-            .for_each(|storage| {
-                let result = tokio::runtime::Handle::try_current()
-                    .map_err(|e| StorageError::InvalidOperation(e.to_string()))
-                    .and_then(|handle| {
-                        tokio::task::block_in_place(|| {
-                            handle.block_on(async {
-                                storage.wal_sync().await?;
-                                storage.flush().await
-                            })
-                        })
-                    });
+        // Skip if `Self::close` was already called
+        let already_closed = self.closed.read().map(|g| *g).unwrap_or(false);
 
-                if let Err(e) = result {
-                    eprintln!("rumps: failed to flush database on drop: {e}");
-                }
-                storage.shutdown_sync_task();
-            });
+        if !already_closed {
+            // Only flush if we're the last `Database` handle to this storage.
+            self.storage
+                .as_ref()
+                .filter(|s| Arc::strong_count(s) == 1)
+                .into_iter()
+                .for_each(|storage| {
+                    let result = tokio::runtime::Handle::try_current()
+                        .map_err(|e| {
+                            StorageError::InvalidOperation(e.to_string())
+                        })
+                        .and_then(|handle| {
+                            tokio::task::block_in_place(|| {
+                                handle.block_on(async {
+                                    storage.wal_sync().await?;
+                                    storage.flush().await
+                                })
+                            })
+                        });
+
+                    if let Err(e) = result {
+                        eprintln!(
+                            "rumps: failed to flush database on drop: {e}"
+                        );
+                    }
+                    storage.shutdown_sync_task();
+                });
+        }
     }
 }
 
