@@ -627,7 +627,7 @@ impl FileStorageEngine {
 }
 
 impl FileStorageEngine {
-    // ========== Private Helpers for open() ==========
+    // Private Helpers for open()
 
     /// Load superblock and bitmap pages (including indirect pages).
     ///
@@ -832,7 +832,7 @@ impl FileStorageEngine {
         })
     }
 
-    // ========== Private Helpers for write operations ==========
+    // Private Helpers for write operations
 
     /// Write a page to disk at its designated offset.
     async fn write_page_to_disk(&self, id: PageId, node: &Node) -> Result<()> {
@@ -1368,7 +1368,7 @@ impl FileStorageEngine {
         Ok(())
     }
 
-    // ========== Registry Chain Operations ==========
+    // Registry Chain Operations
 
     /// Look up a global's root page by name across the entire registry chain.
     pub(crate) async fn registry_get(&self, name: &str) -> Option<PageId> {
@@ -1627,7 +1627,7 @@ mod tests {
 
     use super::*;
 
-    // ========== Test Helpers ==========
+    // Test Helpers
 
     /// Fills the first registry page with entries until full.
     ///
@@ -2104,7 +2104,7 @@ mod tests {
         );
     }
 
-    // ========== Registry Chaining Integration Tests ==========
+    // Registry Chaining Integration Tests
 
     #[tokio::test]
     async fn registry_insert_and_get_single_page() {

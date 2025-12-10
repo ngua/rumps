@@ -389,7 +389,7 @@ mod tests {
             .contains("checksum mismatch"));
     }
 
-    // ========== Tests for chaining helper methods ==========
+    // Tests for chaining helper methods
 
     #[test]
     fn entry_size_calculation() {

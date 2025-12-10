@@ -108,7 +108,7 @@ async fn insert_users(
     txn: &rumps_storage::Transaction,
     users: &[User],
 ) -> rumps_types::Result<()> {
-    futures::future::try_join_all(users.iter().map(|u| txn.insert(u))).await?;
+    futures::future::try_join_all(users.iter().map(|u| u.insert(txn))).await?;
     Ok(())
 }
 
@@ -132,7 +132,7 @@ fn bench_orm_insert(c: &mut Criterion) {
                 db.transaction(|txn| {
                     let u = user.clone();
                     async move {
-                        txn.insert(&u).await?;
+                        u.insert(&txn).await?;
                         Ok(())
                     }
                 })
@@ -164,7 +164,7 @@ fn bench_orm_insert_batch(c: &mut Criterion) {
                     rt.block_on(async {
                         db.transaction(|txn| async move {
                             futures::future::try_join_all(
-                                users.iter().map(|u| txn.insert(u)),
+                                users.iter().map(|u| u.insert(&txn)),
                             )
                             .await?;
                             Ok(())
@@ -201,7 +201,7 @@ fn bench_orm_insert_many(c: &mut Criterion) {
                 |(_dir, db, users)| {
                     rt.block_on(async {
                         db.transaction(|txn| async move {
-                            txn.insert_many(&users).await?;
+                            User::insert_many(&txn, &users).await?;
                             Ok(())
                         })
                         .await
@@ -240,7 +240,7 @@ fn bench_orm_one(c: &mut Criterion) {
         b.iter(|| {
             rt.block_on(async {
                 let user: Option<User> =
-                    db.one(black_box(500u64)).await.unwrap();
+                    User::one(&db, black_box(500u64)).await.unwrap();
                 black_box(user);
             })
         })
@@ -271,7 +271,7 @@ fn bench_orm_exists(c: &mut Criterion) {
         b.iter(|| {
             rt.block_on(async {
                 let exists =
-                    db.exists::<User, _>(black_box(500u64)).await.unwrap();
+                    User::exists(&db, black_box(500u64)).await.unwrap();
                 black_box(exists);
             })
         })
@@ -301,7 +301,7 @@ fn bench_orm_all_1k(c: &mut Criterion) {
     c.bench_function("orm_all_1000", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let users: Vec<User> = db.all().await.unwrap();
+                let users: Vec<User> = User::all(&db).await.unwrap();
                 black_box(users.len());
             })
         })
@@ -337,7 +337,7 @@ fn bench_orm_all_10k(c: &mut Criterion) {
     c.bench_function("orm_all_10000", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let users: Vec<User> = db.all().await.unwrap();
+                let users: Vec<User> = User::all(&db).await.unwrap();
                 black_box(users.len());
             })
         })
@@ -373,7 +373,7 @@ fn bench_orm_delete(c: &mut Criterion) {
             |(_dir, db)| {
                 rt.block_on(async {
                     db.transaction(|txn| async move {
-                        txn.delete::<User, _>(50u64).await?;
+                        User::delete(&txn, 50u64).await?;
                         Ok(())
                     })
                     .await
@@ -411,7 +411,7 @@ fn bench_orm_query(c: &mut Criterion) {
             rt.block_on(async {
                 // Query for a specific user by id prefix
                 let users: Vec<User> =
-                    db.query(black_box(500u64)).await.unwrap();
+                    User::query(&db, black_box(500u64)).await.unwrap();
                 black_box(users.len());
             })
         })

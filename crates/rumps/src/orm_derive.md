@@ -16,11 +16,11 @@ struct User {
 
 let db = Database::in_memory()?;
 db.transaction(|txn| async move {
-    txn.insert(&User { id: 1, name: "Alice".into() }).await?;
+    User { id: 1, name: "Alice".into() }.insert(&txn).await?;
     Ok(())
 }).await?;
 
-let user: Option<User> = db.one(1u64).await?;
+let user = User::one(&db, 1u64).await?;
 assert_eq!(user, Some(User { id: 1, name: "Alice".into() }));
 # Ok::<(), rumps::Error>(())
 # });
@@ -41,7 +41,7 @@ struct Patient {
     id: u64,
     name: String,
 }
-// Storage: ^patient["cardiology", 123, "name"] = "Alice"
+// Storage: ^patient("cardiology", 123, "name") = "Alice"
 ```
 
 # Nested Structs
@@ -61,8 +61,8 @@ struct Patient {
     contact: Contact,
 }
 
-// flatten: ^patient[1, "city"] = "NYC"
-// subtree: ^patient[1, "contact", "phone"] = "555-1234"
+// flatten: ^patient(1, "city") = "NYC"
+// subtree: ^patient(1, "contact", "phone") = "555-1234"
 ```
 
 # Unit Enums
@@ -149,8 +149,8 @@ enum EmploymentStatus {
     OnLeave { reason: String },          // Struct variant
     Terminated { date: String, reason: Option<String> },
 }
-// Unit: ^status["Active"] = ""
-// Struct: ^status["OnLeave"] = "", ^status["OnLeave", "reason"] = "vacation"
+// Unit: ^status("Active") = ""
+// Struct: ^status("OnLeave") = "", ^status("OnLeave", "reason") = "vacation"
 ```
 
 ## Variant Types
@@ -160,19 +160,19 @@ enum EmploymentStatus {
 #[derive(ToRumps, FromRumps)]
 #[rumps(global = "data")]
 enum Data {
-    // Unit variant: ^data["Empty"] = ""
+    // Unit variant: ^data("Empty") = ""
     Empty,
 
     // Single-field tuple: value stored directly
-    // ^data["Error"] = "something went wrong"
+    // ^data("Error") = "something went wrong"
     Error(String),
 
     // Multi-field tuple: numeric indices
-    // ^data["Point", 0] = 1.0, ^data["Point", 1] = 2.0
+    // ^data("Point", 0) = 1.0, ^data("Point", 1) = 2.0
     Point(f64, f64),
 
     // Struct variant with key
-    // ^data["Person", 123, "name"] = "Alice"
+    // ^data("Person", 123, "name") = "Alice"
     Person {
         #[rumps(key)]
         id: u64,
@@ -194,9 +194,9 @@ struct Worker {
     status: Status,
 }
 
-// ^worker[1, "name"] = "Bob"
-// ^worker[1, "status", "OnLeave"] = ""
-// ^worker[1, "status", "OnLeave", "reason"] = "vacation"
+// ^worker(1, "name") = "Bob"
+// ^worker(1, "status", "OnLeave") = ""
+// ^worker(1, "status", "OnLeave", "reason") = "vacation"
 ```
 
 ## Untagged Enums
@@ -214,9 +214,9 @@ enum JsonValue {
     Object { data: String }, // Matches struct with "data" field
 }
 
-// Number: ^value[] = 42.0  (no variant tag)
-// Text:   ^value[] = "hello"
-// Object: ^value["data"] = "contents"
+// Number: ^value() = 42.0  (no variant tag)
+// Text:   ^value() = "hello"
+// Object: ^value("data") = "contents"
 ```
 
 **Note**: For untagged enums, ensure variants have distinguishable structures.

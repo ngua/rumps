@@ -172,7 +172,7 @@ async fn test_derive_basic_struct() {
     db.transaction(|txn| {
         let p = person.clone();
         async move {
-            txn.insert(&p).await?;
+            p.insert(&txn).await?;
             Ok(())
         }
     })
@@ -180,7 +180,7 @@ async fn test_derive_basic_struct() {
     .unwrap();
 
     // Read back
-    let fetched: Option<Person> = db.one(42u64).await.unwrap();
+    let fetched = Person::one(&db, 42u64).await.unwrap();
     assert_eq!(fetched, Some(person));
 }
 
@@ -213,9 +213,9 @@ async fn test_derive_composite_key() {
         let e2 = emp2.clone();
         let e3 = emp3.clone();
         async move {
-            txn.insert(&e1).await?;
-            txn.insert(&e2).await?;
-            txn.insert(&e3).await?;
+            e1.insert(&txn).await?;
+            e2.insert(&txn).await?;
+            e3.insert(&txn).await?;
             Ok(())
         }
     })
@@ -223,16 +223,15 @@ async fn test_derive_composite_key() {
     .unwrap();
 
     // Get by composite key
-    let fetched: Option<Employee> =
-        db.one(("engineering", 1u64)).await.unwrap();
+    let fetched = Employee::one(&db, ("engineering", 1u64)).await.unwrap();
     assert_eq!(fetched, Some(emp1.clone()));
 
     // Query by prefix (all engineering employees)
-    let eng_emps: Vec<Employee> = db.query(("engineering",)).await.unwrap();
+    let eng_emps = Employee::query(&db, ("engineering",)).await.unwrap();
     assert_eq!(eng_emps.len(), 2);
 
     // Get all employees
-    let all_emps: Vec<Employee> = db.all().await.unwrap();
+    let all_emps = Employee::all(&db).await.unwrap();
     assert_eq!(all_emps.len(), 3);
 }
 
@@ -266,9 +265,9 @@ async fn test_derive_optional_fields() {
         let p = partial_profile.clone();
         let m = minimal_profile.clone();
         async move {
-            txn.insert(&f).await?;
-            txn.insert(&p).await?;
-            txn.insert(&m).await?;
+            f.insert(&txn).await?;
+            p.insert(&txn).await?;
+            m.insert(&txn).await?;
             Ok(())
         }
     })
@@ -276,13 +275,13 @@ async fn test_derive_optional_fields() {
     .unwrap();
 
     // Verify round-trip
-    let fetched1: Option<Profile> = db.one(1u64).await.unwrap();
+    let fetched1 = Profile::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched1, Some(full_profile));
 
-    let fetched2: Option<Profile> = db.one(2u64).await.unwrap();
+    let fetched2 = Profile::one(&db, 2u64).await.unwrap();
     assert_eq!(fetched2, Some(partial_profile));
 
-    let fetched3: Option<Profile> = db.one(3u64).await.unwrap();
+    let fetched3 = Profile::one(&db, 3u64).await.unwrap();
     assert_eq!(fetched3, Some(minimal_profile));
 }
 
@@ -298,7 +297,7 @@ async fn test_derive_renamed_field() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
@@ -306,7 +305,7 @@ async fn test_derive_renamed_field() {
     .unwrap();
 
     // Verify round-trip
-    let fetched: Option<Item> = db.one(1u64).await.unwrap();
+    let fetched = Item::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
     // Verify the key uses "desc" not "description"
@@ -329,15 +328,15 @@ async fn test_derive_skipped_field() {
     db.transaction(|txn| {
         let e = entry.clone();
         async move {
-            txn.insert(&e).await?;
+            e.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    // Read back - cached_at should be default (0)
-    let fetched: Option<CacheEntry> = db.one("foo").await.unwrap();
+    // Read back; `cached_at` should be default (`0`)
+    let fetched = CacheEntry::one(&db, "foo").await.unwrap();
     assert!(fetched.is_some());
     let f = fetched.unwrap();
     assert_eq!(f.key, "foo");
@@ -397,23 +396,26 @@ async fn test_derive_all_records() {
 
     // Insert multiple persons
     db.transaction(|txn| async move {
-        txn.insert(&Person {
+        Person {
             id: 1,
             name: "Alice".into(),
             email: "alice@test.com".into(),
-        })
+        }
+        .insert(&txn)
         .await?;
-        txn.insert(&Person {
+        Person {
             id: 2,
             name: "Bob".into(),
             email: "bob@test.com".into(),
-        })
+        }
+        .insert(&txn)
         .await?;
-        txn.insert(&Person {
+        Person {
             id: 3,
             name: "Charlie".into(),
             email: "charlie@test.com".into(),
-        })
+        }
+        .insert(&txn)
         .await?;
         Ok(())
     })
@@ -421,7 +423,7 @@ async fn test_derive_all_records() {
     .unwrap();
 
     // Get all
-    let all: Vec<Person> = db.all().await.unwrap();
+    let all = Person::all(&db).await.unwrap();
     assert_eq!(all.len(), 3);
     assert_eq!(all[0].name, "Alice");
     assert_eq!(all[1].name, "Bob");
@@ -442,7 +444,7 @@ async fn test_derive_delete() {
     db.transaction(|txn| {
         let p = person.clone();
         async move {
-            txn.insert(&p).await?;
+            p.insert(&txn).await?;
             Ok(())
         }
     })
@@ -450,18 +452,18 @@ async fn test_derive_delete() {
     .unwrap();
 
     // Verify exists
-    assert!(db.exists::<Person, _>(1u64).await.unwrap());
+    assert!(Person::exists(&db, 1u64).await.unwrap());
 
     // Delete
     db.transaction(|txn| async move {
-        txn.delete::<Person, _>(1u64).await?;
+        Person::delete(&txn, 1u64).await?;
         Ok(())
     })
     .await
     .unwrap();
 
     // Verify deleted
-    assert!(!db.exists::<Person, _>(1u64).await.unwrap());
+    assert!(!Person::exists(&db, 1u64).await.unwrap());
 }
 
 #[tokio::test]
@@ -470,11 +472,12 @@ async fn test_derive_default_values() {
 
     // Insert a Settings record with all fields
     db.transaction(|txn| async move {
-        txn.insert(&Settings {
+        Settings {
             user_id: 1,
             theme: "dark".into(),
             page_size: 25,
-        })
+        }
+        .insert(&txn)
         .await?;
         Ok(())
     })
@@ -482,7 +485,7 @@ async fn test_derive_default_values() {
     .unwrap();
 
     // Read it back - should match what we inserted
-    let s: Option<Settings> = db.one(1u64).await.unwrap();
+    let s = Settings::one(&db, 1u64).await.unwrap();
     assert_eq!(s.as_ref().map(|s| s.theme.as_str()), Some("dark"));
     assert_eq!(s.as_ref().map(|s| s.page_size), Some(25));
 
@@ -498,7 +501,7 @@ async fn test_derive_default_values() {
     .unwrap();
 
     // Read the partial record - defaults should kick in
-    let s2: Option<Settings> = db.one(2u64).await.unwrap();
+    let s2 = Settings::one(&db, 2u64).await.unwrap();
     assert!(s2.is_some());
     let s2 = s2.unwrap();
     assert_eq!(s2.theme, ""); // Default::default() for String
@@ -522,7 +525,7 @@ async fn test_derive_flatten() {
     db.transaction(|txn| {
         let c = customer.clone();
         async move {
-            txn.insert(&c).await?;
+            c.insert(&txn).await?;
             Ok(())
         }
     })
@@ -530,7 +533,7 @@ async fn test_derive_flatten() {
     .unwrap();
 
     // Verify round-trip
-    let fetched: Option<Customer> = db.one(1u64).await.unwrap();
+    let fetched = Customer::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched.as_ref().map(|c| c.name.as_str()), Some("Acme Corp"));
     assert_eq!(
         fetched.as_ref().map(|c| c.addr.street.as_str()),
@@ -565,7 +568,7 @@ async fn test_derive_subtree() {
     db.transaction(|txn| {
         let v = vendor.clone();
         async move {
-            txn.insert(&v).await?;
+            v.insert(&txn).await?;
             Ok(())
         }
     })
@@ -573,7 +576,7 @@ async fn test_derive_subtree() {
     .unwrap();
 
     // Verify round-trip
-    let fetched: Option<Vendor> = db.one(1u64).await.unwrap();
+    let fetched = Vendor::one(&db, 1u64).await.unwrap();
     assert_eq!(
         fetched.as_ref().map(|v| v.name.as_str()),
         Some("Widget Inc")
@@ -641,19 +644,19 @@ async fn test_newtype_to_rumps() {
     db.transaction(|txn| {
         let w = wrapped.clone();
         async move {
-            txn.insert(&w).await?;
+            w.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    // Read back as WrappedPerson (stored in "WrappedPerson" global)
-    let fetched: Option<WrappedPerson> = db.one(99u64).await.unwrap();
+    // Read back as `WrappedPerson` (stored in "WrappedPerson" global)
+    let fetched = WrappedPerson::one(&db, 99u64).await.unwrap();
     assert_eq!(fetched, Some(wrapped));
 
-    // Person global should be empty (separate storage)
-    let fetched_person: Option<Person> = db.one(99u64).await.unwrap();
+    // `Person` global should be empty (separate storage)
+    let fetched_person = Person::one(&db, 99u64).await.unwrap();
     assert_eq!(fetched_person, None);
 
     // Test 2: Explicit shared storage via #[rumps(global = "person")]
@@ -667,7 +670,7 @@ async fn test_newtype_to_rumps() {
     db.transaction(|txn| {
         let a = alias.clone();
         async move {
-            txn.insert(&a).await?;
+            a.insert(&txn).await?;
             Ok(())
         }
     })
@@ -675,20 +678,18 @@ async fn test_newtype_to_rumps() {
     .unwrap();
 
     // Both types can read the same data
-    let fetched_alias: Option<PersonAlias> = db.one(100u64).await.unwrap();
+    let fetched_alias = PersonAlias::one(&db, 100u64).await.unwrap();
     assert_eq!(fetched_alias, Some(alias));
 
-    let fetched_person2: Option<Person> = db.one(100u64).await.unwrap();
+    let fetched_person2 = Person::one(&db, 100u64).await.unwrap();
     assert_eq!(fetched_person2, Some(person2));
 }
 
-// =============================================================================
 // Tests for reading manually-written data (no ORM markers)
 //
 // These tests verify that the ORM can read data written directly via
 // `txn.set()` without the empty-string marker that ORM `insert()` writes.
 // This exercises the heuristic fallback path in `stream_and_parse`.
-// =============================================================================
 
 /// Struct for reading manually-written "raw_user" data
 #[derive(Debug, Clone, PartialEq, FromRumps)]
@@ -746,7 +747,7 @@ async fn test_manual_write_single_record_one() {
     .unwrap();
 
     // Read back using ORM
-    let user: Option<RawUser> = db.one(1u64).await.unwrap();
+    let user = RawUser::one(&db, 1u64).await.unwrap();
     assert!(user.is_some());
     let u = user.unwrap();
     assert_eq!(u.id, 1);
@@ -796,7 +797,7 @@ async fn test_manual_write_multiple_records_all() {
     .unwrap();
 
     // Read all using ORM
-    let users: Vec<RawUser> = db.all().await.unwrap();
+    let users = RawUser::all(&db).await.unwrap();
     assert_eq!(users.len(), 3);
     assert_eq!(users[0].name, "Alice");
     assert_eq!(users[1].name, "Bob");
@@ -845,7 +846,7 @@ async fn test_manual_write_composite_key_query() {
     .unwrap();
 
     // Get specific order by composite key
-    let order: Option<RawOrder> = db.one((1u64, 2u64)).await.unwrap();
+    let order = RawOrder::one(&db, (1u64, 2u64)).await.unwrap();
     assert!(order.is_some());
     let o = order.unwrap();
     assert_eq!(o.customer_id, 1);
@@ -854,13 +855,13 @@ async fn test_manual_write_composite_key_query() {
     assert_eq!(o.qty, 3);
 
     // Query all orders for customer 1
-    let cust1_orders: Vec<RawOrder> = db.query((1u64,)).await.unwrap();
+    let cust1_orders = RawOrder::query(&db, (1u64,)).await.unwrap();
     assert_eq!(cust1_orders.len(), 2);
     assert_eq!(cust1_orders[0].product, "Widget");
     assert_eq!(cust1_orders[1].product, "Gadget");
 
     // Get all orders
-    let all_orders: Vec<RawOrder> = db.all().await.unwrap();
+    let all_orders = RawOrder::all(&db).await.unwrap();
     assert_eq!(all_orders.len(), 3);
 }
 
@@ -902,7 +903,7 @@ async fn test_manual_write_sparse_data_with_defaults() {
     .unwrap();
 
     // Read all configs
-    let configs: Vec<RawConfig> = db.all().await.unwrap();
+    let configs = RawConfig::all(&db).await.unwrap();
     assert_eq!(configs.len(), 3);
 
     // Full config
@@ -941,8 +942,8 @@ async fn test_manual_write_exists_check() {
     .unwrap();
 
     // Check existence
-    assert!(db.exists::<RawUser, _>(42u64).await.unwrap());
-    assert!(!db.exists::<RawUser, _>(99u64).await.unwrap());
+    assert!(RawUser::exists(&db, 42u64).await.unwrap());
+    assert!(!RawUser::exists(&db, 99u64).await.unwrap());
 }
 
 #[tokio::test]
@@ -951,11 +952,12 @@ async fn test_mixed_orm_and_manual_writes() {
 
     // Insert via ORM (will write marker)
     db.transaction(|txn| async move {
-        txn.insert(&Person {
+        Person {
             id: 1,
             name: "ORM Alice".into(),
             email: "orm@test.com".into(),
-        })
+        }
+        .insert(&txn)
         .await?;
         Ok(())
     })
@@ -981,23 +983,21 @@ async fn test_mixed_orm_and_manual_writes() {
     .await
     .unwrap();
 
-    // Read all - both should work
-    let people: Vec<Person> = db.all().await.unwrap();
+    // Read all; both should work
+    let people = Person::all(&db).await.unwrap();
     assert_eq!(people.len(), 2);
     assert_eq!(people[0].name, "ORM Alice");
     assert_eq!(people[1].name, "Manual Bob");
 
     // Read individual records
-    let p1: Option<Person> = db.one(1u64).await.unwrap();
+    let p1 = Person::one(&db, 1u64).await.unwrap();
     assert_eq!(p1.as_ref().map(|p| p.name.as_str()), Some("ORM Alice"));
 
-    let p2: Option<Person> = db.one(2u64).await.unwrap();
+    let p2 = Person::one(&db, 2u64).await.unwrap();
     assert_eq!(p2.as_ref().map(|p| p.name.as_str()), Some("Manual Bob"));
 }
 
-// =============================================================================
 // Tests for data-carrying enums (ToRumps/FromRumps)
-// =============================================================================
 
 /// Enum with unit and struct variants
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
@@ -1064,15 +1064,15 @@ async fn test_enum_unit_variant_roundtrip() {
     db.transaction(|txn| {
         let s = status.clone();
         async move {
-            txn.insert(&s).await?;
+            s.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    // The key is just ["Active"]
-    let fetched: Option<EmploymentStatus> = db.one("Active").await.unwrap();
+    // The key is just `["Active"]`
+    let fetched = EmploymentStatus::one(&db, "Active").await.unwrap();
     assert_eq!(fetched, Some(EmploymentStatus::Active));
 }
 
@@ -1087,15 +1087,15 @@ async fn test_enum_struct_variant_roundtrip() {
     db.transaction(|txn| {
         let s = status.clone();
         async move {
-            txn.insert(&s).await?;
+            s.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    // The key is ["OnLeave"]
-    let fetched: Option<EmploymentStatus> = db.one("OnLeave").await.unwrap();
+    // The key is `["OnLeave"]`
+    let fetched = EmploymentStatus::one(&db, "OnLeave").await.unwrap();
     assert_eq!(fetched, Some(status));
 
     // Verify storage layout: ^status("OnLeave", "reason") = "vacation"
@@ -1116,14 +1116,14 @@ async fn test_enum_struct_variant_multiple_fields() {
     db.transaction(|txn| {
         let s = status.clone();
         async move {
-            txn.insert(&s).await?;
+            s.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<EmploymentStatus> = db.one("Terminated").await.unwrap();
+    let fetched = EmploymentStatus::one(&db, "Terminated").await.unwrap();
     assert_eq!(fetched, Some(status));
 }
 
@@ -1136,14 +1136,14 @@ async fn test_enum_single_tuple_variant() {
     db.transaction(|txn| {
         let m = msg.clone();
         async move {
-            txn.insert(&m).await?;
+            m.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<Message> = db.one("Text").await.unwrap();
+    let fetched = Message::one(&db, "Text").await.unwrap();
     assert_eq!(fetched, Some(msg));
 
     // Verify storage: single-field tuple stores value directly
@@ -1162,14 +1162,14 @@ async fn test_enum_multi_tuple_variant() {
     db.transaction(|txn| {
         let m = msg.clone();
         async move {
-            txn.insert(&m).await?;
+            m.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<Message> = db.one("Coords").await.unwrap();
+    let fetched = Message::one(&db, "Coords").await.unwrap();
     assert_eq!(fetched, Some(msg));
 
     // Verify storage: multi-field tuple uses numeric indices
@@ -1202,29 +1202,29 @@ async fn test_enum_with_per_variant_keys() {
         let u = user.clone();
         let p = product.clone();
         async move {
-            txn.insert(&u).await?;
-            txn.insert(&p).await?;
+            u.insert(&txn).await?;
+            p.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    // User key is ["User", 42]
-    let fetched_user: Option<Entity> = db.one(("User", 42u64)).await.unwrap();
+    // User key is `["User", 42]`
+    let fetched_user = Entity::one(&db, ("User", 42u64)).await.unwrap();
     assert_eq!(fetched_user, Some(user));
 
-    // Product key is ["Product", "SKU-001"]
-    let fetched_product: Option<Entity> =
-        db.one(("Product", "SKU-001")).await.unwrap();
+    // Product key is `["Product", "SKU-001"]`
+    let fetched_product =
+        Entity::one(&db, ("Product", "SKU-001")).await.unwrap();
     assert_eq!(fetched_product, Some(product));
 
     // Query all Users
-    let users: Vec<Entity> = db.query(("User",)).await.unwrap();
+    let users = Entity::query(&db, ("User",)).await.unwrap();
     assert_eq!(users.len(), 1);
 
     // Query all entities
-    let all: Vec<Entity> = db.all().await.unwrap();
+    let all = Entity::all(&db).await.unwrap();
     assert_eq!(all.len(), 2);
 }
 
@@ -1237,7 +1237,7 @@ async fn test_enum_variant_rename() {
     db.transaction(|txn| {
         let e = event.clone();
         async move {
-            txn.insert(&e).await?;
+            e.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1245,7 +1245,7 @@ async fn test_enum_variant_rename() {
     .unwrap();
 
     // Key uses renamed tag "created" not "Created"
-    let fetched: Option<Event> = db.one("created").await.unwrap();
+    let fetched = Event::one(&db, "created").await.unwrap();
     assert_eq!(fetched, Some(event));
 
     // Verify storage uses renamed tag
@@ -1269,14 +1269,14 @@ async fn test_struct_with_embedded_enum() {
     db.transaction(|txn| {
         let w = worker.clone();
         async move {
-            txn.insert(&w).await?;
+            w.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<Worker> = db.one(1u64).await.unwrap();
+    let fetched = Worker::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(worker));
 
     // Verify storage layout:
@@ -1293,29 +1293,29 @@ async fn test_enum_all_variants_in_same_global() {
 
     // Insert all variant types
     db.transaction(|txn| async move {
-        txn.insert(&EmploymentStatus::Active).await?;
-        txn.insert(&EmploymentStatus::OnLeave {
+        EmploymentStatus::Active.insert(&txn).await?;
+        EmploymentStatus::OnLeave {
             reason: "vacation".into(),
-        })
+        }
+        .insert(&txn)
         .await?;
-        txn.insert(&EmploymentStatus::Terminated {
+        EmploymentStatus::Terminated {
             date: 1000,
             reason: "resignation".into(),
-        })
+        }
+        .insert(&txn)
         .await?;
         Ok(())
     })
     .await
     .unwrap();
 
-    // Get all - should find all 3 variants
-    let all: Vec<EmploymentStatus> = db.all().await.unwrap();
+    // Get all; should find all 3 variants
+    let all = EmploymentStatus::all(&db).await.unwrap();
     assert_eq!(all.len(), 3);
 }
 
-// =============================================================================
 // Enum field attribute tests
-// =============================================================================
 
 /// Enum with default field values
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
@@ -1360,7 +1360,7 @@ async fn test_enum_field_default_attr() {
     db.transaction(|txn| {
         let t = task.clone();
         async move {
-            txn.insert(&t).await?;
+            t.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1368,7 +1368,7 @@ async fn test_enum_field_default_attr() {
     .unwrap();
 
     // Verify roundtrip with all fields
-    let fetched: Option<Task> = db.one("InProgress").await.unwrap();
+    let fetched = Task::one(&db, "InProgress").await.unwrap();
     assert_eq!(fetched, Some(task));
 
     // Now manually delete the priority and timeout fields
@@ -1382,8 +1382,8 @@ async fn test_enum_field_default_attr() {
     .await
     .unwrap();
 
-    // Fetch again - should get defaults
-    let fetched: Option<Task> = db.one("InProgress").await.unwrap();
+    // Fetch again; should get defaults
+    let fetched = Task::one(&db, "InProgress").await.unwrap();
     assert_eq!(
         fetched,
         Some(Task::InProgress {
@@ -1406,7 +1406,7 @@ async fn test_enum_field_rename_attr() {
     db.transaction(|txn| {
         let r = rec.clone();
         async move {
-            txn.insert(&r).await?;
+            r.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1436,7 +1436,7 @@ async fn test_enum_field_skip_attr() {
     db.transaction(|txn| {
         let r = rec.clone();
         async move {
-            txn.insert(&r).await?;
+            r.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1448,8 +1448,8 @@ async fn test_enum_field_skip_attr() {
     let val = db.get(&global!("record"), &cached_key).await.unwrap();
     assert_eq!(val, None);
 
-    // Roundtrip should restore cached to Default::default() (0)
-    let fetched: Option<Record> = db.one("Complex").await.unwrap();
+    // Roundtrip should restore `cached` to `Default::default()` (`0`)
+    let fetched = Record::one(&db, "Complex").await.unwrap();
     assert_eq!(
         fetched,
         Some(Record::Complex {
@@ -1459,9 +1459,7 @@ async fn test_enum_field_skip_attr() {
     );
 }
 
-// =============================================================================
 // Tests for rename_all attribute
-// =============================================================================
 
 /// Struct with snake_case field renaming
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
@@ -1610,7 +1608,7 @@ async fn test_snake_case_struct_fields() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1618,7 +1616,7 @@ async fn test_snake_case_struct_fields() {
     .unwrap();
 
     // Verify roundtrip
-    let fetched: Option<SnakeCaseItem> = db.one(1u64).await.unwrap();
+    let fetched = SnakeCaseItem::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
     // Verify keys use snake_case (fields already snake_case stay same)
@@ -1641,7 +1639,7 @@ async fn test_camel_case_struct_fields() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1649,7 +1647,7 @@ async fn test_camel_case_struct_fields() {
     .unwrap();
 
     // Verify roundtrip
-    let fetched: Option<CamelCaseItem> = db.one(1u64).await.unwrap();
+    let fetched = CamelCaseItem::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
     // Verify keys use camelCase
@@ -1676,7 +1674,7 @@ async fn test_train_case_struct_fields() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1684,7 +1682,7 @@ async fn test_train_case_struct_fields() {
     .unwrap();
 
     // Verify roundtrip
-    let fetched: Option<TrainCaseItem> = db.one(1u64).await.unwrap();
+    let fetched = TrainCaseItem::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
     // Verify keys use train-case (kebab-case)
@@ -1706,14 +1704,14 @@ async fn test_uppercase_struct_fields() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<UppercaseItem> = db.one(1u64).await.unwrap();
+    let fetched = UppercaseItem::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
     // Verify keys use UPPERCASE
@@ -1735,14 +1733,14 @@ async fn test_lowercase_struct_fields() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<LowercaseItem> = db.one(1u64).await.unwrap();
+    let fetched = LowercaseItem::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
     // Verify keys use lowercase (keeps underscores)
@@ -1760,7 +1758,7 @@ async fn test_lowercase_enum_variants() {
     db.transaction(|txn| {
         let s = status.clone();
         async move {
-            txn.insert(&s).await?;
+            s.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1768,7 +1766,7 @@ async fn test_lowercase_enum_variants() {
     .unwrap();
 
     // Key uses lowercase variant name: "IsActive" -> "isactive"
-    let fetched: Option<LowercaseStatus> = db.one("isactive").await.unwrap();
+    let fetched = LowercaseStatus::one(&db, "isactive").await.unwrap();
     assert_eq!(fetched, Some(LowercaseStatus::IsActive));
 
     // Test struct variant
@@ -1779,7 +1777,7 @@ async fn test_lowercase_enum_variants() {
     db.transaction(|txn| {
         let t = term.clone();
         async move {
-            txn.insert(&t).await?;
+            t.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1787,8 +1785,7 @@ async fn test_lowercase_enum_variants() {
     .unwrap();
 
     // "WasTerminated" -> "wasterminated"
-    let fetched: Option<LowercaseStatus> =
-        db.one("wasterminated").await.unwrap();
+    let fetched = LowercaseStatus::one(&db, "wasterminated").await.unwrap();
     assert_eq!(fetched, Some(term));
 }
 
@@ -1805,14 +1802,14 @@ async fn test_screaming_snake_case_struct_fields() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<ScreamingSnakeItem> = db.one(1u64).await.unwrap();
+    let fetched = ScreamingSnakeItem::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
     // Verify keys use SCREAMING_SNAKE_CASE
@@ -1834,7 +1831,7 @@ async fn test_snake_case_enum_variants() {
     db.transaction(|txn| {
         let s = status.clone();
         async move {
-            txn.insert(&s).await?;
+            s.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1842,7 +1839,7 @@ async fn test_snake_case_enum_variants() {
     .unwrap();
 
     // Key uses snake_case variant name
-    let fetched: Option<SnakeCaseStatus> = db.one("is_active").await.unwrap();
+    let fetched = SnakeCaseStatus::one(&db, "is_active").await.unwrap();
     assert_eq!(fetched, Some(SnakeCaseStatus::IsActive));
 
     // Test struct variant
@@ -1853,15 +1850,14 @@ async fn test_snake_case_enum_variants() {
     db.transaction(|txn| {
         let t = term.clone();
         async move {
-            txn.insert(&t).await?;
+            t.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<SnakeCaseStatus> =
-        db.one("was_terminated").await.unwrap();
+    let fetched = SnakeCaseStatus::one(&db, "was_terminated").await.unwrap();
     assert_eq!(fetched, Some(term));
 }
 
@@ -1941,7 +1937,7 @@ async fn test_variant_rename_all_override() {
     db.transaction(|txn| {
         let c = complex.clone();
         async move {
-            txn.insert(&c).await?;
+            c.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1949,8 +1945,7 @@ async fn test_variant_rename_all_override() {
     .unwrap();
 
     // Variant name uses container's rename_all (snake_case)
-    let fetched: Option<MixedCaseEnum> =
-        db.one("complex_variant").await.unwrap();
+    let fetched = MixedCaseEnum::one(&db, "complex_variant").await.unwrap();
     assert_eq!(fetched, Some(complex));
 
     // Field names use variant's rename_all (camelCase)
@@ -1966,7 +1961,7 @@ async fn test_variant_rename_all_override() {
     db.transaction(|txn| {
         let a = another.clone();
         async move {
-            txn.insert(&a).await?;
+            a.insert(&txn).await?;
             Ok(())
         }
     })
@@ -1985,20 +1980,19 @@ async fn test_explicit_rename_overrides_rename_all() {
 
     // Test enum variant with explicit rename
     db.transaction(|txn| async move {
-        txn.insert(&RenameCombined::OriginalName).await?;
-        txn.insert(&RenameCombined::AnotherName).await?;
+        RenameCombined::OriginalName.insert(&txn).await?;
+        RenameCombined::AnotherName.insert(&txn).await?;
         Ok(())
     })
     .await
     .unwrap();
 
     // Explicit rename takes precedence
-    let fetched1: Option<RenameCombined> = db.one("custom_name").await.unwrap();
+    let fetched1 = RenameCombined::one(&db, "custom_name").await.unwrap();
     assert_eq!(fetched1, Some(RenameCombined::OriginalName));
 
-    // rename_all applies when no explicit rename
-    let fetched2: Option<RenameCombined> =
-        db.one("another_name").await.unwrap();
+    // `rename_all` applies when no explicit rename
+    let fetched2 = RenameCombined::one(&db, "another_name").await.unwrap();
     assert_eq!(fetched2, Some(RenameCombined::AnotherName));
 }
 
@@ -2015,17 +2009,17 @@ async fn test_field_rename_overrides_rename_all() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<FieldOverride> = db.one(1u64).await.unwrap();
+    let fetched = FieldOverride::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
-    // Normal field uses rename_all (camelCase)
+    // Normal field uses `rename_all` (camelCase)
     let key1 = key![1i64, "normalField"];
     let val1 = db.get(&global!("field_override"), &key1).await.unwrap();
     assert_eq!(val1, Some(value!("normal")));
@@ -2036,9 +2030,7 @@ async fn test_field_rename_overrides_rename_all() {
     assert_eq!(val2, Some(value!("override")));
 }
 
-// =============================================================================
 // Tests for field-level rename with case transformation
-// =============================================================================
 
 /// Struct with per-field case transformations
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
@@ -2127,7 +2119,7 @@ async fn test_field_level_case_transformation() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
@@ -2135,7 +2127,7 @@ async fn test_field_level_case_transformation() {
     .unwrap();
 
     // Verify roundtrip
-    let fetched: Option<MixedFieldRename> = db.one(1u64).await.unwrap();
+    let fetched = MixedFieldRename::one(&db, 1u64).await.unwrap();
     assert_eq!(fetched, Some(item));
 
     // Verify camelCase transformation on some_field_name
@@ -2165,27 +2157,30 @@ async fn test_variant_level_case_transformation() {
 
     // Test snake_case variant
     db.transaction(|txn| async move {
-        txn.insert(&MixedVariantRename::SomeVariantName).await?;
+        MixedVariantRename::SomeVariantName.insert(&txn).await?;
         Ok(())
     })
     .await
     .unwrap();
 
-    let fetched: Option<MixedVariantRename> =
-        db.one("some_variant_name").await.unwrap();
+    let fetched = MixedVariantRename::one(&db, "some_variant_name")
+        .await
+        .unwrap();
     assert_eq!(fetched, Some(MixedVariantRename::SomeVariantName));
 
     // Test camelCase variant
     db.transaction(|txn| async move {
-        txn.insert(&MixedVariantRename::AnotherVariantHere { val: 42 })
+        MixedVariantRename::AnotherVariantHere { val: 42 }
+            .insert(&txn)
             .await?;
         Ok(())
     })
     .await
     .unwrap();
 
-    let fetched: Option<MixedVariantRename> =
-        db.one("anotherVariantHere").await.unwrap();
+    let fetched = MixedVariantRename::one(&db, "anotherVariantHere")
+        .await
+        .unwrap();
     assert_eq!(
         fetched,
         Some(MixedVariantRename::AnotherVariantHere { val: 42 })
@@ -2193,26 +2188,24 @@ async fn test_variant_level_case_transformation() {
 
     // Test literal rename variant
     db.transaction(|txn| async move {
-        txn.insert(&MixedVariantRename::ThirdVariant).await?;
+        MixedVariantRename::ThirdVariant.insert(&txn).await?;
         Ok(())
     })
     .await
     .unwrap();
 
-    let fetched: Option<MixedVariantRename> =
-        db.one("custom_tag").await.unwrap();
+    let fetched = MixedVariantRename::one(&db, "custom_tag").await.unwrap();
     assert_eq!(fetched, Some(MixedVariantRename::ThirdVariant));
 
     // Test no rename variant
     db.transaction(|txn| async move {
-        txn.insert(&MixedVariantRename::PlainVariant).await?;
+        MixedVariantRename::PlainVariant.insert(&txn).await?;
         Ok(())
     })
     .await
     .unwrap();
 
-    let fetched: Option<MixedVariantRename> =
-        db.one("PlainVariant").await.unwrap();
+    let fetched = MixedVariantRename::one(&db, "PlainVariant").await.unwrap();
     assert_eq!(fetched, Some(MixedVariantRename::PlainVariant));
 }
 
@@ -2316,9 +2309,7 @@ fn test_unit_enum_variant_rename_override_subscript() {
     .is_err());
 }
 
-// =============================================================================
 // Untagged enum tests
-// =============================================================================
 
 /// Untagged enum with unit variant
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
@@ -2369,7 +2360,7 @@ async fn test_untagged_unit_variant() {
     db.transaction(|txn| {
         let v = val.clone();
         async move {
-            txn.insert(&v).await?;
+            v.insert(&txn).await?;
             Ok(())
         }
     })
@@ -2377,7 +2368,7 @@ async fn test_untagged_unit_variant() {
     .unwrap();
 
     // Untagged unit: key is empty, just a marker at root
-    let fetched: Option<UntaggedUnit> = db.one(Key::new()).await.unwrap();
+    let fetched = UntaggedUnit::one(&db, Key::new()).await.unwrap();
     assert_eq!(fetched, Some(UntaggedUnit::Empty));
 }
 
@@ -2390,7 +2381,7 @@ async fn test_untagged_single_tuple_number() {
     db.transaction(|txn| {
         let v = val.clone();
         async move {
-            txn.insert(&v).await?;
+            v.insert(&txn).await?;
             Ok(())
         }
     })
@@ -2403,7 +2394,7 @@ async fn test_untagged_single_tuple_number() {
     assert_eq!(stored, Some(value!(42.5)));
 
     // Round-trip
-    let fetched: Option<JsonValue> = db.one(Key::new()).await.unwrap();
+    let fetched = JsonValue::one(&db, Key::new()).await.unwrap();
     assert_eq!(fetched, Some(JsonValue::Number(42.5)));
 }
 
@@ -2416,7 +2407,7 @@ async fn test_untagged_single_tuple_text() {
     db.transaction(|txn| {
         let v = val.clone();
         async move {
-            txn.insert(&v).await?;
+            v.insert(&txn).await?;
             Ok(())
         }
     })
@@ -2424,7 +2415,7 @@ async fn test_untagged_single_tuple_text() {
     .unwrap();
 
     // Round-trip
-    let fetched: Option<JsonValue> = db.one(Key::new()).await.unwrap();
+    let fetched = JsonValue::one(&db, Key::new()).await.unwrap();
     assert_eq!(fetched, Some(JsonValue::Text("hello".into())));
 }
 
@@ -2437,20 +2428,20 @@ async fn test_untagged_struct_variant() {
     db.transaction(|txn| {
         let v = val.clone();
         async move {
-            txn.insert(&v).await?;
+            v.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    // Verify storage: ^response["data"] = "ok" (no variant tag)
+    // Verify storage: ^response("data") = "ok" (no variant tag)
     let key = key!["data"];
     let stored = db.get(&global!("response"), &key).await.unwrap();
     assert_eq!(stored, Some(value!("ok")));
 
     // Round-trip
-    let fetched: Option<ApiResponse> = db.one(Key::new()).await.unwrap();
+    let fetched = ApiResponse::one(&db, Key::new()).await.unwrap();
     assert_eq!(fetched, Some(val));
 }
 
@@ -2466,14 +2457,14 @@ async fn test_untagged_error_variant() {
     db.transaction(|txn| {
         let v = val.clone();
         async move {
-            txn.insert(&v).await?;
+            v.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    // Verify storage: ^response["code"] = 404, ^response["msg"] = "not found"
+    // Verify storage: ^response("code") = 404, ^response("msg") = "not found"
     let code_key = key!["code"];
     let code_val = db.get(&global!("response"), &code_key).await.unwrap();
     assert_eq!(code_val, Some(value!(404)));
@@ -2483,7 +2474,7 @@ async fn test_untagged_error_variant() {
     assert_eq!(msg_val, Some(value!("not found")));
 
     // Round-trip
-    let fetched: Option<ApiResponse> = db.one(Key::new()).await.unwrap();
+    let fetched = ApiResponse::one(&db, Key::new()).await.unwrap();
     assert_eq!(fetched, Some(val));
 }
 
@@ -2504,8 +2495,8 @@ async fn test_untagged_with_keys() {
         let a = by_id.clone();
         let b = by_name.clone();
         async move {
-            txn.insert(&a).await?;
-            txn.insert(&b).await?;
+            a.insert(&txn).await?;
+            b.insert(&txn).await?;
             Ok(())
         }
     })
@@ -2523,10 +2514,10 @@ async fn test_untagged_with_keys() {
     assert_eq!(val, Some(value!(10)));
 
     // Round-trip
-    let fetched1: Option<KeyedUntagged> = db.one(42u64).await.unwrap();
+    let fetched1 = KeyedUntagged::one(&db, 42u64).await.unwrap();
     assert_eq!(fetched1, Some(by_id));
 
-    let fetched2: Option<KeyedUntagged> = db.one("Bob").await.unwrap();
+    let fetched2 = KeyedUntagged::one(&db, "Bob").await.unwrap();
     assert_eq!(fetched2, Some(by_name));
 }
 
@@ -2545,14 +2536,12 @@ async fn test_untagged_variant_order_matters() {
     .await
     .unwrap();
 
-    // Should parse as Null (first variant that matches empty)
-    let fetched: Option<JsonValue> = db.one(Key::new()).await.unwrap();
+    // Should parse as `Null` (first variant that matches empty)
+    let fetched = JsonValue::one(&db, Key::new()).await.unwrap();
     assert_eq!(fetched, Some(JsonValue::Null));
 }
 
-// =============================================================================
 // Tests for enum struct variants with flatten/subtree
-// =============================================================================
 
 /// Nested struct for flatten tests (key type matches variant tag type - String).
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
@@ -2630,14 +2619,14 @@ async fn test_enum_struct_variant_flatten_roundtrip() {
     db.transaction(|txn| {
         let r = record.clone();
         async move {
-            txn.insert(&r).await?;
+            r.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<EvRecord> = db.one("WithLocation").await.unwrap();
+    let fetched = EvRecord::one(&db, "WithLocation").await.unwrap();
     assert_eq!(fetched, Some(record));
 }
 
@@ -2657,14 +2646,14 @@ async fn test_enum_struct_variant_subtree_roundtrip() {
     db.transaction(|txn| {
         let i = item.clone();
         async move {
-            txn.insert(&i).await?;
+            i.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<EvItem> = db.one("WithMeta").await.unwrap();
+    let fetched = EvItem::one(&db, "WithMeta").await.unwrap();
     assert_eq!(fetched, Some(item));
 }
 
@@ -2684,14 +2673,14 @@ async fn test_enum_struct_variant_optional_flatten_some() {
     db.transaction(|txn| {
         let e = entry.clone();
         async move {
-            txn.insert(&e).await?;
+            e.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<EvEntry> = db.one("WithOptLoc").await.unwrap();
+    let fetched = EvEntry::one(&db, "WithOptLoc").await.unwrap();
     assert_eq!(fetched, Some(entry));
 }
 
@@ -2707,13 +2696,13 @@ async fn test_enum_struct_variant_optional_flatten_none() {
     db.transaction(|txn| {
         let e = entry.clone();
         async move {
-            txn.insert(&e).await?;
+            e.insert(&txn).await?;
             Ok(())
         }
     })
     .await
     .unwrap();
 
-    let fetched: Option<EvEntry> = db.one("WithOptLoc").await.unwrap();
+    let fetched = EvEntry::one(&db, "WithOptLoc").await.unwrap();
     assert_eq!(fetched, Some(entry));
 }

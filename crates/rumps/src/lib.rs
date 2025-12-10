@@ -89,6 +89,27 @@ pub use rumps_types::{
 /// This module re-exports traits from both `rumps-types::orm` and
 /// `rumps-storage::orm` for convenient access, including derive macros.
 ///
+/// # Entity API
+///
+/// The primary API uses entity-centric traits. Methods are called on your types:
+///
+/// ```ignore
+/// use rumps::{Database, orm::{RumpsRead, RumpsWrite}};
+///
+/// // Reads are called on the entity type
+/// let user = User::one(&db, 123u64).await?;
+/// let exists = User::exists(&db, 123u64).await?;
+/// let all = User::all(&db).await?;
+///
+/// // Writes inside transactions
+/// db.transaction(|tx| async move {
+///     user.insert(&tx).await?;
+///     User::delete(&tx, 123u64).await?;
+///     User::insert_many(&tx, &users).await?;
+///     Ok(())
+/// }).await?;
+/// ```
+///
 /// # Derive Macros
 ///
 /// With the `derive` feature (enabled by default), you get access to:
@@ -126,17 +147,18 @@ pub use rumps_types::{
 /// - `#[rumps(rename_all = "case")]` - Apply naming convention to fields within this variant.
 #[cfg_attr(feature = "derive", doc = include_str!("orm_derive.md"))]
 pub mod orm {
-    // From rumps-types: primitive conversion traits and error types
-    // From rumps-storage: struct conversion traits and extension traits
+    // From rumps-storage: struct conversion traits and entity traits
     // Note: This also re-exports FromRumps/ToRumps derive macros when `derive` feature is enabled
     pub use rumps_storage::orm::{
-        FromRumps, RumpsRead, RumpsWrite, Sealed, ToRumps,
+        FromRumps, RumpsRead, RumpsReader, RumpsWrite, RumpsWriter, Sealed,
+        ToRumps,
     };
     // Re-export remaining derive macros (traits with same names already exported above)
     #[cfg(feature = "derive")]
     pub use rumps_storage::orm::{
         FromSubscript, FromValue, ToSubscript, ToValue,
     };
+    // From rumps-types: primitive conversion traits and error types
     pub use rumps_types::orm::{
         DecodeError, FromSubscript, FromValue, IntoKey, ToSubscript, ToValue,
     };

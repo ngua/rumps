@@ -1,0 +1,478 @@
+#+TITLE: RUMPS ORM
+#+OPTIONS: toc:2
+
+* Introduction
+The RUMPS ORM provides derive macros and traits for mapping Rust structs and enums to RUMPS's hierarchical storage. Rather than writing raw =SET= and =GET= calls, you define your types with attributes and let the ORM handle serialization, key construction, and record streaming.
+
+*Important*: The ORM adds a small storage overhead. Each record includes an *empty-string marker* at its prefix key (e.g., ~^patient(123) = ""~). This marker ensures records exist even when all fields are =Option::None=, and enables efficient record-boundary detection when streaming via =all= or =query=. If storage size is critical and you don't need these guarantees, use the raw API instead.
+
+*NOTE*: The ORM layer is something I've added mostly for convenience and for users coming from other DB systems. To a certain extent, it does not fit RUMPS data model very closely. However, it can be more convenient for reading and writing simple records rather than manually =db.get= and =tx.set= calls. It also has some nice features like get one record by key, etc...
+* Quick start
+#+begin_src rust
+use rumps::orm::{ToRumps, FromRumps, RumpsRead, RumpsWrite};
+use rumps::Database;
+
+#[derive(Debug, PartialEq, ToRumps, FromRumps)]
+#[rumps(global = "patient")]
+struct Patient {
+    #[rumps(key)]
+    id: u64,
+    name: String,
+    admitted: bool,
+}
+
+#[tokio::main]
+async fn main() -> rumps::Result<()> {
+    let db = Database::in_memory()?;
+
+    // Writes require a transaction
+    db.transaction(|txn| async move {
+        Patient { id: 123, name: "Alice".into(), admitted: true }
+            .insert(&txn).await?;
+        Patient { id: 456, name: "Bob".into(), admitted: false }
+            .insert(&txn).await?;
+        Ok(())
+    }).await?;
+
+    // Reads work directly on the database
+    let alice = Patient::one(&db, 123u64).await?;
+    assert_eq!(alice.as_ref().map(|p| &p.name), Some(&"Alice".to_string()));
+
+    // Get all patients (returned in key order: 123, then 456)
+    let all = Patient::all(&db).await?;
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].id, 123);
+    assert_eq!(all[1].id, 456);
+
+    Ok(())
+}
+#+end_src
+
+This stores data as:
+#+begin_src text
+^patient(123)            = ""       ; marker
+^patient(123, "name")    = "Alice"
+^patient(123, "admitted") = true
+^patient(456)            = ""       ; marker
+^patient(456, "name")    = "Bob"
+^patient(456, "admitted") = false
+#+end_src
+
+* Derive macros
+** For structs
+- =ToRumps= :: Convert struct to RUMPS key-value pairs (for writes)
+- =FromRumps= :: Reconstruct struct from RUMPS key-value pairs (for reads)
+
+** For unit enums (simple tags)
+- =ToValue= :: Convert enum variant to a =Value= (stored as string)
+- =FromValue= :: Parse enum variant from a =Value=
+- =ToSubscript= :: Convert enum variant to a =Subscript= (for use in keys)
+- =FromSubscript= :: Parse enum variant from a =Subscript=
+
+** For data-carrying enums
+Use =ToRumps= / =FromRumps= (not =ToValue= / =FromValue=); see [[#data-carrying-enums][Data-carrying enums]] below.
+* Core operations
+The ORM provides two traits for entity types: =RumpsRead= (for reads) and =RumpsWrite= (for writes). Methods are called on the entity type itself, passing =&db= (any reference to a =Database=) or =&txn= (any reference to a =Transaction=) as the first argument. To keep things somewhat flexible, the arguments are actually =impl RumpsReader + Sync= and =impl RumpsWriter + Sync=, but in practice, these are only =Database= s and =Transaction= s.
+
+** Read operations
+*** =one=
+Fetches a single record by key. Returns =None= if not found.
+
+#+begin_src rust
+let patient = Patient::one(&db, 123u64).await?;
+#+end_src
+*** =exists=
+Checks if a record exists without fetching it.
+
+#+begin_src rust
+let found = Patient::exists(&db, 123u64).await?;
+#+end_src
+*** =all=
+Fetches all records of a type. Results are *always* in key-collation order.
+
+#+begin_src rust
+let patients = Patient::all(&db).await?;
+// Sorted by `id` (the key field)
+#+end_src
+*** =query=
+Fetches records matching a key /prefix/. Useful for composite keys.
+
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "employee")]
+struct Employee {
+    #[rumps(key, order = 0)]
+    dept: String,
+    #[rumps(key, order = 1)]
+    emp_id: u64,
+    name: String,
+}
+
+// Get all employees in "engineering" (prefix query on first key field)
+let eng = Employee::query(&db, "engineering").await?;
+#+end_src
+
+** Write operations
+All write operations require a transaction.
+
+*** =insert=
+Inserts a new record.
+
+#+begin_src rust
+db.transaction(|txn| async move {
+    Patient { id: 1, name: "Alice".into(), admitted: true }
+        .insert(&txn).await?;
+    Ok(())
+}).await?;
+#+end_src
+*** =insert_many=
+Batch-inserts multiple records efficiently.
+
+#+begin_src rust
+db.transaction(|txn| async move {
+    Patient::insert_many(&txn, &[
+        Patient { id: 1, name: "Alice".into(), admitted: true },
+        Patient { id: 2, name: "Bob".into(), admitted: false },
+    ]).await?;
+    Ok(())
+}).await?;
+#+end_src
+*** =delete=
+Deletes a record by key. This removes the entire subtree under that key.
+
+#+begin_src rust
+db.transaction(|txn| async move {
+    Patient::delete(&txn, 123u64).await?;
+    Ok(())
+}).await?;
+#+end_src
+*** =upsert=
+Insert-or-update. If the record doesn't exist, inserts =val=. If it exists, calls the provided callback with the existing record (by value) at that key path:
+- If the callback evaluates to =Some(new)=, it is replaced with =new=
+- If the callback evaluates to =None= to delete the record
+**** Insert if missing, update if exists
+#+begin_src rust
+db.transaction(|txn| async move {
+    Patient::upsert(
+        &txn,
+        Patient { id: 1, name: "Alice".into(), admitted: false },
+        |existing| Some(Patient { admitted: true, ..existing }),
+    ).await?;
+    Ok(())
+}).await?;
+#+end_src
+**** Increment a counter
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "counter")]
+struct Counter {
+    #[rumps(key)]
+    name: String,
+    count: u64,
+}
+
+db.transaction(|txn| async move {
+    Counter::upsert(
+        &txn,
+        Counter { name: "visits".into(), count: 1 },
+        |c| Some(Counter { count: c.count + 1, ..c }),
+    ).await?;
+    Ok(())
+}).await?;
+#+end_src
+**** Conditional delete
+Evaluate to =None= to delete the record based on some condition:
+
+#+begin_src rust
+db.transaction(|txn| async move {
+    Patient::upsert(
+        &txn,
+        Patient { id: 1, name: "".into(), admitted: false },
+        |existing| {
+            // Delete if patient has been discharged for > 30 days
+            if should_archive(&existing) {
+                None  // Deletes the record
+            } else {
+                Some(existing)  // Keep as-is
+            }
+        },
+    ).await?;
+    Ok(())
+}).await?;
+#+end_src
+**** Merge fields
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "profile")]
+struct Profile {
+    #[rumps(key)]
+    user_id: u64,
+    bio: Option<String>,
+    website: Option<String>,
+}
+
+// Only update fields that are Some in the new value
+db.transaction(|txn| async move {
+    let update = Profile {
+        user_id: 123,
+        bio: Some("New bio".into()),
+        website: None,  // Don't touch existing website
+    };
+    Profile::upsert(&txn, update.clone(), move |existing| {
+        Some(Profile {
+            bio: update.bio.or(existing.bio),
+            website: update.website.or(existing.website),
+            ..existing
+        })
+    }).await?;
+    Ok(())
+}).await?;
+#+end_src
+
+* Attributes
+** Container-level (on struct/enum)
+| Attribute                   | Required | Description                                             |
+|-----------------------------+----------+---------------------------------------------------------|
+| =global = "name"=           | Yes      | Global name (e.g., ="patient"= stores under =^patient=) |
+| =rename_all = "case-style"= | No       | Case conversion for fields/variants                     |
+| =tag = "field"=             | No       | Adjacent tagging for enums (discriminator field)        |
+| =content = "field"=         | No       | Content field for adjacent tagging                      |
+| =untagged=                  | No       | No variant tag in storage (for enums)                   |
+
+** Field-level (on struct fields)
+| Attribute         | Description                                                 |
+|-------------------+-------------------------------------------------------------|
+| =key=             | Field is part of the primary key                            |
+| =key, order = N=  | Explicit ordering for composite keys                        |
+| =flatten=         | Inline nested struct fields at same level                   |
+| =subtree=         | Store nested struct under field name subscript              |
+| =rename = "name"= | Custom subscript name for this field                        |
+| =skip=            | Don't persist; uses =Default::default()= on read            |
+| =default=         | Use =Default::default()= if field missing                   |
+| =default = expr=  | Use specific default if field missing (e.g., =default = 0=) |
+
+* Composite keys
+Use =order= to specify key field ordering:
+
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "visit")]
+struct Visit {
+    #[rumps(key, order = 0)]
+    patient_id: u64,
+    #[rumps(key, order = 1)]
+    visit_date: String,
+    diagnosis: String,
+}
+// Stores: ^visit(123, "2025-01-15", "diagnosis") = "checkup"
+
+// Query all visits for patient 123 (prefix query on first key field)
+let visits = Visit::query(&db, 123u64).await?;
+#+end_src
+
+* Nested structs
+** =flatten=
+Inlines nested struct fields at the same level (no additional subscript):
+
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+struct Address {
+    street: String,
+    city: String,
+}
+
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "patient")]
+struct Patient {
+    #[rumps(key)]
+    id: u64,
+    name: String,
+    #[rumps(flatten)]
+    addr: Address,
+}
+// ^patient(1, "street") = "123 Main St"
+// ^patient(1, "city")   = "Springfield"
+#+end_src
+
+** =subtree=
+Stores nested struct under a subscript:
+
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "patient")]
+struct Patient {
+    #[rumps(key)]
+    id: u64,
+    name: String,
+    #[rumps(subtree)]
+    addr: Address,
+}
+// ^patient(1, "addr", "street") = "123 Main St"
+// ^patient(1, "addr", "city")   = "Springfield"
+#+end_src
+
+* Unit enums
+Unit enums (no data) use =ToValue= / =FromValue= for storage as string values:
+
+#+begin_src rust
+use rumps::orm::{ToValue, FromValue};
+
+#[derive(Debug, PartialEq, ToValue, FromValue)]
+enum Priority {
+    Low,
+    Medium,
+    High,
+}
+// Priority::High -> Value::String("High")
+
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "task")]
+struct Task {
+    #[rumps(key)]
+    id: u64,
+    priority: Priority,  // Stored as string value
+}
+#+end_src
+
+* Data-carrying enums
+:PROPERTIES:
+:CUSTOM_ID: data-carrying-enums
+:END:
+Enums with associated data use =ToRumps= / =FromRumps=:
+
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "status")]
+enum EmploymentStatus {
+    Active,                                    // Unit variant
+    OnLeave { reason: String },                // Struct variant
+    Terminated { date: String, reason: Option<String> },
+}
+// Unit:   ^status("Active") = ""
+// Struct: ^status("OnLeave") = "", ^status("OnLeave", "reason") = "vacation"
+#+end_src
+
+** Variant types
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "data")]
+enum Data {
+    // Unit: ^data("Empty") = ""
+    Empty,
+
+    // Single-field tuple: value stored directly
+    // ^data("Error") = "something went wrong"
+    Error(String),
+
+    // Multi-field tuple: numeric indices
+    // ^data("Point", 0) = 1.0, ^data("Point", 1) = 2.0
+    Point(f64, f64),
+
+    // Struct variant with key field
+    // ^data("Person", 123, "name") = "Alice"
+    Person {
+        #[rumps(key)]
+        id: u64,
+        name: String,
+    },
+}
+#+end_src
+
+** Untagged enums
+Use =untagged= when you don't want variant names in storage. Variants are tried in declaration order during deserialization:
+
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "value", untagged)]
+enum JsonValue {
+    Null,           // Matches empty data
+    Number(f64),    // Matches single numeric value
+    Text(String),   // Matches single string value
+}
+// Number: ^value() = 42.0  (no variant tag)
+// Text:   ^value() = "hello"
+#+end_src
+
+*Note*: Ensure variants have distinguishable structures; the first matching variant wins.
+
+* Case transformation
+Use =rename_all= to transform field/variant names:
+
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "user", rename_all = "camel-case")]
+struct User {
+    #[rumps(key)]
+    user_id: u64,
+    first_name: String,  // stored as "firstName"
+    last_name: String,   // stored as "lastName"
+}
+#+end_src
+
+Supported styles: =snake-case=, =camel-case=, =pascal-case=, =train-case=, =lowercase=, =uppercase=, =screaming-snake-case=.
+
+* Newtype structs
+Newtypes transparently delegate to their inner type:
+
+#+begin_src rust
+use rumps::orm::{ToValue, FromValue, ToSubscript, FromSubscript};
+
+#[derive(ToValue, FromValue)]
+struct UserId(u64);
+
+#[derive(ToSubscript, FromSubscript)]
+struct Email(String);
+#+end_src
+
+For =ToRumps= / =FromRumps= newtypes, an explicit =global= is required:
+
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "admin")]  // Separate storage from User
+struct AdminUser(User);
+#+end_src
+
+* Optional fields
+=Option<T>= fields are not stored when =None=:
+
+#+begin_src rust
+#[derive(ToRumps, FromRumps)]
+#[rumps(global = "profile")]
+struct Profile {
+    #[rumps(key)]
+    user_id: u64,
+    bio: Option<String>,      // Not stored if None
+    website: Option<String>,  // Not stored if None
+}
+#+end_src
+
+Missing optional fields default to =None= on read.
+
+* Storage overhead
+The ORM writes an empty-string marker at each record's prefix key:
+
+#+begin_src text
+^patient(123)         = ""        ; marker (empty string)
+^patient(123, "name") = "Alice"
+^patient(123, "age")  = 30
+#+end_src
+
+This marker serves two purposes:
+1. Ensures records with all-=Option= fields still exist in storage
+2. Enables efficient record-boundary detection when streaming multiple records (e.g., =all=, =query=)
+
+The overhead is one empty-string value per record. For most use cases this is negligible, but if you're storing millions of tiny records where every byte counts, consider using the raw API (=SET= / =GET=) instead.
+
+* Supported types
+** Primitives
+- Integers: =i8=, =i16=, =i32=, =i64=, =u8=, =u16=, =u32=, =u64=, =isize=, =usize=
+- Floats: =f32=, =f64=
+- Boolean: =bool=
+- Char: =char=
+- String: =String=, =&str=
+- JSON: =serde_json::Value=
+- Bytes: =Vec<u8>= (stored as JSON array)
+
+** Collections
+- =Option<T>=: Not stored when =None=
+- Nested structs via =flatten= or =subtree=

@@ -160,40 +160,12 @@ pub trait FromRumps: Sized {
         I: Iterator<Item = (Key, Value)>;
 }
 
-/// Read operations for types implementing [`FromRumps`].
+/// Read operations trait for storage backends.
 ///
-/// This trait is implemented for both [`Database`] and [`Transaction`],
-/// allowing reads from either context.
-///
-/// # Ordering Guarantee
-///
-/// Methods returning multiple records ([`all`](Self::all), [`query`](Self::query))
-/// **must** return results in key-collation order. This is a fundamental property
-/// inherited from RUMPS's B-tree storage — data is stored sorted, so no explicit
-/// sorting is required or desired.
-///
-/// Implementations **must not** use unordered collections (e.g., `HashMap`,
-/// `HashSet`) in code paths that produce results. Use `Vec`, `BTreeMap`, or
-/// other ordered types only.
-///
-/// # Example
-///
-/// ```ignore
-/// use rumps_storage::{Database, RumpsRead};
-///
-/// let db = Database::in_memory()?;
-///
-/// // Get a single record by key
-/// let user: Option<User> = db.one::<User, _>(123u64).await?;
-///
-/// // Get all records of this type (returned in key order)
-/// let users: Vec<User> = db.all::<User>().await?;
-///
-/// // Check if a record exists
-/// let exists: bool = db.exists::<User, _>(123u64).await?;
-/// ```
+/// This trait is sealed and implemented for [`Database`] and [`Transaction`].
+/// Prefer using [`RumpsRead`] methods on your types for a more ergonomic API.
 #[async_trait]
-pub trait RumpsRead: Sealed {
+pub trait RumpsReader: Sealed {
     /// Gets a single record by key.
     ///
     /// Returns `None` if the record doesn't exist.
@@ -220,29 +192,12 @@ pub trait RumpsRead: Sealed {
         K: IntoKey + Send;
 }
 
-/// Write operations for types implementing [`ToRumps`].
+/// Write operations trait for storage backends.
 ///
-/// This trait is ONLY implemented for [`Transaction`], enforcing at compile
-/// time that writes must go through transactions.
-///
-/// # Example
-///
-/// ```ignore
-/// use rumps_storage::{Database, RumpsWrite};
-///
-/// let db = Database::in_memory()?;
-///
-/// // Writes require a transaction
-/// db.transaction(|txn| async move {
-///     txn.insert(&User { id: 1, name: "Alice".into(), age: 30 }).await?;
-///     Ok(())
-/// }).await?;
-///
-/// // This would NOT compile:
-/// // db.insert(&user).await?;  // Error: RumpsWrite not impl for Database
-/// ```
+/// This trait is sealed and only implemented for [`Transaction`].
+/// Prefer using [`RumpsWrite`] methods on your types for a more ergonomic API.
 #[async_trait]
-pub trait RumpsWrite: Sealed {
+pub trait RumpsWriter: Sealed {
     /// Inserts a new record.
     async fn insert<T>(&self, val: &T) -> Result<()>
     where
@@ -268,11 +223,203 @@ pub trait RumpsWrite: Sealed {
     async fn upsert<T, F>(&self, val: T, f: F) -> Result<()>
     where
         T: ToRumps + FromRumps + Sync + Send,
-        F: FnOnce(&T) -> Option<T> + Send;
+        F: FnOnce(T) -> Option<T> + Send;
+}
+
+/// Read operations for RUMPS entity types.
+///
+/// This trait is automatically implemented for any type implementing
+/// [`FromRumps`]. Methods are called on the type itself rather than
+/// on `Database`/`Transaction`.
+///
+/// # Ordering Guarantee
+///
+/// Methods returning multiple records ([`all`](Self::all), [`query`](Self::query))
+/// return results in key-collation order. This is inherited from RUMPS's B-tree
+/// storage; data is stored sorted, so no explicit sorting is required.
+///
+/// # Example
+///
+/// ```ignore
+/// use rumps_storage::{Database, RumpsRead};
+///
+/// let db = Database::in_memory()?;
+///
+/// // Get a single record by key
+/// let user = User::one(&db, 123u64).await?;
+///
+/// // Get all records (returned in key order)
+/// let users = User::all(&db).await?;
+///
+/// // Check if a record exists
+/// let exists = User::exists(&db, 123u64).await?;
+///
+/// // Query by prefix
+/// let subset = User::query(&db, "prefix").await?;
+/// ```
+#[async_trait]
+pub trait RumpsRead: FromRumps + Send + Sync + Sized {
+    /// Gets a single record by key.
+    ///
+    /// Returns `None` if the record doesn't exist.
+    async fn one<K, R>(r: &R, key: K) -> Result<Option<Self>>
+    where
+        K: IntoKey + Send,
+        R: RumpsReader + Sync;
+
+    /// Checks if a record exists.
+    async fn exists<K, R>(r: &R, key: K) -> Result<bool>
+    where
+        K: IntoKey + Send,
+        R: RumpsReader + Sync;
+
+    /// Gets all records of this type.
+    async fn all<R>(r: &R) -> Result<Vec<Self>>
+    where
+        R: RumpsReader + Sync;
+
+    /// Queries records matching a key prefix.
+    async fn query<K, R>(r: &R, prefix: K) -> Result<Vec<Self>>
+    where
+        K: IntoKey + Send,
+        R: RumpsReader + Sync;
+}
+
+/// Write operations for RUMPS entity types.
+///
+/// This trait is automatically implemented for any type implementing
+/// [`ToRumps`]. Write methods require a [`Transaction`] reference.
+///
+/// # Example
+///
+/// ```ignore
+/// use rumps_storage::{Database, RumpsWrite};
+///
+/// let db = Database::in_memory()?;
+///
+/// db.transaction(|tx| async move {
+///     // Insert a record
+///     user.insert(&tx).await?;
+///
+///     // Delete by key
+///     User::delete(&tx, 123u64).await?;
+///
+///     // Batch insert
+///     User::insert_many(&tx, &users).await?;
+///
+///     // Upsert
+///     User::upsert(&tx, user, |old| Some(modified)).await?;
+///
+///     Ok(())
+/// }).await?;
+/// ```
+#[async_trait]
+pub trait RumpsWrite: ToRumps + Send + Sync + Sized {
+    /// Inserts this record.
+    async fn insert<W>(&self, w: &W) -> Result<()>
+    where
+        W: RumpsWriter + Sync;
+
+    /// Deletes a record by key.
+    async fn delete<W, K>(w: &W, key: K) -> Result<()>
+    where
+        W: RumpsWriter + Sync,
+        K: IntoKey + Send;
+
+    /// Inserts multiple records efficiently in a single batch.
+    async fn insert_many<W>(w: &W, vals: &[Self]) -> Result<()>
+    where
+        W: RumpsWriter + Sync;
+
+    /// Inserts or updates a record.
+    ///
+    /// If the record doesn't exist, inserts `val`. If it exists, applies the
+    /// callback `f` to the existing record:
+    /// - `Some(new)` replaces with `new`
+    /// - `None` deletes the record
+    async fn upsert<W, F>(w: &W, val: Self, f: F) -> Result<()>
+    where
+        Self: FromRumps,
+        W: RumpsWriter + RumpsReader + Sync,
+        F: FnOnce(Self) -> Option<Self> + Send;
 }
 
 #[async_trait]
-impl RumpsRead for Database {
+impl<T> RumpsRead for T
+where
+    T: FromRumps + Send + Sync,
+{
+    async fn one<K, R>(r: &R, key: K) -> Result<Option<Self>>
+    where
+        K: IntoKey + Send,
+        R: RumpsReader + Sync,
+    {
+        r.one(key).await
+    }
+
+    async fn exists<K, R>(r: &R, key: K) -> Result<bool>
+    where
+        K: IntoKey + Send,
+        R: RumpsReader + Sync,
+    {
+        r.exists::<Self, _>(key).await
+    }
+
+    async fn all<R>(r: &R) -> Result<Vec<Self>>
+    where
+        R: RumpsReader + Sync,
+    {
+        r.all().await
+    }
+
+    async fn query<K, R>(r: &R, prefix: K) -> Result<Vec<Self>>
+    where
+        K: IntoKey + Send,
+        R: RumpsReader + Sync,
+    {
+        r.query(prefix).await
+    }
+}
+
+#[async_trait]
+impl<T> RumpsWrite for T
+where
+    T: ToRumps + Send + Sync,
+{
+    async fn insert<W>(&self, w: &W) -> Result<()>
+    where
+        W: RumpsWriter + Sync,
+    {
+        w.insert(self).await
+    }
+
+    async fn delete<W, K>(w: &W, key: K) -> Result<()>
+    where
+        W: RumpsWriter + Sync,
+        K: IntoKey + Send,
+    {
+        w.delete::<Self, _>(key).await
+    }
+
+    async fn insert_many<W>(w: &W, vals: &[Self]) -> Result<()>
+    where
+        W: RumpsWriter + Sync,
+    {
+        w.insert_many(vals).await
+    }
+
+    async fn upsert<W, F>(w: &W, val: Self, f: F) -> Result<()>
+    where
+        Self: FromRumps,
+        W: RumpsWriter + RumpsReader + Sync,
+        F: FnOnce(Self) -> Option<Self> + Send,
+    {
+        w.upsert(val, f).await
+    }
+}
+
+#[async_trait]
+impl RumpsReader for Database {
     async fn one<T, K>(&self, key: K) -> Result<Option<T>>
     where
         T: FromRumps + Send,
@@ -359,7 +506,7 @@ impl RumpsRead for Database {
 }
 
 #[async_trait]
-impl RumpsRead for Transaction {
+impl RumpsReader for Transaction {
     async fn one<T, K>(&self, key: K) -> Result<Option<T>>
     where
         T: FromRumps + Send,
@@ -441,7 +588,7 @@ impl RumpsRead for Transaction {
 }
 
 #[async_trait]
-impl RumpsWrite for Transaction {
+impl RumpsWriter for Transaction {
     async fn insert<T>(&self, val: &T) -> Result<()>
     where
         T: ToRumps + Sync,
@@ -497,13 +644,13 @@ impl RumpsWrite for Transaction {
     async fn upsert<T, F>(&self, val: T, f: F) -> Result<()>
     where
         T: ToRumps + FromRumps + Sync + Send,
-        F: FnOnce(&T) -> Option<T> + Send,
+        F: FnOnce(T) -> Option<T> + Send,
     {
         let key = val.to_key();
 
         match self.one::<T, _>(key.clone()).await? {
             None => self.insert(&val).await,
-            Some(ref old) => {
+            Some(old) => {
                 let name = global!(<T as ToRumps>::GLOBAL);
                 match f(old) {
                     Some(ref new) => {
@@ -790,7 +937,7 @@ mod tests {
         db.transaction(|txn| {
             let u = user.clone();
             async move {
-                txn.insert(&u).await?;
+                u.insert(&txn).await?;
                 Ok(())
             }
         })
@@ -798,7 +945,7 @@ mod tests {
         .unwrap();
 
         // Get record
-        let fetched: Option<User> = db.one(1u64).await.unwrap();
+        let fetched = User::one(&db, 1u64).await.unwrap();
         assert_eq!(fetched, Some(user));
     }
 
@@ -807,15 +954,16 @@ mod tests {
         let db = Database::in_memory().unwrap();
 
         // Doesn't exist yet
-        assert!(!db.exists::<User, _>(1u64).await.unwrap());
+        assert!(!User::exists(&db, 1u64).await.unwrap());
 
         // Insert
         db.transaction(|txn| async move {
-            txn.insert(&User {
+            User {
                 id: 1,
                 name: "Bob".into(),
                 age: 25,
-            })
+            }
+            .insert(&txn)
             .await?;
             Ok(())
         })
@@ -823,7 +971,7 @@ mod tests {
         .unwrap();
 
         // Now exists
-        assert!(db.exists::<User, _>(1u64).await.unwrap());
+        assert!(User::exists(&db, 1u64).await.unwrap());
     }
 
     #[tokio::test]
@@ -832,23 +980,26 @@ mod tests {
 
         // Insert multiple users
         db.transaction(|txn| async move {
-            txn.insert(&User {
+            User {
                 id: 1,
                 name: "Alice".into(),
                 age: 30,
-            })
+            }
+            .insert(&txn)
             .await?;
-            txn.insert(&User {
+            User {
                 id: 2,
                 name: "Bob".into(),
                 age: 25,
-            })
+            }
+            .insert(&txn)
             .await?;
-            txn.insert(&User {
+            User {
                 id: 3,
                 name: "Charlie".into(),
                 age: 35,
-            })
+            }
+            .insert(&txn)
             .await?;
             Ok(())
         })
@@ -856,7 +1007,7 @@ mod tests {
         .unwrap();
 
         // Get all records
-        let users: Vec<User> = db.all().await.unwrap();
+        let users = User::all(&db).await.unwrap();
         assert_eq!(users.len(), 3);
 
         // Verify order (by id)
@@ -871,11 +1022,12 @@ mod tests {
 
         // Insert
         db.transaction(|txn| async move {
-            txn.insert(&User {
+            User {
                 id: 1,
                 name: "Alice".into(),
                 age: 30,
-            })
+            }
+            .insert(&txn)
             .await?;
             Ok(())
         })
@@ -883,27 +1035,28 @@ mod tests {
         .unwrap();
 
         // Verify exists
-        assert!(db.exists::<User, _>(1u64).await.unwrap());
+        assert!(User::exists(&db, 1u64).await.unwrap());
 
         // Delete
         db.transaction(|txn| async move {
-            txn.delete::<User, _>(1u64).await?;
+            User::delete(&txn, 1u64).await?;
             Ok(())
         })
         .await
         .unwrap();
 
         // Verify deleted
-        assert!(!db.exists::<User, _>(1u64).await.unwrap());
+        assert!(!User::exists(&db, 1u64).await.unwrap());
     }
 
     #[tokio::test]
     async fn test_upsert_insert_when_not_exists() {
         let db = Database::in_memory().unwrap();
 
-        // Upsert when record doesn't exist - should insert
+        // Upsert when record doesn't exist; should insert
         db.transaction(|txn| async move {
-            txn.upsert(
+            User::upsert(
+                &txn,
                 User {
                     id: 1,
                     name: "Alice".into(),
@@ -917,7 +1070,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user: Option<User> = db.one(1u64).await.unwrap();
+        let user = User::one(&db, 1u64).await.unwrap();
         assert_eq!(user.as_ref().map(|u| &u.name), Some(&"Alice".to_string()));
         assert_eq!(user.as_ref().map(|u| u.age), Some(30));
     }
@@ -928,11 +1081,12 @@ mod tests {
 
         // Insert initial
         db.transaction(|txn| async move {
-            txn.insert(&User {
+            User {
                 id: 1,
                 name: "Alice".into(),
                 age: 30,
-            })
+            }
+            .insert(&txn)
             .await?;
             Ok(())
         })
@@ -941,7 +1095,8 @@ mod tests {
 
         // Upsert with callback that modifies existing
         db.transaction(|txn| async move {
-            txn.upsert(
+            User::upsert(
+                &txn,
                 User {
                     id: 1,
                     name: "ignored".into(),
@@ -961,7 +1116,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user: Option<User> = db.one(1u64).await.unwrap();
+        let user = User::one(&db, 1u64).await.unwrap();
         assert_eq!(user.as_ref().map(|u| &u.name), Some(&"Alicia".to_string()));
         assert_eq!(user.as_ref().map(|u| u.age), Some(31));
     }
@@ -972,20 +1127,22 @@ mod tests {
 
         // Insert initial
         db.transaction(|txn| async move {
-            txn.insert(&User {
+            User {
                 id: 1,
                 name: "Alice".into(),
                 age: 30,
-            })
+            }
+            .insert(&txn)
             .await?;
             Ok(())
         })
         .await
         .unwrap();
 
-        // Upsert with callback that returns None - should delete
+        // Upsert with callback that returns `None`; should delete
         db.transaction(|txn| async move {
-            txn.upsert(
+            User::upsert(
+                &txn,
                 User {
                     id: 1,
                     name: "ignored".into(),
@@ -999,7 +1156,7 @@ mod tests {
         .await
         .unwrap();
 
-        let user: Option<User> = db.one(1u64).await.unwrap();
+        let user = User::one(&db, 1u64).await.unwrap();
         assert!(user.is_none());
     }
 
@@ -1009,15 +1166,16 @@ mod tests {
 
         // Insert via transaction
         db.transaction(|txn| async move {
-            txn.insert(&User {
+            User {
                 id: 1,
                 name: "Alice".into(),
                 age: 30,
-            })
+            }
+            .insert(&txn)
             .await?;
 
             // Read within same transaction
-            let user: Option<User> = txn.one(1u64).await?;
+            let user = User::one(&txn, 1u64).await?;
             assert_eq!(
                 user.as_ref().map(|u| &u.name),
                 Some(&"Alice".to_string())
@@ -1051,11 +1209,11 @@ mod tests {
             },
         ];
 
-        // Insert all via insert_many
+        // Insert all via `insert_many`
         db.transaction(|txn| {
             let users = users.clone();
             async move {
-                txn.insert_many(&users).await?;
+                User::insert_many(&txn, &users).await?;
                 Ok(())
             }
         })
@@ -1063,7 +1221,7 @@ mod tests {
         .unwrap();
 
         // Verify all records
-        let all: Vec<User> = db.all().await.unwrap();
+        let all = User::all(&db).await.unwrap();
         assert_eq!(all.len(), 3);
         assert_eq!(
             all.iter().find(|u| u.id == 1).map(|u| &u.name),
@@ -1077,5 +1235,312 @@ mod tests {
             all.iter().find(|u| u.id == 3).map(|u| &u.name),
             Some(&"Charlie".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_entity_one() {
+        let db = Database::in_memory().unwrap();
+
+        let user = User {
+            id: 1,
+            name: "Alice".into(),
+            age: 30,
+        };
+
+        db.transaction(|txn| {
+            let u = user.clone();
+            async move {
+                u.insert(&txn).await?;
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+        // Entity-centric read
+        let fetched = User::one(&db, 1u64).await.unwrap();
+        assert_eq!(fetched, Some(user));
+    }
+
+    #[tokio::test]
+    async fn test_entity_exists() {
+        let db = Database::in_memory().unwrap();
+
+        // Doesn't exist yet
+        assert!(!User::exists(&db, 1u64).await.unwrap());
+
+        db.transaction(|txn| async move {
+            User {
+                id: 1,
+                name: "Bob".into(),
+                age: 25,
+            }
+            .insert(&txn)
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // Now exists
+        assert!(User::exists(&db, 1u64).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_entity_all() {
+        let db = Database::in_memory().unwrap();
+
+        db.transaction(|txn| async move {
+            User {
+                id: 1,
+                name: "Alice".into(),
+                age: 30,
+            }
+            .insert(&txn)
+            .await?;
+            User {
+                id: 2,
+                name: "Bob".into(),
+                age: 25,
+            }
+            .insert(&txn)
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let all = User::all(&db).await.unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_entity_delete() {
+        let db = Database::in_memory().unwrap();
+
+        db.transaction(|txn| async move {
+            User {
+                id: 1,
+                name: "Alice".into(),
+                age: 30,
+            }
+            .insert(&txn)
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert!(User::exists(&db, 1u64).await.unwrap());
+
+        // Delete by key
+        db.transaction(|txn| async move {
+            User::delete(&txn, 1u64).await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert!(!User::exists(&db, 1u64).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_entity_insert_many() {
+        let db = Database::in_memory().unwrap();
+
+        let users = vec![
+            User {
+                id: 1,
+                name: "Alice".into(),
+                age: 30,
+            },
+            User {
+                id: 2,
+                name: "Bob".into(),
+                age: 25,
+            },
+        ];
+
+        db.transaction(|txn| {
+            let users = users.clone();
+            async move {
+                User::insert_many(&txn, &users).await?;
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+        let all = User::all(&db).await.unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_entity_upsert() {
+        let db = Database::in_memory().unwrap();
+
+        // Insert new
+        db.transaction(|txn| async move {
+            User::upsert(
+                &txn,
+                User {
+                    id: 1,
+                    name: "Alice".into(),
+                    age: 30,
+                },
+                |_| panic!("should not be called for new record"),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let user = User::one(&db, 1u64).await.unwrap().unwrap();
+        assert_eq!(user.name, "Alice");
+
+        // Update existing
+        db.transaction(|txn| async move {
+            User::upsert(
+                &txn,
+                User {
+                    id: 1,
+                    name: "ignored".into(),
+                    age: 999,
+                },
+                |old| {
+                    Some(User {
+                        name: "Alicia".into(),
+                        age: old.age + 1,
+                        ..old
+                    })
+                },
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let user = User::one(&db, 1u64).await.unwrap().unwrap();
+        assert_eq!(user.name, "Alicia");
+        assert_eq!(user.age, 31);
+    }
+
+    #[tokio::test]
+    async fn test_transaction_atomicity() {
+        let db = Database::in_memory().unwrap();
+
+        // Insert initial user
+        db.transaction(|txn| async move {
+            User {
+                id: 1,
+                name: "Alice".into(),
+                age: 30,
+            }
+            .insert(&txn)
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // Transaction that fails should not commit any changes
+        let result: rumps_types::Result<()> = db
+            .transaction(|txn| async move {
+                User {
+                    id: 2,
+                    name: "Bob".into(),
+                    age: 25,
+                }
+                .insert(&txn)
+                .await?;
+
+                // Simulate error; this should cause rollback
+                Err(rumps_types::StorageError::InvalidConfiguration(
+                    "simulated error".into(),
+                )
+                .into())
+            })
+            .await;
+
+        assert!(result.is_err());
+
+        // User 2 should NOT exist (transaction rolled back)
+        assert!(!User::exists(&db, 2u64).await.unwrap());
+
+        // User 1 should still exist
+        assert!(User::exists(&db, 1u64).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_transaction_isolation_read_own_writes() {
+        let db = Database::in_memory().unwrap();
+
+        db.transaction(|txn| async move {
+            // Insert within transaction
+            User {
+                id: 1,
+                name: "Alice".into(),
+                age: 30,
+            }
+            .insert(&txn)
+            .await?;
+
+            // Should be able to read own write within same transaction
+            let user = User::one(&txn, 1u64).await?;
+            assert!(user.is_some());
+            assert_eq!(user.unwrap().name, "Alice");
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_multiple_writes_same_transaction() {
+        let db = Database::in_memory().unwrap();
+
+        // Multiple writes to same and different keys in one transaction
+        db.transaction(|txn| async move {
+            User {
+                id: 1,
+                name: "Alice".into(),
+                age: 30,
+            }
+            .insert(&txn)
+            .await?;
+
+            User {
+                id: 2,
+                name: "Bob".into(),
+                age: 25,
+            }
+            .insert(&txn)
+            .await?;
+
+            // Update user 1
+            User::delete(&txn, 1u64).await?;
+            User {
+                id: 1,
+                name: "Alicia".into(),
+                age: 31,
+            }
+            .insert(&txn)
+            .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // Verify final state
+        let user1 = User::one(&db, 1u64).await.unwrap().unwrap();
+        assert_eq!(user1.name, "Alicia");
+        assert_eq!(user1.age, 31);
+
+        let user2 = User::one(&db, 2u64).await.unwrap().unwrap();
+        assert_eq!(user2.name, "Bob");
     }
 }

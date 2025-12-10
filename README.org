@@ -296,6 +296,24 @@ let db = Database::builder()
     .create("./data")
     .await?;
 #+end_src
+***** Performance and durability
+RUMPS achieves roughly ~10k sequential writes/sec with full durability guarantees. This might sound slow compared to claims from other MUMPS-style databases (YottaDB advertises 100k+ transactions/sec), but the comparison isn't apples-to-apples.
+
+The difference comes down to /when/ data hits disk:
+
+| *Approach*               | *"Committed" means*                  | *On crash*                  | *Throughput*  |
+|--------------------------+--------------------------------------+-----------------------------+---------------|
+| RUMPS (default)          | WAL written + =fsync= complete       | No data loss                | ~10k ops/sec  |
+| YottaDB (default)        | In shared memory + journal buffer    | May lose last few seconds   | 100k+ ops/sec |
+| YottaDB (SYNC_IO)        | Journal =fsync= complete             | No data loss                | ~10k ops/sec  |
+
+YottaDB's speed comes from memory-mapped files and decoupled durability: a "commit" updates shared memory and appends to a journal buffer, but doesn't necessarily =fsync=. The OS flushes asynchronously. This is fast, but means recent commits can vanish on crash.
+
+RUMPS takes the opposite stance: when =transaction()= returns =Ok=, the data is on disk. Period. This bounds throughput by disk latency (~0.1ms on NVMe ≈ theoretical max ~10k/sec for sequential commits), but guarantees durability.
+
+If you /need/ YottaDB-style speed and can tolerate potential data loss, RUMPS isn't the right fit. If you want "commit means committed," RUMPS's performance is competitive with other durable systems.
+
+*NOTE*: Throughput for RUMPS comes from benches running on SSD with ZFS.
 ***** In-memory: ACI
 When using =Database::in_memory()=, writes to globals still require transactions and provide full *ACI* guarantees. The only difference is no durability (data is lost when the database is dropped).
 
