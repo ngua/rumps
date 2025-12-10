@@ -6,7 +6,6 @@ mod tests {
     use futures::{future, StreamExt};
     use rumps_types::{key, value, Value};
     use tokio::task;
-    use tokio::time::{sleep, Duration};
 
     use crate::btree::*;
     use crate::error::StorageError;
@@ -112,23 +111,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_writer_blocks_readers() {
+    async fn test_concurrent_node_access() {
         let btree = Arc::new(BTreeBuilder::default().build().unwrap());
 
-        let write_guard = btree.nodes.write().await;
+        // Insert a node
+        let node_id = NodeId::from(1);
+        btree.nodes.insert(node_id, Node::new_leaf()).await;
 
+        // Concurrent reads should work
         let btree_clone = Arc::clone(&btree);
-        let read_task = tokio::spawn(async move {
-            let start = tokio::time::Instant::now();
-            let _count = btree_clone.node_count().await;
-            start.elapsed()
-        });
+        let read_task =
+            tokio::spawn(async move { btree_clone.nodes.get(node_id).await });
 
-        sleep(Duration::from_millis(10)).await;
-        drop(write_guard);
+        let local_read = btree.nodes.get(node_id).await;
+        let spawned_read = read_task.await.unwrap();
 
-        let elapsed = read_task.await.unwrap();
-        assert!(elapsed >= Duration::from_millis(10));
+        assert!(local_read.is_some());
+        assert!(spawned_read.is_some());
     }
 
     #[tokio::test]
@@ -206,10 +205,7 @@ mod tests {
         let node_id = NodeId::from(1);
         let test_node = Node::new_leaf();
 
-        {
-            let mut nodes = btree.nodes.write().await;
-            nodes.insert(node_id, test_node.clone());
-        }
+        btree.nodes.insert(node_id, test_node.clone()).await;
 
         let result = btree.find_node(node_id).await;
         assert!(result.is_ok());
@@ -236,10 +232,7 @@ mod tests {
             is_leaf: true,
         };
 
-        {
-            let mut nodes = btree.nodes.write().await;
-            nodes.insert(node_id, node);
-        }
+        btree.nodes.insert(node_id, node).await;
 
         let result = btree.split_node(node_id).await;
         assert!(result.is_ok());
@@ -291,11 +284,8 @@ mod tests {
             is_leaf: true,
         };
 
-        {
-            let mut nodes = btree.nodes.write().await;
-            nodes.insert(left_id, left_node);
-            nodes.insert(right_id, right_node);
-        }
+        btree.nodes.insert(left_id, left_node).await;
+        btree.nodes.insert(right_id, right_node).await;
 
         btree
             .merge_nodes(left_id, sep_key, sep_val, right_id)

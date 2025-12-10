@@ -112,6 +112,90 @@ fn bench_set_batch(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark large batch `set` operations (100k elements).
+fn bench_set_batch_100k(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("set_batch_large");
+    group.sample_size(10); // Fewer samples for long-running bench
+
+    let batch_size = 100_000i64;
+    group.throughput(Throughput::Elements(batch_size as u64));
+    group.bench_function("100000_ops", |b| {
+        b.iter_batched(
+            || {
+                let dir = TempDir::new().unwrap();
+                let db = rt.block_on(Database::create(dir.path())).unwrap();
+                (dir, db)
+            },
+            |(_dir, db)| {
+                rt.block_on(async {
+                    db.transaction(|txn| async move {
+                        insert_keys(&txn, &global!("BENCH"), batch_size)
+                            .await?;
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+                })
+            },
+            BatchSize::LargeInput,
+        )
+    });
+
+    group.finish();
+}
+
+/// Benchmark multi-global writes (1000 values across 100 globals).
+///
+/// Tests sharded node cache performance with concurrent global access.
+fn bench_set_multi_global(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("set_multi_global");
+
+    let n_globals = 100usize;
+    let vals_per_global = 10i64;
+    let total = (n_globals as i64) * vals_per_global;
+
+    group.throughput(Throughput::Elements(total as u64));
+    group.bench_function(format!("{total}_across_{n_globals}_globals"), |b| {
+        b.iter_batched(
+            || {
+                let dir = TempDir::new().unwrap();
+                let db = rt.block_on(Database::create(dir.path())).unwrap();
+                // Pre-generate global names
+                let globals: Vec<Name> =
+                    (0..n_globals).map(|i| global!(&format!("G{i}"))).collect();
+                (dir, db, globals)
+            },
+            |(_dir, db, globals)| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let gs = globals.clone();
+                        async move {
+                            // Write vals_per_global values to each global
+                            futures::future::try_join_all(gs.iter().map(|g| {
+                                let t = &txn;
+                                async move {
+                                    insert_keys(t, g, vals_per_global).await
+                                }
+                            }))
+                            .await?;
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    group.finish();
+}
+
 /// Benchmark `get` operations on existing keys.
 fn bench_get(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
@@ -330,6 +414,8 @@ criterion_group!(
     bench_transaction_overhead,
     bench_set_single,
     bench_set_batch,
+    bench_set_batch_100k,
+    bench_set_multi_global,
     bench_get,
     bench_order,
     bench_collects,

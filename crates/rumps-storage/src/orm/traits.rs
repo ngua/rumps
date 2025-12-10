@@ -597,14 +597,8 @@ impl RumpsWriter for Transaction {
         let key = val.to_key();
         let pairs = val.to_pairs(&key);
 
-        // Insert all key-value pairs
-        futures::future::try_join_all(pairs.into_iter().map(|(k, v)| {
-            let name = name.clone();
-            async move { self.set(&name, &k, v).await }
-        }))
-        .await?;
-
-        Ok(())
+        // Insert all key-value pairs with single lock acquisition
+        self.set_many(&name, &pairs).await
     }
 
     async fn insert_many<T>(&self, vals: &[T]) -> Result<()>
@@ -614,19 +608,16 @@ impl RumpsWriter for Transaction {
         let name = global!(T::GLOBAL);
 
         // Flatten all pairs from all values into one batch
-        futures::future::try_join_all(vals.iter().flat_map(|val| {
-            let key = val.to_key();
-            val.to_pairs(&key)
-                .into_iter()
-                .map(|(k, v)| {
-                    let name = name.clone();
-                    async move { self.set(&name, &k, v).await }
-                })
-                .collect::<Vec<_>>()
-        }))
-        .await?;
+        let pairs: Vec<(Key, Value)> = vals
+            .iter()
+            .flat_map(|val| {
+                let key = val.to_key();
+                val.to_pairs(&key)
+            })
+            .collect();
 
-        Ok(())
+        // Insert all with single lock acquisition
+        self.set_many(&name, &pairs).await
     }
 
     async fn delete<T, K>(&self, key: K) -> Result<()>

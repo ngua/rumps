@@ -94,6 +94,82 @@ impl FromRumps for User {
     }
 }
 
+/// Second entity for multi-global benchmarks.
+#[derive(Debug, Clone, PartialEq)]
+struct Product {
+    id: u64,
+    name: String,
+    price: u64,
+}
+
+impl ToRumps for Product {
+    const GLOBAL: &'static str = "product";
+
+    fn to_key(&self) -> Key {
+        Key::from(vec![self.id.to_sub()])
+    }
+
+    fn to_pairs(&self, prefix: &Key) -> Vec<(Key, Value)> {
+        let mut name_key = prefix.clone();
+        name_key.push("name".to_sub());
+
+        let mut price_key = prefix.clone();
+        price_key.push("price".to_sub());
+
+        vec![
+            (prefix.clone(), value!("")),
+            (name_key, self.name.to_val()),
+            (price_key, self.price.to_val()),
+        ]
+    }
+}
+
+impl FromRumps for Product {
+    const GLOBAL: &'static str = "product";
+
+    fn from_pairs<I>(
+        prefix: &Key,
+        pairs: I,
+    ) -> std::result::Result<Self, DecodeError>
+    where
+        I: Iterator<Item = (Key, Value)>,
+    {
+        let mut name: Option<String> = None;
+        let mut price: Option<u64> = None;
+
+        pairs.for_each(|(k, v)| {
+            if k.len() == prefix.len() + 1 {
+                k.get(prefix.len()).into_iter().for_each(|field| {
+                    if field == &"name".to_sub() {
+                        name = String::from_val(&v).ok();
+                    } else if field == &"price".to_sub() {
+                        price = u64::from_val(&v).ok();
+                    }
+                });
+            }
+        });
+
+        let id = prefix
+            .get(0)
+            .ok_or(DecodeError::MissingField { field: "id" })
+            .and_then(u64::from_sub)?;
+
+        Ok(Self {
+            id,
+            name: name.ok_or(DecodeError::MissingField { field: "name" })?,
+            price: price.ok_or(DecodeError::MissingField { field: "price" })?,
+        })
+    }
+}
+
+fn make_product(id: u64) -> Product {
+    Product {
+        id,
+        name: format!("Product{id}"),
+        price: id * 100,
+    }
+}
+
 fn make_user(id: u64) -> User {
     User {
         id,
@@ -418,6 +494,50 @@ fn bench_orm_query(c: &mut Criterion) {
     });
 }
 
+/// Benchmark multi-global concurrent inserts.
+///
+/// This benchmark demonstrates the benefit of sharded node caching by inserting
+/// into multiple globals (User and Product) concurrently within a single transaction.
+fn bench_multi_global_insert(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("multi_global_insert");
+
+    [100u64, 500].into_iter().for_each(|batch_size| {
+        group.throughput(Throughput::Elements(batch_size * 2)); // Users + Products
+        group.bench_function(format!("{batch_size}_per_global"), |b| {
+            b.iter_batched(
+                || {
+                    let dir = TempDir::new().unwrap();
+                    let db = rt.block_on(Database::create(dir.path())).unwrap();
+                    let users: Vec<User> =
+                        (0..batch_size).map(make_user).collect();
+                    let products: Vec<Product> =
+                        (0..batch_size).map(make_product).collect();
+                    (dir, db, users, products)
+                },
+                |(_dir, db, users, products)| {
+                    rt.block_on(async {
+                        db.transaction(|txn| async move {
+                            // Insert into both globals concurrently
+                            let user_fut = User::insert_many(&txn, &users);
+                            let product_fut =
+                                Product::insert_many(&txn, &products);
+                            futures::try_join!(user_fut, product_fut)?;
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                    })
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_orm_insert,
@@ -429,6 +549,7 @@ criterion_group!(
     bench_orm_all_10k,
     bench_orm_delete,
     bench_orm_query,
+    bench_multi_global_insert,
 );
 
 criterion_main!(benches);

@@ -13,6 +13,85 @@ use crate::engine;
 use crate::error::{Result, StorageError};
 use crate::node::{Node, NodeData, NodeId};
 
+/// Number of shards for the node cache.
+const NODE_CACHE_SHARDS: usize = 64;
+
+/// Sharded node cache for reduced lock contention.
+///
+/// Distributes nodes across 64 shards by `NodeId`. Operations on nodes in
+/// different shards can proceed concurrently, improving throughput when
+/// multiple globals are accessed simultaneously.
+struct ShardedNodeCache {
+    shards: [RwLock<HashMap<NodeId, Arc<Node>>>; NODE_CACHE_SHARDS],
+}
+
+impl ShardedNodeCache {
+    fn new() -> Self {
+        Self {
+            shards: std::array::from_fn(|_| RwLock::new(HashMap::new())),
+        }
+    }
+
+    fn shard_idx(id: NodeId) -> usize {
+        (*id as usize) % NODE_CACHE_SHARDS
+    }
+
+    /// Returns a shared reference to the node (cheap Arc clone).
+    async fn get(&self, id: NodeId) -> Option<Arc<Node>> {
+        self.shards[Self::shard_idx(id)]
+            .read()
+            .await
+            .get(&id)
+            .cloned()
+    }
+
+    async fn insert(&self, id: NodeId, node: Node) {
+        self.shards[Self::shard_idx(id)]
+            .write()
+            .await
+            .insert(id, Arc::new(node));
+    }
+
+    async fn remove(&self, id: NodeId) -> Option<Arc<Node>> {
+        self.shards[Self::shard_idx(id)].write().await.remove(&id)
+    }
+
+    /// Modifies a node in-place. Uses `Arc::make_mut` for copy-on-write.
+    async fn modify<F, T>(&self, id: NodeId, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Node) -> T,
+    {
+        self.shards[Self::shard_idx(id)]
+            .write()
+            .await
+            .get_mut(&id)
+            .map(|arc| f(Arc::make_mut(arc)))
+            .ok_or_else(|| StorageError::NodeNotFound(id.into()))
+    }
+
+    /// Tries to modify a node in-place with a fallible closure.
+    async fn try_modify<F, T>(&self, id: NodeId, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Node) -> Result<T>,
+    {
+        self.shards[Self::shard_idx(id)]
+            .write()
+            .await
+            .get_mut(&id)
+            .ok_or_else(|| StorageError::NodeNotFound(id.into()))
+            .and_then(|arc| f(Arc::make_mut(arc)))
+    }
+
+    async fn len(&self) -> usize {
+        futures::future::join_all(
+            self.shards.iter().map(|s| async { s.read().await.len() }),
+        )
+        .await
+        .into_iter()
+        .sum()
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -171,17 +250,15 @@ impl NodeAllocator for DiskNodeAllocator {
 /// # });
 /// ```
 pub(crate) struct BTree {
-    /// Async-aware node storage pool (page cache with LRU eviction).
+    /// Sharded node storage for reduced lock contention.
     ///
-    /// Uses `tokio::sync::RwLock` for async-compatible concurrent access:
-    /// - Multiple readers can access simultaneously
-    /// - Writers get exclusive access
-    /// - Works seamlessly with `async`/`await`
+    /// Nodes are distributed across 64 shards by `NodeId`, allowing
+    /// concurrent access to nodes in different shards.
     ///
     /// `NodeId`s have no semantic ordering—they're internal references.
     /// The tree's logical ordering is maintained by parent-child links
     /// and sorted keys within each node.
-    nodes: RwLock<HashMap<NodeId, Node>>,
+    nodes: ShardedNodeCache,
 
     /// Optional storage engine for persistence.
     ///
@@ -301,7 +378,7 @@ impl BTreeBuilder {
             };
 
             Ok(BTree {
-                nodes: RwLock::new(HashMap::new()),
+                nodes: ShardedNodeCache::new(),
                 storage: self.storage,
                 allocator,
                 min_degree,
@@ -600,32 +677,19 @@ impl BTree {
     ///
     /// Returns `StorageError::NodeNotFound` if the node doesn't exist in
     /// cache or storage.
-    async fn load_node(&self, id: NodeId) -> Result<Node> {
-        // Check cache first
-        let cached = {
-            let nodes = self.nodes.read().await;
-            nodes.get(&id).cloned()
-        };
-
-        match cached {
+    async fn load_node(&self, id: NodeId) -> Result<Arc<Node>> {
+        // Check cache first; on miss, load from disk
+        match self.nodes.get(id).await {
             Some(node) => Ok(node),
             None => {
-                // Load from disk if storage is configured
                 let storage = self
                     .storage
                     .as_ref()
                     .ok_or(StorageError::NodeNotFound(*id))?;
 
                 let node = storage.read(id).await?;
-
-                // Add to cache
-                {
-                    let mut nodes = self.nodes.write().await;
-                    nodes.insert(id, node.clone());
-                    // TODO: Implement LRU eviction if cache is full
-                }
-
-                Ok(node)
+                self.nodes.insert(id, node.clone()).await;
+                Ok(Arc::new(node))
             }
         }
     }
@@ -638,17 +702,12 @@ impl BTree {
     /// For disk-backed trees, the page is marked dirty in the storage cache.
     /// For in-memory trees, just updates the node map.
     async fn save_node(&self, id: NodeId, node: Node) -> Result<()> {
-        // Update in-memory cache
-        {
-            let mut nodes = self.nodes.write().await;
-            nodes.insert(id, node.clone());
-        }
-
         // Mark dirty in storage cache (if configured)
         if let Some(storage) = self.storage.as_ref() {
             storage.mark_dirty(id, &node).await?;
         }
 
+        self.nodes.insert(id, node).await;
         Ok(())
     }
 
@@ -720,10 +779,7 @@ impl BTree {
                 Some(Err(e)) => Err(e),
                 Some(Ok(node)) => {
                     // Remove from cache
-                    {
-                        let mut nodes = self.nodes.write().await;
-                        nodes.remove(&node_id);
-                    }
+                    self.nodes.remove(node_id).await;
 
                     // Deallocate from storage
                     self.allocator.deallocate(node_id).await?;
@@ -789,7 +845,7 @@ impl BTree {
     /// # });
     /// ```
     pub(crate) async fn node_count(&self) -> usize {
-        self.nodes.read().await.len()
+        self.nodes.len().await
     }
 
     /// Returns whether a memory limit is configured.
@@ -1405,7 +1461,7 @@ impl BTree {
     /// // Internal use only - not exposed in public API
     /// let node = btree.find_node(node_id).await?;
     /// ```
-    async fn find_node(&self, id: NodeId) -> Result<Node> {
+    async fn find_node(&self, id: NodeId) -> Result<Arc<Node>> {
         self.load_node(id).await
     }
 
@@ -1474,8 +1530,10 @@ impl BTree {
         &self,
         id: NodeId,
     ) -> Result<(Key, Arc<NodeData>, NodeId)> {
-        // Find the node to split (returns owned node)
-        let node = self.load_node(id).await?;
+        // Find the node to split and take ownership
+        let node_arc = self.load_node(id).await?;
+        let node =
+            Arc::try_unwrap(node_arc).unwrap_or_else(|arc| (*arc).clone());
 
         // Calculate the median index
         let mid = node.keys.len() / 2;
@@ -1621,16 +1679,21 @@ impl BTree {
         right_id: NodeId,
     ) -> Result<()> {
         // Find both nodes
-        let left = self.load_node(left_id).await?;
-        let right = self.load_node(right_id).await?;
+        let left_arc = self.load_node(left_id).await?;
+        let right_arc = self.load_node(right_id).await?;
 
         // Verify they're compatible (both leaf or both internal)
-        if left.is_leaf != right.is_leaf {
+        if left_arc.is_leaf != right_arc.is_leaf {
             Err(StorageError::InvalidOperation(
                 "Cannot merge leaf and internal nodes".to_string(),
             ))
         } else {
-            // Destructure to take ownership of components
+            // Take ownership of components
+            let left =
+                Arc::try_unwrap(left_arc).unwrap_or_else(|arc| (*arc).clone());
+            let right =
+                Arc::try_unwrap(right_arc).unwrap_or_else(|arc| (*arc).clone());
+
             let Node {
                 keys: mut left_keys,
                 children: mut left_children,
@@ -1669,10 +1732,7 @@ impl BTree {
             self.save_node(left_id, merged).await?;
 
             // Remove right node from cache and deallocate
-            {
-                let mut nodes = self.nodes.write().await;
-                nodes.remove(&right_id);
-            }
+            self.nodes.remove(right_id).await;
             self.allocator.deallocate(right_id).await?;
 
             // Update statistics
@@ -1898,15 +1958,12 @@ impl BTree {
                 Ok(pos) => {
                     if node.is_leaf {
                         // Case 1: Key is in a leaf - remove it directly
-                        {
-                            let mut nodes = self.nodes.write().await;
-                            let n =
-                                nodes.get_mut(&node_id).ok_or_else(|| {
-                                    StorageError::NodeNotFound(node_id.into())
-                                })?;
-                            n.keys.remove(pos);
-                            n.values.remove(pos);
-                        }
+                        self.nodes
+                            .modify(node_id, |n| {
+                                n.keys.remove(pos);
+                                n.values.remove(pos);
+                            })
+                            .await?;
                         {
                             let mut stats = self.stats.write().await;
                             stats.key_count = stats.key_count.saturating_sub(1);
@@ -1925,25 +1982,23 @@ impl BTree {
                             self.find_predecessor(left_child).await?;
 
                         // Replace key with predecessor
-                        {
-                            let mut nodes = self.nodes.write().await;
-                            let n =
-                                nodes.get_mut(&node_id).ok_or_else(|| {
-                                    StorageError::NodeNotFound(node_id.into())
-                                })?;
-                            *n.keys.get_mut(pos).ok_or_else(|| {
-                                StorageError::InvalidOperation(format!(
-                                    "Key index {} out of bounds",
-                                    pos
-                                ))
-                            })? = pred_key.clone();
-                            *n.values.get_mut(pos).ok_or_else(|| {
-                                StorageError::InvalidOperation(format!(
-                                    "Value index {} out of bounds",
-                                    pos
-                                ))
-                            })? = pred_val;
-                        }
+                        self.nodes
+                            .try_modify(node_id, |n| {
+                                *n.keys.get_mut(pos).ok_or_else(|| {
+                                    StorageError::InvalidOperation(format!(
+                                        "Key index {} out of bounds",
+                                        pos
+                                    ))
+                                })? = pred_key.clone();
+                                *n.values.get_mut(pos).ok_or_else(|| {
+                                    StorageError::InvalidOperation(format!(
+                                        "Value index {} out of bounds",
+                                        pos
+                                    ))
+                                })? = pred_val;
+                                Ok(())
+                            })
+                            .await?;
 
                         // Delete predecessor from left subtree
                         // Pass ancestors WITH current node so rebalancing propagates
@@ -2173,16 +2228,12 @@ impl BTree {
         sib_id: NodeId,
         dir: BorrowDir,
     ) -> Result<()> {
-        let mut nodes = self.nodes.write().await;
         let err = |i| {
             StorageError::InvalidOperation(format!("Index {} out of bounds", i))
         };
 
-        let parent = nodes
-            .get(&parent_id)
-            .ok_or_else(|| StorageError::NodeNotFound(parent_id.into()))?
-            .clone();
-
+        // Load parent to get child_id and separator
+        let parent = self.load_node(parent_id).await?;
         let child_id = *parent
             .children
             .get(child_idx)
@@ -2191,8 +2242,6 @@ impl BTree {
             BorrowDir::Left => child_idx - 1,
             BorrowDir::Right => child_idx,
         };
-
-        // Get separator from parent
         let sep_key = parent
             .keys
             .get(sep_idx)
@@ -2202,40 +2251,37 @@ impl BTree {
             Arc::clone(parent.values.get(sep_idx).ok_or_else(|| err(sep_idx))?);
 
         // Extract from sibling (pop from end if left, drain first if right)
-        let (new_sep_key, new_sep_val, borrowed_child) = {
-            let sib = nodes
-                .get_mut(&sib_id)
-                .ok_or_else(|| StorageError::NodeNotFound(sib_id.into()))?;
-            let empty =
-                || StorageError::InvalidOperation("Empty sibling".into());
-            match dir {
-                BorrowDir::Left => (
-                    sib.keys.pop().ok_or_else(empty)?,
-                    sib.values.pop().ok_or_else(empty)?,
-                    if sib.is_leaf {
-                        None
-                    } else {
-                        sib.children.pop()
-                    },
-                ),
-                BorrowDir::Right => (
-                    sib.keys.drain(..1).next().ok_or_else(empty)?,
-                    sib.values.drain(..1).next().ok_or_else(empty)?,
-                    if sib.is_leaf {
-                        None
-                    } else {
-                        sib.children.drain(..1).next()
-                    },
-                ),
-            }
-        };
+        let (new_sep_key, new_sep_val, borrowed_child) = self
+            .nodes
+            .try_modify(sib_id, |sib| {
+                let empty =
+                    || StorageError::InvalidOperation("Empty sibling".into());
+                match dir {
+                    BorrowDir::Left => Ok((
+                        sib.keys.pop().ok_or_else(empty)?,
+                        sib.values.pop().ok_or_else(empty)?,
+                        if sib.is_leaf {
+                            None
+                        } else {
+                            sib.children.pop()
+                        },
+                    )),
+                    BorrowDir::Right => Ok((
+                        sib.keys.drain(..1).next().ok_or_else(empty)?,
+                        sib.values.drain(..1).next().ok_or_else(empty)?,
+                        if sib.is_leaf {
+                            None
+                        } else {
+                            sib.children.drain(..1).next()
+                        },
+                    )),
+                }
+            })
+            .await?;
 
         // Insert separator into child (front if left, end if right)
-        {
-            let child = nodes
-                .get_mut(&child_id)
-                .ok_or_else(|| StorageError::NodeNotFound(child_id.into()))?;
-            match dir {
+        self.nodes
+            .modify(child_id, |child| match dir {
                 BorrowDir::Left => {
                     child.keys.insert(0, sep_key);
                     child.values.insert(0, sep_val);
@@ -2250,20 +2296,19 @@ impl BTree {
                         .into_iter()
                         .for_each(|c| child.children.push(c));
                 }
-            }
-        }
+            })
+            .await?;
 
         // Update separator in parent
-        {
-            let p = nodes
-                .get_mut(&parent_id)
-                .ok_or_else(|| StorageError::NodeNotFound(parent_id.into()))?;
-            *p.keys.get_mut(sep_idx).ok_or_else(|| err(sep_idx))? = new_sep_key;
-            *p.values.get_mut(sep_idx).ok_or_else(|| err(sep_idx))? =
-                new_sep_val;
-        }
-
-        Ok(())
+        self.nodes
+            .try_modify(parent_id, |p| {
+                *p.keys.get_mut(sep_idx).ok_or_else(|| err(sep_idx))? =
+                    new_sep_key;
+                *p.values.get_mut(sep_idx).ok_or_else(|| err(sep_idx))? =
+                    new_sep_val;
+                Ok(())
+            })
+            .await
     }
 
     /// Removes the separator key and child pointer from parent after merge.
@@ -2272,20 +2317,17 @@ impl BTree {
         parent_id: NodeId,
         sep_idx: usize,
     ) -> Result<()> {
-        let mut nodes = self.nodes.write().await;
-        let parent = nodes
-            .get_mut(&parent_id)
-            .ok_or_else(|| StorageError::NodeNotFound(parent_id.into()))?;
-
-        parent.keys.remove(sep_idx);
-        parent.values.remove(sep_idx);
-        parent.children.remove(sep_idx + 1);
+        self.nodes
+            .modify(parent_id, |p| {
+                p.keys.remove(sep_idx);
+                p.values.remove(sep_idx);
+                p.children.remove(sep_idx + 1);
+            })
+            .await?;
 
         // Update key count
-        drop(nodes);
         let mut stats = self.stats.write().await;
         stats.key_count = stats.key_count.saturating_sub(1);
-        drop(stats);
 
         // If parent is root and now empty, it was handled by shrink_root_if_needed
         // Otherwise, we might need to recursively fix parent
@@ -2312,10 +2354,7 @@ impl BTree {
             (true, false, Some(new_root)) => {
                 // Promote the only child to be the new root
                 // Deallocate old root
-                {
-                    let mut nodes = self.nodes.write().await;
-                    nodes.remove(&root);
-                }
+                self.nodes.remove(root).await;
                 self.allocator.deallocate(root).await?;
 
                 // Update height
@@ -2330,10 +2369,7 @@ impl BTree {
             (true, true, _) => {
                 // Root is empty leaf - tree is now empty
                 // Deallocate the root node
-                {
-                    let mut nodes = self.nodes.write().await;
-                    nodes.remove(&root);
-                }
+                self.nodes.remove(root).await;
                 self.allocator.deallocate(root).await?;
 
                 // Update stats
@@ -2512,17 +2548,18 @@ impl BTree {
         data: NodeData,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            let node = self.load_node(node_id).await?;
+            let node_arc = self.load_node(node_id).await?;
 
             // Find the position where the key should be inserted
-            let pos = node
+            let pos = node_arc
                 .keys
                 .binary_search(key)
                 .unwrap_or_else(|insert_pos| insert_pos);
 
-            if node.is_leaf {
+            if node_arc.is_leaf {
                 // Leaf node: insert or merge the key-value pair
-                let mut updated_node = node;
+                let mut updated_node = Arc::try_unwrap(node_arc)
+                    .unwrap_or_else(|arc| (*arc).clone());
 
                 match updated_node.keys.get(pos) {
                     Some(existing_key) if existing_key == key => {
@@ -2562,13 +2599,14 @@ impl BTree {
                 Ok(())
             } else {
                 // Internal node: recurse to the appropriate child
-                let child_id = *node.children.get(pos).ok_or_else(|| {
-                    StorageError::InvalidOperation(format!(
-                        "Child index {} out of bounds (len {})",
-                        pos,
-                        node.children.len()
-                    ))
-                })?;
+                let child_id =
+                    *node_arc.children.get(pos).ok_or_else(|| {
+                        StorageError::InvalidOperation(format!(
+                            "Child index {} out of bounds (len {})",
+                            pos,
+                            node_arc.children.len()
+                        ))
+                    })?;
 
                 // Check if child is full
                 let child = self.load_node(child_id).await?;
@@ -2580,13 +2618,14 @@ impl BTree {
                         self.split_node(child_id).await?;
 
                     // Insert median into this node
-                    let mut updated_node = node;
+                    let mut updated_node = Arc::try_unwrap(node_arc)
+                        .unwrap_or_else(|arc| (*arc).clone());
                     updated_node.keys.insert(pos, median_key.clone());
                     updated_node.values.insert(pos, Arc::clone(&median_value));
                     updated_node.children.insert(pos + 1, new_child_id);
 
                     // Write updated parent
-                    self.save_node(node_id, updated_node.clone()).await?;
+                    self.save_node(node_id, updated_node).await?;
 
                     // Determine which child to recurse into
                     let next_child_id = if *key > median_key {
@@ -2600,7 +2639,7 @@ impl BTree {
                 } else {
                     // Child is not full, recurse directly
                     drop(child);
-                    drop(node);
+                    drop(node_arc);
                     self.insert_non_full_with_data(child_id, key, data).await
                 }
             }
@@ -2640,24 +2679,25 @@ impl BTree {
             match node.keys.get(pos) {
                 Some(k) if k == key => {
                     // Found the key - update the flag directly
-                    let mut nodes = self.nodes.write().await;
-                    let n = nodes.get_mut(&node_id).ok_or_else(|| {
-                        StorageError::NodeNotFound(node_id.into())
-                    })?;
-                    let old = n.values.get(pos).ok_or_else(|| {
-                        StorageError::InvalidOperation(format!(
-                            "Value index {} out of bounds",
-                            pos
-                        ))
-                    })?;
-                    let updated = NodeData::new(old.value.clone(), flag);
-                    *n.values.get_mut(pos).ok_or_else(|| {
-                        StorageError::InvalidOperation(format!(
-                            "Value index {} out of bounds for mutation",
-                            pos
-                        ))
-                    })? = Arc::new(updated);
-                    Ok(())
+                    self.nodes
+                        .try_modify(node_id, |n| {
+                            let old = n.values.get(pos).ok_or_else(|| {
+                                StorageError::InvalidOperation(format!(
+                                    "Value index {} out of bounds",
+                                    pos
+                                ))
+                            })?;
+                            let updated =
+                                NodeData::new(old.value.clone(), flag);
+                            *n.values.get_mut(pos).ok_or_else(|| {
+                                StorageError::InvalidOperation(format!(
+                                    "Value index {} out of bounds for mutation",
+                                    pos
+                                ))
+                            })? = Arc::new(updated);
+                            Ok(())
+                        })
+                        .await
                 }
                 _ if node.is_leaf => Err(StorageError::InvalidOperation(
                     format!("Key {:?} not found for flag update", key),

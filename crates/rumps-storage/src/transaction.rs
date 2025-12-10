@@ -1094,7 +1094,6 @@ impl TransactionBuilder {
             deleted_subtrees: Arc::new(RwLock::new(HashSet::new())),
             read_set: Arc::new(RwLock::new(HashSet::new())),
             snapshot,
-            ops_count: Arc::new(RwLock::new(0)),
             start_time: Instant::now(),
         })
     }
@@ -1159,8 +1158,6 @@ pub struct Transaction {
     // Snapshot Data
     snapshot: Arc<Snapshot>,
 
-    // Metrics
-    ops_count: Arc<RwLock<u64>>,
     start_time: Instant,
 }
 
@@ -1177,8 +1174,6 @@ impl Transaction {
     /// - Reads respect deleted subtrees
     /// - Reads are tracked in the read set for conflict detection
     pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
-        *self.ops_count.write().await += 1;
-
         let lookup_key = (name.clone(), key.clone());
 
         // Check write buffer first
@@ -1230,8 +1225,6 @@ impl Transaction {
     ///
     /// The change is not visible to other transactions until commit.
     pub async fn set(&self, name: &Name, key: &Key, val: Value) -> Result<()> {
-        *self.ops_count.write().await += 1;
-
         // Buffer the write
         let mut writes = self.writes.write().await;
         writes.insert(
@@ -1242,12 +1235,29 @@ impl Transaction {
         Ok(())
     }
 
+    /// Sets multiple values in the transaction's write buffer with a single lock.
+    ///
+    /// More efficient than calling `set` multiple times when inserting
+    /// many key-value pairs, as it only acquires the write lock once.
+    pub(crate) async fn set_many(
+        &self,
+        name: &Name,
+        pairs: &[(Key, Value)],
+    ) -> Result<()> {
+        let mut writes = self.writes.write().await;
+        pairs.iter().for_each(|(k, v)| {
+            writes.insert(
+                (name.clone(), k.clone()),
+                WriteOp::Set(NodeData::with_value(v.clone())),
+            );
+        });
+        Ok(())
+    }
+
     /// Kills a key and all its descendants in the transaction's write buffer.
     ///
     /// The deletion is not visible to other transactions until commit.
     pub async fn kill(&self, name: &Name, key: &Key) -> Result<()> {
-        *self.ops_count.write().await += 1;
-
         // Buffer the kill
         let mut writes = self.writes.write().await;
         writes.insert((name.clone(), key.clone()), WriteOp::KillSubtree);
@@ -1264,8 +1274,6 @@ impl Transaction {
     /// Combines buffered writes with the database snapshot to determine
     /// if a node has a value and/or descendants.
     pub async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus> {
-        *self.ops_count.write().await += 1;
-
         let lookup_key = (name.clone(), key.clone());
 
         // Check write buffer
@@ -1308,8 +1316,6 @@ impl Transaction {
         name: &Name,
         after: Option<&Key>,
     ) -> Result<Option<Key>> {
-        *self.ops_count.write().await += 1;
-
         self.order_impl(name, after).await
     }
 
@@ -1334,8 +1340,6 @@ impl Transaction {
         F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone + 'a,
         T: Send + 'a,
     {
-        *self.ops_count.write().await += 1;
-
         // Get owned guard for writes - O(1) memory, no collection
         let writes_guard = Arc::clone(&self.writes).read_owned().await;
 
@@ -1518,31 +1522,52 @@ impl Transaction {
                 .await?;
         }
 
-        // Apply all buffered writes using transaction-aware methods
+        // Apply all buffered writes using transaction-aware methods.
+        // Group by Name to avoid concurrent modifications to the same B-tree.
+        // Writes within each Name are applied sequentially; different Names run in parallel.
         let writes = self.writes.read().await;
         let db = self.db.clone();
         let txn_id = self.id;
         let start_ts = self.start_timestamp;
-        stream::iter(writes.iter().map(Ok))
-            .try_for_each(|((name, key), write_op)| {
+
+        // Group writes by Name
+        let mut by_name: BTreeMap<&Name, Vec<(&Key, &WriteOp)>> =
+            BTreeMap::new();
+        writes.iter().for_each(|((name, key), op)| {
+            by_name.entry(name).or_default().push((key, op));
+        });
+
+        // Process each Name's writes sequentially, but run Names in parallel
+        stream::iter(by_name.into_iter())
+            .map(|(name, ops)| {
                 let db = db.clone();
                 async move {
-                    match write_op {
-                        WriteOp::Set(data) => {
-                            let val = data.value.clone().ok_or_else(|| {
-                                StorageError::InvalidConfiguration(
-                                    "Set operation has no value".into(),
-                                )
-                            })?;
-                            db.set_with_txn(name, key, val, txn_id, start_ts)
-                                .await
-                        }
-                        WriteOp::KillSubtree | WriteOp::Delete => {
-                            db.kill_with_txn(name, key, txn_id, start_ts).await
-                        }
-                    }
+                    // Sequential within this Name (same B-tree)
+                    stream::iter(ops.into_iter().map(Ok))
+                        .try_for_each(|(key, write_op)| {
+                            let db = db.clone();
+                            async move {
+                                match write_op {
+                                    WriteOp::Set(data) => {
+                                        let val = data.value.clone().ok_or_else(|| {
+                                            StorageError::InvalidConfiguration(
+                                                "Set operation has no value".into(),
+                                            )
+                                        })?;
+                                        db.set_with_txn(name, key, val, txn_id, start_ts)
+                                            .await
+                                    }
+                                    WriteOp::KillSubtree | WriteOp::Delete => {
+                                        db.kill_with_txn(name, key, txn_id, start_ts).await
+                                    }
+                                }
+                            }
+                        })
+                        .await
                 }
             })
+            .buffer_unordered(16)
+            .try_for_each(|()| future::ready(Ok(())))
             .await?;
         drop(writes);
 
