@@ -1,0 +1,20 @@
+[package]
+name = "rumps-explorer"
+version = "0.1.0"
+edition = "2021"
+description = "TUI explorer for RUMPS databases"
+
+[[bin]]
+name = "rumps-explorer"
+path = "src/main.rs"
+
+[dependencies]
+rumps-storage = { path = "../rumps-storage" }
+rumps-types = { path = "../rumps-types" }
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { workspace = true }
+lru = "0.12"
+clap = { version = "4", features = ["derive"] }
+miette = { workspace = true }
+thiserror = { workspace = true }
