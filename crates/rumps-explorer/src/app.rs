@@ -294,12 +294,75 @@ impl App {
     }
 
     async fn load_subscripts(
-        _db: Database,
-        _global: &str,
-        _path: &Key,
+        db: Database,
+        global: &str,
+        path: &Key,
     ) -> Result<Vec<Item>> {
-        // TODO: implement actual subscript loading
-        Ok(Vec::new())
+        use std::collections::BTreeSet;
+
+        use futures::StreamExt;
+        use rumps_types::global;
+
+        let name = global!(global);
+        let depth = path.len();
+
+        // Collect unique subscripts at the next level
+        let results: Vec<Subscript> = db
+            .collects_vec(
+                &name,
+                None,
+                |k, _| k.len() > depth && k.starts_with(path),
+                |k, _| k.get(depth).cloned(),
+            )
+            .await
+            .into_diagnostic()?;
+
+        let subs: BTreeSet<Subscript> = results.into_iter().collect();
+
+        // Build items with flags and value preview
+        let width = shortcut_width(subs.len());
+        let items: Vec<Item> =
+            futures::stream::iter(subs.into_iter().enumerate())
+                .then(|(i, sub): (usize, Subscript)| {
+                    let db = db.clone();
+                    let name = name.clone();
+                    let mut key = path.clone();
+                    key.push(sub.clone());
+                    async move {
+                        let flags = db
+                            .data(&name, &key)
+                            .await
+                            .unwrap_or(DataStatus::NoData);
+                        let preview = match flags {
+                            DataStatus::HasValue | DataStatus::Both => db
+                                .get(&name, &key)
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(|v| truncate_value(&v, 40)),
+                            _ => None,
+                        };
+                        Item {
+                            subscript: sub,
+                            shortcut: shortcut(i, width),
+                            flags,
+                            preview,
+                        }
+                    }
+                })
+                .collect()
+                .await;
+
+        Ok(items)
+    }
+}
+
+fn truncate_value(v: &rumps_types::Value, max: usize) -> String {
+    let s = format!("{}", v);
+    if s.len() > max {
+        format!("{}...", &s[..max - 3])
+    } else {
+        s
     }
 }
 
