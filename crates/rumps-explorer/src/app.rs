@@ -91,6 +91,7 @@ pub struct App {
     pub items: Vec<Item>,
     pub input: String,
     pub pending: Option<BoxFuture<'static, Result<Vec<Item>>>>,
+    pub show_legend: bool,
     cache: LruCache<String, Vec<Item>>,
 }
 
@@ -103,6 +104,7 @@ impl App {
             items: Vec::new(),
             input: String::new(),
             pending: None,
+            show_legend: false,
             // SAFETY: CACHE_SIZE is a non-zero constant
             #[allow(clippy::unwrap_used)]
             cache: LruCache::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
@@ -129,9 +131,20 @@ impl App {
                         Action::Quit
                     }
 
-                    // Clear input
-                    KeyCode::Esc | KeyCode::Backspace => {
+                    // Clear input or close legend
+                    KeyCode::Esc => {
+                        self.show_legend = false;
                         self.input.clear();
+                        Action::None
+                    }
+                    KeyCode::Backspace => {
+                        self.input.clear();
+                        Action::None
+                    }
+
+                    // Toggle legend
+                    KeyCode::Char('?') => {
+                        self.show_legend = !self.show_legend;
                         Action::None
                     }
 

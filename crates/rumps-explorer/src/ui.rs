@@ -1,25 +1,29 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
 use crate::app::{App, Screen};
 
-const SHORTCUT_WIDTH: u16 = 7; // "[aaa] " + padding
+const SHORTCUT_WIDTH: u16 = 7;
 
 impl App {
     pub fn render(&self, f: &mut Frame) {
         let chunks = Layout::vertical([
-            Constraint::Length(3), // header
-            Constraint::Min(1),    // main
-            Constraint::Length(3), // footer
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(3),
         ])
         .split(f.area());
 
         self.render_header(f, chunks[0]);
         self.render_main(f, chunks[1]);
         self.render_footer(f, chunks[2]);
+
+        if self.show_legend {
+            self.render_legend(f);
+        }
     }
 
     fn render_header(&self, f: &mut Frame, area: Rect) {
@@ -41,12 +45,14 @@ impl App {
         let header = Paragraph::new(Line::from(vec![
             Span::styled(
                 "RUMPS Explorer",
-                Style::default().add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" | "),
-            Span::styled(title, Style::default().fg(Color::Cyan)),
-            Span::raw(" | "),
-            Span::raw(&self.db_path),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(title, Style::default().fg(Color::LightBlue)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&self.db_path, Style::default().fg(Color::DarkGray)),
         ]))
         .block(Block::default().borders(Borders::BOTTOM));
 
@@ -56,7 +62,10 @@ impl App {
     fn render_main(&self, f: &mut Frame, area: Rect) {
         match self.is_loading() {
             true => {
-                let loading = Paragraph::new("Loading...");
+                let loading = Paragraph::new(Span::styled(
+                    "Loading...",
+                    Style::default().fg(Color::Yellow),
+                ));
                 f.render_widget(loading, area);
             }
             false => self.render_items(f, area),
@@ -89,7 +98,11 @@ impl App {
         )
         .header(
             Row::new(vec!["Key", "Name", "Flags", "Value"])
-                .style(Style::default().add_modifier(Modifier::BOLD))
+                .style(
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                )
                 .bottom_margin(1),
         );
 
@@ -98,24 +111,88 @@ impl App {
 
     fn render_footer(&self, f: &mut Frame, area: Rect) {
         let hints = match &self.screen {
-            Screen::Globals => "[a-z] descend | [q] quit | [?] help",
-            Screen::Subscripts { .. } => {
-                "[a-z] descend | [u] up | [g] globals | [q] quit | [?] help"
-            }
+            Screen::Globals => vec![
+                Span::styled("[a-z]", Style::default().fg(Color::Yellow)),
+                Span::raw(" descend "),
+                Span::styled("[q]", Style::default().fg(Color::Yellow)),
+                Span::raw(" quit "),
+                Span::styled("[?]", Style::default().fg(Color::Yellow)),
+                Span::raw(" help"),
+            ],
+            Screen::Subscripts { .. } => vec![
+                Span::styled("[a-z]", Style::default().fg(Color::Yellow)),
+                Span::raw(" descend "),
+                Span::styled("[u]", Style::default().fg(Color::Yellow)),
+                Span::raw(" up "),
+                Span::styled("[g]", Style::default().fg(Color::Yellow)),
+                Span::raw(" globals "),
+                Span::styled("[q]", Style::default().fg(Color::Yellow)),
+                Span::raw(" quit "),
+                Span::styled("[?]", Style::default().fg(Color::Yellow)),
+                Span::raw(" help"),
+            ],
         };
 
         let input_display = match self.input.is_empty() {
-            true => String::new(),
-            false => format!(" > {}", self.input),
+            true => vec![],
+            false => vec![
+                Span::raw(" > "),
+                Span::styled(&self.input, Style::default().fg(Color::LightRed)),
+            ],
         };
 
-        let footer = Paragraph::new(Line::from(vec![
-            Span::raw(hints),
-            Span::styled(input_display, Style::default().fg(Color::Green)),
-        ]))
+        let footer = Paragraph::new(Line::from(
+            hints.into_iter().chain(input_display).collect::<Vec<_>>(),
+        ))
         .block(Block::default().borders(Borders::TOP));
 
         f.render_widget(footer, area);
+    }
+
+    fn render_legend(&self, f: &mut Frame) {
+        let area = centered_rect(40, 12, f.area());
+
+        let legend_text = vec![
+            Line::from(vec![Span::styled(
+                "Legend",
+                Style::default().add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "Flags:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(vec![
+                Span::styled("  V", Style::default().fg(Color::Green)),
+                Span::raw(" = node has value"),
+            ]),
+            Line::from(vec![
+                Span::styled("  +", Style::default().fg(Color::Blue)),
+                Span::raw(" = node has children"),
+            ]),
+            Line::from(vec![
+                Span::styled("  .", Style::default().fg(Color::DarkGray)),
+                Span::raw(" = absent"),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                Span::styled(" or ", Style::default().fg(Color::DarkGray)),
+                Span::styled("?", Style::default().fg(Color::Yellow)),
+                Span::styled(" to close", Style::default().fg(Color::DarkGray)),
+            ]),
+        ];
+
+        let legend = Paragraph::new(legend_text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::LightBlue))
+                .title(" Help "),
+        );
+
+        f.render_widget(Clear, area);
+        f.render_widget(legend, area);
     }
 }
 
@@ -135,4 +212,10 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         s.to_string()
     }
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    Rect::new(x, y, width.min(area.width), height.min(area.height))
 }
