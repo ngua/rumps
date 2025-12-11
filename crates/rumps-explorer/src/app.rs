@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io;
 use std::num::NonZeroUsize;
 
@@ -11,7 +12,7 @@ use miette::{IntoDiagnostic, Result};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use rumps_storage::Database;
-use rumps_types::{DataStatus, Key, Subscript};
+use rumps_types::{global, DataStatus, Key, Subscript};
 
 const CACHE_SIZE: usize = 64;
 
@@ -308,15 +309,10 @@ impl App {
 
     async fn load_subscripts(
         db: Database,
-        global: &str,
+        glob: &str,
         path: &Key,
     ) -> Result<Vec<Item>> {
-        use std::collections::BTreeSet;
-
-        use futures::StreamExt;
-        use rumps_types::global;
-
-        let name = global!(global);
+        let name = global!(glob);
         let depth = path.len();
 
         // Collect unique subscripts at the next level

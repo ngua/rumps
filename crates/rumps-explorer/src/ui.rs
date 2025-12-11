@@ -3,6 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
+use rumps_types::DataStatus;
 
 use crate::app::{App, Screen};
 
@@ -196,8 +197,7 @@ impl App {
     }
 }
 
-fn format_flags(status: rumps_types::DataStatus) -> String {
-    use rumps_types::DataStatus;
+fn format_flags(status: DataStatus) -> String {
     match status {
         DataStatus::NoData => "..".to_string(),
         DataStatus::HasValue => "V.".to_string(),
