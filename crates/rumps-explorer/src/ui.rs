@@ -1,3 +1,5 @@
+//! UI rendering for the RUMPS database explorer.
+
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -7,16 +9,21 @@ use rumps_types::DataStatus;
 
 use crate::app::{App, Screen};
 
+/// Column width for shortcut display (e.g., `[abc]`).
 const SHORTCUT_WIDTH: u16 = 7;
 
 impl App {
-    pub fn render(&self, f: &mut Frame) {
+    /// Renders the entire UI: header, main content, footer, and optional legend overlay.
+    pub(crate) fn render(&mut self, f: &mut Frame) {
         let chunks = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(3),
+            Constraint::Length(3), // header
+            Constraint::Min(1),    // main content
+            Constraint::Length(3), // footer
         ])
         .split(f.area());
+
+        // Calculate items per page from available height (minus table header + margin)
+        self.items_per_page = chunks[1].height.saturating_sub(2) as usize;
 
         self.render_header(f, chunks[0]);
         self.render_main(f, chunks[1]);
@@ -74,7 +81,7 @@ impl App {
     }
 
     fn render_items(&self, f: &mut Frame, area: Rect) {
-        let rows = self.items.iter().map(|item| {
+        let rows = self.visible_items().iter().map(|item| {
             let shortcut = format!("[{}]", item.shortcut);
             let name = format!("{}", item.subscript);
             let flags = format_flags(item.flags);
@@ -98,7 +105,7 @@ impl App {
             ],
         )
         .header(
-            Row::new(vec!["Key", "Name", "Flags", "Value"])
+            Row::new(vec!["", "Name", "Flags", "Value"])
                 .style(
                     Style::default()
                         .fg(Color::LightBlue)
@@ -111,7 +118,10 @@ impl App {
     }
 
     fn render_footer(&self, f: &mut Frame, area: Rect) {
-        let hints = match &self.screen {
+        let total = self.total_pages();
+        let has_pages = total > 1;
+
+        let base_hints = match &self.screen {
             Screen::Globals => vec![
                 Span::styled("[a-z]", Style::default().fg(Color::Yellow)),
                 Span::raw(" descend "),
@@ -134,6 +144,15 @@ impl App {
             ],
         };
 
+        let page_hints: Vec<Span> = match has_pages {
+            true => vec![
+                Span::raw(" "),
+                Span::styled("[<-/->]", Style::default().fg(Color::Yellow)),
+                Span::raw(" page "),
+            ],
+            false => vec![],
+        };
+
         let input_display = match self.input.is_empty() {
             true => vec![],
             false => vec![
@@ -142,8 +161,24 @@ impl App {
             ],
         };
 
+        let page_indicator: Vec<Span> = match has_pages {
+            true => vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!("{}/{}", self.page + 1, total),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ],
+            false => vec![],
+        };
+
         let footer = Paragraph::new(Line::from(
-            hints.into_iter().chain(input_display).collect::<Vec<_>>(),
+            base_hints
+                .into_iter()
+                .chain(page_hints)
+                .chain(input_display)
+                .chain(page_indicator)
+                .collect::<Vec<_>>(),
         ))
         .block(Block::default().borders(Borders::TOP));
 
@@ -197,6 +232,7 @@ impl App {
     }
 }
 
+/// Formats `DataStatus` as a 2-char flag string (V=value, +=children).
 fn format_flags(status: DataStatus) -> String {
     match status {
         DataStatus::NoData => "..".to_string(),
@@ -206,14 +242,14 @@ fn format_flags(status: DataStatus) -> String {
     }
 }
 
+/// Truncates string to `max` chars, adding `...` if needed.
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}...", &s[..max - 3])
-    } else {
-        s.to_string()
-    }
+    (s.len() > max)
+        .then(|| format!("{}...", &s[..max - 3]))
+        .unwrap_or_else(|| s.to_string())
 }
 
+/// Returns a centered rectangle of the given size within `area`.
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;

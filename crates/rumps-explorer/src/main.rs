@@ -1,3 +1,5 @@
+//! TUI explorer for browsing RUMPS databases.
+
 mod app;
 mod ui;
 
@@ -19,7 +21,8 @@ use rumps_storage::Database;
 #[command(name = "rumps-explorer")]
 #[command(about = "TUI explorer for RUMPS databases")]
 struct Cli {
-    /// Path to the database directory
+    /// Path to database directory.
+    #[arg(value_name = "DIR")]
     path: PathBuf,
 }
 

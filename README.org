@@ -38,9 +38,9 @@
   // supports `tokio`
   #[tokio::main]
   async fn main() -> rumps::Result<()> {
-      // Create a persistent database
+      // Create a persistent database; path is a directory (will contain data.db + wal/)
       let db = Database::create("./my_data").await?;
-      // You can later re-open
+      // You can later re-open the same directory
       // let db = Database::open("./my_data").await?;
 
       // Writes to globals require a transaction
@@ -293,7 +293,7 @@ use rumps::{Database, SyncMode};
 // Configure sync mode at creation time
 let db = Database::builder()
     .sync_mode(SyncMode::Immediate)  // Maximum durability
-    .create("./data")
+    .create("./data")  // path is a directory
     .await?;
 #+end_src
 ***** Performance and durability

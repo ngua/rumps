@@ -1,3 +1,5 @@
+//! Application state and event loop for the RUMPS database explorer.
+
 use std::collections::BTreeSet;
 use std::io;
 use std::num::NonZeroUsize;
@@ -14,8 +16,13 @@ use ratatui::Terminal;
 use rumps_storage::Database;
 use rumps_types::{global, DataStatus, Key, Subscript};
 
+/// Max entries in the navigation cache.
 const CACHE_SIZE: usize = 64;
 
+/// Main event loop. Renders UI and handles input/async data loading via `select!`.
+// NOTE: The `unwrap()` in `select!` is guarded by `if app.pending.is_some()`, but
+// clippy can't see through the macro expansion to verify this.
+#[allow(clippy::unwrap_used)]
 pub async fn run(
     db: Database,
     db_path: String,
@@ -24,13 +31,14 @@ pub async fn run(
     let mut app = App::new(db, db_path);
     let mut events = EventStream::new();
 
-    // Initial load of globals
     app.navigate_to(Screen::Globals);
 
     loop {
+        // NOTE: `render()` updates `app.items_per_page` based on terminal size
         term.draw(|f| app.render(f)).into_diagnostic()?;
 
         tokio::select! {
+            // Handle keyboard events
             Some(Ok(ev)) = events.next() => {
                 match app.handle_input(ev) {
                     Action::Quit => break,
@@ -38,6 +46,7 @@ pub async fn run(
                     Action::None => {}
                 }
             }
+            // Handle async data load completion
             res = async { app.pending.as_mut().unwrap().await }, if app.pending.is_some() => {
                 app.items = res?;
                 app.pending = None;
@@ -49,17 +58,21 @@ pub async fn run(
     Ok(())
 }
 
+/// Current view in the explorer.
 #[derive(Clone)]
-pub enum Screen {
+pub(crate) enum Screen {
+    /// Top-level list of all globals in the database.
     Globals,
+    /// Subscript level within a specific global.
     Subscripts { global: String, path: Key },
 }
 
 impl Screen {
+    /// Returns a unique string for caching this screen's items.
     fn cache_key(&self) -> String {
         match self {
-            Screen::Globals => "globals".to_string(),
-            Screen::Subscripts { global, path } => {
+            Self::Globals => "globals".to_string(),
+            Self::Subscripts { global, path } => {
                 let subs = path
                     .iter()
                     .map(|s| format!("{}", s))
@@ -71,33 +84,44 @@ impl Screen {
     }
 }
 
-pub enum Action {
+/// Result of processing a keyboard event.
+enum Action {
     None,
     Quit,
     Navigate(Screen),
 }
 
+/// A single row in the item list (global name or subscript).
 #[derive(Clone)]
-pub struct Item {
-    pub subscript: Subscript,
-    pub shortcut: String,
-    pub flags: DataStatus,
-    pub preview: Option<String>,
+pub(crate) struct Item {
+    pub(crate) subscript: Subscript,
+    pub(crate) shortcut: String,
+    pub(crate) flags: DataStatus,
+    pub(crate) preview: Option<String>,
 }
 
-pub struct App {
-    pub db: Database,
-    pub db_path: String,
-    pub screen: Screen,
-    pub items: Vec<Item>,
-    pub input: String,
-    pub pending: Option<BoxFuture<'static, Result<Vec<Item>>>>,
-    pub show_legend: bool,
+/// Main application state.
+pub(crate) struct App {
+    db: Database,
+    pub(crate) db_path: String,
+    pub(crate) screen: Screen,
+    /// All items at the current screen (may span multiple pages).
+    items: Vec<Item>,
+    /// Accumulated shortcut input (e.g., "ab" for shortcut `[ab]`).
+    pub(crate) input: String,
+    /// In-flight async load; `Some` while loading, `None` when idle.
+    pending: Option<BoxFuture<'static, Result<Vec<Item>>>>,
+    pub(crate) show_legend: bool,
+    /// Current page index (0-based).
+    pub(crate) page: usize,
+    /// Items per page; updated by `render()` based on terminal height.
+    pub(crate) items_per_page: usize,
+    /// LRU cache of previously loaded screens.
     cache: LruCache<String, Vec<Item>>,
 }
 
 impl App {
-    pub fn new(db: Database, db_path: String) -> Self {
+    fn new(db: Database, db_path: String) -> Self {
         Self {
             db,
             db_path,
@@ -106,17 +130,38 @@ impl App {
             input: String::new(),
             pending: None,
             show_legend: false,
+            page: 0,
+            items_per_page: 20, // default; updated at render time
             // SAFETY: CACHE_SIZE is a non-zero constant
             #[allow(clippy::unwrap_used)]
             cache: LruCache::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
         }
     }
 
-    pub fn is_loading(&self) -> bool {
+    pub(crate) fn total_pages(&self) -> usize {
+        match self.items_per_page {
+            0 => 1,
+            per_page => {
+                let total = self.items.len();
+                (total + per_page - 1) / per_page.max(1)
+            }
+        }
+        .max(1)
+    }
+
+    /// Returns the slice of items visible on the current page.
+    pub(crate) fn visible_items(&self) -> &[Item] {
+        let start = self.page * self.items_per_page;
+        let end = (start + self.items_per_page).min(self.items.len());
+        self.items.get(start..end).unwrap_or(&[])
+    }
+
+    pub(crate) fn is_loading(&self) -> bool {
         self.pending.is_some()
     }
 
-    pub fn handle_input(&mut self, ev: Event) -> Action {
+    /// Processes a terminal event and returns the resulting action.
+    fn handle_input(&mut self, ev: Event) -> Action {
         match ev {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 match key.code {
@@ -195,6 +240,17 @@ impl App {
                         action
                     }
 
+                    // Pagination
+                    KeyCode::Left => {
+                        self.page = self.page.saturating_sub(1);
+                        Action::None
+                    }
+                    KeyCode::Right => {
+                        let max = self.total_pages().saturating_sub(1);
+                        self.page = (self.page + 1).min(max);
+                        Action::None
+                    }
+
                     _ => Action::None,
                 }
             }
@@ -255,10 +311,12 @@ impl App {
         }
     }
 
-    pub fn navigate_to(&mut self, screen: Screen) {
+    /// Navigates to a new screen, loading from cache or initiating async fetch.
+    fn navigate_to(&mut self, screen: Screen) {
         let key = screen.cache_key();
         self.screen = screen.clone();
         self.input.clear();
+        self.page = 0;
 
         match self.cache.get(&key).cloned() {
             Some(items) => {
@@ -272,7 +330,8 @@ impl App {
         }
     }
 
-    pub fn cache_items(&mut self) {
+    /// Stores current items in the LRU cache.
+    fn cache_items(&mut self) {
         let key = self.screen.cache_key();
         self.cache.put(key, self.items.clone());
     }
@@ -329,6 +388,9 @@ impl App {
         let subs: BTreeSet<Subscript> = results.into_iter().collect();
 
         // Build items with flags and value preview
+        // NOTE: This makes separate `db.data()` and `db.get()` calls per subscript.
+        // Could be optimized to a single `collects_vec` pass that extracts flags and
+        // values directly, but the current approach is simpler and good enough for now.
         let width = shortcut_width(subs.len());
         let items: Vec<Item> =
             futures::stream::iter(subs.into_iter().enumerate())
@@ -366,23 +428,24 @@ impl App {
     }
 }
 
+/// Truncates a value's display string to `max` chars, adding `...` if needed.
 fn truncate_value(v: &rumps_types::Value, max: usize) -> String {
     let s = format!("{}", v);
-    if s.len() > max {
-        format!("{}...", &s[..max - 3])
-    } else {
-        s
-    }
+    (s.len() > max)
+        .then(|| format!("{}...", &s[..max - 3]))
+        .unwrap_or(s)
 }
 
+/// Returns the number of letters needed for shortcuts given `count` items.
 fn shortcut_width(count: usize) -> usize {
     match count {
-        0..=26 => 1,
-        27..=676 => 2,
-        _ => 3,
+        0..=26 => 1,   // a-z
+        27..=676 => 2, // aa-zz
+        _ => 3,        // aaa-zzz
     }
 }
 
+/// Generates a shortcut string (e.g., "a", "ab", "abc") for the given index.
 fn shortcut(idx: usize, width: usize) -> String {
     (0..width).fold(String::with_capacity(width), |mut acc, pos| {
         let divisor = 26usize.pow((width - 1 - pos) as u32);
