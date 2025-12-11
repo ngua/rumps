@@ -309,6 +309,15 @@ These numbers are with =SyncMode::OnCommit= (the default), meaning every transac
 Multi-global writes benefit from RUMPS's sharded node cache: writes to different globals can proceed in parallel with reduced lock contention, roughly doubling throughput compared to single-global workloads.
 
 *NOTE*: Benchmarks run on NVMe SSD with ZFS. Your mileage may vary based on storage hardware and filesystem.
+***** In-memory performance
+When using =Database::in_memory()=, there's no WAL, no =fsync=, no disk I/O at all. Throughput is substantially higher:
+
+| *Workload*                        | *Throughput*    |
+|-----------------------------------+-----------------|
+| Single global (sequential writes) | ~215 Kelem/s    |
+| Multi-global (100 globals)        | ~585 Kelem/s    |
+
+Which is roughly 4-5x faster than on-disk for single-global workloads and 5x for multi-global. If you want transactional semantics (atomicity, conflict detection, snapshot isolation) but don't need persistence, in-memory mode is a solid option for caching or scratch workspaces. See the next subsection on using =Database::in_memory= more generally.
 ***** In-memory: ACI
 When using =Database::in_memory()=, writes to globals still require transactions and provide full *ACI* guarantees. The only difference is no durability (data is lost when the database is dropped).
 
@@ -320,6 +329,7 @@ This is useful for:
 - *Testing*: Fast, isolated tests without disk cleanup
 - *Caching*: Transactional semantics for in-memory data with hierarchical structure
 - *Temporary workspaces*: Scratch space that doesn't need persistence
+- *Ephermal data*: You might want very fast throughput (see notes above) and access to hierarchical data, but don't need persistence or durability
 
 #+begin_src rust
 let db = Database::in_memory()?;
@@ -334,6 +344,8 @@ db.transaction(|txn| async move {
 // Locals never need transactions, regardless
 db.set(&local!("TEMP"), &key![1], value!("scratch")).await?;
 #+end_src
+
+Note that unlike e.g. Redis, structured, hierarchical, or nested data works well with RUMPS as a caching layer. For example, you don't need to encode data and store as e.g. ="user:1:foo:bar"= as a string and then re-parse it yourself; since this example is hierarchical, it would work well with RUMPS (e.g. ~USER(1, foo) = "bar"~).
 * Using RUMPS
 ** Core operations
 These are the fundamental building blocks for working with RUMPS data. All operations work on /keys/ within a /variable/ (global or local).

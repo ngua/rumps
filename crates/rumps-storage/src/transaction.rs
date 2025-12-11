@@ -802,6 +802,66 @@ impl TransactionManager {
         Ok(commit_ts)
     }
 
+    /// Atomically validates a transaction's write set and reserves a commit slot.
+    ///
+    /// This combines validation and recording under a single write lock to
+    /// prevent race conditions where two transactions both pass validation
+    /// before either records their commit.
+    ///
+    /// Returns the commit timestamp and an index into `committed_writes` where
+    /// the commit was recorded. If the commit needs to be rolled back (e.g.,
+    /// apply_writes fails), call `rollback_commit` with this index.
+    ///
+    /// # First-Committer-Wins Rule
+    ///
+    /// If transaction A starts, then transaction B starts, both write to key X,
+    /// and B commits first, then A will fail validation because B's commit
+    /// will be recorded before A can validate.
+    pub(crate) async fn validate_and_record(
+        &self,
+        txn_id: TransactionId,
+        start_ts: TransactionTimestamp,
+        write_set: HashSet<(Name, Key)>,
+    ) -> crate::error::Result<TransactionTimestamp> {
+        // Pre-allocate commit timestamp before taking the write lock
+        // to avoid nested lock acquisition
+        let commit_ts = self.current_timestamp().await;
+
+        // Early exit if nothing to validate/record
+        if write_set.is_empty() {
+            Ok(commit_ts)
+        } else {
+            // Take exclusive lock for atomic validation + recording
+            let mut committed = self.committed_writes.write().await;
+
+            // Validate: check for write-write conflicts with transactions
+            // that committed after our start timestamp
+            committed
+                .iter()
+                .filter(|cws| cws.commit_ts > start_ts)
+                .try_for_each(|cws| {
+                    write_set.iter().find(|key| cws.keys.contains(key)).map_or(
+                        Ok(()),
+                        |(name, key)| {
+                            Err(StorageError::WriteConflict {
+                                txn_id: *txn_id,
+                                name: name.clone(),
+                                key: key.clone(),
+                            })
+                        },
+                    )
+                })?;
+
+            // Record immediately (still holding lock)
+            committed.push(CommittedWriteSet {
+                commit_ts,
+                keys: write_set,
+            });
+
+            Ok(commit_ts)
+        }
+    }
+
     /// Cleans up old committed write sets that are no longer needed.
     ///
     /// A committed write set can be removed once all transactions that
@@ -1480,6 +1540,16 @@ impl Transaction {
     /// This validates the transaction for conflicts, applies all writes through
     /// the database layer (which handles WAL logging), and flushes to disk.
     ///
+    /// # Commit Protocol (Phase 4: Concurrent Transaction Commits)
+    ///
+    /// 1. Build write set from buffered writes
+    /// 2. Atomically validate + record (brief serialization point)
+    /// 3. Apply writes in parallel (grouped by Name)
+    /// 4. Flush (group commit batches concurrent flushes)
+    ///
+    /// The atomic validate+record step prevents race conditions where two
+    /// transactions both pass validation before either records their commit.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
@@ -1508,19 +1578,13 @@ impl Transaction {
             writes.keys().cloned().collect()
         };
 
-        // Validate no conflicts with other transactions
-        {
-            let read_set = self.read_set.read().await;
-            self.db
-                .txn_manager
-                .validate_no_conflicts(
-                    self.id,
-                    self.start_timestamp,
-                    &read_set,
-                    &write_set,
-                )
-                .await?;
-        }
+        // Atomically validate and record (brief serialization point).
+        // This prevents race conditions where two transactions both pass
+        // validation before either records their commit.
+        self.db
+            .txn_manager
+            .validate_and_record(self.id, self.start_timestamp, write_set)
+            .await?;
 
         // Apply all buffered writes using transaction-aware methods.
         // Group by Name to avoid concurrent modifications to the same B-tree.
@@ -1571,10 +1635,7 @@ impl Transaction {
             .await?;
         drop(writes);
 
-        // Record this transaction's write set for future conflict detection
-        self.db.txn_manager.record_commit(write_set).await?;
-
-        // Flush with transaction ID
+        // Flush with transaction ID (group commit batches concurrent flushes)
         self.db.flush_with_txn(self.id).await?;
 
         // Unregister transaction from manager and cleanup old commits

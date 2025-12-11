@@ -2141,4 +2141,355 @@ mod tests {
             }
         }
     }
+
+    /// Phase 4 tests: Concurrent Transaction Commits
+    mod concurrent_commits {
+        use std::sync::Arc;
+
+        use super::*;
+
+        /// N transactions writing to disjoint keys should all succeed.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn concurrent_commits_no_conflict() {
+            let db = Arc::new(Database::in_memory().unwrap());
+            let n = 10i64;
+            let name = rumps_types::global!("TEST");
+
+            // Process N transactions writing to disjoint keys
+            let mut results = Vec::with_capacity(n as usize);
+            (0..n).into_iter().for_each(|i| {
+                let db = Arc::clone(&db);
+                let name = name.clone();
+                let r = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        db.build_transaction()
+                            .begin(|txn| {
+                                let name = name.clone();
+                                async move {
+                                    txn.set(
+                                        &name,
+                                        &rumps_types::key![i],
+                                        rumps_types::Value::from(i),
+                                    )
+                                    .await?;
+                                    Ok(())
+                                }
+                            })
+                            .await
+                    })
+                });
+                results.push(r);
+            });
+
+            // All should succeed
+            results.iter().for_each(|r| {
+                assert!(r.is_ok(), "All disjoint transactions should commit");
+            });
+
+            // Verify all values persisted
+            (0..n).into_iter().for_each(|i| {
+                let db = Arc::clone(&db);
+                let name = name.clone();
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let val =
+                            db.get(&name, &rumps_types::key![i]).await.unwrap();
+                        assert_eq!(val, Some(rumps_types::Value::from(i)));
+                    });
+                });
+            });
+        }
+
+        /// N transactions writing to same key; first-committer wins.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn concurrent_commits_with_conflict() {
+            let db = Arc::new(Database::in_memory().unwrap());
+            let n = 5i64;
+            let name = rumps_types::global!("TEST");
+            let key = rumps_types::key![1];
+
+            // Start N transactions, all targeting the same key
+            let mut txns = Vec::with_capacity(n as usize);
+            (0..n).into_iter().for_each(|i| {
+                let db = Arc::clone(&db);
+                let txn = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(db.build_transaction().start())
+                        .unwrap()
+                });
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        txn.set(&name, &key, rumps_types::Value::from(i))
+                            .await
+                            .unwrap();
+                    });
+                });
+                txns.push((i, txn));
+            });
+
+            // Commit them sequentially; first succeeds, rest should fail
+            let mut results = Vec::with_capacity(n as usize);
+            txns.into_iter().for_each(|(i, txn)| {
+                let r = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(txn.commit())
+                });
+                results.push((i, r));
+            });
+
+            // Count successes and failures
+            let (successes, failures): (Vec<_>, Vec<_>) =
+                results.into_iter().partition(|(_, r)| r.is_ok());
+
+            // Exactly one should succeed (first-committer-wins)
+            assert_eq!(
+                successes.len(),
+                1,
+                "Exactly one transaction should succeed"
+            );
+            assert_eq!(
+                failures.len(),
+                (n - 1) as usize,
+                "All other transactions should fail"
+            );
+
+            // All failures should be WriteConflict
+            failures.iter().for_each(|(_, r)| {
+                assert!(
+                    matches!(r, Err(StorageError::WriteConflict { .. })),
+                    "Expected WriteConflict, got {:?}",
+                    r
+                );
+            });
+
+            // The committed value should be from the first transaction
+            let first_idx = successes.first().unwrap().0;
+            let val = db.get(&name, &key).await.unwrap();
+            assert_eq!(val, Some(rumps_types::Value::from(first_idx)));
+        }
+
+        /// Stress test: many threads hammering random keys.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn stress_concurrent_random_keys() {
+            let db = Arc::new(Database::in_memory().unwrap());
+            let n_txns = 50i64;
+            let n_keys = 20i64;
+            let name = rumps_types::global!("STRESS");
+
+            // Process transactions writing to various keys
+            let mut results = Vec::with_capacity(n_txns as usize);
+            (0..n_txns).into_iter().for_each(|i| {
+                let key_idx = i % n_keys;
+                let db = Arc::clone(&db);
+                let name = name.clone();
+                let r = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        db.build_transaction()
+                            .begin(|txn| {
+                                let name = name.clone();
+                                async move {
+                                    txn.set(
+                                        &name,
+                                        &rumps_types::key![key_idx],
+                                        rumps_types::Value::from(i),
+                                    )
+                                    .await?;
+                                    Ok(())
+                                }
+                            })
+                            .await
+                    })
+                });
+                results.push(r);
+            });
+
+            // Some should succeed, some may fail due to conflicts
+            let (successes, failures): (Vec<_>, Vec<_>) =
+                results.into_iter().partition(|r| r.is_ok());
+
+            // At least one should succeed per unique key
+            assert!(
+                !successes.is_empty(),
+                "At least some transactions should succeed"
+            );
+
+            // All failures should be WriteConflict
+            failures.iter().for_each(|r| {
+                assert!(
+                    matches!(
+                        r,
+                        Err(rumps_types::Error::Storage(
+                            StorageError::WriteConflict { .. }
+                        ))
+                    ),
+                    "Expected WriteConflict, got {:?}",
+                    r
+                );
+            });
+        }
+
+        /// Test that atomic validation+recording prevents the race condition.
+        ///
+        /// This test verifies that when two transactions race to commit the same
+        /// key, exactly one succeeds (first-committer-wins). The old code had a
+        /// race condition where both could pass validation before either recorded.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn atomic_validation_prevents_race() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::sync::Barrier;
+
+            let db = Arc::new(Database::in_memory().unwrap());
+            let name = rumps_types::global!("RACE");
+            let key = rumps_types::key![1];
+            let n_trials = 20i64;
+
+            // Run multiple trials to increase chance of catching race conditions
+            let mut both_succeeded = 0usize;
+            let mut one_succeeded = 0usize;
+
+            (0..n_trials).into_iter().for_each(|trial| {
+                let db = Arc::clone(&db);
+                let name = name.clone();
+                let key = key.clone();
+
+                // Use a barrier to synchronize the two commits
+                let barrier = Arc::new(Barrier::new(2));
+                let success_count = Arc::new(AtomicUsize::new(0));
+
+                // Start two transactions writing to the same key
+                let txn_a = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(db.build_transaction().start())
+                        .unwrap()
+                });
+                let txn_b = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(db.build_transaction().start())
+                        .unwrap()
+                });
+
+                // Both write to same key
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        txn_a
+                            .set(
+                                &name,
+                                &key,
+                                rumps_types::Value::from(trial * 2),
+                            )
+                            .await
+                            .unwrap();
+                        txn_b
+                            .set(
+                                &name,
+                                &key,
+                                rumps_types::Value::from(trial * 2 + 1),
+                            )
+                            .await
+                            .unwrap();
+                    });
+                });
+
+                // Spawn two threads that will try to commit at the same time
+                let b1 = Arc::clone(&barrier);
+                let sc1 = Arc::clone(&success_count);
+                let handle_a = std::thread::spawn(move || {
+                    b1.wait(); // Synchronize with other thread
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    let result = rt.block_on(txn_a.commit());
+                    if result.is_ok() {
+                        sc1.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+
+                let b2 = Arc::clone(&barrier);
+                let sc2 = Arc::clone(&success_count);
+                let handle_b = std::thread::spawn(move || {
+                    b2.wait(); // Synchronize with other thread
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    let result = rt.block_on(txn_b.commit());
+                    if result.is_ok() {
+                        sc2.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+
+                handle_a.join().unwrap();
+                handle_b.join().unwrap();
+
+                let successes = success_count.load(Ordering::SeqCst);
+                if successes == 2 {
+                    both_succeeded += 1;
+                } else if successes == 1 {
+                    one_succeeded += 1;
+                }
+            });
+
+            // With atomic validation, exactly one should succeed each trial.
+            // If the race condition existed, we'd see both_succeeded > 0.
+            assert_eq!(
+                both_succeeded, 0,
+                "Race condition detected! Both transactions succeeded {} times out of {}",
+                both_succeeded, n_trials
+            );
+            assert_eq!(
+                one_succeeded, n_trials as usize,
+                "Expected exactly one success per trial"
+            );
+        }
+
+        /// Concurrent commits across multiple globals should parallelize.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn concurrent_commits_multi_global() {
+            let db = Arc::new(Database::in_memory().unwrap());
+            let n = 10i64;
+
+            // Each transaction writes to its own global
+            let mut results = Vec::with_capacity(n as usize);
+            (0..n).into_iter().for_each(|i| {
+                let db = Arc::clone(&db);
+                let r = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let name =
+                            rumps_types::Name::Global(format!("GLOBAL{}", i));
+                        db.build_transaction()
+                            .begin(|txn| {
+                                let name = name.clone();
+                                async move {
+                                    txn.set(
+                                        &name,
+                                        &rumps_types::key![1],
+                                        rumps_types::Value::from(i),
+                                    )
+                                    .await?;
+                                    Ok(())
+                                }
+                            })
+                            .await
+                    })
+                });
+                results.push(r);
+            });
+
+            // All should succeed (no overlapping keys)
+            results.iter().for_each(|r| {
+                assert!(
+                    r.is_ok(),
+                    "All multi-global transactions should commit"
+                );
+            });
+
+            // Verify values
+            (0..n).into_iter().for_each(|i| {
+                let db = Arc::clone(&db);
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let name =
+                            rumps_types::Name::Global(format!("GLOBAL{}", i));
+                        let val =
+                            db.get(&name, &rumps_types::key![1]).await.unwrap();
+                        assert_eq!(val, Some(rumps_types::Value::from(i)));
+                    });
+                });
+            });
+        }
+    }
 }

@@ -2,8 +2,14 @@
 //!
 //! These benchmarks measure the performance of the public `Database` API,
 //! including transactions, reads, writes, and iteration.
+//!
+//! Benchmarks run against both in-memory and on-disk storage modes for
+//! comparison. Filter with `cargo bench -- InMemory` or `OnDisk` to run
+//! only one mode.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::fmt;
 
 use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, Criterion,
@@ -14,6 +20,37 @@ use rumps_storage::{Database, Transaction};
 use rumps_types::{global, key, value, Name, Value};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+
+/// Storage mode for benchmarks.
+#[derive(Clone, Copy)]
+enum Mode {
+    InMemory,
+    OnDisk,
+}
+
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Mode::InMemory => write!(f, "InMemory"),
+            Mode::OnDisk => write!(f, "OnDisk"),
+        }
+    }
+}
+
+const MODES: [Mode; 2] = [Mode::InMemory, Mode::OnDisk];
+
+/// Creates a database for the given mode. Returns `(Option<TempDir>, Database)`.
+/// The `TempDir` must be kept alive for on-disk DBs.
+fn create_db(mode: Mode, rt: &Runtime) -> (Option<TempDir>, Database) {
+    match mode {
+        Mode::InMemory => (None, Database::in_memory().unwrap()),
+        Mode::OnDisk => {
+            let dir = TempDir::new().unwrap();
+            let db = rt.block_on(Database::create(dir.path())).unwrap();
+            (Some(dir), db)
+        }
+    }
+}
 
 /// Helper to insert `n` sequential keys in a transaction.
 async fn insert_keys(
@@ -35,64 +72,107 @@ async fn insert_keys(
 /// Benchmark transaction overhead (begin + commit with no operations).
 fn bench_transaction_overhead(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let dir = TempDir::new().unwrap();
-    let db = rt.block_on(Database::create(dir.path())).unwrap();
+    let mut group = c.benchmark_group("transaction_empty");
 
-    c.bench_function("transaction_empty", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                db.transaction(|_txn| async move { Ok(()) }).await.unwrap();
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|_txn| async move { Ok(()) }).await.unwrap();
+                })
             })
-        })
+        });
     });
+
+    group.finish();
 }
 
 /// Benchmark single `set` operation within a transaction.
 fn bench_set_single(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let dir = TempDir::new().unwrap();
-    let db = rt.block_on(Database::create(dir.path())).unwrap();
-    let name = global!("BENCH");
-    let counter = std::sync::RwLock::new(0i64);
+    let mut group = c.benchmark_group("set_single");
 
-    c.bench_function("set_single", |b| {
-        b.iter(|| {
-            let i = {
-                let mut c = counter.write().unwrap();
-                let v = *c;
-                *c += 1;
-                v
-            };
-            rt.block_on(async {
-                db.transaction(|txn| {
-                    let n = name.clone();
-                    async move {
-                        txn.set(&n, &key![i], value!(i)).await?;
-                        Ok(())
-                    }
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("BENCH");
+        let counter = std::sync::RwLock::new(0i64);
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                let i = {
+                    let mut c = counter.write().unwrap();
+                    let v = *c;
+                    *c += 1;
+                    v
+                };
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n = name.clone();
+                        async move {
+                            txn.set(&n, &key![i], value!(i)).await?;
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
                 })
-                .await
-                .unwrap();
             })
-        })
+        });
     });
+
+    group.finish();
 }
 
 /// Benchmark batch `set` operations (multiple sets per transaction).
 fn bench_set_batch(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-
     let mut group = c.benchmark_group("set_batch");
 
-    [10i64, 100].into_iter().for_each(|batch_size| {
-        group.throughput(Throughput::Elements(batch_size as u64));
-        group.bench_function(format!("{batch_size}_ops"), |b| {
+    MODES.iter().for_each(|&mode| {
+        [10i64, 100].iter().for_each(|&batch_size| {
+            group.throughput(Throughput::Elements(batch_size as u64));
+            group.bench_function(format!("{mode}/{batch_size}_ops"), |b| {
+                b.iter_batched(
+                    || create_db(mode, &rt),
+                    |(_dir, db)| {
+                        rt.block_on(async {
+                            db.transaction(|txn| async move {
+                                insert_keys(
+                                    &txn,
+                                    &global!("BENCH"),
+                                    batch_size,
+                                )
+                                .await?;
+                                Ok(())
+                            })
+                            .await
+                            .unwrap();
+                        })
+                    },
+                    BatchSize::SmallInput,
+                )
+            });
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark large batch `set` operations (100k elements).
+fn bench_set_batch_100k(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("set_batch_large");
+    group.sample_size(10); // Fewer samples for long-running bench
+
+    let batch_size = 100_000i64;
+    group.throughput(Throughput::Elements(batch_size as u64));
+
+    MODES.iter().for_each(|&mode| {
+        group.bench_function(format!("{mode}/100000_ops"), |b| {
             b.iter_batched(
-                || {
-                    let dir = TempDir::new().unwrap();
-                    let db = rt.block_on(Database::create(dir.path())).unwrap();
-                    (dir, db)
-                },
+                || create_db(mode, &rt),
                 |(_dir, db)| {
                     rt.block_on(async {
                         db.transaction(|txn| async move {
@@ -104,43 +184,9 @@ fn bench_set_batch(c: &mut Criterion) {
                         .unwrap();
                     })
                 },
-                BatchSize::SmallInput,
+                BatchSize::LargeInput,
             )
         });
-    });
-
-    group.finish();
-}
-
-/// Benchmark large batch `set` operations (100k elements).
-fn bench_set_batch_100k(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-
-    let mut group = c.benchmark_group("set_batch_large");
-    group.sample_size(10); // Fewer samples for long-running bench
-
-    let batch_size = 100_000i64;
-    group.throughput(Throughput::Elements(batch_size as u64));
-    group.bench_function("100000_ops", |b| {
-        b.iter_batched(
-            || {
-                let dir = TempDir::new().unwrap();
-                let db = rt.block_on(Database::create(dir.path())).unwrap();
-                (dir, db)
-            },
-            |(_dir, db)| {
-                rt.block_on(async {
-                    db.transaction(|txn| async move {
-                        insert_keys(&txn, &global!("BENCH"), batch_size)
-                            .await?;
-                        Ok(())
-                    })
-                    .await
-                    .unwrap();
-                })
-            },
-            BatchSize::LargeInput,
-        )
     });
 
     group.finish();
@@ -151,7 +197,6 @@ fn bench_set_batch_100k(c: &mut Criterion) {
 /// Tests sharded node cache performance with concurrent global access.
 fn bench_set_multi_global(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-
     let mut group = c.benchmark_group("set_multi_global");
 
     let n_globals = 100usize;
@@ -159,38 +204,51 @@ fn bench_set_multi_global(c: &mut Criterion) {
     let total = (n_globals as i64) * vals_per_global;
 
     group.throughput(Throughput::Elements(total as u64));
-    group.bench_function(format!("{total}_across_{n_globals}_globals"), |b| {
-        b.iter_batched(
-            || {
-                let dir = TempDir::new().unwrap();
-                let db = rt.block_on(Database::create(dir.path())).unwrap();
-                // Pre-generate global names
-                let globals: Vec<Name> =
-                    (0..n_globals).map(|i| global!(&format!("G{i}"))).collect();
-                (dir, db, globals)
-            },
-            |(_dir, db, globals)| {
-                rt.block_on(async {
-                    db.transaction(|txn| {
-                        let gs = globals.clone();
-                        async move {
-                            // Write vals_per_global values to each global
-                            futures::future::try_join_all(gs.iter().map(|g| {
-                                let t = &txn;
+
+    MODES.iter().for_each(|&mode| {
+        group.bench_function(
+            format!("{mode}/{total}_across_{n_globals}_globals"),
+            |b| {
+                b.iter_batched(
+                    || {
+                        let (dir, db) = create_db(mode, &rt);
+                        // Pre-generate global names
+                        let globals: Vec<Name> = (0..n_globals)
+                            .map(|i| global!(&format!("G{i}")))
+                            .collect();
+                        (dir, db, globals)
+                    },
+                    |(_dir, db, globals)| {
+                        rt.block_on(async {
+                            db.transaction(|txn| {
+                                let gs = globals.clone();
                                 async move {
-                                    insert_keys(t, g, vals_per_global).await
+                                    // Write vals_per_global values to each global
+                                    futures::future::try_join_all(
+                                        gs.iter().map(|g| {
+                                            let t = &txn;
+                                            async move {
+                                                insert_keys(
+                                                    t,
+                                                    g,
+                                                    vals_per_global,
+                                                )
+                                                .await
+                                            }
+                                        }),
+                                    )
+                                    .await?;
+                                    Ok(())
                                 }
-                            }))
-                            .await?;
-                            Ok(())
-                        }
-                    })
-                    .await
-                    .unwrap();
-                })
+                            })
+                            .await
+                            .unwrap();
+                        })
+                    },
+                    BatchSize::SmallInput,
+                )
             },
-            BatchSize::SmallInput,
-        )
+        );
     });
 
     group.finish();
@@ -199,214 +257,252 @@ fn bench_set_multi_global(c: &mut Criterion) {
 /// Benchmark `get` operations on existing keys.
 fn bench_get(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let dir = TempDir::new().unwrap();
-    let db = rt.block_on(Database::create(dir.path())).unwrap();
-    let name = global!("BENCH");
+    let mut group = c.benchmark_group("get_existing");
 
-    // Setup: insert 1000 keys
-    rt.block_on(async {
-        db.transaction(|txn| {
-            let n = name.clone();
-            async move { insert_keys(&txn, &n, 1000).await }
-        })
-        .await
-        .unwrap();
-    });
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("BENCH");
 
-    c.bench_function("get_existing", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                db.transaction(|txn| {
-                    let n = name.clone();
-                    async move {
-                        let val = txn.get(&n, &key![500i64]).await?;
-                        black_box(val);
-                        Ok(())
-                    }
-                })
-                .await
-                .unwrap();
+        // Setup: insert 1000 keys
+        rt.block_on(async {
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move { insert_keys(&txn, &n, 1000).await }
             })
-        })
+            .await
+            .unwrap();
+        });
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n = name.clone();
+                        async move {
+                            let val = txn.get(&n, &key![500i64]).await?;
+                            black_box(val);
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
     });
+
+    group.finish();
 }
 
 /// Benchmark `order` iteration.
 fn bench_order(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let dir = TempDir::new().unwrap();
-    let db = rt.block_on(Database::create(dir.path())).unwrap();
-    let name = global!("BENCH");
+    let mut group = c.benchmark_group("order_next_100");
 
-    // Setup: insert 1000 keys
-    rt.block_on(async {
-        db.transaction(|txn| {
-            let n = name.clone();
-            async move { insert_keys(&txn, &n, 1000).await }
-        })
-        .await
-        .unwrap();
-    });
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("BENCH");
 
-    c.bench_function("order_next_100", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                db.transaction(|txn| {
-                    let n = name.clone();
-                    async move {
-                        let mut count = 0;
-                        let mut current: Option<rumps_types::Key> = None;
-                        // Iterate through first 100 keys
-                        loop {
-                            match txn.order(&n, current.as_ref()).await? {
-                                Some(next) if count < 100 => {
-                                    current = Some(next);
-                                    count += 1;
-                                }
-                                _ => break,
-                            }
-                        }
-                        black_box(count);
-                        Ok(())
-                    }
-                })
-                .await
-                .unwrap();
+        // Setup: insert 1000 keys
+        rt.block_on(async {
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move { insert_keys(&txn, &n, 1000).await }
             })
-        })
+            .await
+            .unwrap();
+        });
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n = name.clone();
+                        async move {
+                            let mut count = 0;
+                            let mut current: Option<rumps_types::Key> = None;
+                            // Iterate through first 100 keys
+                            loop {
+                                match txn.order(&n, current.as_ref()).await? {
+                                    Some(next) if count < 100 => {
+                                        current = Some(next);
+                                        count += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            black_box(count);
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
     });
+
+    group.finish();
 }
 
 /// Benchmark `collects` stream iteration.
 fn bench_collects(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let dir = TempDir::new().unwrap();
-    let db = rt.block_on(Database::create(dir.path())).unwrap();
-    let name = global!("BENCH");
+    let mut group = c.benchmark_group("collects_1000");
 
-    // Setup: insert 1000 keys
-    rt.block_on(async {
-        db.transaction(|txn| {
-            let n = name.clone();
-            async move { insert_keys(&txn, &n, 1000).await }
-        })
-        .await
-        .unwrap();
-    });
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("BENCH");
 
-    c.bench_function("collects_1000", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                db.transaction(|txn| {
-                    let n = name.clone();
-                    async move {
-                        let vals: Vec<Value> = txn
-                            .collects(&n, None, |_, _| true, |_, v| v.clone())
-                            .await?
-                            .try_collect()
-                            .await?;
-                        black_box(vals.len());
-                        Ok(())
-                    }
-                })
-                .await
-                .unwrap();
+        // Setup: insert 1000 keys
+        rt.block_on(async {
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move { insert_keys(&txn, &n, 1000).await }
             })
-        })
+            .await
+            .unwrap();
+        });
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n = name.clone();
+                        async move {
+                            let vals: Vec<Value> = txn
+                                .collects(
+                                    &n,
+                                    None,
+                                    |_, _| true,
+                                    |_, v| v.clone(),
+                                )
+                                .await?
+                                .try_collect()
+                                .await?;
+                            black_box(vals.len());
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
     });
+
+    group.finish();
 }
 
 /// Benchmark `collects` stream iteration with 10,000 entries.
 fn bench_collects_10k(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let dir = TempDir::new().unwrap();
-    let db = rt.block_on(Database::create(dir.path())).unwrap();
-    let name = global!("BENCH");
+    let mut group = c.benchmark_group("collects_10000");
 
-    // Setup: insert 10,000 keys
-    rt.block_on(async {
-        db.transaction(|txn| {
-            let n = name.clone();
-            async move { insert_keys(&txn, &n, 10_000).await }
-        })
-        .await
-        .unwrap();
-    });
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("BENCH");
 
-    c.bench_function("collects_10000", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                db.transaction(|txn| {
-                    let n = name.clone();
-                    async move {
-                        let vals: Vec<Value> = txn
-                            .collects(&n, None, |_, _| true, |_, v| v.clone())
-                            .await?
-                            .try_collect()
-                            .await?;
-                        black_box(vals.len());
-                        Ok(())
-                    }
-                })
-                .await
-                .unwrap();
+        // Setup: insert 10,000 keys
+        rt.block_on(async {
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move { insert_keys(&txn, &n, 10_000).await }
             })
-        })
+            .await
+            .unwrap();
+        });
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n = name.clone();
+                        async move {
+                            let vals: Vec<Value> = txn
+                                .collects(
+                                    &n,
+                                    None,
+                                    |_, _| true,
+                                    |_, v| v.clone(),
+                                )
+                                .await?
+                                .try_collect()
+                                .await?;
+                            black_box(vals.len());
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
     });
+
+    group.finish();
 }
 
 /// Benchmark `kill` operation.
 fn bench_kill(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("kill_subtree_100");
 
-    c.bench_function("kill_subtree_100", |b| {
-        b.iter_batched(
-            || {
-                let dir = TempDir::new().unwrap();
-                let db = rt.block_on(Database::create(dir.path())).unwrap();
-                let name = global!("BENCH");
+    MODES.iter().for_each(|&mode| {
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter_batched(
+                || {
+                    let (dir, db) = create_db(mode, &rt);
+                    let name = global!("BENCH");
 
-                // Setup: insert 100 keys under a common prefix
-                rt.block_on(async {
-                    db.transaction(|txn| {
-                        let n = name.clone();
-                        async move {
-                            futures::stream::iter(0..100i64)
-                                .then(|i| {
-                                    let t = &txn;
-                                    let n = &n;
-                                    async move {
-                                        t.set(n, &key!["prefix", i], value!(i))
+                    // Setup: insert 100 keys under a common prefix
+                    rt.block_on(async {
+                        db.transaction(|txn| {
+                            let n = name.clone();
+                            async move {
+                                futures::stream::iter(0..100i64)
+                                    .then(|i| {
+                                        let t = &txn;
+                                        let n = &n;
+                                        async move {
+                                            t.set(
+                                                n,
+                                                &key!["prefix", i],
+                                                value!(i),
+                                            )
                                             .await
-                                    }
-                                })
-                                .try_collect::<Vec<_>>()
-                                .await?;
-                            Ok(())
-                        }
-                    })
-                    .await
-                    .unwrap();
-                });
+                                        }
+                                    })
+                                    .try_collect::<Vec<_>>()
+                                    .await?;
+                                Ok(())
+                            }
+                        })
+                        .await
+                        .unwrap();
+                    });
 
-                (dir, db, name)
-            },
-            |(_dir, db, name)| {
-                rt.block_on(async {
-                    db.transaction(|txn| {
-                        let n = name.clone();
-                        async move {
-                            txn.kill(&n, &key!["prefix"]).await?;
-                            Ok(())
-                        }
+                    (dir, db, name)
+                },
+                |(_dir, db, name)| {
+                    rt.block_on(async {
+                        db.transaction(|txn| {
+                            let n = name.clone();
+                            async move {
+                                txn.kill(&n, &key!["prefix"]).await?;
+                                Ok(())
+                            }
+                        })
+                        .await
+                        .unwrap();
                     })
-                    .await
-                    .unwrap();
-                })
-            },
-            BatchSize::SmallInput,
-        )
+                },
+                BatchSize::SmallInput,
+            )
+        });
     });
+
+    group.finish();
 }
 
 criterion_group!(

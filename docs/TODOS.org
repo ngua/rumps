@@ -1,6 +1,6 @@
 * TODOS :todos:
 - [-] Actual database infra
-  - [ ] Entire persistence layer, in-memory ~BTree~, ~Database~ abstraction, etc...
+  - [X] Entire persistence layer, in-memory ~BTree~, ~Database~ abstraction, etc...
   - [X] "ORM" for easier access+query from Rust
   - [ ] Some example executables
 - [ ] Query language (WIP, see [[file:~/projects/rumps/TODOS/dsl.md][dsl.md]])
@@ -8,6 +8,8 @@
     - [ ] Emacs
     - [ ] Vim/Neovim
     - [ ] VSC
+- [ ] ~rumps-remote~ or similar (client+server protocol)
+- [ ] ~rumps-explorer~ (load DB and view nodes, etc...)
+- [ ] Journaling mode (less durable than WAL, but faster and better throughput)
 - [ ] Compression (compress nodes+pages)
 - [ ] Encryption (optional encryption at rest)
-- [ ] ~rumps-remote~ or similar
