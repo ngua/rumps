@@ -39,16 +39,17 @@
 //! # Persistence
 //!
 //! For disk-backed storage, use [`Database::create()`] for new databases
-//! or [`Database::open()`] for existing ones:
+//! or [`Database::open()`] for existing ones. The path should be a directory;
+//! the database stores `data.db` and a `wal/` subdirectory inside it.
 //!
 //! ```no_run
 //! # tokio_test::block_on(async {
 //! use rumps_storage::Database;
 //!
-//! // Create a new persistent database
+//! // Path is a directory (created if it doesn't exist)
 //! let db = Database::create("./my_data").await?;
 //!
-//! // Later, reopen it
+//! // Later, reopen the same directory
 //! let db = Database::open("./my_data").await?;
 //! # Ok::<(), rumps_storage::Error>(())
 //! # });
@@ -272,8 +273,9 @@ impl DatabaseBuilder {
         )?)
     }
 
-    /// Creates a new persistent database at the specified path.
+    /// Creates a new persistent database in the specified directory.
     ///
+    /// The path should be a directory (created if it doesn't exist).
     /// All configuration is persisted to the database's metadata page,
     /// so subsequent calls to [`Database::open()`] will restore the same
     /// configuration without needing to specify it again.
@@ -409,11 +411,14 @@ impl Database {
         )?)
     }
 
-    /// Creates a new persistent database at the specified path.
+    /// Creates a new persistent database in the specified directory.
     ///
     /// Initializes a new database with disk-backed storage and default
     /// configuration. Globals will be persisted to disk, while locals
     /// remain in-memory only.
+    ///
+    /// The path should be a directory (created if it doesn't exist).
+    /// The database will create `data.db` and a `wal/` subdirectory inside it.
     ///
     /// The default configuration is persisted to the database's metadata,
     /// so subsequent calls to [`open()`] will restore the same settings.
@@ -425,6 +430,7 @@ impl Database {
     /// use rumps_storage::Database;
     /// use rumps_types::{global, key, Value};
     ///
+    /// // Path is a directory, not a file
     /// let db = Database::create("./my_data").await?;
     ///
     /// // Globals are persisted to disk
@@ -461,13 +467,16 @@ impl Database {
         })
     }
 
-    /// Opens an existing persistent database from the specified path.
+    /// Opens an existing persistent database from the specified directory.
     ///
     /// Loads the database from disk, runs WAL recovery, and replays committed
     /// operations. Globals are lazy-loaded from the registry on first access.
     ///
-    /// The configuration is restored from the database's stored metadata,
-    /// so no configuration parameters are needed.
+    /// The path should be a directory containing `data.db` (created by
+    /// [`create()`]). The configuration is restored from the database's
+    /// stored metadata, so no configuration parameters are needed.
+    ///
+    /// [`create()`]: Self::create
     ///
     /// # Examples
     ///
@@ -476,6 +485,7 @@ impl Database {
     /// use rumps_storage::Database;
     /// use rumps_types::{global, key};
     ///
+    /// // Path is a directory, not a file
     /// let db = Database::open("./my_data").await?;
     ///
     /// // Read previously stored data
