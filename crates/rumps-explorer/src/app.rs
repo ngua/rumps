@@ -114,6 +114,8 @@ pub(crate) struct App {
     pub(crate) show_legend: bool,
     /// Current page index (0-based).
     pub(crate) page: usize,
+    /// Selected item index within the current page (0-based).
+    pub(crate) selected: usize,
     /// Items per page; updated by `render()` based on terminal height.
     pub(crate) items_per_page: usize,
     /// LRU cache of previously loaded screens.
@@ -131,6 +133,7 @@ impl App {
             pending: None,
             show_legend: false,
             page: 0,
+            selected: 0,
             items_per_page: 20, // default; updated at render time
             // SAFETY: CACHE_SIZE is a non-zero constant
             #[allow(clippy::unwrap_used)]
@@ -154,6 +157,16 @@ impl App {
         let start = self.page * self.items_per_page;
         let end = (start + self.items_per_page).min(self.items.len());
         self.items.get(start..end).unwrap_or(&[])
+    }
+
+    /// Returns the currently selected item, if any.
+    fn selected_item(&self) -> Option<&Item> {
+        self.visible_items().get(self.selected)
+    }
+
+    /// Returns `true` if at the very top (page 0, selection 0).
+    pub(crate) fn at_top(&self) -> bool {
+        self.page == 0 && self.selected == 0
     }
 
     pub(crate) fn is_loading(&self) -> bool {
@@ -194,24 +207,75 @@ impl App {
                         Action::None
                     }
 
-                    // Navigation: up one level
-                    KeyCode::Char('u') if self.input.is_empty() => {
-                        match &self.screen {
-                            Screen::Globals => Action::None,
-                            Screen::Subscripts { global, path } => {
-                                match path.len() {
-                                    0 | 1 => Action::Navigate(Screen::Globals),
-                                    _ => {
-                                        let mut new_path = path.clone();
-                                        new_path.pop();
-                                        Action::Navigate(Screen::Subscripts {
-                                            global: global.clone(),
-                                            path: new_path,
-                                        })
+                    // Up: go to parent if at top, else move selection up
+                    KeyCode::Up => {
+                        match self.at_top() {
+                            true => match &self.screen {
+                                Screen::Globals => Action::None,
+                                Screen::Subscripts { global, path } => {
+                                    match path.len() {
+                                        0 | 1 => {
+                                            Action::Navigate(Screen::Globals)
+                                        }
+                                        _ => {
+                                            let mut new_path = path.clone();
+                                            new_path.pop();
+                                            Action::Navigate(
+                                                Screen::Subscripts {
+                                                    global: global.clone(),
+                                                    path: new_path,
+                                                },
+                                            )
+                                        }
                                     }
                                 }
+                            },
+                            false => {
+                                match self.selected {
+                                    0 => {
+                                        // Move to previous page, select last item
+                                        self.page = self.page.saturating_sub(1);
+                                        self.selected = self
+                                            .visible_items()
+                                            .len()
+                                            .saturating_sub(1);
+                                    }
+                                    _ => self.selected -= 1,
+                                }
+                                Action::None
                             }
                         }
+                    }
+
+                    // Down: move selection down, go to next page if needed
+                    KeyCode::Down => {
+                        let visible = self.visible_items().len();
+                        let at_bottom = self.selected + 1 >= visible;
+                        let has_next_page = self.page + 1 < self.total_pages();
+                        match (at_bottom, has_next_page) {
+                            (true, true) => {
+                                self.page += 1;
+                                self.selected = 0;
+                            }
+                            (true, false) => {} // at end, do nothing
+                            _ => self.selected += 1,
+                        }
+                        Action::None
+                    }
+
+                    // Home: go to first item
+                    KeyCode::Home => {
+                        self.page = 0;
+                        self.selected = 0;
+                        Action::None
+                    }
+
+                    // End: go to last item
+                    KeyCode::End => {
+                        self.page = self.total_pages().saturating_sub(1);
+                        self.selected =
+                            self.visible_items().len().saturating_sub(1);
+                        Action::None
                     }
 
                     // Navigation: back to globals
@@ -233,21 +297,29 @@ impl App {
                         self.try_navigate()
                     }
 
-                    // Enter to confirm shortcut
-                    KeyCode::Enter => {
-                        let action = self.try_navigate_exact();
-                        self.input.clear();
-                        action
-                    }
+                    // Enter: descend into selected item (or confirm shortcut input)
+                    KeyCode::Enter => match self.input.is_empty() {
+                        true => self
+                            .selected_item()
+                            .map(|item| self.navigate_to_item(item))
+                            .unwrap_or(Action::None),
+                        false => {
+                            let action = self.try_navigate_exact();
+                            self.input.clear();
+                            action
+                        }
+                    },
 
-                    // Pagination
+                    // Pagination (also resets selection)
                     KeyCode::Left => {
                         self.page = self.page.saturating_sub(1);
+                        self.selected = 0;
                         Action::None
                     }
                     KeyCode::Right => {
                         let max = self.total_pages().saturating_sub(1);
                         self.page = (self.page + 1).min(max);
+                        self.selected = 0;
                         Action::None
                     }
 
@@ -317,6 +389,7 @@ impl App {
         self.screen = screen.clone();
         self.input.clear();
         self.page = 0;
+        self.selected = 0;
 
         match self.cache.get(&key).cloned() {
             Some(items) => {

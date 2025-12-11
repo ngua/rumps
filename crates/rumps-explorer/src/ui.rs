@@ -10,7 +10,7 @@ use rumps_types::DataStatus;
 use crate::app::{App, Screen};
 
 /// Column width for shortcut display (e.g., `[abc]`).
-const SHORTCUT_WIDTH: u16 = 7;
+const SHORTCUT_WIDTH: u16 = 10;
 
 impl App {
     /// Renders the entire UI: header, main content, footer, and optional legend overlay.
@@ -81,7 +81,8 @@ impl App {
     }
 
     fn render_items(&self, f: &mut Frame, area: Rect) {
-        let rows = self.visible_items().iter().map(|item| {
+        let selected_style = Style::default().add_modifier(Modifier::REVERSED);
+        let rows = self.visible_items().iter().enumerate().map(|(i, item)| {
             let shortcut = format!("[{}]", item.shortcut);
             let name = format!("{}", item.subscript);
             let flags = format_flags(item.flags);
@@ -91,8 +92,10 @@ impl App {
                 .map(|p| truncate(p, 40))
                 .unwrap_or_default();
 
-            Row::new(vec![shortcut, name, flags, preview])
-                .style(Style::default())
+            let style = (i == self.selected)
+                .then_some(selected_style)
+                .unwrap_or_default();
+            Row::new(vec![shortcut, name, flags, preview]).style(style)
         });
 
         let table = Table::new(
@@ -105,7 +108,7 @@ impl App {
             ],
         )
         .header(
-            Row::new(vec!["", "Name", "Flags", "Value"])
+            Row::new(vec!["Shortcut", "Name", "Flags", "Value"])
                 .style(
                     Style::default()
                         .fg(Color::LightBlue)
@@ -121,10 +124,22 @@ impl App {
         let total = self.total_pages();
         let has_pages = total > 1;
 
+        // Dynamic up arrow hint: "parent" if at top of subscripts, else "up"
+        let up_hint = match (&self.screen, self.at_top()) {
+            (Screen::Subscripts { .. }, true) => "parent",
+            _ => "up",
+        };
+
         let base_hints = match &self.screen {
             Screen::Globals => vec![
                 Span::styled("[a-z]", Style::default().fg(Color::Yellow)),
-                Span::raw(" descend "),
+                Span::raw(" shortcut "),
+                Span::styled("[↑↓]", Style::default().fg(Color::Yellow)),
+                Span::raw(" nav "),
+                Span::styled("[⏎]", Style::default().fg(Color::Yellow)),
+                Span::raw(" select "),
+                Span::styled("[⇱⇲]", Style::default().fg(Color::Yellow)),
+                Span::raw(" jump "),
                 Span::styled("[q]", Style::default().fg(Color::Yellow)),
                 Span::raw(" quit "),
                 Span::styled("[?]", Style::default().fg(Color::Yellow)),
@@ -132,9 +147,15 @@ impl App {
             ],
             Screen::Subscripts { .. } => vec![
                 Span::styled("[a-z]", Style::default().fg(Color::Yellow)),
-                Span::raw(" descend "),
-                Span::styled("[u]", Style::default().fg(Color::Yellow)),
-                Span::raw(" up "),
+                Span::raw(" shortcut "),
+                Span::styled("[↑]", Style::default().fg(Color::Yellow)),
+                Span::raw(format!(" {} ", up_hint)),
+                Span::styled("[↓]", Style::default().fg(Color::Yellow)),
+                Span::raw(" down "),
+                Span::styled("[⏎]", Style::default().fg(Color::Yellow)),
+                Span::raw(" select "),
+                Span::styled("[⇱⇲]", Style::default().fg(Color::Yellow)),
+                Span::raw(" jump "),
                 Span::styled("[g]", Style::default().fg(Color::Yellow)),
                 Span::raw(" globals "),
                 Span::styled("[q]", Style::default().fg(Color::Yellow)),
@@ -147,7 +168,7 @@ impl App {
         let page_hints: Vec<Span> = match has_pages {
             true => vec![
                 Span::raw(" "),
-                Span::styled("[<-/->]", Style::default().fg(Color::Yellow)),
+                Span::styled("[←→]", Style::default().fg(Color::Yellow)),
                 Span::raw(" page "),
             ],
             false => vec![],
