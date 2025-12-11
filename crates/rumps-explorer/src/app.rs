@@ -77,26 +77,6 @@ impl App {
             _ => Action::None,
         }
     }
-
-    pub fn render(&self, f: &mut ratatui::Frame) {
-        use ratatui::widgets::Paragraph;
-
-        let text = match &self.screen {
-            Screen::Globals => format!(
-                "RUMPS Explorer - {}\n\nGlobals: {} items\n\nPress 'q' to quit",
-                self.db_path,
-                self.items.len()
-            ),
-            Screen::Subscripts { global, path } => format!(
-                "RUMPS Explorer - {}\n\n^{}({:?}): {} items\n\nPress 'q' to quit",
-                self.db_path,
-                global,
-                path,
-                self.items.len()
-            ),
-        };
-        f.render_widget(Paragraph::new(text), f.area());
-    }
 }
 
 pub async fn run(

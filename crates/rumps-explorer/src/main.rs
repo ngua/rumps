@@ -1,4 +1,5 @@
 mod app;
+mod ui;
 
 use std::io;
 use std::path::PathBuf;
