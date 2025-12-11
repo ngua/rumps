@@ -14,6 +14,7 @@
   - [[#core-operations][Core operations]]
   - [[#rust-api][Rust API]]
   - [[#query-language][Query language]]
+  - [[#database-explorer][Database explorer]]
 - [[#use-cases][Use cases]]
   - [[#where-rumps-is-a-good-fit][Where RUMPS is a good fit]]
   - [[#where-rumps-is-a-bad-fit][Where RUMPS is a bad fit]]
@@ -38,9 +39,9 @@
   // supports `tokio`
   #[tokio::main]
   async fn main() -> rumps::Result<()> {
-      // Create a persistent database
+      // Create a persistent database; path is a directory (will contain data.db + wal/)
       let db = Database::create("./my_data").await?;
-      // You can later re-open
+      // You can later re-open the same directory
       // let db = Database::open("./my_data").await?;
 
       // Writes to globals require a transaction
@@ -132,6 +133,8 @@ SET ^P(1,"A") = "deeper"     ; value at node [1, "A"]
 #+end_src
 
 All three are "the variable =^P=", i.e. nodes in the same tree. A node can hold a value /and/ have children simultaneously (=^P(1)= stores ="child"= while =^P(1,"A")= exists beneath it).
+
+As an /extremely/ loose comparison, a global variable is something like a table in SQL: i.e. a namespace for storing data. However, it has no predefined schema, no rows, etc... Instead, it holds hierarchical key addresses.
 **** Globals vs. locals
 RUMPS distinguishes between two types of variables, locals and globals. A global variable is persisted to the database, while locals are ephemeral, i.e. held in memory only and disappear once the session ends. In the query language, globals and locals are distinguished by a preceding caret on the former, e.g. =^PATIENT= is a global, while =PATIENT= is a local.
 
@@ -293,7 +296,7 @@ use rumps::{Database, SyncMode};
 // Configure sync mode at creation time
 let db = Database::builder()
     .sync_mode(SyncMode::Immediate)  // Maximum durability
-    .create("./data")
+    .create("./data")  // path is a directory
     .await?;
 #+end_src
 ***** Performance and durability
@@ -554,6 +557,16 @@ let first_two: Vec<String> = db
 *** ORM
 ** Query language
 *WIP*. Nowhere near done. RUMPS can only be used from Rust at the moment.
+** Database explorer
+The =rumps-explorer= crate provides a TUI executable for browsing RUMPS databases. You can point it at a database directory and navigate the tree structure interactively:
+
+#+begin_src bash
+cargo run --package rumps-explorer -- ./path/to/db
+#+end_src
+
+The TUI footer explains nagivation keybindings, help, etc..., inside the explorer.
+
+This is useful for poking around unfamiliar databases, verifying data after writes, or understanding how data is structured in the tree.
 * Use cases
 ** Where RUMPS is a good fit
 *** Hierarchical or nested data

@@ -140,10 +140,20 @@ impl FileStorageEngine {
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The path exists but is not a directory
     /// - The directory doesn't exist
     /// - The data file is missing or corrupted
     /// - WAL recovery fails
     pub(crate) async fn open(dir: &Path) -> Result<Self> {
+        // Validate path is a directory
+        if dir.exists() && !dir.is_dir() {
+            Err(StorageError::InvalidOperation(format!(
+                "path is not a directory: {}; \
+                 Database::open expects a directory containing data.db",
+                dir.display()
+            )))?;
+        }
+
         let data_path = dir.join(Self::DATA_FILE_NAME);
         let wal_dir = dir.join(Self::WAL_DIR_NAME);
 
@@ -286,6 +296,7 @@ impl FileStorageEngine {
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The path exists but is not a directory
     /// - The directory already exists with a data file
     /// - Directory creation fails
     /// - File creation fails
@@ -296,6 +307,15 @@ impl FileStorageEngine {
         max_memory_bytes: Option<usize>,
     ) -> Result<Self> {
         use tokio::io::AsyncWriteExt;
+
+        // Validate path is not an existing file
+        if dir.exists() && !dir.is_dir() {
+            Err(StorageError::InvalidOperation(format!(
+                "path is not a directory: {}; \
+                 Database::create expects a directory path",
+                dir.display()
+            )))?;
+        }
 
         let data_path = dir.join(Self::DATA_FILE_NAME);
         let wal_dir = dir.join(Self::WAL_DIR_NAME);
@@ -1685,6 +1705,46 @@ mod tests {
         let result = FileStorageEngine::open(dir.path()).await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn open_file_path_fails() {
+        let dir = TempDir::new().expect("temp dir");
+        let file_path = dir.path().join("not_a_dir.db");
+
+        // Create a regular file
+        tokio::fs::write(&file_path, b"not a database")
+            .await
+            .expect("write file");
+
+        let result = FileStorageEngine::open(&file_path).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not a directory"), "error was: {}", err);
+    }
+
+    #[tokio::test]
+    async fn create_file_path_fails() {
+        let dir = TempDir::new().expect("temp dir");
+        let file_path = dir.path().join("not_a_dir.db");
+
+        // Create a regular file
+        tokio::fs::write(&file_path, b"existing file")
+            .await
+            .expect("write file");
+
+        let result = FileStorageEngine::create(
+            &file_path,
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not a directory"), "error was: {}", err);
     }
 
     #[tokio::test]

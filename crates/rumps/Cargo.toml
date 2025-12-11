@@ -7,6 +7,8 @@ edition = "2021"
 rumps-types = { path = "../rumps-types" }
 rumps-storage = { path = "../rumps-storage", default-features = false }
 rumps-derive = { path = "../rumps-derive", optional = true }
+csv = { version = "1", optional = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -14,6 +16,11 @@ tokio-test = "0.4"
 [features]
 default = ["derive"]
 derive = ["rumps-derive", "rumps-storage/derive"]
+examples = ["dep:csv", "dep:tokio"]
+
+[[example]]
+name = "medical"
+required-features = ["examples"]
 
 [lints.clippy]
 obfuscated_if_else = "allow"

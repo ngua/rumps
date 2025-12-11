@@ -1,0 +1,29 @@
+[package]
+name = "rumps-explorer"
+version = "0.1.0"
+edition = "2021"
+description = "TUI explorer for RUMPS databases"
+
+[[bin]]
+name = "rumps-explorer"
+path = "src/main.rs"
+
+[dependencies]
+rumps-storage = { path = "../rumps-storage" }
+rumps-types = { path = "../rumps-types" }
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio = { workspace = true }
+futures = "0.3"
+lru = "0.12"
+clap = { version = "4", features = ["derive"] }
+miette = { workspace = true }
+thiserror = { workspace = true }
+
+[lints.clippy]
+obfuscated_if_else = "allow"
+option_map_unit_fn = "allow"
+type_complexity = "allow"
+use_self = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
