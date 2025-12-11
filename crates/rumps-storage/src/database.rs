@@ -712,6 +712,32 @@ impl Database {
         })
     }
 
+    /// Returns a list of all global variable names in the database.
+    ///
+    /// For persistent databases, this returns globals from the registry.
+    /// For in-memory databases, this returns globals from the cached roots.
+    /// Names are returned in sorted order.
+    pub async fn list_globals(&self) -> Vec<String> {
+        match self.storage.as_ref() {
+            Some(s) => s
+                .registry_entries()
+                .await
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect(),
+            None => self
+                .roots
+                .read()
+                .await
+                .keys()
+                .filter_map(|n| match n {
+                    Name::Global(g) => Some(g.clone()),
+                    Name::Local(_) => None,
+                })
+                .collect(),
+        }
+    }
+
     /// Creates a stream of entries from the tree (RUMPS `$COLLECT`).
     ///
     /// This is a RUMPS extension providing stream-based iteration.
