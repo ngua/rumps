@@ -225,7 +225,7 @@ fn bench_set_multi_global(c: &mut Criterion) {
                         let (dir, db) = create_db(mode, &rt);
                         // Pre-generate global names
                         let globals: Vec<Name> = (0..n_globals)
-                            .map(|i| global!(&format!("G{i}")))
+                            .map(|i| Name::global(&format!("G{i}")))
                             .collect();
                         (dir, db, globals)
                     },
@@ -637,7 +637,7 @@ fn bench_sync_mode_multi_global(c: &mut Criterion) {
                     || {
                         let (dir, db) = create_db_with_sync(*sync, &rt);
                         let globals: Vec<Name> = (0..n_globals)
-                            .map(|i| global!(&format!("G{i}")))
+                            .map(|i| Name::global(&format!("G{i}")))
                             .collect();
                         (dir, db, globals)
                     },

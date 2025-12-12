@@ -86,6 +86,7 @@ use std::{cmp, fmt, mem, slice, vec};
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use smol_str::SmolStr;
 
 /// A RUMPS variable name, either Global (persistent) or Local (ephemeral).
 ///
@@ -113,12 +114,12 @@ pub enum Name {
     /// A global variable (persistent, stored on disk).
     ///
     /// Example: `^PATIENT`
-    Global(String),
+    Global(SmolStr),
 
     /// A local variable (ephemeral, memory-only).
     ///
     /// Example: `PATIENT`
-    Local(String),
+    Local(SmolStr),
 }
 
 impl Serialize for Name {
@@ -137,13 +138,66 @@ impl<'de> Deserialize<'de> for Name {
         D: Deserializer<'de>,
     {
         // Deserialize as string, always create Global variant
-        // (since only globals are persisted)
-        let name = String::deserialize(deserializer)?;
-        Ok(Self::Global(name))
+        // (since only globals are persisted; locals are ephemeral)
+        SmolStr::deserialize(deserializer).map(Self::Global)
     }
 }
 
 impl Name {
+    /// Creates a global variable name from a runtime string.
+    ///
+    /// Use this for dynamically-constructed names (e.g., from user input or
+    /// formatted strings). For string literals known at compile time, prefer
+    /// the [`global!`] macro which uses zero-copy storage.
+    ///
+    /// # When to Use
+    ///
+    /// - **Use [`global!`]** for string literals: `global!("PATIENT")`
+    /// - **Use `Name::global()`** for runtime strings: `Name::global(&format!("TABLE_{}", id))`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::Name;
+    ///
+    /// // Runtime string from format!
+    /// let id = 123;
+    /// let g = Name::global(&format!("PATIENT_{}", id));
+    /// assert_eq!(g.to_string(), "^PATIENT_123");
+    ///
+    /// // Runtime string from user input
+    /// let user_input = "CUSTOM_TABLE";
+    /// let g2 = Name::global(user_input);
+    /// ```
+    pub fn global(s: &str) -> Self {
+        Self::Global(SmolStr::new(s))
+    }
+
+    /// Creates a local variable name from a runtime string.
+    ///
+    /// Use this for dynamically-constructed names (e.g., from user input or
+    /// formatted strings). For string literals known at compile time, prefer
+    /// the [`local!`] macro which uses zero-copy storage.
+    ///
+    /// # When to Use
+    ///
+    /// - **Use [`local!`]** for string literals: `local!("TEMP")`
+    /// - **Use `Name::local()`** for runtime strings: `Name::local(&format!("VAR_{}", id))`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rumps_types::Name;
+    ///
+    /// // Runtime string from format!
+    /// let id = 42;
+    /// let l = Name::local(&format!("TEMP_{}", id));
+    /// assert_eq!(l.to_string(), "TEMP_42");
+    /// ```
+    pub fn local(s: &str) -> Self {
+        Self::Local(SmolStr::new(s))
+    }
+
     /// Returns the inner name string without the namespace prefix.
     ///
     /// # Examples
@@ -728,39 +782,69 @@ impl<'a> IntoIterator for &'a Key {
     }
 }
 
-/// Convenience macro for constructing a [`Name::Global`] variable name.
+/// Creates a [`Name::Global`] from a string literal.
+///
+/// This is the preferred way to create global names when the name is known
+/// at compile time. It uses zero-copy storage for the string.
+///
+/// # When to Use
+///
+/// - **Use `global!`** for string literals: `global!("PATIENT")`
+/// - **Use [`Name::global()`]** for runtime strings: `Name::global(&format!("TABLE_{}", id))`
 ///
 /// # Examples
 ///
 /// ```
-/// use rumps_types::{global, Name};
+/// use rumps_types::global;
 ///
-/// let name = global!("PATIENT");
-/// assert_eq!(name, Name::Global("PATIENT".into()));
-/// assert_eq!(name.to_string(), "^PATIENT");
+/// let patients = global!("PATIENT");
+/// assert_eq!(patients.to_string(), "^PATIENT");
+///
+/// // Cloning is cheap (no heap allocation for short names)
+/// let patients2 = patients.clone();
 /// ```
+///
+/// # Note
+///
+/// This macro requires a `&'static str` (i.e., a string literal). For
+/// dynamically-constructed names, use [`Name::global()`] instead.
 #[macro_export]
 macro_rules! global {
     ($name:expr) => {
-        $crate::Name::Global($name.into())
+        $crate::Name::Global($crate::SmolStr::new_static($name))
     };
 }
 
-/// Convenience macro for constructing a [`Name::Local`] variable name.
+/// Creates a [`Name::Local`] from a string literal.
+///
+/// This is the preferred way to create local names when the name is known
+/// at compile time. It uses zero-copy storage for the string.
+///
+/// # When to Use
+///
+/// - **Use `local!`** for string literals: `local!("TEMP")`
+/// - **Use [`Name::local()`]** for runtime strings: `Name::local(&format!("VAR_{}", id))`
 ///
 /// # Examples
 ///
 /// ```
-/// use rumps_types::{local, Name};
+/// use rumps_types::local;
 ///
-/// let name = local!("TEMP");
-/// assert_eq!(name, Name::Local("TEMP".into()));
-/// assert_eq!(name.to_string(), "TEMP");
+/// let temp = local!("TEMP");
+/// assert_eq!(temp.to_string(), "TEMP");
+///
+/// // Cloning is cheap (no heap allocation for short names)
+/// let temp2 = temp.clone();
 /// ```
+///
+/// # Note
+///
+/// This macro requires a `&'static str` (i.e., a string literal). For
+/// dynamically-constructed names, use [`Name::local()`] instead.
 #[macro_export]
 macro_rules! local {
     ($name:expr) => {
-        $crate::Name::Local($name.into())
+        $crate::Name::Local($crate::SmolStr::new_static($name))
     };
 }
 

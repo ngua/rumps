@@ -14,7 +14,7 @@ use miette::{IntoDiagnostic, Result};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use rumps_storage::Database;
-use rumps_types::{global, DataStatus, Key, Subscript};
+use rumps_types::{DataStatus, Key, Name, Subscript};
 
 /// Max entries in the navigation cache.
 const CACHE_SIZE: usize = 64;
@@ -431,7 +431,7 @@ impl App {
             .into_iter()
             .enumerate()
             .map(|(i, name)| Item {
-                subscript: Subscript::String(name),
+                subscript: Subscript::String(name.to_string()),
                 shortcut: shortcut(i, width),
                 flags: DataStatus::HasDescendants,
                 preview: None,
@@ -444,7 +444,7 @@ impl App {
         glob: &str,
         path: &Key,
     ) -> Result<Vec<Item>> {
-        let name = global!(glob);
+        let name = Name::global(glob);
         let depth = path.len();
 
         // Collect unique subscripts at the next level

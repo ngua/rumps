@@ -19,6 +19,8 @@ pub use error::{Error, Result, StorageError};
 pub use key::*;
 // Re-export serde_json::json! macro for convenience with JSON subscripts
 pub use serde_json::json;
+// Re-export smol_str for constructing `Name`s from runtime strings
+pub use smol_str::SmolStr;
 pub use value::*;
 
 mod error;

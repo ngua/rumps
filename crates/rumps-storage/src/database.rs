@@ -111,7 +111,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock as StdRwLock};
 
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Name, Result, Value};
+use rumps_types::{DataStatus, Key, Name, Result, SmolStr, Value};
 use tokio::sync::RwLock;
 
 use crate::btree::{BTree, BTreeBuilder, BTreeStats};
@@ -727,13 +727,13 @@ impl Database {
     /// For persistent databases, this returns globals from the registry.
     /// For in-memory databases, this returns globals from the cached roots.
     /// Names are returned in sorted order.
-    pub async fn list_globals(&self) -> Vec<String> {
+    pub async fn list_globals(&self) -> Vec<SmolStr> {
         match self.storage.as_ref() {
             Some(s) => s
                 .registry_entries()
                 .await
                 .into_iter()
-                .map(|(name, _)| name)
+                .map(|(name, _)| SmolStr::from(name))
                 .collect(),
             None => self
                 .roots
@@ -1402,7 +1402,7 @@ impl Database {
                 {
                     storage
                         .registry_insert(
-                            g.clone(),
+                            g.to_string(),
                             crate::page::PageId::from(root),
                         )
                         .await?;
@@ -1452,7 +1452,10 @@ impl Database {
         if let (Name::Global(g), Some(storage)) = (name, self.storage.as_ref())
         {
             storage
-                .registry_insert(g.clone(), crate::page::PageId::from(new_root))
+                .registry_insert(
+                    g.to_string(),
+                    crate::page::PageId::from(new_root),
+                )
                 .await?;
         }
 
@@ -2534,8 +2537,9 @@ mod tests {
                 let db = Arc::clone(&db);
                 let r = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
-                        let name =
-                            rumps_types::Name::Global(format!("GLOBAL{}", i));
+                        let name = rumps_types::Name::Global(
+                            format!("GLOBAL{}", i).into(),
+                        );
                         db.build_transaction()
                             .begin(|txn| {
                                 let name = name.clone();
@@ -2568,8 +2572,9 @@ mod tests {
                 let db = Arc::clone(&db);
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
-                        let name =
-                            rumps_types::Name::Global(format!("GLOBAL{}", i));
+                        let name = rumps_types::Name::Global(
+                            format!("GLOBAL{}", i).into(),
+                        );
                         let val =
                             db.get(&name, &rumps_types::key![1]).await.unwrap();
                         assert_eq!(val, Some(rumps_types::Value::from(i)));

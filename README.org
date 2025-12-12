@@ -39,18 +39,29 @@
   // supports `tokio`
   #[tokio::main]
   async fn main() -> rumps::Result<()> {
-      // Create a persistent database; path is a directory (will contain data.db + wal/)
+      // Create a persistent database; path is a directory
+      // (will contain `data.db` + `wal/`)
       let db = Database::create("./my_data").await?;
       // You can later re-open the same directory
       // let db = Database::open("./my_data").await?;
 
+      // Create Name bindings using macros. The `global!` and `local!` macros
+      // use `SmolStr` internally, making `.clone()` cheap (no heap allocation
+      // for short names). This is useful when moving names into async closures.
+      // For runtime-constructed names, use `Name::global(&str)` instead.
+      let patients = global!("PATIENT");
+      let audits = global!("AUDIT");
+
       // Writes to globals require a transaction
-      db.transaction(|txn| async move {
-          // Insert patients out of order
-          txn.set(&global!("PATIENT"), &key![3, "NAME"], value!("carol")).await?;
-          txn.set(&global!("PATIENT"), &key![1, "NAME"], value!("alice")).await?;
-          txn.set(&global!("PATIENT"), &key![2, "NAME"], value!("bob")).await?;
-          Ok(())
+      db.transaction(|txn| {
+          let patients = patients.clone();  // cheap clone
+          async move {
+              // Insert patients out of order
+              txn.set(&patients, &key![3, "NAME"], value!("carol")).await?;
+              txn.set(&patients, &key![1, "NAME"], value!("alice")).await?;
+              txn.set(&patients, &key![2, "NAME"], value!("bob")).await?;
+              Ok(())
+          }
       }).await?;
 
       // Transactions can be configured with custom parameters, e.g. timeout,
@@ -58,28 +69,31 @@
       db.build_transaction()
           .timeout(5000)  // 5 second timeout
           .priority(TransactionPriority::High)
-          .begin(|txn| async move {
-              txn.set(&global!("AUDIT"), &key![1], value!("logged")).await?;
-              Ok(())
+          .begin(|txn| {
+              let audits = audits.clone();
+              async move {
+                  txn.set(&audits, &key![1], value!("logged")).await?;
+                  Ok(())
+              }
           }).await?;
 
       // All reads work outside transactions
-      let name = db.get(&global!("PATIENT"), &key![1, "NAME"]).await?;
+      let name = db.get(&patients, &key![1, "NAME"]).await?;
       assert_eq!(name, Some(value!("alice")));
 
       // `ORDER`: get next key in sorted order
-      let first = db.order(&global!("PATIENT"), None).await?;
+      let first = db.order(&patients, None).await?;
       assert_eq!(first, Some(key![1, "NAME"]));
 
       // `DATA`: check if a node has value/descendants
-      let status = db.data(&global!("PATIENT"), &key![1]).await?;
+      let status = db.data(&patients, &key![1]).await?;
       assert_eq!(status, DataStatus::HasDescendants);
 
-      // `COLLECT`: stream records - ALWAYS yields in sorted key order;
-      // sorting is inherent to RUMPS data storage
+      // `COLLECT`: stream records; ALWAYS yields in sorted key order
+      // (sorting is inherent to RUMPS data storage)
       let names: Vec<String> = db
           .collects(
-              &global!("PATIENT"),
+              &patients,
               None,
               // Predicate to extract data
               |k, _| k.len() == 2 && k.get(1) == Some(&Subscript::from("NAME")),
