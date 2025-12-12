@@ -166,12 +166,12 @@ TRANSACTION {
 ```rumps
 TRANSACTION {
   SET ^CRITICAL(id) = value
-} ON ERROR error => {
+} CATCH e => {
   ; Error handling block
-  set dir = Io.env("LOG_DIR") ? "./logs"
-  OUTPUT TO FILE 
-    "{dir}/err.log" 
-    "Transaction failed: {error.message}" 
+  SET dir = Io.env("LOG_DIR") ?? "./logs"
+  OUTPUT TO FILE
+    "{dir}/err.log"
+    "Transaction failed: {e.message}"
   ; ALERT admin-user                                    For if/when multi-user support
 } FINALLY {
   ; Cleanup code that always runs
@@ -1320,14 +1320,55 @@ JSON types represent dynamic data from parsing or external sources. They mirror 
 | `Json.Array`  | JSON array (heterogeneous)             | `Array[Json]`       |
 | `Json.Object` | JSON object (string keys)              | `Map[String, Json]` |
 
-### Native vs JSON
+### Native vs JSON: Literal Syntax
+
+RUMPS distinguishes native types from JSON types **syntactically** in literals:
+
+#### Records vs JSON Objects
+
+- **Unquoted keys** → native record (structural type)
+- **Quoted keys** → JSON object
 
 ```rumps
-; Native types - from RUMPS operations, fully typed
+; Native record: typed, efficient, dot access
+SET patient = { id: 123, name: "John", active: true }
+OUTPUT patient.name       ; "John"
+
+; JSON object: dynamic, for external data
+SET json = { "id": 123, "name": "John", "active": true }
+OUTPUT json..name         ; John (text extraction with ..)
+```
+
+#### Arrays
+
+Array literals are **native by default**. JSON arrays require explicit annotation or coercion.
+
+- **Homogeneous** → native `Array[T]` unless annotated/coerced
+- **Heterogeneous** → `Json.Array` (only valid interpretation)
+- **Explicit `as Json` or `: Json.Array`** → JSON regardless of contents
+
+```rumps
+; Native arrays (default for homogeneous)
+[1, 2, 3]                        ; Array[Int]
+["a", "b", "c"]                  ; Array[String]
+
+; JSON arrays (explicit)
+[1, 2, 3] as Json                ; Json.Array
+SET x: Json.Array = [1, 2, 3]    ; Json.Array via annotation
+SET x: Json = [1, 2, 3]          ; Json (which is a Json.Array)
+
+; Heterogeneous: MUST be Json.Array (no other valid interpretation)
+[1, "hello", true]               ; Json.Array (inferred)
+```
+
+#### Conversion and Coercion
+
+```rumps
+; Native types from RUMPS operations
 SET keys: Array[Key] = COLLECT ^DATA SELECT key INTO
 SET counts: Map[String, Int] = compute-histogram(data)
 
-; JSON types - from parsing, dynamically typed
+; JSON from parsing external data
 SET json: Json = Json.parse(input-str)
 SET arr: Json.Array = Json.parse("[1, 2, 3]")
 
@@ -1335,14 +1376,18 @@ SET arr: Json.Array = Json.parse("[1, 2, 3]")
 SET nums: Array[Int] = arr as Array[Int]
 
 ; Convert native to JSON
-SET out: Json = nums as Json
+SET out: Json = patient as Json
 ```
 
-**Key differences**:
-- Native `Array[Int]` guarantees all elements are `Int`
-- `Json.Array` can contain mixed types (`[1, "hello", true]`)
-- Native `Map[K, V]` has typed keys; `Json.Object` always has `String` keys
-- JSON numbers don't distinguish `Int` vs `Float`
+#### Key Differences Summary
+
+| Aspect         | Native                    | JSON                                |
+|----------------|---------------------------|-------------------------------------|
+| Object keys    | Unquoted: `{ name: "x" }` | Quoted: `{ "name": "x" }`           |
+| Array elements | Homogeneous, typed        | Heterogeneous allowed               |
+| Field access   | `.field`                  | `..field` (text) or `.field` (JSON) |
+| Type guarantee | Compile-time structure    | Runtime dynamic                     |
+| Use case       | Internal data, typed APIs | External data, parsing/serializing  |
 
 ### Type Annotations
 
@@ -1509,6 +1554,441 @@ FUN admit (p: Patient) {
 
 **Resolved**: All type checking is **runtime only**. RUMPS is an interpreted query language—type annotations are validated when code executes, not at parse time.
 
+### Sum Types
+
+RUMPS supports **sum types** (tagged unions / algebraic data types) for modeling values that can be one of several variants.
+
+#### Definition Syntax
+
+```rumps
+; Simple enumeration (no payloads)
+TYPE Status =
+  | Pending
+  | Active
+  | Completed
+  | Failed
+
+; With payloads
+TYPE DataStatus =
+  | NoValue
+  | HasValue(value)
+  | HasDescendants
+  | HasBoth(value)
+
+; Parameterized sum types
+TYPE Result[T, E] =
+  | Ok(T)
+  | Err(E)
+
+TYPE Option[T] =
+  | Some(T)
+  | None
+```
+
+#### Constructor Syntax
+
+Constructors use `Type.Variant` notation:
+
+```rumps
+SET status = Status.Pending
+SET result = Result.Ok(42)
+SET data = DataStatus.HasValue("hello")
+SET opt = Option.None
+```
+
+#### Built-in Sum Types
+
+These are predefined in the standard library:
+
+| Type           | Variants                  | Description             |
+|----------------|---------------------------|-------------------------|
+| `Option[T]`    | `Some(T)`, `None`         | Nullable/optional value |
+| `Result[T, E]` | `Ok(T)`, `Err(E)`         | Success or error        |
+| `DataStatus`   | `NoValue`, `HasValue(v)`, `HasDescendants`, `HasBoth(v)` | Node existence status |
+
+#### Serializing Custom Types (Future)
+
+Currently, users must manually convert custom sum types to/from records for persistence:
+
+```rumps
+TYPE Status =
+  | Active
+  | Discharged(date)
+
+; Manual conversion
+FUN status-to-record (s: Status) {
+  MATCH s {
+    Status.Active => { { tag: "Active" } }
+    Status.Discharged(d) => { { tag: "Discharged", date: d } }
+  }
+}
+
+FUN record-to-status (r) -> Status {
+  MATCH r.tag {
+    "Active" => { Status.Active }
+    "Discharged" => { Status.Discharged(r.date) }
+    _ => { THROW "Unknown tag: " ++ r.tag }
+  }
+}
+```
+
+This is explicit and requires no new language features. Future iterations may add:
+- Derive-style: `TYPE Status DERIVE Serialize = | ...`
+- Associated functions: `TYPE Status WITH { to-record: ..., from-record: ... }`
+- Convention-based: interpreter auto-discovers `TypeName.to-record` / `TypeName.from-record`
+
+For now, manual `MATCH`-based conversion is the idiomatic approach.
+
+### Pattern Matching
+
+The `MATCH` expression enables exhaustive, type-safe branching on values. It is the primary way to destructure sum types.
+
+#### Basic Syntax
+
+```rumps
+MATCH <scrutinee> {
+  <pattern> => <expr>
+  <pattern> => <expr>
+  ...
+}
+```
+
+#### Matching Sum Types
+
+```rumps
+SET status = get-data-status(^PATIENT(id))
+
+MATCH status {
+  DataStatus.NoValue => {
+    OUTPUT "No data at this key"
+  }
+  DataStatus.HasValue(v) => {
+    OUTPUT "Value: " ++ v
+  }
+  DataStatus.HasDescendants => {
+    OUTPUT "Has children but no value"
+  }
+  DataStatus.HasBoth(v) => {
+    OUTPUT "Value: " ++ v ++ " (and has children)"
+  }
+}
+```
+
+#### Matching Option and Result
+
+```rumps
+SET name = GET(^PATIENT(id, "NAME"))
+
+MATCH name {
+  Option.Some(n) => { OUTPUT "Patient: " ++ n }
+  Option.None => { OUTPUT "Unknown patient" }
+}
+
+SET result = try-parse-int(input)
+
+MATCH result {
+  Result.Ok(n) => { n * 2 }
+  Result.Err(e) => {
+    OUTPUT TO ERROR "Parse failed: " ++ e
+    0  ; default value
+  }
+}
+```
+
+#### Matching Literals and Wildcards
+
+```rumps
+; Match on integers
+MATCH count {
+  0 => { "none" }
+  1 => { "one" }
+  n => { "many: " ++ n }  ; bind to variable
+}
+
+; Match on booleans
+MATCH active {
+  true => { "enabled" }
+  false => { "disabled" }
+}
+
+; Match on strings
+MATCH cmd {
+  "quit" => { exit() }
+  "help" => { show-help() }
+  _ => { OUTPUT "Unknown command" }  ; wildcard
+}
+```
+
+#### Pattern Guards
+
+Use `IF` to add conditions to patterns:
+
+```rumps
+MATCH n {
+  x IF x > 100 => { "large" }
+  x IF x > 0 => { "positive" }
+  0 => { "zero" }
+  _ => { "negative" }
+}
+
+MATCH user {
+  Option.Some(u) IF u.admin => { "Admin: " ++ u.name }
+  Option.Some(u) => { "User: " ++ u.name }
+  Option.None => { "Anonymous" }
+}
+```
+
+#### Nested Patterns
+
+```rumps
+MATCH nested-opt {
+  Option.Some(Option.Some(v)) => { "doubly wrapped: " ++ v }
+  Option.Some(Option.None) => { "outer Some, inner None" }
+  Option.None => { "outer None" }
+}
+
+MATCH result {
+  Result.Ok(Option.Some(v)) => { use(v) }
+  Result.Ok(Option.None) => { OUTPUT "Success but empty" }
+  Result.Err(e) => { OUTPUT "Error: " ++ e }
+}
+```
+
+#### Tuple and Array Patterns
+
+```rumps
+; Tuple destructuring
+SET pair = (1, "hello")
+MATCH pair {
+  (0, s) => { "zero with " ++ s }
+  (n, "hello") => { "greeting from " ++ n }
+  (n, s) => { "other: " ++ n ++ ", " ++ s }
+}
+
+; Array head/tail (future)
+MATCH items {
+  [] => { "empty" }
+  [x] => { "single: " ++ x }
+  [x, y] => { "pair: " ++ x ++ ", " ++ y }
+  [h, ...tail] => { "head: " ++ h ++ ", rest has " ++ Array.length(tail) }
+}
+```
+
+#### Exhaustiveness
+
+`MATCH` expressions should be **exhaustive**; the interpreter will warn (or error in strict mode) if patterns don't cover all cases:
+
+```rumps
+; WARNING: Non-exhaustive match
+MATCH opt {
+  Option.Some(v) => { v }
+  ; Missing: Option.None
+}
+
+; Fix with wildcard or explicit case
+MATCH opt {
+  Option.Some(v) => { v }
+  _ => { "default" }
+}
+```
+
+#### Match as Expression
+
+`MATCH` is an expression and yields a value:
+
+```rumps
+SET label = MATCH status {
+  Status.Pending => { "waiting" }
+  Status.Active => { "in progress" }
+  Status.Completed => { "done" }
+  Status.Failed => { "error" }
+}
+
+; In pipelines
+^DATA
+  |> COLLECT
+  |> MAP entry => MATCH entry.status {
+       DataStatus.HasValue(v) => { v }
+       _ => { "N/A" }
+     }
+  |> OUTPUT
+```
+
+## Error Handling
+
+RUMPS provides structured error handling through `CATCH` and `HANDLE` constructs. By default, when an operation produces a `Result.Err`, the interpreter raises a `RuntimeError` and halts execution. These constructs allow graceful recovery.
+
+### CATCH: Handling Errors
+
+`CATCH` intercepts errors from any expression or block, receiving only the error value:
+
+```rumps
+; On a single expression
+risky-operation() CATCH e => {
+  OUTPUT TO ERROR "Operation failed: " ++ e.message
+  fallback-value
+}
+
+; On a block
+{
+  SET data = fetch-remote(url)
+  process(data)
+} CATCH e => {
+  OUTPUT TO ERROR "Pipeline failed: " ++ e
+  Option.None
+}
+```
+
+The `CATCH` block receives an error object with at least:
+- `e.message`: Human-readable error description
+- `e.kind`: Error category (e.g., `"IoError"`, `"ParseError"`, `"TxConflict"`)
+- `e.source`: Optional underlying cause
+
+### HANDLE: Receiving the Full Result
+
+`HANDLE` gives you the complete `Result`, allowing you to act on both success and failure:
+
+```rumps
+; Explicit Result handling
+db-operation() HANDLE r => {
+  MATCH r {
+    Result.Ok(v) => {
+      OUTPUT "Success: " ++ v
+      v
+    }
+    Result.Err(e) => {
+      log-error(e)
+      default-value
+    }
+  }
+}
+
+; Shorthand with pattern match
+db-operation() HANDLE {
+  Result.Ok(v) => { process(v) }
+  Result.Err(e) => { recover(e) }
+}
+```
+
+The shorthand form (without `r =>`) directly pattern matches the result.
+
+### Transaction Error Handling
+
+Transactions use `CATCH` for error handling, combined with `ON CONFLICT` for conflict-specific strategies:
+
+```rumps
+TRANSACTION {
+  SET ^ACCOUNT(from, "BALANCE") = ^ACCOUNT(from, "BALANCE") - amount
+  SET ^ACCOUNT(to, "BALANCE") = ^ACCOUNT(to, "BALANCE") + amount
+} ON CONFLICT RETRY 3
+  CATCH e => {
+    log-error("Transfer failed", e)
+    notify-admin(e)
+  }
+  FINALLY {
+    cleanup-locks()
+  }
+```
+
+- `ON CONFLICT`: Handles transaction conflicts specifically (see Transaction section)
+- `CATCH`: Handles any error after conflict resolution exhausted
+- `FINALLY`: Always runs, regardless of success or failure
+
+### Error Propagation in Streams
+
+Within `COLLECT` streams, errors can be handled per-element or for the entire stream:
+
+```rumps
+; Per-element error handling
+COLLECT ^RECORDS
+  MAP record => {
+    parse-record(record) CATCH e => {
+      { error: e.message, original: record }
+    }
+  }
+  INTO results
+
+; Skip errors silently
+COLLECT ^RECORDS
+  MAP record => parse-record(record) CATCH _ => { Option.None }
+  FILTER Option.is-some
+  MAP Option.unwrap
+  INTO valid-records
+
+; Fail-fast (default behavior without CATCH)
+COLLECT ^RECORDS
+  MAP parse-record  ; First error halts the stream
+  INTO results
+
+; Collect errors separately
+COLLECT ^RECORDS
+  MAP record => parse-record(record) HANDLE {
+    Result.Ok(v) => { Result.Ok(v) }
+    Result.Err(e) => { Result.Err({ key: record.key, error: e }) }
+  }
+  PARTITION Result.is-ok INTO (successes, failures)
+```
+
+### TRY Blocks
+
+For grouping multiple operations under unified error handling:
+
+```rumps
+TRY {
+  SET config = load-config(path)
+  SET conn = connect-db(config.db-url)
+  SET data = query(conn, sql)
+  process(data)
+} CATCH e => {
+  OUTPUT TO ERROR "Startup failed: " ++ e.message
+  exit(1)
+} FINALLY {
+  close-conn(conn) CATCH _ => { }  ; Ignore cleanup errors
+}
+```
+
+### Creating Errors
+
+Functions can signal errors using `THROW` or by returning `Result.Err`:
+
+```rumps
+FUN divide (a: Int, b: Int) -> Result[Int, String] {
+  MATCH b {
+    0 => { Result.Err("Division by zero") }
+    _ => { Result.Ok(a / b) }
+  }
+}
+
+FUN require-positive (n: Int) -> Int {
+  MATCH n > 0 {
+    true => { n }
+    false => { THROW "Expected positive number, got: " ++ n }
+  }
+}
+```
+
+`THROW` immediately raises a `RuntimeError`; callers must use `CATCH` or `HANDLE` to recover.
+
+### Error Types
+
+```rumps
+; Built-in error structure
+TYPE Error = {
+  message: String,
+  kind: String,
+  source: Option[Error]
+}
+
+; Common error kinds
+; - "RuntimeError": General interpreter error
+; - "TypeError": Type mismatch at runtime
+; - "IoError": File/network operation failed
+; - "ParseError": Failed to parse input
+; - "TxConflict": Transaction conflict
+; - "TxAborted": Transaction aborted
+; - "KeyNotFound": Global/local key doesn't exist
+```
+
 ## Implementation Phases
 
 ### Phase 1: Core Stream Operations (Storage Layer)
@@ -1529,6 +2009,9 @@ FUN admit (p: Patient) {
 - [ ] Implement two-phase lexer → parser using `chumsky` (see Parser Architecture section)
 - [ ] Build AST representation
 - [ ] Implement interpreter that calls Rust storage layer
+- [ ] Sum type definitions (`TYPE ... = | Variant ...`)
+- [ ] Pattern matching (`MATCH` expressions)
+- [ ] Error handling (`CATCH`, `HANDLE`, `TRY`/`FINALLY`, `THROW`)
 
 ### Phase 4: Output Formatting
 - [ ] Needs to support stdout/stderr writes
@@ -1558,7 +2041,7 @@ FUN admit (p: Patient) {
 
 1. **Syntax Style**: Should we support both block form and pipeline form, or standardize on one?
 2. ~~**Type System**: How much type inference vs explicit typing?~~ **Resolved**: No static type checking. Type annotations are optional runtime hints—validated when executed, producing interpreter errors if violated. Conservative automatic coercion (into strings, between numerics, but not from strings to numbers). A future "strict mode" may add optional parse-time validation for annotated procedures.
-3. **Error Handling**: How to handle errors in stream processing?
+3. ~~**Error Handling**: How to handle errors in stream processing?~~ **Resolved**: `CATCH e => { }` intercepts errors, `HANDLE { Ok(v) => ..., Err(e) => ... }` gives full `Result`. `TRY { } CATCH { } FINALLY { }` for grouped operations. Streams can handle errors per-element or fail-fast. See Error Handling section.
 4. **Transaction Integration**: How do streams interact with transaction boundaries?
 5. **Performance Hints**: Should we allow manual optimization hints?
 6. **Debugging**: What debugging/profiling features should be built-in?
@@ -1575,15 +2058,17 @@ These tasks should be completed after the storage engine implementation is finis
   - Document decision rationale for future reference
 - [ ] **Define operator precedence**: Establish clear precedence rules for all operations
 - [x] **Specify type coercion rules**: Conservative coercion — into strings and between numerics, but NOT from strings to numbers (see Type Coercion section)
-- [ ] **Design error handling semantics**: Define how errors propagate through streams
+- [x] **Design error handling semantics**: `CATCH`, `HANDLE`, `TRY`/`FINALLY` constructs with per-element and fail-fast modes in streams (see Error Handling section)
+- [x] **Design sum types and pattern matching**: `TYPE ... = | Variant1 | Variant2(payload)` syntax, `MATCH` expression with exhaustiveness checking (see Sum Types and Pattern Matching sections)
 - [ ] **Establish naming conventions**: Variable naming, function naming, constants
 
 ### Formal Specification
 - [ ] **Design formal EBNF grammar for RUMPS DSL**
   - Complete lexical structure (tokens, keywords, operators)
-  - Expression grammar (including COLLECT streams)
-  - Statement grammar (assignments, transactions, control flow)
-  - Type annotations (if explicit typing is supported)
+  - Expression grammar (including COLLECT streams, MATCH expressions)
+  - Statement grammar (assignments, transactions, control flow, TRY/CATCH)
+  - Sum type definitions and pattern syntax
+  - Type annotations
   - Comments and documentation syntax
 - [ ] **Create language specification document**
   - Formal semantics for each operation
@@ -1732,4 +2217,4 @@ Some things that look like parsing issues are actually semantic:
 
 ---
 
-Last Updated: 2025-11-29
+Last Updated: 2025-12-12
