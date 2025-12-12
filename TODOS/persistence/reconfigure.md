@@ -4,12 +4,14 @@ Four APIs for changing database configuration at different levels of persistence
 
 ## Overview
 
-| API                     | Scope              | Persists? | Safe Only? | Use Case                        |
-|-------------------------|--------------------|-----------|-----------:|---------------------------------|
-| `db.local()`            | Single callback    | No        |        Yes | Scoped config for one operation |
-| `Database::override`    | Entire session     | No        |        Yes | Session-wide config override    |
-| `Database::reconfigure` | Permanent          | Yes       |        Yes | Persistent safe config updates  |
-| `Database::rebuild`     | Permanent (new DB) | Yes       |         No | Layout-affecting migrations     |
+| API                     | Scope               | Persists? | Safe Only? | Use Case                            |
+|-------------------------|---------------------|-----------|-----------:|-------------------------------------|
+| ~~`db.local()`~~        | ~~Single callback~~ | ~~No~~    |    ~~Yes~~ | ~~Scoped config for one operation~~ |
+| `Database::override`    | Entire session      | No        |        Yes | Session-wide config override        |
+| `Database::reconfigure` | Permanent           | Yes       |        Yes | Persistent safe config updates      |
+| `Database::rebuild`     | Permanent (new DB)  | Yes       |         No | Layout-affecting migrations         |
+
+**Note:** `db.local()` was deemed not feasible; see Phase 2 below.
 
 ## Safe vs Unsafe Configuration
 
@@ -25,51 +27,18 @@ Four APIs for changing database configuration at different levels of persistence
 
 ## API Design
 
-### `db.local()`
+### ~~`db.local()`~~ (Not Feasible)
 
-Temporarily applies config overrides for a single callback, then restores original config.
-Analogous to `local` in Haskell's `ReaderT`.
+~~Temporarily applies config overrides for a single callback, then restores original config.~~
+~~Analogous to `local` in Haskell's `ReaderT`.~~
 
-```rust
-let db = Database::open("./data").await?;
+**Status: Not feasible.** Dynamically swapping `sync_mode` at runtime requires either:
+- An `RwLock` around the WAL config, adding lock contention on every commit (the hot path)
+- Atomic storage of `SyncMode`, complicated by `Periodic(Duration)` variant
 
-// Temporarily use Relaxed mode for a batch import
-db.local()
-    .sync_mode(SyncMode::Relaxed)
-    .run(|db| async move {
-        // All operations here use Relaxed mode
-        db.transaction(|txn| async move {
-            txn.set(&name, &k1, v1).await?;
-            txn.set(&name, &k2, v2).await?;
-            Ok(())
-        }).await?;
-
-        db.transaction(|txn| async move {
-            // ... more batch inserts ...
-            Ok(())
-        }).await?;
-
-        Ok(())
-    })
-    .await?;
-
-// Back to original config here (e.g. OnCommit mode)
-```
-
-### `Database::override`
-
-Opens a database with config overrides for the entire session. Does not modify stored metadata.
-
-```rust
-let db = Database::override("./data")
-    .cache_size(8192)
-    .sync_mode(SyncMode::Relaxed)
-    .open()
-    .await?;
-
-// Uses overridden config for this session only.
-// Next `Database::open("./data")` uses original stored config.
-```
+Neither approach is worth the performance tradeoff for a convenience API. Users who need
+scoped config changes should use `Database::reconfigure` before and after, or open a
+separate database handle with `Database::override`.
 
 ### `Database::reconfigure`
 
@@ -109,16 +78,10 @@ Database::rebuild("./data")
 
 ```rust
 /// Safe config fields shared by `local`, `override`, and `reconfigure`.
-pub struct SafeConfig {
-    pub cache_size: Option<usize>,
-    pub sync_mode: Option<SyncMode>,
-    pub wal_max_file_size: Option<u64>,
-}
-
-/// Builder for `db.local()`.
-pub struct DatabaseLocal<'a> {
-    db: &'a Database,
-    config: SafeConfig,
+pub(crate) struct SafeConfig {
+    pub(crate) cache_size: Option<usize>,
+    pub(crate) sync_mode: Option<SyncMode>,
+    pub(crate) wal_max_file_size: Option<u64>,
 }
 
 /// Builder for `Database::override`.
@@ -147,59 +110,68 @@ pub struct DatabaseRebuild {
 }
 ```
 
-### `local()` Implementation Notes
+### ~~`local()` Implementation Notes~~ (Cancelled)
 
-The `local()` method needs to:
-1. Snapshot current config
-2. Apply overrides
-3. Run callback
-4. Restore original config (even on error/panic)
+~~The `local()` method needs to:~~
+~~1. Snapshot current config~~
+~~2. Apply overrides~~
+~~3. Run callback~~
+~~4. Restore original config (even on error/panic)~~
 
-For `sync_mode`, this likely means swapping the WAL writer's config. Need to ensure
-thread-safety if other operations are concurrent. Options:
-- Use `RwLock` on config and swap atomically
-- Create a scoped "view" that intercepts calls
-- For simplicity, require exclusive access during `local()` (no concurrent ops)
+~~For `sync_mode`, this likely means swapping the WAL writer's config. Need to ensure~~
+~~thread-safety if other operations are concurrent. Options:~~
+~~- Use `RwLock` on config and swap atomically~~
+~~- Create a scoped "view" that intercepts calls~~
+~~- For simplicity, require exclusive access during `local()` (no concurrent ops)~~
+
+**Cancelled:** See "Not Feasible" note in API Design section above.
 
 ## Checklist
 
 ### Phase 1: `SafeConfig` Infrastructure
 
-- [ ] Create `SafeConfig` struct in `database.rs` (or new `config.rs`)
-- [ ] Implement `SafeConfig::apply_to(&self, StorageConfig) -> StorageConfig`
-- [ ] Add internal method to swap/restore config on `Database` or `FileStorage`
+- [x] Create `SafeConfig` struct in `database.rs` (or new `config.rs`)
+- [x] ~~Implement `SafeConfig::apply_to(&self, StorageConfig) -> StorageConfig`~~ (applied inline)
+- [x] Add internal method to swap/restore config on `Database` or `FileStorage`
+- [x] Add directory lock file (`db.lock`) via `fs2` crate to prevent concurrent access
+  - [x] `FileStorageEngine` holds `StdFile` handle for lock lifetime
+  - [x] `StorageError::DatabaseLocked` error variant for lock failures
+  - [x] Tests for concurrent open prevention and lock release on drop
 
-### Phase 2: `Database::local`
+### ~~Phase 2: `Database::local`~~ (Cancelled)
 
-- [ ] Create `DatabaseLocal<'a>` builder struct
-- [ ] Implement `Database::local(&self) -> DatabaseLocal<'_>`
-- [ ] Implement `DatabaseLocal::cache_size`, `sync_mode`, `wal_max_file_size` setters
-- [ ] Implement `DatabaseLocal::run<F, Fut, T>()`:
-  - [ ] Snapshot current config
-  - [ ] Apply `SafeConfig` overrides to database internals
-  - [ ] Run callback `f(&self.db)`
-  - [ ] Restore original config (use `scopeguard` or manual drop guard)
-  - [ ] Return callback result
-- [ ] Add tests for `local`:
-  - [ ] `local` with `SyncMode::Relaxed`, verify no fsync during callback
-  - [ ] Verify config restored after callback completes
-  - [ ] Verify config restored even if callback returns `Err`
-  - [ ] Verify config restored even if callback panics
+**Cancelled:** Runtime config swapping introduces unacceptable lock contention on the
+WAL writer's hot path. See "Not Feasible" note in API Design section.
+
+~~- [ ] Create `DatabaseLocal<'a>` builder struct~~
+~~- [ ] Implement `Database::local(&self) -> DatabaseLocal<'_>` (via `BoxedFuture`?)~~
+~~- [ ] Implement `DatabaseLocal::cache_size`, `sync_mode`, `wal_max_file_size` setters~~
+~~- [ ] Implement `DatabaseLocal::run<F, Fut, T>()`:~~
+  ~~- [ ] Snapshot current config~~
+  ~~- [ ] Apply `SafeConfig` overrides to database internals~~
+  ~~- [ ] Run callback `f(&self.db)`~~
+  ~~- [ ] Restore original config (use `scopeguard` or manual drop guard)~~
+  ~~- [ ] Return callback result~~
+~~- [ ] Add tests for `local`:~~
+  ~~- [ ] Verify config restored after callback completes~~
+  ~~- [ ] Verify config restored even if callback returns `Err`~~
+  ~~- [ ] Verify config restored even if callback panics~~
+  ~~- [ ] `local` with `SyncMode::Relaxed`, verify no fsync during callback (might be tricky)~~
 
 ### Phase 3: `Database::override`
 
-- [ ] Create `DatabaseOverride` builder struct
-- [ ] Implement `Database::override(path) -> DatabaseOverride`
-- [ ] Implement `DatabaseOverride::cache_size`, `sync_mode`, `wal_max_file_size` setters
-- [ ] Implement `DatabaseOverride::open()`:
-  - [ ] Read existing `MetadataPage` from disk
-  - [ ] Convert to `StorageConfig` via `to_storage_config()`
-  - [ ] Apply `SafeConfig` overrides
-  - [ ] Open database with merged config (do NOT write back to metadata)
-- [ ] Add tests for `override`:
-  - [ ] Override `cache_size` and verify runtime behavior
-  - [ ] Override `sync_mode` and verify WAL behavior
-  - [ ] Verify original metadata unchanged after close
+- [x] Create `DatabaseOverride` builder struct
+- [x] Implement `Database::open_override(path) -> DatabaseOverride`
+- [x] Implement `DatabaseOverride::cache_size`, `sync_mode`, `wal_max_file_size` setters
+- [x] Implement `DatabaseOverride::open()`:
+  - [x] Read existing `MetadataPage` from disk
+  - [x] Convert to `StorageConfig` via `to_storage_config()`
+  - [x] Apply `SafeConfig` overrides
+  - [x] Open database with merged config (do NOT write back to metadata)
+- [x] Add tests for `override`:
+  - [x] Override `cache_size` and verify runtime behavior
+  - [x] Override `sync_mode` and verify WAL behavior
+  - [x] Verify original metadata unchanged after close
 
 ### Phase 4: `Database::reconfigure`
 
@@ -207,15 +179,16 @@ thread-safety if other operations are concurrent. Options:
 - [ ] Implement `Database::reconfigure(path) -> DatabaseReconfigure`
 - [ ] Implement `DatabaseReconfigure::cache_size`, `sync_mode`, `wal_max_file_size` setters
 - [ ] Implement `DatabaseReconfigure::apply()`:
-  - [ ] Verify database is not currently open (check lock file or similar)
+  - [ ] Verify database is not currently open (acquire `db.lock` via `fs2`)
   - [ ] Read existing `MetadataPage`
   - [ ] Apply `SafeConfig` changes
   - [ ] Write updated `MetadataPage` back to disk
   - [ ] Sync to ensure durability
+  - [ ] Release lock
 - [ ] Add tests for `reconfigure`:
   - [ ] Reconfigure `sync_mode`, reopen, verify new mode active
   - [ ] Reconfigure `cache_size`, reopen, verify new size
-  - [ ] Verify error if database is open (if lock detection implemented)
+  - [ ] Verify `DatabaseLocked` error if database is open
 
 ### Phase 5: `Database::rebuild`
 

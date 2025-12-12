@@ -130,6 +130,13 @@ pub enum StorageError {
     #[error("Writes to global variables require a transaction")]
     GlobalRequiresTransaction,
 
+    /// Database is locked by another process.
+    #[error("Database at {path} is locked by another process")]
+    DatabaseLocked {
+        /// Path to the locked database.
+        path: PathBuf,
+    },
+
     /// Transaction is not active.
     #[error("Transaction {id} is not active (state: {state})")]
     TransactionNotActive {

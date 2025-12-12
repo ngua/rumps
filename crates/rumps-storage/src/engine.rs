@@ -26,6 +26,7 @@ mod registry;
 mod superblock;
 
 use async_trait::async_trait;
+pub(crate) use config::SafeConfig;
 pub use config::{StorageConfig, StorageMetadata};
 pub(crate) use file::FileStorageEngine;
 pub(crate) use indirect::IndirectPage;

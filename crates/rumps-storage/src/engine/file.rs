@@ -1,6 +1,7 @@
 //! File-based storage engine with WAL and page cache.
 
 use std::fmt;
+use std::fs::File as StdFile;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -101,6 +102,11 @@ pub(crate) struct FileStorageEngine {
     /// When set, a background task is running that syncs the WAL at the
     /// configured interval. Call `shutdown()` to abort it.
     sync_task_abort: Option<tokio::task::AbortHandle>,
+
+    /// Lock file handle; held for the lifetime of the engine to prevent
+    /// concurrent access from other processes.
+    #[allow(dead_code)]
+    lock_file: StdFile,
 }
 
 impl fmt::Debug for FileStorageEngine {
@@ -121,6 +127,41 @@ impl FileStorageEngine {
 
     /// WAL directory name within the data directory.
     const WAL_DIR_NAME: &'static str = "wal";
+
+    /// Lock file name within the data directory.
+    const LOCK_FILE_NAME: &'static str = "db.lock";
+
+    /// Acquires an exclusive lock on the database directory.
+    ///
+    /// Creates the lock file if it doesn't exist, then attempts to acquire
+    /// an exclusive (non-blocking) lock. Returns the locked file handle on
+    /// success; the lock is held until the file is dropped.
+    fn acquire_lock(dir: &Path) -> Result<StdFile> {
+        use std::fs::OpenOptions as StdOpenOptions;
+
+        use fs2::FileExt;
+
+        let lock_path = dir.join(Self::LOCK_FILE_NAME);
+        let lock_file = StdOpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| StorageError::Io {
+                op: "open lock file".into(),
+                path: lock_path.clone(),
+                source: e,
+            })?;
+
+        lock_file.try_lock_exclusive().map_err(|_| {
+            StorageError::DatabaseLocked {
+                path: dir.to_path_buf(),
+            }
+        })?;
+
+        Ok(lock_file)
+    }
 
     /// Open an existing database.
     ///
@@ -145,6 +186,20 @@ impl FileStorageEngine {
     /// - The data file is missing or corrupted
     /// - WAL recovery fails
     pub(crate) async fn open(dir: &Path) -> Result<Self> {
+        Self::open_with_overrides(dir, super::SafeConfig::default()).await
+    }
+
+    /// Open an existing database with config overrides.
+    ///
+    /// Like [`open`], but applies `overrides` to the stored config before
+    /// initializing. The overrides are NOT persisted; subsequent opens
+    /// without overrides will use the original stored config.
+    ///
+    /// [`open`]: Self::open
+    pub(crate) async fn open_with_overrides(
+        dir: &Path,
+        overrides: super::SafeConfig,
+    ) -> Result<Self> {
         // Validate path is a directory
         if dir.exists() && !dir.is_dir() {
             Err(StorageError::InvalidOperation(format!(
@@ -153,6 +208,9 @@ impl FileStorageEngine {
                 dir.display()
             )))?;
         }
+
+        // Acquire exclusive lock before any other operations
+        let lock_file = Self::acquire_lock(dir)?;
 
         let data_path = dir.join(Self::DATA_FILE_NAME);
         let wal_dir = dir.join(Self::WAL_DIR_NAME);
@@ -184,102 +242,104 @@ impl FileStorageEngine {
         if file_len < page::PAGE_SIZE as u64 {
             Err(StorageError::InvalidOperation(
                 "data file too small for header page".into(),
-            ))
-        } else {
-            // Read page 0 (header/superblock)
-            let mut hdr = vec![0u8; page::PAGE_SIZE];
-
-            file.seek(SeekFrom::Start(0)).await.map_err(|e| {
-                StorageError::Io {
-                    op: "seek to header".into(),
-                    path: data_path.clone(),
-                    source: e,
-                }
-            })?;
-            file.read_exact(&mut hdr)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "read header".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            // Load metadata page first so we can use stored config
-            let superblock_raw = Superblock::deserialize(&hdr)?;
-
-            let metadata = match superblock_raw.metadata_root {
-                Some(pid) => {
-                    let buf = Self::read_page_at(
-                        &mut file,
-                        pid.byte_offset(),
-                        &data_path,
-                    )
-                    .await?;
-                    let meta = MetadataPage::deserialize(&buf)?;
-                    meta.validate_runtime()?;
-                    meta
-                }
-                None => {
-                    // DB without metadata page - create default
-                    MetadataPage::new(3)
-                }
-            };
-
-            // Use stored config from metadata
-            let cfg = metadata.to_storage_config();
-
-            // Parse superblock and load bitmap pages (including indirect)
-            let (page_alloc, superblock, indirect) =
-                Self::load_superblock(&mut file, &hdr, &cfg, &data_path)
-                    .await?;
-
-            // Load registry chain (follows next_page links)
-            let registry_chain = match superblock.registry_root {
-                Some(pid) => {
-                    Self::load_registry_chain(&mut file, pid, &data_path)
-                        .await?
-                }
-                None => {
-                    // DB without registry - create empty chain
-                    Vec::new()
-                }
-            };
-
-            // Run WAL recovery
-            let (recovery, reader) =
-                WalReader::open(&wal_dir).await?.recover().await?;
-
-            // TODO: Apply recovery.committed_ops to page cache/data file
-            let _ = recovery.uncommitted_txns;
-
-            // Convert reader to writer using stored WAL config
-            let wal = reader.into_writer(cfg.wal_config.clone()).await?;
-
-            // Create page cache using stored cache size
-            let cache = PageCache::new(cfg.cache_size);
-
-            // Wrap WAL in Arc for potential sharing with sync task
-            let wal = Arc::new(wal);
-
-            // Spawn periodic sync task if configured
-            let sync_task_abort =
-                Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
-
-            Ok(Self {
-                data_file: Arc::new(RwLock::new(file)),
-                wal,
-                cache: Arc::new(cache),
-                page_alloc: Arc::new(page_alloc),
-                superblock: RwLock::new(superblock),
-                single_indirect: RwLock::new(indirect.single),
-                double_indirect: RwLock::new(indirect.double),
-                metadata: RwLock::new(metadata),
-                registry_chain: RwLock::new(registry_chain),
-                cfg,
-                data_dir: dir.to_path_buf(),
-                sync_task_abort,
-            })
+            ))?;
         }
+
+        // Read page 0 (header/superblock)
+        let mut hdr = vec![0u8; page::PAGE_SIZE];
+
+        file.seek(SeekFrom::Start(0))
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "seek to header".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+        file.read_exact(&mut hdr)
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "read header".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+
+        // Load metadata page first so we can use stored config
+        let superblock_raw = Superblock::deserialize(&hdr)?;
+
+        let metadata = match superblock_raw.metadata_root {
+            Some(pid) => {
+                let buf = Self::read_page_at(
+                    &mut file,
+                    pid.byte_offset(),
+                    &data_path,
+                )
+                .await?;
+                let meta = MetadataPage::deserialize(&buf)?;
+                meta.validate_runtime()?;
+                meta
+            }
+            None => MetadataPage::new(3),
+        };
+
+        // Use stored config, then apply overrides
+        let mut cfg = metadata.to_storage_config();
+        if let Some(cs) = overrides.cache_size {
+            cfg.cache_size = cs;
+        }
+        if let Some(sm) = overrides.sync_mode {
+            cfg.wal_config.sync_mode = sm;
+        }
+        if let Some(ws) = overrides.wal_max_file_size {
+            cfg.wal_config.max_file_size = ws;
+        }
+
+        // Parse superblock and load bitmap pages (including indirect)
+        let (page_alloc, superblock, indirect) =
+            Self::load_superblock(&mut file, &hdr, &cfg, &data_path).await?;
+
+        // Load registry chain (follows next_page links)
+        let registry_chain = match superblock.registry_root {
+            Some(pid) => {
+                Self::load_registry_chain(&mut file, pid, &data_path).await?
+            }
+            None => Vec::new(),
+        };
+
+        // Run WAL recovery
+        let (recovery, reader) =
+            WalReader::open(&wal_dir).await?.recover().await?;
+
+        // TODO: Apply recovery.committed_ops to page cache/data file
+        let _ = recovery.uncommitted_txns;
+
+        // Convert reader to writer using (possibly overridden) WAL config
+        let wal = reader.into_writer(cfg.wal_config.clone()).await?;
+
+        // Create page cache using (possibly overridden) cache size
+        let cache = PageCache::new(cfg.cache_size);
+
+        // Wrap WAL in Arc for potential sharing with sync task
+        let wal = Arc::new(wal);
+
+        // Spawn periodic sync task if configured
+        let sync_task_abort =
+            Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
+
+        Ok(Self {
+            data_file: Arc::new(RwLock::new(file)),
+            wal,
+            cache: Arc::new(cache),
+            page_alloc: Arc::new(page_alloc),
+            superblock: RwLock::new(superblock),
+            single_indirect: RwLock::new(indirect.single),
+            double_indirect: RwLock::new(indirect.double),
+            metadata: RwLock::new(metadata),
+            registry_chain: RwLock::new(registry_chain),
+            cfg,
+            data_dir: dir.to_path_buf(),
+            sync_task_abort,
+            lock_file,
+        })
     }
 
     /// Create a new database.
@@ -336,6 +396,9 @@ impl FileStorageEngine {
                 path: wal_dir.clone(),
                 source: e,
             })?;
+
+        // Acquire exclusive lock after creating directories
+        let lock_file = Self::acquire_lock(dir)?;
 
         // Fail if data file already exists
         if data_path.exists() {
@@ -457,6 +520,7 @@ impl FileStorageEngine {
                 cfg,
                 data_dir: dir.to_path_buf(),
                 sync_task_abort,
+                lock_file,
             })
         }
     }
@@ -2658,5 +2722,83 @@ mod tests {
                 Some(PageId::from(499))
             );
         }
+    }
+
+    #[tokio::test]
+    async fn concurrent_open_fails_with_database_locked() {
+        let dir = TempDir::new().expect("temp dir");
+
+        // Create and keep engine alive
+        let engine1 = FileStorageEngine::create(
+            dir.path(),
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
+
+        // Second open should fail with DatabaseLocked
+        let result = FileStorageEngine::open(dir.path()).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, StorageError::DatabaseLocked { .. }),
+            "expected DatabaseLocked, got: {err:?}"
+        );
+
+        drop(engine1);
+    }
+
+    #[tokio::test]
+    async fn lock_released_after_drop() {
+        let dir = TempDir::new().expect("temp dir");
+
+        // Create and drop engine
+        {
+            let _engine = FileStorageEngine::create(
+                dir.path(),
+                StorageConfig::default(),
+                3,
+                None,
+            )
+            .await
+            .expect("create");
+        }
+
+        // Second open should now succeed
+        let engine2 = FileStorageEngine::open(dir.path()).await;
+        assert!(engine2.is_ok(), "open failed: {:?}", engine2.unwrap_err());
+    }
+
+    #[tokio::test]
+    async fn concurrent_create_fails_with_database_locked() {
+        let dir = TempDir::new().expect("temp dir");
+
+        // Create first, keep alive
+        let engine1 = FileStorageEngine::create(
+            dir.path(),
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await
+        .expect("create");
+
+        // Second create should fail (either with "already exists" or "locked")
+        let result = FileStorageEngine::create(
+            dir.path(),
+            StorageConfig::default(),
+            3,
+            None,
+        )
+        .await;
+
+        assert!(result.is_err());
+        // Could be either DatabaseLocked or InvalidOperation("database already exists")
+        // depending on timing; both are acceptable
+
+        drop(engine1);
     }
 }

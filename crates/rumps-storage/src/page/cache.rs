@@ -41,6 +41,8 @@ pub(crate) struct EvictedPage {
 /// Statistics for the page cache.
 #[derive(Debug, Clone, Default)]
 pub struct PageCacheStats {
+    /// Maximum number of pages the cache can hold.
+    pub max_capacity: usize,
     /// Number of cache hits.
     pub hits: u64,
     /// Number of cache misses.
@@ -278,7 +280,9 @@ impl PageCache {
 
     /// Get cache statistics.
     pub(crate) async fn stats(&self) -> PageCacheStats {
-        self.stats.read().await.clone()
+        let mut s = self.stats.read().await.clone();
+        s.max_capacity = self.capacity;
+        s
     }
 
     /// Calculate the hit rate (`0.0` to `1.0`).

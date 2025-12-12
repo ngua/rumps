@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::wal::WalWriterConfig;
+use crate::wal::{SyncMode, WalWriterConfig};
 
 /// Configuration for the storage engine.
 ///
@@ -35,6 +35,14 @@ impl Default for StorageConfig {
             wal_config: WalWriterConfig::default(),
         }
     }
+}
+
+/// Safe configuration overrides for [`Database::open_override`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SafeConfig {
+    pub(crate) cache_size: Option<usize>,
+    pub(crate) sync_mode: Option<SyncMode>,
+    pub(crate) wal_max_file_size: Option<u64>,
 }
 
 /// Metadata about the storage engine state.

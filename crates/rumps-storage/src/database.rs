@@ -107,7 +107,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock as StdRwLock};
 
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
@@ -116,7 +116,8 @@ use tokio::sync::RwLock;
 
 use crate::btree::{BTree, BTreeBuilder, BTreeStats};
 use crate::engine::{
-    AsyncStorageEngine, FileStorageEngine, StorageConfig, StorageMetadata,
+    AsyncStorageEngine, FileStorageEngine, SafeConfig, StorageConfig,
+    StorageMetadata,
 };
 use crate::error::StorageError;
 use crate::node::{NodeData, NodeId};
@@ -308,6 +309,87 @@ impl DatabaseBuilder {
     }
 }
 
+/// Builder for opening a database with config overrides.
+///
+/// Created via [`Database::open_override`]. Overrides are applied at open time
+/// but NOT persisted; subsequent opens without overrides use the stored config.
+///
+/// # Examples
+///
+/// ```no_run
+/// # tokio_test::block_on(async {
+/// use rumps_storage::{Database, SyncMode};
+///
+/// // Open with overridden sync mode for this session only
+/// let db = Database::open_override("./data")
+///     .sync_mode(SyncMode::Relaxed)
+///     .cache_size(8192)
+///     .open()
+///     .await?;
+///
+/// // Next `Database::open("./data")` uses original stored config
+/// # Ok::<(), rumps_storage::Error>(())
+/// # });
+/// ```
+pub struct DatabaseOverride {
+    path: PathBuf,
+    config: SafeConfig,
+}
+
+impl DatabaseOverride {
+    /// Sets the page cache size override.
+    pub fn cache_size(mut self, pages: usize) -> Self {
+        self.config.cache_size = Some(pages);
+        self
+    }
+
+    /// Sets the WAL sync mode override.
+    pub fn sync_mode(mut self, mode: SyncMode) -> Self {
+        self.config.sync_mode = Some(mode);
+        self
+    }
+
+    /// Sets the WAL file rotation size override.
+    pub fn wal_max_file_size(mut self, bytes: u64) -> Self {
+        self.config.wal_max_file_size = Some(bytes);
+        self
+    }
+
+    /// Opens the database with the configured overrides.
+    ///
+    /// Reads stored config from metadata, applies overrides, then opens.
+    /// Overrides are NOT persisted.
+    pub async fn open(self) -> Result<Database> {
+        let storage = Arc::new(
+            FileStorageEngine::open_with_overrides(&self.path, self.config)
+                .await?,
+        );
+
+        let deg = storage.min_degree().await as usize;
+        let mut builder = BTreeBuilder::default()
+            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>)
+            .min_degree(deg);
+        if let Some(bytes) = storage.max_memory_bytes().await {
+            builder = builder.max_memory_bytes(bytes);
+        }
+
+        let btree = Arc::new(builder.build()?);
+
+        let db = Database {
+            roots: Arc::new(RwLock::new(BTreeMap::new())),
+            btree,
+            storage: Some(Arc::clone(&storage)),
+            txn_manager: Arc::new(TransactionManager::default()),
+            closed: Arc::new(StdRwLock::new(false)),
+        };
+
+        // Run WAL recovery and replay committed operations
+        db.recover(&self.path).await?;
+
+        Ok(db)
+    }
+}
+
 /// Database providing namespace management over a B-tree.
 ///
 /// `Database` maps variable names (`Name::Global` and `Name::Local`) to
@@ -494,32 +576,34 @@ impl Database {
     /// # });
     /// ```
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let storage = Arc::new(FileStorageEngine::open(path.as_ref()).await?);
+        Self::open_override(path).open().await
+    }
 
-        // Use stored config from metadata
-        let deg = storage.min_degree().await as usize;
-        let mut builder = BTreeBuilder::default()
-            .storage(Arc::clone(&storage)
-                as Arc<dyn crate::engine::AsyncStorageEngine>)
-            .min_degree(deg);
-        if let Some(bytes) = storage.max_memory_bytes().await {
-            builder = builder.max_memory_bytes(bytes);
+    /// Opens an existing database with config overrides for this session.
+    ///
+    /// Returns a builder that allows overriding safe config fields before
+    /// opening. Overrides are NOT persisted; subsequent opens without
+    /// overrides use the original stored config.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::{Database, SyncMode};
+    ///
+    /// // Open with Relaxed mode for batch import
+    /// let db = Database::open_override("./data")
+    ///     .sync_mode(SyncMode::Relaxed)
+    ///     .open()
+    ///     .await?;
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    pub fn open_override(path: impl AsRef<Path>) -> DatabaseOverride {
+        DatabaseOverride {
+            path: path.as_ref().to_path_buf(),
+            config: SafeConfig::default(),
         }
-
-        let btree = Arc::new(builder.build()?);
-
-        let db = Self {
-            roots: Arc::new(RwLock::new(BTreeMap::new())),
-            btree,
-            storage: Some(Arc::clone(&storage)),
-            txn_manager: Arc::new(TransactionManager::default()),
-            closed: Arc::new(StdRwLock::new(false)),
-        };
-
-        // Run WAL recovery and replay committed operations
-        db.recover(path.as_ref()).await?;
-
-        Ok(db)
     }
 
     /// Closes the database, flushing all data and releasing resources.
@@ -2581,6 +2665,225 @@ mod tests {
                     });
                 });
             });
+        }
+    }
+
+    mod open_override {
+        use tempfile::TempDir;
+
+        use super::*;
+        use crate::SyncMode;
+
+        #[tokio::test]
+        async fn override_cache_size() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create with default cache size (1024)
+            {
+                let db = Database::create(&path).await.unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reopen with overridden cache size
+            {
+                let db = Database::open_override(&path)
+                    .cache_size(2048)
+                    .open()
+                    .await
+                    .unwrap();
+
+                let stats = db.debug().await;
+                assert_eq!(
+                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    Some(2048)
+                );
+
+                db.close().await.unwrap();
+            }
+
+            // Normal open should use original stored config
+            {
+                let db = Database::open(&path).await.unwrap();
+                let stats = db.debug().await;
+                assert_eq!(
+                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    Some(1024)
+                );
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn override_sync_mode() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create with OnCommit sync mode
+            {
+                let db = Database::builder()
+                    .sync_mode(SyncMode::OnCommit)
+                    .create(&path)
+                    .await
+                    .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reopen with Relaxed mode for this session only
+            {
+                let db = Database::open_override(&path)
+                    .sync_mode(SyncMode::Relaxed)
+                    .open()
+                    .await
+                    .unwrap();
+
+                // Write data with relaxed sync
+                db.transaction(|txn| async move {
+                    txn.set(
+                        &global!("TEST"),
+                        &rumps_types::key![1],
+                        rumps_types::Value::from("value"),
+                    )
+                    .await
+                })
+                .await
+                .unwrap();
+
+                db.close().await.unwrap();
+            }
+
+            // Verify data persisted
+            {
+                let db = Database::open(&path).await.unwrap();
+                let val = db
+                    .get(&global!("TEST"), &rumps_types::key![1])
+                    .await
+                    .unwrap();
+                assert_eq!(val, Some(rumps_types::Value::from("value")));
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn override_wal_max_file_size() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create database
+            {
+                let db = Database::create(&path).await.unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reopen with smaller WAL max file size
+            let db = Database::open_override(&path)
+                .wal_max_file_size(1024 * 1024)
+                .open()
+                .await
+                .unwrap();
+
+            db.close().await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn override_multiple_options() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create database
+            {
+                let db = Database::create(&path).await.unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reopen with multiple overrides
+            {
+                let db = Database::open_override(&path)
+                    .cache_size(512)
+                    .sync_mode(SyncMode::Relaxed)
+                    .wal_max_file_size(2 * 1024 * 1024)
+                    .open()
+                    .await
+                    .unwrap();
+
+                let stats = db.debug().await;
+                assert_eq!(
+                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    Some(512)
+                );
+
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn override_preserves_data() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create and populate database
+            {
+                let db = Database::create(&path).await.unwrap();
+                db.transaction(|txn| async move {
+                    txn.set(
+                        &global!("DATA"),
+                        &rumps_types::key!["key"],
+                        rumps_types::Value::from(42),
+                    )
+                    .await
+                })
+                .await
+                .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Open with override, modify, close
+            {
+                let db = Database::open_override(&path)
+                    .cache_size(256)
+                    .open()
+                    .await
+                    .unwrap();
+
+                // Verify existing data
+                let val = db
+                    .get(&global!("DATA"), &rumps_types::key!["key"])
+                    .await
+                    .unwrap();
+                assert_eq!(val, Some(rumps_types::Value::from(42)));
+
+                // Add more data
+                db.transaction(|txn| async move {
+                    txn.set(
+                        &global!("DATA"),
+                        &rumps_types::key!["key2"],
+                        rumps_types::Value::from(99),
+                    )
+                    .await
+                })
+                .await
+                .unwrap();
+
+                db.close().await.unwrap();
+            }
+
+            // Verify all data with normal open
+            {
+                let db = Database::open(&path).await.unwrap();
+                let v1 = db
+                    .get(&global!("DATA"), &rumps_types::key!["key"])
+                    .await
+                    .unwrap();
+                let v2 = db
+                    .get(&global!("DATA"), &rumps_types::key!["key2"])
+                    .await
+                    .unwrap();
+
+                assert_eq!(v1, Some(rumps_types::Value::from(42)));
+                assert_eq!(v2, Some(rumps_types::Value::from(99)));
+
+                db.close().await.unwrap();
+            }
         }
     }
 }

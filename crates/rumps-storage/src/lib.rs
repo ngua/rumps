@@ -36,7 +36,9 @@ pub(crate) mod transaction;
 pub(crate) mod wal;
 
 pub use btree::BTreeStats;
-pub use database::{Database, DatabaseBuilder, DatabaseStats};
+pub use database::{
+    Database, DatabaseBuilder, DatabaseOverride, DatabaseStats,
+};
 pub use engine::{StorageConfig, StorageMetadata};
 pub use error::{Error, StorageError};
 pub use page::PageCacheStats;
