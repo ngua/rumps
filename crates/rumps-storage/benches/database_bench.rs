@@ -10,13 +10,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fmt;
+use std::path::Path;
 
 use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, Criterion,
     Throughput,
 };
 use futures::{StreamExt, TryStreamExt};
-use rumps_storage::{Database, Transaction};
+use rumps_storage::{Database, SyncMode, Transaction};
 use rumps_types::{global, key, value, Name, Value};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -41,11 +42,17 @@ const MODES: [Mode; 2] = [Mode::InMemory, Mode::OnDisk];
 
 /// Creates a database for the given mode. Returns `(Option<TempDir>, Database)`.
 /// The `TempDir` must be kept alive for on-disk DBs.
+///
+/// We use `TempDir::new_in(CARGO_MANIFEST_DIR)` instead of `TempDir::new()` to
+/// ensure the temp directory is on a real filesystem, not a RAM disk. On many
+/// systems, `/tmp` is a `tmpfs` mount, which would make I/O benchmarks
+/// meaningless since there's no actual disk I/O.
 fn create_db(mode: Mode, rt: &Runtime) -> (Option<TempDir>, Database) {
     match mode {
         Mode::InMemory => (None, Database::in_memory().unwrap()),
         Mode::OnDisk => {
-            let dir = TempDir::new().unwrap();
+            let dir =
+                TempDir::new_in(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
             let db = rt.block_on(Database::create(dir.path())).unwrap();
             (Some(dir), db)
         }
@@ -93,6 +100,7 @@ fn bench_transaction_overhead(c: &mut Criterion) {
 fn bench_set_single(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("set_single");
+    group.measurement_time(std::time::Duration::from_secs(15));
 
     MODES.iter().for_each(|&mode| {
         let (_dir, db) = create_db(mode, &rt);
@@ -129,6 +137,7 @@ fn bench_set_single(c: &mut Criterion) {
 fn bench_set_batch(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("set_batch");
+    group.measurement_time(std::time::Duration::from_secs(15));
 
     MODES.iter().for_each(|&mode| {
         [10i64, 100].iter().for_each(|&batch_size| {
@@ -164,7 +173,8 @@ fn bench_set_batch(c: &mut Criterion) {
 fn bench_set_batch_100k(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("set_batch_large");
-    group.sample_size(10); // Fewer samples for long-running bench
+    group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(30));
 
     let batch_size = 100_000i64;
     group.throughput(Throughput::Elements(batch_size as u64));
@@ -198,6 +208,7 @@ fn bench_set_batch_100k(c: &mut Criterion) {
 fn bench_set_multi_global(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("set_multi_global");
+    group.measurement_time(std::time::Duration::from_secs(15));
 
     let n_globals = 100usize;
     let vals_per_global = 10i64;
@@ -505,6 +516,166 @@ fn bench_kill(c: &mut Criterion) {
     group.finish();
 }
 
+// Sync Mode Comparison Benchmarks
+//
+// These benchmarks compare throughput between `OnCommit` (default) and `Relaxed`
+// sync modes for on-disk databases. `Relaxed` skips fsync on commit, relying on
+// OS page cache, which trades durability for throughput.
+
+/// Creates an on-disk database with the specified sync mode.
+///
+/// See [`create_db`] for why we use `CARGO_MANIFEST_DIR` instead of default `/tmp`.
+fn create_db_with_sync(sync: SyncMode, rt: &Runtime) -> (TempDir, Database) {
+    let dir = TempDir::new_in(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let db = rt
+        .block_on(Database::builder().sync_mode(sync).create(dir.path()))
+        .unwrap();
+    (dir, db)
+}
+
+/// Benchmark batch sets comparing `OnCommit` vs `Relaxed` sync modes.
+fn bench_sync_mode_set_batch(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("sync_mode/set_batch");
+    group.measurement_time(std::time::Duration::from_secs(15));
+
+    let modes = [
+        ("OnCommit", SyncMode::OnCommit),
+        ("Relaxed", SyncMode::Relaxed),
+    ];
+
+    modes.iter().for_each(|(label, sync)| {
+        [100i64, 1000].iter().for_each(|&batch_size| {
+            group.throughput(Throughput::Elements(batch_size as u64));
+            group.bench_function(format!("{label}/{batch_size}_ops"), |b| {
+                b.iter_batched(
+                    || create_db_with_sync(*sync, &rt),
+                    |(_dir, db)| {
+                        rt.block_on(async {
+                            db.transaction(|txn| async move {
+                                insert_keys(
+                                    &txn,
+                                    &global!("BENCH"),
+                                    batch_size,
+                                )
+                                .await?;
+                                Ok(())
+                            })
+                            .await
+                            .unwrap();
+                        })
+                    },
+                    BatchSize::SmallInput,
+                )
+            });
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark large batch sets (100k) comparing sync modes.
+fn bench_sync_mode_set_batch_100k(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("sync_mode/set_batch_large");
+    group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(30));
+
+    let batch_size = 100_000i64;
+    group.throughput(Throughput::Elements(batch_size as u64));
+
+    let modes = [
+        ("OnCommit", SyncMode::OnCommit),
+        ("Relaxed", SyncMode::Relaxed),
+    ];
+
+    modes.iter().for_each(|(label, sync)| {
+        group.bench_function(format!("{label}/100000_ops"), |b| {
+            b.iter_batched(
+                || create_db_with_sync(*sync, &rt),
+                |(_dir, db)| {
+                    rt.block_on(async {
+                        db.transaction(|txn| async move {
+                            insert_keys(&txn, &global!("BENCH"), batch_size)
+                                .await?;
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                    })
+                },
+                BatchSize::LargeInput,
+            )
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark multi-global writes comparing sync modes.
+fn bench_sync_mode_multi_global(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("sync_mode/set_multi_global");
+    group.measurement_time(std::time::Duration::from_secs(15));
+
+    let n_globals = 100usize;
+    let vals_per_global = 10i64;
+    let total = (n_globals as i64) * vals_per_global;
+
+    group.throughput(Throughput::Elements(total as u64));
+
+    let modes = [
+        ("OnCommit", SyncMode::OnCommit),
+        ("Relaxed", SyncMode::Relaxed),
+    ];
+
+    modes.iter().for_each(|(label, sync)| {
+        group.bench_function(
+            format!("{label}/{total}_across_{n_globals}_globals"),
+            |b| {
+                b.iter_batched(
+                    || {
+                        let (dir, db) = create_db_with_sync(*sync, &rt);
+                        let globals: Vec<Name> = (0..n_globals)
+                            .map(|i| global!(&format!("G{i}")))
+                            .collect();
+                        (dir, db, globals)
+                    },
+                    |(_dir, db, globals)| {
+                        rt.block_on(async {
+                            db.transaction(|txn| {
+                                let gs = globals.clone();
+                                async move {
+                                    futures::future::try_join_all(
+                                        gs.iter().map(|g| {
+                                            let t = &txn;
+                                            async move {
+                                                insert_keys(
+                                                    t,
+                                                    g,
+                                                    vals_per_global,
+                                                )
+                                                .await
+                                            }
+                                        }),
+                                    )
+                                    .await?;
+                                    Ok(())
+                                }
+                            })
+                            .await
+                            .unwrap();
+                        })
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_transaction_overhead,
@@ -519,4 +690,11 @@ criterion_group!(
     bench_kill,
 );
 
-criterion_main!(benches);
+criterion_group!(
+    sync_mode_benches,
+    bench_sync_mode_set_batch,
+    bench_sync_mode_set_batch_100k,
+    bench_sync_mode_multi_global,
+);
+
+criterion_main!(benches, sync_mode_benches);

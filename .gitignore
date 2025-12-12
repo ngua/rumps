@@ -6,3 +6,5 @@ CLAUDE.md
 .claude/
 .slop
 .pre-commit*
+# For temp dirs in benchmark runs
+/**/.tmp*

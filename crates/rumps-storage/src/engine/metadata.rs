@@ -105,6 +105,7 @@ impl MetadataPage {
             SyncMode::Immediate => (0, 0),
             SyncMode::OnCommit => (1, 0),
             SyncMode::Periodic(d) => (2, d.as_millis() as u64),
+            SyncMode::Relaxed => (3, 0),
         };
 
         Self {
@@ -129,6 +130,7 @@ impl MetadataPage {
             2 => {
                 SyncMode::Periodic(Duration::from_millis(self.sync_interval_ms))
             }
+            3 => SyncMode::Relaxed,
             _ => SyncMode::OnCommit,
         };
         StorageConfig {

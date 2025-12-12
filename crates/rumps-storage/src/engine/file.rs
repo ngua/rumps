@@ -484,7 +484,9 @@ impl FileStorageEngine {
                 });
                 Some(task.abort_handle())
             }
-            SyncMode::Immediate | SyncMode::OnCommit => None,
+            SyncMode::Immediate | SyncMode::OnCommit | SyncMode::Relaxed => {
+                None
+            }
         }
     }
 
@@ -605,14 +607,16 @@ impl AsyncStorageEngine for FileStorageEngine {
         // Write registry chain pages
         self.flush_registry_chain().await?;
 
-        // Sync data file
-        let file = self.data_file.read().await;
+        // Sync data file (skip in Relaxed mode)
+        if self.cfg.wal_config.sync_mode != SyncMode::Relaxed {
+            let file = self.data_file.read().await;
 
-        file.sync_all().await.map_err(|e| StorageError::Io {
-            op: "sync data file".into(),
-            path: self.data_dir.join(Self::DATA_FILE_NAME),
-            source: e,
-        })?;
+            file.sync_all().await.map_err(|e| StorageError::Io {
+                op: "sync data file".into(),
+                path: self.data_dir.join(Self::DATA_FILE_NAME),
+                source: e,
+            })?;
+        }
 
         Ok(())
     }
@@ -1608,6 +1612,17 @@ impl FileStorageEngine {
     /// are durably written to disk before the commit is acknowledged.
     pub(crate) async fn wal_sync(&self) -> Result<()> {
         self.wal.sync().await
+    }
+
+    /// Sync the WAL if the current mode requires it at commit time.
+    ///
+    /// This respects the configured `SyncMode`:
+    /// - `Immediate`: No-op (already synced on append)
+    /// - `OnCommit`: Performs fsync
+    /// - `Periodic`: No-op (background task handles it)
+    /// - `Relaxed`: No-op (rely on OS page cache)
+    pub(crate) async fn wal_sync_if_needed(&self) -> Result<()> {
+        self.wal.sync_if_needed().await
     }
 
     /// Flush the entire registry chain to disk.

@@ -1133,7 +1133,7 @@ impl Database {
         if let Some(storage) = self.storage.as_ref() {
             storage.wal_append(&WalRecord::TxnCommit { txn_id }).await?;
 
-            storage.wal_sync().await?;
+            storage.wal_sync_if_needed().await?;
             storage.flush().await?;
         }
         Ok(())
@@ -1183,7 +1183,7 @@ impl Database {
     /// For in-memory databases, this is a no-op.
     pub(crate) async fn flush(&self) -> crate::error::Result<()> {
         if let Some(storage) = self.storage.as_ref() {
-            storage.wal_sync().await?;
+            storage.wal_sync_if_needed().await?;
             storage.flush().await?;
         }
         Ok(())
@@ -1503,7 +1503,7 @@ impl Drop for Database {
                         .and_then(|handle| {
                             tokio::task::block_in_place(|| {
                                 handle.block_on(async {
-                                    storage.wal_sync().await?;
+                                    storage.wal_sync_if_needed().await?;
                                     storage.flush().await
                                 })
                             })
@@ -2173,6 +2173,56 @@ mod tests {
                 let db = Database::open(&path).await.unwrap();
                 let stats = db.debug().await;
                 assert!(stats.storage.is_some());
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn relaxed_sync_mode_with_transaction() {
+            use rumps_types::{global, key, Value};
+
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("test.db");
+
+            // Create with SyncMode::Relaxed and perform a transaction
+            {
+                let db = Database::builder()
+                    .sync_mode(SyncMode::Relaxed)
+                    .create(&path)
+                    .await
+                    .unwrap();
+
+                let name = global!("TEST");
+                let k = key![1, "foo"];
+
+                db.build_transaction()
+                    .begin(|txn| {
+                        let name = name.clone();
+                        let k = k.clone();
+                        async move {
+                            txn.set(&name, &k, "bar".into()).await?;
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+
+                // Verify readable within same session
+                let val = db.get(&name, &k).await.unwrap();
+                assert_eq!(val, Some(Value::from("bar")));
+
+                db.close().await.unwrap();
+            }
+
+            // Reopen and verify data persisted
+            {
+                let db = Database::open(&path).await.unwrap();
+                let name = global!("TEST");
+                let k = key![1, "foo"];
+
+                let val = db.get(&name, &k).await.unwrap();
+                assert_eq!(val, Some(Value::from("bar")));
+
                 db.close().await.unwrap();
             }
         }

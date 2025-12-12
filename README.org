@@ -274,12 +274,18 @@ RUMPS is built on Rust's async ecosystem (=tokio=) from the ground up. All I/O o
 
 This may or may not suit your needs. For one, =tokio= *is required* to run RUMPS. I might try to make it runtme-agnostic in the future, but for now, you'd need to use =tokio= to use RUMPS.
 **** ACID guarantees
-RUMPS provides ACID semantics for writes to globals. I'm not going to try to guarantee that RUMPS will not destroy your data, but I have tried to design it to be provide ACID guarantees:
+RUMPS provides ACID semantics for writes to globals. I'm not going to try to guarantee that RUMPS will not destroy your data, and there are definitely bugs in implementation, etc..., but I have designed it to be provide ACID semantics:
 
 - *Atomicity*: All operations within a transaction succeed together or fail together. Writes are buffered until commit; on rollback, changes are discarded. No partial writes are ever visible.
 - *Consistency*: Conflict detection prevents write-write conflicts between concurrent transactions. B-tree invariants are maintained through all operations.
 - *Isolation*: Snapshot isolation by default: each transaction sees a consistent snapshot as of transaction start. Readers never block writers; writers never block readers.
-- *Durability*: Write-Ahead Logging (WAL) ensures committed transactions survive crashes. The sequence is: WAL write → =fsync= → commit acknowledged → flush to data file. Note that WAL is currently the only option.
+- *Durability*: Write-Ahead Logging (WAL) ensures committed transactions survive crashes. The sequence is:
+  - WAL write
+  - =fsync=
+  - commit acknowledged
+  - flush to data file
+
+Note that WAL is currently the only option for durability.
 
 There are configurable WAL sync modes that trade durability for performance:
 | *Mode*        | *Behavior*                       | *Durability*     |
@@ -287,6 +293,7 @@ There are configurable WAL sync modes that trade durability for performance:
 | =Immediate=   | an =fsync= after every WAL write | Highest          |
 | =OnCommit=    | an =fsync= on transaction commit | Good (*default*) |
 | =Periodic(n)= | an =fsync= every =n= ms          | Lower            |
+| =Relaxed=     | no =fsync=; relies on OS cache   | *None*           |
 
 =rumps::SyncMode::OnCommit= is the default setting. However, you can create a database with different options:
 
@@ -299,26 +306,46 @@ let db = Database::builder()
     .create("./data")  // path is a directory
     .await?;
 #+end_src
+
+Note that =SyncMode::Relaxed= does /not/ follow the durability sequence outlined above as it skips =fsync=.
 ***** Performance and durability
-RUMPS achieves solid write throughput with full durability guarantees:
+RUMPS achieves solid write throughput with full durability guarantees (with NVMe, ZFS, =SyncMode::OnCommit=):
 
 | *Workload*                        | *Throughput*    |
 |-----------------------------------+-----------------|
-| Single global (sequential writes) | ~57 Kelem/s     |
-| Multi-global (100 globals)        | ~113 Kelem/s    |
+| Single global (sequential writes) | ~40-50 Kelem/s  |
+| Multi-global (100 globals)        | ~90-100 Kelem/s |
 
-These numbers are with =SyncMode::OnCommit= (the default), meaning every transaction commit includes an =fsync= to the WAL. When =transaction()= returns =Ok=, the data is on disk. Period.
+These numbers are with =SyncMode::OnCommit= (the default), meaning every transaction commit includes an =fsync= to the WAL. Using RUMPS' default settings, when =transaction()= returns =Ok=, the data is *really* on disk.
 
 Multi-global writes benefit from RUMPS's sharded node cache: writes to different globals can proceed in parallel with reduced lock contention, roughly doubling throughput compared to single-global workloads.
 
-*NOTE*: Benchmarks run on NVMe SSD with ZFS. Your mileage may vary based on storage hardware and filesystem.
+*NOTE*: Benchmarks are run on NVMe SSD with ZFS. Actual speed and throughput may vary based on storage hardware and filesystem.
+****** Relaxed mode
+=SyncMode::Relaxed= skips *all* =fsync= calls on both the WAL and data file, relying entirely on the OS page cache. This means *committed transactions may be lost on crash*; when =transaction()= returns =Ok=, the data is in memory but not necessarily on disk. This is fundamentally different from the three other =SyncMode= options and should only be used when durability is not a primary concern.
+
+Whether =Relaxed= improves throughput depends on your environment. On fast NVMe drives, =fsync= can complete in microseconds, making =Relaxed= indistinguishable from =OnCommit=. On slower storage (HDDs, network-attached storage, cloud block devices), the difference can be significant.
+
+You may want to use =Relaxed= when:
+- *Batch imports*: Loading data from an authoritative source you can replay if needed
+- *Rebuild-able indices*: Secondary data derived from a durable primary
+- *Dev/test environments*: Speed matters more than crash safety
+- *Analytics workloads*: Read-heavy with occasional writes you can afford to lose
+- *Ephemeral processing*: Intermediate results that will be discarded anyway (although locals might be more appropriate for this in RUMPS)
+
+#+begin_src rust
+let db = Database::builder()
+    .sync_mode(SyncMode::Relaxed)  // No fsync; not crash-safe
+    .create("./scratch")
+    .await?;
+#+end_src
 ***** In-memory performance
 When using =Database::in_memory()=, there's no WAL, no =fsync=, no disk I/O at all. Throughput is substantially higher:
 
-| *Workload*                        | *Throughput*    |
-|-----------------------------------+-----------------|
-| Single global (sequential writes) | ~215 Kelem/s    |
-| Multi-global (100 globals)        | ~585 Kelem/s    |
+| *Workload*                        | *Throughput* |
+|-----------------------------------+--------------|
+| Single global (sequential writes) | ~200 Kelem/s |
+| Multi-global (100 globals)        | ~580 Kelem/s |
 
 Which is roughly 4-5x faster than on-disk for single-global workloads and 5x for multi-global. If you want transactional semantics (atomicity, conflict detection, snapshot isolation) but don't need persistence, in-memory mode is a solid option for caching or scratch workspaces. See the next subsection on using =Database::in_memory= more generally.
 ***** In-memory: ACI

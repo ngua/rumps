@@ -72,6 +72,12 @@ pub enum SyncMode {
     ///
     /// [`sync`]: WalWriter::sync
     Periodic(Duration),
+
+    /// Never explicitly sync; rely on OS page cache flush.
+    ///
+    /// Highest throughput, but a crash may lose recent commits.
+    /// Useful for batch imports, analytics workloads, or development.
+    Relaxed,
 }
 
 /// Configuration for [`WalWriter`].
@@ -667,6 +673,21 @@ impl WalWriter {
             .await
             .map_err(|_| StorageError::WalShutdown)?;
         rx.await.map_err(|_| StorageError::WalShutdown)?
+    }
+
+    /// Sync if the current mode requires it at commit time.
+    ///
+    /// - `Immediate`: No-op (already synced on append)
+    /// - `OnCommit`: Performs fsync
+    /// - `Periodic`: No-op (background task handles it)
+    /// - `Relaxed`: No-op (rely on OS page cache)
+    pub(crate) async fn sync_if_needed(&self) -> Result<()> {
+        match self.cfg.sync_mode {
+            SyncMode::OnCommit => self.sync().await,
+            SyncMode::Immediate | SyncMode::Periodic(_) | SyncMode::Relaxed => {
+                Ok(())
+            }
+        }
     }
 
     /// Force rotation to a new WAL file.
