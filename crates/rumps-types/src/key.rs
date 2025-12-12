@@ -251,12 +251,12 @@ impl fmt::Display for Name {
 /// # Examples
 ///
 /// ```
-/// use rumps_types::Subscript;
+/// use rumps_types::{subscript, Subscript};
 ///
-/// let bool_sub = Subscript::from(false);
-/// let num_sub = Subscript::from(123);
-/// let char_sub = Subscript::from('A');
-/// let str_sub = Subscript::from("NAME");
+/// let bool_sub = subscript!(false);
+/// let num_sub = subscript!(123);
+/// let char_sub = subscript!('A');
+/// let str_sub = subscript!("NAME");
 /// let json_sub = Subscript::Json(serde_json::json!({"key": "value"}));
 ///
 /// // Extended RUMPS collation: booleans < numbers < chars < strings < json
@@ -565,13 +565,13 @@ impl<'de> Deserialize<'de> for Subscript {
 /// # Examples
 ///
 /// ```
-/// use rumps_types::{key, Subscript};
+/// use rumps_types::{key, subscript, Subscript};
 ///
 /// // Create a key with multiple subscripts
 /// let key = key![123, "NAME"];
 ///
 /// assert_eq!(key.len(), 2);
-/// assert_eq!(key.get(0), Some(&Subscript::from(123)));
+/// assert_eq!(key.get(0), Some(&subscript!(123)));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -848,6 +848,46 @@ macro_rules! local {
     };
 }
 
+/// Creates a [`Subscript`] from a value.
+///
+/// This is a convenience macro for `Subscript::from(value)`. It accepts any
+/// type that implements `Into<Subscript>`: booleans, integers, floats, chars,
+/// strings, and JSON values.
+///
+/// # Examples
+///
+/// ```
+/// use rumps_types::subscript;
+///
+/// let b = subscript!(true);
+/// let n = subscript!(123);
+/// let f = subscript!(1.5);
+/// let c = subscript!('X');
+/// let s = subscript!("NAME");
+/// ```
+///
+/// # Note
+///
+/// For building keys with multiple subscripts, prefer the [`key!`] macro
+/// which handles the conversion automatically:
+///
+/// ```
+/// use rumps_types::key;
+///
+/// // Preferred for multi-subscript keys
+/// let k = key![123, "NAME"];
+///
+/// // subscript! is useful for single subscripts or comparisons
+/// use rumps_types::subscript;
+/// assert_eq!(k.get(1), Some(&subscript!("NAME")));
+/// ```
+#[macro_export]
+macro_rules! subscript {
+    ($val:expr) => {
+        $crate::Subscript::from($val)
+    };
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1070,20 +1110,20 @@ mod tests {
 
     #[test]
     fn test_subscript_boolean_ordering() {
-        let f = Subscript::from(false);
-        let t = Subscript::from(true);
+        let f = subscript!(false);
+        let t = subscript!(true);
 
         assert!(f < t);
-        assert_eq!(f, Subscript::from(false));
+        assert_eq!(f, subscript!(false));
     }
 
     #[test]
     fn test_subscript_number_ordering() {
-        let n1 = Subscript::from(-10);
-        let n2 = Subscript::from(0);
-        let n3 = Subscript::from(1.5);
-        let n4 = Subscript::from(10);
-        let n5 = Subscript::from(100);
+        let n1 = subscript!(-10);
+        let n2 = subscript!(0);
+        let n3 = subscript!(1.5);
+        let n4 = subscript!(10);
+        let n5 = subscript!(100);
 
         // Numeric ordering
         assert!(n1 < n2);
@@ -1094,10 +1134,10 @@ mod tests {
 
     #[test]
     fn test_subscript_string_ordering() {
-        let s1 = Subscript::from("1");
-        let s2 = Subscript::from("10");
-        let s3 = Subscript::from("ABC");
-        let s4 = Subscript::from("NAME");
+        let s1 = subscript!("1");
+        let s2 = subscript!("10");
+        let s3 = subscript!("ABC");
+        let s4 = subscript!("NAME");
 
         // Lexicographic ordering (note: "1" < "10" as strings)
         assert!(s1 < s2);
@@ -1107,15 +1147,15 @@ mod tests {
 
     #[test]
     fn test_subscript_cross_type_ordering() {
-        let bool_false = Subscript::from(false);
-        let bool_true = Subscript::from(true);
-        let num_neg = Subscript::from(-10);
-        let num_zero = Subscript::from(0);
-        let num_pos = Subscript::from(100);
-        let char_a = Subscript::from('A');
-        let char_z = Subscript::from('Z');
-        let str_num = Subscript::from("1");
-        let str_alpha = Subscript::from("ABC");
+        let bool_false = subscript!(false);
+        let bool_true = subscript!(true);
+        let num_neg = subscript!(-10);
+        let num_zero = subscript!(0);
+        let num_pos = subscript!(100);
+        let char_a = subscript!('A');
+        let char_z = subscript!('Z');
+        let str_num = subscript!("1");
+        let str_alpha = subscript!("ABC");
         let json_val = Subscript::Json(serde_json::json!({"a": 1}));
 
         // Boolean < Number < Char < String < Json
@@ -1134,12 +1174,12 @@ mod tests {
     fn test_subscript_mumps_collation() {
         // This test verifies the RUMPS collation where numeric subscripts
         // are ordered numerically, not lexicographically
-        let num_1 = Subscript::from(1);
-        let num_10 = Subscript::from(10);
-        let num_100 = Subscript::from(100);
-        let str_1 = Subscript::from("1");
-        let str_10 = Subscript::from("10");
-        let str_100 = Subscript::from("100");
+        let num_1 = subscript!(1);
+        let num_10 = subscript!(10);
+        let num_100 = subscript!(100);
+        let str_1 = subscript!("1");
+        let str_10 = subscript!("10");
+        let str_100 = subscript!("100");
 
         // Numeric ordering: 1 < 10 < 100
         assert!(num_1 < num_10);
@@ -1155,12 +1195,12 @@ mod tests {
 
     #[test]
     fn test_subscript_display() {
-        assert_eq!(Subscript::from(false).to_string(), "false");
-        assert_eq!(Subscript::from(true).to_string(), "true");
-        assert_eq!(Subscript::from(123).to_string(), "123");
-        assert_eq!(Subscript::from(1.5).to_string(), "1.5");
-        assert_eq!(Subscript::from('A').to_string(), "A");
-        assert_eq!(Subscript::from("NAME").to_string(), "NAME");
+        assert_eq!(subscript!(false).to_string(), "false");
+        assert_eq!(subscript!(true).to_string(), "true");
+        assert_eq!(subscript!(123).to_string(), "123");
+        assert_eq!(subscript!(1.5).to_string(), "1.5");
+        assert_eq!(subscript!('A').to_string(), "A");
+        assert_eq!(subscript!("NAME").to_string(), "NAME");
         assert_eq!(
             Subscript::Json(serde_json::json!({"a": 1})).to_string(),
             "{\"a\":1}"
@@ -1169,10 +1209,10 @@ mod tests {
 
     #[test]
     fn test_subscript_type_checks() {
-        let bool_sub = Subscript::from(false);
-        let num_sub = Subscript::from(123);
-        let char_sub = Subscript::from('X');
-        let str_sub = Subscript::from("ABC");
+        let bool_sub = subscript!(false);
+        let num_sub = subscript!(123);
+        let char_sub = subscript!('X');
+        let str_sub = subscript!("ABC");
         let json_sub = Subscript::Json(serde_json::json!({"a": 1}));
 
         assert!(bool_sub.is_boolean());
@@ -1209,31 +1249,31 @@ mod tests {
     #[test]
     fn test_subscript_serialization() {
         // Test each variant round-trips correctly
-        let bool_sub = Subscript::from(true);
+        let bool_sub = subscript!(true);
         let serialized = bincode::serialize(&bool_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(bool_sub, deserialized);
 
-        let num_sub = Subscript::from(123.45);
+        let num_sub = subscript!(123.45);
         let serialized = bincode::serialize(&num_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(num_sub, deserialized);
 
-        let char_sub = Subscript::from('Z');
+        let char_sub = subscript!('Z');
         let serialized = bincode::serialize(&char_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(char_sub, deserialized);
 
-        let str_sub = Subscript::from("TEST");
+        let str_sub = subscript!("TEST");
         let serialized = bincode::serialize(&str_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
         assert_eq!(str_sub, deserialized);
 
-        let json_sub = Subscript::from(serde_json::json!({"test": 123}));
+        let json_sub = subscript!(serde_json::json!({"test": 123}));
         let serialized = bincode::serialize(&json_sub).unwrap();
         let deserialized: Subscript =
             bincode::deserialize(&serialized).unwrap();
@@ -1256,14 +1296,14 @@ mod tests {
     #[test]
     fn test_key_push_pop() {
         let mut key = Key::new();
-        key.push(Subscript::from(123));
-        key.push(Subscript::from("NAME"));
+        key.push(subscript!(123));
+        key.push(subscript!("NAME"));
 
         assert_eq!(key.len(), 2);
-        assert_eq!(key.get(0), Some(&Subscript::from(123)));
-        assert_eq!(key.get(1), Some(&Subscript::from("NAME")));
+        assert_eq!(key.get(0), Some(&subscript!(123)));
+        assert_eq!(key.get(1), Some(&subscript!("NAME")));
 
-        assert_eq!(key.pop(), Some(Subscript::from("NAME")));
+        assert_eq!(key.pop(), Some(subscript!("NAME")));
         assert_eq!(key.len(), 1);
     }
 
@@ -1323,7 +1363,7 @@ mod tests {
         let collected: Vec<_> = k.iter().cloned().collect();
         assert_eq!(
             collected,
-            vec![Subscript::from(1), Subscript::from(2), Subscript::from(3)]
+            vec![subscript!(1), subscript!(2), subscript!(3)]
         );
 
         // Test IntoIterator for &Key
@@ -1338,8 +1378,7 @@ mod tests {
 
     #[test]
     fn test_key_from_iterator() {
-        let subscripts =
-            vec![Subscript::from(1), Subscript::from(2), Subscript::from(3)];
+        let subscripts = vec![subscript!(1), subscript!(2), subscript!(3)];
         let key: Key = subscripts.into_iter().collect();
         assert_eq!(key.len(), 3);
     }
@@ -1400,14 +1439,14 @@ mod tests {
         // Single subscript
         let single = key![42];
         assert_eq!(single.len(), 1);
-        assert_eq!(single.get(0), Some(&Subscript::from(42)));
+        assert_eq!(single.get(0), Some(&subscript!(42)));
 
         // Multiple subscripts with different types
         let multi = key![123, "ADDRESS", "CITY"];
         assert_eq!(multi.len(), 3);
-        assert_eq!(multi.get(0), Some(&Subscript::from(123)));
-        assert_eq!(multi.get(1), Some(&Subscript::from("ADDRESS")));
-        assert_eq!(multi.get(2), Some(&Subscript::from("CITY")));
+        assert_eq!(multi.get(0), Some(&subscript!(123)));
+        assert_eq!(multi.get(1), Some(&subscript!("ADDRESS")));
+        assert_eq!(multi.get(2), Some(&subscript!("CITY")));
 
         // Mixed types
         let mixed = key![false, 1.5, 'X', "test"];

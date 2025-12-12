@@ -54,7 +54,9 @@
 
       // Writes to globals require a transaction
       db.transaction(|txn| {
-          let patients = patients.clone();  // cheap clone
+          // Cheap clone. All global/local clones are generally cheap, especially
+          // in the common case of a short name
+          let patients = patients.clone();
           async move {
               // Insert patients out of order
               txn.set(&patients, &key![3, "NAME"], value!("carol")).await?;
@@ -96,7 +98,7 @@
               &patients,
               None,
               // Predicate to extract data
-              |k, _| k.len() == 2 && k.get(1) == Some(&Subscript::from("NAME")),
+              |k, _| k.len() == 2 && k.get(1) == Some(&subscript!("NAME")),
               // Mapping/transformation of data
               |_, v| v.as_ref()?.as_str().map(str::to_uppercase),
           )
@@ -185,15 +187,15 @@ Keys are ordered lexicographically by their subscripts, which means iteration (v
 **** Subscript types
 RUMPS subscripts are represented by the =Subscript= enum. Unlike traditional MUMPS where everything was stringly-typed, RUMPS supports explicit types:
 
-| *Type*               | *Rust API*                            | *Notes*                                |
-|----------------------+---------------------------------------+----------------------------------------|
-| =Subscript::Boolean= | =Subscript::from(true)=               | =false= < =true=                       |
-| =Subscript::Number=  | =Subscript::from(123)= or =from(1.5)= | Integers and floats; numeric ordering  |
-| =Subscript::Char=    | =Subscript::from('A')=                | Single UTF-8 character                 |
-| =Subscript::String=  | =Subscript::from("foo")=              | UTF-8 string; lexicographic ordering   |
-| =Subscript::Json=    | =Subscript::Json(json!({...}))=       | Arbitrary JSON; ordered by string repr |
+| *Type*               | *Rust API*                             | *Notes*                                |
+|----------------------+----------------------------------------+----------------------------------------|
+| =Subscript::Boolean= | =subscript!(true)=                     | =false= < =true=                       |
+| =Subscript::Number=  | =subscript!(123)= or =subscript!(1.5)= | Integers and floats; numeric ordering  |
+| =Subscript::Char=    | =subscript!('A')=                      | Single UTF-8 character                 |
+| =Subscript::String=  | =subscript!("foo")=                    | UTF-8 string; lexicographic ordering   |
+| =Subscript::Json=    | =Subscript::Json(json!({...}))=        | Arbitrary JSON; ordered by string repr |
 
-Although subscripts can be constructed manually via =Subscript::from=, it's easier and better to use the =key!= macro, since all operations on the DB (see below) require or reference /keys/, not individual subscripts.
+Although subscripts can be constructed via the =subscript!= macro, it's easier to use the =key!= macro for building keys, since all operations on the DB (see below) require or reference /keys/, not individual subscripts.
 
 The =key!= macro will also handle type conversions automatically:
 
@@ -543,7 +545,7 @@ let names: Vec<String> = db
     .collects(
         &global!("P"),
         None,
-        |k, _| k.len() == 2 && k.get(1) == Some(&Subscript::from("NAME")),
+        |k, _| k.len() == 2 && k.get(1) == Some(&subscript!("NAME")),
         |_, v| v.as_ref()?.as_str().map(str::to_owned),
     )
     .await?
@@ -563,7 +565,7 @@ let names: Vec<String> = db
         |k, _| {
             k.len() == 2
                 && k.get(0).and_then(|s| s.as_i64()).is_some_and(|id| id > 1)
-                && k.get(1) == Some(&Subscript::from("NAME"))
+                && k.get(1) == Some(&subscript!("NAME"))
         },
         |_, v| v.as_ref()?.as_str().map(|s| s.to_uppercase()),
     )

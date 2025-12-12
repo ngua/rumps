@@ -15,7 +15,7 @@ use rumps_storage::Database;
 use rumps_types::orm::{
     FromSubscript as _, FromValue as _, ToSubscript as _, ToValue as _,
 };
-use rumps_types::{global, key, value, Key, Subscript};
+use rumps_types::{global, key, subscript, value, Key, Subscript};
 
 /// Basic struct with derive macros
 #[derive(Debug, Clone, PartialEq, ToRumps, FromRumps)]
@@ -387,7 +387,7 @@ fn test_unit_enum_to_subscript() {
 
     // Invalid subscript
     assert!(Priority::from_sub(&Subscript::String("Critical".into())).is_err());
-    assert!(Priority::from_sub(&Subscript::from(42)).is_err());
+    assert!(Priority::from_sub(&subscript!(42)).is_err());
 }
 
 #[tokio::test]
@@ -626,7 +626,7 @@ fn test_newtype_to_subscript() {
     );
 
     // Error cases
-    assert!(Email::from_sub(&Subscript::from(42)).is_err());
+    assert!(Email::from_sub(&subscript!(42)).is_err());
 }
 
 #[tokio::test]
