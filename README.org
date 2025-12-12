@@ -594,6 +594,37 @@ cargo run --package rumps-explorer -- ./path/to/db
 The TUI footer explains nagivation keybindings, help, etc..., inside the explorer.
 
 This is useful for poking around unfamiliar databases, verifying data after writes, or understanding how data is structured in the tree.
+
+The first screen are all globals recorded in the database. You can select a global to start descending into its nodes. For this example, we will explore =^PATIENTS=. Note that pagination is supported and you can navigate between pages.
+
+#+HTML: <p align="center">
+#+HTML:   <img src="stuff/re-globals.png" alt="RUMPS Explorer: globals view">
+#+HTML: </p>
+
+Next you will see all nodes at the given level. This is level one, so we see all first-level keys under =^PATIENT=. For this database, this corresponds to patient ID. Note that each node also has a value attached, in this case a =Value::String= with a (pointless) description of the patient (e.g. =Patient 27=). This is an actual value at the root of =^Patient(<id>)=, not, for example, an auto-generated description:
+
+#+HTML: <p align="center">
+#+HTML:   <img src="stuff/re-patient-lvl-1.png" alt="RUMPS Explorer: patient data level 1">
+#+HTML: </p>
+
+We can descend into the subtree at =^PATIENT(27)= either by scrolling down and hitting enter, or using the shortcut on the far left:
+
+#+HTML: <p align="center">
+#+HTML:   <img src="stuff/re-patient-lvl-2.png" alt="RUMPS Explorer: patient data level 2">
+#+HTML: </p>
+
+Hit =?= to bring up the "help" screen, which explains what the =Flag= column indicates:
+
+#+HTML: <p align="center">
+#+HTML:   <img src="stuff/re-help.png" alt="RUMPS Explorer: help screen">
+#+HTML: </p>
+
+Finally, we can go to the final subtree remaining (indicated by =.+= on the subscript), bringing us to =^PATIENT(27, VISIT)=. This is a leaf node; there's only a value, so we can stop here:
+
+#+HTML: <p align="center">
+#+HTML:   <img src="stuff/re-patient-lvl-3.png" alt="RUMPS Explorer: patient data level 3">
+#+HTML: </p>
+
 * Use cases
 ** Where RUMPS is a good fit
 *** Hierarchical or nested data
