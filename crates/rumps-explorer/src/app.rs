@@ -431,7 +431,7 @@ impl App {
             .into_iter()
             .enumerate()
             .map(|(i, name)| Item {
-                subscript: Subscript::String(name.to_string()),
+                subscript: Subscript::String(name),
                 shortcut: shortcut(i, width),
                 flags: DataStatus::HasDescendants,
                 preview: None,

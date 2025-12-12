@@ -111,7 +111,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock as StdRwLock};
 
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Name, Result, SmolStr, Value};
+use rumps_types::{DataStatus, Key, Name, Result, Value};
 use tokio::sync::RwLock;
 
 use crate::btree::{BTree, BTreeBuilder, BTreeStats};
@@ -727,13 +727,13 @@ impl Database {
     /// For persistent databases, this returns globals from the registry.
     /// For in-memory databases, this returns globals from the cached roots.
     /// Names are returned in sorted order.
-    pub async fn list_globals(&self) -> Vec<SmolStr> {
+    pub async fn list_globals(&self) -> Vec<String> {
         match self.storage.as_ref() {
             Some(s) => s
                 .registry_entries()
                 .await
                 .into_iter()
-                .map(|(name, _)| SmolStr::from(name))
+                .map(|(name, _)| name)
                 .collect(),
             None => self
                 .roots
@@ -741,7 +741,7 @@ impl Database {
                 .await
                 .keys()
                 .filter_map(|n| match n {
-                    Name::Global(g) => Some(g.clone()),
+                    Name::Global(g) => Some(g.to_string()),
                     Name::Local(_) => None,
                 })
                 .collect(),
