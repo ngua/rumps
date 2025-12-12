@@ -33,11 +33,11 @@ Analogous to `local` in Haskell's `ReaderT`.
 ```rust
 let db = Database::open("./data").await?;
 
-// Temporarily use Immediate mode
+// Temporarily use Relaxed mode for a batch import
 db.local()
-    .sync_mode(SyncMode::Immedidate)
+    .sync_mode(SyncMode::Relaxed)
     .run(|db| async move {
-        // All operations here use Immediate mode
+        // All operations here use Relaxed mode
         db.transaction(|txn| async move {
             txn.set(&name, &k1, v1).await?;
             txn.set(&name, &k2, v2).await?;
@@ -45,7 +45,7 @@ db.local()
         }).await?;
 
         db.transaction(|txn| async move {
-            // etc...
+            // ... more batch inserts ...
             Ok(())
         }).await?;
 
@@ -63,7 +63,7 @@ Opens a database with config overrides for the entire session. Does not modify s
 ```rust
 let db = Database::override("./data")
     .cache_size(8192)
-    .sync_mode(SyncMode::Immediate)
+    .sync_mode(SyncMode::Relaxed)
     .open()
     .await?;
 
@@ -181,6 +181,7 @@ thread-safety if other operations are concurrent. Options:
   - [ ] Restore original config (use `scopeguard` or manual drop guard)
   - [ ] Return callback result
 - [ ] Add tests for `local`:
+  - [ ] `local` with `SyncMode::Relaxed`, verify no fsync during callback
   - [ ] Verify config restored after callback completes
   - [ ] Verify config restored even if callback returns `Err`
   - [ ] Verify config restored even if callback panics
