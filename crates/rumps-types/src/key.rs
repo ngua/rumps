@@ -272,18 +272,24 @@ impl fmt::Display for Name {
 /// - JSON: single quotes like `'{"active": true}'`
 /// - Char: single quotes with single character like `'A'`
 /// - String: double quotes like `"NAME"`
+///
+/// # Memory Layout
+///
+/// Uses `#[repr(u8)]` with explicit discriminants matching collation order,
+/// enabling fast cross-type comparisons via discriminant byte comparison.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Subscript {
     /// A boolean subscript (false < true).
-    Boolean(bool),
+    Boolean(bool) = 0,
     /// A numeric subscript (integers and floats in numeric order).
-    Number(OrderedFloat<f64>),
+    Number(OrderedFloat<f64>) = 1,
     /// A single character subscript.
-    Char(char),
+    Char(char) = 2,
     /// A string subscript (lexicographic order).
-    String(String),
+    String(String) = 3,
     /// A JSON subscript (arbitrary nested structure).
-    Json(serde_json::Value),
+    Json(serde_json::Value) = 4,
 }
 
 // Manual Hash implementation since serde_json::Value doesn't implement Hash
@@ -301,6 +307,18 @@ impl Hash for Subscript {
 }
 
 impl Subscript {
+    /// Returns the discriminant byte directly.
+    ///
+    /// # Safety
+    ///
+    /// `#[repr(u8)]` guarantees the enum's memory layout has the discriminant
+    /// as its first byte.
+    #[inline]
+    const fn discriminant(&self) -> u8 {
+        // SAFETY: #[repr(u8)] ensures discriminant is first byte
+        unsafe { *(self as *const Self as *const u8) }
+    }
+
     /// Returns `true` if this is a boolean subscript.
     pub fn is_boolean(&self) -> bool {
         matches!(self, Self::Boolean(_))
@@ -355,44 +373,36 @@ impl Subscript {
 }
 
 impl PartialOrd for Subscript {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Subscript {
+    #[inline]
     fn cmp(&self, other: &Self) -> cmp::Ordering {
-        use Subscript::*;
+        let self_disc = self.discriminant();
+        let other_disc = other.discriminant();
 
-        match (self, other) {
-            // Same variant comparisons
-            (Boolean(a), Boolean(b)) => a.cmp(b),
-            (Number(a), Number(b)) => a.cmp(b),
-            (Char(a), Char(b)) => a.cmp(b),
-            (String(a), String(b)) => a.cmp(b),
-            (Json(a), Json(b)) => a.to_string().cmp(&b.to_string()),
-
-            // Cross-variant comparisons: Boolean < Number < Char < String < Json
-            (Boolean(_), Number(_)) => cmp::Ordering::Less,
-            (Boolean(_), Char(_)) => cmp::Ordering::Less,
-            (Boolean(_), String(_)) => cmp::Ordering::Less,
-            (Boolean(_), Json(_)) => cmp::Ordering::Less,
-            (Number(_), Boolean(_)) => cmp::Ordering::Greater,
-            (Number(_), Char(_)) => cmp::Ordering::Less,
-            (Number(_), String(_)) => cmp::Ordering::Less,
-            (Number(_), Json(_)) => cmp::Ordering::Less,
-            (Char(_), Boolean(_)) => cmp::Ordering::Greater,
-            (Char(_), Number(_)) => cmp::Ordering::Greater,
-            (Char(_), String(_)) => cmp::Ordering::Less,
-            (Char(_), Json(_)) => cmp::Ordering::Less,
-            (String(_), Boolean(_)) => cmp::Ordering::Greater,
-            (String(_), Number(_)) => cmp::Ordering::Greater,
-            (String(_), Char(_)) => cmp::Ordering::Greater,
-            (String(_), Json(_)) => cmp::Ordering::Less,
-            (Json(_), Boolean(_)) => cmp::Ordering::Greater,
-            (Json(_), Number(_)) => cmp::Ordering::Greater,
-            (Json(_), Char(_)) => cmp::Ordering::Greater,
-            (Json(_), String(_)) => cmp::Ordering::Greater,
+        // Fast path: different types resolve by discriminant alone
+        match self_disc.cmp(&other_disc) {
+            cmp::Ordering::Less => cmp::Ordering::Less,
+            cmp::Ordering::Greater => cmp::Ordering::Greater,
+            cmp::Ordering::Equal => {
+                // Same type: compare values
+                match (self, other) {
+                    (Self::Boolean(a), Self::Boolean(b)) => a.cmp(b),
+                    (Self::Number(a), Self::Number(b)) => a.cmp(b),
+                    (Self::Char(a), Self::Char(b)) => a.cmp(b),
+                    (Self::String(a), Self::String(b)) => a.cmp(b),
+                    (Self::Json(a), Self::Json(b)) => {
+                        a.to_string().cmp(&b.to_string())
+                    }
+                    // Unreachable: same discriminant means same variant
+                    _ => cmp::Ordering::Equal,
+                }
+            }
         }
     }
 }

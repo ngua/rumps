@@ -13,7 +13,7 @@ This document outlines actionable performance improvements for the B-tree implem
 
 ---
 
-## 1. Lock Contention Reduction
+## 1. Lock Contention Reduction ✅
 
 **Goal:** Replace `RwLock<HashMap>` shards with lock-free concurrent map.
 
@@ -99,7 +99,7 @@ pub(crate) struct BTree {
 
 ---
 
-## 2. Subscript Comparison Fast-Path
+## 2. Subscript Comparison Fast-Path ✅
 
 **Goal:** Short-circuit cross-type comparisons using discriminant, avoiding deep match.
 
