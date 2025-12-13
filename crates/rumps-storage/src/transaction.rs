@@ -1341,36 +1341,86 @@ impl Transaction {
     ///
     /// Combines buffered writes with the database snapshot to determine
     /// if a node has a value and/or descendants.
+    ///
+    /// # Semantics
+    ///
+    /// - Buffered `Set` operations contribute to both value and descendant status
+    /// - Buffered `Kill`/`Delete` operations mask the key and its descendants
+    /// - Sets under killed subtrees are masked (consistent with `collects`)
+    /// - Final status combines buffered state with snapshot state
     pub async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus> {
-        let lookup_key = (name.clone(), key.clone());
+        let writes = self.writes.read().await;
+        let deleted = self.deleted_subtrees.read().await;
 
-        // Check write buffer
-        let buffered = {
-            let writes = self.writes.read().await;
-            writes.get(&lookup_key).cloned()
+        // A key is "killed" if it (or an ancestor) was killed in this txn.
+        // Killed keys return only buffered descendants added after the kill,
+        // but per current semantics, Sets under killed subtrees are masked.
+        let is_killed = |k: &Key| {
+            deleted
+                .iter()
+                .any(|(n, del)| n == name && k.starts_with(del))
         };
 
-        match buffered {
-            Some(WriteOp::Set(_)) => {
-                // Has value from buffered write
-                // TODO: Check for descendants in buffer
-                Ok(DataStatus::HasValue)
-            }
-            Some(WriteOp::Delete | WriteOp::KillSubtree) => {
-                Ok(DataStatus::NoData)
-            }
-            None => {
-                // Check if in deleted subtree
-                let deleted = self.deleted_subtrees.read().await;
-                let is_deleted = deleted.iter().any(|(del_name, del_key)| {
-                    del_name == name && key.starts_with(del_key)
-                });
+        // Check for valid buffered descendants: Sets that are strict
+        // descendants of `key` and not under a killed subtree.
+        let has_buffered_desc = writes.iter().any(|((n, k), op)| {
+            n == name
+                && k.starts_with(key)
+                && k.len() > key.len()
+                && matches!(op, WriteOp::Set(_))
+                && !is_killed(k)
+        });
 
-                if is_deleted {
-                    Ok(DataStatus::NoData)
+        // If this key is killed, only buffered descendants matter
+        if is_killed(key) {
+            Ok(if has_buffered_desc {
+                DataStatus::HasDescendants
+            } else {
+                DataStatus::NoData
+            })
+        } else {
+            let lookup_key = (name.clone(), key.clone());
+
+            // Check buffered state for this exact key
+            let buffered_has_val = matches!(
+                writes.get(&lookup_key),
+                Some(WriteOp::Set(d)) if d.value.is_some()
+            );
+
+            let explicitly_deleted = matches!(
+                writes.get(&lookup_key),
+                Some(WriteOp::Delete | WriteOp::KillSubtree)
+            );
+
+            if explicitly_deleted {
+                // Key deleted; only buffered descendants count
+                Ok(if has_buffered_desc {
+                    DataStatus::HasDescendants
                 } else {
-                    self.db.data(name, key).await
-                }
+                    DataStatus::NoData
+                })
+            } else {
+                // Combine buffered state with DB snapshot
+                let db_status = self.db.data(name, key).await?;
+
+                let has_val = buffered_has_val
+                    || matches!(
+                        db_status,
+                        DataStatus::HasValue | DataStatus::Both
+                    );
+
+                let has_desc = has_buffered_desc
+                    || matches!(
+                        db_status,
+                        DataStatus::HasDescendants | DataStatus::Both
+                    );
+
+                Ok(match (has_val, has_desc) {
+                    (true, true) => DataStatus::Both,
+                    (true, false) => DataStatus::HasValue,
+                    (false, true) => DataStatus::HasDescendants,
+                    (false, false) => DataStatus::NoData,
+                })
             }
         }
     }
