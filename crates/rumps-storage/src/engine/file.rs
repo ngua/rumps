@@ -1,7 +1,6 @@
 //! File-based storage engine with WAL and page cache.
 
 use std::fmt;
-use std::fs::File as StdFile;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -106,7 +105,7 @@ pub(crate) struct FileStorageEngine {
     /// Lock file handle; held for the lifetime of the engine to prevent
     /// concurrent access from other processes.
     #[allow(dead_code)]
-    lock_file: StdFile,
+    lock_file: std::fs::File,
 }
 
 impl fmt::Debug for FileStorageEngine {
@@ -136,13 +135,12 @@ impl FileStorageEngine {
     /// Creates the lock file if it doesn't exist, then attempts to acquire
     /// an exclusive (non-blocking) lock. Returns the locked file handle on
     /// success; the lock is held until the file is dropped.
-    fn acquire_lock(dir: &Path) -> Result<StdFile> {
-        use std::fs::OpenOptions as StdOpenOptions;
-
+    fn acquire_lock(dir: &Path) -> Result<std::fs::File> {
         use fs2::FileExt;
 
         let lock_path = dir.join(Self::LOCK_FILE_NAME);
-        let lock_file = StdOpenOptions::new()
+        // Note: `fs2` requires blocking I/O for lock acquisition
+        let lock_file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
@@ -186,7 +184,8 @@ impl FileStorageEngine {
     /// - The data file is missing or corrupted
     /// - WAL recovery fails
     pub(crate) async fn open(dir: &Path) -> Result<Self> {
-        Self::open_with_overrides(dir, super::SafeConfig::default()).await
+        Self::open_with_overrides(dir, super::SafeReconfiguration::default())
+            .await
     }
 
     /// Open an existing database with config overrides.
@@ -198,7 +197,7 @@ impl FileStorageEngine {
     /// [`open`]: Self::open
     pub(crate) async fn open_with_overrides(
         dir: &Path,
-        overrides: super::SafeConfig,
+        overrides: super::SafeReconfiguration,
     ) -> Result<Self> {
         // Validate path is a directory
         if dir.exists() && !dir.is_dir() {
@@ -711,6 +710,11 @@ impl FileStorageEngine {
     /// Returns the stored max_memory_bytes as `Option` (`0` means unlimited).
     pub(crate) async fn max_memory_bytes(&self) -> Option<usize> {
         self.metadata.read().await.max_memory_bytes_opt()
+    }
+
+    /// Returns a clone of the current storage configuration.
+    pub(crate) fn config(&self) -> StorageConfig {
+        self.cfg.clone()
     }
 }
 

@@ -1,6 +1,7 @@
 #![allow(clippy::only_used_in_recursion)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -12,6 +13,33 @@ use tokio::sync::RwLock;
 use crate::engine;
 use crate::error::{Result, StorageError};
 use crate::node::{Node, NodeData, NodeId};
+
+/// Conditionally updates B-tree statistics when the `debug` feature is enabled.
+///
+/// When `debug` is disabled, this macro expands to nothing, eliminating
+/// the write lock acquisition on every insert/delete operation.
+///
+/// # Usage
+///
+/// ```ignore
+/// update_stats!(self, |stats| {
+///     stats.node_count += 1;
+///     stats.height = 1;
+/// });
+/// ```
+macro_rules! update_stats {
+    ($self:expr, |$stats:ident| $body:block) => {{
+        #[cfg(feature = "debug")]
+        {
+            let mut $stats = $self.stats.write().await;
+            $body
+        }
+        #[cfg(not(feature = "debug"))]
+        {
+            let _ = &$self; // suppress unused warning
+        }
+    }};
+}
 
 /// Number of shards for the node cache.
 const NODE_CACHE_SHARDS: usize = 64;
@@ -96,6 +124,9 @@ impl ShardedNodeCache {
 mod tests;
 
 /// Statistics tracking for B-tree operations.
+///
+/// **Note**: Requires the `debug` feature to be enabled. Without it, all
+/// fields will be zero (tracking is disabled to avoid lock contention).
 #[derive(Debug, Clone, Default)]
 pub struct BTreeStats {
     /// Current height of the tree.
@@ -129,13 +160,13 @@ pub(crate) trait NodeAllocator: Send + Sync {
 
 /// Simple incrementing allocator for in-memory use.
 pub(crate) struct IncrementingAllocator {
-    next_id: RwLock<u64>,
+    next_id: AtomicU64,
 }
 
 impl IncrementingAllocator {
     pub(crate) fn new() -> Self {
         Self {
-            next_id: RwLock::new(0),
+            next_id: AtomicU64::new(0),
         }
     }
 }
@@ -143,10 +174,7 @@ impl IncrementingAllocator {
 #[async_trait]
 impl NodeAllocator for IncrementingAllocator {
     async fn allocate(&self) -> Result<NodeId> {
-        let mut next = self.next_id.write().await;
-        let id = NodeId::from(*next);
-        *next += 1;
-        Ok(id)
+        Ok(NodeId::from(self.next_id.fetch_add(1, Ordering::Relaxed)))
     }
 
     async fn deallocate(&self, _id: NodeId) -> Result<()> {
@@ -155,7 +183,7 @@ impl NodeAllocator for IncrementingAllocator {
     }
 
     async fn peek_next(&self) -> NodeId {
-        NodeId::from(*self.next_id.read().await)
+        NodeId::from(self.next_id.load(Ordering::Relaxed))
     }
 }
 
@@ -283,6 +311,11 @@ pub(crate) struct BTree {
     max_memory_bytes: Option<usize>,
 
     /// Statistics tracking for monitoring and debugging.
+    ///
+    /// Only compiled when the `debug` feature is enabled. Tracking stats
+    /// requires a write lock on every insert/delete, which adds significant
+    /// overhead in write-heavy workloads.
+    #[cfg(feature = "debug")]
     stats: RwLock<BTreeStats>,
 }
 
@@ -383,6 +416,7 @@ impl BTreeBuilder {
                 allocator,
                 min_degree,
                 max_memory_bytes: self.max_memory_bytes,
+                #[cfg(feature = "debug")]
                 stats: RwLock::new(BTreeStats::default()),
             })
         }
@@ -728,11 +762,10 @@ impl BTree {
 
         self.save_node(id, node).await?;
 
-        {
-            let mut stats = self.stats.write().await;
+        update_stats!(self, |stats| {
             stats.node_count += 1;
             stats.height = 1;
-        }
+        });
 
         Ok(id)
     }
@@ -798,12 +831,11 @@ impl BTree {
                     };
 
                     // Update stats
-                    {
-                        let mut stats = self.stats.write().await;
+                    update_stats!(self, |stats| {
                         stats.node_count = stats.node_count.saturating_sub(1);
                         stats.key_count =
                             stats.key_count.saturating_sub(node.keys.len());
-                    }
+                    });
 
                     Ok(1 + child_counts)
                 }
@@ -870,6 +902,8 @@ impl BTree {
 
     /// Returns the current statistics for this B-tree.
     ///
+    /// When the `debug` feature is disabled, returns default (zero) stats.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -884,24 +918,13 @@ impl BTree {
     /// # });
     /// ```
     pub(crate) async fn stats(&self) -> BTreeStats {
-        self.stats.read().await.clone()
-    }
-
-    /// Checks if the current memory usage is within limits.
-    async fn check_memory_limit(&self) -> Result<()> {
-        match self.max_memory_bytes {
-            Some(limit) => {
-                let stats = self.stats.read().await;
-                if stats.memory_bytes > limit {
-                    Err(StorageError::MemoryLimitExceeded {
-                        used: stats.memory_bytes,
-                        limit,
-                    })
-                } else {
-                    Ok(())
-                }
-            }
-            None => Ok(()),
+        #[cfg(feature = "debug")]
+        {
+            self.stats.read().await.clone()
+        }
+        #[cfg(not(feature = "debug"))]
+        {
+            BTreeStats::default()
         }
     }
 }
@@ -1605,9 +1628,10 @@ impl BTree {
                 self.save_node(right_id, right_node).await?;
 
                 // Update statistics
-                let mut stats = self.stats.write().await;
-                stats.splits += 1;
-                stats.node_count += 1;
+                update_stats!(self, |stats| {
+                    stats.splits += 1;
+                    stats.node_count += 1;
+                });
 
                 Ok((med_key, med_val, right_id))
             }
@@ -1736,9 +1760,10 @@ impl BTree {
             self.allocator.deallocate(right_id).await?;
 
             // Update statistics
-            let mut stats = self.stats.write().await;
-            stats.merges += 1;
-            stats.node_count = stats.node_count.saturating_sub(1);
+            update_stats!(self, |stats| {
+                stats.merges += 1;
+                stats.node_count = stats.node_count.saturating_sub(1);
+            });
 
             Ok(())
         }
@@ -1843,11 +1868,10 @@ impl BTree {
             self.save_node(new_root_id, new_root_node).await?;
 
             // Update height
-            {
-                let mut stats = self.stats.write().await;
+            update_stats!(self, |stats| {
                 stats.height += 1;
                 stats.node_count += 1;
-            }
+            });
 
             new_root_id
         } else {
@@ -1858,10 +1882,9 @@ impl BTree {
         self.insert_non_full_with_data(new_root, key, data).await?;
 
         // Update key count statistics
-        {
-            let mut stats = self.stats.write().await;
+        update_stats!(self, |stats| {
             stats.key_count += 1;
-        }
+        });
 
         Ok(new_root)
     }
@@ -1964,10 +1987,9 @@ impl BTree {
                                 n.values.remove(pos);
                             })
                             .await?;
-                        {
-                            let mut stats = self.stats.write().await;
+                        update_stats!(self, |stats| {
                             stats.key_count = stats.key_count.saturating_sub(1);
-                        }
+                        });
                         self.rebalance_with_ancestors(node_id, ancestors).await
                     } else {
                         // Case 2: Key is in an internal node - replace with predecessor
@@ -2326,8 +2348,9 @@ impl BTree {
             .await?;
 
         // Update key count
-        let mut stats = self.stats.write().await;
-        stats.key_count = stats.key_count.saturating_sub(1);
+        update_stats!(self, |stats| {
+            stats.key_count = stats.key_count.saturating_sub(1);
+        });
 
         // If parent is root and now empty, it was handled by shrink_root_if_needed
         // Otherwise, we might need to recursively fix parent
@@ -2358,11 +2381,10 @@ impl BTree {
                 self.allocator.deallocate(root).await?;
 
                 // Update height
-                {
-                    let mut stats = self.stats.write().await;
+                update_stats!(self, |stats| {
                     stats.height = stats.height.saturating_sub(1);
                     stats.node_count = stats.node_count.saturating_sub(1);
-                }
+                });
 
                 Ok(Some(new_root))
             }
@@ -2373,11 +2395,10 @@ impl BTree {
                 self.allocator.deallocate(root).await?;
 
                 // Update stats
-                {
-                    let mut stats = self.stats.write().await;
+                update_stats!(self, |stats| {
                     stats.height = 0;
                     stats.node_count = stats.node_count.saturating_sub(1);
-                }
+                });
 
                 Ok(None)
             }

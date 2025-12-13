@@ -1,13 +1,15 @@
-//! Medical database example: loads CSV data into a RUMPS database.
+//! Financial database example: loads CSV data into a RUMPS database.
 //!
-//! This example demonstrates populating a RUMPS database from CSV data.
-//! The CSV format is `global,path,value` where `path` can be comma-separated.
+//! This example demonstrates the `open_override` API for batch imports.
+//! It creates a database with default settings, closes it, then re-opens
+//! with `SyncMode::Relaxed` for faster bulk inserts.
 //!
-//! Run with: `cargo run --example medical --features examples`
+//! Run with: `cargo run --example financial --features examples`
 
 use std::path::Path;
 
-use rumps::{Database, Key, Name, Result, Subscript, Value};
+use futures::stream::{self, StreamExt, TryStreamExt};
+use rumps::{Database, Key, Name, Result, Subscript, SyncMode, Value};
 
 /// A parsed CSV row ready for insertion.
 struct Entry {
@@ -16,7 +18,7 @@ struct Entry {
     val: Value,
 }
 
-/// Parses a path string like `"1,VISIT,2"` or `"1"` into subscripts.
+/// Parses a path string like `"ACCT000001,BAL"` or `"ACCT000001"` into subscripts.
 fn parse_path(path: &str) -> Key {
     path.split(',')
         .map(|s| s.trim())
@@ -55,15 +57,20 @@ fn load_csv(path: &Path) -> Result<Vec<Entry>> {
         .collect()
 }
 
+// This is somewhat contrived, but demonstrates:
+//   - Creating a DB with default settings; in this case, the important
+//     setting is WAL sync mode, which defaults to `SyncMode::OnCommit`
+//   - Re=opening the DB with overridden settings for this session only; here
+//     it's using `SyncMode::Relaxed` for a batch import
 #[tokio::main]
 async fn main() -> Result<()> {
     let csv_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
-        .join("medical-db.csv");
+        .join("financial-db.csv");
 
     let db_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
-        .join("medical.db");
+        .join("financial.db");
 
     println!("Loading CSV from: {}", csv_path.display());
     let entries = load_csv(&csv_path)?;
@@ -75,24 +82,27 @@ async fn main() -> Result<()> {
             .map_err(rumps::StorageError::IoGeneric)?;
     }
 
-    println!("Creating database at: {}", db_path.display());
+    // Step 1: Create DB with default settings
+    println!("\nCreating database at: {}", db_path.display());
     let db = Database::create(&db_path).await?;
+    db.close().await?;
+    println!("Database created and closed.");
 
-    // Insert all entries in a single transaction
-    db.transaction(|txn| {
-        async fn insert_all(
-            txn: &rumps::Transaction,
-            entries: &[Entry],
-        ) -> Result<()> {
-            match entries.split_first() {
-                None => Ok(()),
-                Some((e, rest)) => {
-                    txn.set(&e.global, &e.key, e.val.clone()).await?;
-                    Box::pin(insert_all(txn, rest)).await
-                }
-            }
-        }
-        async move { insert_all(&txn, &entries).await }
+    // Step 2: Re-open with `SyncMode::Relaxed` for batch import
+    println!("\nRe-opening with `SyncMode::Relaxed` for batch import...");
+    let db = Database::open_override(&db_path)
+        .sync_mode(SyncMode::Relaxed)
+        .open()
+        .await?;
+
+    // Step 3: Insert all entries in a single transaction
+    db.transaction(|txn| async move {
+        stream::iter(entries.iter())
+            .map(Ok)
+            .try_for_each(|e| async {
+                txn.set(&e.global, &e.key, e.val.clone()).await
+            })
+            .await
     })
     .await?;
 
@@ -102,7 +112,7 @@ async fn main() -> Result<()> {
     globals.iter().for_each(|g| println!("  ^{}", g));
 
     db.close().await?;
-    println!("\nDatabase closed successfully.");
+    println!("\nOverride database closed successfully.");
 
     Ok(())
 }

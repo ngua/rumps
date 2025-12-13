@@ -93,6 +93,7 @@
 //! │  ────────                       ─────                                   │
 //! │  roots: BTreeMap<Name, NodeId>  nodes: HashMap<NodeId, Node>            │
 //! │  (lazy-loaded from registry)    (no names, no roots!)                   │
+//! │  (sharded)                                                              │
 //! │         │                              │                                │
 //! │         │ lookup/create root           │ load/save nodes                │
 //! │         ▼                              ▼                                │
@@ -107,288 +108,31 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::Arc;
 
+use fs2::FileExt;
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name, Result, Value};
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
 use crate::btree::{BTree, BTreeBuilder, BTreeStats};
 use crate::engine::{
-    AsyncStorageEngine, FileStorageEngine, SafeConfig, StorageConfig,
-    StorageMetadata,
+    AsyncStorageEngine, FileStorageEngine, MetadataPage, SafeReconfiguration,
+    StorageConfig, StorageMetadata, Superblock,
 };
 use crate::error::StorageError;
 use crate::node::{NodeData, NodeId};
-use crate::page::PageCacheStats;
+use crate::page::{self, PageCacheStats};
 use crate::transaction::{
     Transaction, TransactionBuilder, TransactionContext, TransactionId,
     TransactionManager, TransactionTimestamp,
 };
 use crate::wal::{SyncMode, WalOp, WalReader, WalRecord};
-
-/// Diagnostic statistics for a [`Database`].
-///
-/// Aggregates statistics from the B-tree, page cache, storage engine, and
-/// transaction manager. Use [`Database::debug()`] to obtain this.
-#[derive(Debug, Clone)]
-pub struct DatabaseStats {
-    /// Number of root variables (globals + locals) currently cached.
-    pub root_count: usize,
-    /// B-tree statistics.
-    pub btree: BTreeStats,
-    /// Page cache statistics (persistent DBs only).
-    pub cache: Option<PageCacheStats>,
-    /// Storage metadata (persistent DBs only).
-    pub storage: Option<StorageMetadata>,
-    /// Number of active transactions.
-    pub active_txns: usize,
-    /// Whether this is an in-memory database.
-    pub in_memory: bool,
-}
-
-/// Builder for creating [`Database`] instances with custom configuration.
-///
-/// For most use cases, prefer the simple constructors:
-/// - [`Database::in_memory()`] - ephemeral in-memory database
-/// - [`Database::create()`] - new persistent database with defaults
-/// - [`Database::open()`] - open existing persistent database
-///
-/// Use the builder for advanced configuration when **creating** a database:
-///
-/// ```no_run
-/// # tokio_test::block_on(async {
-/// use rumps_storage::{Database, SyncMode};
-///
-/// let db = Database::builder()
-///     .cache_size(4096)              // 4096 pages (~16 MiB)
-///     .sync_mode(SyncMode::Immediate)
-///     .min_degree(5)                 // B-tree branching factor
-///     .create("./data")
-///     .await?;
-///
-/// // Later, just open - config is restored automatically
-/// let db = Database::open("./data").await?;
-/// # Ok::<(), rumps_storage::Error>(())
-/// # });
-/// ```
-///
-/// For in-memory databases with custom B-tree settings:
-///
-/// ```
-/// use rumps_storage::Database;
-///
-/// let db = Database::builder()
-///     .min_degree(5)
-///     .in_memory()?;
-/// # Ok::<(), rumps_storage::Error>(())
-/// ```
-///
-/// # Configuration Persistence
-///
-/// All configuration is persisted to the database's metadata page when
-/// creating. On reopen via [`Database::open()`], the stored configuration
-/// is restored automatically.
-///
-/// # Why No `open()` Method?
-///
-/// The builder intentionally only has [`create()`] and [`in_memory()`].
-/// Since all configuration is persisted at creation time and restored
-/// automatically on open, there's no need to specify config when opening.
-/// Use [`Database::open()`] directly to open an existing database.
-///
-/// [`create()`]: Self::create
-/// [`in_memory()`]: Self::in_memory
-#[derive(Debug, Clone, Default)]
-pub struct DatabaseBuilder {
-    storage_config: StorageConfig,
-    min_degree: Option<usize>,
-    max_memory_bytes: Option<usize>,
-}
-
-impl DatabaseBuilder {
-    /// Sets the page cache size in pages.
-    ///
-    /// Default: `1024` pages (~4 MiB at 4KB page size).
-    pub fn cache_size(mut self, pages: usize) -> Self {
-        self.storage_config.cache_size = pages;
-        self
-    }
-
-    /// Sets maximum database size in pages.
-    ///
-    /// `None` means unlimited growth. Default: `None`.
-    pub fn max_pages(mut self, pages: u64) -> Self {
-        self.storage_config.max_pages = Some(pages);
-        self
-    }
-
-    /// Sets WAL sync mode.
-    ///
-    /// Default: [`SyncMode::OnCommit`].
-    pub fn sync_mode(mut self, mode: SyncMode) -> Self {
-        self.storage_config.wal_config.sync_mode = mode;
-        self
-    }
-
-    /// Sets WAL file rotation size in bytes.
-    ///
-    /// Default: `64` MiB.
-    pub fn wal_max_file_size(mut self, bytes: u64) -> Self {
-        self.storage_config.wal_config.max_file_size = bytes;
-        self
-    }
-
-    /// Sets B-tree minimum degree (branching factor).
-    ///
-    /// Nodes contain `t-1` to `2t-1` keys. Default: `3`.
-    pub fn min_degree(mut self, deg: usize) -> Self {
-        self.min_degree = Some(deg);
-        self
-    }
-
-    /// Sets memory limit for in-memory operations.
-    ///
-    /// Default: unlimited.
-    pub fn max_memory_bytes(mut self, bytes: usize) -> Self {
-        self.max_memory_bytes = Some(bytes);
-        self
-    }
-
-    /// Creates a new in-memory database with these settings.
-    ///
-    /// In-memory databases ignore storage configuration (cache size, WAL, etc.)
-    /// but respect B-tree settings (`min_degree`, `max_memory_bytes`).
-    pub fn in_memory(self) -> Result<Database> {
-        let mut builder = BTreeBuilder::default();
-        if let Some(deg) = self.min_degree {
-            builder = builder.min_degree(deg);
-        }
-        if let Some(bytes) = self.max_memory_bytes {
-            builder = builder.max_memory_bytes(bytes);
-        }
-        Ok(Database::with_btree(
-            Arc::new(builder.build()?),
-            Arc::new(TransactionManager::default()),
-        )?)
-    }
-
-    /// Creates a new persistent database in the specified directory.
-    ///
-    /// The path should be a directory (created if it doesn't exist).
-    /// All configuration is persisted to the database's metadata page,
-    /// so subsequent calls to [`Database::open()`] will restore the same
-    /// configuration without needing to specify it again.
-    pub async fn create(self, path: impl AsRef<Path>) -> Result<Database> {
-        let deg = self.min_degree.unwrap_or(3) as u16;
-        let storage = Arc::new(
-            FileStorageEngine::create(
-                path.as_ref(),
-                self.storage_config,
-                deg,
-                self.max_memory_bytes,
-            )
-            .await?,
-        );
-
-        let mut builder = BTreeBuilder::default()
-            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>)
-            .min_degree(deg as usize);
-        if let Some(bytes) = self.max_memory_bytes {
-            builder = builder.max_memory_bytes(bytes);
-        }
-
-        Ok(Database {
-            roots: Arc::new(RwLock::new(BTreeMap::new())),
-            btree: Arc::new(builder.build()?),
-            storage: Some(storage),
-            txn_manager: Arc::new(TransactionManager::default()),
-            closed: Arc::new(StdRwLock::new(false)),
-        })
-    }
-}
-
-/// Builder for opening a database with config overrides.
-///
-/// Created via [`Database::open_override`]. Overrides are applied at open time
-/// but NOT persisted; subsequent opens without overrides use the stored config.
-///
-/// # Examples
-///
-/// ```no_run
-/// # tokio_test::block_on(async {
-/// use rumps_storage::{Database, SyncMode};
-///
-/// // Open with overridden sync mode for this session only
-/// let db = Database::open_override("./data")
-///     .sync_mode(SyncMode::Relaxed)
-///     .cache_size(8192)
-///     .open()
-///     .await?;
-///
-/// // Next `Database::open("./data")` uses original stored config
-/// # Ok::<(), rumps_storage::Error>(())
-/// # });
-/// ```
-pub struct DatabaseOverride {
-    path: PathBuf,
-    config: SafeConfig,
-}
-
-impl DatabaseOverride {
-    /// Sets the page cache size override.
-    pub fn cache_size(mut self, pages: usize) -> Self {
-        self.config.cache_size = Some(pages);
-        self
-    }
-
-    /// Sets the WAL sync mode override.
-    pub fn sync_mode(mut self, mode: SyncMode) -> Self {
-        self.config.sync_mode = Some(mode);
-        self
-    }
-
-    /// Sets the WAL file rotation size override.
-    pub fn wal_max_file_size(mut self, bytes: u64) -> Self {
-        self.config.wal_max_file_size = Some(bytes);
-        self
-    }
-
-    /// Opens the database with the configured overrides.
-    ///
-    /// Reads stored config from metadata, applies overrides, then opens.
-    /// Overrides are NOT persisted.
-    pub async fn open(self) -> Result<Database> {
-        let storage = Arc::new(
-            FileStorageEngine::open_with_overrides(&self.path, self.config)
-                .await?,
-        );
-
-        let deg = storage.min_degree().await as usize;
-        let mut builder = BTreeBuilder::default()
-            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>)
-            .min_degree(deg);
-        if let Some(bytes) = storage.max_memory_bytes().await {
-            builder = builder.max_memory_bytes(bytes);
-        }
-
-        let btree = Arc::new(builder.build()?);
-
-        let db = Database {
-            roots: Arc::new(RwLock::new(BTreeMap::new())),
-            btree,
-            storage: Some(Arc::clone(&storage)),
-            txn_manager: Arc::new(TransactionManager::default()),
-            closed: Arc::new(StdRwLock::new(false)),
-        };
-
-        // Run WAL recovery and replay committed operations
-        db.recover(&self.path).await?;
-
-        Ok(db)
-    }
-}
 
 /// Database providing namespace management over a B-tree.
 ///
@@ -402,6 +146,11 @@ impl DatabaseOverride {
 ///   lazy-loaded from the registry and cached in memory.
 /// - **Locals** (`NAME`): Ephemeral, memory-only. Created on first access,
 ///   discarded when the database closes.
+///
+/// # Cloning
+///
+/// `Database`s can be cloned very cheaply as all fields are `Arc`s or are
+/// themselves cheaply cloned.
 ///
 /// # Thread Safety
 ///
@@ -432,11 +181,11 @@ pub struct Database {
 
     /// Whether [`close()`] has been called.
     ///
-    /// Used by `Drop` to avoid redundant cleanup. Uses `StdRwLock`
-    /// (not tokio) so it can be checked synchronously in `Drop`.
+    /// Used by `Drop` to avoid redundant cleanup. Uses `AtomicBool`
+    /// so it can be checked synchronously in `Drop` without locking.
     ///
     /// [`close()`]: Self::close
-    closed: Arc<StdRwLock<bool>>,
+    closed: Arc<AtomicBool>,
 }
 
 // Public API
@@ -545,7 +294,7 @@ impl Database {
             btree,
             storage: Some(storage),
             txn_manager: Arc::new(TransactionManager::default()),
-            closed: Arc::new(StdRwLock::new(false)),
+            closed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -579,6 +328,70 @@ impl Database {
         Self::open_override(path).open().await
     }
 
+    /// Executes a function within a transaction context.
+    ///
+    /// The transaction auto-commits if the closure returns `Ok`, and
+    /// auto-rollbacks if it returns `Err`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{global, key, Value};
+    ///
+    /// let db = Database::in_memory()?;
+    ///
+    /// db.transaction(|txn| async move {
+    ///     txn.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Bob")).await?;
+    ///     txn.set(&global!("PATIENT"), &key![123, "AGE"], Value::from(42)).await?;
+    ///     Ok(())
+    /// }).await?;
+    ///
+    /// // Values are visible after commit
+    /// let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
+    /// assert_eq!(name, Some(Value::from("Bob")));
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(Transaction) -> Fut,
+        Fut: Future<Output = Result<R>>,
+    {
+        self.build_transaction().begin(f).await
+    }
+
+    /// Creates a transaction builder for custom configuration.
+    ///
+    /// Returns a [`BoundTransactionBuilder`] that provides a fluent API for
+    /// configuring and executing transactions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::{Database, TransactionPriority, ConflictStrategy};
+    /// use rumps_types::{global, key, value};
+    ///
+    /// let db = Database::in_memory()?;
+    ///
+    /// db.build_transaction()
+    ///     .timeout(5000)
+    ///     .priority(TransactionPriority::High)
+    ///     .conflict(ConflictStrategy::Retry(3))
+    ///     .begin(|txn| async move {
+    ///         txn.set(&global!("DATA"), &key![1], value!("test")).await?;
+    ///         Ok(())
+    ///     })
+    ///     .await?;
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    pub fn build_transaction(&self) -> TransactionBuilder {
+        TransactionBuilder::new(self.clone())
+    }
+
     /// Opens an existing database with config overrides for this session.
     ///
     /// Returns a builder that allows overriding safe config fields before
@@ -600,10 +413,42 @@ impl Database {
     /// # });
     /// ```
     pub fn open_override(path: impl AsRef<Path>) -> DatabaseOverride {
-        DatabaseOverride {
-            path: path.as_ref().to_path_buf(),
-            config: SafeConfig::default(),
-        }
+        DatabaseOverride::new(path.as_ref().to_path_buf())
+    }
+
+    /// Reconfigures a closed database's persistent settings.
+    ///
+    /// Returns a builder that allows changing safe config fields. Unlike
+    /// [`open_override`], changes made here ARE persisted to the database's
+    /// metadata page and will affect all subsequent opens.
+    ///
+    /// The database must be closed before calling `apply()`. If the database
+    /// is open (by this or another process), `apply()` will fail with
+    /// [`StorageError::DatabaseLocked`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::{Database, SyncMode};
+    ///
+    /// // Permanently change sync mode and cache size
+    /// Database::reconfigure("./data")
+    ///     .sync_mode(SyncMode::Immediate)
+    ///     .cache_size(4096)
+    ///     .apply()
+    ///     .await?;
+    ///
+    /// // All future opens use new config
+    /// let db = Database::open("./data").await?;
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    ///
+    /// [`open_override`]: Self::open_override
+    /// [`StorageError::DatabaseLocked`]: crate::StorageError::DatabaseLocked
+    pub fn reconfigure(path: impl AsRef<Path>) -> DatabaseReconfigure {
+        DatabaseReconfigure::new(path.as_ref().to_path_buf())
     }
 
     /// Closes the database, flushing all data and releasing resources.
@@ -629,8 +474,7 @@ impl Database {
     /// ```
     pub async fn close(self) -> crate::error::Result<()> {
         // Mark as closed so Drop doesn't do redundant work.
-        // If poisoned, proceed anyway - the flag is still usable.
-        *self.closed.write().unwrap_or_else(|e| e.into_inner()) = true;
+        self.closed.store(true, AtomicOrdering::Release);
 
         self.flush().await?;
 
@@ -942,116 +786,15 @@ impl Database {
         })
     }
 
-    /// Collects all entries matching a key prefix into a `Vec`.
-    ///
-    /// This method is optimized for prefix-based queries: it seeks directly
-    /// to the prefix position and **stops iteration** as soon as a key is
-    /// encountered that doesn't start with the prefix. This is much more
-    /// efficient than `collects_vec` with a prefix predicate for sparse data.
-    ///
-    /// # Parameters
-    ///
-    /// * `name` - The variable name (global or local)
-    /// * `prefix` - The key prefix to match
-    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
-    pub(crate) async fn collects_prefix_vec<F, T>(
-        &self,
-        name: &Name,
-        prefix: &Key,
-        extract: F,
-    ) -> Result<Vec<T>>
-    where
-        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        let extract_wrap =
-            move |k: &Key, data: &NodeData| extract(k, &data.value);
-
-        let opt_root = self.get_root(name).await?;
-        Ok(match opt_root {
-            Some(root) => {
-                self.btree
-                    .collects_prefix_vec_at(root, prefix, extract_wrap)
-                    .await?
-            }
-            None => Vec::new(),
-        })
-    }
-
-    /// Creates a stream of entries matching a key prefix.
-    ///
-    /// This method is optimized for prefix-based queries: it seeks directly
-    /// to the prefix position and **stops iteration** as soon as a key is
-    /// encountered that doesn't start with the prefix.
-    ///
-    /// # Parameters
-    ///
-    /// * `name` - The variable name (global or local)
-    /// * `prefix` - The key prefix to match
-    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
-    pub(crate) async fn collects_prefix<'a, F, T>(
-        &'a self,
-        name: &'a Name,
-        prefix: &'a Key,
-        extract: F,
-    ) -> Result<impl Stream<Item = Result<T>> + Send + 'a>
-    where
-        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + 'a,
-        T: Send + 'a,
-    {
-        let extract_wrap =
-            move |k: &Key, data: &NodeData| extract(k, &data.value);
-
-        let opt_root = self.get_root(name).await?;
-        let s = match opt_root {
-            Some(root) => self
-                .btree
-                .collects_prefix_at(root, prefix, extract_wrap)
-                .map(|r| r.map_err(Into::into))
-                .boxed(),
-            None => stream::empty().boxed(),
-        };
-        Ok(s)
-    }
-
-    /// Executes a function within a transaction context.
-    ///
-    /// The transaction auto-commits if the closure returns `Ok`, and
-    /// auto-rollbacks if it returns `Err`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # tokio_test::block_on(async {
-    /// use rumps_storage::Database;
-    /// use rumps_types::{global, key, Value};
-    ///
-    /// let db = Database::in_memory()?;
-    ///
-    /// db.transaction(|txn| async move {
-    ///     txn.set(&global!("PATIENT"), &key![123, "NAME"], Value::from("Bob")).await?;
-    ///     txn.set(&global!("PATIENT"), &key![123, "AGE"], Value::from(42)).await?;
-    ///     Ok(())
-    /// }).await?;
-    ///
-    /// // Values are visible after commit
-    /// let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
-    /// assert_eq!(name, Some(Value::from("Bob")));
-    /// # Ok::<(), rumps_storage::Error>(())
-    /// # });
-    /// ```
-    pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
-    where
-        F: FnOnce(Transaction) -> Fut,
-        Fut: Future<Output = Result<R>>,
-    {
-        self.build_transaction().begin(f).await
-    }
-
     /// Returns diagnostic statistics for the database.
     ///
     /// Use this method for debugging and monitoring. The returned
     /// [`DatabaseStats`] aggregates statistics from all components.
+    ///
+    /// **Note**: The `btree` field requires the `debug` feature to be enabled.
+    /// Without it, B-tree stats (node count, key count, splits, merges, etc.)
+    /// will be zeros. Other fields (`root_count`, `cache`, `storage`,
+    /// `active_txns`, `in_memory`) are always available.
     ///
     /// # Examples
     ///
@@ -1261,6 +1004,78 @@ impl Database {
         }
     }
 
+    /// Collects all entries matching a key prefix into a `Vec`.
+    ///
+    /// This method is optimized for prefix-based queries: it seeks directly
+    /// to the prefix position and **stops iteration** as soon as a key is
+    /// encountered that doesn't start with the prefix. This is much more
+    /// efficient than `collects_vec` with a prefix predicate for sparse data.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The variable name (global or local)
+    /// * `prefix` - The key prefix to match
+    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
+    pub(crate) async fn collects_prefix_vec<F, T>(
+        &self,
+        name: &Name,
+        prefix: &Key,
+        extract: F,
+    ) -> Result<Vec<T>>
+    where
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync,
+        T: Send,
+    {
+        let extract_wrap =
+            move |k: &Key, data: &NodeData| extract(k, &data.value);
+
+        let opt_root = self.get_root(name).await?;
+        Ok(match opt_root {
+            Some(root) => {
+                self.btree
+                    .collects_prefix_vec_at(root, prefix, extract_wrap)
+                    .await?
+            }
+            None => Vec::new(),
+        })
+    }
+
+    /// Creates a stream of entries matching a key prefix.
+    ///
+    /// This method is optimized for prefix-based queries: it seeks directly
+    /// to the prefix position and **stops iteration** as soon as a key is
+    /// encountered that doesn't start with the prefix.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The variable name (global or local)
+    /// * `prefix` - The key prefix to match
+    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
+    pub(crate) async fn collects_prefix<'a, F, T>(
+        &'a self,
+        name: &'a Name,
+        prefix: &'a Key,
+        extract: F,
+    ) -> Result<impl Stream<Item = Result<T>> + Send + 'a>
+    where
+        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + 'a,
+        T: Send + 'a,
+    {
+        let extract_wrap =
+            move |k: &Key, data: &NodeData| extract(k, &data.value);
+
+        let opt_root = self.get_root(name).await?;
+        let s = match opt_root {
+            Some(root) => self
+                .btree
+                .collects_prefix_at(root, prefix, extract_wrap)
+                .map(|r| r.map_err(Into::into))
+                .boxed(),
+            None => stream::empty().boxed(),
+        };
+        Ok(s)
+    }
+
     /// Flushes all dirty pages and metadata to disk.
     ///
     /// For persistent databases, this syncs the WAL and flushes dirty pages.
@@ -1271,36 +1086,6 @@ impl Database {
             storage.flush().await?;
         }
         Ok(())
-    }
-
-    /// Creates a transaction builder for custom configuration.
-    ///
-    /// Returns a [`BoundTransactionBuilder`] that provides a fluent API for
-    /// configuring and executing transactions.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # tokio_test::block_on(async {
-    /// use rumps_storage::{Database, TransactionPriority, ConflictStrategy};
-    /// use rumps_types::{global, key, value};
-    ///
-    /// let db = Database::in_memory()?;
-    ///
-    /// db.build_transaction()
-    ///     .timeout(5000)
-    ///     .priority(TransactionPriority::High)
-    ///     .conflict(ConflictStrategy::Retry(3))
-    ///     .begin(|txn| async move {
-    ///         txn.set(&global!("DATA"), &key![1], value!("test")).await?;
-    ///         Ok(())
-    ///     })
-    ///     .await?;
-    /// # Ok::<(), rumps_storage::Error>(())
-    /// # });
-    /// ```
-    pub fn build_transaction(&self) -> TransactionBuilder {
-        TransactionBuilder::new(self.clone())
     }
 
     /// Returns the underlying B-tree.
@@ -1320,7 +1105,7 @@ impl Database {
             btree,
             storage: None,
             txn_manager,
-            closed: Arc::new(StdRwLock::new(false)),
+            closed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -1574,7 +1359,7 @@ impl Database {
 impl Drop for Database {
     fn drop(&mut self) {
         // Skip if `Self::close` was already called
-        let already_closed = self.closed.read().map(|g| *g).unwrap_or(false);
+        let already_closed = self.closed.load(AtomicOrdering::Acquire);
 
         if !already_closed {
             // Only flush if we're the last `Database` handle to this storage.
@@ -1605,6 +1390,815 @@ impl Drop for Database {
                 });
         }
     }
+}
+
+/// Diagnostic statistics for a [`Database`].
+///
+/// Aggregates statistics from the B-tree, page cache, storage engine, and
+/// transaction manager. Use [`Database::debug()`] to obtain this.
+#[derive(Debug, Clone)]
+pub struct DatabaseStats {
+    /// Number of root variables (globals + locals) currently cached.
+    pub root_count: usize,
+    /// B-tree statistics (requires `debug` feature; zeros otherwise).
+    pub btree: BTreeStats,
+    /// Page cache statistics (persistent DBs only).
+    pub cache: Option<PageCacheStats>,
+    /// Storage metadata (persistent DBs only).
+    pub storage: Option<StorageMetadata>,
+    /// Number of active transactions.
+    pub active_txns: usize,
+    /// Whether this is an in-memory database.
+    pub in_memory: bool,
+}
+
+/// Builder for creating [`Database`] instances with custom configuration.
+///
+/// For most use cases, prefer the simple constructors:
+/// - [`Database::in_memory()`] - ephemeral in-memory database
+/// - [`Database::create()`] - new persistent database with defaults
+/// - [`Database::open()`] - open existing persistent database
+///
+/// Use the builder for advanced configuration when **creating** a database:
+///
+/// ```no_run
+/// # tokio_test::block_on(async {
+/// use rumps_storage::{Database, SyncMode};
+///
+/// let db = Database::builder()
+///     .cache_size(4096)              // 4096 pages (~16 MiB)
+///     .sync_mode(SyncMode::Immediate)
+///     .min_degree(5)                 // B-tree branching factor
+///     .create("./data")
+///     .await?;
+///
+/// // Later, just open - config is restored automatically
+/// let db = Database::open("./data").await?;
+/// # Ok::<(), rumps_storage::Error>(())
+/// # });
+/// ```
+///
+/// For in-memory databases with custom B-tree settings:
+///
+/// ```
+/// use rumps_storage::Database;
+///
+/// let db = Database::builder()
+///     .min_degree(5)
+///     .in_memory()?;
+/// # Ok::<(), rumps_storage::Error>(())
+/// ```
+///
+/// # Configuration Persistence
+///
+/// All configuration is persisted to the database's metadata page when
+/// creating. On reopen via [`Database::open()`], the stored configuration
+/// is restored automatically.
+///
+/// # Why No `open()` Method?
+///
+/// The builder intentionally only has [`create()`] and [`in_memory()`].
+/// Since all configuration is persisted at creation time and restored
+/// automatically on open, there's no need to specify config when opening.
+/// Use [`Database::open()`] directly to open an existing database.
+///
+/// [`create()`]: Self::create
+/// [`in_memory()`]: Self::in_memory
+#[derive(Debug, Clone, Default)]
+pub struct DatabaseBuilder {
+    storage_config: StorageConfig,
+    min_degree: Option<usize>,
+    max_memory_bytes: Option<usize>,
+}
+
+impl DatabaseBuilder {
+    /// Sets the page cache size in pages.
+    ///
+    /// Default: `1024` pages (~4 MiB at 4KB page size).
+    pub fn cache_size(mut self, pages: usize) -> Self {
+        self.storage_config.cache_size = pages;
+        self
+    }
+
+    /// Sets maximum database size in pages.
+    ///
+    /// `None` means unlimited growth. Default: `None`.
+    pub fn max_pages(mut self, pages: u64) -> Self {
+        self.storage_config.max_pages = Some(pages);
+        self
+    }
+
+    /// Sets WAL sync mode.
+    ///
+    /// Default: [`SyncMode::OnCommit`].
+    pub fn sync_mode(mut self, mode: SyncMode) -> Self {
+        self.storage_config.wal_config.sync_mode = mode;
+        self
+    }
+
+    /// Sets WAL file rotation size in bytes.
+    ///
+    /// Default: `64` MiB.
+    pub fn wal_max_file_size(mut self, bytes: u64) -> Self {
+        self.storage_config.wal_config.max_file_size = bytes;
+        self
+    }
+
+    /// Sets B-tree minimum degree (branching factor).
+    ///
+    /// Nodes contain `t-1` to `2t-1` keys. Default: `3`.
+    pub fn min_degree(mut self, deg: usize) -> Self {
+        self.min_degree = Some(deg);
+        self
+    }
+
+    /// Sets memory limit for in-memory operations.
+    ///
+    /// Default: unlimited.
+    pub fn max_memory_bytes(mut self, bytes: usize) -> Self {
+        self.max_memory_bytes = Some(bytes);
+        self
+    }
+
+    /// Creates a new in-memory database with these settings.
+    ///
+    /// In-memory databases ignore storage configuration (cache size, WAL, etc.)
+    /// but respect B-tree settings (`min_degree`, `max_memory_bytes`).
+    pub fn in_memory(self) -> Result<Database> {
+        let mut builder = BTreeBuilder::default();
+        if let Some(deg) = self.min_degree {
+            builder = builder.min_degree(deg);
+        }
+        if let Some(bytes) = self.max_memory_bytes {
+            builder = builder.max_memory_bytes(bytes);
+        }
+        Ok(Database::with_btree(
+            Arc::new(builder.build()?),
+            Arc::new(TransactionManager::default()),
+        )?)
+    }
+
+    /// Creates a new persistent database in the specified directory.
+    ///
+    /// The path should be a directory (created if it doesn't exist).
+    /// All configuration is persisted to the database's metadata page,
+    /// so subsequent calls to [`Database::open()`] will restore the same
+    /// configuration without needing to specify it again.
+    pub async fn create(self, path: impl AsRef<Path>) -> Result<Database> {
+        let deg = self.min_degree.unwrap_or(3) as u16;
+        let storage = Arc::new(
+            FileStorageEngine::create(
+                path.as_ref(),
+                self.storage_config,
+                deg,
+                self.max_memory_bytes,
+            )
+            .await?,
+        );
+
+        let mut builder = BTreeBuilder::default()
+            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>)
+            .min_degree(deg as usize);
+        if let Some(bytes) = self.max_memory_bytes {
+            builder = builder.max_memory_bytes(bytes);
+        }
+
+        Ok(Database {
+            roots: Arc::new(RwLock::new(BTreeMap::new())),
+            btree: Arc::new(builder.build()?),
+            storage: Some(storage),
+            txn_manager: Arc::new(TransactionManager::default()),
+            closed: Arc::new(AtomicBool::new(false)),
+        })
+    }
+}
+
+/// Builder for opening a database with config overrides.
+///
+/// Created via [`Database::open_override`]. Overrides are applied at open time
+/// but NOT persisted; subsequent opens without overrides use the stored config.
+///
+/// # Examples
+///
+/// ```no_run
+/// # tokio_test::block_on(async {
+/// use rumps_storage::{Database, SyncMode};
+///
+/// // Open with overridden sync mode for this session only
+/// let db = Database::open_override("./data")
+///     .sync_mode(SyncMode::Relaxed)
+///     .cache_size(8192)
+///     .open()
+///     .await?;
+///
+/// // Next `Database::open("./data")` uses original stored config
+/// # Ok::<(), rumps_storage::Error>(())
+/// # });
+/// ```
+pub struct DatabaseOverride {
+    path: PathBuf,
+    config: SafeReconfiguration,
+}
+
+impl DatabaseOverride {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            config: SafeReconfiguration::default(),
+        }
+    }
+}
+
+impl DatabaseOverride {
+    /// Sets the page cache size override.
+    pub fn cache_size(mut self, pages: usize) -> Self {
+        self.config.cache_size = Some(pages);
+        self
+    }
+
+    /// Sets the WAL sync mode override.
+    pub fn sync_mode(mut self, mode: SyncMode) -> Self {
+        self.config.sync_mode = Some(mode);
+        self
+    }
+
+    /// Sets the WAL file rotation size override.
+    pub fn wal_max_file_size(mut self, bytes: u64) -> Self {
+        self.config.wal_max_file_size = Some(bytes);
+        self
+    }
+
+    /// Opens the database with the configured overrides.
+    ///
+    /// Reads stored config from metadata, applies overrides, then opens.
+    /// Overrides are NOT persisted.
+    pub async fn open(self) -> Result<Database> {
+        let storage = Arc::new(
+            FileStorageEngine::open_with_overrides(&self.path, self.config)
+                .await?,
+        );
+
+        let deg = storage.min_degree().await as usize;
+        let mut builder = BTreeBuilder::default()
+            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>)
+            .min_degree(deg);
+        if let Some(bytes) = storage.max_memory_bytes().await {
+            builder = builder.max_memory_bytes(bytes);
+        }
+
+        let btree = Arc::new(builder.build()?);
+
+        let db = Database {
+            roots: Arc::new(RwLock::new(BTreeMap::new())),
+            btree,
+            storage: Some(Arc::clone(&storage)),
+            txn_manager: Arc::new(TransactionManager::default()),
+            closed: Arc::new(AtomicBool::new(false)),
+        };
+
+        // Run WAL recovery and replay committed operations
+        db.recover(&self.path).await?;
+
+        Ok(db)
+    }
+}
+
+/// Builder for reconfiguring a closed database's persistent settings.
+///
+/// Created via [`Database::reconfigure`]. Unlike [`Database::open_override`],
+/// changes made here ARE persisted to the database's metadata page and will be
+/// used by all subsequent opens.
+///
+/// The database must be closed before reconfiguring. If another process has
+/// the database open, `apply()` will fail with [`StorageError::DatabaseLocked`].
+///
+/// # Examples
+///
+/// ```no_run
+/// # tokio_test::block_on(async {
+/// use rumps_storage::{Database, SyncMode};
+///
+/// // Permanently change sync mode
+/// Database::reconfigure("./data")
+///     .sync_mode(SyncMode::Immediate)
+///     .cache_size(4096)
+///     .apply()
+///     .await?;
+///
+/// // All future opens use new config
+/// let db = Database::open("./data").await?;
+/// # Ok::<(), rumps_storage::Error>(())
+/// # });
+/// ```
+///
+/// [`StorageError::DatabaseLocked`]: crate::StorageError::DatabaseLocked
+pub struct DatabaseReconfigure {
+    path: PathBuf,
+    config: SafeReconfiguration,
+}
+
+// Make struct fields and construction internal-only; the struct is public
+// but can only be created via `Database::reconfigure()`.
+impl DatabaseReconfigure {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            config: SafeReconfiguration::default(),
+        }
+    }
+}
+
+impl DatabaseReconfigure {
+    /// Sets the page cache size (number of pages).
+    pub fn cache_size(mut self, pages: usize) -> Self {
+        self.config.cache_size = Some(pages);
+        self
+    }
+
+    /// Sets the WAL sync mode.
+    pub fn sync_mode(mut self, mode: SyncMode) -> Self {
+        self.config.sync_mode = Some(mode);
+        self
+    }
+
+    /// Sets the WAL file rotation size in bytes.
+    pub fn wal_max_file_size(mut self, bytes: u64) -> Self {
+        self.config.wal_max_file_size = Some(bytes);
+        self
+    }
+
+    /// Converts this reconfiguration into a full rebuild operation.
+    ///
+    /// Unlike `apply()`, a rebuild copies data to a new database file,
+    /// allowing unsafe config changes like `min_degree` that affect
+    /// B-tree node layout.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    ///
+    /// let out = Database::reconfigure("./data")
+    ///     .cache_size(4096)  // safe change
+    ///     .rebuild()
+    ///     .min_degree(5)     // unsafe change; requires rebuild
+    ///     .output("./data_new")
+    ///     .apply()
+    ///     .await?;
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    pub fn rebuild(self) -> DatabaseRebuild {
+        let mut rb = DatabaseRebuild::new(self.path);
+        rb.safe = self.config;
+        rb
+    }
+
+    /// Applies the configuration changes to the database.
+    ///
+    /// This method:
+    /// 1. Acquires an exclusive lock on the database
+    /// 2. Reads the existing metadata
+    /// 3. Applies the configured changes
+    /// 4. Writes the updated metadata back
+    /// 5. Syncs to disk for durability
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The database is currently open (by this or another process)
+    /// - The database directory or files don't exist
+    /// - I/O errors occur during read/write
+    pub async fn apply(self) -> crate::error::Result<()> {
+        // Validate path exists
+        if !self.path.exists() {
+            Err(StorageError::InvalidOperation(format!(
+                "database directory does not exist: {}",
+                self.path.display()
+            )))?;
+        }
+
+        // Acquire exclusive lock (sync; required by fs2)
+        let lock_path = self.path.join("db.lock");
+        let lock_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| StorageError::Io {
+                op: "open lock file".into(),
+                path: lock_path.clone(),
+                source: e,
+            })?;
+
+        lock_file.try_lock_exclusive().map_err(|_| {
+            StorageError::DatabaseLocked {
+                path: self.path.clone(),
+            }
+        })?;
+        // Hold `lock_file` until end of function; lock released on drop.
+
+        // Open data file for read/write (async)
+        let data_path = self.path.join("data.db");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&data_path)
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "open data file".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+
+        // Read superblock (page 0)
+        let mut sb_buf = vec![0u8; page::PAGE_SIZE];
+        file.seek(SeekFrom::Start(0))
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "seek to superblock".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+        file.read_exact(&mut sb_buf)
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "read superblock".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+
+        let superblock = Superblock::deserialize(&sb_buf)?;
+
+        // Get metadata page location
+        let meta_pid = superblock.metadata_root.ok_or_else(|| {
+            StorageError::InvalidOperation(
+                "database has no metadata page".into(),
+            )
+        })?;
+
+        // Read metadata page
+        let mut meta_buf = vec![0u8; page::PAGE_SIZE];
+        file.seek(SeekFrom::Start(meta_pid.byte_offset()))
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "seek to metadata".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+        file.read_exact(&mut meta_buf)
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "read metadata".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+
+        let mut metadata = MetadataPage::deserialize(&meta_buf)?;
+        metadata.validate_runtime()?;
+
+        // Apply safe config changes
+        if let Some(cs) = self.config.cache_size {
+            metadata.cache_size = cs as u64;
+        }
+        if let Some(sm) = self.config.sync_mode {
+            let (mode, interval) = sm.to_raw();
+            metadata.sync_mode = mode;
+            metadata.sync_interval_ms = interval;
+        }
+        if let Some(ws) = self.config.wal_max_file_size {
+            metadata.wal_max_file_size = ws;
+        }
+
+        // Write updated metadata back
+        let new_meta = metadata.serialize();
+        file.seek(SeekFrom::Start(meta_pid.byte_offset()))
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "seek to metadata for write".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+        file.write_all(&new_meta)
+            .await
+            .map_err(|e| StorageError::Io {
+                op: "write metadata".into(),
+                path: data_path.clone(),
+                source: e,
+            })?;
+
+        // Sync for durability
+        file.sync_all().await.map_err(|e| StorageError::Io {
+            op: "sync data file".into(),
+            path: data_path,
+            source: e,
+        })?;
+
+        Ok(())
+    }
+}
+
+/// Builder for rebuilding a database with different configuration.
+///
+/// Created via [`DatabaseReconfigure::rebuild`]. Unlike [`DatabaseReconfigure`],
+/// this allows changing ALL config fields (including unsafe ones like `min_degree`
+/// that affect B-tree layout) by copying data to a new database file.
+///
+/// The source database is opened read-only, and data is streamed to the
+/// destination without loading everything into memory.
+///
+/// # Examples
+///
+/// ```no_run
+/// # tokio_test::block_on(async {
+/// use rumps_storage::Database;
+///
+/// // Rebuild with different B-tree degree and limits
+/// let out = Database::reconfigure("./data")
+///     .rebuild()
+///     .min_degree(5)
+///     .max_pages(Some(10000))
+///     .output("./data_new")
+///     .apply()
+///     .await?;
+///
+/// // Original "./data" unchanged; new database at `out`
+/// let db = Database::open(&out).await?;
+/// # Ok::<(), rumps_storage::Error>(())
+/// # });
+/// ```
+pub struct DatabaseRebuild {
+    src: PathBuf,
+    output: Option<PathBuf>,
+    // Safe config
+    safe: SafeReconfiguration,
+    // Unsafe config
+    min_degree: Option<usize>,
+    max_pages: Option<Option<u64>>,
+    max_memory_bytes: Option<Option<usize>>,
+    /// Entries per transaction batch during copy.
+    batch_size: usize,
+}
+
+impl DatabaseRebuild {
+    fn new(src: PathBuf) -> Self {
+        Self {
+            src,
+            output: None,
+            safe: SafeReconfiguration::default(),
+            min_degree: None,
+            max_pages: None,
+            max_memory_bytes: None,
+            batch_size: 1000,
+        }
+    }
+}
+
+impl DatabaseRebuild {
+    /// Sets the page cache size (number of pages) for the rebuilt database.
+    pub fn cache_size(mut self, pages: usize) -> Self {
+        self.safe.cache_size = Some(pages);
+        self
+    }
+
+    /// Sets the WAL sync mode for the rebuilt database.
+    pub fn sync_mode(mut self, mode: SyncMode) -> Self {
+        self.safe.sync_mode = Some(mode);
+        self
+    }
+
+    /// Sets the WAL file rotation size for the rebuilt database.
+    pub fn wal_max_file_size(mut self, bytes: u64) -> Self {
+        self.safe.wal_max_file_size = Some(bytes);
+        self
+    }
+
+    /// Sets the B-tree minimum degree (branching factor) for the rebuilt database.
+    ///
+    /// This is an unsafe config change that affects B-tree node structure.
+    pub fn min_degree(mut self, deg: usize) -> Self {
+        self.min_degree = Some(deg);
+        self
+    }
+
+    /// Sets the maximum number of pages for the rebuilt database.
+    ///
+    /// `None` means unlimited. This is an unsafe config change.
+    pub fn max_pages(mut self, pages: Option<u64>) -> Self {
+        self.max_pages = Some(pages);
+        self
+    }
+
+    /// Sets the memory limit for B-tree operations in the rebuilt database.
+    ///
+    /// `None` means unlimited. This is an unsafe config change.
+    pub fn max_memory_bytes(mut self, bytes: Option<usize>) -> Self {
+        self.max_memory_bytes = Some(bytes);
+        self
+    }
+
+    /// Sets the destination path for the rebuilt database.
+    ///
+    /// **Required.** The output path must be different from the source.
+    pub fn output(mut self, path: impl AsRef<Path>) -> Self {
+        self.output = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Sets the number of entries to batch per transaction during copy.
+    ///
+    /// Lower values use less memory but may be slower. Default: `1000`.
+    pub fn batch_size(mut self, n: usize) -> Self {
+        self.batch_size = n;
+        self
+    }
+
+    /// Applies the rebuild, copying data to the new database.
+    ///
+    /// Returns the path to the newly created database on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No output path was specified
+    /// - The output path already exists
+    /// - The source database doesn't exist or can't be opened
+    /// - I/O errors during copy
+    pub async fn apply(self) -> Result<PathBuf> {
+        let out = self.output.ok_or_else(|| {
+            StorageError::InvalidOperation(
+                "rebuild requires output path".into(),
+            )
+        })?;
+
+        // Check output doesn't exist
+        if out.exists() {
+            Err(StorageError::InvalidOperation(format!(
+                "output path already exists: {}",
+                out.display()
+            )))?;
+        }
+
+        // Open source with relaxed sync (read-only intent)
+        let src_db = Database::open_override(&self.src)
+            .sync_mode(SyncMode::Relaxed)
+            .open()
+            .await?;
+
+        // Read source metadata to get defaults
+        let src_storage = src_db.storage.as_ref().ok_or_else(|| {
+            StorageError::InvalidOperation(
+                "source must be a file-backed database".into(),
+            )
+        })?;
+        let src_deg = src_storage.min_degree().await as usize;
+        let src_mem = src_storage.max_memory_bytes().await;
+        let src_cfg = src_storage.config();
+
+        // Build destination config
+        let mut builder = Database::builder();
+
+        // Apply safe config (use source as fallback)
+        builder = builder
+            .cache_size(self.safe.cache_size.unwrap_or(src_cfg.cache_size));
+        builder = builder.sync_mode(
+            self.safe.sync_mode.unwrap_or(src_cfg.wal_config.sync_mode),
+        );
+        builder = builder.wal_max_file_size(
+            self.safe
+                .wal_max_file_size
+                .unwrap_or(src_cfg.wal_config.max_file_size),
+        );
+
+        // Apply unsafe config
+        builder = builder.min_degree(self.min_degree.unwrap_or(src_deg));
+
+        match self.max_pages {
+            Some(Some(p)) => builder = builder.max_pages(p),
+            Some(None) => { /* unlimited; don't set */ }
+            None => {
+                if let Some(p) = src_cfg.max_pages {
+                    builder = builder.max_pages(p);
+                }
+            }
+        }
+
+        match self.max_memory_bytes {
+            Some(Some(b)) => builder = builder.max_memory_bytes(b),
+            Some(None) => { /* unlimited; don't set */ }
+            None => {
+                if let Some(b) = src_mem {
+                    builder = builder.max_memory_bytes(b);
+                }
+            }
+        }
+
+        // Create destination
+        let dst_db = builder.create(&out).await?;
+
+        // Copy all globals
+        let globals = src_db.list_globals().await;
+        let batch_sz = self.batch_size;
+
+        // Process each global sequentially
+        let copy_result = stream::iter(globals)
+            .map(Ok::<_, rumps_types::Error>)
+            .try_for_each(|gname| {
+                let src = &src_db;
+                let dst = &dst_db;
+                async move { copy_global(src, dst, &gname, batch_sz).await }
+            })
+            .await;
+
+        // Close both databases (regardless of copy result)
+        let close_src = src_db.close().await;
+        let close_dst = dst_db.close().await;
+
+        // Propagate errors in order
+        copy_result?;
+        close_src?;
+        close_dst?;
+
+        Ok(out)
+    }
+}
+
+/// Copies all entries from one global to another database in batches.
+///
+/// Uses `while let` iteration to process entries in chunks, avoiding
+/// memory blowup on large globals.
+async fn copy_global(
+    src: &Database,
+    dst: &Database,
+    gname: &str,
+    batch_sz: usize,
+) -> Result<()> {
+    let name = Name::Global(gname.into());
+    let mut start: Option<Key> = None;
+
+    // Process in batches using while-let (allowed per CLAUDE.md)
+    while let Some(batch) =
+        collect_batch(src, &name, start.as_ref(), batch_sz).await?
+    {
+        // Get last key for next iteration
+        start = batch.last().map(|(k, _)| k.clone());
+
+        // Insert batch into destination via transaction
+        insert_batch(dst, &name, batch).await?;
+    }
+
+    Ok(())
+}
+
+/// Collects up to `batch_sz` entries from a global starting after `start`.
+///
+/// Returns `None` when there are no more entries.
+async fn collect_batch(
+    db: &Database,
+    name: &Name,
+    start: Option<&Key>,
+    batch_sz: usize,
+) -> Result<Option<Vec<(Key, Value)>>> {
+    let entries: Vec<(Key, Value)> = db
+        .collects(
+            name,
+            start,
+            |_, v| v.is_some(),
+            |k, v| v.clone().map(|val| (k.clone(), val)),
+        )
+        .await?
+        .take(batch_sz)
+        .try_collect()
+        .await?;
+
+    Ok((!entries.is_empty()).then_some(entries))
+}
+
+/// Helper to insert a batch of entries into a global via transaction.
+async fn insert_batch(
+    db: &Database,
+    name: &Name,
+    entries: Vec<(Key, Value)>,
+) -> Result<()> {
+    let name = name.clone();
+    db.transaction(move |txn| {
+        let entries = entries;
+        let name = name;
+        async move {
+            // Use fold to insert each entry sequentially
+            stream::iter(entries.into_iter())
+                .map(Ok::<_, rumps_types::Error>)
+                .try_fold((), |(), (k, v)| {
+                    let txn = &txn;
+                    let nm = &name;
+                    async move { txn.set(nm, &k, v).await.map(|_| ()) }
+                })
+                .await
+        }
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1961,9 +2555,9 @@ mod tests {
         let db = Database::in_memory().unwrap();
 
         // Create multiple transactions and verify they get unique IDs
-        let id1 = db.txn_manager.allocate_txn_id().await;
-        let id2 = db.txn_manager.allocate_txn_id().await;
-        let id3 = db.txn_manager.allocate_txn_id().await;
+        let id1 = db.txn_manager.allocate_txn_id();
+        let id2 = db.txn_manager.allocate_txn_id();
+        let id3 = db.txn_manager.allocate_txn_id();
 
         assert_ne!(id1, id2);
         assert_ne!(id2, id3);
@@ -2882,6 +3476,491 @@ mod tests {
                 assert_eq!(v1, Some(rumps_types::Value::from(42)));
                 assert_eq!(v2, Some(rumps_types::Value::from(99)));
 
+                db.close().await.unwrap();
+            }
+        }
+    }
+
+    mod reconfigure {
+        use tempfile::TempDir;
+
+        use super::*;
+        use crate::SyncMode;
+
+        #[tokio::test]
+        async fn reconfigure_cache_size() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create with default cache size (1024)
+            {
+                let db = Database::create(&path).await.unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reconfigure cache size (persisted)
+            Database::reconfigure(&path)
+                .cache_size(2048)
+                .apply()
+                .await
+                .unwrap();
+
+            // Reopen; new cache size should be active
+            {
+                let db = Database::open(&path).await.unwrap();
+                let stats = db.debug().await;
+                assert_eq!(
+                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    Some(2048)
+                );
+                db.close().await.unwrap();
+            }
+
+            // Reopen again; should still use reconfigured value
+            {
+                let db = Database::open(&path).await.unwrap();
+                let stats = db.debug().await;
+                assert_eq!(
+                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    Some(2048)
+                );
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn reconfigure_sync_mode() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create with OnCommit mode (default)
+            {
+                let db = Database::builder()
+                    .sync_mode(SyncMode::OnCommit)
+                    .create(&path)
+                    .await
+                    .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reconfigure to Immediate
+            Database::reconfigure(&path)
+                .sync_mode(SyncMode::Immediate)
+                .apply()
+                .await
+                .unwrap();
+
+            // Verify data can still be written with new mode
+            {
+                let db = Database::open(&path).await.unwrap();
+                db.transaction(|txn| async move {
+                    txn.set(
+                        &global!("TEST"),
+                        &rumps_types::key![1],
+                        rumps_types::Value::from("value"),
+                    )
+                    .await
+                })
+                .await
+                .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Verify data persisted
+            {
+                let db = Database::open(&path).await.unwrap();
+                let val = db
+                    .get(&global!("TEST"), &rumps_types::key![1])
+                    .await
+                    .unwrap();
+                assert_eq!(val, Some(rumps_types::Value::from("value")));
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn reconfigure_wal_max_file_size() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create database
+            {
+                let db = Database::create(&path).await.unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reconfigure WAL max file size
+            Database::reconfigure(&path)
+                .wal_max_file_size(16 * 1024 * 1024)
+                .apply()
+                .await
+                .unwrap();
+
+            // Verify can still open and use
+            {
+                let db = Database::open(&path).await.unwrap();
+                db.transaction(|txn| async move {
+                    txn.set(
+                        &global!("DATA"),
+                        &rumps_types::key!["key"],
+                        rumps_types::Value::from(42),
+                    )
+                    .await
+                })
+                .await
+                .unwrap();
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn reconfigure_fails_when_db_open() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create and keep database open
+            let db = Database::create(&path).await.unwrap();
+
+            // Attempt to reconfigure while open
+            let result =
+                Database::reconfigure(&path).cache_size(4096).apply().await;
+
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(
+                matches!(err, StorageError::DatabaseLocked { .. }),
+                "expected DatabaseLocked error, got: {err:?}"
+            );
+
+            db.close().await.unwrap();
+
+            // Should succeed after close
+            Database::reconfigure(&path)
+                .cache_size(4096)
+                .apply()
+                .await
+                .unwrap();
+        }
+
+        #[tokio::test]
+        async fn reconfigure_multiple_options() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create database
+            {
+                let db = Database::create(&path).await.unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reconfigure multiple options at once
+            Database::reconfigure(&path)
+                .cache_size(512)
+                .sync_mode(SyncMode::Relaxed)
+                .wal_max_file_size(8 * 1024 * 1024)
+                .apply()
+                .await
+                .unwrap();
+
+            // Verify cache_size was applied
+            {
+                let db = Database::open(&path).await.unwrap();
+                let stats = db.debug().await;
+                assert_eq!(
+                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    Some(512)
+                );
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn reconfigure_nonexistent_db_fails() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("nonexistent_db");
+
+            let result =
+                Database::reconfigure(&path).cache_size(1024).apply().await;
+
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn reconfigure_preserves_data() {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("db");
+
+            // Create and populate database
+            {
+                let db = Database::create(&path).await.unwrap();
+                db.transaction(|txn| async move {
+                    txn.set(
+                        &global!("DATA"),
+                        &rumps_types::key!["key"],
+                        rumps_types::Value::from(42),
+                    )
+                    .await
+                })
+                .await
+                .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Reconfigure
+            Database::reconfigure(&path)
+                .cache_size(2048)
+                .apply()
+                .await
+                .unwrap();
+
+            // Verify data preserved
+            {
+                let db = Database::open(&path).await.unwrap();
+                let val = db
+                    .get(&global!("DATA"), &rumps_types::key!["key"])
+                    .await
+                    .unwrap();
+                assert_eq!(val, Some(rumps_types::Value::from(42)));
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn rebuild_with_different_min_degree() {
+            let tmp = tempfile::tempdir().unwrap();
+            let src = tmp.path().join("src");
+            let dst = tmp.path().join("dst");
+
+            // Create source with min_degree 3
+            {
+                let db = Database::builder()
+                    .min_degree(3)
+                    .create(&src)
+                    .await
+                    .unwrap();
+                db.transaction(|txn| async move {
+                    txn.set(
+                        &global!("DATA"),
+                        &rumps_types::key![1],
+                        rumps_types::Value::from("a"),
+                    )
+                    .await?;
+                    txn.set(
+                        &global!("DATA"),
+                        &rumps_types::key![2],
+                        rumps_types::Value::from("b"),
+                    )
+                    .await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Rebuild with different min_degree
+            let out = Database::reconfigure(&src)
+                .rebuild()
+                .min_degree(5)
+                .output(&dst)
+                .apply()
+                .await
+                .unwrap();
+
+            assert_eq!(out, dst);
+
+            // Verify data in rebuilt database
+            {
+                let db = Database::open(&dst).await.unwrap();
+                let v1 = db
+                    .get(&global!("DATA"), &rumps_types::key![1])
+                    .await
+                    .unwrap();
+                let v2 = db
+                    .get(&global!("DATA"), &rumps_types::key![2])
+                    .await
+                    .unwrap();
+                assert_eq!(v1, Some(rumps_types::Value::from("a")));
+                assert_eq!(v2, Some(rumps_types::Value::from("b")));
+                db.close().await.unwrap();
+            }
+
+            // Verify original unchanged
+            {
+                let db = Database::open(&src).await.unwrap();
+                let v1 = db
+                    .get(&global!("DATA"), &rumps_types::key![1])
+                    .await
+                    .unwrap();
+                assert_eq!(v1, Some(rumps_types::Value::from("a")));
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn rebuild_multiple_globals() {
+            let tmp = tempfile::tempdir().unwrap();
+            let src = tmp.path().join("src");
+            let dst = tmp.path().join("dst");
+
+            // Create source with multiple globals
+            {
+                let db = Database::create(&src).await.unwrap();
+                db.transaction(|txn| async move {
+                    txn.set(
+                        &global!("ALPHA"),
+                        &rumps_types::key!["x"],
+                        rumps_types::Value::from(100),
+                    )
+                    .await?;
+                    txn.set(
+                        &global!("BETA"),
+                        &rumps_types::key!["y"],
+                        rumps_types::Value::from(200),
+                    )
+                    .await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Rebuild
+            Database::reconfigure(&src)
+                .rebuild()
+                .output(&dst)
+                .apply()
+                .await
+                .unwrap();
+
+            // Verify both globals copied
+            {
+                let db = Database::open(&dst).await.unwrap();
+                let a = db
+                    .get(&global!("ALPHA"), &rumps_types::key!["x"])
+                    .await
+                    .unwrap();
+                let b = db
+                    .get(&global!("BETA"), &rumps_types::key!["y"])
+                    .await
+                    .unwrap();
+                assert_eq!(a, Some(rumps_types::Value::from(100)));
+                assert_eq!(b, Some(rumps_types::Value::from(200)));
+                db.close().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn rebuild_fails_without_output() {
+            let tmp = tempfile::tempdir().unwrap();
+            let src = tmp.path().join("src");
+
+            // Create source
+            {
+                let db = Database::create(&src).await.unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Rebuild without output path
+            let result = Database::reconfigure(&src).rebuild().apply().await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("requires output path"));
+        }
+
+        #[tokio::test]
+        async fn rebuild_fails_if_output_exists() {
+            let tmp = tempfile::tempdir().unwrap();
+            let src = tmp.path().join("src");
+            let dst = tmp.path().join("dst");
+
+            // Create both source and destination
+            {
+                let db = Database::create(&src).await.unwrap();
+                db.close().await.unwrap();
+            }
+            {
+                let db = Database::create(&dst).await.unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Rebuild should fail
+            let result = Database::reconfigure(&src)
+                .rebuild()
+                .output(&dst)
+                .apply()
+                .await;
+
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("already exists"));
+        }
+
+        #[tokio::test]
+        async fn rebuild_large_dataset_batched() {
+            let tmp = tempfile::tempdir().unwrap();
+            let src = tmp.path().join("src");
+            let dst = tmp.path().join("dst");
+
+            // Create source with many entries
+            {
+                let db = Database::create(&src).await.unwrap();
+                db.transaction(|txn| async move {
+                    // Insert 50 entries (more than default batch size of 1000, but small for test)
+                    futures::stream::iter(0..50)
+                        .map(Ok::<_, rumps_types::Error>)
+                        .try_fold((), |(), i| {
+                            let txn = &txn;
+                            async move {
+                                txn.set(
+                                    &global!("DATA"),
+                                    &rumps_types::key![i],
+                                    rumps_types::Value::from(i * 10),
+                                )
+                                .await?;
+                                Ok(())
+                            }
+                        })
+                        .await
+                })
+                .await
+                .unwrap();
+                db.close().await.unwrap();
+            }
+
+            // Rebuild with small batch size to test batching
+            Database::reconfigure(&src)
+                .rebuild()
+                .batch_size(10)
+                .output(&dst)
+                .apply()
+                .await
+                .unwrap();
+
+            // Verify all entries copied
+            {
+                let db = Database::open(&dst).await.unwrap();
+                futures::stream::iter(0..50)
+                    .map(Ok::<_, rumps_types::Error>)
+                    .try_for_each(|i| {
+                        let db = &db;
+                        async move {
+                            let val = db
+                                .get(&global!("DATA"), &rumps_types::key![i])
+                                .await?;
+                            assert_eq!(
+                                val,
+                                Some(rumps_types::Value::from(i * 10)),
+                                "mismatch at key {i}"
+                            );
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
                 db.close().await.unwrap();
             }
         }

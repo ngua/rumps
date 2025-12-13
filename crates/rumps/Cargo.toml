@@ -9,6 +9,7 @@ rumps-storage = { path = "../rumps-storage", default-features = false }
 rumps-derive = { path = "../rumps-derive", optional = true }
 csv = { version = "1", optional = true }
 tokio = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -16,10 +17,14 @@ tokio-test = "0.4"
 [features]
 default = ["derive"]
 derive = ["rumps-derive", "rumps-storage/derive"]
-examples = ["dep:csv", "dep:tokio"]
+examples = ["dep:csv", "dep:tokio", "dep:futures"]
 
 [[example]]
 name = "medical"
+required-features = ["examples"]
+
+[[example]]
+name = "financial"
 required-features = ["examples"]
 
 [lints.clippy]

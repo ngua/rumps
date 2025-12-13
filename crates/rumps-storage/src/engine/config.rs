@@ -39,7 +39,7 @@ impl Default for StorageConfig {
 
 /// Safe configuration overrides for [`Database::open_override`].
 #[derive(Debug, Clone, Default)]
-pub(crate) struct SafeConfig {
+pub(crate) struct SafeReconfiguration {
     pub(crate) cache_size: Option<usize>,
     pub(crate) sync_mode: Option<SyncMode>,
     pub(crate) wal_max_file_size: Option<u64>,

@@ -1054,6 +1054,7 @@ name = "rumps"
 version = "0.0.1"
 dependencies = [
  "csv",
+ "futures",
  "rumps-derive",
  "rumps-storage",
  "rumps-types",

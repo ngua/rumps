@@ -45,6 +45,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::{Bound, Deref};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fmt, future};
@@ -642,14 +643,23 @@ struct CommittedWriteSet {
 ///
 /// # Thread Safety
 ///
-/// All operations use `RwLock` for safe concurrent access.
+/// Uses atomics for simple counters (`next_txn_id`, `next_timestamp`) and
+/// `RwLock` for collections requiring consistent reads/writes.
 #[derive(Debug)]
 pub(crate) struct TransactionManager {
     /// Monotonically increasing transaction ID counter.
-    next_txn_id: RwLock<u64>,
+    ///
+    /// Uses `AtomicU64` with `Relaxed` ordering; we only need uniqueness,
+    /// not ordering guarantees. Transaction IDs are opaque identifiers.
+    next_txn_id: AtomicU64,
 
     /// Monotonically increasing timestamp for snapshot isolation.
-    next_timestamp: RwLock<u64>,
+    ///
+    /// Uses `AtomicU64` with `Relaxed` ordering; relative ordering between
+    /// transactions is established by `committed_writes` (which uses a lock).
+    /// What matters is `commit_ts > start_ts` for the same transaction, which
+    /// is guaranteed since both are fetched sequentially within the txn lifecycle.
+    next_timestamp: AtomicU64,
 
     /// Currently active transactions (`txn_id` → metadata).
     active: RwLock<HashMap<TransactionId, TransactionMetadata>>,
@@ -669,28 +679,26 @@ impl TransactionManager {
     /// Creates a new transaction manager with the specified limit.
     pub(crate) fn new(max_concurrent: usize) -> Self {
         Self {
-            next_txn_id: RwLock::new(1), // 0 is reserved for IMPLICIT
-            next_timestamp: RwLock::new(0),
+            next_txn_id: AtomicU64::new(1), // 0 is reserved for IMPLICIT
+            next_timestamp: AtomicU64::new(0),
             active: RwLock::new(HashMap::new()),
             committed_writes: RwLock::new(Vec::new()),
             max_concurrent,
         }
     }
 
-    /// Allocates a new unique transaction ID.
-    pub(crate) async fn allocate_txn_id(&self) -> TransactionId {
-        let mut counter = self.next_txn_id.write().await;
-        let id = *counter;
-        *counter = counter.saturating_add(1);
-        TransactionId::from(id)
+    /// Allocates a new unique transaction ID (lock-free).
+    pub(crate) fn allocate_txn_id(&self) -> TransactionId {
+        TransactionId::from(
+            self.next_txn_id.fetch_add(1, AtomicOrdering::Relaxed),
+        )
     }
 
-    /// Gets a new timestamp for snapshot isolation.
-    pub(crate) async fn current_timestamp(&self) -> TransactionTimestamp {
-        let mut counter = self.next_timestamp.write().await;
-        let ts = *counter;
-        *counter = counter.saturating_add(1);
-        TransactionTimestamp::from(ts)
+    /// Gets a new timestamp for snapshot isolation (lock-free).
+    pub(crate) fn current_timestamp(&self) -> TransactionTimestamp {
+        TransactionTimestamp::from(
+            self.next_timestamp.fetch_add(1, AtomicOrdering::Relaxed),
+        )
     }
 
     /// Registers a new transaction as active.
@@ -788,7 +796,7 @@ impl TransactionManager {
         &self,
         write_set: HashSet<(Name, Key)>,
     ) -> crate::error::Result<TransactionTimestamp> {
-        let commit_ts = self.current_timestamp().await;
+        let commit_ts = self.current_timestamp();
 
         // Only record if there were actual writes
         if !write_set.is_empty() {
@@ -825,7 +833,7 @@ impl TransactionManager {
     ) -> crate::error::Result<TransactionTimestamp> {
         // Pre-allocate commit timestamp before taking the write lock
         // to avoid nested lock acquisition
-        let commit_ts = self.current_timestamp().await;
+        let commit_ts = self.current_timestamp();
 
         // Early exit if nothing to validate/record
         if write_set.is_empty() {
@@ -1120,10 +1128,10 @@ impl TransactionBuilder {
         let db = &self.db;
 
         // Allocate unique transaction ID from manager
-        let id = db.txn_manager.allocate_txn_id().await;
+        let id = db.txn_manager.allocate_txn_id();
 
         // Get current timestamp for snapshot isolation
-        let start_ts = db.txn_manager.current_timestamp().await;
+        let start_ts = db.txn_manager.current_timestamp();
 
         // Register transaction with manager
         let metadata = TransactionMetadata::new(id, start_ts);

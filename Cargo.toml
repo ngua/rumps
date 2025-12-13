@@ -8,6 +8,7 @@ resolver = "2"
 [workspace.dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
 either = "1.13"
+futures = "0.3"
 itertools = "*"
 miette = "7.2"
 ordered-float = { version = "4.2", features = ["serde", "rand"] }

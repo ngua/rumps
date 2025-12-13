@@ -78,7 +78,7 @@ Database::rebuild("./data")
 
 ```rust
 /// Safe config fields shared by `local`, `override`, and `reconfigure`.
-pub(crate) struct SafeConfig {
+pub(crate) struct SafeReconfiguration {
     pub(crate) cache_size: Option<usize>,
     pub(crate) sync_mode: Option<SyncMode>,
     pub(crate) wal_max_file_size: Option<u64>,
@@ -87,13 +87,13 @@ pub(crate) struct SafeConfig {
 /// Builder for `Database::override`.
 pub struct DatabaseOverride {
     path: PathBuf,
-    config: SafeConfig,
+    config: SafeReconfiguration,
 }
 
 /// Builder for `Database::reconfigure`.
 pub struct DatabaseReconfigure {
     path: PathBuf,
-    config: SafeConfig,
+    config: SafeReconfiguration,
 }
 
 /// Builder for `Database::rebuild`.
@@ -128,10 +128,10 @@ pub struct DatabaseRebuild {
 
 ## Checklist
 
-### Phase 1: `SafeConfig` Infrastructure
+### Phase 1: `SafeReconfiguration` Infrastructure
 
-- [x] Create `SafeConfig` struct in `database.rs` (or new `config.rs`)
-- [x] ~~Implement `SafeConfig::apply_to(&self, StorageConfig) -> StorageConfig`~~ (applied inline)
+- [x] Create `SafeReconfiguration` struct in `database.rs` (or new `config.rs`)
+- [x] ~~Implement `SafeReconfiguration::apply_to(&self, StorageConfig) -> StorageConfig`~~ (applied inline)
 - [x] Add internal method to swap/restore config on `Database` or `FileStorage`
 - [x] Add directory lock file (`db.lock`) via `fs2` crate to prevent concurrent access
   - [x] `FileStorageEngine` holds `StdFile` handle for lock lifetime
@@ -148,7 +148,7 @@ WAL writer's hot path. See "Not Feasible" note in API Design section.
 ~~- [ ] Implement `DatabaseLocal::cache_size`, `sync_mode`, `wal_max_file_size` setters~~
 ~~- [ ] Implement `DatabaseLocal::run<F, Fut, T>()`:~~
   ~~- [ ] Snapshot current config~~
-  ~~- [ ] Apply `SafeConfig` overrides to database internals~~
+  ~~- [ ] Apply `SafeReconfiguration` overrides to database internals~~
   ~~- [ ] Run callback `f(&self.db)`~~
   ~~- [ ] Restore original config (use `scopeguard` or manual drop guard)~~
   ~~- [ ] Return callback result~~
@@ -166,7 +166,7 @@ WAL writer's hot path. See "Not Feasible" note in API Design section.
 - [x] Implement `DatabaseOverride::open()`:
   - [x] Read existing `MetadataPage` from disk
   - [x] Convert to `StorageConfig` via `to_storage_config()`
-  - [x] Apply `SafeConfig` overrides
+  - [x] Apply `SafeReconfiguration` overrides
   - [x] Open database with merged config (do NOT write back to metadata)
 - [x] Add tests for `override`:
   - [x] Override `cache_size` and verify runtime behavior
@@ -175,41 +175,41 @@ WAL writer's hot path. See "Not Feasible" note in API Design section.
 
 ### Phase 4: `Database::reconfigure`
 
-- [ ] Create `DatabaseReconfigure` builder struct
-- [ ] Implement `Database::reconfigure(path) -> DatabaseReconfigure`
-- [ ] Implement `DatabaseReconfigure::cache_size`, `sync_mode`, `wal_max_file_size` setters
-- [ ] Implement `DatabaseReconfigure::apply()`:
-  - [ ] Verify database is not currently open (acquire `db.lock` via `fs2`)
-  - [ ] Read existing `MetadataPage`
-  - [ ] Apply `SafeConfig` changes
-  - [ ] Write updated `MetadataPage` back to disk
-  - [ ] Sync to ensure durability
-  - [ ] Release lock
-- [ ] Add tests for `reconfigure`:
-  - [ ] Reconfigure `sync_mode`, reopen, verify new mode active
-  - [ ] Reconfigure `cache_size`, reopen, verify new size
-  - [ ] Verify `DatabaseLocked` error if database is open
+- [x] Create `DatabaseReconfigure` builder struct
+- [x] Implement `Database::reconfigure(path) -> DatabaseReconfigure`
+- [x] Implement `DatabaseReconfigure::cache_size`, `sync_mode`, `wal_max_file_size` setters
+- [x] Implement `DatabaseReconfigure::apply()`:
+  - [x] Verify database is not currently open (acquire `db.lock` via `fs2`)
+  - [x] Read existing `MetadataPage`
+  - [x] Apply `SafeReconfiguration` changes
+  - [x] Write updated `MetadataPage` back to disk
+  - [x] Sync to ensure durability
+  - [x] Release lock
+- [x] Add tests for `reconfigure`:
+  - [x] Reconfigure `sync_mode`, reopen, verify new mode active
+  - [x] Reconfigure `cache_size`, reopen, verify new size
+  - [x] Verify `DatabaseLocked` error if database is open
 
 ### Phase 5: `Database::rebuild`
 
-- [ ] Create `DatabaseRebuild` builder struct
-- [ ] Implement `Database::rebuild(path) -> DatabaseRebuild`
-- [ ] Implement setters for ALL config fields (safe and unsafe)
-- [ ] Implement `DatabaseRebuild::output(path)` to set destination
-- [ ] Implement `DatabaseRebuild::apply()`:
-  - [ ] Open source database read-only
-  - [ ] Create destination database with new config via `Database::builder().create()`
-  - [ ] Iterate all globals in source (via registry)
-  - [ ] For each global, iterate all keys via `collects`
-  - [ ] Insert each key-value into destination within transaction(s)
-  - [ ] Handle batching for large datasets (commit every N keys?)
-  - [ ] Close both databases
-- [ ] Add tests for `rebuild`:
-  - [ ] Rebuild with different `min_degree`, verify data intact
-  - [ ] Rebuild with different `max_pages`, verify constraint applied
-  - [ ] Rebuild large dataset, verify no data loss
-  - [ ] Error if `output` not specified
-  - [ ] Error if `output` already exists (or add `force` flag?)
+- [x] Create `DatabaseRebuild` builder struct
+- [x] Implement `DatabaseReconfigure::rebuild() -> DatabaseRebuild`
+- [x] Implement setters for ALL config fields (safe and unsafe)
+- [x] Implement `DatabaseRebuild::output(path)` to set destination
+- [x] Implement `DatabaseRebuild::apply()`:
+  - [x] Open source database (with relaxed sync)
+  - [x] Create destination database with new config via `Database::builder().create()`
+  - [x] Iterate all globals in source (via `list_globals`)
+  - [x] For each global, iterate all keys via `collects` in batches
+  - [x] Insert each key-value into destination within transaction(s)
+  - [x] Handle batching for large datasets (configurable `batch_size`)
+  - [x] Close both databases
+- [x] Add tests for `rebuild`:
+  - [x] Rebuild with different `min_degree`, verify data intact
+  - [x] Rebuild multiple globals, verify all copied
+  - [x] Rebuild large dataset with batching, verify no data loss
+  - [x] Error if `output` not specified
+  - [x] Error if `output` already exists
 
 ### Phase 6: Documentation and Cleanup
 

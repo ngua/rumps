@@ -112,7 +112,7 @@
       // Not strictly necessary; `Database` has a `Drop` implementation that
       // cleans up resources when the strong `Arc` count is 1. However, to
       // ensure resource cleanup, `Database::close` can be called
-      db.close()
+      db.close().await?;
 
       Ok(())
   }
@@ -193,7 +193,7 @@ RUMPS subscripts are represented by the =Subscript= enum. Unlike traditional MUM
 | =Subscript::Number=  | =subscript!(123)= or =subscript!(1.5)= | Integers and floats; numeric ordering  |
 | =Subscript::Char=    | =subscript!('A')=                      | Single UTF-8 character                 |
 | =Subscript::String=  | =subscript!("foo")=                    | UTF-8 string; lexicographic ordering   |
-| =Subscript::Json=    | =Subscript::Json(json!({...}))=        | Arbitrary JSON; ordered by string repr |
+| =Subscript::Json=    | =subscript!(json!(...))=               | Arbitrary JSON; ordered by string repr |
 
 Although subscripts can be constructed via the =subscript!= macro, it's easier to use the =key!= macro for building keys, since all operations on the DB (see below) require or reference /keys/, not individual subscripts.
 
@@ -201,6 +201,8 @@ The =key!= macro will also handle type conversions automatically:
 
 #+begin_src rust
 // These all work heterogeneously with the `key!` macro
+//
+// Equivalent to query language: `^P(true, 123, 'X', "NAME", '{"active": true')`
 let k = key![true, 123, 'X', "NAME", json!({"active": true})];
 #+end_src
 **** Subscript vs. node value
@@ -329,12 +331,14 @@ RUMPS achieves solid write throughput with full durability guarantees (with NVMe
 
 | *Workload*                        | *Throughput*    |
 |-----------------------------------+-----------------|
-| Single global (sequential writes) | ~40-50 Kelem/s  |
-| Multi-global (100 globals)        | ~90-100 Kelem/s |
+| Single global (sequential writes) | ~40-60 Kelem/s  |
+| Multi-global (100 globals)        | ~90-110 Kelem/s |
 
-These numbers are with =SyncMode::OnCommit= (the default), meaning every transaction commit includes an =fsync= to the WAL. Using RUMPS' default settings, when =transaction()= returns =Ok=, the data is *really* on disk.
+These numbers are with =SyncMode::OnCommit= (the default), meaning every transaction commit includes an =fsync= to the WAL. Using RUMPS' default settings, when =transaction()= returns =Ok=, /the data is really on disk/.
 
 Multi-global writes benefit from RUMPS's sharded node cache: writes to different globals can proceed in parallel with reduced lock contention, roughly doubling throughput compared to single-global workloads.
+
+*NOTE*: Generally speaking, the larger the batches, the better throughput will be. Fixed I/O cost is amortized better over larger write batches (this is a general property of MUMPS-like DBs where the =O(n log n)= time complexity of the B-tree is amortized by disk I/O overhead). So, for example, it is better to write to 1,000 key addresses in single transaction than 100 addresses spread across 10 transactions. Bear in mind that all read-only operations also work inside transactions, so no need to break transactions up to insert reads in between (unless this is explicitly desirable).
 
 *NOTE*: Benchmarks are run on NVMe SSD with ZFS. Actual speed and throughput may vary based on storage hardware and filesystem.
 ****** Relaxed mode
@@ -356,20 +360,22 @@ let db = Database::builder()
     .await?;
 #+end_src
 ***** In-memory performance
-When using =Database::in_memory()=, there's no WAL, no =fsync=, no disk I/O at all. Throughput is substantially higher:
+When using =Database::in_memory()=, there's no WAL, no =fsync=, no disk I/O at all. Throughput /can be/ substantially higher but see the caveat below regarding I/O amortization relative to normal on-disk DBs:
 
-| *Workload*                        | *Throughput* |
-|-----------------------------------+--------------|
-| Single global (sequential writes) | ~200 Kelem/s |
-| Multi-global (100 globals)        | ~580 Kelem/s |
+| *Workload*                        | *Throughput*     |
+|-----------------------------------+------------------|
+| Single global (sequential writes) | ~100-500 Kelem/s |
+| Multi-global (100 globals)        | ~580 Kelem/s     |
 
-Which is roughly 4-5x faster than on-disk for single-global workloads and 5x for multi-global. If you want transactional semantics (atomicity, conflict detection, snapshot isolation) but don't need persistence, in-memory mode is a solid option for caching or scratch workspaces. See the next subsection on using =Database::in_memory= more generally.
+If you want transactional semantics (atomicity, conflict detection, snapshot isolation) but don't need persistence, in-memory mode is a solid option for caching or scratch workspaces. See the next subsection on using =Database::in_memory= more generally.
+
+One quirk of in-memory mode: per-element throughput /decreases/ for larger batches, which is the opposite of on-disk behavior. With disk-backed storage, the fixed I/O cost (=fsync=, WAL flush) is amortized over more operations, so bigger batches means better throughput. In-memory has no I/O to amortize; you're left with raw B-tree insertion cost, which is =O(n log n)= for =n= sequential inserts. As the tree grows, each insert traverses more levels. This is normal B-tree behavior that's usually hidden behind disk latency.
 ***** In-memory: ACI
 When using =Database::in_memory()=, writes to globals still require transactions and provide full *ACI* guarantees. The only difference is no durability (data is lost when the database is dropped).
 
-- *Atomicity*: Writes are buffered until commit; rollback discards all changes
+- *Atomicity*: Writes are still buffered until commit; rollback discards all changes
 - *Consistency*: Conflict detection still prevents write-write conflicts
-- *Isolation*: Snapshot isolation ensures transactions see consistent state
+- *Isolation*: Snapshot isolation still ensures transactions see consistent state
 
 This is useful for:
 - *Testing*: Fast, isolated tests without disk cleanup

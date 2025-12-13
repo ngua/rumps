@@ -101,12 +101,7 @@ impl MetadataPage {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        let (sync_mode, sync_interval_ms) = match cfg.wal_config.sync_mode {
-            SyncMode::Immediate => (0, 0),
-            SyncMode::OnCommit => (1, 0),
-            SyncMode::Periodic(d) => (2, d.as_millis() as u64),
-            SyncMode::Relaxed => (3, 0),
-        };
+        let (sync_mode, sync_interval_ms) = cfg.wal_config.sync_mode.to_raw();
 
         Self {
             version: Self::VERSION,

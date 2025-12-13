@@ -80,6 +80,18 @@ pub enum SyncMode {
     Relaxed,
 }
 
+impl SyncMode {
+    /// Converts to raw `(mode, interval_ms)` for metadata serialization.
+    pub(crate) fn to_raw(self) -> (u8, u64) {
+        match self {
+            Self::Immediate => (0, 0),
+            Self::OnCommit => (1, 0),
+            Self::Periodic(d) => (2, d.as_millis() as u64),
+            Self::Relaxed => (3, 0),
+        }
+    }
+}
+
 /// Configuration for [`WalWriter`].
 #[derive(Debug, Clone)]
 pub struct WalWriterConfig {

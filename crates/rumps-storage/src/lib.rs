@@ -37,7 +37,8 @@ pub(crate) mod wal;
 
 pub use btree::BTreeStats;
 pub use database::{
-    Database, DatabaseBuilder, DatabaseOverride, DatabaseStats,
+    Database, DatabaseBuilder, DatabaseOverride, DatabaseRebuild,
+    DatabaseReconfigure, DatabaseStats,
 };
 pub use engine::{StorageConfig, StorageMetadata};
 pub use error::{Error, StorageError};

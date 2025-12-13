@@ -80,6 +80,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "debug")]
     async fn test_btree_stats() {
         let btree = BTreeBuilder::default().build().unwrap();
         let stats = btree.stats().await;
@@ -136,8 +137,11 @@ mod tests {
         let root = btree.create_tree().await.unwrap();
 
         assert_eq!(btree.node_count().await, 1);
-        let stats = btree.stats().await;
-        assert_eq!(stats.height, 1);
+        #[cfg(feature = "debug")]
+        {
+            let stats = btree.stats().await;
+            assert_eq!(stats.height, 1);
+        }
 
         // Root should be an empty leaf
         let node = btree.find_node(root).await.unwrap();
@@ -251,8 +255,11 @@ mod tests {
         assert_eq!(right.keys[0], key![40]);
         assert_eq!(right.keys[1], key![50]);
 
-        let stats = btree.stats().await;
-        assert_eq!(stats.splits, 1);
+        #[cfg(feature = "debug")]
+        {
+            let stats = btree.stats().await;
+            assert_eq!(stats.splits, 1);
+        }
     }
 
     #[tokio::test]
@@ -300,8 +307,11 @@ mod tests {
 
         assert!(btree.find_node(right_id).await.is_err());
 
-        let stats = btree.stats().await;
-        assert_eq!(stats.merges, 1);
+        #[cfg(feature = "debug")]
+        {
+            let stats = btree.stats().await;
+            assert_eq!(stats.merges, 1);
+        }
     }
 
     #[cfg(test)]
@@ -587,6 +597,7 @@ mod tests {
             ); // Small degree to trigger splits
             let root = btree.create_tree().await.unwrap();
 
+            #[cfg(feature = "debug")]
             let initial_height = btree.stats().await.height;
 
             // Insert many keys to cause splits
@@ -605,9 +616,12 @@ mod tests {
                 })
                 .await;
 
-            let final_stats = btree.stats().await;
-            assert!(final_stats.splits > 0);
-            assert!(final_stats.height > initial_height);
+            #[cfg(feature = "debug")]
+            {
+                let final_stats = btree.stats().await;
+                assert!(final_stats.splits > 0);
+                assert!(final_stats.height > initial_height);
+            }
 
             // All keys should still be retrievable
             futures::stream::iter(0..20i64)
@@ -1079,8 +1093,11 @@ mod tests {
             })
             .await;
 
-        let stats = btree.stats().await;
-        assert!(stats.splits > 0);
+        #[cfg(feature = "debug")]
+        {
+            let stats = btree.stats().await;
+            assert!(stats.splits > 0);
+        }
     }
 
     #[tokio::test]
