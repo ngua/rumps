@@ -340,6 +340,21 @@ let right_keys: KeyVec = keys.split_off(mid + 1);
 
 **Solution:** Collect ancestor keys in transaction write buffer; batch-update flags at commit.
 
+### Snapshot Isolation Analysis
+
+**This optimization is safe.** The transaction implementation in `transaction.rs` already provides snapshot isolation:
+
+1. **Writes are buffered** until commit (`writes: BTreeMap<(Name, Key), WriteOp>`)
+2. **Reads check buffer first**, then fall through to DB snapshot
+3. **Ancestor flags are not updated** until `db.set_with_txn()` at commit time
+
+Within a transaction, `data()` on ancestor keys sees:
+- Buffered writes for that exact key (if any)
+- Buffered descendants (Sets under the ancestor prefix)
+- DB snapshot state (for non-buffered keys)
+
+The `data()` method correctly merges buffered descendants with snapshot state, so callers see accurate `HasDescendants` / `Both` status even before commit. This means lazy ancestor updates don't change observable behavior; they only batch what currently happens sequentially at commit.
+
 ### Implementation
 
 **Step 1:** Add ancestor tracking to `Transaction` in `transaction.rs`:
