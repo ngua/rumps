@@ -5,6 +5,7 @@ mod tests {
 
     use futures::{future, StreamExt};
     use rumps_types::{key, value, Value};
+    use smallvec::smallvec;
     use tokio::task;
 
     use crate::btree::*;
@@ -224,9 +225,9 @@ mod tests {
 
         let node_id = NodeId::from(100);
         let node = Node {
-            keys: vec![key![10], key![20], key![30], key![40], key![50]],
-            children: vec![],
-            values: vec![
+            keys: smallvec![key![10], key![20], key![30], key![40], key![50]],
+            children: smallvec![],
+            values: smallvec![
                 Arc::new(NodeData::with_value(value!(10))),
                 Arc::new(NodeData::with_value(value!(20))),
                 Arc::new(NodeData::with_value(value!(30))),
@@ -272,9 +273,9 @@ mod tests {
         let sep_val = Arc::new(NodeData::with_value(value!(30)));
 
         let left_node = Node {
-            keys: vec![key![10], key![20]],
-            children: vec![],
-            values: vec![
+            keys: smallvec![key![10], key![20]],
+            children: smallvec![],
+            values: smallvec![
                 Arc::new(NodeData::with_value(value!(10))),
                 Arc::new(NodeData::with_value(value!(20))),
             ],
@@ -282,9 +283,9 @@ mod tests {
         };
 
         let right_node = Node {
-            keys: vec![key![40], key![50]],
-            children: vec![],
-            values: vec![
+            keys: smallvec![key![40], key![50]],
+            children: smallvec![],
+            values: smallvec![
                 Arc::new(NodeData::with_value(value!(40))),
                 Arc::new(NodeData::with_value(value!(50))),
             ],

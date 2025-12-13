@@ -1553,10 +1553,11 @@ impl BTree {
                 // Allocate ID for the new right node
                 let right_id = self.allocator.allocate().await?;
 
-                // Split keys efficiently using split_off
+                // Split keys using drain (SmallVec equivalent of split_off)
                 // keys = [0..mid, mid, mid+1..end]
-                // After split_off: keys = [0..mid, mid], right_keys = [mid+1..end]
-                let right_keys = keys.split_off(mid + 1);
+                // After drain: keys = [0..mid, mid], right_keys = [mid+1..end]
+                let right_keys: smallvec::SmallVec<_> =
+                    keys.drain(mid + 1..).collect();
                 // Pop the median from left side: keys = [0..mid]
                 let med_key = keys.pop().ok_or_else(|| {
                     StorageError::InvalidOperation(
@@ -1565,7 +1566,8 @@ impl BTree {
                 })?;
 
                 // Split values the same way and extract median value
-                let right_vals = values.split_off(mid + 1);
+                let right_vals: smallvec::SmallVec<_> =
+                    values.drain(mid + 1..).collect();
                 let med_val = values.pop().ok_or_else(|| {
                     StorageError::InvalidOperation(
                         "Failed to extract median value".to_string(),
@@ -1576,10 +1578,10 @@ impl BTree {
                 // For n keys, there are n+1 children
                 // Left node (mid keys) needs mid+1 children: [0..=mid]
                 // Right node needs remaining children: [mid+1..end]
-                let right_children = if is_leaf {
-                    Vec::new()
+                let right_children: smallvec::SmallVec<_> = if is_leaf {
+                    smallvec::SmallVec::new()
                 } else {
-                    children.split_off(mid + 1)
+                    children.drain(mid + 1..).collect()
                 };
 
                 // Create the right node
@@ -1833,9 +1835,9 @@ impl BTree {
             // Create new root with the median
             let new_root_id = self.allocator.allocate().await?;
             let new_root_node = Node {
-                keys: vec![med_key],
-                children: vec![root, right_id],
-                values: vec![Arc::clone(&med_val)],
+                keys: smallvec::smallvec![med_key],
+                children: smallvec::smallvec![root, right_id],
+                values: smallvec::smallvec![Arc::clone(&med_val)],
                 is_leaf: false,
             };
 

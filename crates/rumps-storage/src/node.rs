@@ -40,6 +40,20 @@ use rumps_types::{Key, Value};
 use serde::de::{self, Deserializer, Visitor};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
+
+/// Inline capacity for node vectors. For `min_degree=3`, max keys = `2*3-1 = 5`.
+/// Use `8` for headroom with larger degrees. Re-exported as [`Node::INLINE_CAP`].
+const INLINE_CAP: usize = 8;
+
+/// Keys stored in a B-tree node; inlined up to [`Node::INLINE_CAP`].
+pub(crate) type KeyVec = SmallVec<[Key; INLINE_CAP]>;
+
+/// Values stored in a B-tree node; inlined up to [`Node::INLINE_CAP`].
+pub(crate) type ValueVec = SmallVec<[Arc<NodeData>; INLINE_CAP]>;
+
+/// Child pointers in a B-tree node; `children = keys + 1`.
+pub(crate) type ChildVec = SmallVec<[NodeId; INLINE_CAP + 1]>;
 
 /// Identifier for a node in the B-tree.
 ///
@@ -136,11 +150,11 @@ impl fmt::Display for NodeId {
 #[serde(from = "NodeRaw", into = "NodeRaw")]
 pub(crate) struct Node {
     /// Complete key paths (sorted) stored in this node
-    pub(crate) keys: Vec<Key>,
+    pub(crate) keys: KeyVec,
     /// References to child nodes (empty for leaf nodes)
-    pub(crate) children: Vec<NodeId>,
+    pub(crate) children: ChildVec,
     /// Data associated with each key, wrapped in `Arc` for cheap cloning.
-    pub(crate) values: Vec<Arc<NodeData>>,
+    pub(crate) values: ValueVec,
     /// Whether this is a leaf node (no children)
     pub(crate) is_leaf: bool,
 }
@@ -148,8 +162,8 @@ pub(crate) struct Node {
 impl From<NodeRaw> for Node {
     fn from(raw: NodeRaw) -> Self {
         Self {
-            keys: raw.keys,
-            children: raw.children,
+            keys: raw.keys.into_iter().collect(),
+            children: raw.children.into_iter().collect(),
             values: raw.values.into_iter().map(Arc::new).collect(),
             is_leaf: raw.is_leaf,
         }
@@ -157,6 +171,9 @@ impl From<NodeRaw> for Node {
 }
 
 impl Node {
+    /// Inline capacity for `SmallVec` fields (`keys`, `values`, `children`).
+    pub(crate) const INLINE_CAP: usize = INLINE_CAP;
+
     /// Creates a new empty leaf node.
     ///
     /// # Examples
@@ -171,9 +188,9 @@ impl Node {
     /// ```
     pub(crate) fn new_leaf() -> Self {
         Self {
-            keys: Vec::new(),
-            children: Vec::new(),
-            values: Vec::new(),
+            keys: SmallVec::new(),
+            children: SmallVec::new(),
+            values: SmallVec::new(),
             is_leaf: true,
         }
     }
@@ -191,9 +208,9 @@ impl Node {
     /// ```
     pub(crate) fn new_internal() -> Self {
         Self {
-            keys: Vec::new(),
-            children: Vec::new(),
-            values: Vec::new(),
+            keys: SmallVec::new(),
+            children: SmallVec::new(),
+            values: SmallVec::new(),
             is_leaf: false,
         }
     }
@@ -256,8 +273,8 @@ impl Node {
     /// ```
     pub(crate) fn serialized_size(&self) -> usize {
         let raw = NodeRaw {
-            keys: self.keys.clone(),
-            children: self.children.clone(),
+            keys: self.keys.to_vec(),
+            children: self.children.to_vec(),
             values: self.values.iter().map(|a| (**a).clone()).collect(),
             is_leaf: self.is_leaf,
         };
@@ -645,8 +662,8 @@ pub(crate) struct NodeRaw {
 impl From<Node> for NodeRaw {
     fn from(node: Node) -> Self {
         Self {
-            keys: node.keys,
-            children: node.children,
+            keys: node.keys.into_vec(),
+            children: node.children.into_vec(),
             values: node
                 .values
                 .into_iter()
@@ -663,6 +680,7 @@ impl From<Node> for NodeRaw {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use rumps_types::{key, value};
+    use smallvec::smallvec;
 
     use super::*;
 
@@ -1061,9 +1079,9 @@ mod tests {
     #[test]
     fn test_node_serialized_size_matches_actual() {
         let node = Node {
-            keys: vec![key![123, "NAME"], key![124, "NAME"]],
-            children: vec![],
-            values: vec![
+            keys: smallvec![key![123, "NAME"], key![124, "NAME"]],
+            children: smallvec![],
+            values: smallvec![
                 Arc::new(NodeData::with_value(value!("John"))),
                 Arc::new(NodeData::with_value(value!("Jane"))),
             ],
@@ -1127,13 +1145,13 @@ mod tests {
     #[test]
     fn test_node_serialized_size_internal_with_children() {
         let internal = Node {
-            keys: vec![key![100], key![200]],
-            children: vec![
+            keys: smallvec![key![100], key![200]],
+            children: smallvec![
                 NodeId::from(1u64),
                 NodeId::from(2u64),
                 NodeId::from(3u64),
             ],
-            values: vec![
+            values: smallvec![
                 Arc::new(NodeData::empty()),
                 Arc::new(NodeData::empty()),
             ],
@@ -1171,9 +1189,9 @@ mod tests {
         #[test]
         fn roundtrip_leaf_with_data() {
             let node = Node {
-                keys: vec![key![123, "NAME"], key![124, "DOB"]],
-                children: vec![],
-                values: vec![
+                keys: smallvec![key![123, "NAME"], key![124, "DOB"]],
+                children: smallvec![],
+                values: smallvec![
                     Arc::new(NodeData::with_value(value!("John"))),
                     Arc::new(NodeData::with_value(value!("1980"))),
                 ],
@@ -1187,14 +1205,14 @@ mod tests {
         #[test]
         fn roundtrip_internal_with_children() {
             let node = Node {
-                keys: vec![key![100], key![200], key![300]],
-                children: vec![
+                keys: smallvec![key![100], key![200], key![300]],
+                children: smallvec![
                     NodeId::from(10u64),
                     NodeId::from(20u64),
                     NodeId::from(30u64),
                     NodeId::from(40u64),
                 ],
-                values: vec![
+                values: smallvec![
                     Arc::new(NodeData::with_descendants()),
                     Arc::new(NodeData::with_descendants()),
                     Arc::new(NodeData::with_descendants()),
@@ -1209,7 +1227,7 @@ mod tests {
         #[test]
         fn roundtrip_all_value_types() {
             let node = Node {
-                keys: vec![
+                keys: smallvec![
                     key!["bool"],
                     key!["int"],
                     key!["float"],
@@ -1217,8 +1235,8 @@ mod tests {
                     key!["string"],
                     key!["json"],
                 ],
-                children: vec![],
-                values: vec![
+                children: smallvec![],
+                values: smallvec![
                     Arc::new(NodeData::with_value(value!(true))),
                     Arc::new(NodeData::with_value(value!(-42))),
                     Arc::new(NodeData::with_value(value!(3.14159))),
@@ -1238,14 +1256,14 @@ mod tests {
         #[test]
         fn roundtrip_all_nodedata_states() {
             let node = Node {
-                keys: vec![
+                keys: smallvec![
                     key!["empty"],
                     key!["intermediate"],
                     key!["leaf"],
                     key!["both"],
                 ],
-                children: vec![],
-                values: vec![
+                children: smallvec![],
+                values: smallvec![
                     Arc::new(NodeData::empty()),
                     Arc::new(NodeData::with_descendants()),
                     Arc::new(NodeData::with_value(value!(1))),
@@ -1261,12 +1279,12 @@ mod tests {
         #[test]
         fn roundtrip_deep_keys() {
             let node = Node {
-                keys: vec![
+                keys: smallvec![
                     key!["l1", "l2", "l3", "l4", "l5"],
                     key![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
                 ],
-                children: vec![],
-                values: vec![
+                children: smallvec![],
+                values: smallvec![
                     Arc::new(NodeData::with_value(value!("deep"))),
                     Arc::new(NodeData::with_value(value!(12345))),
                 ],
@@ -1293,9 +1311,9 @@ mod tests {
         #[test]
         fn truncated_bytes_error() {
             let node = Node {
-                keys: vec![key!["test"]],
-                children: vec![],
-                values: vec![Arc::new(NodeData::with_value(value!(42)))],
+                keys: smallvec![key!["test"]],
+                children: smallvec![],
+                values: smallvec![Arc::new(NodeData::with_value(value!(42)))],
                 is_leaf: true,
             };
             let bytes = bincode::serialize(&node).unwrap();
