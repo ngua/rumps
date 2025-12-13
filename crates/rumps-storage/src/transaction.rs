@@ -1233,28 +1233,35 @@ pub struct Transaction {
 impl Transaction {
     /// Gets a value from the database within this transaction's context.
     ///
-    /// Checks the write buffer first for pending changes, then delegates
-    /// to the database if not found in the buffer.
+    /// Checks the write buffer for pending changes, respects killed subtrees,
+    /// then delegates to the database if not found in the buffer.
     ///
     /// # Transaction Semantics
     ///
-    /// - Reads see buffered writes from this transaction
-    /// - Reads respect deleted subtrees
+    /// - Keys under killed subtrees return `None` (consistent with `collects`)
+    /// - Otherwise, buffered writes take precedence over snapshot
     /// - Reads are tracked in the read set for conflict detection
     pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
         let lookup_key = (name.clone(), key.clone());
 
-        // Check write buffer first
-        let buffered = {
-            let writes = self.writes.read().await;
-            writes.get(&lookup_key).cloned()
-        };
+        let writes = self.writes.read().await;
+        let deleted = self.deleted_subtrees.read().await;
 
-        match buffered {
-            Some(WriteOp::Set(data)) => {
-                // Track read
-                self.read_set.write().await.insert(lookup_key.clone());
-                data.value
+        // Check if key is masked by a killed subtree
+        let is_killed = deleted
+            .iter()
+            .any(|(n, del)| n == name && key.starts_with(del));
+
+        // Track read
+        self.read_set.write().await.insert(lookup_key.clone());
+
+        if is_killed {
+            // Key is under a killed subtree; return None
+            Ok(None)
+        } else {
+            match writes.get(&lookup_key) {
+                Some(WriteOp::Set(data)) => data
+                    .value
                     .clone()
                     .map(Some)
                     .ok_or_else(|| {
@@ -1262,29 +1269,9 @@ impl Transaction {
                             "Buffered set has no value".into(),
                         )
                     })
-                    .map_err(Into::into)
-            }
-            Some(WriteOp::Delete | WriteOp::KillSubtree) => {
-                // Track read
-                self.read_set.write().await.insert(lookup_key);
-                Ok(None)
-            }
-            None => {
-                // Check if key is in a deleted subtree
-                let deleted = self.deleted_subtrees.read().await;
-                let is_deleted = deleted.iter().any(|(del_name, del_key)| {
-                    del_name == name && key.starts_with(del_key)
-                });
-
-                // Track read
-                self.read_set.write().await.insert(lookup_key);
-
-                if is_deleted {
-                    Ok(None)
-                } else {
-                    // Delegate to database (snapshot read)
-                    self.db.get(name, key).await
-                }
+                    .map_err(Into::into),
+                Some(WriteOp::Delete | WriteOp::KillSubtree) => Ok(None),
+                None => self.db.get(name, key).await,
             }
         }
     }
