@@ -58,14 +58,14 @@ mod tests {
     #[tokio::test]
     async fn test_btree_initial_state() {
         let btree = BTreeBuilder::default().min_degree(4).build().unwrap();
-        assert_eq!(btree.node_count().await, 0);
+        assert_eq!(btree.node_count(), 0);
         assert_eq!(btree.allocator.peek_next().await, NodeId::from(0));
     }
 
     #[tokio::test]
     async fn test_btree_node_count() {
         let btree = BTreeBuilder::default().build().unwrap();
-        assert_eq!(btree.node_count().await, 0);
+        assert_eq!(btree.node_count(), 0);
     }
 
     #[tokio::test]
@@ -100,7 +100,7 @@ mod tests {
                 let btree_clone = Arc::clone(&btree);
                 task::spawn(async move {
                     future::join_all((0..100).map(|_| async {
-                        let _count = btree_clone.node_count().await;
+                        let _count = btree_clone.node_count();
                         let _stats = btree_clone.stats().await;
                     }))
                     .await;
@@ -117,15 +117,15 @@ mod tests {
 
         // Insert a node
         let node_id = NodeId::from(1);
-        btree.nodes.insert(node_id, Node::new_leaf()).await;
+        btree.nodes.insert(node_id, Node::new_leaf());
 
         // Concurrent reads should work
         let btree_clone = Arc::clone(&btree);
         let read_task =
-            tokio::spawn(async move { btree_clone.nodes.get(node_id).await });
+            tokio::spawn(async move { btree_clone.nodes.get(node_id) });
 
-        let local_read = btree.nodes.get(node_id).await;
-        let spawned_read = read_task.await.unwrap();
+        let local_read = btree.nodes.get(node_id);
+        let spawned_read: Option<Arc<Node>> = read_task.await.unwrap();
 
         assert!(local_read.is_some());
         assert!(spawned_read.is_some());
@@ -136,7 +136,7 @@ mod tests {
         let btree = BTreeBuilder::default().build().unwrap();
         let root = btree.create_tree().await.unwrap();
 
-        assert_eq!(btree.node_count().await, 1);
+        assert_eq!(btree.node_count(), 1);
         #[cfg(feature = "debug")]
         {
             let stats = btree.stats().await;
@@ -160,7 +160,7 @@ mod tests {
         // Each tree gets its own root
         assert_ne!(root1, root2);
         assert_ne!(root2, root3);
-        assert_eq!(btree.node_count().await, 3);
+        assert_eq!(btree.node_count(), 3);
     }
 
     #[tokio::test]
@@ -179,12 +179,12 @@ mod tests {
             .await
             .unwrap();
 
-        let node_count_before = btree.node_count().await;
+        let node_count_before = btree.node_count();
         assert!(node_count_before >= 1);
 
         let freed = btree.delete_tree(r).await.unwrap();
         assert!(freed >= 1);
-        assert_eq!(btree.node_count().await, 0);
+        assert_eq!(btree.node_count(), 0);
     }
 
     #[tokio::test]
@@ -209,7 +209,7 @@ mod tests {
         let node_id = NodeId::from(1);
         let test_node = Node::new_leaf();
 
-        btree.nodes.insert(node_id, test_node.clone()).await;
+        btree.nodes.insert(node_id, test_node.clone());
 
         let result = btree.find_node(node_id).await;
         assert!(result.is_ok());
@@ -236,7 +236,7 @@ mod tests {
             is_leaf: true,
         };
 
-        btree.nodes.insert(node_id, node).await;
+        btree.nodes.insert(node_id, node);
 
         let result = btree.split_node(node_id).await;
         assert!(result.is_ok());
@@ -291,8 +291,8 @@ mod tests {
             is_leaf: true,
         };
 
-        btree.nodes.insert(left_id, left_node).await;
-        btree.nodes.insert(right_id, right_node).await;
+        btree.nodes.insert(left_id, left_node);
+        btree.nodes.insert(right_id, right_node);
 
         btree
             .merge_nodes(left_id, sep_key, sep_val, right_id)
