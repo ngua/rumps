@@ -140,7 +140,7 @@ fn bench_set_batch(c: &mut Criterion) {
     group.measurement_time(std::time::Duration::from_secs(15));
 
     MODES.iter().for_each(|&mode| {
-        [10i64, 100].iter().for_each(|&batch_size| {
+        [100i64, 1_000, 10_000].iter().for_each(|&batch_size| {
             group.throughput(Throughput::Elements(batch_size as u64));
             group.bench_function(format!("{mode}/{batch_size}_ops"), |b| {
                 b.iter_batched(
@@ -545,7 +545,7 @@ fn bench_sync_mode_set_batch(c: &mut Criterion) {
     ];
 
     modes.iter().for_each(|(label, sync)| {
-        [100i64, 1000].iter().for_each(|&batch_size| {
+        [100i64, 1_000, 10_000].iter().for_each(|&batch_size| {
             group.throughput(Throughput::Elements(batch_size as u64));
             group.bench_function(format!("{label}/{batch_size}_ops"), |b| {
                 b.iter_batched(

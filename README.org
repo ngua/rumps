@@ -329,10 +329,10 @@ Note that =SyncMode::Relaxed= does /not/ follow the durability sequence outlined
 ***** Performance and durability
 RUMPS achieves solid write throughput with full durability guarantees (with NVMe, ZFS, =SyncMode::OnCommit=):
 
-| *Workload*                        | *Throughput*    |
-|-----------------------------------+-----------------|
-| Single global (sequential writes) | ~40-60 Kelem/s  |
-| Multi-global (100 globals)        | ~90-110 Kelem/s |
+| *Workload*                        | *Throughput* |
+|-----------------------------------+--------------|
+| Single global (sequential writes) | ~60 Kelem/s  |
+| Multi-global (100 globals)        | ~110 Kelem/s |
 
 These numbers are with =SyncMode::OnCommit= (the default), meaning every transaction commit includes an =fsync= to the WAL. Using RUMPS' default settings, when =transaction()= returns =Ok=, /the data is really on disk/.
 
@@ -347,7 +347,7 @@ Multi-global writes benefit from RUMPS's sharded node cache: writes to different
 Whether =Relaxed= improves throughput depends on your environment. On fast NVMe drives, =fsync= can complete in microseconds, making =Relaxed= indistinguishable from =OnCommit=. On slower storage (HDDs, network-attached storage, cloud block devices), the difference can be significant.
 
 You may want to use =Relaxed= when:
-- *Batch imports*: Loading data from an authoritative source you can replay if needed
+- *Batch imports*: Loading data from an authoritative source you can replay if needed (e.g. see [[./crates/rumps/examples/financial.rs][this example]])
 - *Rebuild-able indices*: Secondary data derived from a durable primary
 - *Dev/test environments*: Speed matters more than crash safety
 - *Analytics workloads*: Read-heavy with occasional writes you can afford to lose
@@ -715,18 +715,18 @@ RUMPS requires =std= and =tokio=. For microcontrollers or =no_std= environments,
 RUMPS is experimental and under active development. For production systems that need battle-tested reliability, use established alternatives.
 * RUMPS vs SQL
 ** Key differences
-| *Aspect*           | *RUMPS*                                                   | *SQL*                                         |
-|--------------------+-----------------------------------------------------------+-----------------------------------------------|
-| Data model         | Hierarchical sparse trees (globals)                       | Relational tables with rows/columns           |
-| Schema             | Schema-less; structure emerges from keys                  | Strict schema defined upfront                 |
-| Query model        | Tree-navigation primitives (=ORDER=, =COLLECT=)           | Declarative set operations (=SELECT=, =JOIN=) |
-| Keys               | Compound subscript paths (e.g., =^PATIENT(123,"NAME")=)   | Primary/foreign key relationships             |
-| Joins              | Hierarchical nesting eliminates most joins                | Explicit =JOIN= operations required           |
-| Node structure     | Nodes can have /both/ a value AND children simultaneously | Cells hold single values only                 |
-| Storage            | Unified key-value B-tree; one structure for everything    | Separate tables, each with own storage        |
-| Iteration          | Stream-based (=COLLECT=) or tree traversal (=ORDER=)      | Set-based =WHERE= clauses                     |
-| Collation          | Extended: =bool= < =number= < =string= (=10= < =100=)     | Type-specific; string ="10"= > ="100"=        |
-| Namespaces         | Globals (=^NAME=) vs Locals (=NAME=)                      | Tables within schemas/databases               |
+| *Aspect*       | *RUMPS*                                                   | *SQL*                                         |
+|----------------+-----------------------------------------------------------+-----------------------------------------------|
+| Data model     | Hierarchical sparse trees (globals)                       | Relational tables with rows/columns           |
+| Schema         | Schema-less; structure emerges from keys                  | Strict schema defined upfront                 |
+| Query model    | Tree-navigation primitives (=ORDER=, =COLLECT=)           | Declarative set operations (=SELECT=, =JOIN=) |
+| Keys           | Compound subscript paths (e.g., =^PATIENT(123,"NAME")=)   | Primary/foreign key relationships             |
+| Joins          | Hierarchical nesting eliminates most joins                | Explicit =JOIN= operations required           |
+| Node structure | Nodes can have /both/ a value AND children simultaneously | Cells hold single values only                 |
+| Storage        | Unified key-value B-tree; one structure for everything    | Separate tables, each with own storage        |
+| Iteration      | Stream-based (=COLLECT=) or tree traversal (=ORDER=)      | Set-based =WHERE= clauses                     |
+| Collation      | Extended: =bool= < =number= < =string= (=10= < =100=)     | Type-specific; string ="10"= > ="100"=        |
+| Namespaces     | Globals (=^NAME=) vs Locals (=NAME=)                      | Tables within schemas/databases               |
 
 ** Similarities
 Despite the different paradigms, RUMPS and SQL share several capabilities:
