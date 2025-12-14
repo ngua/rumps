@@ -167,7 +167,7 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
 
 Uses **arena allocation** (like the AST) for cache efficiency and to avoid `Box` in recursive structures. Strings are **interned** to avoid duplication and enable O(1) comparison. A **type registry** enables runtime type validation, `is` checks, and clear error messages.
 
-- [ ] Define arena, interning, and type registry:
+- [x] Define arena, interning, and type registry:
   ```rust
   #[derive(Clone, Copy, Debug, PartialEq, Eq)]
   pub struct ValueId(u32);
@@ -177,6 +177,12 @@ Uses **arena allocation** (like the AST) for cache efficiency and to avoid `Box`
 
   #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
   pub struct TypeId(u32);
+
+  impl TypeId {
+      // Reserved indices for built-in sum types
+      pub const OPTION: Self = Self(6);
+      pub const RESULT: Self = Self(7);
+  }
 
   pub struct ValueArena {
       values: Vec<Value>,
@@ -188,6 +194,11 @@ Uses **arena allocation** (like the AST) for cache efficiency and to avoid `Box`
   pub struct TypeRegistry {
       defs: Vec<TypeDef>,
       by_name: HashMap<StringId, TypeId>,
+  }
+
+  impl TypeRegistry {
+      // Builtins registered at construction; validates reserved indices
+      pub fn new(arena: &mut ValueArena) -> Result<Self>;
   }
 
   pub enum TypeDef {
@@ -208,14 +219,23 @@ Uses **arena allocation** (like the AST) for cache efficiency and to avoid `Box`
       idx: u8,
       arity: u8,  // payload count
   }
+  ```
+- [x] Define type expression arena (for annotations; not stored in values):
+  ```rust
+  #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+  pub struct TypeExprId(u32);
 
-  // For type annotations (not stored in values; used for validation)
-  pub enum TypeExpr {
+  pub struct TypeExprArena {
+      exprs: Vec<TypeExpr>,
+  }
+
+  enum TypeExpr {
       Named(TypeId),
-      App(TypeId, SmallVec<[TypeExpr; 2]>),  // e.g., Result[Int, String]
+      App(TypeId, SmallVec<[TypeExprId; 2]>),  // e.g., Result[Int, String]
   }
   ```
-- [ ] Define `Value` enum (references use `ValueId`/`TypeId`):
+  **Note**: `TypeExprArena` was added to use indices (`TypeExprId`) instead of `Box<TypeExpr>` in `TypeExpr::App`, consistent with our arena allocation pattern. This avoids heap allocation for nested type expressions like `Result[Option[Int], String]`.
+- [x] Define `Value` enum (references use `ValueId`/`TypeId`):
   - `Bool(bool)`
   - `Int(i64)`
   - `Float(f64)`
@@ -224,16 +244,16 @@ Uses **arena allocation** (like the AST) for cache efficiency and to avoid `Box`
   - `Object(HashMap<StringId, ValueId>)`
   - `Tagged(TypeId, u8, SmallVec<[ValueId; 2]>)` (sum type, variant index, payloads)
   - Note: No `None` variant; use `Option.None` via `Tagged(OPTION_TYPE_ID, 0, [])`
-- [ ] Implement `TypeRegistry` methods:
+- [x] Implement `TypeRegistry` methods:
   - `get_def(TypeId) -> &TypeDef`
   - `type_name(TypeId) -> StringId` (for error messages)
   - `variant_name(TypeId, u8) -> StringId` (for error messages)
   - `lookup(StringId) -> Option<TypeId>`
-- [ ] Register built-in types at startup:
+- [x] Register built-in types at startup:
   - Primitives via `BuiltinType`: Bool, Int, Float, String, Array, Object
   - Sum types: `Option` (variants: `None`, `Some`), `Result` (variants: `Ok`, `Err`)
-- [ ] Implement `Display` for values (uses registry for Tagged variant names)
-- [ ] Implement type coercion rules (conservative: into strings, between numerics)
+- [x] Implement `Display` for values (uses registry for Tagged variant names)
+- [x] Implement type coercion rules (conservative: into strings, between numerics)
 
 ### 8. Environment
 
@@ -381,21 +401,25 @@ pub struct VariantDef { name: StringId, idx: u8, arity: u8 }
 // BuiltinType covers primitives only; Option/Result are sum types
 pub enum BuiltinType { Bool, Int, Float, String, Array, Object }
 
-// For annotations only; not stored in values
-pub enum TypeExpr {
+// For annotations only; not stored in values; arena-allocated
+pub struct TypeExprId(u32);
+pub struct TypeExprArena { exprs: Vec<TypeExpr> }
+enum TypeExpr {
     Named(TypeId),
-    App(TypeId, SmallVec<[TypeExpr; 2]>),  // e.g., Result[Int, String]
+    App(TypeId, SmallVec<[TypeExprId; 2]>),  // e.g., Result[Int, String]
 }
 ```
 
-**No `Value::None`**: Instead of a special `None` primitive, we use `Option.None` represented as `Tagged(OPTION_TYPE_ID, 0, [])`. This is consistent with `Option` being a proper sum type. `GET(...)` returns `Option.Some(v)` or `Option.None`; `??` operates on `Option` types.
+**No `Value::None`**: Instead of a special `None` primitive, we use `Option.None` represented as `Tagged(TypeId::OPTION, 0, [])`. This is consistent with `Option` being a proper sum type. `GET(...)` returns `Option.Some(v)` or `Option.None`; `??` operates on `Option` types.
+
+**Reserved `TypeId` constants**: `TypeId::OPTION` (6) and `TypeId::RESULT` (7) are compile-time constants. Builtins are registered in a fixed order (Bool, Int, Float, String, Array, Object, Option, Result), and `TypeRegistry::new()` validates the indices match. This avoids storing `Option<TypeId>` fields and simplifies `Value::none()`, `Value::some(v)`, etc., which can use the constants directly without needing a registry reference.
 
 **Why `TypeId` instead of `StringId` for sum types?**
 - O(1) type comparison (compare `u32` vs string lookup)
 - Enables exhaustiveness checking (registry knows all variants)
 - Clear error messages via `type_name()`/`variant_name()` lookups
 
-**Type applications** (`Array[Int]`, `Result[T, E]`): Represented as `TypeExpr::App(base, params)`. Values store only the base `TypeId`; type parameters live in annotations and are validated against actual payload types at runtime. This avoids monomorphization (type explosion) while preserving full type checking.
+**Type applications** (`Array[Int]`, `Result[T, E]`): Represented as `TypeExpr::App(base, params)` within a `TypeExprArena`. The arena uses `TypeExprId` indices instead of `Box<TypeExpr>` for nested types, consistent with our arena pattern. Values store only the base `TypeId`; type parameters live in annotations and are validated against actual payload types at runtime. This avoids monomorphization (type explosion) while preserving full type checking.
 
 **Why `SmallVec`?** Most type-related collections are small:
 - Type params: 0-2 (`Option[T]`, `Result[T, E]`)

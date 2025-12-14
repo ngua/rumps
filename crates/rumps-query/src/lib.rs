@@ -8,16 +8,16 @@ mod lexer;
 mod parser;
 mod span;
 mod token;
+mod value;
 
 // Future modules (Phase 1 continued):
-// mod value;
 // mod env;
 // mod interpreter;
 
 #[allow(unused_imports)]
 pub(crate) use ast::{Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, UnOp};
 #[allow(unused_imports)]
-pub(crate) use error::{Error, ErrorDisplay};
+pub(crate) use error::{Error, ErrorDisplay, Result};
 #[allow(unused_imports)]
 pub(crate) use lexer::{Lexer, Spanned};
 #[allow(unused_imports)]
@@ -26,3 +26,8 @@ pub(crate) use parser::{ParseResult, Parser};
 pub(crate) use span::Span;
 #[allow(unused_imports)]
 pub(crate) use token::Token;
+#[allow(unused_imports)]
+pub(crate) use value::{
+    StringId, TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value,
+    ValueArena, ValueId,
+};

@@ -9,6 +9,9 @@ use thiserror::Error;
 
 use crate::{Span, Token};
 
+/// Crate-wide result type.
+pub(crate) type Result<T> = std::result::Result<T, Error>;
+
 /// Errors produced during lexing, parsing, or interpretation.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum Error {
@@ -24,6 +27,13 @@ pub(crate) enum Error {
 
     #[error("runtime error{}: {msg}", fmt_span(span))]
     Runtime { span: Option<Span>, msg: String },
+
+    #[error("cannot coerce {from} to {to}: {msg}")]
+    Coercion {
+        from: &'static str,
+        to: &'static str,
+        msg: String,
+    },
 }
 
 fn fmt_expected(expected: &[String]) -> String {
@@ -70,10 +80,23 @@ impl Error {
         }
     }
 
+    pub(crate) fn coercion(
+        from: &'static str,
+        to: &'static str,
+        msg: impl Into<String>,
+    ) -> Self {
+        Self::Coercion {
+            from,
+            to,
+            msg: msg.into(),
+        }
+    }
+
     pub(crate) fn span(&self) -> Option<Span> {
         match self {
             Self::Lex { span, .. } | Self::Parse { span, .. } => Some(*span),
             Self::Runtime { span, .. } => *span,
+            Self::Coercion { .. } => None,
         }
     }
 
@@ -133,6 +156,9 @@ impl fmt::Display for ErrorDisplay<'_> {
             }
             Error::Runtime { span: None, msg } => {
                 write!(f, "runtime error: {msg}")
+            }
+            Error::Coercion { from, to, msg } => {
+                write!(f, "cannot coerce {from} to {to}: {msg}")
             }
         }
     }
