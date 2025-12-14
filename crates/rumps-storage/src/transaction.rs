@@ -87,8 +87,6 @@ where
     pred: P,
     /// Start key for filtering.
     start: Option<Key>,
-    /// Deleted subtrees to skip.
-    deleted_subtrees: Vec<Key>,
     /// The snapshot stream yielding `(Key, T)` pairs (lazy, unbounded).
     snapshot: BoxStream<'a, crate::error::Result<(Key, T)>>,
     /// Next snapshot entry to consider.
@@ -104,9 +102,9 @@ where
 {
     /// Advances to the next buffered entry using O(log n) range lookup.
     ///
-    /// Unlike the previous implementation, this includes ALL write ops
-    /// (Set, Delete, KillSubtree) so the merge logic can properly hide
-    /// snapshot entries without per-entry `is_buffered` checks.
+    /// Includes ALL write ops (Set, Delete, KillSubtree) so the merge logic
+    /// can properly hide snapshot entries. Buffered Sets are always visible,
+    /// even under killed subtrees (sets after kills take precedence).
     fn advance_buffered(&mut self) {
         let range_start = match &self.last_buffered_key {
             None => Bound::Included((self.name.clone(), Key::default())),
@@ -128,17 +126,10 @@ where
                     if after_start {
                         match op {
                             WriteOp::Set(data) => {
-                                // Check if in deleted subtree
-                                let in_deleted = self
-                                    .deleted_subtrees
-                                    .iter()
-                                    .any(|del| k.starts_with(del));
-
-                                let val = (!in_deleted
-                                    && (self.pred)(k, &data.value))
-                                .then(|| (self.extract)(k, &data.value))
-                                .flatten();
-
+                                // Buffered Sets are always visible; apply pred
+                                let val = (self.pred)(k, &data.value)
+                                    .then(|| (self.extract)(k, &data.value))
+                                    .flatten();
                                 Some((k.clone(), val))
                             }
                             WriteOp::Delete | WriteOp::KillSubtree => {
@@ -1233,45 +1224,48 @@ pub struct Transaction {
 impl Transaction {
     /// Gets a value from the database within this transaction's context.
     ///
-    /// Checks the write buffer for pending changes, respects killed subtrees,
-    /// then delegates to the database if not found in the buffer.
+    /// Checks the write buffer for pending changes, then delegates to the
+    /// database if not found in the buffer.
     ///
     /// # Transaction Semantics
     ///
-    /// - Keys under killed subtrees return `None` (consistent with `collects`)
-    /// - Otherwise, buffered writes take precedence over snapshot
+    /// - Buffered writes always take precedence (sets after kills are visible)
+    /// - Keys under killed subtrees return `None` only if not in write buffer
     /// - Reads are tracked in the read set for conflict detection
     pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
         let lookup_key = (name.clone(), key.clone());
 
-        let writes = self.writes.read().await;
-        let deleted = self.deleted_subtrees.read().await;
-
-        // Check if key is masked by a killed subtree
-        let is_killed = deleted
-            .iter()
-            .any(|(n, del)| n == name && key.starts_with(del));
-
         // Track read
         self.read_set.write().await.insert(lookup_key.clone());
 
-        if is_killed {
-            // Key is under a killed subtree; return None
-            Ok(None)
-        } else {
-            match writes.get(&lookup_key) {
-                Some(WriteOp::Set(data)) => data
-                    .value
-                    .clone()
-                    .map(Some)
-                    .ok_or_else(|| {
-                        StorageError::InvalidConfiguration(
-                            "Buffered set has no value".into(),
-                        )
-                    })
-                    .map_err(Into::into),
-                Some(WriteOp::Delete | WriteOp::KillSubtree) => Ok(None),
-                None => self.db.get(name, key).await,
+        // Check write buffer first; buffered writes always take precedence
+        let writes = self.writes.read().await;
+        match writes.get(&lookup_key) {
+            Some(WriteOp::Set(data)) => data
+                .value
+                .clone()
+                .map(Some)
+                .ok_or_else(|| {
+                    StorageError::InvalidConfiguration(
+                        "Buffered set has no value".into(),
+                    )
+                })
+                .map_err(Into::into),
+            Some(WriteOp::Delete | WriteOp::KillSubtree) => Ok(None),
+            None => {
+                drop(writes);
+                // Check if key is under a killed subtree
+                let deleted = self.deleted_subtrees.read().await;
+                let is_killed = deleted
+                    .iter()
+                    .any(|(n, del)| n == name && key.starts_with(del));
+
+                if is_killed {
+                    Ok(None)
+                } else {
+                    drop(deleted);
+                    self.db.get(name, key).await
+                }
             }
         }
     }
@@ -1331,85 +1325,66 @@ impl Transaction {
     ///
     /// # Semantics
     ///
-    /// - Buffered `Set` operations contribute to both value and descendant status
-    /// - Buffered `Kill`/`Delete` operations mask the key and its descendants
-    /// - Sets under killed subtrees are masked (consistent with `collects`)
+    /// - Buffered `Set` operations always contribute (sets after kills visible)
+    /// - Buffered `Kill`/`Delete` operations mask snapshot data
+    /// - Killed subtrees only affect snapshot reads, not buffered writes
     /// - Final status combines buffered state with snapshot state
     pub async fn data(&self, name: &Name, key: &Key) -> Result<DataStatus> {
         let writes = self.writes.read().await;
         let deleted = self.deleted_subtrees.read().await;
+        let lookup_key = (name.clone(), key.clone());
 
-        // A key is "killed" if it (or an ancestor) was killed in this txn.
-        // Killed keys return only buffered descendants added after the kill,
-        // but per current semantics, Sets under killed subtrees are masked.
-        let is_killed = |k: &Key| {
-            deleted
-                .iter()
-                .any(|(n, del)| n == name && k.starts_with(del))
-        };
+        // Check buffered state for this exact key
+        let buffered_has_val = matches!(
+            writes.get(&lookup_key),
+            Some(WriteOp::Set(d)) if d.value.is_some()
+        );
 
-        // Check for valid buffered descendants: Sets that are strict
-        // descendants of `key` and not under a killed subtree.
+        let explicitly_deleted = matches!(
+            writes.get(&lookup_key),
+            Some(WriteOp::Delete | WriteOp::KillSubtree)
+        );
+
+        // Check for buffered descendants: Sets that are strict descendants.
+        // Buffered Sets are always visible, even under killed subtrees.
         let has_buffered_desc = writes.iter().any(|((n, k), op)| {
             n == name
                 && k.starts_with(key)
                 && k.len() > key.len()
                 && matches!(op, WriteOp::Set(_))
-                && !is_killed(k)
         });
 
-        // If this key is killed, only buffered descendants matter
-        if is_killed(key) {
-            Ok(if has_buffered_desc {
-                DataStatus::HasDescendants
-            } else {
-                DataStatus::NoData
-            })
+        // A key is "killed" if it (or an ancestor) was killed in this txn.
+        // Killed subtrees only mask snapshot data, not buffered writes.
+        let is_killed = deleted
+            .iter()
+            .any(|(n, del)| n == name && key.starts_with(del));
+
+        // Determine snapshot contribution (masked by kills and explicit deletes)
+        let (snap_has_val, snap_has_desc) = if explicitly_deleted || is_killed {
+            (false, false)
         } else {
-            let lookup_key = (name.clone(), key.clone());
+            drop(writes);
+            drop(deleted);
+            let db_status = self.db.data(name, key).await?;
+            (
+                matches!(db_status, DataStatus::HasValue | DataStatus::Both),
+                matches!(
+                    db_status,
+                    DataStatus::HasDescendants | DataStatus::Both
+                ),
+            )
+        };
 
-            // Check buffered state for this exact key
-            let buffered_has_val = matches!(
-                writes.get(&lookup_key),
-                Some(WriteOp::Set(d)) if d.value.is_some()
-            );
+        let has_val = buffered_has_val || snap_has_val;
+        let has_desc = has_buffered_desc || snap_has_desc;
 
-            let explicitly_deleted = matches!(
-                writes.get(&lookup_key),
-                Some(WriteOp::Delete | WriteOp::KillSubtree)
-            );
-
-            if explicitly_deleted {
-                // Key deleted; only buffered descendants count
-                Ok(if has_buffered_desc {
-                    DataStatus::HasDescendants
-                } else {
-                    DataStatus::NoData
-                })
-            } else {
-                // Combine buffered state with DB snapshot
-                let db_status = self.db.data(name, key).await?;
-
-                let has_val = buffered_has_val
-                    || matches!(
-                        db_status,
-                        DataStatus::HasValue | DataStatus::Both
-                    );
-
-                let has_desc = has_buffered_desc
-                    || matches!(
-                        db_status,
-                        DataStatus::HasDescendants | DataStatus::Both
-                    );
-
-                Ok(match (has_val, has_desc) {
-                    (true, true) => DataStatus::Both,
-                    (true, false) => DataStatus::HasValue,
-                    (false, true) => DataStatus::HasDescendants,
-                    (false, false) => DataStatus::NoData,
-                })
-            }
-        }
+        Ok(match (has_val, has_desc) {
+            (true, true) => DataStatus::Both,
+            (true, false) => DataStatus::HasValue,
+            (false, true) => DataStatus::HasDescendants,
+            (false, false) => DataStatus::NoData,
+        })
     }
 
     /// Returns the next key in lexicographic order within this transaction's context.
@@ -1448,7 +1423,7 @@ impl Transaction {
         // Get owned guard for writes - O(1) memory, no collection
         let writes_guard = Arc::clone(&self.writes).read_owned().await;
 
-        // Build list of deleted subtrees for this name
+        // Build list of deleted subtrees for this name (for snapshot filtering)
         let deleted = self.deleted_subtrees.read().await;
         let deleted_list: Vec<Key> = deleted
             .iter()
@@ -1456,15 +1431,12 @@ impl Transaction {
             .collect();
         drop(deleted);
 
-        // Clone data for the predicate closure
-        let deleted_list_for_pred = deleted_list.clone();
+        // Create predicate that excludes killed keys from snapshot.
+        // Buffered writes are NOT filtered by kills (handled in MergeState).
         let pred_clone = pred.clone();
-
-        // Create predicate that excludes deleted keys (checks writes via guard)
         let pred_with_deletes = move |k: &Key, val: &Option<Value>| {
-            let in_deleted = deleted_list_for_pred
-                .iter()
-                .any(|del_key| k.starts_with(del_key));
+            let in_deleted =
+                deleted_list.iter().any(|del_key| k.starts_with(del_key));
 
             if in_deleted {
                 false
@@ -1505,7 +1477,6 @@ impl Transaction {
             extract,
             pred,
             start: start.cloned(),
-            deleted_subtrees: deleted_list,
             snapshot: snapshot_stream.boxed(),
             next_snapshot: None,
             snapshot_error: None,
