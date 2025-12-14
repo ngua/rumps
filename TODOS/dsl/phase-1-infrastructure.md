@@ -86,6 +86,9 @@ crates/rumps-query/
   - Special: `Newline`, `Indent`, `Dedent`, `Eof`
 
 ### 4. Lexer Implementation
+
+**Implementation**: Uses `chumsky` parser combinators for tokenization; produces `Vec<Spanned>` (token + span pairs). A post-processing pass adds `Indent`/`Dedent` tokens based on indentation changes. The same `chumsky` crate will be used for parsing tokens into AST (Phase 1.6).
+
 - [x] Implement whitespace handling (preserve for train-case detection)
 - [x] Implement indentation tracking (emit `Indent`/`Dedent` tokens for multi-line expressions)
 - [x] Implement comment skipping (`;` to newline)
