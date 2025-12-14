@@ -28,7 +28,7 @@ SET PATIENT-ID = 123
 ```
 
 **Reserved keywords** (cannot be used as variable names):
-`SET`, `GET`, `KILL`, `COLLECT`, `FUN`, `TRANSACTION`, `IF`, `ELSE`, `WHERE`, `SELECT`, `INTO`, `OUTPUT`, `INTO` etc.
+`LET`, `SET`, `GET`, `KILL`, `COLLECT`, `FUN`, `TRANSACTION`, `IF`, `ELSE`, `WHERE`, `SELECT`, `INTO`, `OUTPUT`, `INTO` etc.
 
 ### Train-Case Support
 
@@ -59,6 +59,65 @@ SET x = a-b                     ; ERROR: use spaces for subtraction
 - **Namespaces**: PascalCase (`Json`, `String`, `Math`)
 - **Types**: PascalCase (`Int`, `String`, `Array[T]`, `Option[T]`)
 - **Namespace functions**: PascalCase.train-case (`Json.parse`, `String.split`, `Math.sqrt`)
+
+## Variable Binding: `LET` vs `SET`
+
+RUMPS distinguishes between two kinds of variable binding with different semantics and performance characteristics.
+
+### `LET`: Simple Lexical Binding
+
+`LET` creates a simple, non-subscriptable binding in lexical scope. These bindings:
+- Are **synchronous** (no async DB machinery)
+- Live on the **call stack** (not in the B-tree)
+- **Cannot be subscripted** (`LET x(1) = ...` is a syntax error)
+- Are **scoped** to the enclosing block
+
+```rumps
+LET x = 10
+LET name = "John"
+LET result = compute-something()
+
+; x(1) = 2  ; ERROR: LET bindings cannot be subscripted
+```
+
+Use `LET` for:
+- Temporaries and intermediate results
+- Function-local computations
+- Top-level script bindings
+- Any binding that doesn't need subscripting
+
+### `SET`: Tree-Structured Variables
+
+`SET` creates or modifies a variable in the B-tree storage. These variables:
+- Are **asynchronous** (backed by B-tree operations)
+- Can be **subscripted** (`SET x(1, 2) = "value"`)
+- Are either **local** (`x`) or **global** (`^X`)
+- Globals require a **transaction**
+
+```rumps
+; Local B-tree variable (ephemeral, session-scoped)
+SET x = 10
+SET x(1) = "first"
+SET x(1, "nested") = "deep"
+
+; Global B-tree variable (persistent, requires transaction)
+TRANSACTION {
+  SET ^PATIENT(123, "NAME") = "John"
+}
+```
+
+Use `SET` for:
+- Data that needs hierarchical/subscripted access
+- Persistent storage (globals)
+- MUMPS-style sparse arrays
+
+### Summary
+
+| Construct    | Subscriptable        | Storage         | Async | Scope                     |
+|--------------|----------------------|-----------------|-------|---------------------------|
+| `LET x = 1`  | No                   | Call stack      | No    | Lexical block             |
+| `SET x = 1`  | Yes (`SET x(1) = 2`) | B-tree (local)  | Yes   | Session                   |
+| `SET ^X = 1` | Yes                  | B-tree (global) | Yes   | Persistent (requires txn) |
 
 ## Pragmas
 

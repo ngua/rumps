@@ -74,7 +74,7 @@ crates/rumps-query/
 **NOTE**: This is a minimal subset for Phase 1. See `TODOS/dsl.md` for the full language specification including all keywords, operators, and constructs to be implemented in later phases.
 
 - [x] Define `Token` enum with:
-  - Keywords (Phase 1 subset): `SET`, `KILL`, `OUTPUT`, `IF`, `ELSE`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`
+  - Keywords (Phase 1 subset): `LET`, `SET`, `KILL`, `OUTPUT`, `IF`, `ELSE`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`
     - Future keywords (see `dsl.md`): `COLLECT`, `WHERE`, `SELECT`, `FILTER`, `MAP`, `TAKE`, `SKIP`, `INTO`, `TRANSACTION`, `FUN`, `MATCH`, `TYPE`, `IMPORT`, `NAMESPACE`, `CATCH`, `HANDLE`, `TRY`, `FINALLY`, `THROW`, `FOREACH`, `PARALLEL`, `GROUP`, `BY`, `SORT`, `JOIN`, `AGGREGATE`, `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `REDUCE`, `REVERSE`, `WHILE`, `SAVEPOINT`, `ROLLBACK`, `WITH`, `ISOLATION`, `TIMEOUT`, `PRIORITY`, `ON`, `CONFLICT`, `RETRY`, `ABORT`, `SKIP`, `OVERWRITE`, `DO`, `AS`, `TO`, `FILE`, `ERROR`, `HEADERS`, `SEPARATOR`, (`ROOT`, `ELEMENT` if we ever do XML output?)
   - Literals (Phase 1 subset): `Int(i64)`, `Float(f64)`, `String(String)` (no `Bool` token; booleans come from `TRUE`/`FALSE` keywords, converted to `Literal(Value::Bool(...))` by the parser)
     - Future literals (see `dsl.md`): record literals (`{ id: 123, name: "John" }`; unquoted keys), JSON object literals (`{ "id": 123 }`; quoted keys), array literals (`[1, 2, 3]`), regex literals (`/pattern/`), template strings with interpolation (`"Hello {name}"`), range literals (`1..10`)
@@ -134,7 +134,8 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
   - `Index(ExprId, ExprId)` (array/object access)
   - `Field(ExprId, String)` (`.field` access)
 - [ ] Define `Stmt` enum (references use `ExprId`/`StmtId`):
-  - `Set(String, ExprId)` (local assignment)
+  - `Let(String, ExprId)` (lexical binding; sync, not subscriptable)
+  - `Set(String, ExprId)` (local B-tree assignment)
   - `SetGlobal(String, SmallVec<[ExprId; 4]>, ExprId)` (global assignment)
   - `Kill(String, SmallVec<[ExprId; 4]>)` (delete)
   - `Output(ExprId)` (print)
@@ -234,13 +235,26 @@ Uses **arena allocation** (like the AST) for cache efficiency and to avoid `Box`
 
 ### 8. Environment
 
-The `Environment` tracks lexical scope for callable/resolvable names (NOT variable storage; that's the `Database`).
+The `Environment` tracks lexical scope for `LET` bindings and callable names. `SET` variables (both local and global) go through the `Database`.
 
+- [ ] Define `Scopes` as a stack for lexical `LET` bindings:
+  ```rust
+  pub struct Scopes {
+      stack: Vec<HashMap<StringId, ValueId>>,  // Stack of frames; top = current
+  }
+  ```
+  Uses `StringId`/`ValueId` from the arena for efficiency. Stack-based avoids `Box` allocations.
 - [ ] Define `Environment` struct with:
+  - `scopes: Scopes` (lexical scope stack for `LET` bindings)
   - `primitives: HashMap<String, PrimitiveFn>` (built-in functions)
   - Future: `functions: HashMap<String, FunDef>` (user-defined functions)
   - Future: `namespaces: HashMap<String, Namespace>` (e.g., `String`, `Math`)
   - Future: `types: HashMap<String, TypeDef>` (sum types, type aliases)
+- [ ] Implement `Scopes` methods:
+  - `bind(&mut self, name: StringId, val: ValueId)` (add `LET` binding to current frame)
+  - `lookup(&self, name: StringId) -> Option<ValueId>` (search stack top-down)
+  - `push(&mut self)` (enter nested scope)
+  - `pop(&mut self)` (exit scope)
 - [ ] Define `PrimitiveFn` type (async fn pointer or enum)
 - [ ] Register built-in primitives (Phase 1 subset: maybe just `GET` as a function?)
 - [ ] Implement name lookup with scope chain (for nested scopes later)
@@ -267,6 +281,7 @@ The `Environment` tracks lexical scope for callable/resolvable names (NOT variab
   ```
 - [ ] Implement binary operations with type checking
 - [ ] Implement `OUTPUT` (print to stdout)
+- [ ] Implement `LET` (sync; `env.scopes.bind(...)`)
 - [ ] Implement `SET` for locals (async; `db.set_local(...)`)
 - [ ] Implement `SET` for globals (async; requires `txn.set(...)`)
 - [ ] Implement `GET` for locals (async; `db.get_local(...)`)
@@ -465,12 +480,15 @@ Defer to Phase 2. For now, focus on locals only (no DB integration needed).
 The following program should work:
 
 ```rumps
-; Basic arithmetic and variables
-SET x = 10
-SET y = 20
-SET z(1, "ABC") = 30
-SET sum = x + y
+; LET for simple bindings (sync, no subscripts)
+LET x = 10
+LET y = 20
+LET sum = x + y
 OUTPUT sum
+
+; SET for B-tree locals (async, subscriptable)
+SET z = 100
+SET z(1, "ABC") = 30
 
 ; Comparison and branching
 IF sum > 25 {

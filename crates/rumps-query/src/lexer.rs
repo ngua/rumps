@@ -914,10 +914,12 @@ mod tests {
 
     #[test]
     fn all_keywords() {
-        let tokens = lex_ok("SET KILL OUTPUT IF ELSE AND OR NOT TRUE FALSE");
+        let tokens =
+            lex_ok("LET SET KILL OUTPUT IF ELSE AND OR NOT TRUE FALSE");
         assert_eq!(
             tokens,
             vec![
+                Token::Let,
                 Token::Set,
                 Token::Kill,
                 Token::Output,

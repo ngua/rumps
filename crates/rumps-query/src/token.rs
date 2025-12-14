@@ -11,6 +11,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Token {
     // Keywords
+    Let,
     Set,
     Kill,
     Output,
@@ -84,6 +85,7 @@ impl Token {
     pub(crate) fn keyword(s: &str) -> Option<Self> {
         let upper = s.to_ascii_uppercase();
         match upper.as_str() {
+            "LET" => Some(Self::Let),
             "SET" => Some(Self::Set),
             "KILL" => Some(Self::Kill),
             "OUTPUT" => Some(Self::Output),
@@ -102,6 +104,7 @@ impl Token {
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Let => write!(f, "LET"),
             Self::Set => write!(f, "SET"),
             Self::Kill => write!(f, "KILL"),
             Self::Output => write!(f, "OUTPUT"),
@@ -172,6 +175,7 @@ mod tests {
 
     #[test]
     fn all_keywords() {
+        assert_eq!(Token::keyword("LET"), Some(Token::Let));
         assert_eq!(Token::keyword("SET"), Some(Token::Set));
         assert_eq!(Token::keyword("KILL"), Some(Token::Kill));
         assert_eq!(Token::keyword("OUTPUT"), Some(Token::Output));
