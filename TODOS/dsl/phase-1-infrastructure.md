@@ -109,7 +109,7 @@ crates/rumps-query/
 
 Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendliness and to avoid deep pointer chains. See Design Decisions for rationale.
 
-- [ ] Define arena types:
+- [x] Define arena types:
   ```rust
   #[derive(Clone, Copy, Debug, PartialEq, Eq)]
   pub struct ExprId(u32);
@@ -125,7 +125,7 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
   }
   ```
   Spans are stored in parallel vectors rather than inline (e.g., `Vec<(Expr, Span)>`) for cache efficiency; the interpreter rarely needs spans during normal execution, only for error reporting.
-- [ ] Define `Expr` enum (references use `ExprId`):
+- [x] Define `Expr` enum (references use `ExprId`):
   - `Literal(Value)`
   - `Local(String)` (local variable)
   - `Global(String, SmallVec<[ExprId; 4]>)` (global with subscripts; implicit GET — `^PATIENT(123)` alone is a valid expression that evaluates to its value, no explicit `GET(...)` wrapper required)
@@ -136,7 +136,7 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
   - `Array(Vec<ExprId>)` (array literal)
   - `Index(ExprId, ExprId)` (array/object access)
   - `Field(ExprId, String)` (`.field` access)
-- [ ] Define `Stmt` enum (references use `ExprId`/`StmtId`):
+- [x] Define `Stmt` enum (references use `ExprId`/`StmtId`):
   - `Let(String, ExprId)` (lexical binding; sync, not subscriptable)
   - `Set(String, ExprId)` (local B-tree assignment)
   - `SetGlobal(String, SmallVec<[ExprId; 4]>, ExprId)` (global assignment)
@@ -145,8 +145,8 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
   - `If(ExprId, Vec<StmtId>, Option<Vec<StmtId>>)`
   - `Block(Vec<StmtId>)`
   - `Expr(ExprId)` (expression statement)
-- [ ] Define `BinOp` and `UnOp` enums
-- [ ] Implement `Ast` methods: `add_expr(&mut self, e: Expr) -> ExprId`, `add_stmt(&mut self, s: Stmt) -> StmtId`, `get_expr(&self, id: ExprId) -> &Expr`, `get_stmt(&self, id: StmtId) -> &Stmt`
+- [x] Define `BinOp` and `UnOp` enums
+- [x] Implement `Ast` methods: `add_expr(&mut self, e: Expr) -> ExprId`, `add_stmt(&mut self, s: Stmt) -> StmtId`, `get_expr(&self, id: ExprId) -> &Expr`, `get_stmt(&self, id: StmtId) -> &Stmt`
 
 ### 6. Parser Implementation
 - [ ] Set up chumsky parser structure (two-phase: lexer output -> AST)
