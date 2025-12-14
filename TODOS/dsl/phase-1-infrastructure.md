@@ -39,18 +39,18 @@ crates/rumps-query/
 ## Phase 1 Tasks
 
 ### 1. Crate Setup
-- [ ] Create `Cargo.toml` with dependencies:
+- [x] Create `Cargo.toml` with dependencies:
   - `chumsky` (parsing)
   - `smallvec` (inline storage for small collections; type params, variants, payloads)
     - **NOTE**: `rumps-storage` also uses this; move to workspace dep with correct features enabled, then update `rumps-storage/Cargo.toml`
   - `rumps-types` (shared types)
   - `rumps-storage` (database access)
   - `tokio` (async runtime; interpreter is async; **NOTE**: workspace dep)
-- [ ] Set up module structure in `lib.rs`
-- [ ] Add crate to workspace in root `Cargo.toml`
+- [x] Set up module structure in `lib.rs`
+- [x] Add crate to workspace in root `Cargo.toml`
 
 ### 2. Error and Span Types
-- [ ] Define `Span` type for source locations:
+- [x] Define `Span` type for source locations:
   ```rust
   #[derive(Clone, Copy, Debug, PartialEq, Eq)]
   pub struct Span {
@@ -59,7 +59,7 @@ crates/rumps-query/
   }
   ```
   Using `u32` limits source files to ~4GB, which is plenty. Chumsky's `SimpleSpan` can convert to/from this.
-- [ ] Define `Error` enum with variants for lex/parse/runtime errors:
+- [x] Define `Error` enum with variants for lex/parse/runtime errors:
   ```rust
   pub enum Error {
       Lex { span: Span, msg: String },
@@ -67,13 +67,13 @@ crates/rumps-query/
       Runtime { span: Option<Span>, msg: String },  // span from AST/Value if available
   }
   ```
-- [ ] Implement `Display` for errors with span info (line/column computed from source on demand)
+- [x] Implement `Display` for errors with span info (line/column computed from source on demand)
 
 ### 3. Token Definition
 
 **NOTE**: This is a minimal subset for Phase 1. See `TODOS/dsl.md` for the full language specification including all keywords, operators, and constructs to be implemented in later phases.
 
-- [ ] Define `Token` enum with:
+- [x] Define `Token` enum with:
   - Keywords (Phase 1 subset): `SET`, `KILL`, `OUTPUT`, `IF`, `ELSE`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`
     - Future keywords (see `dsl.md`): `COLLECT`, `WHERE`, `SELECT`, `FILTER`, `MAP`, `TAKE`, `SKIP`, `INTO`, `TRANSACTION`, `FUN`, `MATCH`, `TYPE`, `IMPORT`, `NAMESPACE`, `CATCH`, `HANDLE`, `TRY`, `FINALLY`, `THROW`, `FOREACH`, `PARALLEL`, `GROUP`, `BY`, `SORT`, `JOIN`, `AGGREGATE`, `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `REDUCE`, `REVERSE`, `WHILE`, `SAVEPOINT`, `ROLLBACK`, `WITH`, `ISOLATION`, `TIMEOUT`, `PRIORITY`, `ON`, `CONFLICT`, `RETRY`, `ABORT`, `SKIP`, `OVERWRITE`, `DO`, `AS`, `TO`, `FILE`, `ERROR`, `HEADERS`, `SEPARATOR`, (`ROOT`, `ELEMENT` if we ever do XML output?)
   - Literals (Phase 1 subset): `Int(i64)`, `Float(f64)`, `String(String)` (no `Bool` token; booleans come from `TRUE`/`FALSE` keywords, converted to `Literal(Value::Bool(...))` by the parser)

@@ -4,9 +4,9 @@
 
 mod error;
 mod span;
+mod token;
 
 // Future modules (Phase 1 continued):
-// mod token;
 // mod lexer;
 // mod ast;
 // mod parser;
@@ -18,3 +18,5 @@ mod span;
 pub(crate) use error::{Error, ErrorDisplay};
 #[allow(unused_imports)]
 pub(crate) use span::Span;
+#[allow(unused_imports)]
+pub(crate) use token::Token;
