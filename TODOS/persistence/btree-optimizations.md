@@ -4,12 +4,12 @@ This document outlines actionable performance improvements for the B-tree implem
 
 ## Overview
 
-| Optimization                    | Expected Impact             | Complexity | Collation Safe |
-|---------------------------------|-----------------------------|------------|----------------|
-| Lock contention reduction       | High (concurrent workloads) | Medium     | Yes            |
-| Subscript comparison fast-path  | High (all workloads)        | Low        | Yes            |
-| Reduce allocations via SmallVec | Medium                      | Low        | Yes            |
-| Lazy ancestor flag updates      | Medium (write-heavy)        | Medium     | Yes            |
+| Optimization                    | Expected Impact             | Complexity | Collation Safe | Status         |
+|---------------------------------|-----------------------------|------------|----------------|----------------|
+| Lock contention reduction       | High (concurrent workloads) | Medium     | Yes            | Done           |
+| Subscript comparison fast-path  | High (all workloads)        | Low        | Yes            | Done           |
+| Reduce allocations via SmallVec | Medium                      | Low        | Yes            | Done           |
+| Lazy ancestor flag updates      | Medium (write-heavy)        | Medium     | Yes            | **Not viable** |
 
 ---
 
@@ -332,182 +332,37 @@ let right_keys: KeyVec = keys.split_off(mid + 1);
 
 ---
 
-## 4. Lazy Ancestor Flag Updates
+## 4. ~~Lazy Ancestor Flag Updates~~ NOT VIABLE
 
-**Goal:** Defer `has_descendants` flag maintenance until transaction commit, reducing repeated tree traversals.
+**Status:** Attempted and reverted. Causes ~10% performance regression.
 
-**Current:** `set_internal()` calls `ensure_ancestors()` on every insert (`btree.rs:983`). For `key![1, 2, 3, 4]`, this creates/updates ancestors `[1]`, `[1,2]`, `[1,3]` individually, each traversing from root.
+**Original Goal:** Defer `has_descendants` flag maintenance until transaction commit, reducing repeated tree traversals.
 
-**Solution:** Collect ancestor keys in transaction write buffer; batch-update flags at commit.
+**Why It Failed:**
 
-### Snapshot Isolation Analysis
+1. **Overhead exceeds savings.** The per-`set()` cost of collecting ancestors:
+   - `key.ancestors()` allocates a `Vec` on every call
+   - Acquiring write lock on `pending_ancestors`
+   - Cloning `Name` for each ancestor
+   - `HashSet` operations (hashing, potential resize)
 
-**This optimization is safe.** The transaction implementation in `transaction.rs` already provides snapshot isolation:
+   This overhead occurs on EVERY `set()` call, even for shallow keys with few/no ancestors.
 
-1. **Writes are buffered** until commit (`writes: BTreeMap<(Name, Key), WriteOp>`)
-2. **Reads check buffer first**, then fall through to DB snapshot
-3. **Ancestor flags are not updated** until `db.set_with_txn()` at commit time
+2. **Current code has a fast path.** The existing `ensure_ancestors()` checks if an ancestor already has `has_descendants=true` and skips it entirely (no tree modification). With shared prefixes, most ancestor checks hit this fast path. The "optimization" replaces cheap checks with expensive collection overhead.
 
-Within a transaction, `data()` on ancestor keys sees:
-- Buffered writes for that exact key (if any)
-- Buffered descendants (Sets under the ancestor prefix)
-- DB snapshot state (for non-buffered keys)
+3. **Correctness bug in batch algorithm.** The "domination" logic that skips keys whose ancestors were already processed is flawed. For depth-3+ keys, intermediate ancestors get skipped:
+   - Key `[1,2,3]` collects ancestors `{[1], [1,2]}`
+   - After sorting: `[[1], [1,2]]`
+   - Process `[1]}`: insert, add to processed
+   - Process `[1,2]`: ancestors=`[[1]]`, `[1]` in processed, **SKIP**
+   - Result: `[1,2]` never gets `has_descendants=true`
 
-The `data()` method correctly merges buffered descendants with snapshot state, so callers see accurate `HasDescendants` / `Both` status even before commit. This means lazy ancestor updates don't change observable behavior; they only batch what currently happens sequentially at commit.
+4. **Benchmarks confirmed regression.** Both on-disk (ZFS) and in-memory tests showed consistent ~8-12% throughput reduction across all batch sizes (100, 1000, 10000 ops).
 
-### Implementation
-
-**Step 1:** Add ancestor tracking to `Transaction` in `transaction.rs`:
-
-```rust
-pub struct Transaction {
-    // ... existing fields
-
-    /// Keys that need `has_descendants=true` set at commit.
-    /// Populated lazily during `set()` calls.
-    pending_ancestors: Arc<RwLock<HashSet<(Name, Key)>>>,
-}
-```
-
-**Step 2:** Modify `Transaction::set()` to collect ancestors instead of immediate update:
-
-```rust
-impl Transaction {
-    pub async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()> {
-        // Buffer the write (existing logic)
-        self.writes.write().await.insert(
-            (name.clone(), key.clone()),
-            WriteOp::Set(NodeData::with_value(value)),
-        );
-
-        // Collect ancestors for deferred update
-        let ancestors = key.ancestors();
-        let mut pending = self.pending_ancestors.write().await;
-        ancestors.into_iter().for_each(|anc| {
-            pending.insert((name.clone(), anc));
-        });
-
-        Ok(())
-    }
-}
-```
-
-**Step 3:** Add batch ancestor update in `Database::apply_transaction()`:
-
-```rust
-impl Database {
-    pub(crate) async fn apply_transaction(&self, txn: &Transaction) -> Result<()> {
-        // 1. Apply buffered writes (existing logic)
-        // ...
-
-        // 2. Batch-update ancestor flags
-        let ancestors = txn.pending_ancestors.read().await;
-
-        // Group by name for efficiency
-        let by_name = ancestors.iter().fold(
-            HashMap::<Name, Vec<Key>>::new(),
-            |mut acc, (name, key)| {
-                acc.entry(name.clone()).or_default().push(key.clone());
-                acc
-            },
-        );
-
-        // Update each global's ancestors in one pass
-        futures::stream::iter(by_name)
-            .then(|(name, keys)| async move {
-                let root = self.get_or_create_root(&name).await?;
-                self.batch_set_descendants_flag(root, &keys).await
-            })
-            .try_collect::<()>()
-            .await
-    }
-}
-```
-
-**Step 4:** Add `batch_set_descendants_flag()` to `BTree`:
-
-```rust
-impl BTree {
-    /// Sets `has_descendants=true` for multiple keys in one traversal.
-    /// Keys should be sorted shortest-first for efficiency.
-    pub(crate) async fn batch_set_descendants_flag(
-        &self,
-        root: NodeId,
-        keys: &[Key],
-    ) -> Result<()> {
-        // Sort keys by length (ancestors before descendants)
-        let mut sorted: Vec<_> = keys.to_vec();
-        sorted.sort_by_key(|k| k.len());
-
-        // Process in order; skip keys whose ancestors already processed
-        futures::stream::iter(sorted)
-            .try_fold(HashSet::new(), |mut processed, key| async move {
-                // Skip if a prefix was already processed
-                let dominated = key
-                    .ancestors()
-                    .iter()
-                    .any(|anc| processed.contains(anc));
-
-                if !dominated {
-                    self.ensure_ancestor_flag(root, &key).await?;
-                    processed.insert(key);
-                }
-
-                Ok(processed)
-            })
-            .await?;
-
-        Ok(())
-    }
-
-    /// Ensures a single key exists with `has_descendants=true`.
-    /// Cheaper than `set_internal()` since it doesn't traverse ancestors.
-    async fn ensure_ancestor_flag(&self, root: NodeId, key: &Key) -> Result<()> {
-        let data = NodeData::with_descendants();
-        self.set_at_node(root, key, data).await
-    }
-}
-```
-
-**Step 5:** Remove `ensure_ancestors()` call from `set_internal()`:
-
-```rust
-impl BTree {
-    async fn set_internal(
-        &self,
-        root: NodeId,
-        key: &Key,
-        data: NodeData,
-    ) -> Result<NodeId> {
-        // REMOVED: let root = self.ensure_ancestors(root, key).await?;
-
-        // Directly insert the key
-        self.set_at_node(root, key, data).await
-    }
-}
-```
-
-### Verification
-
-- All existing tests pass (ancestor semantics unchanged)
-- Benchmark multi-level key insertion:
-  ```rust
-  #[bench]
-  fn bench_deep_key_insert(b: &mut Bencher) {
-      let db = Database::in_memory().unwrap();
-      b.iter(|| {
-          block_on(db.transaction(|txn| async move {
-              // Insert 100 keys at depth 5
-              futures::stream::iter(0..100)
-                  .then(|i| async move {
-                      txn.set(&global!("TEST"), &key![1, 2, 3, 4, i], value!(i)).await
-                  })
-                  .try_collect::<()>()
-                  .await
-          }))
-      });
-  }
-  ```
+**Lesson:** The theoretical O(n * depth) -> O(unique_ancestors) improvement doesn't account for:
+- The constant-factor overhead of collection machinery
+- The existing fast-path optimization in `ensure_ancestors()`
+- The fact that `HashSet` deduplication doesn't help when ancestors are already efficiently skipped
 
 ---
 
@@ -761,10 +616,10 @@ pub(crate) struct NodeRaw {
 ## Execution Order
 
 ### Tier 1 (High Impact, Lower Risk)
-1. **Subscript comparison fast-path** (lowest risk, immediate benefit)
-2. **SmallVec for nodes** (low risk, reduces allocator pressure)
-3. **Lock contention reduction** (medium risk, benefits concurrent workloads)
-4. **Lazy ancestor updates** (higher risk, most invasive change)
+1. **Subscript comparison fast-path** ✅ Done
+2. **SmallVec for nodes** ✅ Done
+3. **Lock contention reduction** ✅ Done
+4. ~~**Lazy ancestor updates**~~ ❌ Attempted; caused regression; reverted
 
 ### Tier 2 (Medium Impact, Higher Complexity)
 5. **Incremental size tracking** (medium complexity, helps disk-backed)
