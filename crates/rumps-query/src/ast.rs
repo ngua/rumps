@@ -38,7 +38,7 @@ impl StmtId {
 ///
 /// Spans are stored in parallel vectors rather than inline for cache
 /// efficiency; they're only accessed for error reporting.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Ast {
     exprs: Vec<Expr>,
     expr_spans: Vec<Span>,

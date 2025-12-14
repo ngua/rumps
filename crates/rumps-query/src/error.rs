@@ -4,9 +4,10 @@
 
 use std::fmt;
 
+use chumsky::error::Simple;
 use thiserror::Error;
 
-use crate::Span;
+use crate::{Span, Token};
 
 /// Errors produced during lexing, parsing, or interpretation.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -81,6 +82,21 @@ impl Error {
         src: &'a str,
     ) -> ErrorDisplay<'a> {
         ErrorDisplay { err: self, src }
+    }
+}
+
+impl From<Simple<Token, Span>> for Error {
+    fn from(e: Simple<Token, Span>) -> Self {
+        let span = e.span();
+        let msg = e
+            .found()
+            .map(|t| format!("unexpected `{t}`"))
+            .unwrap_or_else(|| "unexpected end of input".into());
+        let expected = e
+            .expected()
+            .filter_map(|exp| exp.as_ref().map(|t| t.to_string()))
+            .collect();
+        Self::parse(span, msg, expected)
     }
 }
 

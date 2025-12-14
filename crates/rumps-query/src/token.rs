@@ -7,8 +7,10 @@
 
 use std::fmt;
 
+use ordered_float::OrderedFloat;
+
 /// A token in the RUMPS query language tokenizer.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Token {
     // Keywords
     Let,
@@ -25,7 +27,7 @@ pub(crate) enum Token {
 
     // Literals
     Int(i64),
-    Float(f64),
+    Float(OrderedFloat<f64>),
     String(String),
 
     // Identifiers
@@ -116,7 +118,7 @@ impl fmt::Display for Token {
             Self::True => write!(f, "TRUE"),
             Self::False => write!(f, "FALSE"),
             Self::Int(n) => write!(f, "{n}"),
-            Self::Float(n) => write!(f, "{n}"),
+            Self::Float(n) => write!(f, "{}", n.0),
             Self::String(s) => write!(f, "\"{s}\""),
             Self::Ident(s) => write!(f, "{s}"),
             Self::Global(s) => write!(f, "^{s}"),
@@ -192,7 +194,7 @@ mod tests {
     fn display_tokens() {
         assert_eq!(Token::Set.to_string(), "SET");
         assert_eq!(Token::Int(42).to_string(), "42");
-        assert_eq!(Token::Float(3.14).to_string(), "3.14");
+        assert_eq!(Token::Float(OrderedFloat(3.14)).to_string(), "3.14");
         assert_eq!(Token::String("hello".into()).to_string(), "\"hello\"");
         assert_eq!(Token::Ident("foo".into()).to_string(), "foo");
         assert_eq!(Token::Global("PATIENT".into()).to_string(), "^PATIENT");

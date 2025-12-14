@@ -12,6 +12,7 @@
 use std::ops::Range;
 
 use chumsky::prelude::*;
+use ordered_float::OrderedFloat;
 
 use crate::{Error, Span, Token};
 
@@ -285,10 +286,16 @@ impl Lexer<'_> {
                     exp.map(|e| s.push_str(&e));
                     s.parse::<f64>()
                         .map(|f| {
-                            Spanned::from_range(Token::Float(f), span.clone())
+                            Spanned::from_range(
+                                Token::Float(OrderedFloat(f)),
+                                span.clone(),
+                            )
                         })
                         .unwrap_or_else(|_| {
-                            Spanned::from_range(Token::Float(0.0), span)
+                            Spanned::from_range(
+                                Token::Float(OrderedFloat(0.0)),
+                                span,
+                            )
                         })
                 } else {
                     int.parse::<i64>()
@@ -300,7 +307,7 @@ impl Lexer<'_> {
                             int.parse::<f64>()
                                 .map(|f| {
                                     Spanned::from_range(
-                                        Token::Float(f),
+                                        Token::Float(OrderedFloat(f)),
                                         span.clone(),
                                     )
                                 })
@@ -488,16 +495,19 @@ mod tests {
     #[test]
     fn simple_float() {
         let tokens = lex_ok("3.14");
-        assert_eq!(tokens, vec![Token::Float(3.14), Token::Eof]);
+        assert_eq!(tokens, vec![Token::Float(OrderedFloat(3.14)), Token::Eof]);
     }
 
     #[test]
     fn float_with_exponent() {
         let tokens = lex_ok("1e10");
-        assert_eq!(tokens, vec![Token::Float(1e10), Token::Eof]);
+        assert_eq!(tokens, vec![Token::Float(OrderedFloat(1e10)), Token::Eof]);
 
         let tokens = lex_ok("2.5e-3");
-        assert_eq!(tokens, vec![Token::Float(2.5e-3), Token::Eof]);
+        assert_eq!(
+            tokens,
+            vec![Token::Float(OrderedFloat(2.5e-3)), Token::Eof]
+        );
     }
 
     #[test]

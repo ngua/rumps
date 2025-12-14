@@ -149,8 +149,8 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
 - [x] Implement `Ast` methods: `add_expr(&mut self, e: Expr) -> ExprId`, `add_stmt(&mut self, s: Stmt) -> StmtId`, `get_expr(&self, id: ExprId) -> &Expr`, `get_stmt(&self, id: StmtId) -> &Stmt`
 
 ### 6. Parser Implementation
-- [ ] Set up chumsky parser structure (two-phase: lexer output -> AST)
-- [ ] Implement expression parser with precedence:
+- [x] Set up chumsky parser structure (two-phase: lexer output -> AST)
+- [x] Implement expression parser with precedence:
   1. Primary: literals, identifiers, parenthesized, arrays, objects
   2. Postfix: field access (`.`), index (`[...]`), call (`(...)`)
   3. Unary: `NOT`, `!`, `-`
@@ -159,10 +159,9 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
   6. Comparison: `<`, `>`, `<=`, `>=`, `==`, `!=`
   7. Logical AND: `AND`, `&&`
   8. Logical OR: `OR`, `||`
-  9. Null coalesce: `??`
-- [ ] Implement statement parser
-- [ ] Implement block parser (`{` statements `}`)
-- [ ] Add error recovery and helpful messages
+- [x] Implement statement parser
+- [x] Implement block parser (`{` statements `}`)
+- [x] Add error recovery and helpful messages
 
 ### 7. Value Types and Type Registry
 
@@ -501,3 +500,61 @@ IF sum > 25 {
 }
 ```
 
+### 11. CLI Executable
+
+Create a `rumps` binary for running scripts against a database.
+
+- [ ] Create `crates/rumps/src/main.rs` (or add `[[bin]]` target)
+- [ ] Add `clap` dependency for argument parsing
+- [ ] Add `miette` dependency with `fancy` feature for pretty errors
+- [ ] Define CLI arguments:
+  ```rust
+  #[derive(clap::Parser)]
+  struct Args {
+      /// Path to database directory (in-memory if omitted)
+      #[arg(long)]
+      db: Option<PathBuf>,
+
+      /// Path to script file to execute
+      #[arg(long)]
+      script: PathBuf,
+  }
+  ```
+- [ ] Implement `async fn main()`:
+  - Install miette handler: `miette::set_hook(...)`
+  - Parse args with `clap`
+  - Create database: `Database::in_memory()` if no `--db`, else `Database::open(path)`
+  - Read script file
+  - Parse via `Parser::parse(src)`
+  - Create `Interpreter` with database and AST
+  - Execute statements
+  - On error, wrap with source via `miette::Report` and print
+- [ ] Use `tokio` runtime (`#[tokio::main]`)
+- [ ] Update `Error` in `rumps-query` to derive `miette::Diagnostic`:
+  ```rust
+  #[derive(Debug, Error, Diagnostic)]
+  pub enum Error {
+      #[error("lex error: {msg}")]
+      #[diagnostic(code(rumps::lex))]
+      Lex {
+          #[label("here")]
+          span: SourceSpan,
+          msg: String,
+      },
+      // ...
+  }
+  ```
+  Note: `miette::SourceSpan` is `(offset, len)` so convert from our `Span`
+
+**Usage:**
+```bash
+# In-memory database
+rumps --script examples/hello.rumps
+
+# Persistent database
+rumps --db ./data --script examples/hello.rumps
+```
+
+**Future enhancements** (not Phase 1):
+- REPL mode when `--script` is omitted
+- `--eval` flag for inline expressions
