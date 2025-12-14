@@ -86,19 +86,19 @@ crates/rumps-query/
   - Special: `Newline`, `Indent`, `Dedent`, `Eof`
 
 ### 4. Lexer Implementation
-- [ ] Implement whitespace handling (preserve for train-case detection)
-- [ ] Implement indentation tracking (emit `Indent`/`Dedent` tokens for multi-line expressions)
-- [ ] Implement comment skipping (`;` to newline)
-- [ ] Implement string literal parsing (with escape sequences)
-- [ ] Implement number parsing (int and float)
-- [ ] Implement identifier parsing (including train-case)
-- [ ] Handle train-case vs subtraction:
+- [x] Implement whitespace handling (preserve for train-case detection)
+- [x] Implement indentation tracking (emit `Indent`/`Dedent` tokens for multi-line expressions)
+- [x] Implement comment skipping (`;` to newline)
+- [x] Implement string literal parsing (with escape sequences)
+- [x] Implement number parsing (int and float)
+- [x] Implement identifier parsing (including train-case)
+- [x] Handle train-case vs subtraction:
   - `my-var` (no spaces) = identifier
   - `a - b` (spaces) = subtraction
-- [ ] Implement keyword recognition:
+- [x] Implement keyword recognition:
   - Case-insensitive (`SET` = `set` = `Set`)
   - No abbreviations; full keyword names only (no `S` for `SET`, etc.)
-- [ ] Implement operator tokenization (handle multi-char: `==`, `!=`, `>=`, `<=`, `++`, `&&`, `||`)
+- [x] Implement operator tokenization (handle multi-char: `==`, `!=`, `>=`, `<=`, `++`, `&&`, `||`)
 
 ### 5. AST Definition
 
