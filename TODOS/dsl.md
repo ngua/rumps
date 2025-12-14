@@ -670,8 +670,8 @@ SET city = patient?.address?.city ?? "N/A"
   |> MAP transform
   |> OUTPUT
 
-; Range operator
-1..100 FOREACH i => {
+; Range operator (`..`)
+FOREACH (1..100 ) i => {
   ; Process with closure
 }
 
@@ -679,9 +679,9 @@ SET city = patient?.address?.city ?? "N/A"
 SET combined = [...array1, ...array2]
 
 ; Type checking
-IF value is Number {
+IF value is Type.Number {
   SET res = value * 2
-} ELSE IF value is String {
+} ELSE IF value is Type.String {
   SET res = "Value: " + value
 }
 ```
@@ -983,7 +983,7 @@ FUN <name> (<args>) {
 
 ```rumps
 FUN greet (name) {
-  OUTPUT "Hello, " + name + "!"
+  OUTPUT "Hello, " ++ name ++ "!"
 }
 
 FUN add (a, b) {
@@ -1426,9 +1426,9 @@ When a type annotation is violated, the interpreter raises a runtime error with 
 Runtime type checking with `is`:
 
 ```rumps
-IF value is String {
+IF value is Type.String {
   OUTPUT "It's a string: " + value
-} ELSE IF value is Number {
+} ELSE IF value is Type.Number {
   OUTPUT "It's a number: " + String.from(value)
 } ELSE IF value is Option.None {
   OUTPUT "It's null"
@@ -1440,8 +1440,8 @@ Get type as a value with `Type.of`:
 ```rumps
 SET t = Type.of(value)
 
-IF t == String { ... }
-IF t == Int OR t == Float { ... }
+IF t == Type.String { ... }
+IF t == Type.Int OR t == Type.Float { ... }
 ```
 
 ### Type Coercion
