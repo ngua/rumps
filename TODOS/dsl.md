@@ -24,7 +24,7 @@ SET count = 0
 SET patientName = "John"
 SET PatientName = "John"
 SET patient-name = "John"
-SET PATIENT_ID = 123
+SET PATIENT-ID = 123
 ```
 
 **Reserved keywords** (cannot be used as variable names):
@@ -59,6 +59,122 @@ SET x = a-b                     ; ERROR: use spaces for subtraction
 - **Namespaces**: PascalCase (`Json`, `String`, `Math`)
 - **Types**: PascalCase (`Int`, `String`, `Array[T]`, `Option[T]`)
 - **Namespace functions**: PascalCase.train-case (`Json.parse`, `String.split`, `Math.sqrt`)
+
+## Pragmas
+
+RUMPS uses `PRAGMA` statements to configure database behavior at runtime. Pragmas affect the current session or database settings.
+
+### Syntax
+
+```rumps
+PRAGMA <setting> = <value>
+PRAGMA <setting>          ; Query current value
+```
+
+### Available Pragmas
+
+#### `cache-size`
+
+Controls the maximum number of pages cached in memory.
+
+```rumps
+PRAGMA cache-size = 2048   ; Cache up to 2048 pages (~8 MiB at 4KB page size)
+PRAGMA cache-size          ; Query current cache size
+```
+
+Larger values improve read performance at the cost of memory. Default: `1024` pages.
+
+#### `sync-mode`
+
+Controls when WAL data is synced to disk. Affects durability vs performance trade-off.
+
+```rumps
+PRAGMA sync-mode = IMMEDIATE    ; Sync every write (safest, slowest)
+PRAGMA sync-mode = ON-COMMIT    ; Sync on transaction commit (default)
+PRAGMA sync-mode = PERIODIC(50) ; Sync every 50ms
+PRAGMA sync-mode = RELAXED      ; Rely on OS page cache (fastest, least durable)
+```
+
+| Mode           | Durability       | Performance | Use Case                          |
+|----------------|------------------|-------------|-----------------------------------|
+| `IMMEDIATE`    | Maximum          | Lowest      | Critical financial data           |
+| `ON-COMMIT`    | Per-transaction  | Balanced    | General use (default)             |
+| `PERIODIC(ms)` | Interval-bounded | High        | High-throughput with bounded loss |
+| `RELAXED`      | OS-dependent     | Maximum     | Batch imports, analytics, dev     |
+
+#### `wal-max-file-size`
+
+Maximum WAL file size in bytes before rotation to a new file.
+
+```rumps
+PRAGMA wal-max-file-size = 134217728  ; 128 MiB
+PRAGMA wal-max-file-size = 64M        ; Shorthand: 64 MiB
+PRAGMA wal-max-file-size = 1G         ; Shorthand: 1 GiB
+```
+
+Default: `64` MiB. Larger files reduce rotation overhead but increase recovery time.
+
+#### `max-pages` (future)
+
+Optional limit on total database pages.
+
+```rumps
+PRAGMA max-pages = 1000000  ; Limit to ~4 GiB at 4KB page size
+PRAGMA max-pages = NONE     ; Unlimited (default)
+```
+
+Useful for resource-constrained environments or testing.
+
+#### `read-only` (future)
+
+Open database in read-only mode.
+
+```rumps
+PRAGMA read-only = true
+```
+
+Prevents all writes; useful for analytics or replication targets.
+
+### Pragma Scope
+
+- **Session pragmas**: Affect only the current connection (e.g., `cache-size`)
+- **Database pragmas**: Persist across sessions, stored in metadata (e.g., `max-pages`)
+
+```rumps
+; Session-scoped (reverts on disconnect)
+PRAGMA cache-size = 4096
+
+; Database-scoped (persists)
+PRAGMA max-pages = 500000
+```
+
+### Querying Pragmas
+
+Query current values by omitting the assignment:
+
+```rumps
+PRAGMA cache-size
+; Returns: 1024
+
+PRAGMA sync-mode
+; Returns: ON-COMMIT
+```
+
+### Example: High-Throughput Configuration
+
+```rumps
+; Optimize for batch import
+PRAGMA cache-size = 8192
+PRAGMA sync-mode = RELAXED
+PRAGMA wal-max-file-size = 256M
+
+TRANSACTION {
+  ; ... bulk insert operations ...
+}
+
+; Restore safe defaults
+PRAGMA sync-mode = ON-COMMIT
+```
 
 ## Transaction Blocks
 
@@ -118,7 +234,7 @@ TRANSACTION WITH ISOLATION SERIALIZABLE {
   ; Stricter isolation for critical operations
 }
 
-TRANSACTION WITH ISOLATION READ_COMMITTED {
+TRANSACTION WITH ISOLATION READ-COMMITTED {
   ; Lower isolation for better concurrency
 }
 ```
@@ -271,11 +387,11 @@ COLLECT ^LOG
   TAKE 50  ; Get items 101-150
 ```
 
-#### TAKE_WHILE / SKIP_WHILE - Conditional limiting
+#### TAKE-WHILE / SKIP-WHILE - Conditional limiting
 ```rumps
 COLLECT ^DATA
-  SKIP_WHILE value < 0
-  TAKE_WHILE value < 1000
+  SKIP-WHILE value < 0
+  TAKE-WHILE value < 1000
 ```
 
 ### Aggregation Operations
@@ -2215,6 +2331,3 @@ Some things that look like parsing issues are actually semantic:
 - `CLAUDE.md` - Project overview and RUMPS extensions
 - MUMPS documentation - For comparison and compatibility
 
----
-
-Last Updated: 2025-12-12
