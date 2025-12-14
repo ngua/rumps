@@ -1,0 +1,23 @@
+[package]
+name = "rumps-query"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+rumps-types = { path = "../rumps-types" }
+rumps-storage = { path = "../rumps-storage" }
+chumsky = "0.9"
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[lints.clippy]
+obfuscated_if_else = "allow"
+option_map_unit_fn = "allow"
+type_complexity = "allow"
+use_self = "warn"
+unwrap_used = "deny"
+expect_used = "deny"

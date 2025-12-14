@@ -2,6 +2,8 @@
 
 This document tracks the first phase of implementing the RUMPS query language: setting up the foundational infrastructure for lexing, parsing, and interpreting.
 
+**NOTE**: Maximum visibility in general should be `pub(crate)`. Only very few things need to be `pub`. Use `pub(crate)` or keep private.
+
 ## Goals
 
 Build a minimal working vertical slice that can:
