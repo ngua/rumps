@@ -259,55 +259,58 @@ Uses **arena allocation** (like the AST) for cache efficiency and to avoid `Box`
 
 The `Environment` tracks lexical scope for `LET` bindings and callable names. `SET` variables (both local and global) go through the `Database`.
 
-- [ ] Define `Scopes` as a stack for lexical `LET` bindings:
+- [x] Define `Scopes` as a stack for lexical `LET` bindings:
   ```rust
   pub struct Scopes {
       stack: Vec<HashMap<StringId, ValueId>>,  // Stack of frames; top = current
   }
   ```
-  Uses `StringId`/`ValueId` from the arena for efficiency. Stack-based avoids `Box` allocations.
-- [ ] Define `Environment` struct with:
+  Uses `StringId`/`ValueId` from the arena (from value.rs) for efficiency. Stack-based avoids `Box` allocations.
+- [x] Define `Environment` struct with:
   - `scopes: Scopes` (lexical scope stack for `LET` bindings)
-  - `primitives: HashMap<String, PrimitiveFn>` (built-in functions)
+  - `primitives: HashMap<String, PrimFn>` (built-in functions)
   - Future: `functions: HashMap<String, FunDef>` (user-defined functions)
   - Future: `namespaces: HashMap<String, Namespace>` (e.g., `String`, `Math`)
   - Future: `types: HashMap<String, TypeDef>` (sum types, type aliases)
-- [ ] Implement `Scopes` methods:
+- [x] Implement `Scopes` methods:
   - `bind(&mut self, name: StringId, val: ValueId)` (add `LET` binding to current frame)
   - `lookup(&self, name: StringId) -> Option<ValueId>` (search stack top-down)
   - `push(&mut self)` (enter nested scope)
   - `pop(&mut self)` (exit scope)
-- [ ] Define `PrimitiveFn` type (async fn pointer or enum)
-- [ ] Register built-in primitives (Phase 1 subset: maybe just `GET` as a function?)
-- [ ] Implement name lookup with scope chain (for nested scopes later)
+- [x] Define `PrimFn` type (async fn pointer or enum)
+- [x] Register built-in primitives (Phase 1 subset: maybe just `GET` as a function?)
+- [x] Implement name lookup with scope chain (for nested scopes)
 
 ### 9. Interpreter
 
 **IMPORTANT**: The interpreter must be **async** because `Database`/`Transaction` methods are async. All evaluation and execution methods return futures.
 
-- [ ] Define `Interpreter` struct with:
+- [ ] Define `pub(crate) Interpreter` struct with:
   - `ast: &Ast` (the parsed AST)
   - `env: &Environment` (primitives, functions, namespaces, types)
-  - `db: Database` (owned; for all variable operations)
+  - `db: Database` (owned; for all global/local variable operations)
+    **Why owned `Database`?**
+    - The interpreter is the natural owner when running `rumps path/to/db script.rumps`
+    - `PRAGMA` directives require `Database::reconfigure` (mutable access)
+    - `Database` is cheap to clone (internal `Arc`), so ownership has very low perf cost
   - `txn: Option<Transaction>` (active transaction, if any)
-
-**Why owned `Database`?**
-- The interpreter is the natural owner when running `rumps path/to/db script.rumps`
-- `PRAGMA` directives require `Database::reconfigure` (mutable access)
-- `Database` is cheap to clone (internal `Arc`), so ownership has very low perf cost
 - [ ] Implement async evaluation:
   ```rust
-  async fn eval_expr(&mut self, id: ExprId) -> Result<Value>
-  async fn exec_stmt(&mut self, id: StmtId) -> Result<()>
-  async fn exec(&mut self, stmts: &[StmtId]) -> Result<()>
+  // eval an expression
+  async fn eval(&mut self, id: ExprId) -> Result<Value>
+  // exec a statement
+  async fn exec(&mut self, id: StmtId) -> Result<()>
+  // run a full program (i.e. slice of statements)
+  pub(crate) async fn run(&mut self, stmts: &[StmtId]) -> Result<()>
   ```
-- [ ] Implement binary operations with type checking
-- [ ] Implement `OUTPUT` (print to stdout)
+- [ ] Implement binary operations with type checking (ALL Phase 1 binary operations; see `ast::BinOp`)
+  - **NOTE** Here is where we will do type coercions for numeric types; i.e. `<int> + <float>` requires coercion
+- [ ] Implement basic `OUTPUT` (print to stdout; use `tokio::io::stdout` for consistency)
 - [ ] Implement `LET` (sync; `env.scopes.bind(...)`)
-- [ ] Implement `SET` for locals (async; `db.set_local(...)`)
-- [ ] Implement `SET` for globals (async; requires `txn.set(...)`)
-- [ ] Implement `GET` for locals (async; `db.get_local(...)`)
-- [ ] Implement `GET` for globals (async; `db.get(...)` or `txn.get(...)`)
+- [ ] Implement `SET` for locals (async; `db.set(...)` with `Name::local` [`Database::set` will dispatch correctly])
+- [ ] Implement `SET` for globals (async; requires `txn.set(...)`, i.e. active transaction;  error if not in transaction)
+- [ ] Implement `GET` for locals (async; `db.get(...)` with `Name::local` [`Database::set` will dispatch correctly])
+- [ ] Implement `GET` for globals (async; `db.get(...)` or `txn.get(...)` [if there's an active transaction])
 
 ### 10. Integration Tests
 - [ ] Test: lex simple expressions
@@ -325,12 +328,12 @@ Instead of using `Box<Expr>` and `Box<Stmt>` for recursive AST nodes, we use **a
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ExprId(u32);
+pub(crate) struct ExprId(u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StmtId(u32);
+pub(crate) struct StmtId(u32);
 
-pub struct Ast {
+pub(crate) struct Ast {
     exprs: Vec<Expr>,
     expr_spans: Vec<Span>,
     stmts: Vec<Stmt>,
@@ -355,12 +358,12 @@ Runtime values also use arena allocation for the same reasons as AST nodes. Addi
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ValueId(u32);
+pub(crate) struct ValueId(u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct StringId(u32);
+pub(crate) struct StringId(u32);
 
-pub struct ValueArena {
+pub(crate) struct ValueArena {
     values: Vec<Value>,
     value_spans: Vec<Span>,
     strings: Vec<String>,
@@ -380,9 +383,9 @@ A `TypeRegistry` maps `TypeId` to type definitions, enabling runtime type valida
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TypeId(u32);
+pub(crate) struct TypeId(u32);
 
-pub struct TypeRegistry {
+pub(crate) struct TypeRegistry {
     defs: Vec<TypeDef>,
     by_name: HashMap<StringId, TypeId>,
 }
@@ -396,14 +399,14 @@ pub enum TypeDef {
     },
 }
 
-pub struct VariantDef { name: StringId, idx: u8, arity: u8 }
+pub(crate) struct VariantDef { name: StringId, idx: u8, arity: u8 }
 
 // BuiltinType covers primitives only; Option/Result are sum types
-pub enum BuiltinType { Bool, Int, Float, String, Array, Object }
+pub(crate) enum BuiltinType { Bool, Int, Float, String, Array, Object }
 
 // For annotations only; not stored in values; arena-allocated
-pub struct TypeExprId(u32);
-pub struct TypeExprArena { exprs: Vec<TypeExpr> }
+pub(crate) struct TypeExprId(u32);
+pub(crate) struct TypeExprArena { exprs: Vec<TypeExpr> }
 enum TypeExpr {
     Named(TypeId),
     App(TypeId, SmallVec<[TypeExprId; 2]>),  // e.g., Result[Int, String]
@@ -443,7 +446,7 @@ async fn set(&self, name: &Name, key: &Key, value: Value) -> Result<()>
 ```
 
 This means:
-- `eval_expr` and `exec_stmt` are `async fn`
+- `eval` and `exec` are `async fn`
 - All variable access (both locals and globals) goes through async `Database` methods
 - Transactions in the DSL map to `db.transaction(...)` calls
 - Tests use `#[tokio::test]`
