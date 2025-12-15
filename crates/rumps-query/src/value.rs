@@ -535,6 +535,9 @@ struct CoerceCtx<'a> {
 /// RUMPS uses conservative coercion:
 /// - Values can be coerced INTO strings, but not OUT of them
 /// - Numeric types can be coerced between each other
+///
+/// TODO: Later we probably want to coerce into JSON for our `Value`s as well;
+/// need to handle sum types carefully though
 trait Coerce<T> {
     fn coerce(&self, ctx: &CoerceCtx<'_>) -> Result<T>;
 }
