@@ -5,14 +5,12 @@
 mod ast;
 mod env;
 mod error;
+mod interpreter;
 mod lexer;
 mod parser;
 mod span;
 mod token;
 mod value;
-
-// Future modules (Phase 1 continued):
-// mod interpreter;
 
 #[allow(unused_imports)]
 pub(crate) use ast::{Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, UnOp};
@@ -20,6 +18,8 @@ pub(crate) use ast::{Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, UnOp};
 pub(crate) use env::{Environment, PrimCtx, PrimFn, PrimResult, Scopes};
 #[allow(unused_imports)]
 pub(crate) use error::{Error, ErrorDisplay, Result};
+#[allow(unused_imports)]
+pub(crate) use interpreter::Interpreter;
 #[allow(unused_imports)]
 pub(crate) use lexer::{Lexer, Spanned};
 #[allow(unused_imports)]

@@ -1,0 +1,1650 @@
+//! AST interpreter for the RUMPS query language.
+//!
+//! The interpreter is async because `Database` and `Transaction` methods are async.
+//! All variable access (both locals and globals) goes through async `Database` methods.
+
+#![allow(dead_code)]
+
+use std::collections::HashMap;
+
+use futures::future::BoxFuture;
+use ordered_float::OrderedFloat;
+use rumps_storage::{Database, Transaction};
+use smallvec::SmallVec;
+use tokio::io::{stdout, AsyncWriteExt};
+
+use crate::ast::{Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, UnOp};
+use crate::env::Environment;
+use crate::value::{
+    CoerceCtx, StringId, TypeRegistry, Value, ValueArena, ValueId,
+};
+use crate::{Error, Result, Span};
+
+/// The RUMPS interpreter.
+///
+/// Walks the AST and evaluates expressions/executes statements. Owns the
+/// runtime state (value arena, type registry, environment) and has access
+/// to the database for persistent storage operations.
+pub(crate) struct Interpreter<'a> {
+    /// The parsed AST (borrowed; immutable during interpretation).
+    ast: &'a Ast,
+
+    /// Variable environment for lexical `LET` bindings and primitives.
+    env: Environment,
+
+    /// Database for all `SET`/`GET` operations (owned).
+    ///
+    /// The interpreter is the natural owner when running `rumps path/to/db script.rumps`.
+    /// `Database` is cheap to clone (internal `Arc`), so ownership has low overhead.
+    db: Database,
+
+    /// Active transaction, if any.
+    ///
+    /// Global writes require a transaction; local writes can happen outside.
+    txn: Option<Transaction>,
+
+    /// Arena for runtime values with string interning.
+    arena: ValueArena,
+
+    /// Type registry for runtime type information.
+    registry: TypeRegistry,
+}
+
+impl<'a> Interpreter<'a> {
+    /// Create a new interpreter for the given AST and database.
+    pub(crate) fn new(ast: &'a Ast, db: Database) -> Result<Self> {
+        let mut arena = ValueArena::new();
+        let registry = TypeRegistry::new(&mut arena)?;
+
+        Ok(Self {
+            ast,
+            env: Environment::new(),
+            db,
+            txn: None,
+            arena,
+            registry,
+        })
+    }
+
+    /// Run a program (a sequence of statements).
+    ///
+    /// Consumes and returns the interpreter, allowing continued use after execution.
+    pub(crate) async fn run(mut self, stmts: &[StmtId]) -> Result<Self> {
+        self.exec_stmts(stmts).await?;
+        Ok(self)
+    }
+
+    /// Execute a sequence of statements.
+    ///
+    /// Uses async recursion over the slice instead of iteration.
+    fn exec_stmts<'b>(
+        &'b mut self,
+        stmts: &'b [StmtId],
+    ) -> BoxFuture<'b, Result<()>> {
+        Box::pin(async move {
+            match stmts.split_first() {
+                None => Ok(()),
+                Some((head, tail)) => {
+                    self.exec(*head).await?;
+                    self.exec_stmts(tail).await
+                }
+            }
+        })
+    }
+
+    /// Execute a single statement.
+    fn exec(&mut self, id: StmtId) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let span = self.ast.stmt_span(id).unwrap_or_default();
+            let stmt = self
+                .ast
+                .get_stmt(id)
+                .ok_or_else(|| Error::runtime(span, "invalid statement id"))?
+                .clone();
+
+            match stmt {
+                Stmt::Let(name, expr_id) => self.exec_let(&name, expr_id).await,
+                Stmt::Set(name, subs, expr_id) => {
+                    self.exec_set_local(&name, &subs, expr_id).await
+                }
+                Stmt::SetGlobal(name, subs, expr_id) => {
+                    self.exec_set_global(&name, &subs, expr_id, span).await
+                }
+                Stmt::Kill(name, subs) => {
+                    self.exec_kill_local(&name, &subs).await
+                }
+                Stmt::KillGlobal(name, subs) => {
+                    self.exec_kill_global(&name, &subs, span).await
+                }
+                Stmt::Output(expr_id) => self.exec_output(expr_id).await,
+                Stmt::If(cond, then_block, else_block) => {
+                    self.exec_if(cond, &then_block, else_block.as_deref()).await
+                }
+                Stmt::Block(stmts) => self.exec_block(&stmts).await,
+                Stmt::Expr(expr_id) => {
+                    // Evaluate for side effects, discard result
+                    self.eval(expr_id).await.map(|_| ())
+                }
+            }
+        })
+    }
+
+    /// Evaluate an expression.
+    fn eval(&mut self, id: ExprId) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            let span = self.ast.expr_span(id).unwrap_or_default();
+            let expr = self
+                .ast
+                .get_expr(id)
+                .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+                .clone();
+
+            match expr {
+                Expr::Literal(lit) => Ok(self.eval_literal(&lit)),
+                Expr::Local(name) => self.eval_local(&name, span),
+                Expr::Global(name, subs) => {
+                    self.eval_global(&name, &subs, span).await
+                }
+                Expr::Binary(lhs, op, rhs) => {
+                    self.eval_binary(lhs, op, rhs, span).await
+                }
+                Expr::Unary(op, operand) => {
+                    self.eval_unary(op, operand, span).await
+                }
+                Expr::Call(name, args) => {
+                    self.eval_call(&name, &args, span).await
+                }
+                Expr::Object(fields) => self.eval_object(&fields).await,
+                Expr::Array(elems) => self.eval_array(&elems).await,
+                Expr::Index(base, idx) => {
+                    self.eval_index(base, idx, span).await
+                }
+                Expr::Field(base, field) => {
+                    self.eval_field(base, &field, span).await
+                }
+            }
+        })
+    }
+
+    /// Convert an AST literal to a runtime value.
+    fn eval_literal(&mut self, lit: &Literal) -> Value {
+        match lit {
+            Literal::Bool(b) => Value::Bool(*b),
+            Literal::Int(n) => Value::Int(*n),
+            Literal::Float(f) => Value::Float(OrderedFloat(*f)),
+            Literal::String(s) => Value::String(self.arena.intern(s)),
+        }
+    }
+
+    /// Evaluate a local variable reference (from `LET` bindings).
+    fn eval_local(&self, name: &str, span: Span) -> Result<Value> {
+        let name_id = self.arena.string_map_lookup(name);
+        name_id
+            .and_then(|id| self.env.scopes.lookup(id))
+            .and_then(|val_id| self.arena.get(val_id).cloned())
+            .ok_or_else(|| {
+                Error::runtime(span, format!("undefined variable `{name}`"))
+            })
+    }
+
+    /// Evaluate a global variable reference.
+    fn eval_global<'b>(
+        &'b mut self,
+        _name: &'b str,
+        _subs: &'b [ExprId],
+        span: Span,
+    ) -> BoxFuture<'b, Result<Value>> {
+        Box::pin(async move {
+            // TODO: Phase 1 focuses on locals; globals require DB integration
+            Err(Error::runtime(
+                span,
+                "global variable access not yet implemented",
+            ))
+        })
+    }
+
+    /// Evaluate a binary operation.
+    ///
+    /// Handles short-circuit evaluation for `AND` and `OR`.
+    fn eval_binary(
+        &mut self,
+        lhs: ExprId,
+        op: BinOp,
+        rhs: ExprId,
+        span: Span,
+    ) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            match op {
+                // Short-circuit AND: if left is false, don't evaluate right
+                BinOp::And => {
+                    let left = self.eval(lhs).await?;
+                    match left {
+                        Value::Bool(false) => Ok(Value::Bool(false)),
+                        Value::Bool(true) => {
+                            let right = self.eval(rhs).await?;
+                            match right {
+                                Value::Bool(b) => Ok(Value::Bool(b)),
+                                _ => Err(Error::runtime(
+                                    span,
+                                    format!(
+                                        "logical AND requires booleans; got Bool and {}",
+                                        right.type_name(&self.registry)
+                                    ),
+                                )),
+                            }
+                        }
+                        _ => Err(Error::runtime(
+                            span,
+                            format!(
+                                "logical AND requires booleans; got {}",
+                                left.type_name(&self.registry)
+                            ),
+                        )),
+                    }
+                }
+                // Short-circuit OR: if left is true, don't evaluate right
+                BinOp::Or => {
+                    let left = self.eval(lhs).await?;
+                    match left {
+                        Value::Bool(true) => Ok(Value::Bool(true)),
+                        Value::Bool(false) => {
+                            let right = self.eval(rhs).await?;
+                            match right {
+                                Value::Bool(b) => Ok(Value::Bool(b)),
+                                _ => Err(Error::runtime(
+                                    span,
+                                    format!(
+                                        "logical OR requires booleans; got Bool and {}",
+                                        right.type_name(&self.registry)
+                                    ),
+                                )),
+                            }
+                        }
+                        _ => Err(Error::runtime(
+                            span,
+                            format!(
+                                "logical OR requires booleans; got {}",
+                                left.type_name(&self.registry)
+                            ),
+                        )),
+                    }
+                }
+                // All other operators evaluate both sides
+                _ => {
+                    let left = self.eval(lhs).await?;
+                    let right = self.eval(rhs).await?;
+                    self.apply_binop(&left, op, &right, span)
+                }
+            }
+        })
+    }
+
+    /// Evaluate a unary operation.
+    fn eval_unary(
+        &mut self,
+        op: UnOp,
+        operand: ExprId,
+        span: Span,
+    ) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            let val = self.eval(operand).await?;
+            self.apply_unop(op, &val, span)
+        })
+    }
+
+    /// Evaluate a function call.
+    fn eval_call<'b>(
+        &'b mut self,
+        _name: &'b str,
+        _args: &'b [ExprId],
+        span: Span,
+    ) -> BoxFuture<'b, Result<Value>> {
+        Box::pin(async move {
+            // TODO: Function calls will be implemented in later phases
+            Err(Error::runtime(span, "function calls not yet implemented"))
+        })
+    }
+
+    /// Evaluate an object literal.
+    fn eval_object<'b>(
+        &'b mut self,
+        fields: &'b [(String, ExprId)],
+    ) -> BoxFuture<'b, Result<Value>> {
+        Box::pin(async move {
+            let map = self.eval_object_fields(fields, HashMap::new()).await?;
+            Ok(Value::Object(map))
+        })
+    }
+
+    /// Recursively evaluate object fields.
+    fn eval_object_fields<'b>(
+        &'b mut self,
+        fields: &'b [(String, ExprId)],
+        mut acc: HashMap<StringId, ValueId>,
+    ) -> BoxFuture<'b, Result<HashMap<StringId, ValueId>>> {
+        Box::pin(async move {
+            match fields.split_first() {
+                None => Ok(acc),
+                Some(((key, expr_id), tail)) => {
+                    let val = self.eval(*expr_id).await?;
+                    let key_id = self.arena.intern(key);
+                    let val_id = self.arena.add(val, Span::default());
+                    acc.insert(key_id, val_id);
+                    self.eval_object_fields(tail, acc).await
+                }
+            }
+        })
+    }
+
+    /// Evaluate an array literal.
+    fn eval_array<'b>(
+        &'b mut self,
+        elems: &'b [ExprId],
+    ) -> BoxFuture<'b, Result<Value>> {
+        Box::pin(async move {
+            let vec = self
+                .eval_array_elems(elems, Vec::with_capacity(elems.len()))
+                .await?;
+            Ok(Value::Array(vec))
+        })
+    }
+
+    /// Recursively evaluate array elements.
+    fn eval_array_elems<'b>(
+        &'b mut self,
+        elems: &'b [ExprId],
+        mut acc: Vec<ValueId>,
+    ) -> BoxFuture<'b, Result<Vec<ValueId>>> {
+        Box::pin(async move {
+            match elems.split_first() {
+                None => Ok(acc),
+                Some((expr_id, tail)) => {
+                    let val = self.eval(*expr_id).await?;
+                    let val_id = self.arena.add(val, Span::default());
+                    acc.push(val_id);
+                    self.eval_array_elems(tail, acc).await
+                }
+            }
+        })
+    }
+
+    /// Evaluate index access (array or object).
+    fn eval_index(
+        &mut self,
+        base: ExprId,
+        idx: ExprId,
+        span: Span,
+    ) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            let base_val = self.eval(base).await?;
+            let idx_val = self.eval(idx).await?;
+
+            match (&base_val, &idx_val) {
+                (Value::Array(arr), Value::Int(i)) => {
+                    let index = if *i < 0 {
+                        // Negative indexing from end
+                        arr.len().checked_sub((-*i) as usize)
+                    } else {
+                        Some(*i as usize)
+                    };
+                    index
+                        .and_then(|idx| arr.get(idx))
+                        .and_then(|id| self.arena.get(*id).cloned())
+                        .ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                format!("array index {i} out of bounds"),
+                            )
+                        })
+                }
+                (Value::Object(obj), Value::String(key)) => obj
+                    .get(key)
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        let key_str = self.arena.get_str(*key).unwrap_or("?");
+                        Error::runtime(
+                            span,
+                            format!("key `{key_str}` not found"),
+                        )
+                    }),
+                _ => Err(Error::runtime(
+                    span,
+                    format!(
+                        "cannot index {} with {}",
+                        base_val.type_name(&self.registry),
+                        idx_val.type_name(&self.registry)
+                    ),
+                )),
+            }
+        })
+    }
+
+    /// Evaluate field access.
+    fn eval_field<'b>(
+        &'b mut self,
+        base: ExprId,
+        field: &'b str,
+        span: Span,
+    ) -> BoxFuture<'b, Result<Value>> {
+        Box::pin(async move {
+            let base_val = self.eval(base).await?;
+
+            match &base_val {
+                Value::Object(obj) => {
+                    let field_id = self.arena.intern(field);
+                    obj.get(&field_id)
+                        .and_then(|id| self.arena.get(*id).cloned())
+                        .ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                format!("field `{field}` not found"),
+                            )
+                        })
+                }
+                _ => Err(Error::runtime(
+                    span,
+                    format!(
+                        "cannot access field on {}",
+                        base_val.type_name(&self.registry)
+                    ),
+                )),
+            }
+        })
+    }
+
+    /// Execute a `LET` binding.
+    fn exec_let<'b>(
+        &'b mut self,
+        name: &'b str,
+        expr_id: ExprId,
+    ) -> BoxFuture<'b, Result<()>> {
+        Box::pin(async move {
+            let val = self.eval(expr_id).await?;
+            let name_id = self.arena.intern(name);
+            let val_id = self.arena.add(val, Span::default());
+            self.env.scopes.bind(name_id, val_id);
+            Ok(())
+        })
+    }
+
+    /// Execute a local `SET`.
+    fn exec_set_local<'b>(
+        &'b mut self,
+        _name: &'b str,
+        _subs: &'b [ExprId],
+        _expr_id: ExprId,
+    ) -> BoxFuture<'b, Result<()>> {
+        Box::pin(async move {
+            // TODO: Local SET requires Database integration (phase 1 continued)
+            Err(Error::runtime_no_span("local SET not yet implemented"))
+        })
+    }
+
+    /// Execute a global `SET`.
+    fn exec_set_global<'b>(
+        &'b mut self,
+        _name: &'b str,
+        _subs: &'b [ExprId],
+        _expr_id: ExprId,
+        span: Span,
+    ) -> BoxFuture<'b, Result<()>> {
+        Box::pin(async move {
+            // Global SET requires a transaction
+            self.txn.as_ref().map(|_| ()).ok_or_else(|| {
+                Error::runtime(span, "global SET requires a transaction")
+            })?;
+            // TODO: Implement global SET
+            Err(Error::runtime(span, "global SET not yet implemented"))
+        })
+    }
+
+    /// Execute a local `KILL`.
+    fn exec_kill_local<'b>(
+        &'b mut self,
+        _name: &'b str,
+        _subs: &'b [ExprId],
+    ) -> BoxFuture<'b, Result<()>> {
+        Box::pin(async move {
+            // TODO: Local KILL requires Database integration
+            Err(Error::runtime_no_span("local KILL not yet implemented"))
+        })
+    }
+
+    /// Execute a global `KILL`.
+    fn exec_kill_global<'b>(
+        &'b mut self,
+        _name: &'b str,
+        _subs: &'b [ExprId],
+        span: Span,
+    ) -> BoxFuture<'b, Result<()>> {
+        Box::pin(async move {
+            // Global KILL requires a transaction
+            self.txn.as_ref().map(|_| ()).ok_or_else(|| {
+                Error::runtime(span, "global KILL requires a transaction")
+            })?;
+            // TODO: Implement global KILL
+            Err(Error::runtime(span, "global KILL not yet implemented"))
+        })
+    }
+
+    /// Execute an `OUTPUT` statement.
+    ///
+    /// Writes to stdout asynchronously. Future: will support stderr, files, etc.
+    fn exec_output(&mut self, expr_id: ExprId) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let val = self.eval(expr_id).await?;
+            let ctx = CoerceCtx {
+                arena: &self.arena,
+                registry: &self.registry,
+            };
+            let s: String = val.coerce_to(&ctx)?;
+
+            let mut out = stdout();
+            out.write_all(s.as_bytes()).await.map_err(|e| {
+                Error::runtime_no_span(format!("output error: {e}"))
+            })?;
+            out.write_all(b"\n").await.map_err(|e| {
+                Error::runtime_no_span(format!("output error: {e}"))
+            })?;
+            out.flush().await.map_err(|e| {
+                Error::runtime_no_span(format!("output error: {e}"))
+            })
+        })
+    }
+
+    /// Execute an `IF` statement.
+    fn exec_if<'b>(
+        &'b mut self,
+        cond: ExprId,
+        then_block: &'b [StmtId],
+        else_block: Option<&'b [StmtId]>,
+    ) -> BoxFuture<'b, Result<()>> {
+        Box::pin(async move {
+            let cond_val = self.eval(cond).await?;
+            if cond_val.is_truthy(&self.arena) {
+                self.exec_block(then_block).await
+            } else {
+                match else_block {
+                    Some(stmts) => self.exec_block(stmts).await,
+                    None => Ok(()),
+                }
+            }
+        })
+    }
+
+    /// Execute a block of statements with a new scope.
+    fn exec_block<'b>(
+        &'b mut self,
+        stmts: &'b [StmtId],
+    ) -> BoxFuture<'b, Result<()>> {
+        Box::pin(async move {
+            self.env.scopes.push();
+            let result = self.exec_stmts(stmts).await;
+            self.env.scopes.pop();
+            result
+        })
+    }
+
+    /// Apply a binary operation to two values.
+    fn apply_binop(
+        &mut self,
+        left: &Value,
+        op: BinOp,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        match op {
+            // Arithmetic
+            BinOp::Add => self.binop_add(left, right, span),
+            BinOp::Sub => self.binop_sub(left, right, span),
+            BinOp::Mul => self.binop_mul(left, right, span),
+            BinOp::Div => self.binop_div(left, right, span),
+            BinOp::FloorDiv => self.binop_floor_div(left, right, span),
+            BinOp::Mod => self.binop_mod(left, right, span),
+
+            // Comparison
+            BinOp::Eq => self.values_equal(left, right, span).map(Value::Bool),
+            BinOp::Ne => self
+                .values_equal(left, right, span)
+                .map(|eq| Value::Bool(!eq)),
+            BinOp::Lt => self.binop_compare(left, right, span, |ord| {
+                matches!(ord, std::cmp::Ordering::Less)
+            }),
+            BinOp::Gt => self.binop_compare(left, right, span, |ord| {
+                matches!(ord, std::cmp::Ordering::Greater)
+            }),
+            BinOp::Le => self.binop_compare(left, right, span, |ord| {
+                matches!(
+                    ord,
+                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal
+                )
+            }),
+            BinOp::Ge => self.binop_compare(left, right, span, |ord| {
+                matches!(
+                    ord,
+                    std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
+                )
+            }),
+
+            // AND/OR are handled in `eval_binary` for short-circuit semantics
+            BinOp::And | BinOp::Or => unreachable!("handled in eval_binary"),
+
+            // String concatenation
+            BinOp::Concat => self.binop_concat(left, right),
+        }
+    }
+
+    /// Unary operation application.
+    fn apply_unop(&self, op: UnOp, val: &Value, span: Span) -> Result<Value> {
+        match op {
+            UnOp::Neg => match val {
+                Value::Int(n) => Ok(Value::Int(-n)),
+                Value::Float(f) => Ok(Value::Float(OrderedFloat(-f.0))),
+                _ => Err(Error::runtime(
+                    span,
+                    format!("cannot negate {}", val.type_name(&self.registry)),
+                )),
+            },
+            UnOp::Not => match val {
+                Value::Bool(b) => Ok(Value::Bool(!b)),
+                _ => Err(Error::runtime(
+                    span,
+                    format!(
+                        "logical NOT requires a boolean; got {}",
+                        val.type_name(&self.registry)
+                    ),
+                )),
+            },
+        }
+    }
+
+    /// Addition with numeric coercion.
+    fn binop_add(
+        &mut self,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => {
+                Ok(Value::Int(a.wrapping_add(*b)))
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                Ok(Value::Float(OrderedFloat(a.0 + b.0)))
+            }
+            // Int + Float -> Float
+            (Value::Int(a), Value::Float(b)) => {
+                Ok(Value::Float(OrderedFloat(*a as f64 + b.0)))
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                Ok(Value::Float(OrderedFloat(a.0 + *b as f64)))
+            }
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot add {} and {}",
+                    left.type_name(&self.registry),
+                    right.type_name(&self.registry)
+                ),
+            )),
+        }
+    }
+
+    /// Subtraction with numeric coercion.
+    fn binop_sub(
+        &mut self,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => {
+                Ok(Value::Int(a.wrapping_sub(*b)))
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                Ok(Value::Float(OrderedFloat(a.0 - b.0)))
+            }
+            (Value::Int(a), Value::Float(b)) => {
+                Ok(Value::Float(OrderedFloat(*a as f64 - b.0)))
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                Ok(Value::Float(OrderedFloat(a.0 - *b as f64)))
+            }
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot subtract {} from {}",
+                    right.type_name(&self.registry),
+                    left.type_name(&self.registry)
+                ),
+            )),
+        }
+    }
+
+    /// Multiplication with numeric coercion.
+    fn binop_mul(
+        &mut self,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => {
+                Ok(Value::Int(a.wrapping_mul(*b)))
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                Ok(Value::Float(OrderedFloat(a.0 * b.0)))
+            }
+            (Value::Int(a), Value::Float(b)) => {
+                Ok(Value::Float(OrderedFloat(*a as f64 * b.0)))
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                Ok(Value::Float(OrderedFloat(a.0 * *b as f64)))
+            }
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot multiply {} and {}",
+                    left.type_name(&self.registry),
+                    right.type_name(&self.registry)
+                ),
+            )),
+        }
+    }
+
+    /// Division (always returns float).
+    fn binop_div(
+        &self,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => {
+                div_f64(*a as f64, *b as f64, span)
+            }
+            (Value::Float(a), Value::Float(b)) => div_f64(a.0, b.0, span),
+            (Value::Int(a), Value::Float(b)) => div_f64(*a as f64, b.0, span),
+            (Value::Float(a), Value::Int(b)) => div_f64(a.0, *b as f64, span),
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot divide {} by {}",
+                    left.type_name(&self.registry),
+                    right.type_name(&self.registry)
+                ),
+            )),
+        }
+    }
+
+    /// Floor division (integer division).
+    fn binop_floor_div(
+        &mut self,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "division by zero"))
+                } else {
+                    Ok(Value::Int(a.div_euclid(*b)))
+                }
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if b.0 == 0.0 {
+                    Err(Error::runtime(span, "division by zero"))
+                } else {
+                    Ok(Value::Int((a.0 / b.0).floor() as i64))
+                }
+            }
+            (Value::Int(a), Value::Float(b)) => {
+                if b.0 == 0.0 {
+                    Err(Error::runtime(span, "division by zero"))
+                } else {
+                    Ok(Value::Int((*a as f64 / b.0).floor() as i64))
+                }
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "division by zero"))
+                } else {
+                    Ok(Value::Int((a.0 / *b as f64).floor() as i64))
+                }
+            }
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot floor divide {} by {}",
+                    left.type_name(&self.registry),
+                    right.type_name(&self.registry)
+                ),
+            )),
+        }
+    }
+
+    /// Modulo operation.
+    fn binop_mod(
+        &mut self,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "modulo by zero"))
+                } else {
+                    Ok(Value::Int(a.rem_euclid(*b)))
+                }
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if b.0 == 0.0 {
+                    Err(Error::runtime(span, "modulo by zero"))
+                } else {
+                    Ok(Value::Float(OrderedFloat(a.0 % b.0)))
+                }
+            }
+            (Value::Int(a), Value::Float(b)) => {
+                if b.0 == 0.0 {
+                    Err(Error::runtime(span, "modulo by zero"))
+                } else {
+                    Ok(Value::Float(OrderedFloat(*a as f64 % b.0)))
+                }
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "modulo by zero"))
+                } else {
+                    Ok(Value::Float(OrderedFloat(a.0 % *b as f64)))
+                }
+            }
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot compute {} mod {}",
+                    left.type_name(&self.registry),
+                    right.type_name(&self.registry)
+                ),
+            )),
+        }
+    }
+
+    /// String concatenation.
+    fn binop_concat(&mut self, left: &Value, right: &Value) -> Result<Value> {
+        // Fast path: both are strings
+        let result = match (left, right) {
+            (Value::String(l), Value::String(r)) => {
+                let ls = self.arena.get_str(*l).unwrap_or("");
+                let rs = self.arena.get_str(*r).unwrap_or("");
+                format!("{ls}{rs}")
+            }
+            _ => {
+                // Coerce both to strings
+                let ctx = CoerceCtx {
+                    arena: &self.arena,
+                    registry: &self.registry,
+                };
+                let l: String = left.coerce_to(&ctx)?;
+                let r: String = right.coerce_to(&ctx)?;
+                format!("{l}{r}")
+            }
+        };
+        Ok(Value::String(self.arena.intern(&result)))
+    }
+
+    /// Check equality of two values.
+    ///
+    /// Returns `Err` if the types are incompatible for comparison.
+    fn values_equal(
+        &self,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<bool> {
+        match (left, right) {
+            (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
+            (Value::Int(a), Value::Int(b)) => Ok(a == b),
+            (Value::Float(a), Value::Float(b)) => Ok(a == b),
+            // Cross-type numeric comparison
+            (Value::Int(a), Value::Float(b)) => Ok((*a as f64) == b.0),
+            (Value::Float(a), Value::Int(b)) => Ok(a.0 == (*b as f64)),
+            (Value::String(a), Value::String(b)) => Ok(a == b),
+            // Arrays: structural equality
+            (Value::Array(a), Value::Array(b)) => {
+                if a.len() != b.len() {
+                    Ok(false)
+                } else {
+                    self.arrays_equal(a, b, span)
+                }
+            }
+            // Objects: structural equality
+            (Value::Object(a), Value::Object(b)) => {
+                if a.len() != b.len() {
+                    Ok(false)
+                } else {
+                    self.objects_equal(a, b, span)
+                }
+            }
+            // Tagged: same type, variant, and payloads
+            (Value::Tagged(ty1, idx1, p1), Value::Tagged(ty2, idx2, p2)) => {
+                if ty1 != ty2 || idx1 != idx2 || p1.len() != p2.len() {
+                    Ok(false)
+                } else {
+                    self.payloads_equal(p1, p2, span)
+                }
+            }
+            // Incompatible types
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot compare {} and {} for equality",
+                    left.type_name(&self.registry),
+                    right.type_name(&self.registry)
+                ),
+            )),
+        }
+    }
+
+    /// Check equality of two arrays element-wise.
+    fn arrays_equal(
+        &self,
+        a: &[ValueId],
+        b: &[ValueId],
+        span: Span,
+    ) -> Result<bool> {
+        a.iter().zip(b.iter()).try_fold(true, |acc, (av, bv)| {
+            self.arena
+                .get(*av)
+                .zip(self.arena.get(*bv))
+                .map(|(va, vb)| self.values_equal(va, vb, span))
+                .unwrap_or(Ok(false))
+                .map(|eq| acc && eq)
+        })
+    }
+
+    /// Check equality of two objects field-wise.
+    fn objects_equal(
+        &self,
+        a: &HashMap<StringId, ValueId>,
+        b: &HashMap<StringId, ValueId>,
+        span: Span,
+    ) -> Result<bool> {
+        a.iter().try_fold(true, |acc, (k, av)| {
+            b.get(k)
+                .and_then(|bv| {
+                    self.arena
+                        .get(*av)
+                        .zip(self.arena.get(*bv))
+                        .map(|(va, vb)| self.values_equal(va, vb, span))
+                })
+                .unwrap_or(Ok(false))
+                .map(|eq| acc && eq)
+        })
+    }
+
+    /// Check equality of tagged value payloads.
+    fn payloads_equal(
+        &self,
+        p1: &SmallVec<[ValueId; 2]>,
+        p2: &SmallVec<[ValueId; 2]>,
+        span: Span,
+    ) -> Result<bool> {
+        p1.iter().zip(p2.iter()).try_fold(true, |acc, (av, bv)| {
+            self.arena
+                .get(*av)
+                .zip(self.arena.get(*bv))
+                .map(|(va, vb)| self.values_equal(va, vb, span))
+                .unwrap_or(Ok(false))
+                .map(|eq| acc && eq)
+        })
+    }
+
+    /// Compare two values and apply a predicate to the ordering.
+    fn binop_compare<F>(
+        &self,
+        left: &Value,
+        right: &Value,
+        span: Span,
+        pred: F,
+    ) -> Result<Value>
+    where
+        F: FnOnce(std::cmp::Ordering) -> bool,
+    {
+        let ord = match (left, right) {
+            (Value::Int(a), Value::Int(b)) => a.cmp(b),
+            (Value::Float(a), Value::Float(b)) => a.cmp(b),
+            // Cross-type numeric comparison
+            (Value::Int(a), Value::Float(b)) => OrderedFloat(*a as f64).cmp(b),
+            (Value::Float(a), Value::Int(b)) => a.cmp(&OrderedFloat(*b as f64)),
+            (Value::String(a), Value::String(b)) => {
+                // Compare by actual string content
+                let sa = self.arena.get_str(*a).unwrap_or("");
+                let sb = self.arena.get_str(*b).unwrap_or("");
+                sa.cmp(sb)
+            }
+            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+            _ => {
+                return Err(Error::runtime(
+                    span,
+                    format!(
+                        "cannot compare {} and {}",
+                        left.type_name(&self.registry),
+                        right.type_name(&self.registry)
+                    ),
+                ))
+            }
+        };
+        Ok(Value::Bool(pred(ord)))
+    }
+}
+
+/// Helper for float division with zero check.
+fn div_f64(a: f64, b: f64, span: Span) -> Result<Value> {
+    if b == 0.0 {
+        Err(Error::runtime(span, "division by zero"))
+    } else {
+        Ok(Value::Float(OrderedFloat(a / b)))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// Create a test interpreter with an in-memory database.
+    fn test_interp(ast: &Ast) -> Interpreter<'_> {
+        let db = Database::in_memory().expect("in-memory db");
+        Interpreter::new(ast, db).expect("interpreter")
+    }
+
+    /// Build a simple AST with a single expression.
+    fn ast_with_expr(expr: Expr) -> (Ast, ExprId) {
+        let mut ast = Ast::new();
+        let id = ast.add_expr(expr, Span::new(0, 10));
+        (ast, id)
+    }
+
+    #[tokio::test]
+    async fn eval_int_literal() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Int(42)));
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(id).await.unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[tokio::test]
+    async fn eval_float_literal() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Float(3.14)));
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(id).await.unwrap();
+        assert_eq!(result, Value::Float(OrderedFloat(3.14)));
+    }
+
+    #[tokio::test]
+    async fn eval_bool_literal() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Bool(true)));
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(id).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn eval_string_literal() {
+        let (ast, id) =
+            ast_with_expr(Expr::Literal(Literal::String("hello".into())));
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(id).await.unwrap();
+        match result {
+            Value::String(id) => {
+                assert_eq!(interp.arena.get_str(id), Some("hello"));
+            }
+            _ => panic!("expected string"),
+        }
+    }
+
+    #[tokio::test]
+    async fn eval_add_int() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(5, 7));
+        let add =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 7));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(add).await.unwrap();
+        assert_eq!(result, Value::Int(30));
+    }
+
+    #[tokio::test]
+    async fn eval_add_float() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Float(1.5)), Span::new(0, 3));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Float(2.5)), Span::new(6, 9));
+        let add =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 9));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(add).await.unwrap();
+        assert_eq!(result, Value::Float(OrderedFloat(4.0)));
+    }
+
+    #[tokio::test]
+    async fn eval_add_mixed_coercion() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Float(2.5)), Span::new(5, 8));
+        let add =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 8));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(add).await.unwrap();
+        assert_eq!(result, Value::Float(OrderedFloat(12.5)));
+    }
+
+    #[tokio::test]
+    async fn eval_sub() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(50)), Span::new(0, 2));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Int(30)), Span::new(5, 7));
+        let sub =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Sub, rhs), Span::new(0, 7));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(sub).await.unwrap();
+        assert_eq!(result, Value::Int(20));
+    }
+
+    #[tokio::test]
+    async fn eval_mul() {
+        let mut ast = Ast::new();
+        let lhs = ast.add_expr(Expr::Literal(Literal::Int(6)), Span::new(0, 1));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(7)), Span::new(4, 5));
+        let mul =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Mul, rhs), Span::new(0, 5));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(mul).await.unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[tokio::test]
+    async fn eval_div() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(4)), Span::new(5, 6));
+        let div =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Div, rhs), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(div).await.unwrap();
+        assert_eq!(result, Value::Float(OrderedFloat(2.5)));
+    }
+
+    #[tokio::test]
+    async fn eval_div_by_zero() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(5, 6));
+        let div =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Div, rhs), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(div).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn eval_floor_div() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(5, 6));
+        let div = ast
+            .add_expr(Expr::Binary(lhs, BinOp::FloorDiv, rhs), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(div).await.unwrap();
+        assert_eq!(result, Value::Int(3));
+    }
+
+    #[tokio::test]
+    async fn eval_mod() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(5, 6));
+        let m =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Mod, rhs), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(m).await.unwrap();
+        assert_eq!(result, Value::Int(1));
+    }
+
+    #[tokio::test]
+    async fn eval_eq() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(5, 7));
+        let eq =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Eq, rhs), Span::new(0, 7));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(eq).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn eval_eq_mixed_numeric() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Float(42.0)), Span::new(5, 9));
+        let eq =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Eq, rhs), Span::new(0, 9));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(eq).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn eval_ne() {
+        let mut ast = Ast::new();
+        let lhs = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(0, 1));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(5, 6));
+        let ne =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Ne, rhs), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(ne).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn eval_lt() {
+        let mut ast = Ast::new();
+        let lhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(4, 6));
+        let lt =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Lt, rhs), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(lt).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn eval_gt() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6));
+        let gt =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Gt, rhs), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(gt).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn eval_le() {
+        let mut ast = Ast::new();
+        let lhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6));
+        let le =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Le, rhs), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(le).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn eval_ge() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6));
+        let ge =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Ge, rhs), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(ge).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn eval_and() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(8, 13));
+        let and =
+            ast.add_expr(Expr::Binary(lhs, BinOp::And, rhs), Span::new(0, 13));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(and).await.unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn eval_or() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(0, 5));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(9, 13));
+        let or =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Or, rhs), Span::new(0, 13));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(or).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn eval_concat() {
+        let mut ast = Ast::new();
+        let lhs = ast.add_expr(
+            Expr::Literal(Literal::String("Hello".into())),
+            Span::new(0, 7),
+        );
+        let rhs = ast.add_expr(
+            Expr::Literal(Literal::String(" World".into())),
+            Span::new(11, 19),
+        );
+        let cat = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Concat, rhs), Span::new(0, 19));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cat).await.unwrap();
+        match result {
+            Value::String(id) => {
+                assert_eq!(interp.arena.get_str(id), Some("Hello World"));
+            }
+            _ => panic!("expected string"),
+        }
+    }
+
+    #[tokio::test]
+    async fn eval_concat_coercion() {
+        let mut ast = Ast::new();
+        let lhs = ast.add_expr(
+            Expr::Literal(Literal::String("value: ".into())),
+            Span::new(0, 9),
+        );
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(13, 15));
+        let cat = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Concat, rhs), Span::new(0, 15));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cat).await.unwrap();
+        match result {
+            Value::String(id) => {
+                assert_eq!(interp.arena.get_str(id), Some("value: 42"));
+            }
+            _ => panic!("expected string"),
+        }
+    }
+
+    #[tokio::test]
+    async fn eval_neg_int() {
+        let mut ast = Ast::new();
+        let operand =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(1, 3));
+        let neg =
+            ast.add_expr(Expr::Unary(UnOp::Neg, operand), Span::new(0, 3));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(neg).await.unwrap();
+        assert_eq!(result, Value::Int(-42));
+    }
+
+    #[tokio::test]
+    async fn eval_neg_float() {
+        let mut ast = Ast::new();
+        let operand =
+            ast.add_expr(Expr::Literal(Literal::Float(3.14)), Span::new(1, 5));
+        let neg =
+            ast.add_expr(Expr::Unary(UnOp::Neg, operand), Span::new(0, 5));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(neg).await.unwrap();
+        assert_eq!(result, Value::Float(OrderedFloat(-3.14)));
+    }
+
+    #[tokio::test]
+    async fn eval_not() {
+        let mut ast = Ast::new();
+        let operand =
+            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(1, 5));
+        let not =
+            ast.add_expr(Expr::Unary(UnOp::Not, operand), Span::new(0, 5));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(not).await.unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn exec_let_and_lookup() {
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(100)), Span::new(8, 11));
+        let let_stmt =
+            ast.add_stmt(Stmt::Let("x".into(), val), Span::new(0, 11));
+        let var = ast.add_expr(Expr::Local("x".into()), Span::new(0, 1));
+
+        let mut interp = test_interp(&ast);
+        interp.exec(let_stmt).await.unwrap();
+        let result = interp.eval(var).await.unwrap();
+        assert_eq!(result, Value::Int(100));
+    }
+
+    #[tokio::test]
+    async fn exec_let_shadowing() {
+        let mut ast = Ast::new();
+
+        // LET x = 10
+        let val1 =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
+        let let1 = ast.add_stmt(Stmt::Let("x".into(), val1), Span::new(0, 10));
+
+        // Block with LET x = 20
+        let val2 =
+            ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22));
+        let let2 = ast.add_stmt(Stmt::Let("x".into(), val2), Span::new(12, 22));
+        let block = ast.add_stmt(Stmt::Block(vec![let2]), Span::new(10, 24));
+
+        // Reference x
+        let var = ast.add_expr(Expr::Local("x".into()), Span::new(26, 27));
+
+        let mut interp = test_interp(&ast);
+        interp.exec(let1).await.unwrap();
+        interp.exec(block).await.unwrap();
+        // After block exits, x should be 10 again
+        let result = interp.eval(var).await.unwrap();
+        assert_eq!(result, Value::Int(10));
+    }
+
+    #[tokio::test]
+    async fn eval_array() {
+        let mut ast = Ast::new();
+        let e1 = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2));
+        let e2 = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5));
+        let e3 = ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(7, 8));
+        let arr = ast.add_expr(Expr::Array(vec![e1, e2, e3]), Span::new(0, 9));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(arr).await.unwrap();
+        match result {
+            Value::Array(ids) => {
+                assert_eq!(ids.len(), 3);
+            }
+            _ => panic!("expected array"),
+        }
+    }
+
+    #[tokio::test]
+    async fn eval_object() {
+        let mut ast = Ast::new();
+        let v1 = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
+        let v2 = ast.add_expr(
+            Expr::Literal(Literal::String("John".into())),
+            Span::new(17, 23),
+        );
+        let obj = ast.add_expr(
+            Expr::Object(vec![("id".into(), v1), ("name".into(), v2)]),
+            Span::new(0, 25),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(obj).await.unwrap();
+        match result {
+            Value::Object(map) => {
+                assert_eq!(map.len(), 2);
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[tokio::test]
+    async fn eval_index_array() {
+        let mut ast = Ast::new();
+        let e1 = ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(1, 3));
+        let e2 = ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(5, 7));
+        let arr = ast.add_expr(Expr::Array(vec![e1, e2]), Span::new(0, 8));
+        let idx =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(9, 10));
+        let access = ast.add_expr(Expr::Index(arr, idx), Span::new(0, 11));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(access).await.unwrap();
+        assert_eq!(result, Value::Int(20));
+    }
+
+    #[tokio::test]
+    async fn eval_field_access() {
+        let mut ast = Ast::new();
+        let v = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
+        let obj =
+            ast.add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10));
+        let field =
+            ast.add_expr(Expr::Field(obj, "x".into()), Span::new(0, 12));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(field).await.unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[tokio::test]
+    async fn exec_if_true() {
+        let mut ast = Ast::new();
+
+        // LET result = 0
+        let zero =
+            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(13, 14));
+        let let_result =
+            ast.add_stmt(Stmt::Let("result".into(), zero), Span::new(0, 14));
+
+        // IF true { LET result = 1 }
+        let cond =
+            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7));
+        let one =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(25, 26));
+        let set_one =
+            ast.add_stmt(Stmt::Let("result".into(), one), Span::new(10, 26));
+        let if_stmt =
+            ast.add_stmt(Stmt::If(cond, vec![set_one], None), Span::new(0, 28));
+
+        let var = ast.add_expr(Expr::Local("result".into()), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        interp.exec(let_result).await.unwrap();
+        interp.exec(if_stmt).await.unwrap();
+        let result = interp.eval(var).await.unwrap();
+        // In the block, we shadowed result. After block exit, it's 0 again.
+        assert_eq!(result, Value::Int(0));
+    }
+
+    #[tokio::test]
+    async fn exec_if_else() {
+        let mut ast = Ast::new();
+
+        // IF false { ... } ELSE { LET x = 42 }
+        let cond =
+            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8));
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(30, 32));
+        let let_x = ast.add_stmt(Stmt::Let("x".into(), val), Span::new(22, 32));
+        let if_stmt = ast.add_stmt(
+            Stmt::If(cond, vec![], Some(vec![let_x])),
+            Span::new(0, 35),
+        );
+
+        // After IF, check x
+        let var = ast.add_expr(Expr::Local("x".into()), Span::new(0, 1));
+
+        let mut interp = test_interp(&ast);
+        interp.exec(if_stmt).await.unwrap();
+        // x was set in else block which exited, so x is not visible
+        let result = interp.eval(var).await;
+        assert!(result.is_err()); // x is not defined outside the block
+    }
+
+    #[tokio::test]
+    async fn run_program() {
+        let mut ast = Ast::new();
+
+        // LET x = 10
+        let v1 =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
+        let let_x = ast.add_stmt(Stmt::Let("x".into(), v1), Span::new(0, 10));
+
+        // LET y = 20
+        let v2 =
+            ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22));
+        let let_y = ast.add_stmt(Stmt::Let("y".into(), v2), Span::new(12, 22));
+
+        // LET sum = x + y
+        let x = ast.add_expr(Expr::Local("x".into()), Span::new(34, 35));
+        let y = ast.add_expr(Expr::Local("y".into()), Span::new(38, 39));
+        let add =
+            ast.add_expr(Expr::Binary(x, BinOp::Add, y), Span::new(34, 39));
+        let let_sum =
+            ast.add_stmt(Stmt::Let("sum".into(), add), Span::new(24, 39));
+
+        // Reference to check result (create before interpreter borrows ast)
+        let sum_var = ast.add_expr(Expr::Local("sum".into()), Span::new(0, 3));
+
+        let stmts = vec![let_x, let_y, let_sum];
+
+        let interp = test_interp(&ast);
+        let mut interp = interp.run(&stmts).await.unwrap();
+
+        // Check sum
+        let result = interp.eval(sum_var).await.unwrap();
+        assert_eq!(result, Value::Int(30));
+    }
+}

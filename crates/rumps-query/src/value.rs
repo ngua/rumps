@@ -117,6 +117,13 @@ impl ValueArena {
         self.strings.get(id.idx()).map(String::as_str)
     }
 
+    /// Look up a string's ID without interning it.
+    ///
+    /// Returns `None` if the string has not been interned.
+    pub(crate) fn string_map_lookup(&self, s: &str) -> Option<StringId> {
+        self.string_map.get(s).copied()
+    }
+
     fn len(&self) -> usize {
         self.values.len()
     }

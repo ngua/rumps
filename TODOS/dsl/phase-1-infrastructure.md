@@ -285,7 +285,7 @@ The `Environment` tracks lexical scope for `LET` bindings and callable names. `S
 
 **IMPORTANT**: The interpreter must be **async** because `Database`/`Transaction` methods are async. All evaluation and execution methods return futures.
 
-- [ ] Define `pub(crate) Interpreter` struct with:
+- [x] Define `pub(crate) Interpreter` struct with:
   - `ast: &Ast` (the parsed AST)
   - `env: &Environment` (primitives, functions, namespaces, types)
   - `db: Database` (owned; for all global/local variable operations)
@@ -294,7 +294,7 @@ The `Environment` tracks lexical scope for `LET` bindings and callable names. `S
     - `PRAGMA` directives require `Database::reconfigure` (mutable access)
     - `Database` is cheap to clone (internal `Arc`), so ownership has very low perf cost
   - `txn: Option<Transaction>` (active transaction, if any)
-- [ ] Implement async evaluation:
+- [x] Implement async evaluation:
   ```rust
   // eval an expression
   async fn eval(&mut self, id: ExprId) -> Result<Value>
@@ -303,10 +303,10 @@ The `Environment` tracks lexical scope for `LET` bindings and callable names. `S
   // run a full program (i.e. slice of statements)
   pub(crate) async fn run(&mut self, stmts: &[StmtId]) -> Result<()>
   ```
-- [ ] Implement binary operations with type checking (ALL Phase 1 binary operations; see `ast::BinOp`)
+- [x] Implement binary operations with type checking (ALL Phase 1 binary operations; see `ast::BinOp`)
   - **NOTE** Here is where we will do type coercions for numeric types; i.e. `<int> + <float>` requires coercion
-- [ ] Implement basic `OUTPUT` (print to stdout; use `tokio::io::stdout` for consistency)
-- [ ] Implement `LET` (sync; `env.scopes.bind(...)`)
+- [x] Implement basic `OUTPUT` (print to stdout; use `tokio::io::stdout` for consistency)
+- [x] Implement `LET` (sync; `env.scopes.bind(...)`)
 - [ ] Implement `SET` for locals (async; `db.set(...)` with `Name::local` [`Database::set` will dispatch correctly])
 - [ ] Implement `SET` for globals (async; requires `txn.set(...)`, i.e. active transaction;  error if not in transaction)
 - [ ] Implement `GET` for locals (async; `db.get(...)` with `Name::local` [`Database::set` will dispatch correctly])
