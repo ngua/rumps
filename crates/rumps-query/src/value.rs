@@ -251,6 +251,14 @@ impl Value {
     pub(crate) fn is_err(&self) -> bool {
         matches!(self, Self::Tagged(ty, 1, _) if *ty == TypeId::RESULT)
     }
+
+    /// Coerce this value to type `T`.
+    pub(crate) fn coerce_to<T>(&self, ctx: &CoerceCtx<'_>) -> Result<T>
+    where
+        Self: Coerce<T>,
+    {
+        Coerce::<T>::coerce(self, ctx)
+    }
 }
 
 /// Built-in primitive types.
@@ -525,9 +533,9 @@ impl TypeRegistry {
 }
 
 /// Context needed for coercion operations.
-struct CoerceCtx<'a> {
-    arena: &'a ValueArena,
-    registry: &'a TypeRegistry,
+pub(crate) struct CoerceCtx<'a> {
+    pub(crate) arena: &'a ValueArena,
+    pub(crate) registry: &'a TypeRegistry,
 }
 
 /// Trait for coercing a `Value` to a target type.
@@ -538,7 +546,7 @@ struct CoerceCtx<'a> {
 ///
 /// TODO: Later we probably want to coerce into JSON for our `Value`s as well;
 /// need to handle sum types carefully though
-trait Coerce<T> {
+pub(crate) trait Coerce<T> {
     fn coerce(&self, ctx: &CoerceCtx<'_>) -> Result<T>;
 }
 
@@ -780,21 +788,15 @@ mod tests {
             registry: &reg,
         };
 
+        assert_eq!(Value::Int(42).coerce_to::<String>(&ctx).unwrap(), "42");
         assert_eq!(
-            <Value as Coerce<String>>::coerce(&Value::Int(42), &ctx).unwrap(),
-            "42"
-        );
-        assert_eq!(
-            <Value as Coerce<String>>::coerce(&Value::Bool(true), &ctx)
-                .unwrap(),
+            Value::Bool(true).coerce_to::<String>(&ctx).unwrap(),
             "true"
         );
         assert_eq!(
-            <Value as Coerce<String>>::coerce(
-                &Value::Float(OrderedFloat(3.14)),
-                &ctx
-            )
-            .unwrap(),
+            Value::Float(OrderedFloat(3.14))
+                .coerce_to::<String>(&ctx)
+                .unwrap(),
             "3.14"
         );
 
@@ -806,10 +808,7 @@ mod tests {
             arena: &arena,
             registry: &reg,
         };
-        assert_eq!(
-            <Value as Coerce<String>>::coerce(&arr, &ctx).unwrap(),
-            "[ 1, 2 ]"
-        );
+        assert_eq!(arr.coerce_to::<String>(&ctx).unwrap(), "[ 1, 2 ]");
 
         // Test object
         let k = arena.intern("x");
@@ -819,10 +818,7 @@ mod tests {
             arena: &arena,
             registry: &reg,
         };
-        assert_eq!(
-            <Value as Coerce<String>>::coerce(&obj, &ctx).unwrap(),
-            "{ x: 10 }"
-        );
+        assert_eq!(obj.coerce_to::<String>(&ctx).unwrap(), "{ x: 10 }");
 
         // Test tagged (Option.Some)
         let inner = arena.add(Value::Int(42), Span::new(10, 12));
@@ -831,17 +827,11 @@ mod tests {
             arena: &arena,
             registry: &reg,
         };
-        assert_eq!(
-            <Value as Coerce<String>>::coerce(&some, &ctx).unwrap(),
-            "Option.Some(42)"
-        );
+        assert_eq!(some.coerce_to::<String>(&ctx).unwrap(), "Option.Some(42)");
 
         // Test tagged (Option.None)
         let none = Value::none();
-        assert_eq!(
-            <Value as Coerce<String>>::coerce(&none, &ctx).unwrap(),
-            "Option.None"
-        );
+        assert_eq!(none.coerce_to::<String>(&ctx).unwrap(), "Option.None");
     }
 
     #[test]
@@ -854,16 +844,13 @@ mod tests {
         };
 
         assert_eq!(
-            <Value as Coerce<i64>>::coerce(
-                &Value::Float(OrderedFloat(3.7)),
-                &ctx
-            )
-            .unwrap(),
+            Value::Float(OrderedFloat(3.7))
+                .coerce_to::<i64>(&ctx)
+                .unwrap(),
             3
         );
         assert_eq!(
-            <Value as Coerce<OrderedFloat<f64>>>::coerce(&Value::Int(42), &ctx)
-                .unwrap(),
+            Value::Int(42).coerce_to::<OrderedFloat<f64>>(&ctx).unwrap(),
             OrderedFloat(42.0)
         );
 
@@ -873,9 +860,7 @@ mod tests {
             arena: &arena,
             registry: &reg,
         };
-        assert!(
-            <Value as Coerce<i64>>::coerce(&Value::String(s), &ctx).is_err()
-        );
+        assert!(Value::String(s).coerce_to::<i64>(&ctx).is_err());
     }
 
     #[test]
