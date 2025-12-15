@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use futures::future::BoxFuture;
 use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
+use rumps_types::{Key, Name, Subscript};
 use smallvec::SmallVec;
 use tokio::io::{stdout, AsyncWriteExt};
 
@@ -70,14 +71,14 @@ impl<'a> Interpreter<'a> {
     ///
     /// Consumes and returns the interpreter, allowing continued use after execution.
     pub(crate) async fn run(mut self, stmts: &[StmtId]) -> Result<Self> {
-        self.exec_stmts(stmts).await?;
+        self.stmts(stmts).await?;
         Ok(self)
     }
 
     /// Execute a sequence of statements.
     ///
     /// Uses async recursion over the slice instead of iteration.
-    fn exec_stmts<'b>(
+    fn stmts<'b>(
         &'b mut self,
         stmts: &'b [StmtId],
     ) -> BoxFuture<'b, Result<()>> {
@@ -86,7 +87,7 @@ impl<'a> Interpreter<'a> {
                 None => Ok(()),
                 Some((head, tail)) => {
                     self.exec(*head).await?;
-                    self.exec_stmts(tail).await
+                    self.stmts(tail).await
                 }
             }
         })
@@ -103,24 +104,22 @@ impl<'a> Interpreter<'a> {
                 .clone();
 
             match stmt {
-                Stmt::Let(name, expr_id) => self.exec_let(&name, expr_id).await,
+                Stmt::Let(name, expr_id) => self.r#let(&name, expr_id).await,
                 Stmt::Set(name, subs, expr_id) => {
-                    self.exec_set_local(&name, &subs, expr_id).await
+                    self.set_local(&name, &subs, expr_id).await
                 }
                 Stmt::SetGlobal(name, subs, expr_id) => {
-                    self.exec_set_global(&name, &subs, expr_id, span).await
+                    self.set_global(&name, &subs, expr_id, span).await
                 }
-                Stmt::Kill(name, subs) => {
-                    self.exec_kill_local(&name, &subs).await
-                }
+                Stmt::Kill(name, subs) => self.kill_local(&name, &subs).await,
                 Stmt::KillGlobal(name, subs) => {
-                    self.exec_kill_global(&name, &subs, span).await
+                    self.kill_global(&name, &subs, span).await
                 }
-                Stmt::Output(expr_id) => self.exec_output(expr_id).await,
+                Stmt::Output(expr_id) => self.output(expr_id).await,
                 Stmt::If(cond, then_block, else_block) => {
-                    self.exec_if(cond, &then_block, else_block.as_deref()).await
+                    self.r#if(cond, &then_block, else_block.as_deref()).await
                 }
-                Stmt::Block(stmts) => self.exec_block(&stmts).await,
+                Stmt::Block(stmts) => self.block(&stmts).await,
                 Stmt::Expr(expr_id) => {
                     // Evaluate for side effects, discard result
                     self.eval(expr_id).await.map(|_| ())
@@ -140,34 +139,28 @@ impl<'a> Interpreter<'a> {
                 .clone();
 
             match expr {
-                Expr::Literal(lit) => Ok(self.eval_literal(&lit)),
-                Expr::Local(name) => self.eval_local(&name, span),
+                Expr::Literal(lit) => Ok(self.literal(&lit)),
+                Expr::Local(name) => self.local(&name, span).await,
                 Expr::Global(name, subs) => {
-                    self.eval_global(&name, &subs, span).await
+                    self.global(&name, &subs, span).await
                 }
                 Expr::Binary(lhs, op, rhs) => {
-                    self.eval_binary(lhs, op, rhs, span).await
+                    self.binary(lhs, op, rhs, span).await
                 }
-                Expr::Unary(op, operand) => {
-                    self.eval_unary(op, operand, span).await
-                }
-                Expr::Call(name, args) => {
-                    self.eval_call(&name, &args, span).await
-                }
-                Expr::Object(fields) => self.eval_object(&fields).await,
-                Expr::Array(elems) => self.eval_array(&elems).await,
-                Expr::Index(base, idx) => {
-                    self.eval_index(base, idx, span).await
-                }
+                Expr::Unary(op, operand) => self.unary(op, operand, span).await,
+                Expr::Call(name, args) => self.call(&name, &args, span).await,
+                Expr::Object(fields) => self.object(&fields).await,
+                Expr::Array(elems) => self.array(&elems).await,
+                Expr::Index(base, idx) => self.index(base, idx, span).await,
                 Expr::Field(base, field) => {
-                    self.eval_field(base, &field, span).await
+                    self.field(base, &field, span).await
                 }
             }
         })
     }
 
     /// Convert an AST literal to a runtime value.
-    fn eval_literal(&mut self, lit: &Literal) -> Value {
+    fn literal(&mut self, lit: &Literal) -> Value {
         match lit {
             Literal::Bool(b) => Value::Bool(*b),
             Literal::Int(n) => Value::Int(*n),
@@ -176,37 +169,80 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    /// Evaluate a local variable reference (from `LET` bindings).
-    fn eval_local(&self, name: &str, span: Span) -> Result<Value> {
-        let name_id = self.arena.string_map_lookup(name);
-        name_id
-            .and_then(|id| self.env.scopes.lookup(id))
-            .and_then(|val_id| self.arena.get(val_id).cloned())
-            .ok_or_else(|| {
-                Error::runtime(span, format!("undefined variable `{name}`"))
-            })
-    }
-
-    /// Evaluate a global variable reference.
-    fn eval_global<'b>(
+    /// Evaluate a local variable reference.
+    ///
+    /// First checks LET bindings (lexical scopes), then falls back to
+    /// SET locals in the database. LET bindings shadow SET locals.
+    fn local<'b>(
         &'b mut self,
-        _name: &'b str,
-        _subs: &'b [ExprId],
+        name: &'b str,
         span: Span,
     ) -> BoxFuture<'b, Result<Value>> {
         Box::pin(async move {
-            // TODO: Phase 1 focuses on locals; globals require DB integration
-            Err(Error::runtime(
-                span,
-                "global variable access not yet implemented",
-            ))
+            // First: check LET bindings (lexical scopes)
+            let scope_val = self
+                .arena
+                .string_map_lookup(name)
+                .and_then(|id| self.env.scopes.lookup(id))
+                .and_then(|val_id| self.arena.get(val_id).cloned());
+
+            match scope_val {
+                Some(v) => Ok(v),
+                None => {
+                    // Fall back to SET locals in the database
+                    let db_name = Name::local(name);
+                    let key = Key::new(); // Empty key for simple local
+
+                    self.db
+                        .get(&db_name, &key)
+                        .await
+                        .map_err(|e| {
+                            Error::runtime(span, format!("GET failed: {e}"))
+                        })?
+                        .map(|sv| Value::from_storage(sv, &mut self.arena))
+                        .ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                format!("undefined variable `{name}`"),
+                            )
+                        })
+                }
+            }
+        })
+    }
+
+    /// Evaluate a global variable reference.
+    ///
+    /// Gets a global variable from the database. Uses the active transaction
+    /// if one exists, otherwise reads directly from the database.
+    fn global<'b>(
+        &'b mut self,
+        name: &'b str,
+        subs: &'b [ExprId],
+        span: Span,
+    ) -> BoxFuture<'b, Result<Value>> {
+        Box::pin(async move {
+            let key = self.build_key(subs).await?;
+            let db_name = Name::global(name);
+
+            let opt_val = match &self.txn {
+                Some(txn) => txn.get(&db_name, &key).await,
+                None => self.db.get(&db_name, &key).await,
+            }
+            .map_err(|e| Error::runtime(span, format!("GET failed: {e}")))?;
+
+            opt_val
+                .map(|sv| Value::from_storage(sv, &mut self.arena))
+                .ok_or_else(|| {
+                    Error::runtime(span, format!("undefined global `^{name}`"))
+                })
         })
     }
 
     /// Evaluate a binary operation.
     ///
     /// Handles short-circuit evaluation for `AND` and `OR`.
-    fn eval_binary(
+    fn binary(
         &mut self,
         lhs: ExprId,
         op: BinOp,
@@ -280,7 +316,7 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Evaluate a unary operation.
-    fn eval_unary(
+    fn unary(
         &mut self,
         op: UnOp,
         operand: ExprId,
@@ -293,7 +329,7 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Evaluate a function call.
-    fn eval_call<'b>(
+    fn call<'b>(
         &'b mut self,
         _name: &'b str,
         _args: &'b [ExprId],
@@ -306,18 +342,18 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Evaluate an object literal.
-    fn eval_object<'b>(
+    fn object<'b>(
         &'b mut self,
         fields: &'b [(String, ExprId)],
     ) -> BoxFuture<'b, Result<Value>> {
         Box::pin(async move {
-            let map = self.eval_object_fields(fields, HashMap::new()).await?;
+            let map = self.object_fields(fields, HashMap::new()).await?;
             Ok(Value::Object(map))
         })
     }
 
     /// Recursively evaluate object fields.
-    fn eval_object_fields<'b>(
+    fn object_fields<'b>(
         &'b mut self,
         fields: &'b [(String, ExprId)],
         mut acc: HashMap<StringId, ValueId>,
@@ -326,31 +362,32 @@ impl<'a> Interpreter<'a> {
             match fields.split_first() {
                 None => Ok(acc),
                 Some(((key, expr_id), tail)) => {
+                    let span = self.ast.expr_span(*expr_id).unwrap_or_default();
                     let val = self.eval(*expr_id).await?;
                     let key_id = self.arena.intern(key);
-                    let val_id = self.arena.add(val, Span::default());
+                    let val_id = self.arena.add(val, span);
                     acc.insert(key_id, val_id);
-                    self.eval_object_fields(tail, acc).await
+                    self.object_fields(tail, acc).await
                 }
             }
         })
     }
 
     /// Evaluate an array literal.
-    fn eval_array<'b>(
+    fn array<'b>(
         &'b mut self,
         elems: &'b [ExprId],
     ) -> BoxFuture<'b, Result<Value>> {
         Box::pin(async move {
             let vec = self
-                .eval_array_elems(elems, Vec::with_capacity(elems.len()))
+                .array_elems(elems, Vec::with_capacity(elems.len()))
                 .await?;
             Ok(Value::Array(vec))
         })
     }
 
     /// Recursively evaluate array elements.
-    fn eval_array_elems<'b>(
+    fn array_elems<'b>(
         &'b mut self,
         elems: &'b [ExprId],
         mut acc: Vec<ValueId>,
@@ -359,17 +396,18 @@ impl<'a> Interpreter<'a> {
             match elems.split_first() {
                 None => Ok(acc),
                 Some((expr_id, tail)) => {
+                    let span = self.ast.expr_span(*expr_id).unwrap_or_default();
                     let val = self.eval(*expr_id).await?;
-                    let val_id = self.arena.add(val, Span::default());
+                    let val_id = self.arena.add(val, span);
                     acc.push(val_id);
-                    self.eval_array_elems(tail, acc).await
+                    self.array_elems(tail, acc).await
                 }
             }
         })
     }
 
     /// Evaluate index access (array or object).
-    fn eval_index(
+    fn index(
         &mut self,
         base: ExprId,
         idx: ExprId,
@@ -420,7 +458,7 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Evaluate field access.
-    fn eval_field<'b>(
+    fn field<'b>(
         &'b mut self,
         base: ExprId,
         field: &'b str,
@@ -453,53 +491,107 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Execute a `LET` binding.
-    fn exec_let<'b>(
+    fn r#let<'b>(
         &'b mut self,
         name: &'b str,
         expr_id: ExprId,
     ) -> BoxFuture<'b, Result<()>> {
         Box::pin(async move {
+            let span = self.ast.expr_span(expr_id).unwrap_or_default();
             let val = self.eval(expr_id).await?;
             let name_id = self.arena.intern(name);
-            let val_id = self.arena.add(val, Span::default());
+            let val_id = self.arena.add(val, span);
             self.env.scopes.bind(name_id, val_id);
             Ok(())
         })
     }
 
-    /// Execute a local `SET`.
-    fn exec_set_local<'b>(
+    /// Evaluate subscript expressions and build a `Key`.
+    fn build_key<'b>(
         &'b mut self,
-        _name: &'b str,
-        _subs: &'b [ExprId],
-        _expr_id: ExprId,
+        subs: &'b [ExprId],
+    ) -> BoxFuture<'b, Result<Key>> {
+        Box::pin(async move {
+            self.build_key_acc(subs, Vec::with_capacity(subs.len()))
+                .await
+        })
+    }
+
+    /// Recursive helper for building a key from subscript expressions.
+    fn build_key_acc<'b>(
+        &'b mut self,
+        subs: &'b [ExprId],
+        mut acc: Vec<Subscript>,
+    ) -> BoxFuture<'b, Result<Key>> {
+        Box::pin(async move {
+            match subs.split_first() {
+                None => Ok(Key::from(acc)),
+                Some((head, tail)) => {
+                    let val = self.eval(*head).await?;
+                    let sub = val.to_subscript(&self.arena)?;
+                    acc.push(sub);
+                    self.build_key_acc(tail, acc).await
+                }
+            }
+        })
+    }
+
+    /// Execute a local `SET`.
+    ///
+    /// Sets a local variable in the database. Locals can be set outside transactions.
+    fn set_local<'b>(
+        &'b mut self,
+        name: &'b str,
+        subs: &'b [ExprId],
+        expr_id: ExprId,
     ) -> BoxFuture<'b, Result<()>> {
         Box::pin(async move {
-            // TODO: Local SET requires Database integration (phase 1 continued)
-            Err(Error::runtime_no_span("local SET not yet implemented"))
+            let key = self.build_key(subs).await?;
+            let val = self.eval(expr_id).await?;
+            let storage_val = val.to_storage(&self.arena)?;
+            let db_name = Name::local(name);
+
+            self.db
+                .set(&db_name, &key, storage_val)
+                .await
+                .map_err(|e| Error::runtime_no_span(format!("SET failed: {e}")))
         })
     }
 
     /// Execute a global `SET`.
-    fn exec_set_global<'b>(
+    ///
+    /// Sets a global variable; requires an active transaction.
+    fn set_global<'b>(
         &'b mut self,
-        _name: &'b str,
-        _subs: &'b [ExprId],
-        _expr_id: ExprId,
+        name: &'b str,
+        subs: &'b [ExprId],
+        expr_id: ExprId,
         span: Span,
     ) -> BoxFuture<'b, Result<()>> {
         Box::pin(async move {
-            // Global SET requires a transaction
-            self.txn.as_ref().map(|_| ()).ok_or_else(|| {
-                Error::runtime(span, "global SET requires a transaction")
-            })?;
-            // TODO: Implement global SET
-            Err(Error::runtime(span, "global SET not yet implemented"))
+            // Do all &mut self operations first
+            let key = self.build_key(subs).await?;
+            let val = self.eval(expr_id).await?;
+            let storage_val = val.to_storage(&self.arena)?;
+            let db_name = Name::global(name);
+
+            // Now we can borrow txn
+            match self.txn.as_ref() {
+                Some(txn) => {
+                    txn.set(&db_name, &key, storage_val).await.map_err(|e| {
+                        Error::runtime(span, format!("SET failed: {e}"))
+                    })
+                }
+                None => Err(Error::runtime(
+                    span,
+                    "global SET requires a transaction",
+                )),
+            }
         })
     }
 
     /// Execute a local `KILL`.
-    fn exec_kill_local<'b>(
+    fn kill_local<'b>(
         &'b mut self,
         _name: &'b str,
         _subs: &'b [ExprId],
@@ -511,7 +603,7 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Execute a global `KILL`.
-    fn exec_kill_global<'b>(
+    fn kill_global<'b>(
         &'b mut self,
         _name: &'b str,
         _subs: &'b [ExprId],
@@ -530,7 +622,7 @@ impl<'a> Interpreter<'a> {
     /// Execute an `OUTPUT` statement.
     ///
     /// Writes to stdout asynchronously. Future: will support stderr, files, etc.
-    fn exec_output(&mut self, expr_id: ExprId) -> BoxFuture<'_, Result<()>> {
+    fn output(&mut self, expr_id: ExprId) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             let val = self.eval(expr_id).await?;
             let ctx = CoerceCtx {
@@ -553,7 +645,7 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Execute an `IF` statement.
-    fn exec_if<'b>(
+    fn r#if<'b>(
         &'b mut self,
         cond: ExprId,
         then_block: &'b [StmtId],
@@ -562,10 +654,10 @@ impl<'a> Interpreter<'a> {
         Box::pin(async move {
             let cond_val = self.eval(cond).await?;
             if cond_val.is_truthy(&self.arena) {
-                self.exec_block(then_block).await
+                self.block(then_block).await
             } else {
                 match else_block {
-                    Some(stmts) => self.exec_block(stmts).await,
+                    Some(stmts) => self.block(stmts).await,
                     None => Ok(()),
                 }
             }
@@ -573,13 +665,13 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Execute a block of statements with a new scope.
-    fn exec_block<'b>(
+    fn block<'b>(
         &'b mut self,
         stmts: &'b [StmtId],
     ) -> BoxFuture<'b, Result<()>> {
         Box::pin(async move {
             self.env.scopes.push();
-            let result = self.exec_stmts(stmts).await;
+            let result = self.stmts(stmts).await;
             self.env.scopes.pop();
             result
         })
@@ -626,8 +718,8 @@ impl<'a> Interpreter<'a> {
                 )
             }),
 
-            // AND/OR are handled in `eval_binary` for short-circuit semantics
-            BinOp::And | BinOp::Or => unreachable!("handled in eval_binary"),
+            // AND/OR are handled in `binary` for short-circuit semantics
+            BinOp::And | BinOp::Or => unreachable!("handled in binary"),
 
             // String concatenation
             BinOp::Concat => self.binop_concat(left, right),
@@ -1448,7 +1540,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exec_let_and_lookup() {
+    async fn let_and_lookup() {
         let mut ast = Ast::new();
         let val =
             ast.add_expr(Expr::Literal(Literal::Int(100)), Span::new(8, 11));
@@ -1463,7 +1555,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exec_let_shadowing() {
+    async fn let_shadowing() {
         let mut ast = Ast::new();
 
         // LET x = 10
@@ -1489,7 +1581,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn eval_array() {
+    async fn array() {
         let mut ast = Ast::new();
         let e1 = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2));
         let e2 = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5));
@@ -1507,7 +1599,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn eval_object() {
+    async fn object() {
         let mut ast = Ast::new();
         let v1 = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
         let v2 = ast.add_expr(
@@ -1530,7 +1622,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn eval_index_array() {
+    async fn index_array() {
         let mut ast = Ast::new();
         let e1 = ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(1, 3));
         let e2 = ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(5, 7));
@@ -1545,7 +1637,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn eval_field_access() {
+    async fn field_access() {
         let mut ast = Ast::new();
         let v = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
         let obj =
@@ -1559,7 +1651,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exec_if_true() {
+    async fn if_true() {
         let mut ast = Ast::new();
 
         // LET result = 0
@@ -1589,7 +1681,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exec_if_else() {
+    async fn if_else() {
         let mut ast = Ast::new();
 
         // IF false { ... } ELSE { LET x = 42 }

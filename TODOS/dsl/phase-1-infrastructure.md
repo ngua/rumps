@@ -307,10 +307,10 @@ The `Environment` tracks lexical scope for `LET` bindings and callable names. `S
   - **NOTE** Here is where we will do type coercions for numeric types; i.e. `<int> + <float>` requires coercion
 - [x] Implement basic `OUTPUT` (print to stdout; use `tokio::io::stdout` for consistency)
 - [x] Implement `LET` (sync; `env.scopes.bind(...)`)
-- [ ] Implement `SET` for locals (async; `db.set(...)` with `Name::local` [`Database::set` will dispatch correctly])
-- [ ] Implement `SET` for globals (async; requires `txn.set(...)`, i.e. active transaction;  error if not in transaction)
-- [ ] Implement `GET` for locals (async; `db.get(...)` with `Name::local` [`Database::set` will dispatch correctly])
-- [ ] Implement `GET` for globals (async; `db.get(...)` or `txn.get(...)` [if there's an active transaction])
+- [x] Implement `SET` for locals (async; `db.set(...)` with `Name::local` [`Database::set` will dispatch correctly])
+- [x] Implement `SET` for globals (async; requires `txn.set(...)`, i.e. active transaction;  error if not in transaction)
+- [x] Implement `GET` for locals (async; `db.get(...)` with `Name::local` [`Database::get` will dispatch correctly]; `eval_local` also checks LET scopes first)
+- [x] Implement `GET` for globals (async; `db.get(...)` or `txn.get(...)` [if there's an active transaction])
 
 ### 10. Integration Tests
 - [ ] Test: lex simple expressions

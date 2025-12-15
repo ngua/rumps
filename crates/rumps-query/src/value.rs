@@ -10,9 +10,10 @@
 use std::collections::HashMap;
 
 use ordered_float::OrderedFloat;
+use rumps_types::Subscript;
 use smallvec::SmallVec;
 
-use crate::{Result, Span};
+use crate::{Error, Result, Span};
 
 /// Index into the value arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -265,6 +266,133 @@ impl Value {
         Self: Coerce<T>,
     {
         Coerce::<T>::coerce(self, ctx)
+    }
+
+    /// Convert this value to a subscript for key construction.
+    ///
+    /// Only scalar types (Bool, Int, Float, String) can be subscripts.
+    pub(crate) fn to_subscript(&self, arena: &ValueArena) -> Result<Subscript> {
+        match self {
+            Self::Bool(b) => Ok(Subscript::Boolean(*b)),
+            Self::Int(i) => Ok(Subscript::Number(OrderedFloat(*i as f64))),
+            Self::Float(f) => Ok(Subscript::Number(*f)),
+            Self::String(id) => arena
+                .get_str(*id)
+                .map(|s| Subscript::String(s.to_owned()))
+                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
+            Self::Array(_) | Self::Object(_) | Self::Tagged(_, _, _) => {
+                Err(Error::runtime_no_span(
+                    "complex values cannot be used as subscripts",
+                ))
+            }
+        }
+    }
+
+    /// Convert this value to a storage value (`rumps_types::Value`).
+    ///
+    /// Only scalar types can be stored directly; complex values need JSON.
+    pub(crate) fn to_storage(
+        &self,
+        arena: &ValueArena,
+    ) -> Result<rumps_types::Value> {
+        match self {
+            Self::Bool(b) => Ok(rumps_types::Value::Boolean(*b)),
+            Self::Int(i) => Ok(rumps_types::Value::Integer(*i)),
+            Self::Float(f) => Ok(rumps_types::Value::Double(*f)),
+            Self::String(id) => arena
+                .get_str(*id)
+                .map(|s| rumps_types::Value::String(s.to_owned()))
+                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
+            Self::Array(_) | Self::Object(_) | Self::Tagged(_, _, _) => {
+                // FIXME: Serialize to JSON. Objects and arrays are straightforward;
+                // sum type encoding needs some thought (we could use strings for
+                // unit enums and maybe the default for payload-bearing enums that
+                // serde uses)
+                Err(Error::runtime_no_span(
+                    "complex values (Array, Object, Tagged) cannot be stored yet",
+                ))
+            }
+        }
+    }
+
+    /// Convert a storage value (`rumps_types::Value`) to a runtime value.
+    pub(crate) fn from_storage(
+        v: rumps_types::Value,
+        arena: &mut ValueArena,
+    ) -> Self {
+        match v {
+            rumps_types::Value::Boolean(b) => Self::Bool(b),
+            rumps_types::Value::Integer(i) => Self::Int(i),
+            rumps_types::Value::Double(d) => Self::Float(d),
+            rumps_types::Value::Char(c) => {
+                Self::String(arena.intern(&c.to_string()))
+            }
+            rumps_types::Value::String(s) => Self::String(arena.intern(&s)),
+            rumps_types::Value::Json(j) => Self::from_json(j, arena),
+        }
+    }
+
+    /// Convert a JSON value to a runtime value.
+    ///
+    /// Arrays are only converted if homogeneous; heterogeneous arrays become
+    /// strings until we add a `Value::Json` variant.
+    fn from_json(j: serde_json::Value, arena: &mut ValueArena) -> Self {
+        match j {
+            serde_json::Value::Null => Self::none(),
+            serde_json::Value::Bool(b) => Self::Bool(b),
+            serde_json::Value::Number(n) => {
+                Self::Float(OrderedFloat(n.as_f64().unwrap_or(0.0)))
+            }
+            serde_json::Value::String(s) => Self::String(arena.intern(&s)),
+            serde_json::Value::Array(arr) => {
+                // Check homogeneity: all elements must have the same JSON type
+                let is_homogeneous = arr.first().is_none_or(|first| {
+                    let tag = json_type_tag(first);
+                    arr.iter().skip(1).all(|v| json_type_tag(v) == tag)
+                });
+
+                if is_homogeneous {
+                    let elems = arr
+                        .into_iter()
+                        .map(|v| {
+                            let val = Self::from_json(v, arena);
+                            arena.add(val, Span::default())
+                        })
+                        .collect();
+                    Self::Array(elems)
+                } else {
+                    // FIXME: Heterogeneous JSON arrays should map to a future
+                    // `Value::Json` variant. For now, store as string.
+                    let s = serde_json::to_string(&arr)
+                        .unwrap_or_else(|_| "<json>".to_owned());
+                    Self::String(arena.intern(&s))
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                let fields = obj
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = arena.intern(&k);
+                        let val = Self::from_json(v, arena);
+                        let val_id = arena.add(val, Span::default());
+                        (key, val_id)
+                    })
+                    .collect();
+                Self::Object(fields)
+            }
+        }
+    }
+}
+
+/// Get a discriminant tag for JSON value type (for homogeneity checks).
+fn json_type_tag(v: &serde_json::Value) -> u8 {
+    match v {
+        serde_json::Value::Null => 0,
+        serde_json::Value::Bool(_) => 1,
+        serde_json::Value::Number(_) => 2,
+        serde_json::Value::String(_) => 3,
+        serde_json::Value::Array(_) => 4,
+        serde_json::Value::Object(_) => 5,
     }
 }
 
@@ -880,5 +1008,67 @@ mod tests {
 
         assert_eq!(reg.variant_name(TypeId::RESULT, 0, &arena), Some("Ok"));
         assert_eq!(reg.variant_name(TypeId::RESULT, 1, &arena), Some("Err"));
+    }
+
+    #[test]
+    fn from_json_scalars() {
+        let mut arena = ValueArena::new();
+
+        // Null -> Option.None
+        let v = Value::from_json(serde_json::Value::Null, &mut arena);
+        assert!(v.is_none());
+
+        // Bool
+        let v = Value::from_json(serde_json::json!(true), &mut arena);
+        assert_eq!(v, Value::Bool(true));
+
+        // Number -> Float
+        let v = Value::from_json(serde_json::json!(42.5), &mut arena);
+        assert_eq!(v, Value::Float(OrderedFloat(42.5)));
+
+        // String
+        let v = Value::from_json(serde_json::json!("hello"), &mut arena);
+        matches!(v, Value::String(_));
+    }
+
+    #[test]
+    fn from_json_homogeneous_array() {
+        let mut arena = ValueArena::new();
+
+        // Homogeneous array of numbers
+        let v = Value::from_json(serde_json::json!([1, 2, 3]), &mut arena);
+        assert!(matches!(v, Value::Array(_)));
+
+        // Homogeneous array of strings
+        let v =
+            Value::from_json(serde_json::json!(["a", "b", "c"]), &mut arena);
+        assert!(matches!(v, Value::Array(_)));
+
+        // Empty array is homogeneous
+        let v = Value::from_json(serde_json::json!([]), &mut arena);
+        assert!(matches!(v, Value::Array(ref arr) if arr.is_empty()));
+    }
+
+    #[test]
+    fn from_json_heterogeneous_array() {
+        let mut arena = ValueArena::new();
+
+        // Heterogeneous array -> String (for now)
+        let v =
+            Value::from_json(serde_json::json!([1, "two", true]), &mut arena);
+        assert!(matches!(v, Value::String(_)));
+
+        // Mixed numbers and strings
+        let v = Value::from_json(serde_json::json!([1, "a"]), &mut arena);
+        assert!(matches!(v, Value::String(_)));
+    }
+
+    #[test]
+    fn from_json_object() {
+        let mut arena = ValueArena::new();
+
+        let v =
+            Value::from_json(serde_json::json!({"x": 1, "y": 2}), &mut arena);
+        assert!(matches!(v, Value::Object(_)));
     }
 }
