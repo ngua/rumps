@@ -18,15 +18,21 @@ use crate::{Error, Span, Token};
 
 /// A token paired with its source span.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Spanned(pub Token, pub Span);
+pub(crate) struct Spanned {
+    pub(crate) tok: Token,
+    pub(crate) span: Span,
+}
 
 impl Spanned {
     fn new(tok: Token, span: Span) -> Self {
-        Self(tok, span)
+        Self { tok, span }
     }
 
     fn from_range(tok: Token, range: Range<usize>) -> Self {
-        Self(tok, Span::from(range))
+        Self {
+            tok,
+            span: Span::from(range),
+        }
     }
 
     /// Post-processes tokens to add `Indent` and `Dedent` tokens.
@@ -121,7 +127,7 @@ impl Spanned {
         let eof_span = result
             .iter()
             .rev()
-            .find_map(|Self(t, s)| matches!(t, Token::Eof).then_some(*s))
+            .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
             .unwrap_or_default();
 
         let eof = result.pop();
@@ -436,7 +442,7 @@ impl TokenWithCol {
         let mut result = Vec::with_capacity(tokens.len());
         let mut line_start: u32 = 0;
 
-        tokens.iter().for_each(|Spanned(tok, span)| {
+        tokens.iter().for_each(|Spanned { tok, span }| {
             let col = (span.start - line_start) as usize;
             result.push(Self {
                 tok: tok.clone(),
@@ -468,7 +474,7 @@ mod tests {
             .lex()
             .expect("lex should succeed")
             .into_iter()
-            .map(|Spanned(t, _)| t)
+            .map(|s| s.tok)
             .collect()
     }
 
@@ -812,10 +818,19 @@ mod tests {
     #[test]
     fn spans_correct() {
         let result = lex_spanned("SET x");
-        assert_eq!(result[0], Spanned(Token::Set, Span::new(0, 3)));
+        assert_eq!(
+            result[0],
+            Spanned {
+                tok: Token::Set,
+                span: Span::new(0, 3)
+            }
+        );
         assert_eq!(
             result[1],
-            Spanned(Token::Ident("x".into()), Span::new(4, 5))
+            Spanned {
+                tok: Token::Ident("x".into()),
+                span: Span::new(4, 5)
+            }
         );
     }
 

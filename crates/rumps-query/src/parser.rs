@@ -58,7 +58,7 @@ impl Parser {
         // Find EOF span for chumsky's end-of-input handling
         let eof_span = tokens
             .iter()
-            .find_map(|Spanned(t, s)| matches!(t, Token::Eof).then_some(*s))
+            .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
             .unwrap_or(Span::new(0, 0));
 
         // Filter out EOF token; chumsky handles end-of-input separately
@@ -66,8 +66,8 @@ impl Parser {
             eof_span,
             tokens
                 .iter()
-                .filter(|Spanned(t, _)| !matches!(t, Token::Eof))
-                .map(|Spanned(t, s)| (t.clone(), *s)),
+                .filter(|s| !matches!(s.tok, Token::Eof))
+                .map(|s| (s.tok.clone(), s.span)),
         );
 
         parser
@@ -304,9 +304,8 @@ impl Parser {
         });
 
         // If we found a tail, remove the last statement
-        let tail = tail.map(|e| {
+        let tail = tail.inspect(|_| {
             stmts.pop();
-            e
         });
 
         ast.add_expr(Expr::Block(stmts, tail), span)
