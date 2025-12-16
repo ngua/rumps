@@ -128,7 +128,7 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
 - [x] Define `Expr` enum (references use `ExprId`):
   - `Literal(Value)`
   - `Local(String)` (local variable)
-  - `Global(String, SmallVec<[ExprId; 4]>)` (global with subscripts; implicit GET — `^PATIENT(123)` alone is a valid expression that evaluates to its value, no explicit `GET(...)` wrapper required)
+  - `Global(String, SmallVec<[ExprId; 4]>)` (global with subscripts; requires explicit `GET` to read, e.g. `GET ^PATIENT(123)`)
   - `Binary(ExprId, BinOp, ExprId)`
   - `Unary(UnOp, ExprId)`
   - `Call(String, SmallVec<[ExprId; 4]>)` (function call; most have 0-4 args)

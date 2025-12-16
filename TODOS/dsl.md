@@ -463,14 +463,14 @@ COLLECT ^DATA
 
 ; Field extraction
 COLLECT ^PATIENT
-  SELECT GET(^PATIENT(key[0],"NAME"))
+  SELECT GET ^PATIENT(key[0],"NAME")
 
 ; Object construction
 COLLECT ^PATIENT
   SELECT {
     id: key[0],
-    name: GET(^PATIENT(key[0],"NAME")),
-    dob: GET(^PATIENT(key[0],"DOB"))
+    name: GET ^PATIENT(key[0],"NAME"),
+    dob: GET ^PATIENT(key[0],"DOB")
   }
 ```
 
@@ -513,7 +513,7 @@ COLLECT ^DATA
 #### AGGREGATE - Multiple aggregations at once
 ```rumps
 COLLECT ^SALES
-  SELECT GET(^SALES(key[0],"AMOUNT"))
+  SELECT GET ^SALES(key[0],"AMOUNT")
   AGGREGATE
     COUNT INTO total-sales
     SUM INTO total-revenue
@@ -551,7 +551,7 @@ COLLECT ^VISITS
 ```rumps
 ; Sort by object field
 COLLECT ^PATIENT
-  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
+  SELECT { id: key[0], name: GET ^PATIENT(key[0],"NAME") }
   SORT BY name ASC
 
 ; Sort by scalar (use 'item')
@@ -616,7 +616,7 @@ COLLECT ^DATA
 #### Template Output
 ```rumps
 COLLECT ^PATIENT
-  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
+  SELECT { id: key[0], name: GET ^PATIENT(key[0],"NAME") }
   OUTPUT "Patient #{id}: {name}"
 ```
 
@@ -662,7 +662,7 @@ COLLECT ^DATA
 
 ; Template-based formatting with field interpolation
 COLLECT ^PATIENT
-  SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
+  SELECT { id: key[0], name: GET ^PATIENT(key[0],"NAME") }
   OUTPUT "ID: {id} - Name: {name}"
 
 ; JSON output for structured data
@@ -854,30 +854,30 @@ COLLECT ^DATA
 ; RUMPS declarative approach
 COLLECT ^PATIENT
   WHERE has-descendants
-  WHERE GET(^PATIENT(key[0],"LASTVISIT")) > 20250101
+  WHERE GET ^PATIENT(key[0],"LASTVISIT") > 20250101
   SELECT {
     id: key[0],
-    last-visit: GET(^PATIENT(key[0],"LASTVISIT"))
+    last-visit: GET ^PATIENT(key[0],"LASTVISIT")
   }
   OUTPUT "Patient {id} last visited on {last-visit}"
 
 ; Get count
 COLLECT ^PATIENT
   WHERE has-descendants
-  WHERE GET(^PATIENT(key[0],"LASTVISIT")) > 20250101
+  WHERE GET ^PATIENT(key[0],"LASTVISIT") > 20250101
   COUNT INTO recent-count
 ```
 
 ### Example 2: Top 10 customers by order value
 ```rumps
 COLLECT ^ORDERS
-  GROUP BY GET(^ORDERS(key[0],"CUSTOMER-ID"))
-  AGGREGATE SUM GET(^ORDERS(key[0],"AMOUNT")) INTO total
+  GROUP BY GET ^ORDERS(key[0],"CUSTOMER-ID")
+  AGGREGATE SUM GET ^ORDERS(key[0],"AMOUNT") INTO total
   SORT BY total DESC
   TAKE 10
   JOIN ^CUSTOMER ON group-key
   SELECT {
-    customer-name: GET(^CUSTOMER(group-key,"NAME")),
+    customer-name: GET ^CUSTOMER(group-key,"NAME"),
     total-orders: total
   }
   OUTPUT AS TABLE HEADERS ["Customer", "Total Orders"]
@@ -928,11 +928,11 @@ The following table shows common MUMPS iteration patterns and their conceptual R
 | ```mumps```<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`WRITE "Total: ",CNT,!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  COUNT INTO tot`<br/>`WRITE "Total: ",tot,!` | Count entries |
 | ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. IF ID>100 QUIT`<br/>`. ; Process ID` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  WHILE key[0] <= 100`<br/>`  ; Process automatically` | Early termination with condition |
 | ```mumps```<br/>`SET I=0`<br/>`FOR  SET ID=$ORDER(^LOG(ID)) QUIT:ID=""  DO`<br/>`. SET I=I+1`<br/>`. IF I>10 QUIT`<br/>`. ; Process first 10` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  TAKE 10`<br/>`  ; Process automatically` | Take first N entries |
-| ```mumps```<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. IF NAME["Smith" DO`<br/>`. . ; Process Smith patients` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  WHERE has-descendants`<br/>`  WHERE GET(^PAT(key[0],"NAME")) contains "Smith"`<br/>`  ; Process automatically` | Filter with condition |
-| ```mumps```<br/>`KILL RESULTS`<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`. SET RESULTS(CNT)=$GET(^DATA(ID,"VAL"))` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  SELECT GET(^DATA(key[0],"VAL"))`<br/>`  INTO RESULTS` | Collect into array |
+| ```mumps```<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. IF NAME["Smith" DO`<br/>`. . ; Process Smith patients` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  WHERE has-descendants`<br/>`  WHERE GET ^PAT(key[0],"NAME") contains "Smith"`<br/>`  ; Process automatically` | Filter with condition |
+| ```mumps```<br/>`KILL RESULTS`<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`. SET RESULTS(CNT)=$GET(^DATA(ID,"VAL"))` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  SELECT GET ^DATA(key[0],"VAL")`<br/>`  INTO RESULTS` | Collect into array |
 | ```mumps```<br/>`FOR  SET D=$ORDER(^LOG(2025,D)) QUIT:D=""  DO`<br/>`. FOR  SET T=$ORDER(^LOG(2025,D,T)) QUIT:T=""  DO`<br/>`. . ; Process each timestamp` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  WHERE key[0] == 2025 AND key.len == 3`<br/>`  ; All 2025 timestamps, flat` | Nested iteration (flattened) |
-| ```mumps```<br/>`; Complex aggregation`<br/>`SET TOT=0,CNT=0`<br/>`FOR  SET ID=$ORDER(^SALE(ID)) QUIT:ID=""  DO`<br/>`. SET AMT=$GET(^SALE(ID,"AMOUNT"))`<br/>`. SET TOT=TOT+AMT,CNT=CNT+1`<br/>`SET AVG=TOT/CNT` | ```rumps```<br/>`COLLECT ^SALE`<br/>`  SELECT GET(^SALE(key[0],"AMOUNT"))`<br/>`  AGGREGATE`<br/>`    SUM INTO total`<br/>`    COUNT INTO count`<br/>`    AVG INTO average` | Aggregation operations |
-| ```mumps```<br/>`; Display all patient info`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. SET DOB=$GET(^PAT(ID,"DOB"))`<br/>`. WRITE "Patient ",ID,": ",NAME`<br/>`. WRITE " (DOB: ",DOB,")",!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  SELECT {`<br/>`    id: key[0],`<br/>`    name: GET(^PAT(key[0],"NAME")),`<br/>`    dob: GET(^PAT(key[0],"DOB"))`<br/>`  }`<br/>`  OUTPUT "Patient {id}: {name} (DOB: {dob})"` | Console output with formatting |
+| ```mumps```<br/>`; Complex aggregation`<br/>`SET TOT=0,CNT=0`<br/>`FOR  SET ID=$ORDER(^SALE(ID)) QUIT:ID=""  DO`<br/>`. SET AMT=$GET(^SALE(ID,"AMOUNT"))`<br/>`. SET TOT=TOT+AMT,CNT=CNT+1`<br/>`SET AVG=TOT/CNT` | ```rumps```<br/>`COLLECT ^SALE`<br/>`  SELECT GET ^SALE(key[0],"AMOUNT")`<br/>`  AGGREGATE`<br/>`    SUM INTO total`<br/>`    COUNT INTO count`<br/>`    AVG INTO average` | Aggregation operations |
+| ```mumps```<br/>`; Display all patient info`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. SET DOB=$GET(^PAT(ID,"DOB"))`<br/>`. WRITE "Patient ",ID,": ",NAME`<br/>`. WRITE " (DOB: ",DOB,")",!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  SELECT {`<br/>`    id: key[0],`<br/>`    name: GET ^PAT(key[0],"NAME"),`<br/>`    dob: GET ^PAT(key[0],"DOB")`<br/>`  }`<br/>`  OUTPUT "Patient {id}: {name} (DOB: {dob})"` | Console output with formatting |
 
 ### Key Advantages of RUMPS `COLLECT` Approach
 
@@ -1043,7 +1043,7 @@ SET valid = exists(user) && user.active && user.age >= 18
 #### New RUMPS Operators
 ```rumps
 ; Null coalescing - use default if null/undefined
-SET name = GET(^PATIENT(id, "NAME")) ?? "Unknown"
+SET name = GET ^PATIENT(id, "NAME") ?? "Unknown"
 
 ; Optional chaining - safe navigation
 SET city = patient?.address?.city ?? "N/A"
@@ -1491,8 +1491,8 @@ Use `;` or newlines to separate statements. The final expression is the result:
 
 ```rumps
 FUN process-patient (id) {
-  SET name = GET(^PATIENT(id, "NAME"))
-  SET age = GET(^PATIENT(id, "AGE"))
+  SET name = GET ^PATIENT(id, "NAME")
+  SET age = GET ^PATIENT(id, "AGE")
   SET visits = COLLECT ^VISITS
     WHERE key[0] == id
     COUNT
@@ -1554,7 +1554,7 @@ FUN factorial (n) {
 }
 
 FUN tree-sum (node-key) {
-  SET val = GET(^TREE(node-key, "VALUE")) ?? 0
+  SET val = GET ^TREE(node-key, "VALUE") ?? 0
   SET children-sum = COLLECT ^TREE(node-key, "CHILDREN")
     SELECT tree-sum(key[0])
     AGGREGATE SUM
@@ -1980,7 +1980,7 @@ FUN sum (nums: Array[Int]) -> Int {
 
 ; Optional/nullable return
 FUN find (id: Int) -> Option[String] {
-  GET(^DATA(id, "NAME"))
+  GET ^DATA(id, "NAME")
 }
 
 ; Result type for fallible operations
@@ -2152,7 +2152,7 @@ MATCH status {
 #### Matching Option and Result
 
 ```rumps
-SET name = GET(^PATIENT(id, "NAME"))
+SET name = GET ^PATIENT(id, "NAME")
 
 MATCH name {
   Option.Some(n) => { OUTPUT "Patient: " ++ n }
