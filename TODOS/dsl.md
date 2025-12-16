@@ -1142,6 +1142,91 @@ SET result = (data || defaults)..name    ; Merge first, then access
 SET result = data || (defaults..name)    ; Access first, then merge (different!)
 ```
 
+## Control Flow
+
+### IF Expression
+
+`IF` is an **expression** that evaluates to a value, not just a statement. This enables functional-style conditional logic where the result of a branch can be assigned or used directly.
+
+#### Basic Syntax
+
+```rumps
+IF <condition> { <then-expr> } ELSE { <else-expr> }
+```
+
+Both branches are block expressions. The `ELSE` clause is optional.
+
+#### As an Expression
+
+```rumps
+; Assign result of IF directly
+LET status = IF active { "enabled" } ELSE { "disabled" }
+
+; Use in function return
+FUN abs (n) {
+  IF n < 0 { -n } ELSE { n }
+}
+
+; Nested IF expressions
+LET grade = IF score >= 90 { "A" }
+            ELSE IF score >= 80 { "B" }
+            ELSE IF score >= 70 { "C" }
+            ELSE { "F" }
+```
+
+#### Without ELSE
+
+When `IF` has no `ELSE` clause and the condition is false, it evaluates to `Option.None`:
+
+```rumps
+LET result = IF condition { value }
+; result is Option.None if condition is false
+
+; Useful with null coalescing
+LET name = IF has-name { get-name() } ?? "Unknown"
+```
+
+#### As a Statement
+
+When used as a statement (for side effects), the value is discarded:
+
+```rumps
+IF count > 0 {
+  OUTPUT "Processing..."
+  process-items()
+}
+```
+
+### Block Expressions
+
+Braces `{ }` create a **block expression**. A block executes statements for side effects, then evaluates to its trailing expression (the last expression in the block).
+
+```rumps
+; Block with trailing expression
+LET result = {
+  LET x = compute()
+  LET y = transform(x)
+  x + y    ; This is the value of the block
+}
+
+; Block without trailing expression evaluates to Option.None
+{
+  OUTPUT "Side effect only"
+}
+```
+
+Variables bound with `LET` inside a block are scoped to that block:
+
+```rumps
+LET x = 1
+LET result = {
+  LET x = 10   ; shadows outer x
+  x + 1        ; 11
+}
+OUTPUT x       ; 1 (outer x unchanged)
+OUTPUT result  ; 11
+```
+
 ## Functions
 
 Functions are named, reusable blocks of code. They can accept arguments, perform computations, and yield a result.

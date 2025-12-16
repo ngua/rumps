@@ -136,15 +136,15 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
   - `Array(Vec<ExprId>)` (array literal)
   - `Index(ExprId, ExprId)` (array/object access)
   - `Field(ExprId, String)` (`.field` access)
+  - `Block(Vec<StmtId>, Option<ExprId>)` (block expression; statements + optional trailing expression; returns `Option.None` if no tail)
+  - `If(ExprId, ExprId, Option<ExprId>)` (conditional expression; cond, then-expr, else-expr; returns `Option.None` if no else and cond is false)
 - [x] Define `Stmt` enum (references use `ExprId`/`StmtId`):
   - `Let(String, ExprId)` (lexical binding; sync, not subscriptable)
   - `Set(String, ExprId)` (local B-tree assignment)
   - `SetGlobal(String, SmallVec<[ExprId; 4]>, ExprId)` (global assignment)
   - `Kill(String, SmallVec<[ExprId; 4]>)` (delete)
   - `Output(ExprId)` (print)
-  - `If(ExprId, Vec<StmtId>, Option<Vec<StmtId>>)`
-  - `Block(Vec<StmtId>)`
-  - `Expr(ExprId)` (expression statement)
+  - `Expr(ExprId)` (expression statement; used to wrap `Expr::If` and `Expr::Block` as statements)
 - [x] Define `BinOp` and `UnOp` enums
 - [x] Implement `Ast` methods: `add_expr(&mut self, e: Expr) -> ExprId`, `add_stmt(&mut self, s: Stmt) -> StmtId`, `get_expr(&self, id: ExprId) -> &Expr`, `get_stmt(&self, id: StmtId) -> &Stmt`
 

@@ -240,7 +240,10 @@ impl Parser {
             })
     }
 
-    /// `IF cond { stmts } [ELSE { stmts }]`
+    /// `IF cond { block } [ELSE { block }]`
+    ///
+    /// Parses an IF expression and wraps it in `Stmt::Expr`. The branches are
+    /// block expressions (`Expr::Block`).
     fn if_stmt(
         ast: AstCell,
         stmt: impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> + Clone,
@@ -256,18 +259,64 @@ impl Parser {
                     .ignore_then(block)
                     .or_not(),
             )
-            .map_with_span(move |((cond, then_stmts), else_stmts), span| {
-                let id = ast
-                    .borrow_mut()
-                    .add_stmt(Stmt::If(cond.0, then_stmts, else_stmts), span);
-                (id, span)
-            })
+            .map_with_span(
+                move |((cond, (then_stmts, then_span)), else_block), span| {
+                    let mut ast_mut = ast.borrow_mut();
+
+                    // Convert then-block to Expr::Block
+                    let then_expr = Self::stmts_to_block(
+                        &mut ast_mut,
+                        then_stmts,
+                        then_span,
+                    );
+
+                    // Convert else-block to Expr::Block if present
+                    let else_expr = else_block.map(|(stmts, blk_span)| {
+                        Self::stmts_to_block(&mut ast_mut, stmts, blk_span)
+                    });
+
+                    // Create IF expression
+                    let if_expr = ast_mut
+                        .add_expr(Expr::If(cond.0, then_expr, else_expr), span);
+
+                    // Wrap in Stmt::Expr
+                    let id = ast_mut.add_stmt(Stmt::Expr(if_expr), span);
+                    (id, span)
+                },
+            )
     }
 
-    /// `{ stmts... }` block
+    /// Convert a list of statements to a block expression.
+    ///
+    /// If the last statement is `Stmt::Expr(e)`, extracts `e` as the trailing
+    /// expression (block's value). Otherwise, the block has no trailing expr.
+    fn stmts_to_block(
+        ast: &mut Ast,
+        mut stmts: Vec<StmtId>,
+        span: Span,
+    ) -> ExprId {
+        // Check if last statement is Stmt::Expr; if so, use it as tail
+        let tail = stmts.last().and_then(|&last_id| {
+            ast.get_stmt(last_id).and_then(|s| match s {
+                Stmt::Expr(e) => Some(*e),
+                _ => None,
+            })
+        });
+
+        // If we found a tail, remove the last statement
+        let tail = tail.map(|e| {
+            stmts.pop();
+            e
+        });
+
+        ast.add_expr(Expr::Block(stmts, tail), span)
+    }
+
+    /// `{ stmts... }` block, returns statements and the block's span.
     fn block(
         stmt: impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> + Clone,
-    ) -> impl ChumskyParser<Token, Vec<StmtId>, Error = ParseErr> + Clone {
+    ) -> impl ChumskyParser<Token, (Vec<StmtId>, Span), Error = ParseErr> + Clone
+    {
         Self::opt_newlines()
             .ignore_then(just(Token::LBrace))
             .ignore_then(Self::opt_newlines())
@@ -279,6 +328,7 @@ impl Parser {
             )
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
+            .map_with_span(|stmts, span| (stmts, span))
     }
 
     /// Expression used as statement.
@@ -999,10 +1049,20 @@ mod tests {
     fn parse_if_stmt() {
         let result = parse_ok("IF x > 0 { OUTPUT x }");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::If(_, then_block, else_block) => {
-                assert_eq!(then_block.len(), 1);
-                assert!(else_block.is_none());
+        let Stmt::Expr(expr_id) = stmt else {
+            panic!("expected Stmt::Expr");
+        };
+        let expr = result.ast.get_expr(*expr_id).unwrap();
+        match expr {
+            Expr::If(_, then_blk, else_blk) => {
+                // then_blk is a block expression
+                let Expr::Block(stmts, _) =
+                    result.ast.get_expr(*then_blk).unwrap()
+                else {
+                    panic!("expected Block");
+                };
+                assert_eq!(stmts.len(), 1);
+                assert!(else_blk.is_none());
             }
             _ => panic!("expected If"),
         }
@@ -1013,11 +1073,25 @@ mod tests {
         let result =
             parse_ok("IF x > 0 { OUTPUT \"pos\" } ELSE { OUTPUT \"neg\" }");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::If(_, then_block, else_block) => {
-                assert_eq!(then_block.len(), 1);
-                assert!(else_block.is_some());
-                assert_eq!(else_block.as_ref().unwrap().len(), 1);
+        let Stmt::Expr(expr_id) = stmt else {
+            panic!("expected Stmt::Expr");
+        };
+        let expr = result.ast.get_expr(*expr_id).unwrap();
+        match expr {
+            Expr::If(_, then_blk, else_blk) => {
+                let Expr::Block(then_stmts, _) =
+                    result.ast.get_expr(*then_blk).unwrap()
+                else {
+                    panic!("expected Block");
+                };
+                assert_eq!(then_stmts.len(), 1);
+                let else_id = else_blk.expect("expected else branch");
+                let Expr::Block(else_stmts, _) =
+                    result.ast.get_expr(else_id).unwrap()
+                else {
+                    panic!("expected Block");
+                };
+                assert_eq!(else_stmts.len(), 1);
             }
             _ => panic!("expected If"),
         }

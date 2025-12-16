@@ -185,6 +185,18 @@ pub(crate) enum Expr {
 
     /// Field access: `expr.field`.
     Field(ExprId, String),
+
+    /// A block expression: `{ stmt...; expr }`.
+    ///
+    /// Executes statements for side effects, then evaluates to the trailing
+    /// expression. If no trailing expression, evaluates to `Option.None`.
+    Block(Vec<StmtId>, Option<ExprId>),
+
+    /// Conditional expression: `IF cond { then } ELSE { else }`.
+    ///
+    /// Evaluates to the value of the taken branch. If no else branch and
+    /// condition is false, evaluates to `Option.None`.
+    If(ExprId, ExprId, Option<ExprId>),
 }
 
 /// A statement node.
@@ -210,13 +222,9 @@ pub(crate) enum Stmt {
     /// Output a value: `OUTPUT expr`.
     Output(ExprId),
 
-    /// Conditional: `IF cond { then... } ELSE { else... }`.
-    If(ExprId, Vec<StmtId>, Option<Vec<StmtId>>),
-
-    /// A block of statements: `{ stmt... }`.
-    Block(Vec<StmtId>),
-
     /// An expression used as a statement (for side effects).
+    ///
+    /// This is the canonical way to use `Expr::If` and `Expr::Block` as statements.
     Expr(ExprId),
 }
 
@@ -297,28 +305,37 @@ mod tests {
     }
 
     #[test]
-    fn arena_if_stmt() {
+    fn arena_if_expr() {
         let mut ast = Ast::new();
 
-        // Build: IF x > 0 { OUTPUT x }
+        // Build: IF x > 0 { 1 } ELSE { 0 }
         let x = ast.add_expr(Expr::Local("x".into()), Span::new(3, 4));
         let zero =
             ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(7, 8));
         let cond =
             ast.add_expr(Expr::Binary(x, BinOp::Gt, zero), Span::new(3, 8));
 
-        let x2 = ast.add_expr(Expr::Local("x".into()), Span::new(18, 19));
-        let output = ast.add_stmt(Stmt::Output(x2), Span::new(11, 19));
+        let one =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
+        let then_blk =
+            ast.add_expr(Expr::Block(vec![], Some(one)), Span::new(10, 15));
 
-        let if_stmt =
-            ast.add_stmt(Stmt::If(cond, vec![output], None), Span::new(0, 21));
+        let zero2 =
+            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(23, 24));
+        let else_blk =
+            ast.add_expr(Expr::Block(vec![], Some(zero2)), Span::new(21, 26));
 
-        assert_eq!(ast.stmt_count(), 2);
-        match ast.get_stmt(if_stmt) {
-            Some(Stmt::If(c, then_block, else_block)) => {
+        let if_expr = ast.add_expr(
+            Expr::If(cond, then_blk, Some(else_blk)),
+            Span::new(0, 26),
+        );
+
+        assert_eq!(ast.expr_count(), 8);
+        match ast.get_expr(if_expr) {
+            Some(Expr::If(c, then_br, else_br)) => {
                 assert_eq!(*c, cond);
-                assert_eq!(then_block.len(), 1);
-                assert!(else_block.is_none());
+                assert_eq!(*then_br, then_blk);
+                assert_eq!(*else_br, Some(else_blk));
             }
             _ => panic!("expected If"),
         }

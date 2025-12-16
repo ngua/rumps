@@ -116,10 +116,6 @@ impl<'a> Interpreter<'a> {
                     self.kill_global(&name, &subs, span).await
                 }
                 Stmt::Output(expr_id) => self.output(expr_id).await,
-                Stmt::If(cond, then_block, else_block) => {
-                    self.r#if(cond, &then_block, else_block.as_deref()).await
-                }
-                Stmt::Block(stmts) => self.block(&stmts).await,
                 Stmt::Expr(expr_id) => {
                     // Evaluate for side effects, discard result
                     self.eval(expr_id).await.map(|_| ())
@@ -154,6 +150,10 @@ impl<'a> Interpreter<'a> {
                 Expr::Index(base, idx) => self.index(base, idx, span).await,
                 Expr::Field(base, field) => {
                     self.field(base, &field, span).await
+                }
+                Expr::Block(stmts, tail) => self.block_expr(&stmts, tail).await,
+                Expr::If(cond, then_br, else_br) => {
+                    self.if_expr(cond, then_br, else_br).await
                 }
             }
         })
@@ -490,6 +490,66 @@ impl<'a> Interpreter<'a> {
         })
     }
 
+    /// Evaluate a block expression.
+    ///
+    /// Executes statements, then evaluates the trailing expression (if any).
+    /// Returns `Option.None` if no trailing expression.
+    fn block_expr<'b>(
+        &'b mut self,
+        stmts: &'b [StmtId],
+        tail: Option<ExprId>,
+    ) -> BoxFuture<'b, Result<Value>> {
+        Box::pin(async move {
+            self.env.scopes.push();
+            let result = self.block_expr_inner(stmts, tail).await;
+            self.env.scopes.pop();
+            result
+        })
+    }
+
+    /// Inner helper for block expression evaluation.
+    fn block_expr_inner<'b>(
+        &'b mut self,
+        stmts: &'b [StmtId],
+        tail: Option<ExprId>,
+    ) -> BoxFuture<'b, Result<Value>> {
+        Box::pin(async move {
+            match stmts.split_first() {
+                None => match tail {
+                    Some(e) => self.eval(e).await,
+                    None => Ok(Value::none()),
+                },
+                Some((head, rest)) => {
+                    self.exec(*head).await?;
+                    self.block_expr_inner(rest, tail).await
+                }
+            }
+        })
+    }
+
+    /// Evaluate an `IF` expression.
+    ///
+    /// Returns the value of the taken branch. If no else branch and condition
+    /// is false, returns `Option.None`.
+    fn if_expr(
+        &mut self,
+        cond: ExprId,
+        then_br: ExprId,
+        else_br: Option<ExprId>,
+    ) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            let cond_val = self.eval(cond).await?;
+            if cond_val.is_truthy(&self.arena) {
+                self.eval(then_br).await
+            } else {
+                match else_br {
+                    Some(e) => self.eval(e).await,
+                    None => Ok(Value::none()),
+                }
+            }
+        })
+    }
+
     /// Execute a `LET` binding.
     fn r#let<'b>(
         &'b mut self,
@@ -641,39 +701,6 @@ impl<'a> Interpreter<'a> {
             out.flush().await.map_err(|e| {
                 Error::runtime_no_span(format!("output error: {e}"))
             })
-        })
-    }
-
-    /// Execute an `IF` statement.
-    fn r#if<'b>(
-        &'b mut self,
-        cond: ExprId,
-        then_block: &'b [StmtId],
-        else_block: Option<&'b [StmtId]>,
-    ) -> BoxFuture<'b, Result<()>> {
-        Box::pin(async move {
-            let cond_val = self.eval(cond).await?;
-            if cond_val.is_truthy(&self.arena) {
-                self.block(then_block).await
-            } else {
-                match else_block {
-                    Some(stmts) => self.block(stmts).await,
-                    None => Ok(()),
-                }
-            }
-        })
-    }
-
-    /// Execute a block of statements with a new scope.
-    fn block<'b>(
-        &'b mut self,
-        stmts: &'b [StmtId],
-    ) -> BoxFuture<'b, Result<()>> {
-        Box::pin(async move {
-            self.env.scopes.push();
-            let result = self.stmts(stmts).await;
-            self.env.scopes.pop();
-            result
         })
     }
 
@@ -1563,18 +1590,21 @@ mod tests {
             ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
         let let1 = ast.add_stmt(Stmt::Let("x".into(), val1), Span::new(0, 10));
 
-        // Block with LET x = 20
+        // Block expr with LET x = 20, returning x
         let val2 =
             ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22));
         let let2 = ast.add_stmt(Stmt::Let("x".into(), val2), Span::new(12, 22));
-        let block = ast.add_stmt(Stmt::Block(vec![let2]), Span::new(10, 24));
+        let x_ref = ast.add_expr(Expr::Local("x".into()), Span::new(24, 25));
+        let blk_expr = ast
+            .add_expr(Expr::Block(vec![let2], Some(x_ref)), Span::new(10, 26));
+        let blk_stmt = ast.add_stmt(Stmt::Expr(blk_expr), Span::new(10, 26));
 
-        // Reference x
-        let var = ast.add_expr(Expr::Local("x".into()), Span::new(26, 27));
+        // Reference outer x
+        let var = ast.add_expr(Expr::Local("x".into()), Span::new(28, 29));
 
         let mut interp = test_interp(&ast);
         interp.exec(let1).await.unwrap();
-        interp.exec(block).await.unwrap();
+        interp.exec(blk_stmt).await.unwrap();
         // After block exits, x should be 10 again
         let result = interp.eval(var).await.unwrap();
         assert_eq!(result, Value::Int(10));
@@ -1667,8 +1697,11 @@ mod tests {
             ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(25, 26));
         let set_one =
             ast.add_stmt(Stmt::Let("result".into(), one), Span::new(10, 26));
-        let if_stmt =
-            ast.add_stmt(Stmt::If(cond, vec![set_one], None), Span::new(0, 28));
+        let then_blk =
+            ast.add_expr(Expr::Block(vec![set_one], None), Span::new(8, 28));
+        let if_expr =
+            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(0, 28));
+        let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 28));
 
         let var = ast.add_expr(Expr::Local("result".into()), Span::new(0, 6));
 
@@ -1684,16 +1717,21 @@ mod tests {
     async fn if_else() {
         let mut ast = Ast::new();
 
-        // IF false { ... } ELSE { LET x = 42 }
+        // IF false { } ELSE { LET x = 42 }
         let cond =
             ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8));
+        let then_blk =
+            ast.add_expr(Expr::Block(vec![], None), Span::new(9, 12));
         let val =
             ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(30, 32));
         let let_x = ast.add_stmt(Stmt::Let("x".into(), val), Span::new(22, 32));
-        let if_stmt = ast.add_stmt(
-            Stmt::If(cond, vec![], Some(vec![let_x])),
+        let else_blk =
+            ast.add_expr(Expr::Block(vec![let_x], None), Span::new(18, 35));
+        let if_expr = ast.add_expr(
+            Expr::If(cond, then_blk, Some(else_blk)),
             Span::new(0, 35),
         );
+        let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 35));
 
         // After IF, check x
         let var = ast.add_expr(Expr::Local("x".into()), Span::new(0, 1));
@@ -1738,5 +1776,201 @@ mod tests {
         // Check sum
         let result = interp.eval(sum_var).await.unwrap();
         assert_eq!(result, Value::Int(30));
+    }
+
+    // ---- Expr::If tests ----
+
+    #[tokio::test]
+    async fn if_expr_true_branch() {
+        // IF true { 42 } ELSE { 0 }
+        let mut ast = Ast::new();
+        let cond =
+            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7));
+        let then_val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(10, 12));
+        let then_blk =
+            ast.add_expr(Expr::Block(vec![], Some(then_val)), Span::new(9, 14));
+        let else_val =
+            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(22, 23));
+        let else_blk = ast
+            .add_expr(Expr::Block(vec![], Some(else_val)), Span::new(21, 25));
+        let if_expr = ast.add_expr(
+            Expr::If(cond, then_blk, Some(else_blk)),
+            Span::new(0, 25),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(if_expr).await.unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[tokio::test]
+    async fn if_expr_false_branch() {
+        // IF false { 42 } ELSE { 0 }
+        let mut ast = Ast::new();
+        let cond =
+            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8));
+        let then_val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(11, 13));
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(10, 15));
+        let else_val =
+            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(23, 24));
+        let else_blk = ast
+            .add_expr(Expr::Block(vec![], Some(else_val)), Span::new(22, 26));
+        let if_expr = ast.add_expr(
+            Expr::If(cond, then_blk, Some(else_blk)),
+            Span::new(0, 26),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(if_expr).await.unwrap();
+        assert_eq!(result, Value::Int(0));
+    }
+
+    #[tokio::test]
+    async fn if_expr_no_else_true() {
+        // IF true { 42 }  (no else)
+        let mut ast = Ast::new();
+        let cond =
+            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7));
+        let then_val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(10, 12));
+        let then_blk =
+            ast.add_expr(Expr::Block(vec![], Some(then_val)), Span::new(9, 14));
+        let if_expr =
+            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(0, 14));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(if_expr).await.unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[tokio::test]
+    async fn if_expr_no_else_false() {
+        // IF false { 42 }  (no else, returns Option.None)
+        let mut ast = Ast::new();
+        let cond =
+            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8));
+        let then_val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(11, 13));
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(10, 15));
+        let if_expr =
+            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(0, 15));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(if_expr).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn if_expr_as_value() {
+        // LET x = IF true { 10 } ELSE { 20 }
+        let mut ast = Ast::new();
+        let cond =
+            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(12, 16));
+        let then_val =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(19, 21));
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(18, 23));
+        let else_val =
+            ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(31, 33));
+        let else_blk = ast
+            .add_expr(Expr::Block(vec![], Some(else_val)), Span::new(30, 35));
+        let if_expr = ast.add_expr(
+            Expr::If(cond, then_blk, Some(else_blk)),
+            Span::new(8, 35),
+        );
+
+        let let_x =
+            ast.add_stmt(Stmt::Let("x".into(), if_expr), Span::new(0, 35));
+        let x_var = ast.add_expr(Expr::Local("x".into()), Span::new(0, 1));
+
+        let mut interp = test_interp(&ast);
+        interp.exec(let_x).await.unwrap();
+        let result = interp.eval(x_var).await.unwrap();
+        assert_eq!(result, Value::Int(10));
+    }
+
+    // ---- Expr::Block tests ----
+
+    #[tokio::test]
+    async fn block_expr_with_tail() {
+        // { 42 }
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(2, 4));
+        let blk = ast.add_expr(Expr::Block(vec![], Some(val)), Span::new(0, 6));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(blk).await.unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[tokio::test]
+    async fn block_expr_no_tail() {
+        // { } (empty block, returns Option.None)
+        let mut ast = Ast::new();
+        let blk = ast.add_expr(Expr::Block(vec![], None), Span::new(0, 3));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(blk).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn block_expr_with_stmts() {
+        // { LET x = 10; x + 1 }
+        let mut ast = Ast::new();
+        let ten =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(10, 12));
+        let let_x = ast.add_stmt(Stmt::Let("x".into(), ten), Span::new(2, 12));
+
+        let x = ast.add_expr(Expr::Local("x".into()), Span::new(14, 15));
+        let one =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(18, 19));
+        let tail =
+            ast.add_expr(Expr::Binary(x, BinOp::Add, one), Span::new(14, 19));
+
+        let blk = ast
+            .add_expr(Expr::Block(vec![let_x], Some(tail)), Span::new(0, 21));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(blk).await.unwrap();
+        assert_eq!(result, Value::Int(11));
+    }
+
+    #[tokio::test]
+    async fn block_expr_scope_isolated() {
+        // LET x = 1; { LET x = 10; x } evaluates to 10, outer x still 1
+        let mut ast = Ast::new();
+
+        // outer LET x = 1
+        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(8, 9));
+        let let_outer =
+            ast.add_stmt(Stmt::Let("x".into(), one), Span::new(0, 9));
+
+        // inner block: { LET x = 10; x }
+        let ten =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(22, 24));
+        let let_inner =
+            ast.add_stmt(Stmt::Let("x".into(), ten), Span::new(13, 24));
+        let x_inner = ast.add_expr(Expr::Local("x".into()), Span::new(26, 27));
+        let blk = ast.add_expr(
+            Expr::Block(vec![let_inner], Some(x_inner)),
+            Span::new(11, 29),
+        );
+
+        // outer x reference
+        let x_outer = ast.add_expr(Expr::Local("x".into()), Span::new(31, 32));
+
+        let mut interp = test_interp(&ast);
+        interp.exec(let_outer).await.unwrap();
+        let blk_result = interp.eval(blk).await.unwrap();
+        assert_eq!(blk_result, Value::Int(10));
+
+        let outer_result = interp.eval(x_outer).await.unwrap();
+        assert_eq!(outer_result, Value::Int(1));
     }
 }
