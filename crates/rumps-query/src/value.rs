@@ -4,16 +4,19 @@
 //! structures. Strings are interned to avoid duplication and enable O(1)
 //! comparison. A type registry enables runtime type validation, `is` checks,
 //! and clear error messages.
+//!
+//! Note: Value conversion methods (to/from storage, JSON, display) live on
+//! `Interpreter` rather than `Value` because they require context (arena,
+//! registry) that the interpreter owns.
 
 #![allow(dead_code)]
 
 use std::collections::HashMap;
 
 use ordered_float::OrderedFloat;
-use rumps_types::Subscript;
 use smallvec::SmallVec;
 
-use crate::{Error, Result, Span};
+use crate::{Result, Span};
 
 /// Index into the value arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -258,141 +261,6 @@ impl Value {
     /// Check if this is `Result.Err`.
     pub(crate) fn is_err(&self) -> bool {
         matches!(self, Self::Tagged(ty, 1, _) if *ty == TypeId::RESULT)
-    }
-
-    /// Coerce this value to type `T`.
-    pub(crate) fn coerce_to<T>(&self, ctx: &CoerceCtx<'_>) -> Result<T>
-    where
-        Self: Coerce<T>,
-    {
-        Coerce::<T>::coerce(self, ctx)
-    }
-
-    /// Convert this value to a subscript for key construction.
-    ///
-    /// Only scalar types (Bool, Int, Float, String) can be subscripts.
-    pub(crate) fn to_subscript(&self, arena: &ValueArena) -> Result<Subscript> {
-        match self {
-            Self::Bool(b) => Ok(Subscript::Boolean(*b)),
-            Self::Int(i) => Ok(Subscript::Number(OrderedFloat(*i as f64))),
-            Self::Float(f) => Ok(Subscript::Number(*f)),
-            Self::String(id) => arena
-                .get_str(*id)
-                .map(|s| Subscript::String(s.to_owned()))
-                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            Self::Array(_) | Self::Object(_) | Self::Tagged(_, _, _) => {
-                Err(Error::runtime_no_span(
-                    "complex values cannot be used as subscripts",
-                ))
-            }
-        }
-    }
-
-    /// Convert this value to a storage value (`rumps_types::Value`).
-    ///
-    /// Only scalar types can be stored directly; complex values need JSON.
-    pub(crate) fn to_storage(
-        &self,
-        arena: &ValueArena,
-    ) -> Result<rumps_types::Value> {
-        match self {
-            Self::Bool(b) => Ok(rumps_types::Value::Boolean(*b)),
-            Self::Int(i) => Ok(rumps_types::Value::Integer(*i)),
-            Self::Float(f) => Ok(rumps_types::Value::Double(*f)),
-            Self::String(id) => arena
-                .get_str(*id)
-                .map(|s| rumps_types::Value::String(s.to_owned()))
-                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            Self::Array(_) | Self::Object(_) | Self::Tagged(_, _, _) => {
-                // FIXME: Serialize to JSON. Objects and arrays are straightforward;
-                // sum type encoding needs some thought (we could use strings for
-                // unit enums and maybe the default for payload-bearing enums that
-                // serde uses)
-                Err(Error::runtime_no_span(
-                    "complex values (Array, Object, Tagged) cannot be stored yet",
-                ))
-            }
-        }
-    }
-
-    /// Convert a storage value (`rumps_types::Value`) to a runtime value.
-    pub(crate) fn from_storage(
-        v: rumps_types::Value,
-        arena: &mut ValueArena,
-    ) -> Self {
-        match v {
-            rumps_types::Value::Boolean(b) => Self::Bool(b),
-            rumps_types::Value::Integer(i) => Self::Int(i),
-            rumps_types::Value::Double(d) => Self::Float(d),
-            rumps_types::Value::Char(c) => {
-                Self::String(arena.intern(&c.to_string()))
-            }
-            rumps_types::Value::String(s) => Self::String(arena.intern(&s)),
-            rumps_types::Value::Json(j) => Self::from_json(j, arena),
-        }
-    }
-
-    /// Convert a JSON value to a runtime value.
-    ///
-    /// Arrays are only converted if homogeneous; heterogeneous arrays become
-    /// strings until we add a `Value::Json` variant.
-    fn from_json(j: serde_json::Value, arena: &mut ValueArena) -> Self {
-        match j {
-            serde_json::Value::Null => Self::none(),
-            serde_json::Value::Bool(b) => Self::Bool(b),
-            serde_json::Value::Number(n) => {
-                Self::Float(OrderedFloat(n.as_f64().unwrap_or(0.0)))
-            }
-            serde_json::Value::String(s) => Self::String(arena.intern(&s)),
-            serde_json::Value::Array(arr) => {
-                // Check homogeneity: all elements must have the same JSON type
-                let is_homogeneous = arr.first().is_none_or(|first| {
-                    let tag = json_type_tag(first);
-                    arr.iter().skip(1).all(|v| json_type_tag(v) == tag)
-                });
-
-                if is_homogeneous {
-                    let elems = arr
-                        .into_iter()
-                        .map(|v| {
-                            let val = Self::from_json(v, arena);
-                            arena.add(val, Span::default())
-                        })
-                        .collect();
-                    Self::Array(elems)
-                } else {
-                    // FIXME: Heterogeneous JSON arrays should map to a future
-                    // `Value::Json` variant. For now, store as string.
-                    let s = serde_json::to_string(&arr)
-                        .unwrap_or_else(|_| "<json>".to_owned());
-                    Self::String(arena.intern(&s))
-                }
-            }
-            serde_json::Value::Object(obj) => {
-                let fields = obj
-                    .into_iter()
-                    .map(|(k, v)| {
-                        let key = arena.intern(&k);
-                        let val = Self::from_json(v, arena);
-                        let val_id = arena.add(val, Span::default());
-                        (key, val_id)
-                    })
-                    .collect();
-                Self::Object(fields)
-            }
-        }
-    }
-}
-
-/// Get a discriminant tag for JSON value type (for homogeneity checks).
-fn json_type_tag(v: &serde_json::Value) -> u8 {
-    match v {
-        serde_json::Value::Null => 0,
-        serde_json::Value::Bool(_) => 1,
-        serde_json::Value::Number(_) => 2,
-        serde_json::Value::String(_) => 3,
-        serde_json::Value::Array(_) => 4,
-        serde_json::Value::Object(_) => 5,
     }
 }
 
@@ -667,119 +535,6 @@ impl TypeRegistry {
     }
 }
 
-/// Context needed for coercion operations.
-pub(crate) struct CoerceCtx<'a> {
-    pub(crate) arena: &'a ValueArena,
-    pub(crate) registry: &'a TypeRegistry,
-}
-
-/// Trait for coercing a `Value` to a target type.
-///
-/// RUMPS uses conservative coercion:
-/// - Values can be coerced INTO strings, but not OUT of them
-/// - Numeric types can be coerced between each other
-///
-/// TODO: Later we probably want to coerce into JSON for our `Value`s as well;
-/// need to handle sum types carefully though
-pub(crate) trait Coerce<T> {
-    fn coerce(&self, ctx: &CoerceCtx<'_>) -> Result<T>;
-}
-
-impl Coerce<String> for Value {
-    fn coerce(&self, ctx: &CoerceCtx<'_>) -> Result<String> {
-        fn stringify(
-            v: &Value,
-            arena: &ValueArena,
-            reg: &TypeRegistry,
-        ) -> String {
-            match v {
-                Value::Bool(b) => b.to_string(),
-                Value::Int(n) => n.to_string(),
-                Value::Float(f) => f.to_string(),
-                Value::String(id) => {
-                    arena.get_str(*id).unwrap_or("").to_owned()
-                }
-                Value::Array(arr) => {
-                    let items = arr
-                        .iter()
-                        .filter_map(|id| arena.get(*id))
-                        .map(|v| stringify(v, arena, reg))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("[ {items} ]")
-                }
-                Value::Object(obj) => {
-                    let fields = obj
-                        .iter()
-                        .map(|(k, v)| {
-                            let key = arena.get_str(*k).unwrap_or("?");
-                            let val = arena
-                                .get(*v)
-                                .map(|v| stringify(v, arena, reg))
-                                .unwrap_or_else(|| "?".to_owned());
-                            format!("{key}: {val}")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("{{ {fields} }}")
-                }
-                Value::Tagged(ty, idx, payloads) => {
-                    let ty_name = reg.type_name(*ty, arena).unwrap_or("?");
-                    let var_name =
-                        reg.variant_name(*ty, *idx, arena).unwrap_or("?");
-
-                    if payloads.is_empty() {
-                        format!("{ty_name}.{var_name}")
-                    } else {
-                        let args = payloads
-                            .iter()
-                            .filter_map(|id| arena.get(*id))
-                            .map(|v| stringify(v, arena, reg))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("{ty_name}.{var_name}({args})")
-                    }
-                }
-            }
-        }
-
-        Ok(stringify(self, ctx.arena, ctx.registry))
-    }
-}
-
-impl Coerce<i64> for Value {
-    fn coerce(&self, ctx: &CoerceCtx<'_>) -> Result<i64> {
-        match self {
-            Self::Int(n) => Ok(*n),
-            Self::Float(f) => Ok(f.0 as i64),
-            Self::Bool(b) => Ok(if *b { 1 } else { 0 }),
-            _ => Err(coercion_err(self.type_name(ctx.registry), "Int")),
-        }
-    }
-}
-
-impl Coerce<OrderedFloat<f64>> for Value {
-    fn coerce(&self, ctx: &CoerceCtx<'_>) -> Result<OrderedFloat<f64>> {
-        match self {
-            Self::Int(n) => Ok(OrderedFloat(*n as f64)),
-            Self::Float(f) => Ok(*f),
-            Self::Bool(b) => Ok(OrderedFloat(if *b { 1.0 } else { 0.0 })),
-            _ => Err(coercion_err(self.type_name(ctx.registry), "Float")),
-        }
-    }
-}
-
-impl Coerce<bool> for Value {
-    fn coerce(&self, ctx: &CoerceCtx<'_>) -> Result<bool> {
-        Ok(self.is_truthy(ctx.arena))
-    }
-}
-
-/// Create a coercion error.
-fn coercion_err(from: &'static str, to: &'static str) -> crate::Error {
-    crate::Error::coercion(from, to, format!("cannot coerce {from} to {to}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -915,90 +670,6 @@ mod tests {
     }
 
     #[test]
-    fn coercion_to_string() {
-        let mut arena = ValueArena::new();
-        let reg = TypeRegistry::new(&mut arena).unwrap();
-        let ctx = CoerceCtx {
-            arena: &arena,
-            registry: &reg,
-        };
-
-        assert_eq!(Value::Int(42).coerce_to::<String>(&ctx).unwrap(), "42");
-        assert_eq!(
-            Value::Bool(true).coerce_to::<String>(&ctx).unwrap(),
-            "true"
-        );
-        assert_eq!(
-            Value::Float(OrderedFloat(3.14))
-                .coerce_to::<String>(&ctx)
-                .unwrap(),
-            "3.14"
-        );
-
-        // Test array
-        let v1 = arena.add(Value::Int(1), Span::new(0, 1));
-        let v2 = arena.add(Value::Int(2), Span::new(3, 4));
-        let arr = Value::Array(vec![v1, v2]);
-        let ctx = CoerceCtx {
-            arena: &arena,
-            registry: &reg,
-        };
-        assert_eq!(arr.coerce_to::<String>(&ctx).unwrap(), "[ 1, 2 ]");
-
-        // Test object
-        let k = arena.intern("x");
-        let v = arena.add(Value::Int(10), Span::new(6, 8));
-        let obj = Value::Object(std::iter::once((k, v)).collect());
-        let ctx = CoerceCtx {
-            arena: &arena,
-            registry: &reg,
-        };
-        assert_eq!(obj.coerce_to::<String>(&ctx).unwrap(), "{ x: 10 }");
-
-        // Test tagged (Option.Some)
-        let inner = arena.add(Value::Int(42), Span::new(10, 12));
-        let some = Value::some(inner);
-        let ctx = CoerceCtx {
-            arena: &arena,
-            registry: &reg,
-        };
-        assert_eq!(some.coerce_to::<String>(&ctx).unwrap(), "Option.Some(42)");
-
-        // Test tagged (Option.None)
-        let none = Value::none();
-        assert_eq!(none.coerce_to::<String>(&ctx).unwrap(), "Option.None");
-    }
-
-    #[test]
-    fn coercion_numeric() {
-        let mut arena = ValueArena::new();
-        let reg = TypeRegistry::new(&mut arena).unwrap();
-        let ctx = CoerceCtx {
-            arena: &arena,
-            registry: &reg,
-        };
-
-        assert_eq!(
-            Value::Float(OrderedFloat(3.7))
-                .coerce_to::<i64>(&ctx)
-                .unwrap(),
-            3
-        );
-        assert_eq!(
-            Value::Int(42).coerce_to::<OrderedFloat<f64>>(&ctx).unwrap(),
-            OrderedFloat(42.0)
-        );
-
-        // String to Int should fail
-        let s = arena.intern("42");
-        let ctx = CoerceCtx {
-            arena: &arena,
-            registry: &reg,
-        };
-        assert!(Value::String(s).coerce_to::<i64>(&ctx).is_err());
-    }
-
-    #[test]
     fn variant_name_lookup() {
         let mut arena = ValueArena::new();
         let reg = TypeRegistry::new(&mut arena).unwrap();
@@ -1008,67 +679,5 @@ mod tests {
 
         assert_eq!(reg.variant_name(TypeId::RESULT, 0, &arena), Some("Ok"));
         assert_eq!(reg.variant_name(TypeId::RESULT, 1, &arena), Some("Err"));
-    }
-
-    #[test]
-    fn from_json_scalars() {
-        let mut arena = ValueArena::new();
-
-        // Null -> Option.None
-        let v = Value::from_json(serde_json::Value::Null, &mut arena);
-        assert!(v.is_none());
-
-        // Bool
-        let v = Value::from_json(serde_json::json!(true), &mut arena);
-        assert_eq!(v, Value::Bool(true));
-
-        // Number -> Float
-        let v = Value::from_json(serde_json::json!(42.5), &mut arena);
-        assert_eq!(v, Value::Float(OrderedFloat(42.5)));
-
-        // String
-        let v = Value::from_json(serde_json::json!("hello"), &mut arena);
-        matches!(v, Value::String(_));
-    }
-
-    #[test]
-    fn from_json_homogeneous_array() {
-        let mut arena = ValueArena::new();
-
-        // Homogeneous array of numbers
-        let v = Value::from_json(serde_json::json!([1, 2, 3]), &mut arena);
-        assert!(matches!(v, Value::Array(_)));
-
-        // Homogeneous array of strings
-        let v =
-            Value::from_json(serde_json::json!(["a", "b", "c"]), &mut arena);
-        assert!(matches!(v, Value::Array(_)));
-
-        // Empty array is homogeneous
-        let v = Value::from_json(serde_json::json!([]), &mut arena);
-        assert!(matches!(v, Value::Array(ref arr) if arr.is_empty()));
-    }
-
-    #[test]
-    fn from_json_heterogeneous_array() {
-        let mut arena = ValueArena::new();
-
-        // Heterogeneous array -> String (for now)
-        let v =
-            Value::from_json(serde_json::json!([1, "two", true]), &mut arena);
-        assert!(matches!(v, Value::String(_)));
-
-        // Mixed numbers and strings
-        let v = Value::from_json(serde_json::json!([1, "a"]), &mut arena);
-        assert!(matches!(v, Value::String(_)));
-    }
-
-    #[test]
-    fn from_json_object() {
-        let mut arena = ValueArena::new();
-
-        let v =
-            Value::from_json(serde_json::json!({"x": 1, "y": 2}), &mut arena);
-        assert!(matches!(v, Value::Object(_)));
     }
 }
