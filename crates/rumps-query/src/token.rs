@@ -15,6 +15,7 @@ pub(crate) enum Token {
     // Keywords
     Let,
     Set,
+    Get,
     Kill,
     Output,
     If,
@@ -89,6 +90,7 @@ impl Token {
         match upper.as_str() {
             "LET" => Some(Self::Let),
             "SET" => Some(Self::Set),
+            "GET" => Some(Self::Get),
             "KILL" => Some(Self::Kill),
             "OUTPUT" => Some(Self::Output),
             "IF" => Some(Self::If),
@@ -108,6 +110,7 @@ impl fmt::Display for Token {
         match self {
             Self::Let => write!(f, "LET"),
             Self::Set => write!(f, "SET"),
+            Self::Get => write!(f, "GET"),
             Self::Kill => write!(f, "KILL"),
             Self::Output => write!(f, "OUTPUT"),
             Self::If => write!(f, "IF"),
@@ -179,6 +182,7 @@ mod tests {
     fn all_keywords() {
         assert_eq!(Token::keyword("LET"), Some(Token::Let));
         assert_eq!(Token::keyword("SET"), Some(Token::Set));
+        assert_eq!(Token::keyword("GET"), Some(Token::Get));
         assert_eq!(Token::keyword("KILL"), Some(Token::Kill));
         assert_eq!(Token::keyword("OUTPUT"), Some(Token::Output));
         assert_eq!(Token::keyword("IF"), Some(Token::If));

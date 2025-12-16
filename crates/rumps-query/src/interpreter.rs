@@ -42,7 +42,7 @@
 //! - `number` becomes `Float` (JSON has no int/float distinction)
 //! - `string` becomes `String`
 //! - `array` becomes `Array` if homogeneous (all elements same JSON type);
-//!    (FIXME) heterogeneous arrays are not yet supported
+//!   (FIXME) heterogeneous arrays are not yet supported
 //! - `object` becomes `Object`
 //!
 //! ## Numeric Coercion
@@ -204,10 +204,16 @@ impl<'a> Interpreter<'a> {
 
             match expr {
                 Expr::Literal(lit) => Ok(self.literal(&lit)),
-                Expr::Local(name) => self.local(&name, span).await,
-                Expr::Global(name, subs) => {
-                    self.global(&name, &subs, span).await
-                }
+                Expr::Var(name) => self.var(&name, span),
+                Expr::Local(_, _) => Err(Error::runtime(
+                    span,
+                    "cannot use local as value; use GET",
+                )),
+                Expr::Global(_, _) => Err(Error::runtime(
+                    span,
+                    "cannot use global as value; use GET",
+                )),
+                Expr::Get(inner) => self.get(inner, span).await,
                 Expr::Binary(lhs, op, rhs) => {
                     self.binary(lhs, op, rhs, span).await
                 }
@@ -237,70 +243,61 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    /// Evaluate a local variable reference.
+    /// Evaluate a lexical variable reference (LET bindings only).
     ///
-    /// First checks LET bindings (lexical scopes), then falls back to
-    /// SET locals in the database. LET bindings shadow SET locals.
-    fn local<'b>(
-        &'b mut self,
-        name: &'b str,
-        span: Span,
-    ) -> BoxFuture<'b, Result<Value>> {
-        Box::pin(async move {
-            // First: check LET bindings (lexical scopes)
-            let scope_val = self
-                .arena
-                .string_map_lookup(name)
-                .and_then(|id| self.env.scopes.lookup(id))
-                .and_then(|val_id| self.arena.get(val_id).cloned());
-
-            match scope_val {
-                Some(v) => Ok(v),
-                None => {
-                    // Fall back to SET locals in the database
-                    let db_name = Name::local(name);
-                    let key = Key::new(); // Empty key for simple local
-
-                    self.db
-                        .get(&db_name, &key)
-                        .await
-                        .map_err(|e| {
-                            Error::runtime(span, format!("GET failed: {e}"))
-                        })?
-                        .map(|sv| self.load(sv))
-                        .ok_or_else(|| {
-                            Error::runtime(
-                                span,
-                                format!("undefined variable `{name}`"),
-                            )
-                        })
-                }
-            }
-        })
+    /// Does NOT fall back to B-tree locals; use `GET` for those.
+    fn var(&mut self, name: &str, span: Span) -> Result<Value> {
+        self.arena
+            .string_map_lookup(name)
+            .and_then(|id| self.env.scopes.lookup(id))
+            .and_then(|val_id| self.arena.get(val_id).cloned())
+            .ok_or_else(|| {
+                Error::runtime(span, format!("undefined variable `{name}`"))
+            })
     }
 
-    /// Evaluate a global variable reference.
+    /// `GET` primitive; reads a value from a B-tree variable.
     ///
-    /// Gets a global variable from the database. Uses the active transaction
-    /// if one exists, otherwise reads directly from the database.
-    fn global<'b>(
-        &'b mut self,
-        name: &'b str,
-        subs: &'b [ExprId],
+    /// The inner expression must be a `Local` or `Global`. Uses the active
+    /// transaction if one exists, otherwise reads directly from the database.
+    fn get(
+        &mut self,
+        inner: ExprId,
         span: Span,
-    ) -> BoxFuture<'b, Result<Value>> {
+    ) -> BoxFuture<'_, Result<Value>> {
         Box::pin(async move {
-            let key = self.build_key(subs).await?;
-            let db_name = Name::global(name);
+            let inner_span = self.ast.expr_span(inner).unwrap_or(span);
+            let inner_expr = self
+                .ast
+                .get_expr(inner)
+                .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+                .clone();
+
+            let (name, subs) = match inner_expr {
+                Expr::Local(n, s) => (Name::local(&n), s),
+                Expr::Global(n, s) => (Name::global(&n), s),
+                _ => {
+                    return Err(Error::runtime(
+                        inner_span,
+                        "GET requires a local or global",
+                    ))
+                }
+            };
+
+            let key = self.build_key(&subs).await?;
 
             let opt_val = match &self.txn {
-                Some(txn) => txn.get(&db_name, &key).await,
-                None => self.db.get(&db_name, &key).await,
+                Some(txn) => txn.get(&name, &key).await,
+                None => self.db.get(&name, &key).await,
             }
             .map_err(|e| Error::runtime(span, format!("GET failed: {e}")))?;
 
             opt_val.map(|sv| self.load(sv)).ok_or_else(|| {
-                Error::runtime(span, format!("undefined global `^{name}`"))
+                let prefix = if name.is_global() { "^" } else { "" };
+                Error::runtime(
+                    span,
+                    format!("undefined variable `{prefix}{}`", name.name()),
+                )
             })
         })
     }
@@ -1876,7 +1873,7 @@ mod tests {
             ast.add_expr(Expr::Literal(Literal::Int(100)), Span::new(8, 11));
         let let_stmt =
             ast.add_stmt(Stmt::Let("x".into(), val), Span::new(0, 11));
-        let var = ast.add_expr(Expr::Local("x".into()), Span::new(0, 1));
+        let var = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
 
         let mut interp = test_interp(&ast);
         interp.exec(let_stmt).await.unwrap();
@@ -1897,13 +1894,13 @@ mod tests {
         let val2 =
             ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22));
         let let2 = ast.add_stmt(Stmt::Let("x".into(), val2), Span::new(12, 22));
-        let x_ref = ast.add_expr(Expr::Local("x".into()), Span::new(24, 25));
+        let x_ref = ast.add_expr(Expr::Var("x".into()), Span::new(24, 25));
         let blk_expr = ast
             .add_expr(Expr::Block(vec![let2], Some(x_ref)), Span::new(10, 26));
         let blk_stmt = ast.add_stmt(Stmt::Expr(blk_expr), Span::new(10, 26));
 
         // Reference outer x
-        let var = ast.add_expr(Expr::Local("x".into()), Span::new(28, 29));
+        let var = ast.add_expr(Expr::Var("x".into()), Span::new(28, 29));
 
         let mut interp = test_interp(&ast);
         interp.exec(let1).await.unwrap();
@@ -2006,7 +2003,7 @@ mod tests {
             ast.add_expr(Expr::If(cond, then_blk, None), Span::new(0, 28));
         let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 28));
 
-        let var = ast.add_expr(Expr::Local("result".into()), Span::new(0, 6));
+        let var = ast.add_expr(Expr::Var("result".into()), Span::new(0, 6));
 
         let mut interp = test_interp(&ast);
         interp.exec(let_result).await.unwrap();
@@ -2037,7 +2034,7 @@ mod tests {
         let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 35));
 
         // After IF, check x
-        let var = ast.add_expr(Expr::Local("x".into()), Span::new(0, 1));
+        let var = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
 
         let mut interp = test_interp(&ast);
         interp.exec(if_stmt).await.unwrap();
@@ -2061,15 +2058,15 @@ mod tests {
         let let_y = ast.add_stmt(Stmt::Let("y".into(), v2), Span::new(12, 22));
 
         // LET sum = x + y
-        let x = ast.add_expr(Expr::Local("x".into()), Span::new(34, 35));
-        let y = ast.add_expr(Expr::Local("y".into()), Span::new(38, 39));
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(34, 35));
+        let y = ast.add_expr(Expr::Var("y".into()), Span::new(38, 39));
         let add =
             ast.add_expr(Expr::Binary(x, BinOp::Add, y), Span::new(34, 39));
         let let_sum =
             ast.add_stmt(Stmt::Let("sum".into(), add), Span::new(24, 39));
 
         // Reference to check result (create before interpreter borrows ast)
-        let sum_var = ast.add_expr(Expr::Local("sum".into()), Span::new(0, 3));
+        let sum_var = ast.add_expr(Expr::Var("sum".into()), Span::new(0, 3));
 
         let stmts = vec![let_x, let_y, let_sum];
 
@@ -2188,7 +2185,7 @@ mod tests {
 
         let let_x =
             ast.add_stmt(Stmt::Let("x".into(), if_expr), Span::new(0, 35));
-        let x_var = ast.add_expr(Expr::Local("x".into()), Span::new(0, 1));
+        let x_var = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
 
         let mut interp = test_interp(&ast);
         interp.exec(let_x).await.unwrap();
@@ -2230,7 +2227,7 @@ mod tests {
             ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(10, 12));
         let let_x = ast.add_stmt(Stmt::Let("x".into(), ten), Span::new(2, 12));
 
-        let x = ast.add_expr(Expr::Local("x".into()), Span::new(14, 15));
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(14, 15));
         let one =
             ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(18, 19));
         let tail =
@@ -2259,14 +2256,14 @@ mod tests {
             ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(22, 24));
         let let_inner =
             ast.add_stmt(Stmt::Let("x".into(), ten), Span::new(13, 24));
-        let x_inner = ast.add_expr(Expr::Local("x".into()), Span::new(26, 27));
+        let x_inner = ast.add_expr(Expr::Var("x".into()), Span::new(26, 27));
         let blk = ast.add_expr(
             Expr::Block(vec![let_inner], Some(x_inner)),
             Span::new(11, 29),
         );
 
         // outer x reference
-        let x_outer = ast.add_expr(Expr::Local("x".into()), Span::new(31, 32));
+        let x_outer = ast.add_expr(Expr::Var("x".into()), Span::new(31, 32));
 
         let mut interp = test_interp(&ast);
         interp.exec(let_outer).await.unwrap();

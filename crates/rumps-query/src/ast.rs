@@ -154,14 +154,28 @@ pub(crate) enum Expr {
     /// A literal value.
     Literal(Literal),
 
-    /// A local variable reference.
-    Local(String),
+    /// A lexical variable reference (LET bindings).
+    ///
+    /// `x` becomes `Var("x")`. Only looks up in lexical scope; does not
+    /// fall back to B-tree locals.
+    Var(String),
 
-    /// A global variable reference with subscripts.
+    /// A local B-tree variable with subscripts.
+    ///
+    /// `x(1, "KEY")` becomes `Local("x", [1, "KEY"])`.
+    /// Requires `GET` to read the value.
+    Local(String, SmallVec<[ExprId; 4]>),
+
+    /// A global B-tree variable with subscripts.
     ///
     /// `^PATIENT(123, "NAME")` becomes `Global("PATIENT", [123, "NAME"])`.
-    /// This is an implicit GET; reading a global alone evaluates to its value.
+    /// Requires `GET` to read the value.
     Global(String, SmallVec<[ExprId; 4]>),
+
+    /// `GET` primitive.
+    ///
+    /// Reads a value from a B-tree variable (`Local` or `Global`).
+    Get(ExprId),
 
     /// A binary operation.
     Binary(ExprId, BinOp, ExprId),
@@ -238,11 +252,11 @@ mod tests {
 
         let lit =
             ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let var = ast.add_expr(Expr::Local("x".into()), Span::new(4, 5));
+        let var = ast.add_expr(Expr::Var("x".into()), Span::new(4, 5));
 
         assert_eq!(ast.expr_count(), 2);
         assert_eq!(ast.get_expr(lit), Some(&Expr::Literal(Literal::Int(42))));
-        assert_eq!(ast.get_expr(var), Some(&Expr::Local("x".into())));
+        assert_eq!(ast.get_expr(var), Some(&Expr::Var("x".into())));
         assert_eq!(ast.expr_span(lit), Some(Span::new(0, 2)));
         assert_eq!(ast.expr_span(var), Some(Span::new(4, 5)));
     }
@@ -309,7 +323,7 @@ mod tests {
         let mut ast = Ast::new();
 
         // Build: IF x > 0 { 1 } ELSE { 0 }
-        let x = ast.add_expr(Expr::Local("x".into()), Span::new(3, 4));
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(3, 4));
         let zero =
             ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(7, 8));
         let cond =

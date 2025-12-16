@@ -486,11 +486,13 @@ impl Parser {
         ));
 
         let ast2 = Rc::clone(&ast);
+        let ast3 = Rc::clone(&ast);
 
         // Unary is right-associative, so we use recursion
         recursive(move |unary| {
             let ast_inner = Rc::clone(&ast);
-            let with_op = op.clone().then(unary).map_with_span(
+            let ast_get = Rc::clone(&ast3);
+            let with_op = op.clone().then(unary.clone()).map_with_span(
                 move |(op, (inner, _)): (UnOp, SpannedExpr), span| {
                     let id = ast_inner
                         .borrow_mut()
@@ -499,8 +501,50 @@ impl Parser {
                 },
             );
 
-            with_op.or(Self::postfix_expr(Rc::clone(&ast2), expr.clone()))
+            // GET target: reads from a B-tree variable (local or global)
+            let get_expr = just(Token::Get)
+                .ignore_then(Self::gettable(Rc::clone(&ast_get), expr.clone()))
+                .map_with_span(move |(inner, _), span| {
+                    let id =
+                        ast_get.borrow_mut().add_expr(Expr::Get(inner), span);
+                    (id, span)
+                });
+
+            choice((with_op, get_expr))
+                .or(Self::postfix_expr(Rc::clone(&ast2), expr.clone()))
         })
+    }
+
+    /// Target for `GET`: a local or global B-tree variable.
+    fn gettable(
+        ast: AstCell,
+        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+        let ast2 = Rc::clone(&ast);
+
+        // Global: `^NAME` or `^NAME(subs...)`
+        let global = Self::global_name()
+            .then(Self::subscripts(expr.clone()).or_not())
+            .map_with_span(move |(name, subs), span| {
+                let subs = subs.unwrap_or_default();
+                let id =
+                    ast.borrow_mut().add_expr(Expr::Global(name, subs), span);
+                (id, span)
+            });
+
+        // Local: `name` or `name(subs...)`
+        let local = Self::ident()
+            .then(Self::subscripts(expr).or_not())
+            .map_with_span(move |(name, subs), span| {
+                let subs = subs.unwrap_or_default();
+                let id =
+                    ast2.borrow_mut().add_expr(Expr::Local(name, subs), span);
+                (id, span)
+            });
+
+        choice((global, local))
     }
 
     /// Postfix: field access `.field`, index `[expr]`, call `(args...)`
@@ -572,10 +616,10 @@ impl Parser {
                     Some((id, span))
                 }
                 PostfixOp::Call(args, _) => {
-                    // Convert the base expression to a function call if it's a local var
+                    // Convert the base expression to a function call if it's a Var
                     let base_expr = ast.borrow().get_expr(acc.0).cloned();
                     base_expr.and_then(|e| match e {
-                        Expr::Local(name) => {
+                        Expr::Var(name) => {
                             let id = ast
                                 .borrow_mut()
                                 .add_expr(Expr::Call(name, args), span);
@@ -616,13 +660,13 @@ impl Parser {
                 (id, span)
             });
 
-        // Local variable
-        let local = Self::ident().map_with_span(move |name, span| {
-            let id = ast2.borrow_mut().add_expr(Expr::Local(name), span);
+        // Lexical variable (LET bindings)
+        let var = Self::ident().map_with_span(move |name, span| {
+            let id = ast2.borrow_mut().add_expr(Expr::Var(name), span);
             (id, span)
         });
 
-        // Global variable with optional subscripts: `^NAME` or `^NAME(subs...)`
+        // Global with optional subscripts: `^NAME` or `^NAME(subs...)`
         let global = Self::global_name()
             .then(Self::subscripts(expr.clone()).or_not())
             .map_with_span(move |(name, subs), span| {
@@ -666,8 +710,8 @@ impl Parser {
                 (id, span)
             });
 
-        // Order matters: try global before local (both can start with ident pattern)
-        choice((literal, global, local, paren, array, object))
+        // Order matters: try global before var (both can start with ident pattern)
+        choice((literal, global, var, paren, array, object))
     }
 
     /// Parse an identifier token.
@@ -778,13 +822,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_local_var() {
+    fn parse_var() {
         let (ast, id) = parse_expr_ok("foo");
-        assert_eq!(ast.get_expr(id), Some(&Expr::Local("foo".into())));
+        assert_eq!(ast.get_expr(id), Some(&Expr::Var("foo".into())));
     }
 
     #[test]
-    fn parse_global_var() {
+    fn parse_global() {
         let (ast, id) = parse_expr_ok("^PATIENT");
         assert_eq!(
             ast.get_expr(id),
@@ -801,6 +845,51 @@ mod tests {
                 assert_eq!(subs.len(), 2);
             }
             _ => panic!("expected Global"),
+        }
+    }
+
+    #[test]
+    fn parse_get_global() {
+        let (ast, id) = parse_expr_ok("GET ^PATIENT(123)");
+        match ast.get_expr(id) {
+            Some(Expr::Get(inner)) => match ast.get_expr(*inner) {
+                Some(Expr::Global(name, subs)) => {
+                    assert_eq!(name, "PATIENT");
+                    assert_eq!(subs.len(), 1);
+                }
+                _ => panic!("expected Global inside Get"),
+            },
+            _ => panic!("expected Get"),
+        }
+    }
+
+    #[test]
+    fn parse_get_local() {
+        let (ast, id) = parse_expr_ok("GET cache(\"key\")");
+        match ast.get_expr(id) {
+            Some(Expr::Get(inner)) => match ast.get_expr(*inner) {
+                Some(Expr::Local(name, subs)) => {
+                    assert_eq!(name, "cache");
+                    assert_eq!(subs.len(), 1);
+                }
+                _ => panic!("expected Local inside Get"),
+            },
+            _ => panic!("expected Get"),
+        }
+    }
+
+    #[test]
+    fn parse_get_local_no_subscripts() {
+        let (ast, id) = parse_expr_ok("GET myvar");
+        match ast.get_expr(id) {
+            Some(Expr::Get(inner)) => match ast.get_expr(*inner) {
+                Some(Expr::Local(name, subs)) => {
+                    assert_eq!(name, "myvar");
+                    assert!(subs.is_empty());
+                }
+                _ => panic!("expected Local inside Get"),
+            },
+            _ => panic!("expected Get"),
         }
     }
 
