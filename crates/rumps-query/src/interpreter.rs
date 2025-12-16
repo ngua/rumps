@@ -2,6 +2,77 @@
 //!
 //! The interpreter is async because `Database` and `Transaction` methods are async.
 //! All variable access (both locals and globals) goes through async `Database` methods.
+//!
+//! # Type Coercions
+//!
+//! The interpreter performs various type coercions for operations like string
+//! concatenation, comparison, and storage. All conversion methods live on
+//! [`Interpreter`] since they require access to the arena and type registry.
+//!
+//! ## String Coercion
+//!
+//! String coercion (via [`Interpreter::display`]) converts any value to a
+//! human-readable string. Used for `OUTPUT` statements and string concatenation
+//! or interpolation.
+//!
+//! | *Type*   | *Result*                                              |
+//! |----------|-------------------------------------------------------|
+//! | `Bool`   | `"TRUE"` or `"FALSE"`                                 |
+//! | `Int`    | Decimal representation (e.g., `"42"`)                 |
+//! | `Float`  | Decimal representation (e.g., `"3.14"`)               |
+//! | `String` | The string itself                                     |
+//! | `Array`  | `"[ elem1, elem2, ... ]"` (recursive)                 |
+//! | `Object` | `"{ key1: val1, key2: val2, ... }"` (recursive)       |
+//! | `Tagged` | `"TypeName.Variant"` or `"TypeName.Variant(args...)"` |
+//!
+//! ## JSON Coercion
+//!
+//! JSON conversion is used for storage serialization of complex values.
+//!
+//! **To JSON** ([`Interpreter::jsonify`]):
+//! - Scalars map directly (`Bool`, `Int`, `Float`, `String`)
+//! - `Array` becomes a JSON array
+//! - `Object` becomes a JSON object
+//! - `Tagged` becomes `{"_type": "...", "_variant": "...", "_payload": [...]}`
+//!   (provisional encoding)
+//!
+//! **From JSON** ([`Interpreter::unjsonify`]):
+//! - `null` becomes `Option.None`
+//! - `bool` becomes `Bool`
+//! - `number` becomes `Float` (JSON has no int/float distinction)
+//! - `string` becomes `String`
+//! - `array` becomes `Array` if homogeneous (all elements same JSON type);
+//!    (FIXME) heterogeneous arrays are not yet supported
+//! - `object` becomes `Object`
+//!
+//! ## Numeric Coercion
+//!
+//! For comparison and arithmetic operators, mixed numeric types are coerced:
+//!
+//! - `Int` vs `Float`: The `Int` is promoted to `Float`
+//! - Comparisons (`==`, `<`, etc.) work across `Int`/`Float` boundaries
+//! - Division always produces `Float` (use `//` for floor division)
+//!
+//! ## Storage Coercion
+//!
+//! Storage conversion translates between runtime `Value` and persistent
+//! `rumps_types::Value`.
+//!
+//! **To storage** ([`Interpreter::store`]):
+//! - `Bool`, `Int`, `Float`, `String` map directly
+//! - `Array`, `Object`, `Tagged` are serialized as JSON
+//!
+//! **From storage** ([`Interpreter::load`]):
+//! - Direct types map back to their runtime equivalents
+//! - JSON is parsed via [`Interpreter::unjsonify`]
+//!
+//! ## Subscript Coercion
+//!
+//! Only scalar types can be used as database key subscripts
+//! ([`Interpreter::subscript`]):
+//!
+//! - `Bool`, `Int`, `Float`, `String` are valid subscripts
+//! - `Array`, `Object`, `Tagged` cannot be subscripts (returns error)
 
 #![allow(dead_code)]
 
@@ -1200,7 +1271,9 @@ impl Interpreter<'_> {
     /// Recursive stringify helper.
     fn stringify(&self, v: &Value) -> String {
         match v {
-            Value::Bool(b) => b.to_string(),
+            // Usually keywords are represented as uppercase, so this will
+            // produce `TRUE`/`FALSE`, even though they are not really keywords
+            Value::Bool(b) => b.to_string().to_uppercase(),
             Value::Int(n) => n.to_string(),
             Value::Float(f) => f.to_string(),
             Value::String(id) => {
