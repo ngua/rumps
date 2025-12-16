@@ -5,21 +5,36 @@
 use std::fmt;
 use std::ops::Range;
 
-/// A span representing a range of byte offsets in source code.
+/// A span representing a range of byte offsets in source code, with optional
+/// attached metadata.
+///
+/// The type parameter `M` allows attaching arbitrary metadata to spans. This is
+/// useful for tools that need to preserve information beyond position:
+///
+/// - **Interpreter**: Uses `Span<()>` (the default); no metadata needed.
+/// - **Formatter**: Could use `Span<Comments>` to preserve comment attachment.
+/// - **LSP**: Could use `Span<Trivia>` for whitespace-preserving transforms.
 ///
 /// Using `u32` limits source files to ~4GB, which is plenty.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub(crate) struct Span {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Span<M = ()> {
     /// Byte offset of the start (inclusive).
     pub(crate) start: u32,
     /// Byte offset of the end (exclusive).
     pub(crate) end: u32,
+    /// Optional metadata attached to this span.
+    pub(crate) meta: M,
 }
 
+/// Constructors for `Span<()>` (no metadata).
 impl Span {
     /// Create a new span from start and end byte offsets.
     pub(crate) const fn new(start: u32, end: u32) -> Self {
-        Self { start, end }
+        Self {
+            start,
+            end,
+            meta: (),
+        }
     }
 
     /// Create a span covering a single byte position.
@@ -27,15 +42,16 @@ impl Span {
         Self {
             start: pos,
             end: pos + 1,
+            meta: (),
         }
     }
+}
 
-    /// Merge two spans into one covering both.
-    pub(crate) fn merge(self, other: Self) -> Self {
-        Self {
-            start: self.start.min(other.start),
-            end: self.end.max(other.end),
-        }
+/// Methods available for all `Span<M>`.
+impl<M> Span<M> {
+    /// Create a span with explicit metadata.
+    pub(crate) const fn with_meta(start: u32, end: u32, meta: M) -> Self {
+        Self { start, end, meta }
     }
 
     /// The length of this span in bytes.
@@ -68,9 +84,40 @@ impl Span {
             })
             .unwrap_or((1, 1))
     }
+
+    /// Discard metadata, converting to `Span<()>`.
+    pub(crate) fn strip(self) -> Span {
+        Span {
+            start: self.start,
+            end: self.end,
+            meta: (),
+        }
+    }
 }
 
-impl fmt::Display for Span {
+/// Methods for spans with `Default` metadata.
+impl<M: Default> Span<M> {
+    /// Merge two spans into one covering both, using default metadata.
+    pub(crate) fn merge(self, other: Self) -> Self {
+        Self {
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+            meta: M::default(),
+        }
+    }
+}
+
+impl<M: Default> Default for Span<M> {
+    fn default() -> Self {
+        Self {
+            start: 0,
+            end: 0,
+            meta: M::default(),
+        }
+    }
+}
+
+impl<M> fmt::Display for Span<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}..{}", self.start, self.end)
     }
@@ -81,12 +128,13 @@ impl From<Range<usize>> for Span {
         Self {
             start: r.start as u32,
             end: r.end as u32,
+            meta: (),
         }
     }
 }
 
-impl From<Span> for Range<usize> {
-    fn from(s: Span) -> Self {
+impl<M> From<Span<M>> for Range<usize> {
+    fn from(s: Span<M>) -> Self {
         s.as_range()
     }
 }
@@ -99,6 +147,7 @@ impl chumsky::span::Span for Span {
         Self {
             start: range.start,
             end: range.end,
+            meta: (),
         }
     }
 

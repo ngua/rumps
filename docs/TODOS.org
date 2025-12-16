@@ -10,6 +10,7 @@
     - [ ] Emacs
     - [ ] Vim/Neovim
     - [ ] VSC
+  - [ ] Source formatter
 - [ ] ~rumps-remote~ or similar (client+server protocol)
 - [ ] Compression (compress nodes+pages)
 - [ ] Encryption (optional encryption at rest)
