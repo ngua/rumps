@@ -5,9 +5,8 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-
 use futures::future::BoxFuture;
+use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
 use rumps_types::{Key, Name, Subscript};
@@ -343,7 +342,7 @@ impl<'a> Interpreter<'a> {
         fields: &'b [(String, ExprId)],
     ) -> BoxFuture<'b, Result<Value>> {
         Box::pin(async move {
-            let map = self.object_fields(fields, HashMap::new()).await?;
+            let map = self.object_fields(fields, IndexMap::new()).await?;
             Ok(Value::Object(map))
         })
     }
@@ -352,8 +351,8 @@ impl<'a> Interpreter<'a> {
     fn object_fields<'b>(
         &'b mut self,
         fields: &'b [(String, ExprId)],
-        mut acc: HashMap<StringId, ValueId>,
-    ) -> BoxFuture<'b, Result<HashMap<StringId, ValueId>>> {
+        mut acc: IndexMap<StringId, ValueId>,
+    ) -> BoxFuture<'b, Result<IndexMap<StringId, ValueId>>> {
         Box::pin(async move {
             match fields.split_first() {
                 None => Ok(acc),
@@ -1073,8 +1072,8 @@ impl<'a> Interpreter<'a> {
     /// Check equality of two objects field-wise.
     fn objects_equal(
         &self,
-        a: &HashMap<StringId, ValueId>,
-        b: &HashMap<StringId, ValueId>,
+        a: &IndexMap<StringId, ValueId>,
+        b: &IndexMap<StringId, ValueId>,
         span: Span,
     ) -> Result<bool> {
         a.iter().try_fold(true, |acc, (k, av)| {
@@ -1337,11 +1336,8 @@ impl Interpreter<'_> {
                         .collect();
                     Value::Array(elems)
                 } else {
-                    // FIXME: Heterogeneous JSON arrays should map to a future
-                    // `Value::Json` variant. For now, store as string.
-                    let s = serde_json::to_string(&arr)
-                        .unwrap_or_else(|_| "<json>".to_owned());
-                    Value::String(self.arena.intern(&s))
+                    // TODO: Heterogeneous JSON arrays should map to `Value::Json`
+                    todo!("Value::Json variant for heterogeneous arrays")
                 }
             }
             serde_json::Value::Object(obj) => {

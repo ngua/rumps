@@ -8,6 +8,7 @@ rumps-types = { path = "../rumps-types" }
 rumps-storage = { path = "../rumps-storage" }
 chumsky = "0.9"
 futures = { workspace = true }
+indexmap = "2"
 ordered-float = { workspace = true }
 serde_json = { workspace = true }
 smallvec = { workspace = true }

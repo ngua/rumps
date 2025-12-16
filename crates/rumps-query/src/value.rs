@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
@@ -165,13 +166,8 @@ pub(crate) enum Value {
     /// An array of values.
     Array(Vec<ValueId>),
 
-    /// An object/record with string keys.
-    ///
-    /// NOTE: `HashMap` does not preserve insertion order. If field ordering
-    /// becomes important (e.g., for deterministic serialization), consider
-    /// switching to `IndexMap` or `Vec<(StringId, ValueId)>`. The latter
-    /// trades O(1) field access for ordering guarantees.
-    Object(HashMap<StringId, ValueId>),
+    /// An object/record with string keys (insertion order preserved).
+    Object(IndexMap<StringId, ValueId>),
 
     /// A tagged value (sum type variant).
     ///
@@ -644,7 +640,7 @@ mod tests {
         let empty_str = arena.intern("");
         assert!(!Value::String(empty_str).is_truthy(&arena));
         assert!(!Value::Array(vec![]).is_truthy(&arena));
-        assert!(!Value::Object(HashMap::new()).is_truthy(&arena));
+        assert!(!Value::Object(IndexMap::new()).is_truthy(&arena));
 
         let none = Value::none();
         assert!(!none.is_truthy(&arena));
