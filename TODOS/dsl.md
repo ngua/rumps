@@ -317,9 +317,9 @@ TRANSACTION {
   SAVEPOINT process-items
 
   COLLECT ^ORDER(id,"ITEMS")
-    FOREACH item => {
+    EXECUTE {
       TRANSACTION {  ; Nested transaction
-        SET ^INVENTORY(item.id,"COUNT") = ^INVENTORY(item.id,"COUNT") - item.qty
+        SET ^INVENTORY(key[0],"COUNT") = ^INVENTORY(key[0],"COUNT") - value..qty
       } ON CONFLICT ROLLBACK TO process-items
     }
 
@@ -356,40 +356,93 @@ TRANSACTION {
 
 ## Fundamental Primitive: COLLECT
 
-The `COLLECT` primitive is the **foundation for ALL iteration** in RUMPS. It creates a lazy stream from a B-tree variable that can be transformed, filtered, and consumed.
+The `COLLECT` primitive is the **foundation for ALL iteration over B-tree data** in RUMPS. It creates a lazy stream from a B-tree variable that can be transformed, filtered, and consumed.
 
-### Basic Syntax Forms
+### Syntax
 
-#### 1. Block Form
 ```rumps
 COLLECT ^DATA
   WHERE condition
   SELECT transformation
-  ACTION
+  TERMINAL
 ```
 
-#### 2. Pipeline Form
+### Element Type Tracking
+
+The interpreter tracks the **element type** as data flows through the pipeline. This determines what implicit bindings are available at each stage.
+
+#### Initial State (before SELECT)
+
+Each element is a `(Key, Option<Value>)` tuple from the B-tree:
+- `key`: The current key (subscript path)
+- `value`: The value at that key (may be `Option.None` if node has descendants but no value)
+
+Operations like `WHERE`, `WHILE`, and `SELECT` have access to these implicit bindings.
+
+#### After SELECT
+
+`SELECT` transforms elements into a new type. The interpreter tracks this and updates available bindings:
+
+| SELECT Expression               | Element Becomes  | Available Bindings                  |
+|---------------------------------|------------------|-------------------------------------|
+| `SELECT { id: ..., name: ... }` | Object           | `item` + field names (`id`, `name`) |
+| `SELECT value.amount`           | Scalar           | `item`                              |
+| `SELECT ^G(key[0], "SUB")`      | Global reference | `item` (can be nested-iterated)     |
+
+**Examples:**
+
 ```rumps
-^DATA
-  |> COLLECT WHERE condition
-  |> SELECT transformation
-  |> ACTION
+; After SELECT { fields }, field names are directly available
+COLLECT ^PATIENT
+  WHERE key[0] > 100                        ; key/value (pre-SELECT)
+  SELECT { id: key[0], name: value.name }
+  SORT BY name ASC                          ; 'name' from selected object
+  TAKE-WHILE id < 1000                      ; 'id' from selected object
+  EXECUTE { log(item) }                     ; 'item' is the selected object
+
+; After SELECT scalar, use 'item'
+COLLECT ^SALES
+  SELECT value.amount                       ; stream element becomes the _amount_
+  SKIP-WHILE item < 100                     ; 'item' is the scalar
+  TAKE-WHILE item < 10000
+  AGGREGATE SUM INTO total
+
+; SELECT can produce global references
+COLLECT ^PATIENT
+  SELECT ^VISITS(key[0])              ; element becomes a Global ref
+  ; 'item' is now a Global that could be further iterated in a nested COLLECT
 ```
 
-Both forms are equivalent and can be used interchangeably based on preference and readability.
+#### Binding Summary
 
-## Stream Operations
+| Operation                  | When Used         | Implicit Bindings                                        |
+|----------------------------|-------------------|----------------------------------------------------------|
+| `WHERE`, `WHILE`           | Pre-SELECT        | `key`, `value`                                           |
+| `SELECT`                   | Transforms stream | `key`, `value` → produces new type                       |
+| `TAKE-WHILE`, `SKIP-WHILE` | Post-SELECT       | `item` + fields (if object)                              |
+| `SORT BY`                  | Post-SELECT       | Field names (if object) or expression                    |
+| `AGGREGATE`, `COUNT`       | Any               | Operates on stream values                                |
+| `TAKE n`, `SKIP n`         | Any               | No element access needed                                 |
+| `EXECUTE`                  | Terminal          | Same as current stage (`key`/`value`, `item`, or fields) |
+| `INTO`, `OUTPUT`           | Terminal          | No element access needed                                 |
 
-All operations are composable and can be chained together. Operations are **lazy** - they don't execute until a terminal operation (like `OUTPUT` or `INTO`) is reached.
+## COLLECT Operations
+
+Operations within a `COLLECT` block are composable and lazy; they don't execute until a terminal operation is reached. The available implicit bindings depend on whether you're before or after a `SELECT` (see [Element Type Tracking](#element-type-tracking) above).
 
 ### Filtering Operations
 
-#### WHERE - Filter by predicate
+#### WHERE - Filter by predicate (COLLECT-specific)
+
+`WHERE` filters based on `key` and/or `value`. Multiple `WHERE` clauses are ANDed together.
+
 ```rumps
 COLLECT ^PATIENT
   WHERE key[0] > 100 AND key[0] < 200
   WHERE has-value  ; Multiple WHERE clauses are ANDed together
 ```
+
+**Note**: For filtering general collections (arrays, etc.), use `FILTER` with an explicit closure. See [General Collection Operations](#general-collection-operations).
 
 #### WHILE - Take while condition is true (early termination)
 ```rumps
@@ -397,16 +450,12 @@ COLLECT ^LOG
   WHILE key[0] <= "2025-01-01"  ; Stops at first false condition
 ```
 
-#### FILTER - Post-selection filtering
-```rumps
-COLLECT ^PATIENT
-  SELECT GET(^PATIENT(key[0],"NAME"))
-  FILTER value.contains("Smith")
-```
-
 ### Transformation Operations
 
-#### SELECT - Transform each element
+#### SELECT - Transform each element (COLLECT-specific)
+
+`SELECT` transforms each element using the implicit `key` and `value` bindings.
+
 ```rumps
 ; Simple selection
 COLLECT ^DATA
@@ -425,32 +474,38 @@ COLLECT ^PATIENT
   }
 ```
 
-#### MAP - Alias for SELECT (for familiarity)
-```rumps
-COLLECT ^DATA
-  MAP process-record
-```
+**Note**: For transforming general collections (arrays, etc.), use `MAP` with an explicit closure. See [General Collection Operations](#general-collection-operations).
 
 ### Limiting Operations
 
-#### TAKE - Take first N elements
+#### TAKE / SKIP - Count-based limiting
+These operations don't need element access:
 ```rumps
 COLLECT ^LOG
   TAKE 100
-```
 
-#### SKIP - Skip first N elements
-```rumps
 COLLECT ^LOG
   SKIP 100
   TAKE 50  ; Get items 101-150
 ```
 
 #### TAKE-WHILE / SKIP-WHILE - Conditional limiting
+These operations access the current element. Bindings depend on position relative to SELECT:
 ```rumps
+; Pre-SELECT: uses key/value
 COLLECT ^DATA
   SKIP-WHILE value < 0
-  TAKE-WHILE value < 1000
+  TAKE-WHILE key[0] < 1000
+
+; Post-SELECT with scalar: uses 'item'
+COLLECT ^DATA
+  SELECT value.score
+  TAKE-WHILE item >= 0
+
+; Post-SELECT with object: uses field names
+COLLECT ^DATA
+  SELECT { id: key[0], score: value.score }
+  TAKE-WHILE score >= 0
 ```
 
 ### Aggregation Operations
@@ -492,10 +547,21 @@ COLLECT ^VISITS
 ### Ordering Operations
 
 #### SORT BY - Sort stream
+`SORT BY` uses the current element bindings. Typically used after SELECT:
 ```rumps
+; Sort by object field
 COLLECT ^PATIENT
   SELECT { id: key[0], name: GET(^PATIENT(key[0],"NAME")) }
   SORT BY name ASC
+
+; Sort by scalar (use 'item')
+COLLECT ^SCORES
+  SELECT value.score
+  SORT BY item DESC
+
+; Pre-SELECT: sort by key or value
+COLLECT ^DATA
+  SORT BY key[0] ASC
 ```
 
 #### REVERSE - Reverse stream order
@@ -519,7 +585,7 @@ COLLECT ^ORDER
 ```rumps
 COLLECT ^RECORDS
   PARALLEL 10  ; Process up to 10 records concurrently
-  MAP expensive-op
+  SELECT expensive-op(key, value)
 ```
 
 ## Terminal Operations
@@ -621,10 +687,156 @@ COLLECT ^ERRORS
 
 This declarative output approach eliminates the need for manual formatting loops and provides consistent, reusable output patterns.
 
-### FOREACH - Side effects
+### EXECUTE - Side effects (COLLECT terminal)
+
+`EXECUTE` is an operation that runs a block for each element in the stream. Like other COLLECT operations, it uses implicit bindings based on element type (see [Element Type Tracking](#element-type-tracking)).
+
 ```rumps
+; Pre-SELECT: key/value available
 COLLECT ^TASKS
-  FOREACH process-task  ; Execute function for each element
+  WHERE value.status == "pending"
+  EXECUTE {
+    process(key[0])
+    log("Processed task", key)
+  }
+
+; Post-SELECT with object: field names available
+COLLECT ^PATIENT
+  WHERE key[0] > 100
+  SELECT { id: key[0], name: value.name }
+  EXECUTE {
+    log("Processing: " ++ name)
+    notify(id)
+  }
+
+; Post-SELECT with scalar: item available
+COLLECT ^DATA
+  SELECT value.score
+  EXECUTE {
+    log("Score: " ++ item)
+  }
+```
+
+**Note**: `EXECUTE` is the COLLECT-specific primitive for side effects. For general collections (arrays, etc.), use `FOREACH` with an explicit closure.
+
+## General Collection Operations
+
+These operations work on **any collection** (arrays, ranges, streams, etc.) and require **explicit closures**. They are distinct from `COLLECT`-specific operations which have implicit `key`/`value` bindings.
+
+### MAP - Transform collection elements
+
+`MAP` applies a closure to each element and returns a new collection.
+
+```rumps
+; Prefix form: parens around closure (needed to delimit from array arg)
+MAP (x => x * 2) [1, 2, 3]              ; => [2, 4, 6]
+MAP (n => n * n) (1..5)                 ; => [1, 4, 9, 16, 25]
+
+; Pipeline form: no parens needed (closure is last)
+[1, 2, 3] |> MAP x => x * 2             ; => [2, 4, 6]
+
+; With named function
+FUN double (x) { x * 2 }
+MAP double [1, 2, 3]                    ; => [2, 4, 6]
+```
+
+### FILTER - Filter collection elements
+
+`FILTER` keeps elements that satisfy a predicate.
+
+```rumps
+; Prefix form: parens around closure
+FILTER (x => x > 2) [1, 2, 3, 4, 5]     ; => [3, 4, 5]
+
+; Pipeline form: no parens needed
+[1, 2, 3, 4, 5] |> FILTER x => x > 2    ; => [3, 4, 5]
+
+; Chain with pipeline
+[1, 2, 3, 4, 5]
+  |> FILTER x => x % 2 == 0
+  |> MAP x => x * 10                    ; => [20, 40]
+```
+
+### FOREACH - Execute side effects
+
+`FOREACH` executes a closure for each element. It does not produce a result; use for side effects only.
+
+```rumps
+; Execute for each element (one-liner, no braces needed)
+FOREACH (x => OUTPUT x) [1, 2, 3]
+
+; With pipeline operator (multi-line needs braces)
+[1, 2, 3] |> FOREACH x => {
+  OUTPUT "Processing: {x}" 
+  log(x)
+}
+
+; Process a range
+FOREACH n => {
+  SET ^COUNTER(n) = n * n
+} (1..100)
+```
+
+### REDUCE - Fold collection to single value
+
+`REDUCE` combines all elements into a single value using an accumulator.
+
+```rumps
+; Sum an array
+REDUCE (acc, x => acc + x) 0 [1, 2, 3, 4, 5]  ; => 15
+
+; With pipeline
+[1, 2, 3, 4, 5] |> REDUCE (acc, x => acc + x) 0
+
+; Build a string
+["a", "b", "c"] |> REDUCE (acc, s => acc ++ s) ""  ; => "abc"
+```
+
+### Pipeline Operator (`|>`)
+
+The pipeline operator threads a value through a series of transformations:
+
+```rumps
+; General collection pipeline
+[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  |> FILTER x => x % 2 == 0      ; [2, 4, 6, 8, 10]
+  |> MAP x => x * x              ; [4, 16, 36, 64, 100]
+  |> REDUCE (a, b => a + b) 0    ; 220 (parens needed: closure not last)
+
+; Mixed with function calls
+"hello world"
+  |> String.upper
+  |> String.split " "
+  |> MAP String.reverse
+  |> String.join "-"             ; "OLLEH-DLROW"
+```
+
+**Note**: The pipeline operator works with general values and functions. For B-tree iteration, use `COLLECT` with its block syntax instead.
+
+### Comparison: COLLECT Operations vs General Operations
+
+| COLLECT-specific | General   | Binding Model                                                 |
+|------------------|-----------|---------------------------------------------------------------|
+| `WHERE`          | `FILTER`  | Implicit `key`/`value` vs explicit closure                    |
+| `SELECT`         | `MAP`     | Implicit `key`/`value` vs explicit closure                    |
+| `TAKE-WHILE`     | (same)    | Implicit (`key`/`value` or `item`/fields) vs explicit closure |
+| `SORT BY`        | (same)    | Implicit field access vs explicit closure                     |
+| `EXECUTE`        | `FOREACH` | Implicit bindings vs explicit closure                         |
+
+```rumps
+; COLLECT: implicit bindings track element type through pipeline
+COLLECT ^DATA
+  WHERE key[0] > 100                   ; implicit key/value
+  SELECT { id: key[0], val: value }    ; implicit key/value → object
+  SORT BY val DESC                     ; implicit field access
+  TAKE-WHILE id < 500                  ; implicit field access
+  EXECUTE { log(item) }                ; implicit (item is the object)
+
+; General: all operations use explicit closures
+[1, 2, 3]
+  |> FILTER x => x > 1
+  |> MAP x => { id: x, val: x * 2 }
+  |> FOREACH obj => log(obj)
 ```
 
 ## Complete Examples
@@ -642,34 +854,33 @@ COLLECT ^TASKS
 ; RUMPS declarative approach
 COLLECT ^PATIENT
   WHERE has-descendants
+  WHERE GET(^PATIENT(key[0],"LASTVISIT")) > 20250101
   SELECT {
     id: key[0],
     last-visit: GET(^PATIENT(key[0],"LASTVISIT"))
   }
-  FILTER last-visit > 20250101
   OUTPUT "Patient {id} last visited on {last-visit}"
 
 ; Get count
 COLLECT ^PATIENT
   WHERE has-descendants
-  FILTER GET(^PATIENT(key[0],"LASTVISIT")) > 20250101
+  WHERE GET(^PATIENT(key[0],"LASTVISIT")) > 20250101
   COUNT INTO recent-count
 ```
 
 ### Example 2: Top 10 customers by order value
 ```rumps
-^ORDERS
-  |> COLLECT
-  |> GROUP BY GET(^ORDERS(key[0],"CUSTOMER-ID"))
-  |> AGGREGATE SUM GET(^ORDERS(key[0],"AMOUNT")) INTO total
-  |> SORT BY total DESC
-  |> TAKE 10
-  |> JOIN ^CUSTOMER ON group-key
-  |> SELECT {
-       customer-name: GET(^CUSTOMER(group-key,"NAME")),
-       total-orders: total
-     }
-  |> OUTPUT AS TABLE HEADERS ["Customer", "Total Orders"]
+COLLECT ^ORDERS
+  GROUP BY GET(^ORDERS(key[0],"CUSTOMER-ID"))
+  AGGREGATE SUM GET(^ORDERS(key[0],"AMOUNT")) INTO total
+  SORT BY total DESC
+  TAKE 10
+  JOIN ^CUSTOMER ON group-key
+  SELECT {
+    customer-name: GET(^CUSTOMER(group-key,"NAME")),
+    total-orders: total
+  }
+  OUTPUT AS TABLE HEADERS ["Customer", "Total Orders"]
 ```
 
 ### Example 3: ETL Pipeline
@@ -679,12 +890,11 @@ TRANSACTION {
   COLLECT ^RAW-DATA
     WHERE key[0] >= last-processed-id
     PARALLEL 5
-    MAP validate-record
-    FILTER is-valid
-    MAP transform-record
+    WHERE validate-record(key, value)
+    WHERE is-valid(value)
     SELECT {
       id: generate-id(),
-      data: transformed-val,
+      data: transform-record(value),
       processed-at: Time.now()
     }
     INTO ^PROCESSED-DATA
@@ -700,7 +910,7 @@ TRANSACTION {
 | Pattern             | Traditional MUMPS                | RUMPS DSL                 | Benefits               |
 |---------------------|----------------------------------|---------------------------|------------------------|
 | Simple iteration    | `FOR SET I=$O(^D(I)) Q:I="" DO`  | `COLLECT ^D`              | Cleaner syntax         |
-| Filtering           | `IF` statements in loop body     | `WHERE` / `FILTER`        | Declarative intent     |
+| Filtering           | `IF` statements in loop body     | `WHERE`                   | Declarative intent     |
 | Counting            | Manual counter variable          | `COUNT INTO`              | No state management    |
 | First N items       | Counter with `QUIT`              | `TAKE n`                  | Clear intent           |
 | Aggregation         | Manual accumulator variables     | `AGGREGATE` operations    | Built-in operations    |
@@ -718,7 +928,7 @@ The following table shows common MUMPS iteration patterns and their conceptual R
 | ```mumps```<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`WRITE "Total: ",CNT,!` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  COUNT INTO tot`<br/>`WRITE "Total: ",tot,!` | Count entries |
 | ```mumps```<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. IF ID>100 QUIT`<br/>`. ; Process ID` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  WHILE key[0] <= 100`<br/>`  ; Process automatically` | Early termination with condition |
 | ```mumps```<br/>`SET I=0`<br/>`FOR  SET ID=$ORDER(^LOG(ID)) QUIT:ID=""  DO`<br/>`. SET I=I+1`<br/>`. IF I>10 QUIT`<br/>`. ; Process first 10` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  TAKE 10`<br/>`  ; Process automatically` | Take first N entries |
-| ```mumps```<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. IF NAME["Smith" DO`<br/>`. . ; Process Smith patients` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  WHERE has-descendants`<br/>`  SELECT GET(^PAT(key[0],"NAME"))`<br/>`  FILTER value.contains("Smith")`<br/>`  ; Process automatically` | Filter with condition |
+| ```mumps```<br/>`FOR  SET ID=$ORDER(^PAT(ID)) QUIT:ID=""  DO`<br/>`. SET NAME=$GET(^PAT(ID,"NAME"))`<br/>`. IF NAME["Smith" DO`<br/>`. . ; Process Smith patients` | ```rumps```<br/>`COLLECT ^PAT`<br/>`  WHERE has-descendants`<br/>`  WHERE GET(^PAT(key[0],"NAME")) contains "Smith"`<br/>`  ; Process automatically` | Filter with condition |
 | ```mumps```<br/>`KILL RESULTS`<br/>`SET CNT=0`<br/>`FOR  SET ID=$ORDER(^DATA(ID)) QUIT:ID=""  DO`<br/>`. SET CNT=CNT+1`<br/>`. SET RESULTS(CNT)=$GET(^DATA(ID,"VAL"))` | ```rumps```<br/>`COLLECT ^DATA`<br/>`  SELECT GET(^DATA(key[0],"VAL"))`<br/>`  INTO RESULTS` | Collect into array |
 | ```mumps```<br/>`FOR  SET D=$ORDER(^LOG(2025,D)) QUIT:D=""  DO`<br/>`. FOR  SET T=$ORDER(^LOG(2025,D,T)) QUIT:T=""  DO`<br/>`. . ; Process each timestamp` | ```rumps```<br/>`COLLECT ^LOG`<br/>`  WHERE key[0] == 2025 AND key.len == 3`<br/>`  ; All 2025 timestamps, flat` | Nested iteration (flattened) |
 | ```mumps```<br/>`; Complex aggregation`<br/>`SET TOT=0,CNT=0`<br/>`FOR  SET ID=$ORDER(^SALE(ID)) QUIT:ID=""  DO`<br/>`. SET AMT=$GET(^SALE(ID,"AMOUNT"))`<br/>`. SET TOT=TOT+AMT,CNT=CNT+1`<br/>`SET AVG=TOT/CNT` | ```rumps```<br/>`COLLECT ^SALE`<br/>`  SELECT GET(^SALE(key[0],"AMOUNT"))`<br/>`  AGGREGATE`<br/>`    SUM INTO total`<br/>`    COUNT INTO count`<br/>`    AVG INTO average` | Aggregation operations |
@@ -839,16 +1049,13 @@ SET name = GET(^PATIENT(id, "NAME")) ?? "Unknown"
 SET city = patient?.address?.city ?? "N/A"
 
 ; Pipeline operator for functional composition
-^DATA
-  |> COLLECT
-  |> FILTER active
-  |> MAP transform
-  |> OUTPUT
+[1, 2, 3, 4, 5]
+  |> FILTER x => x > 2
+  |> MAP x => x * 10
+  |> FOREACH x => OUTPUT x
 
 ; Range operator (`..`)
-FOREACH (1..100 ) i => {
-  ; Process with closure
-}
+FOREACH (n => OUTPUT n) (1..100)
 
 ; Spread operator in collections
 SET combined = [...array1, ...array2]
@@ -1269,11 +1476,13 @@ SET sum = add(10, 20)
 ; In expressions
 SET area = square(side) * 4
 
-; In pipelines
-^NUMBERS
-  |> COLLECT
-  |> MAP square
-  |> OUTPUT
+; With COLLECT (implicit key/value)
+COLLECT ^NUMBERS
+  SELECT square(value)
+  OUTPUT
+
+; With general collections
+[1, 2, 3, 4] |> MAP square
 ```
 
 ### Multi-Statement Functions
@@ -1310,8 +1519,8 @@ FUN log-access (user, resource) {
 FUN notify-all (msg) {
   COLLECT ^USERS
     WHERE value..active == true
-    FOREACH user => {
-      send-notification(user..id, msg)
+    EXECUTE {
+      send-notification(value..id, msg)
     }
 }
 ```
@@ -1321,18 +1530,18 @@ FUN notify-all (msg) {
 Functions integrate naturally with `COLLECT` streams:
 
 ```rumps
-FUN is-adult (record) {
-  record..age >= 18
+FUN is-adult (age) {
+  age >= 18
 }
 
-FUN format-name (record) {
-  record..last + ", " + record..first
+FUN format-name (last, first) {
+  last ++ ", " ++ first
 }
 
-; Use in pipeline
+; Use in COLLECT with implicit key/value
 COLLECT ^PERSONS
-  FILTER is-adult
-  MAP format-name
+  WHERE is-adult(value..age)
+  SELECT format-name(value..last, value..first)
   OUTPUT
 ```
 
@@ -1347,7 +1556,7 @@ FUN factorial (n) {
 FUN tree-sum (node-key) {
   SET val = GET(^TREE(node-key, "VALUE")) ?? 0
   SET children-sum = COLLECT ^TREE(node-key, "CHILDREN")
-    MAP tree-sum
+    SELECT tree-sum(key[0])
     AGGREGATE SUM
 
   val + children-sum
@@ -1356,22 +1565,28 @@ FUN tree-sum (node-key) {
 
 ### Closures / Anonymous Functions
 
-For inline use in streams, etc...:
+Closures use arrow syntax and are used with general collection operations:
 
 ```rumps
-; Arrow syntax
-COLLECT ^DATA
-  MAP x => x * 2
-  FILTER x => x > 10
+; Arrow syntax with general collections (pipeline form, no parens needed)
+[1, 2, 3] |> MAP x => x * 2
+[1, 2, 3, 4, 5] |> FILTER x => x > 2
+
+; Prefix form requires parens to delimit closure from collection arg
+MAP (x => x * 2) [1, 2, 3]
 ```
 
-More complex expressions can allow braces in the closure body, e.g.
+More complex expressions use braces in the closure body:
 
 ```rumps
-MAP x => {
-  ; Complex body here
+[1, 2, 3] |> MAP x => {
+  LET doubled = x * 2
+  LET squared = doubled * doubled
+  squared
 }
 ```
+
+**Note**: Within `COLLECT` blocks, all operations (`WHERE`, `SELECT`, `EXECUTE`, etc.) have implicit access to bindings based on element type. General collection operations (`MAP`, `FILTER`, `FOREACH`) use explicit closures.
 
 ## Namespaces
 
@@ -2064,14 +2279,13 @@ SET label = MATCH status {
   Status.Failed => { "error" }
 }
 
-; In pipelines
-^DATA
-  |> COLLECT
-  |> MAP entry => MATCH entry.status {
-       DataStatus.HasValue(v) => { v }
-       _ => { "N/A" }
-     }
-  |> OUTPUT
+; In COLLECT with MATCH
+COLLECT ^DATA
+  SELECT MATCH value.status {
+    DataStatus.HasValue(v) => { v }
+    _ => { "N/A" }
+  }
+  OUTPUT
 ```
 
 ## Error Handling
@@ -2299,7 +2513,7 @@ TYPE Error = {
 
 ## Open Design Questions
 
-1. **Syntax Style**: Should we support both block form and pipeline form, or standardize on one?
+1. ~~**Syntax Style**: Should we support both block form and pipeline form, or standardize on one?~~ **Resolved**: Block form only for `COLLECT`. Pipeline operator (`|>`) retained for general collection operations (`MAP`, `FILTER`, `FOREACH`, `REDUCE`). The interpreter tracks **element type** through the pipeline: pre-SELECT operations use `key`/`value`; post-SELECT operations use `item` (scalars) or field names (objects). All COLLECT operations (including `EXECUTE`) use implicit bindings. See [Element Type Tracking](#element-type-tracking).
 2. ~~**Type System**: How much type inference vs explicit typing?~~ **Resolved**: No static type checking. Type annotations are optional runtime hints—validated when executed, producing interpreter errors if violated. Conservative automatic coercion (into strings, between numerics, but not from strings to numbers). A future "strict mode" may add optional parse-time validation for annotated procedures.
 3. ~~**Error Handling**: How to handle errors in stream processing?~~ **Resolved**: `CATCH e => { }` intercepts errors, `HANDLE { Ok(v) => ..., Err(e) => ... }` gives full `Result`. `TRY { } CATCH { } FINALLY { }` for grouped operations. Streams can handle errors per-element or fail-fast. See Error Handling section.
 4. **Transaction Integration**: How do streams interact with transaction boundaries?
@@ -2313,9 +2527,7 @@ TYPE Error = {
 These tasks should be completed after the storage engine implementation is finished:
 
 ### Language Design
-- [ ] **Resolve syntax style decision**: Decide between supporting both block and pipeline forms or standardizing on one
-  - Consider user survey or prototype both to test ergonomics
-  - Document decision rationale for future reference
+- [x] **Resolve syntax style decision**: Block form only for `COLLECT`; pipeline operator for general collections. Interpreter tracks element type: pre-SELECT uses `key`/`value`; post-SELECT uses `item` or field names. All COLLECT operations use implicit bindings. See [Element Type Tracking](#element-type-tracking).
 - [ ] **Define operator precedence**: Establish clear precedence rules for all operations
 - [x] **Specify type coercion rules**: Conservative coercion — into strings and between numerics, but NOT from strings to numbers (see Type Coercion section)
 - [x] **Design error handling semantics**: `CATCH`, `HANDLE`, `TRY`/`FINALLY` constructs with per-element and fail-fast modes in streams (see Error Handling section)
