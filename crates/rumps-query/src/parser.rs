@@ -8,9 +8,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use chumsky::prelude::{
-    choice, end, just, recursive, select, Parser as ChumskyParser, Simple,
-};
+use chumsky::prelude::{choice, end, just, recursive, select, Simple};
+use chumsky::Parser as _;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
@@ -85,7 +84,7 @@ impl Parser {
     /// Program: zero or more statements separated by newlines, ending with EOF.
     fn program(
         ast: AstCell,
-    ) -> impl ChumskyParser<Token, Vec<StmtId>, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, Vec<StmtId>, Error = ParseErr> {
         Self::opt_newlines()
             .ignore_then(
                 Self::stmt(Rc::clone(&ast))
@@ -98,19 +97,19 @@ impl Parser {
     }
 
     /// One or more newlines (skipping indentation tokens for now).
-    fn newlines() -> impl ChumskyParser<Token, (), Error = ParseErr> + Clone {
+    fn newlines() -> impl chumsky::Parser<Token, (), Error = ParseErr> + Clone {
         Self::newline_or_indent().repeated().at_least(1).ignored()
     }
 
     /// Optional newlines.
-    fn opt_newlines() -> impl ChumskyParser<Token, (), Error = ParseErr> + Clone
-    {
+    fn opt_newlines(
+    ) -> impl chumsky::Parser<Token, (), Error = ParseErr> + Clone {
         Self::newline_or_indent().repeated().ignored()
     }
 
     /// A single newline or indentation token.
     fn newline_or_indent(
-    ) -> impl ChumskyParser<Token, Token, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, Token, Error = ParseErr> + Clone {
         choice((
             just(Token::Newline),
             just(Token::Indent),
@@ -121,7 +120,7 @@ impl Parser {
     /// A single statement.
     fn stmt(
         ast: AstCell,
-    ) -> impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         recursive(|stmt| {
             let let_stmt = Self::let_stmt(Rc::clone(&ast));
             let set_stmt = Self::set_stmt(Rc::clone(&ast));
@@ -144,7 +143,7 @@ impl Parser {
     /// `LET name = expr`
     fn let_stmt(
         ast: AstCell,
-    ) -> impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         just(Token::Let)
             .ignore_then(Self::ident())
             .then_ignore(just(Token::Assign))
@@ -160,7 +159,7 @@ impl Parser {
     /// `SET ^global = expr` or `SET ^global(subs...) = expr`
     fn set_stmt(
         ast: AstCell,
-    ) -> impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         let ast2 = Rc::clone(&ast);
         let ast3 = Rc::clone(&ast);
         let ast4 = Rc::clone(&ast);
@@ -199,7 +198,7 @@ impl Parser {
     /// `KILL ^global` or `KILL ^global(subs...)`
     fn kill_stmt(
         ast: AstCell,
-    ) -> impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         let ast2 = Rc::clone(&ast);
         let ast3 = Rc::clone(&ast);
         let ast4 = Rc::clone(&ast);
@@ -231,7 +230,7 @@ impl Parser {
     /// `OUTPUT expr`
     fn output_stmt(
         ast: AstCell,
-    ) -> impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         just(Token::Output)
             .ignore_then(Self::expr(Rc::clone(&ast)))
             .map_with_span(move |(expr_id, _), span| {
@@ -246,8 +245,8 @@ impl Parser {
     /// block expressions (`Expr::Block`).
     fn if_stmt(
         ast: AstCell,
-        stmt: impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> + Clone,
-    ) -> impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> {
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> + Clone,
+    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         let block = Self::block(stmt);
 
         just(Token::If)
@@ -313,8 +312,8 @@ impl Parser {
 
     /// `{ stmts... }` block, returns statements and the block's span.
     fn block(
-        stmt: impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> + Clone,
-    ) -> impl ChumskyParser<Token, (Vec<StmtId>, Span), Error = ParseErr> + Clone
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> + Clone,
+    ) -> impl chumsky::Parser<Token, (Vec<StmtId>, Span), Error = ParseErr> + Clone
     {
         Self::opt_newlines()
             .ignore_then(just(Token::LBrace))
@@ -333,7 +332,7 @@ impl Parser {
     /// Expression used as statement.
     fn expr_stmt(
         ast: AstCell,
-    ) -> impl ChumskyParser<Token, SpannedStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         Self::expr(Rc::clone(&ast)).map_with_span(move |(expr_id, _), span| {
             let id = ast.borrow_mut().add_stmt(Stmt::Expr(expr_id), span);
             (id, span)
@@ -346,27 +345,30 @@ impl Parser {
     /// grammar (e.g., parenthesized expressions, array elements, etc.).
     fn expr(
         ast: AstCell,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         recursive(|expr| Self::expr_inner(ast, expr))
     }
 
     /// Inner expression parser that takes the recursive reference.
     fn expr_inner(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         Self::or_expr(ast, expr)
     }
 
     /// Logical OR: `expr || expr` or `expr OR expr`
     fn or_expr(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         let op = choice((just(Token::PipePipe), just(Token::Or))).to(BinOp::Or);
 
         Self::and_expr(Rc::clone(&ast), expr.clone())
@@ -379,10 +381,11 @@ impl Parser {
     /// Logical AND: `expr && expr` or `expr AND expr`
     fn and_expr(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         let op = choice((just(Token::AmpAmp), just(Token::And))).to(BinOp::And);
 
         Self::cmp_expr(Rc::clone(&ast), expr.clone())
@@ -395,10 +398,11 @@ impl Parser {
     /// Comparison: `<`, `>`, `<=`, `>=`, `==`, `!=`
     fn cmp_expr(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         let op = choice((
             just(Token::Eq).to(BinOp::Eq),
             just(Token::Ne).to(BinOp::Ne),
@@ -418,10 +422,11 @@ impl Parser {
     /// Additive: `+`, `-`, `++`
     fn add_expr(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         let op = choice((
             just(Token::Plus).to(BinOp::Add),
             just(Token::Minus).to(BinOp::Sub),
@@ -438,10 +443,11 @@ impl Parser {
     /// Multiplicative: `*`, `/`, `//`, `%`
     fn mul_expr(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         let op = choice((
             just(Token::Mul).to(BinOp::Mul),
             just(Token::FloorDiv).to(BinOp::FloorDiv),
@@ -475,10 +481,11 @@ impl Parser {
     /// Unary: `NOT`, `!`, `-`
     fn unary_expr(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         let op = choice((
             just(Token::Not).to(UnOp::Not),
             just(Token::Bang).to(UnOp::Not),
@@ -518,10 +525,11 @@ impl Parser {
     /// Target for `GET`: a local or global B-tree variable.
     fn gettable(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         let ast2 = Rc::clone(&ast);
 
         // Global: `^NAME` or `^NAME(subs...)`
@@ -550,10 +558,11 @@ impl Parser {
     /// Postfix: field access `.field`, index `[expr]`, call `(args...)`
     fn postfix_expr(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         let ast2 = Rc::clone(&ast);
 
         // Field access: `.field`
@@ -635,10 +644,11 @@ impl Parser {
     /// Primary: literals, identifiers, globals, parenthesized, arrays, objects.
     fn primary_expr(
         ast: AstCell,
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SpannedExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
         let ast2 = Rc::clone(&ast);
         let ast3 = Rc::clone(&ast);
         let ast5 = Rc::clone(&ast);
@@ -715,22 +725,23 @@ impl Parser {
     }
 
     /// Parse an identifier token.
-    fn ident() -> impl ChumskyParser<Token, String, Error = ParseErr> + Clone {
+    fn ident() -> impl chumsky::Parser<Token, String, Error = ParseErr> + Clone
+    {
         select! { Token::Ident(s) => s }
     }
 
     /// Parse a global variable name (without the `^` prefix, which is in the token).
     fn global_name(
-    ) -> impl ChumskyParser<Token, String, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, String, Error = ParseErr> + Clone {
         select! { Token::Global(s) => s }
     }
 
     /// Parse subscripts: `(expr, expr, ...)`
     fn subscripts(
-        expr: impl ChumskyParser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl ChumskyParser<Token, SmallVec<[ExprId; 4]>, Error = ParseErr> + Clone
+    ) -> impl chumsky::Parser<Token, SmallVec<[ExprId; 4]>, Error = ParseErr> + Clone
     {
         just(Token::LParen)
             .ignore_then(
