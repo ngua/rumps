@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 rumps-types = { path = "../rumps-types" }
 rumps-storage = { path = "../rumps-storage" }
+async-recursion = { workspace = true }
 chumsky = "0.9"
 nonempty = { workspace = true }
 futures = { workspace = true }

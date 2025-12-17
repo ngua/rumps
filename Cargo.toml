@@ -6,6 +6,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+async-recursion = "1"
 criterion = { version = "0.5", features = ["async_tokio"] }
 either = "1.13"
 futures = "0.3"

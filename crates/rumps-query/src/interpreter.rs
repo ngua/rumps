@@ -76,7 +76,7 @@
 
 #![allow(dead_code)]
 
-use futures::future::BoxFuture;
+use async_recursion::async_recursion;
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
@@ -157,93 +157,81 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Execute a sequence of statements.
     ///
     /// Uses async recursion over the slice instead of iteration.
-    fn stmts<'b>(
-        &'b mut self,
-        stmts: &'b [StmtId],
-    ) -> BoxFuture<'b, Result<()>> {
-        Box::pin(async move {
-            match stmts.split_first() {
-                None => Ok(()),
-                Some((head, tail)) => {
-                    self.exec(*head).await?;
-                    self.stmts(tail).await
-                }
+    #[async_recursion]
+    async fn stmts(&mut self, stmts: &[StmtId]) -> Result<()> {
+        match stmts.split_first() {
+            None => Ok(()),
+            Some((head, tail)) => {
+                self.exec(*head).await?;
+                self.stmts(tail).await
             }
-        })
+        }
     }
 
     /// Execute a single statement.
-    fn exec(&mut self, id: StmtId) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async move {
-            let span = self.ast.stmt_span(id).unwrap_or_default();
-            let stmt = self
-                .ast
-                .get_stmt(id)
-                .ok_or_else(|| Error::runtime(span, "invalid statement id"))?
-                .clone();
+    #[async_recursion]
+    async fn exec(&mut self, id: StmtId) -> Result<()> {
+        let span = self.ast.stmt_span(id).unwrap_or_default();
+        let stmt = self
+            .ast
+            .get_stmt(id)
+            .ok_or_else(|| Error::runtime(span, "invalid statement id"))?
+            .clone();
 
-            match stmt {
-                Stmt::Let(name, expr_id) => self.r#let(&name, expr_id).await,
-                Stmt::Set(name, subs, expr_id) => {
-                    self.set_local(&name, &subs, expr_id).await
-                }
-                Stmt::SetGlobal(name, subs, expr_id) => {
-                    self.set_global(&name, &subs, expr_id, span).await
-                }
-                Stmt::Kill(name, subs) => {
-                    self.kill(Name::local(&name), &subs, span).await
-                }
-                Stmt::KillGlobal(name, subs) => {
-                    self.kill(Name::global(&name), &subs, span).await
-                }
-                Stmt::Output(expr_id) => self.output(expr_id).await,
-                Stmt::Expr(expr_id) => {
-                    // Evaluate for side effects, discard result
-                    self.eval(expr_id).await.map(|_| ())
-                }
+        match stmt {
+            Stmt::Let(name, expr_id) => self.r#let(&name, expr_id).await,
+            Stmt::Set(name, subs, expr_id) => {
+                self.set_local(&name, &subs, expr_id).await
             }
-        })
+            Stmt::SetGlobal(name, subs, expr_id) => {
+                self.set_global(&name, &subs, expr_id, span).await
+            }
+            Stmt::Kill(name, subs) => {
+                self.kill(Name::local(&name), &subs, span).await
+            }
+            Stmt::KillGlobal(name, subs) => {
+                self.kill(Name::global(&name), &subs, span).await
+            }
+            Stmt::Output(expr_id) => self.output(expr_id).await,
+            Stmt::Expr(expr_id) => {
+                // Evaluate for side effects, discard result
+                self.eval(expr_id).await.map(|_| ())
+            }
+        }
     }
 
     /// Evaluate an expression.
-    fn eval(&mut self, id: ExprId) -> BoxFuture<'_, Result<Value>> {
-        Box::pin(async move {
-            let span = self.ast.expr_span(id).unwrap_or_default();
-            let expr = self
-                .ast
-                .get_expr(id)
-                .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-                .clone();
+    #[async_recursion]
+    async fn eval(&mut self, id: ExprId) -> Result<Value> {
+        let span = self.ast.expr_span(id).unwrap_or_default();
+        let expr = self
+            .ast
+            .get_expr(id)
+            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+            .clone();
 
-            match expr {
-                Expr::Literal(lit) => Ok(self.literal(&lit)),
-                Expr::Var(name) => self.var(&name, span),
-                Expr::Local(_, _) => Err(Error::runtime(
-                    span,
-                    "cannot use local as value; use GET",
-                )),
-                Expr::Global(_, _) => Err(Error::runtime(
-                    span,
-                    "cannot use global as value; use GET",
-                )),
-                Expr::Get(inner) => self.get(inner, span).await,
-                Expr::Binary(lhs, op, rhs) => {
-                    self.binary(lhs, op, rhs, span).await
-                }
-                Expr::Unary(op, operand) => self.unary(op, operand, span).await,
-                Expr::Call(name, args) => self.call(&name, &args, span).await,
-                Expr::Object(fields) => self.object(&fields).await,
-                Expr::Array(elems) => self.array(&elems).await,
-                Expr::Index(base, idx) => self.index(base, idx, span).await,
-                Expr::Field(base, field) => {
-                    self.field(base, &field, span).await
-                }
-                Expr::Block(stmts, tail) => self.block_expr(&stmts, tail).await,
-                Expr::If(cond, then_br, else_br) => {
-                    self.if_expr(cond, then_br, else_br).await
-                }
+        match expr {
+            Expr::Literal(lit) => Ok(self.literal(&lit)),
+            Expr::Var(name) => self.var(&name, span),
+            Expr::Local(_, _) => {
+                Err(Error::runtime(span, "cannot use local as value; use GET"))
             }
-        })
+            Expr::Global(_, _) => {
+                Err(Error::runtime(span, "cannot use global as value; use GET"))
+            }
+            Expr::Get(inner) => self.get(inner, span).await,
+            Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
+            Expr::Unary(op, operand) => self.unary(op, operand, span).await,
+            Expr::Call(name, args) => self.call(&name, &args, span).await,
+            Expr::Object(fields) => self.object(&fields).await,
+            Expr::Array(elems) => self.array(&elems).await,
+            Expr::Index(base, idx) => self.index(base, idx, span).await,
+            Expr::Field(base, field) => self.field(base, &field, span).await,
+            Expr::Block(stmts, tail) => self.block_expr(&stmts, tail).await,
+            Expr::If(cond, then_br, else_br) => {
+                self.if_expr(cond, then_br, else_br).await
+            }
+        }
     }
 
     /// Convert an AST literal to a runtime value.
@@ -273,488 +261,446 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     ///
     /// The inner expression must be a `Local` or `Global`. Uses the active
     /// transaction if one exists, otherwise reads directly from the database.
-    fn get(
-        &mut self,
-        inner: ExprId,
-        span: Span,
-    ) -> BoxFuture<'_, Result<Value>> {
-        Box::pin(async move {
-            let inner_span = self.ast.expr_span(inner).unwrap_or(span);
-            let inner_expr = self
-                .ast
-                .get_expr(inner)
-                .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-                .clone();
+    #[async_recursion]
+    async fn get(&mut self, inner: ExprId, span: Span) -> Result<Value> {
+        let inner_span = self.ast.expr_span(inner).unwrap_or(span);
+        let inner_expr = self
+            .ast
+            .get_expr(inner)
+            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+            .clone();
 
-            let (name, subs) = match inner_expr {
-                Expr::Local(n, s) => (Name::local(&n), s),
-                Expr::Global(n, s) => (Name::global(&n), s),
-                _ => {
-                    return Err(Error::runtime(
-                        inner_span,
-                        "GET requires a local or global",
-                    ))
-                }
-            };
+        let (name, subs) = match inner_expr {
+            Expr::Local(n, s) => Ok((Name::local(&n), s)),
+            Expr::Global(n, s) => Ok((Name::global(&n), s)),
+            _ => Err(Error::runtime(
+                inner_span,
+                "GET requires a local or global",
+            )),
+        }?;
 
-            let key = self.build_key(&subs).await?;
+        let key = self.build_key(&subs).await?;
 
-            let opt_val = match &self.txn {
-                Some(txn) => txn.get(&name, &key).await,
-                None => self.db.get(&name, &key).await,
-            }
-            .map_err(|e| Error::runtime(span, format!("GET failed: {e}")))?;
+        let opt_val = match &self.txn {
+            Some(txn) => txn.get(&name, &key).await,
+            None => self.db.get(&name, &key).await,
+        }
+        .map_err(|e| Error::runtime(span, format!("GET failed: {e}")))?;
 
-            opt_val.map(|sv| self.load(sv)).ok_or_else(|| {
-                let prefix = if name.is_global() { "^" } else { "" };
-                Error::runtime(
-                    span,
-                    format!("undefined variable `{prefix}{}`", name.name()),
-                )
-            })
+        opt_val.map(|sv| self.load(sv)).ok_or_else(|| {
+            let prefix = if name.is_global() { "^" } else { "" };
+            Error::runtime(
+                span,
+                format!("undefined variable `{prefix}{}`", name.name()),
+            )
         })
     }
 
     /// Evaluate a binary operation.
     ///
     /// Handles short-circuit evaluation for `AND` and `OR`.
-    fn binary(
+    #[async_recursion]
+    async fn binary(
         &mut self,
         lhs: ExprId,
         op: BinOp,
         rhs: ExprId,
         span: Span,
-    ) -> BoxFuture<'_, Result<Value>> {
-        Box::pin(async move {
-            match op {
-                // Short-circuit AND: if left is false, don't evaluate right
-                BinOp::And => {
-                    let left = self.eval(lhs).await?;
-                    match left {
-                        Value::Bool(false) => Ok(Value::Bool(false)),
-                        Value::Bool(true) => {
-                            let right = self.eval(rhs).await?;
-                            match right {
-                                Value::Bool(b) => Ok(Value::Bool(b)),
-                                _ => Err(Error::runtime(
-                                    span,
-                                    format!(
-                                        "logical AND requires booleans; got Bool and {}",
-                                        right.type_name(&self.registry)
-                                    ),
-                                )),
-                            }
+    ) -> Result<Value> {
+        match op {
+            // Short-circuit AND: if left is false, don't evaluate right
+            BinOp::And => {
+                let left = self.eval(lhs).await?;
+                match left {
+                    Value::Bool(false) => Ok(Value::Bool(false)),
+                    Value::Bool(true) => {
+                        let right = self.eval(rhs).await?;
+                        match right {
+                            Value::Bool(b) => Ok(Value::Bool(b)),
+                            _ => Err(Error::runtime(
+                                span,
+                                format!(
+                                    "logical AND requires booleans; got Bool and {}",
+                                    right.type_name(&self.registry)
+                                ),
+                            )),
                         }
-                        _ => Err(Error::runtime(
-                            span,
-                            format!(
-                                "logical AND requires booleans; got {}",
-                                left.type_name(&self.registry)
-                            ),
-                        )),
                     }
-                }
-                // Short-circuit OR: if left is true, don't evaluate right
-                BinOp::Or => {
-                    let left = self.eval(lhs).await?;
-                    match left {
-                        Value::Bool(true) => Ok(Value::Bool(true)),
-                        Value::Bool(false) => {
-                            let right = self.eval(rhs).await?;
-                            match right {
-                                Value::Bool(b) => Ok(Value::Bool(b)),
-                                _ => Err(Error::runtime(
-                                    span,
-                                    format!(
-                                        "logical OR requires booleans; got Bool and {}",
-                                        right.type_name(&self.registry)
-                                    ),
-                                )),
-                            }
-                        }
-                        _ => Err(Error::runtime(
-                            span,
-                            format!(
-                                "logical OR requires booleans; got {}",
-                                left.type_name(&self.registry)
-                            ),
-                        )),
-                    }
-                }
-                // All other operators evaluate both sides
-                _ => {
-                    let left = self.eval(lhs).await?;
-                    let right = self.eval(rhs).await?;
-                    self.apply_binop(&left, op, &right, span)
+                    _ => Err(Error::runtime(
+                        span,
+                        format!(
+                            "logical AND requires booleans; got {}",
+                            left.type_name(&self.registry)
+                        ),
+                    )),
                 }
             }
-        })
+            // Short-circuit OR: if left is true, don't evaluate right
+            BinOp::Or => {
+                let left = self.eval(lhs).await?;
+                match left {
+                    Value::Bool(true) => Ok(Value::Bool(true)),
+                    Value::Bool(false) => {
+                        let right = self.eval(rhs).await?;
+                        match right {
+                            Value::Bool(b) => Ok(Value::Bool(b)),
+                            _ => Err(Error::runtime(
+                                span,
+                                format!(
+                                    "logical OR requires booleans; got Bool and {}",
+                                    right.type_name(&self.registry)
+                                ),
+                            )),
+                        }
+                    }
+                    _ => Err(Error::runtime(
+                        span,
+                        format!(
+                            "logical OR requires booleans; got {}",
+                            left.type_name(&self.registry)
+                        ),
+                    )),
+                }
+            }
+            // All other operators evaluate both sides
+            _ => {
+                let left = self.eval(lhs).await?;
+                let right = self.eval(rhs).await?;
+                self.apply_binop(&left, op, &right, span)
+            }
+        }
     }
 
     /// Evaluate a unary operation.
-    fn unary(
+    #[async_recursion]
+    async fn unary(
         &mut self,
         op: UnOp,
         operand: ExprId,
         span: Span,
-    ) -> BoxFuture<'_, Result<Value>> {
-        Box::pin(async move {
-            let val = self.eval(operand).await?;
-            self.apply_unop(op, &val, span)
-        })
+    ) -> Result<Value> {
+        let val = self.eval(operand).await?;
+        self.apply_unop(op, &val, span)
     }
 
     /// Evaluate a function call.
-    fn call<'b>(
-        &'b mut self,
-        _name: &'b str,
-        _args: &'b [ExprId],
+    #[async_recursion]
+    async fn call(
+        &mut self,
+        _name: &str,
+        _args: &[ExprId],
         span: Span,
-    ) -> BoxFuture<'b, Result<Value>> {
-        Box::pin(async move {
-            // TODO: Function calls will be implemented in later phases
-            Err(Error::runtime(span, "function calls not yet implemented"))
-        })
+    ) -> Result<Value> {
+        // TODO: Function calls will be implemented in later phases
+        Err(Error::runtime(span, "function calls not yet implemented"))
     }
 
     /// Evaluate an object literal.
-    fn object<'b>(
-        &'b mut self,
-        fields: &'b [(String, ExprId)],
-    ) -> BoxFuture<'b, Result<Value>> {
-        Box::pin(async move {
-            let map = self.object_fields(fields, IndexMap::new()).await?;
-            Ok(Value::Object(map))
-        })
+    #[async_recursion]
+    async fn object(&mut self, fields: &[(String, ExprId)]) -> Result<Value> {
+        let map = self.object_fields(fields, IndexMap::new()).await?;
+        Ok(Value::Object(map))
     }
 
     /// Recursively evaluate object fields.
-    fn object_fields<'b>(
-        &'b mut self,
-        fields: &'b [(String, ExprId)],
+    #[async_recursion]
+    async fn object_fields(
+        &mut self,
+        fields: &[(String, ExprId)],
         mut acc: IndexMap<StringId, ValueId>,
-    ) -> BoxFuture<'b, Result<IndexMap<StringId, ValueId>>> {
-        Box::pin(async move {
-            match fields.split_first() {
-                None => Ok(acc),
-                Some(((key, expr_id), tail)) => {
-                    let span = self.ast.expr_span(*expr_id).unwrap_or_default();
-                    let val = self.eval(*expr_id).await?;
-                    let key_id = self.arena.intern(key);
-                    let val_id = self.arena.add(val, span);
-                    acc.insert(key_id, val_id);
-                    self.object_fields(tail, acc).await
-                }
+    ) -> Result<IndexMap<StringId, ValueId>> {
+        match fields.split_first() {
+            None => Ok(acc),
+            Some(((key, expr_id), tail)) => {
+                let span = self.ast.expr_span(*expr_id).unwrap_or_default();
+                let val = self.eval(*expr_id).await?;
+                let key_id = self.arena.intern(key);
+                let val_id = self.arena.add(val, span);
+                acc.insert(key_id, val_id);
+                self.object_fields(tail, acc).await
             }
-        })
+        }
     }
 
     /// Evaluate an array literal.
-    fn array<'b>(
-        &'b mut self,
-        elems: &'b [ExprId],
-    ) -> BoxFuture<'b, Result<Value>> {
-        Box::pin(async move {
-            let vec = self
-                .array_elems(elems, Vec::with_capacity(elems.len()))
-                .await?;
-            Ok(Value::Array(vec))
-        })
+    #[async_recursion]
+    async fn array(&mut self, elems: &[ExprId]) -> Result<Value> {
+        let vec = self
+            .array_elems(elems, Vec::with_capacity(elems.len()))
+            .await?;
+        Ok(Value::Array(vec))
     }
 
     /// Recursively evaluate array elements.
-    fn array_elems<'b>(
-        &'b mut self,
-        elems: &'b [ExprId],
+    #[async_recursion]
+    async fn array_elems(
+        &mut self,
+        elems: &[ExprId],
         mut acc: Vec<ValueId>,
-    ) -> BoxFuture<'b, Result<Vec<ValueId>>> {
-        Box::pin(async move {
-            match elems.split_first() {
-                None => Ok(acc),
-                Some((expr_id, tail)) => {
-                    let span = self.ast.expr_span(*expr_id).unwrap_or_default();
-                    let val = self.eval(*expr_id).await?;
-                    let val_id = self.arena.add(val, span);
-                    acc.push(val_id);
-                    self.array_elems(tail, acc).await
-                }
+    ) -> Result<Vec<ValueId>> {
+        match elems.split_first() {
+            None => Ok(acc),
+            Some((expr_id, tail)) => {
+                let span = self.ast.expr_span(*expr_id).unwrap_or_default();
+                let val = self.eval(*expr_id).await?;
+                let val_id = self.arena.add(val, span);
+                acc.push(val_id);
+                self.array_elems(tail, acc).await
             }
-        })
+        }
     }
 
     /// Evaluate index access (array or object).
-    fn index(
+    #[async_recursion]
+    async fn index(
         &mut self,
         base: ExprId,
         idx: ExprId,
         span: Span,
-    ) -> BoxFuture<'_, Result<Value>> {
-        Box::pin(async move {
-            let base_val = self.eval(base).await?;
-            let idx_val = self.eval(idx).await?;
+    ) -> Result<Value> {
+        let base_val = self.eval(base).await?;
+        let idx_val = self.eval(idx).await?;
 
-            match (&base_val, &idx_val) {
-                (Value::Array(arr), Value::Int(i)) => {
-                    let index = if *i < 0 {
-                        // Negative indexing from end
-                        arr.len().checked_sub((-*i) as usize)
-                    } else {
-                        Some(*i as usize)
-                    };
-                    index
-                        .and_then(|idx| arr.get(idx))
-                        .and_then(|id| self.arena.get(*id).cloned())
-                        .ok_or_else(|| {
-                            Error::runtime(
-                                span,
-                                format!("array index {i} out of bounds"),
-                            )
-                        })
-                }
-                (Value::Object(obj), Value::String(key)) => obj
-                    .get(key)
+        match (&base_val, &idx_val) {
+            (Value::Array(arr), Value::Int(i)) => {
+                let index = if *i < 0 {
+                    // Negative indexing from end
+                    arr.len().checked_sub((-*i) as usize)
+                } else {
+                    Some(*i as usize)
+                };
+                index
+                    .and_then(|idx| arr.get(idx))
                     .and_then(|id| self.arena.get(*id).cloned())
                     .ok_or_else(|| {
-                        let key_str = self.arena.get_str(*key).unwrap_or("?");
                         Error::runtime(
                             span,
-                            format!("key `{key_str}` not found"),
+                            format!("array index {i} out of bounds"),
                         )
-                    }),
-                _ => Err(Error::runtime(
-                    span,
-                    format!(
-                        "cannot index {} with {}",
-                        base_val.type_name(&self.registry),
-                        idx_val.type_name(&self.registry)
-                    ),
-                )),
+                    })
             }
-        })
+            (Value::Object(obj), Value::String(key)) => obj
+                .get(key)
+                .and_then(|id| self.arena.get(*id).cloned())
+                .ok_or_else(|| {
+                    let key_str = self.arena.get_str(*key).unwrap_or("?");
+                    Error::runtime(span, format!("key `{key_str}` not found"))
+                }),
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot index {} with {}",
+                    base_val.type_name(&self.registry),
+                    idx_val.type_name(&self.registry)
+                ),
+            )),
+        }
     }
 
     /// Evaluate field access.
-    fn field<'b>(
-        &'b mut self,
+    #[async_recursion]
+    async fn field(
+        &mut self,
         base: ExprId,
-        field: &'b str,
+        field: &str,
         span: Span,
-    ) -> BoxFuture<'b, Result<Value>> {
-        Box::pin(async move {
-            let base_val = self.eval(base).await?;
+    ) -> Result<Value> {
+        let base_val = self.eval(base).await?;
 
-            match &base_val {
-                Value::Object(obj) => {
-                    let field_id = self.arena.intern(field);
-                    obj.get(&field_id)
-                        .and_then(|id| self.arena.get(*id).cloned())
-                        .ok_or_else(|| {
-                            Error::runtime(
-                                span,
-                                format!("field `{field}` not found"),
-                            )
-                        })
-                }
-                _ => Err(Error::runtime(
-                    span,
-                    format!(
-                        "cannot access field on {}",
-                        base_val.type_name(&self.registry)
-                    ),
-                )),
+        match &base_val {
+            Value::Object(obj) => {
+                let field_id = self.arena.intern(field);
+                obj.get(&field_id)
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(
+                            span,
+                            format!("field `{field}` not found"),
+                        )
+                    })
             }
-        })
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot access field on {}",
+                    base_val.type_name(&self.registry)
+                ),
+            )),
+        }
     }
 
     /// Evaluate a block expression.
     ///
     /// Executes statements, then evaluates the trailing expression (if any).
     /// Returns `Option.None` if no trailing expression.
-    fn block_expr<'b>(
-        &'b mut self,
-        stmts: &'b [StmtId],
+    #[async_recursion]
+    async fn block_expr(
+        &mut self,
+        stmts: &[StmtId],
         tail: Option<ExprId>,
-    ) -> BoxFuture<'b, Result<Value>> {
-        Box::pin(async move {
-            self.env.scopes.push();
-            let result = self.block_expr_inner(stmts, tail).await;
-            self.env.scopes.pop();
-            result
-        })
+    ) -> Result<Value> {
+        self.env.scopes.push();
+        let result = self.block_expr_inner(stmts, tail).await;
+        self.env.scopes.pop();
+        result
     }
 
     /// Inner helper for block expression evaluation.
-    fn block_expr_inner<'b>(
-        &'b mut self,
-        stmts: &'b [StmtId],
+    #[async_recursion]
+    async fn block_expr_inner(
+        &mut self,
+        stmts: &[StmtId],
         tail: Option<ExprId>,
-    ) -> BoxFuture<'b, Result<Value>> {
-        Box::pin(async move {
-            match stmts.split_first() {
-                None => match tail {
-                    Some(e) => self.eval(e).await,
-                    None => Ok(Value::none()),
-                },
-                Some((head, rest)) => {
-                    self.exec(*head).await?;
-                    self.block_expr_inner(rest, tail).await
-                }
+    ) -> Result<Value> {
+        match stmts.split_first() {
+            None => match tail {
+                Some(e) => self.eval(e).await,
+                None => Ok(Value::none()),
+            },
+            Some((head, rest)) => {
+                self.exec(*head).await?;
+                self.block_expr_inner(rest, tail).await
             }
-        })
+        }
     }
 
     /// Evaluate an `IF` expression.
     ///
     /// Returns the value of the taken branch. If no else branch and condition
     /// is false, returns `Option.None`.
-    fn if_expr(
+    #[async_recursion]
+    async fn if_expr(
         &mut self,
         cond: ExprId,
         then_br: ExprId,
         else_br: Option<ExprId>,
-    ) -> BoxFuture<'_, Result<Value>> {
-        Box::pin(async move {
-            let cond_val = self.eval(cond).await?;
-            if cond_val.is_truthy(&self.arena) {
-                self.eval(then_br).await
-            } else {
-                match else_br {
-                    Some(e) => self.eval(e).await,
-                    None => Ok(Value::none()),
-                }
+    ) -> Result<Value> {
+        let cond_val = self.eval(cond).await?;
+        if cond_val.is_truthy(&self.arena) {
+            self.eval(then_br).await
+        } else {
+            match else_br {
+                Some(e) => self.eval(e).await,
+                None => Ok(Value::none()),
             }
-        })
+        }
     }
 
     /// Execute a `LET` binding.
-    fn r#let<'b>(
-        &'b mut self,
-        name: &'b str,
-        expr_id: ExprId,
-    ) -> BoxFuture<'b, Result<()>> {
-        Box::pin(async move {
-            let span = self.ast.expr_span(expr_id).unwrap_or_default();
-            let val = self.eval(expr_id).await?;
-            let name_id = self.arena.intern(name);
-            let val_id = self.arena.add(val, span);
-            self.env.scopes.bind(name_id, val_id);
-            Ok(())
-        })
+    #[async_recursion]
+    async fn r#let(&mut self, name: &str, expr_id: ExprId) -> Result<()> {
+        let span = self.ast.expr_span(expr_id).unwrap_or_default();
+        let val = self.eval(expr_id).await?;
+        let name_id = self.arena.intern(name);
+        let val_id = self.arena.add(val, span);
+        self.env.scopes.bind(name_id, val_id);
+        Ok(())
     }
 
     /// Evaluate subscript expressions and build a `Key`.
-    fn build_key<'b>(
-        &'b mut self,
-        subs: &'b [ExprId],
-    ) -> BoxFuture<'b, Result<Key>> {
-        Box::pin(async move {
-            self.build_key_acc(subs, Vec::with_capacity(subs.len()))
-                .await
-        })
+    #[async_recursion]
+    async fn build_key(&mut self, subs: &[ExprId]) -> Result<Key> {
+        self.build_key_acc(subs, Vec::with_capacity(subs.len()))
+            .await
     }
 
     /// Recursive helper for building a key from subscript expressions.
-    fn build_key_acc<'b>(
-        &'b mut self,
-        subs: &'b [ExprId],
+    #[async_recursion]
+    async fn build_key_acc(
+        &mut self,
+        subs: &[ExprId],
         mut acc: Vec<Subscript>,
-    ) -> BoxFuture<'b, Result<Key>> {
-        Box::pin(async move {
-            match subs.split_first() {
-                None => Ok(Key::from(acc)),
-                Some((head, tail)) => {
-                    let val = self.eval(*head).await?;
-                    let sub = self.subscript(&val)?;
-                    acc.push(sub);
-                    self.build_key_acc(tail, acc).await
-                }
+    ) -> Result<Key> {
+        match subs.split_first() {
+            None => Ok(Key::from(acc)),
+            Some((head, tail)) => {
+                let val = self.eval(*head).await?;
+                let sub = self.subscript(&val)?;
+                acc.push(sub);
+                self.build_key_acc(tail, acc).await
             }
-        })
+        }
     }
 
     /// Execute a local `SET`.
     ///
     /// Sets a local variable in the database. Locals can be set outside transactions.
-    fn set_local<'b>(
-        &'b mut self,
-        name: &'b str,
-        subs: &'b [ExprId],
+    #[async_recursion]
+    async fn set_local(
+        &mut self,
+        name: &str,
+        subs: &[ExprId],
         expr_id: ExprId,
-    ) -> BoxFuture<'b, Result<()>> {
-        Box::pin(async move {
-            let key = self.build_key(subs).await?;
-            let val = self.eval(expr_id).await?;
-            let storage_val = self.store(&val)?;
-            let db_name = Name::local(name);
+    ) -> Result<()> {
+        let key = self.build_key(subs).await?;
+        let val = self.eval(expr_id).await?;
+        let storage_val = self.store(&val)?;
+        let db_name = Name::local(name);
 
-            self.db
-                .set(&db_name, &key, storage_val)
-                .await
-                .map_err(|e| Error::runtime_no_span(format!("SET failed: {e}")))
-        })
+        self.db
+            .set(&db_name, &key, storage_val)
+            .await
+            .map_err(|e| Error::runtime_no_span(format!("SET failed: {e}")))
     }
 
     /// Execute a global `SET`.
     ///
     /// Sets a global variable; requires an active transaction.
-    fn set_global<'b>(
-        &'b mut self,
-        name: &'b str,
-        subs: &'b [ExprId],
+    #[async_recursion]
+    async fn set_global(
+        &mut self,
+        name: &str,
+        subs: &[ExprId],
         expr_id: ExprId,
         span: Span,
-    ) -> BoxFuture<'b, Result<()>> {
-        Box::pin(async move {
-            // Do all &mut self operations first
-            let key = self.build_key(subs).await?;
-            let val = self.eval(expr_id).await?;
-            let storage_val = self.store(&val)?;
-            let db_name = Name::global(name);
+    ) -> Result<()> {
+        // Do all &mut self operations first
+        let key = self.build_key(subs).await?;
+        let val = self.eval(expr_id).await?;
+        let storage_val = self.store(&val)?;
+        let db_name = Name::global(name);
 
-            // Now we can borrow txn
-            match self.txn.as_ref() {
-                Some(txn) => {
-                    txn.set(&db_name, &key, storage_val).await.map_err(|e| {
-                        Error::runtime(span, format!("SET failed: {e}"))
-                    })
-                }
-                None => Err(Error::runtime(
-                    span,
-                    "global SET requires a transaction",
-                )),
+        // Now we can borrow txn
+        match self.txn.as_ref() {
+            Some(txn) => txn
+                .set(&db_name, &key, storage_val)
+                .await
+                .map_err(|e| Error::runtime(span, format!("SET failed: {e}"))),
+            None => {
+                Err(Error::runtime(span, "global SET requires a transaction"))
             }
-        })
+        }
     }
 
     /// Execute a `KILL` statement.
     ///
     /// Kills a variable (and its descendants). For globals, requires an
     /// active transaction. For locals, operates directly on the database.
-    fn kill<'b>(
-        &'b mut self,
+    #[async_recursion]
+    async fn kill(
+        &mut self,
         name: Name,
-        subs: &'b [ExprId],
+        subs: &[ExprId],
         span: Span,
-    ) -> BoxFuture<'b, Result<()>> {
-        Box::pin(async move {
-            let key = self.build_key(subs).await?;
+    ) -> Result<()> {
+        let key = self.build_key(subs).await?;
 
-            if name.is_global() {
-                match self.txn.as_ref() {
-                    Some(txn) => txn.kill(&name, &key).await.map_err(|e| {
-                        Error::runtime(span, format!("KILL failed: {e}"))
-                    }),
-                    None => Err(Error::runtime(
-                        span,
-                        "global KILL requires a transaction",
-                    )),
-                }
-            } else {
-                self.db.kill(&name, &key).await.map_err(|e| {
+        if name.is_global() {
+            match self.txn.as_ref() {
+                Some(txn) => txn.kill(&name, &key).await.map_err(|e| {
                     Error::runtime(span, format!("KILL failed: {e}"))
-                })
+                }),
+                None => Err(Error::runtime(
+                    span,
+                    "global KILL requires a transaction",
+                )),
             }
-        })
+        } else {
+            self.db
+                .kill(&name, &key)
+                .await
+                .map_err(|e| Error::runtime(span, format!("KILL failed: {e}")))
+        }
     }
 
     /// Execute an `OUTPUT` statement.
@@ -762,13 +708,12 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Writes to stdout via the I/O context.
     ///
     /// TODO Add more targets; stderr, file, etc...
-    fn output(&mut self, expr_id: ExprId) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async move {
-            let span = self.ast.expr_span(expr_id).unwrap_or_default();
-            let val = self.eval(expr_id).await?;
-            let s = self.display(&val);
-            self.io.stdout(&s, span).await
-        })
+    #[async_recursion]
+    async fn output(&mut self, expr_id: ExprId) -> Result<()> {
+        let span = self.ast.expr_span(expr_id).unwrap_or_default();
+        let val = self.eval(expr_id).await?;
+        let s = self.display(&val);
+        self.io.stdout(&s, span).await
     }
 
     /// Apply a binary operation to two values.
