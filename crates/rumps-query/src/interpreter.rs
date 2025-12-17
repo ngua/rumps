@@ -1138,31 +1138,33 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     where
         F: FnOnce(std::cmp::Ordering) -> bool,
     {
-        let ord = match (left, right) {
-            (Value::Int(a), Value::Int(b)) => a.cmp(b),
-            (Value::Float(a), Value::Float(b)) => a.cmp(b),
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
+            (Value::Float(a), Value::Float(b)) => Ok(a.cmp(b)),
             // Cross-type numeric comparison
-            (Value::Int(a), Value::Float(b)) => OrderedFloat(*a as f64).cmp(b),
-            (Value::Float(a), Value::Int(b)) => a.cmp(&OrderedFloat(*b as f64)),
+            (Value::Int(a), Value::Float(b)) => {
+                Ok(OrderedFloat(*a as f64).cmp(b))
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                Ok(a.cmp(&OrderedFloat(*b as f64)))
+            }
             (Value::String(a), Value::String(b)) => {
                 // Compare by actual string content
                 let sa = self.arena.get_str(*a).unwrap_or("");
                 let sb = self.arena.get_str(*b).unwrap_or("");
-                sa.cmp(sb)
+                Ok(sa.cmp(sb))
             }
-            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-            _ => {
-                return Err(Error::runtime(
-                    span,
-                    format!(
-                        "cannot compare {} and {}",
-                        left.type_name(&self.registry),
-                        right.type_name(&self.registry)
-                    ),
-                ))
-            }
-        };
-        Ok(Value::Bool(pred(ord)))
+            (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot compare {} and {}",
+                    left.type_name(&self.registry),
+                    right.type_name(&self.registry)
+                ),
+            )),
+        }
+        .map(|ord| Value::Bool(pred(ord)))
     }
 }
 

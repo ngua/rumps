@@ -294,25 +294,23 @@ impl Parser {
     ///
     /// If the last statement is `Stmt::Expr(e)`, extracts `e` as the trailing
     /// expression (block's value). Otherwise, the block has no trailing expr.
-    fn stmts_to_block(
-        ast: &mut Ast,
-        mut stmts: Vec<StmtId>,
-        span: Span,
-    ) -> ExprId {
+    fn stmts_to_block(ast: &mut Ast, stmts: Vec<StmtId>, span: Span) -> ExprId {
         // Check if last statement is Stmt::Expr; if so, use it as tail
-        let tail = stmts.last().and_then(|&last_id| {
-            ast.get_stmt(last_id).and_then(|s| match s {
+        let tail = stmts.last().and_then(|&id| {
+            ast.get_stmt(id).and_then(|s| match s {
                 Stmt::Expr(e) => Some(*e),
                 _ => None,
             })
         });
 
-        // If we found a tail, remove the last statement
-        let tail = tail.inspect(|_| {
-            stmts.pop();
-        });
-
-        ast.add_expr(Expr::Block(stmts, tail), span)
+        // If last was Expr, exclude it from statements and use as tail
+        if let Some(e) = tail {
+            let n = stmts.len().saturating_sub(1);
+            let block_stmts = stmts.into_iter().take(n).collect();
+            ast.add_expr(Expr::Block(block_stmts, Some(e)), span)
+        } else {
+            ast.add_expr(Expr::Block(stmts, None), span)
+        }
     }
 
     /// `{ stmts... }` block, returns statements and the block's span.

@@ -37,107 +37,86 @@ impl Spanned {
     }
 
     /// Post-processes tokens to add `Indent` and `Dedent` tokens.
+    ///
+    /// Uses iterative `fold` instead of recursion to avoid stack overflow
+    /// on large files.
     fn process_indentation(tokens: Vec<Self>) -> Vec<Self> {
+        struct State {
+            result: Vec<Spanned>,
+            indent_stack: Vec<usize>,
+            after_newline: bool,
+            pending_span: Span,
+        }
+
         let with_cols = TokenWithCol::from_spanned(&tokens);
-        let mut result = Vec::with_capacity(tokens.len());
-        let mut indent_stack: Vec<usize> = vec![0];
+        let cap = tokens.len();
 
-        Self::process_indent_loop(
-            &with_cols,
-            0,
-            &mut result,
-            &mut indent_stack,
+        let st = with_cols.into_iter().fold(
+            State {
+                result: Vec::with_capacity(cap),
+                indent_stack: vec![0],
+                after_newline: false,
+                pending_span: Span::default(),
+            },
+            |mut st, t| {
+                match &t.tok {
+                    Token::Newline => {
+                        // Only push the first newline; skip consecutive ones
+                        if !st.after_newline {
+                            st.result.push(Self::new(t.tok.clone(), t.span));
+                            st.after_newline = true;
+                            st.pending_span = t.span;
+                        }
+                    }
+                    Token::Eof => {
+                        // Emit final dedents before EOF
+                        (1..st.indent_stack.len()).for_each(|_| {
+                            st.result.push(Self::new(Token::Dedent, t.span));
+                        });
+                        st.result.push(Self::new(t.tok.clone(), t.span));
+                    }
+                    _ => {
+                        if st.after_newline {
+                            let cur =
+                                st.indent_stack.last().copied().unwrap_or(0);
+                            if t.col > cur {
+                                st.indent_stack.push(t.col);
+                                st.result.push(Self::new(
+                                    Token::Indent,
+                                    st.pending_span,
+                                ));
+                            } else {
+                                Self::emit_dedents(
+                                    &mut st.result,
+                                    &mut st.indent_stack,
+                                    t.col,
+                                    st.pending_span,
+                                );
+                            }
+                            st.after_newline = false;
+                        }
+                        st.result.push(Self::new(t.tok.clone(), t.span));
+                    }
+                }
+                st
+            },
         );
-        Self::emit_final_dedents(&mut result, &indent_stack);
 
-        result
-    }
-
-    fn process_indent_loop(
-        tokens: &[TokenWithCol],
-        idx: usize,
-        result: &mut Vec<Self>,
-        indent_stack: &mut Vec<usize>,
-    ) {
-        tokens.get(idx).map(|t| match &t.tok {
-            Token::Newline => {
-                result.push(Self::new(t.tok.clone(), t.span));
-
-                let (next_idx, indent) =
-                    TokenWithCol::measure_indent(tokens, idx + 1);
-                let current = indent_stack.last().copied().unwrap_or(0);
-
-                (indent > current)
-                    .then(|| {
-                        indent_stack.push(indent);
-                        result.push(Self::new(Token::Indent, t.span));
-                    })
-                    .or_else(|| {
-                        Self::emit_dedents_to(
-                            result,
-                            indent_stack,
-                            indent,
-                            t.span,
-                        );
-                        Some(())
-                    });
-
-                Self::process_indent_loop(
-                    tokens,
-                    next_idx,
-                    result,
-                    indent_stack,
-                );
-            }
-            Token::Eof => {
-                result.push(Self::new(t.tok.clone(), t.span));
-            }
-            _ => {
-                result.push(Self::new(t.tok.clone(), t.span));
-                Self::process_indent_loop(
-                    tokens,
-                    idx + 1,
-                    result,
-                    indent_stack,
-                );
-            }
-        });
+        st.result
     }
 
     /// Emits `Dedent` tokens to return to target indent level.
-    fn emit_dedents_to(
+    fn emit_dedents(
         result: &mut Vec<Self>,
-        indent_stack: &mut Vec<usize>,
+        stack: &mut Vec<usize>,
         target: usize,
         span: Span,
     ) {
-        let should_dedent = indent_stack
-            .last()
-            .map(|&level| level > target)
-            .unwrap_or(false);
-
-        should_dedent.then(|| {
-            indent_stack.pop();
+        let count = stack.iter().rev().take_while(|&&lvl| lvl > target).count();
+        (0..count).for_each(|_| {
+            stack.pop();
             result.push(Self::new(Token::Dedent, span));
-            Self::emit_dedents_to(result, indent_stack, target, span);
         });
-    }
-
-    /// Emits final dedents at EOF.
-    fn emit_final_dedents(result: &mut Vec<Self>, indent_stack: &[usize]) {
-        let eof_span = result
-            .iter()
-            .rev()
-            .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
-            .unwrap_or_default();
-
-        let eof = result.pop();
-
-        (1..indent_stack.len()).for_each(|_| {
-            result.push(Self::new(Token::Dedent, eof_span));
-        });
-
-        eof.map(|e| result.push(e));
     }
 }
 
@@ -444,29 +423,20 @@ struct TokenWithCol {
 impl TokenWithCol {
     /// Computes column positions for each token.
     fn from_spanned(tokens: &[Spanned]) -> Vec<Self> {
-        let mut result = Vec::with_capacity(tokens.len());
-        let mut line_start: u32 = 0;
-
-        tokens.iter().for_each(|Spanned { tok, span }| {
-            let col = (span.start - line_start) as usize;
-            result.push(Self {
-                tok: tok.clone(),
-                span: *span,
-                col,
-            });
-            (tok == &Token::Newline).then(|| line_start = span.end);
-        });
-
-        result
-    }
-
-    /// Measures indentation level of the next significant token.
-    fn measure_indent(tokens: &[Self], idx: usize) -> (usize, usize) {
-        tokens.get(idx).map_or((idx, 0), |t| match &t.tok {
-            Token::Newline => Self::measure_indent(tokens, idx + 1),
-            Token::Eof => (idx, 0),
-            _ => (idx, t.col),
-        })
+        tokens
+            .iter()
+            .scan(0u32, |line_start, Spanned { tok, span }| {
+                let col = (span.start - *line_start) as usize;
+                if *tok == Token::Newline {
+                    *line_start = span.end;
+                }
+                Some(Self {
+                    tok: tok.clone(),
+                    span: *span,
+                    col,
+                })
+            })
+            .collect()
     }
 }
 
