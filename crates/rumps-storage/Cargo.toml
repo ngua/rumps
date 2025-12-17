@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 rumps-types = { path = "../rumps-types" }
 rumps-derive = { path = "../rumps-derive", optional = true }
+async-recursion = { workspace = true }
 async-trait = "0.1"
 bincode = "1.3"
 bitvec = "1.0"

@@ -50,7 +50,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fmt, future};
 
-use futures::future::BoxFuture;
+use async_recursion::async_recursion;
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name, Result, Value};
 use serde::{Deserialize, Serialize};
@@ -150,85 +150,79 @@ where
     }
 
     /// Advances the snapshot stream (no `is_buffered` check needed).
-    fn advance_snapshot(&mut self) -> BoxFuture<'_, ()> {
-        Box::pin(async move {
-            if self.next_snapshot.is_none() {
-                match self.snapshot.next().await {
-                    None => {}
-                    Some(Err(e)) => {
-                        self.snapshot_error = Some(e);
-                    }
-                    Some(Ok(entry)) => {
-                        self.next_snapshot = Some(entry);
-                    }
+    #[async_recursion]
+    async fn advance_snapshot(&mut self) {
+        if self.next_snapshot.is_none() {
+            match self.snapshot.next().await {
+                None => {}
+                Some(Err(e)) => {
+                    self.snapshot_error = Some(e);
+                }
+                Some(Ok(entry)) => {
+                    self.next_snapshot = Some(entry);
                 }
             }
-        })
+        }
     }
 
     /// Yields buffered value if present, skips snapshot if requested, recurses.
-    fn yield_buffered_or_skip(
+    #[async_recursion]
+    async fn yield_buffered_or_skip(
         &mut self,
         skip_snapshot: bool,
-    ) -> BoxFuture<'_, Option<crate::error::Result<T>>> {
-        Box::pin(async move {
-            let opt_val = self.next_buffered.take().and_then(|(_, v)| v);
-            if skip_snapshot {
-                self.next_snapshot = None;
-            }
-            self.advance_buffered();
-            match opt_val {
-                Some(val) => Some(Ok(val)),
-                None => self.next_impl().await,
-            }
-        })
+    ) -> Option<crate::error::Result<T>> {
+        let opt_val = self.next_buffered.take().and_then(|(_, v)| v);
+        if skip_snapshot {
+            self.next_snapshot = None;
+        }
+        self.advance_buffered();
+        match opt_val {
+            Some(val) => Some(Ok(val)),
+            None => self.next_impl().await,
+        }
     }
 
     /// Core merge logic with O(n + m) complexity.
-    fn next_impl(&mut self) -> BoxFuture<'_, Option<crate::error::Result<T>>> {
-        Box::pin(async move {
-            match self.snapshot_error.take() {
-                Some(e) => Some(Err(e)),
-                None => {
-                    // Initialize buffered on first call
-                    if self.next_buffered.is_none()
-                        && self.last_buffered_key.is_none()
-                    {
-                        self.advance_buffered();
+    #[async_recursion]
+    async fn next_impl(&mut self) -> Option<crate::error::Result<T>> {
+        match self.snapshot_error.take() {
+            Some(e) => Some(Err(e)),
+            None => {
+                // Initialize buffered on first call
+                if self.next_buffered.is_none()
+                    && self.last_buffered_key.is_none()
+                {
+                    self.advance_buffered();
+                }
+
+                self.advance_snapshot().await;
+
+                // Clone keys for comparison to avoid borrow issues
+                let buf_key =
+                    self.next_buffered.as_ref().map(|(k, _)| k.clone());
+                let snap_key =
+                    self.next_snapshot.as_ref().map(|(k, _)| k.clone());
+
+                match (buf_key, snap_key) {
+                    (None, None) => None,
+                    (Some(_), None) => self.yield_buffered_or_skip(false).await,
+                    (None, Some(_)) => {
+                        self.next_snapshot.take().map(|(_, val)| Ok(val))
                     }
-
-                    self.advance_snapshot().await;
-
-                    // Clone keys for comparison to avoid borrow issues
-                    let buf_key =
-                        self.next_buffered.as_ref().map(|(k, _)| k.clone());
-                    let snap_key =
-                        self.next_snapshot.as_ref().map(|(k, _)| k.clone());
-
-                    match (buf_key, snap_key) {
-                        (None, None) => None,
-                        (Some(_), None) => {
+                    (Some(bk), Some(sk)) => match bk.cmp(&sk) {
+                        Ordering::Less => {
                             self.yield_buffered_or_skip(false).await
                         }
-                        (None, Some(_)) => {
+                        Ordering::Equal => {
+                            self.yield_buffered_or_skip(true).await
+                        }
+                        Ordering::Greater => {
                             self.next_snapshot.take().map(|(_, val)| Ok(val))
                         }
-                        (Some(bk), Some(sk)) => match bk.cmp(&sk) {
-                            Ordering::Less => {
-                                self.yield_buffered_or_skip(false).await
-                            }
-                            Ordering::Equal => {
-                                self.yield_buffered_or_skip(true).await
-                            }
-                            Ordering::Greater => self
-                                .next_snapshot
-                                .take()
-                                .map(|(_, val)| Ok(val)),
-                        },
-                    }
+                    },
                 }
             }
-        })
+        }
     }
 
     /// Gets the next item from the merged stream.
@@ -1721,74 +1715,71 @@ impl Transaction {
     /// Internal recursive implementation of `order()`.
     ///
     /// Uses async recursion to avoid `loop` with `break`/`continue`.
-    fn order_impl<'a>(
-        &'a self,
-        name: &'a Name,
-        after: Option<&'a Key>,
-    ) -> BoxFuture<'a, Result<Option<Key>>> {
-        Box::pin(async move {
-            // Get snapshot view from database
-            let snapshot_candidate = self.db.order(name, after).await?;
+    #[async_recursion]
+    async fn order_impl(
+        &self,
+        name: &Name,
+        after: Option<&Key>,
+    ) -> Result<Option<Key>> {
+        // Get snapshot view from database
+        let snapshot_candidate = self.db.order(name, after).await?;
 
-            // Collect buffered keys for this name
-            let writes = self.writes.read().await;
-            let deleted = self.deleted_subtrees.read().await;
+        // Collect buffered keys for this name
+        let writes = self.writes.read().await;
+        let deleted = self.deleted_subtrees.read().await;
 
-            // Find minimum buffered key greater than `after` that's not deleted
-            let buffered_candidate = writes
-                .keys()
-                .filter(|(n, _)| n == name)
-                .map(|(_, k)| k)
-                .filter(|k| match after {
-                    Some(a) => *k > a,
-                    None => true,
-                })
-                .filter(|k| {
-                    let not_explicitly_deleted = !matches!(
-                        writes.get(&(name.clone(), (*k).clone())),
-                        Some(WriteOp::Delete | WriteOp::KillSubtree)
-                    );
-                    let not_in_deleted_subtree =
-                        !deleted.iter().any(|(del_name, del_key)| {
-                            del_name == name && k.starts_with(del_key)
-                        });
-                    not_explicitly_deleted && not_in_deleted_subtree
-                })
-                .min()
-                .cloned();
+        // Find minimum buffered key greater than `after` that's not deleted
+        let buffered_candidate = writes
+            .keys()
+            .filter(|(n, _)| n == name)
+            .map(|(_, k)| k)
+            .filter(|k| match after {
+                Some(a) => *k > a,
+                None => true,
+            })
+            .filter(|k| {
+                let not_explicitly_deleted = !matches!(
+                    writes.get(&(name.clone(), (*k).clone())),
+                    Some(WriteOp::Delete | WriteOp::KillSubtree)
+                );
+                let not_in_deleted_subtree =
+                    !deleted.iter().any(|(del_name, del_key)| {
+                        del_name == name && k.starts_with(del_key)
+                    });
+                not_explicitly_deleted && not_in_deleted_subtree
+            })
+            .min()
+            .cloned();
 
-            // Choose the minimum between snapshot and buffered
-            let next = match (
-                snapshot_candidate.as_ref(),
-                buffered_candidate.as_ref(),
-            ) {
+        // Choose the minimum between snapshot and buffered
+        let next =
+            match (snapshot_candidate.as_ref(), buffered_candidate.as_ref()) {
                 (Some(snap), Some(buf)) => Some(snap.min(buf).clone()),
                 (Some(snap), None) => Some(snap.clone()),
                 (None, Some(buf)) => Some(buf.clone()),
                 (None, None) => None,
             };
 
-            // Check if candidate is deleted in our buffer; if so, recurse
-            match next {
-                None => Ok(None),
-                Some(k) => {
-                    let is_deleted =
-                        matches!(
-                            writes.get(&(name.clone(), k.clone())),
-                            Some(WriteOp::Delete | WriteOp::KillSubtree)
-                        ) || deleted.iter().any(|(del_name, del_key)| {
-                            del_name == name && k.starts_with(del_key)
-                        });
+        // Check if candidate is deleted in our buffer; if so, recurse
+        match next {
+            None => Ok(None),
+            Some(k) => {
+                let is_deleted =
+                    matches!(
+                        writes.get(&(name.clone(), k.clone())),
+                        Some(WriteOp::Delete | WriteOp::KillSubtree)
+                    ) || deleted.iter().any(|(del_name, del_key)| {
+                        del_name == name && k.starts_with(del_key)
+                    });
 
-                    if is_deleted {
-                        // Recurse to find next valid key
-                        self.order_impl(name, Some(&k)).await
-                    } else {
-                        Ok(Some(k))
-                    }
+                if is_deleted {
+                    // Recurse to find next valid key
+                    self.order_impl(name, Some(&k)).await
+                } else {
+                    Ok(Some(k))
                 }
             }
-        })
+        }
     }
 }
 
