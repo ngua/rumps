@@ -177,9 +177,9 @@ impl Parser {
             .then(Self::expr(Rc::clone(&ast2)))
             .map_with_span(move |((name, subs), (val_id, _)), span| {
                 let subs = subs.unwrap_or_default();
-                let id = ast3
-                    .borrow_mut()
-                    .add_stmt(Stmt::Set(name, subs, val_id), span);
+                let mut ast_ref = ast3.borrow_mut();
+                let target = ast_ref.add_expr(Expr::Local(name, subs), span);
+                let id = ast_ref.add_stmt(Stmt::Set(target, val_id), span);
                 (id, span)
             });
 
@@ -190,9 +190,9 @@ impl Parser {
             .then(Self::expr(Rc::clone(&ast5)))
             .map_with_span(move |((name, subs), (val_id, _)), span| {
                 let subs = subs.unwrap_or_default();
-                let id = ast5
-                    .borrow_mut()
-                    .add_stmt(Stmt::SetGlobal(name, subs, val_id), span);
+                let mut ast_ref = ast5.borrow_mut();
+                let target = ast_ref.add_expr(Expr::Global(name, subs), span);
+                let id = ast_ref.add_stmt(Stmt::Set(target, val_id), span);
                 (id, span)
             });
 
@@ -213,8 +213,9 @@ impl Parser {
             .then(Self::subscripts(Self::expr(Rc::clone(&ast))).or_not())
             .map_with_span(move |(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                let id =
-                    ast2.borrow_mut().add_stmt(Stmt::Kill(name, subs), span);
+                let mut ast_ref = ast2.borrow_mut();
+                let target = ast_ref.add_expr(Expr::Local(name, subs), span);
+                let id = ast_ref.add_stmt(Stmt::Kill(target), span);
                 (id, span)
             });
 
@@ -223,9 +224,9 @@ impl Parser {
             .then(Self::subscripts(Self::expr(Rc::clone(&ast3))).or_not())
             .map_with_span(move |(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                let id = ast4
-                    .borrow_mut()
-                    .add_stmt(Stmt::KillGlobal(name, subs), span);
+                let mut ast_ref = ast4.borrow_mut();
+                let target = ast_ref.add_expr(Expr::Global(name, subs), span);
+                let id = ast_ref.add_stmt(Stmt::Kill(target), span);
                 (id, span)
             });
 
@@ -1077,10 +1078,13 @@ mod tests {
         let result = parse_ok("SET x = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
         match stmt {
-            Stmt::Set(name, subs, _) => {
-                assert_eq!(name, "x");
-                assert!(subs.is_empty());
-            }
+            Stmt::Set(target, _) => match result.ast.get_expr(*target) {
+                Some(Expr::Local(name, subs)) => {
+                    assert_eq!(name, "x");
+                    assert!(subs.is_empty());
+                }
+                _ => panic!("expected Local"),
+            },
             _ => panic!("expected Set"),
         }
     }
@@ -1090,10 +1094,13 @@ mod tests {
         let result = parse_ok("SET x(1, 2) = 30");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
         match stmt {
-            Stmt::Set(name, subs, _) => {
-                assert_eq!(name, "x");
-                assert_eq!(subs.len(), 2);
-            }
+            Stmt::Set(target, _) => match result.ast.get_expr(*target) {
+                Some(Expr::Local(name, subs)) => {
+                    assert_eq!(name, "x");
+                    assert_eq!(subs.len(), 2);
+                }
+                _ => panic!("expected Local"),
+            },
             _ => panic!("expected Set"),
         }
     }
@@ -1103,11 +1110,14 @@ mod tests {
         let result = parse_ok("SET ^PATIENT(123) = \"Bob\"");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
         match stmt {
-            Stmt::SetGlobal(name, subs, _) => {
-                assert_eq!(name, "PATIENT");
-                assert_eq!(subs.len(), 1);
-            }
-            _ => panic!("expected SetGlobal"),
+            Stmt::Set(target, _) => match result.ast.get_expr(*target) {
+                Some(Expr::Global(name, subs)) => {
+                    assert_eq!(name, "PATIENT");
+                    assert_eq!(subs.len(), 1);
+                }
+                _ => panic!("expected Global"),
+            },
+            _ => panic!("expected Set"),
         }
     }
 
@@ -1116,10 +1126,13 @@ mod tests {
         let result = parse_ok("KILL x");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
         match stmt {
-            Stmt::Kill(name, subs) => {
-                assert_eq!(name, "x");
-                assert!(subs.is_empty());
-            }
+            Stmt::Kill(target) => match result.ast.get_expr(*target) {
+                Some(Expr::Local(name, subs)) => {
+                    assert_eq!(name, "x");
+                    assert!(subs.is_empty());
+                }
+                _ => panic!("expected Local"),
+            },
             _ => panic!("expected Kill"),
         }
     }
@@ -1129,11 +1142,14 @@ mod tests {
         let result = parse_ok("KILL ^DATA(123)");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
         match stmt {
-            Stmt::KillGlobal(name, subs) => {
-                assert_eq!(name, "DATA");
-                assert_eq!(subs.len(), 1);
-            }
-            _ => panic!("expected KillGlobal"),
+            Stmt::Kill(target) => match result.ast.get_expr(*target) {
+                Some(Expr::Global(name, subs)) => {
+                    assert_eq!(name, "DATA");
+                    assert_eq!(subs.len(), 1);
+                }
+                _ => panic!("expected Global"),
+            },
+            _ => panic!("expected Kill"),
         }
     }
 

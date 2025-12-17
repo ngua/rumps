@@ -180,18 +180,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
         match stmt {
             Stmt::Let(name, expr_id) => self.r#let(&name, expr_id).await,
-            Stmt::Set(name, subs, expr_id) => {
-                self.set_local(&name, &subs, expr_id).await
-            }
-            Stmt::SetGlobal(name, subs, expr_id) => {
-                self.set_global(&name, &subs, expr_id, span).await
-            }
-            Stmt::Kill(name, subs) => {
-                self.kill(Name::local(&name), &subs, span).await
-            }
-            Stmt::KillGlobal(name, subs) => {
-                self.kill(Name::global(&name), &subs, span).await
-            }
+            Stmt::Set(target, expr_id) => self.set(target, expr_id, span).await,
+            Stmt::Kill(target) => self.kill(target, span).await,
             Stmt::Output(expr_id) => self.output(expr_id).await,
             Stmt::Expr(expr_id) => {
                 // Evaluate for side effects, discard result
@@ -622,68 +612,82 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         }
     }
 
-    /// Execute a local `SET`.
+    /// `SET` primitive; writes a value to a B-tree variable.
     ///
-    /// Sets a local variable in the database. Locals can be set outside transactions.
+    /// The target expression must be a `Local` or `Global`. Dispatches based
+    /// on the name type: globals require an active transaction, locals can
+    /// be set outside transactions.
     #[async_recursion]
-    async fn set_local(
+    async fn set(
         &mut self,
-        name: &str,
-        subs: &[ExprId],
-        expr_id: ExprId,
-    ) -> Result<()> {
-        let key = self.build_key(subs).await?;
-        let val = self.eval(expr_id).await?;
-        let storage_val = self.store(&val)?;
-        let db_name = Name::local(name);
-
-        self.db
-            .set(&db_name, &key, storage_val)
-            .await
-            .map_err(|e| Error::runtime_no_span(format!("SET failed: {e}")))
-    }
-
-    /// Execute a global `SET`.
-    ///
-    /// Sets a global variable; requires an active transaction.
-    #[async_recursion]
-    async fn set_global(
-        &mut self,
-        name: &str,
-        subs: &[ExprId],
+        target: ExprId,
         expr_id: ExprId,
         span: Span,
     ) -> Result<()> {
-        // Do all &mut self operations first
-        let key = self.build_key(subs).await?;
+        let target_span = self.ast.expr_span(target).unwrap_or(span);
+        let target_expr = self
+            .ast
+            .get_expr(target)
+            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+            .clone();
+
+        let (name, subs) = match target_expr {
+            Expr::Local(n, s) => Ok((Name::local(&n), s)),
+            Expr::Global(n, s) => Ok((Name::global(&n), s)),
+            _ => Err(Error::runtime(
+                target_span,
+                "SET requires a local or global",
+            )),
+        }?;
+
+        let key = self.build_key(&subs).await?;
         let val = self.eval(expr_id).await?;
         let storage_val = self.store(&val)?;
-        let db_name = Name::global(name);
 
-        // Now we can borrow txn
-        match self.txn.as_ref() {
-            Some(txn) => txn
-                .set(&db_name, &key, storage_val)
-                .await
-                .map_err(|e| Error::runtime(span, format!("SET failed: {e}"))),
-            None => {
-                Err(Error::runtime(span, "global SET requires a transaction"))
+        if name.is_global() {
+            match self.txn.as_ref() {
+                Some(txn) => {
+                    txn.set(&name, &key, storage_val).await.map_err(|e| {
+                        Error::runtime(span, format!("SET failed: {e}"))
+                    })
+                }
+                None => Err(Error::runtime(
+                    span,
+                    "global SET requires a transaction",
+                )),
             }
+        } else {
+            self.db
+                .set(&name, &key, storage_val)
+                .await
+                .map_err(|e| Error::runtime(span, format!("SET failed: {e}")))
         }
     }
 
-    /// Execute a `KILL` statement.
+    /// `KILL` primitive; deletes a variable and its descendants.
     ///
-    /// Kills a variable (and its descendants). For globals, requires an
-    /// active transaction. For locals, operates directly on the database.
+    /// The target expression must be a `Local` or `Global`. For globals,
+    /// requires an active transaction. For locals, operates directly on
+    /// the database.
     #[async_recursion]
-    async fn kill(
-        &mut self,
-        name: Name,
-        subs: &[ExprId],
-        span: Span,
-    ) -> Result<()> {
-        let key = self.build_key(subs).await?;
+    async fn kill(&mut self, target: ExprId, span: Span) -> Result<()> {
+        let target_span = self.ast.expr_span(target).unwrap_or(span);
+        let target_expr = self
+            .ast
+            .get_expr(target)
+            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+            .clone();
+
+        let (name, subs) = match target_expr {
+            Expr::Local(n, s) => Ok((Name::local(&n), s)),
+            Expr::Global(n, s) => Ok((Name::global(&n), s)),
+            _ => Err(Error::runtime(
+                target_span,
+                "KILL requires a local or global",
+            )),
+        }?;
+
+        let key = self.build_key(&subs).await?;
 
         if name.is_global() {
             match self.txn.as_ref() {
@@ -1168,7 +1172,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     }
 }
 
-// ---- Value conversion methods ----
+// Value conversion methods
+//
 //
 // These live on Interpreter rather than Value because they need context
 // (arena, registry) that the interpreter owns.
@@ -2034,8 +2039,6 @@ mod tests {
         assert_eq!(result, Value::Int(30));
     }
 
-    // ---- Expr::If tests ----
-
     #[tokio::test]
     async fn if_expr_true_branch() {
         // IF true { 42 } ELSE { 0 }
@@ -2148,8 +2151,6 @@ mod tests {
         let result = interp.eval(x_var).await.unwrap();
         assert_eq!(result, Value::Int(10));
     }
-
-    // ---- Expr::Block tests ----
 
     #[tokio::test]
     async fn block_expr_with_tail() {

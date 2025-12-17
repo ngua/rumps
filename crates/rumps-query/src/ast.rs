@@ -221,17 +221,16 @@ pub(crate) enum Stmt {
     /// Lexical binding (sync, not subscriptable): `LET x = expr`.
     Let(String, ExprId),
 
-    /// Local B-tree assignment: `SET x = expr` or `SET x(subs...) = expr`.
-    Set(String, SmallVec<[ExprId; 4]>, ExprId),
+    /// B-tree assignment: `SET x(subs...) = expr` or `SET ^NAME(subs...) = expr`.
+    ///
+    /// The first `ExprId` must be a `Local` or `Global` expression (the target);
+    /// the second is the value expression.
+    Set(ExprId, ExprId),
 
-    /// Global assignment: `SET ^NAME(subs...) = expr`.
-    SetGlobal(String, SmallVec<[ExprId; 4]>, ExprId),
-
-    /// Delete a variable or subtree: `KILL x` or `KILL ^NAME(subs...)`.
-    Kill(String, SmallVec<[ExprId; 4]>),
-
-    /// Delete a global: `KILL ^NAME(subs...)`.
-    KillGlobal(String, SmallVec<[ExprId; 4]>),
+    /// Delete a variable or subtree: `KILL x(subs...)` or `KILL ^NAME(subs...)`.
+    ///
+    /// The `ExprId` must be a `Local` or `Global` expression.
+    Kill(ExprId),
 
     /// Output a value: `OUTPUT expr`.
     Output(ExprId),
@@ -399,18 +398,18 @@ mod tests {
             Expr::Literal(Literal::String("ABC".into())),
             Span::new(9, 14),
         );
+        let target = ast.add_expr(
+            Expr::Local("x".into(), smallvec::smallvec![sub1, sub2]),
+            Span::new(4, 15),
+        );
         let val =
             ast.add_expr(Expr::Literal(Literal::Int(30)), Span::new(18, 20));
 
-        let stmt = ast.add_stmt(
-            Stmt::Set("x".into(), smallvec::smallvec![sub1, sub2], val),
-            Span::new(0, 20),
-        );
+        let stmt = ast.add_stmt(Stmt::Set(target, val), Span::new(0, 20));
 
         match ast.get_stmt(stmt) {
-            Some(Stmt::Set(name, subs, v)) => {
-                assert_eq!(name, "x");
-                assert_eq!(subs.len(), 2);
+            Some(Stmt::Set(t, v)) => {
+                assert_eq!(*t, target);
                 assert_eq!(*v, val);
             }
             _ => panic!("expected Set"),
