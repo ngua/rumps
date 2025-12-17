@@ -29,6 +29,9 @@ pub enum Error {
     #[error("runtime error{}: {msg}", fmt_span(span))]
     Runtime { span: Option<Span>, msg: String },
 
+    #[error("type error at {span}: {msg}")]
+    Type { span: Span, msg: String },
+
     #[error("cannot coerce {from} to {to}: {msg}")]
     Coercion {
         from: &'static str,
@@ -92,6 +95,13 @@ impl Error {
         }
     }
 
+    pub(crate) fn type_err(span: Span, msg: impl Into<String>) -> Self {
+        Self::Type {
+            span,
+            msg: msg.into(),
+        }
+    }
+
     pub(crate) fn coercion(
         from: &'static str,
         to: &'static str,
@@ -119,7 +129,9 @@ impl Error {
 
     pub(crate) fn span(&self) -> Option<Span> {
         match self {
-            Self::Lex { span, .. } | Self::Parse { span, .. } => Some(*span),
+            Self::Lex { span, .. }
+            | Self::Parse { span, .. }
+            | Self::Type { span, .. } => Some(*span),
             Self::Runtime { span, .. } => *span,
             Self::Coercion { .. } | Self::Multiple { .. } => None,
         }
@@ -182,6 +194,9 @@ impl fmt::Display for ErrorDisplay<'_> {
             Error::Runtime { span: None, msg } => {
                 write!(f, "runtime error: {msg}")
             }
+            Error::Type { span, msg } => {
+                write!(f, "type error at {}: {msg}", loc(*span))
+            }
             Error::Coercion { from, to, msg } => {
                 write!(f, "cannot coerce {from} to {to}: {msg}")
             }
@@ -232,6 +247,16 @@ mod tests {
     fn runtime_error_no_span_display() {
         let err = Error::runtime_no_span("unknown variable");
         assert_eq!(err.to_string(), "runtime error: unknown variable");
+    }
+
+    #[test]
+    fn type_error_display() {
+        let err =
+            Error::type_err(Span::new(5, 10), "cannot add Int and String");
+        assert_eq!(
+            err.to_string(),
+            "type error at 5..10: cannot add Int and String"
+        );
     }
 
     #[test]

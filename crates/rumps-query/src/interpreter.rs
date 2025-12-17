@@ -317,7 +317,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                         let right = self.eval(rhs).await?;
                         match right {
                             Value::Bool(b) => Ok(Value::Bool(b)),
-                            _ => Err(Error::runtime(
+                            _ => Err(Error::type_err(
                                 span,
                                 format!(
                                     "logical AND requires booleans; got Bool and {}",
@@ -326,7 +326,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                             )),
                         }
                     }
-                    _ => Err(Error::runtime(
+                    _ => Err(Error::type_err(
                         span,
                         format!(
                             "logical AND requires booleans; got {}",
@@ -344,7 +344,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                         let right = self.eval(rhs).await?;
                         match right {
                             Value::Bool(b) => Ok(Value::Bool(b)),
-                            _ => Err(Error::runtime(
+                            _ => Err(Error::type_err(
                                 span,
                                 format!(
                                     "logical OR requires booleans; got Bool and {}",
@@ -353,7 +353,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                             )),
                         }
                     }
-                    _ => Err(Error::runtime(
+                    _ => Err(Error::type_err(
                         span,
                         format!(
                             "logical OR requires booleans; got {}",
@@ -486,7 +486,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     let key_str = self.arena.get_str(*key).unwrap_or("?");
                     Error::runtime(span, format!("key `{key_str}` not found"))
                 }),
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot index {} with {}",
@@ -519,7 +519,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                         )
                     })
             }
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot access field on {}",
@@ -771,14 +771,14 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             UnOp::Neg => match val {
                 Value::Int(n) => Ok(Value::Int(-n)),
                 Value::Float(f) => Ok(Value::Float(OrderedFloat(-f.0))),
-                _ => Err(Error::runtime(
+                _ => Err(Error::type_err(
                     span,
                     format!("cannot negate {}", val.type_name(&self.registry)),
                 )),
             },
             UnOp::Not => match val {
                 Value::Bool(b) => Ok(Value::Bool(!b)),
-                _ => Err(Error::runtime(
+                _ => Err(Error::type_err(
                     span,
                     format!(
                         "logical NOT requires a boolean; got {}",
@@ -810,7 +810,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Ok(Value::Float(OrderedFloat(a.0 + *b as f64)))
             }
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot add {} and {}",
@@ -841,7 +841,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Ok(Value::Float(OrderedFloat(a.0 - *b as f64)))
             }
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot subtract {} from {}",
@@ -872,7 +872,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Ok(Value::Float(OrderedFloat(a.0 * *b as f64)))
             }
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot multiply {} and {}",
@@ -897,7 +897,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             (Value::Float(a), Value::Float(b)) => div_f64(a.0, b.0, span),
             (Value::Int(a), Value::Float(b)) => div_f64(*a as f64, b.0, span),
             (Value::Float(a), Value::Int(b)) => div_f64(a.0, *b as f64, span),
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot divide {} by {}",
@@ -944,7 +944,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     Ok(Value::Int((a.0 / *b as f64).floor() as i64))
                 }
             }
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot floor divide {} by {}",
@@ -991,7 +991,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     Ok(Value::Float(OrderedFloat(a.0 % *b as f64)))
                 }
             }
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot compute {} mod {}",
@@ -1062,7 +1062,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 }
             }
             // Incompatible types
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot compare {} and {} for equality",
@@ -1155,7 +1155,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 Ok(sa.cmp(sb))
             }
             (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
-            _ => Err(Error::runtime(
+            _ => Err(Error::type_err(
                 span,
                 format!(
                     "cannot compare {} and {}",
