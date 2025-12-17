@@ -10,6 +10,7 @@ use std::rc::Rc;
 
 use chumsky::prelude::{choice, end, just, recursive, select, Simple};
 use chumsky::Parser as _;
+use nonempty::NonEmpty;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
@@ -70,7 +71,11 @@ impl Parser {
         parser
             .parse(stream)
             .map_err(|errs| {
-                Error::multiple(errs.into_iter().map(Into::into).collect())
+                NonEmpty::collect(errs.into_iter().map(Into::into))
+                    .map(Error::multiple)
+                    .unwrap_or_else(|| {
+                        Error::runtime_no_span("unknown parse error")
+                    })
             })
             .map(|stmts| {
                 // Extract the AST; try_unwrap if we're the only owner, otherwise take inner

@@ -19,3 +19,4 @@ thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["fs"] }
 tokio-util = "0.7.9"
+nonempty = "0.10"

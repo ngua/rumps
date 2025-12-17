@@ -5,6 +5,7 @@
 use std::fmt;
 
 use chumsky::error::Simple;
+use nonempty::NonEmpty;
 use thiserror::Error;
 
 use crate::{Span, Token};
@@ -36,7 +37,7 @@ pub enum Error {
     },
 
     #[error("{}", fmt_multiple(errors))]
-    Multiple { errors: Vec<Error> },
+    Multiple { errors: NonEmpty<Box<Self>> },
 }
 
 fn fmt_expected(expected: &[String]) -> String {
@@ -49,7 +50,7 @@ fn fmt_span(span: &Option<Span>) -> String {
     span.map_or(String::new(), |s| format!(" at {s}"))
 }
 
-fn fmt_multiple(errors: &[Error]) -> String {
+fn fmt_multiple(errors: &NonEmpty<Box<Error>>) -> String {
     errors
         .iter()
         .map(|e| e.to_string())
@@ -103,15 +104,16 @@ impl Error {
         }
     }
 
-    /// Create an error from multiple errors.
+    /// Create an error from one or more errors.
     ///
-    /// If the vec contains exactly one error, returns that error directly.
-    /// If empty, panics (caller should check).
-    pub(crate) fn multiple(errors: Vec<Error>) -> Self {
-        match errors.len() {
-            0 => panic!("Error::multiple called with empty vec"),
-            1 => errors.into_iter().next().expect("checked len"),
-            _ => Self::Multiple { errors },
+    /// If exactly one error, returns it directly; otherwise wraps in `Multiple`.
+    pub(crate) fn multiple(errors: NonEmpty<Self>) -> Self {
+        if errors.tail.is_empty() {
+            errors.head
+        } else {
+            Self::Multiple {
+                errors: errors.map(Box::new),
+            }
         }
     }
 

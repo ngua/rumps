@@ -976,6 +976,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "nonempty"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "303e8749c804ccd6ca3b428de7fe0d86cb86bc7606bc15291f100fd487960bb8"
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1277,6 +1283,7 @@ dependencies = [
  "futures",
  "indexmap",
  "insta",
+ "nonempty",
  "ordered-float",
  "rumps-storage",
  "rumps-types",

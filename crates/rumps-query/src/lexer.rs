@@ -12,6 +12,7 @@
 use std::ops::Range;
 
 use chumsky::prelude::*;
+use nonempty::NonEmpty;
 use ordered_float::OrderedFloat;
 
 use crate::{Error, Result, Span, Token};
@@ -157,7 +158,11 @@ impl<'a> Lexer<'a> {
             .parse(self.src)
             .map(Spanned::process_indentation)
             .map_err(|errs| {
-                Error::multiple(errs.into_iter().map(Self::to_error).collect())
+                NonEmpty::collect(errs.into_iter().map(Self::to_error))
+                    .map(Error::multiple)
+                    .unwrap_or_else(|| {
+                        Error::runtime_no_span("unknown lex error")
+                    })
             })
     }
 }
