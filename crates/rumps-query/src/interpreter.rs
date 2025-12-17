@@ -190,9 +190,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 Stmt::SetGlobal(name, subs, expr_id) => {
                     self.set_global(&name, &subs, expr_id, span).await
                 }
-                Stmt::Kill(name, subs) => self.kill_local(&name, &subs).await,
+                Stmt::Kill(name, subs) => {
+                    self.kill(Name::local(&name), &subs, span).await
+                }
                 Stmt::KillGlobal(name, subs) => {
-                    self.kill_global(&name, &subs, span).await
+                    self.kill(Name::global(&name), &subs, span).await
                 }
                 Stmt::Output(expr_id) => self.output(expr_id).await,
                 Stmt::Expr(expr_id) => {
@@ -724,32 +726,34 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         })
     }
 
-    /// Execute a local `KILL`.
-    fn kill_local<'b>(
+    /// Execute a `KILL` statement.
+    ///
+    /// Kills a variable (and its descendants). For globals, requires an
+    /// active transaction. For locals, operates directly on the database.
+    fn kill<'b>(
         &'b mut self,
-        _name: &'b str,
-        _subs: &'b [ExprId],
-    ) -> BoxFuture<'b, Result<()>> {
-        Box::pin(async move {
-            // TODO: Local KILL requires Database integration
-            Err(Error::runtime_no_span("local KILL not yet implemented"))
-        })
-    }
-
-    /// Execute a global `KILL`.
-    fn kill_global<'b>(
-        &'b mut self,
-        _name: &'b str,
-        _subs: &'b [ExprId],
+        name: Name,
+        subs: &'b [ExprId],
         span: Span,
     ) -> BoxFuture<'b, Result<()>> {
         Box::pin(async move {
-            // Global KILL requires a transaction
-            self.txn.as_ref().map(|_| ()).ok_or_else(|| {
-                Error::runtime(span, "global KILL requires a transaction")
-            })?;
-            // TODO: Implement global KILL
-            Err(Error::runtime(span, "global KILL not yet implemented"))
+            let key = self.build_key(subs).await?;
+
+            if name.is_global() {
+                match self.txn.as_ref() {
+                    Some(txn) => txn.kill(&name, &key).await.map_err(|e| {
+                        Error::runtime(span, format!("KILL failed: {e}"))
+                    }),
+                    None => Err(Error::runtime(
+                        span,
+                        "global KILL requires a transaction",
+                    )),
+                }
+            } else {
+                self.db.kill(&name, &key).await.map_err(|e| {
+                    Error::runtime(span, format!("KILL failed: {e}"))
+                })
+            }
         })
     }
 

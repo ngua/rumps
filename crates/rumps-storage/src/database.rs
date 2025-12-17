@@ -570,6 +570,73 @@ impl Database {
         })
     }
 
+    /// Deletes a key and all its descendants from the database.
+    ///
+    /// **Note**: Writes to globals require a transaction. Use `db.transaction()`
+    /// or create a `Transaction` manually. Direct calls for globals will error.
+    ///
+    /// For locals (in-memory only), this deletes from the B-tree directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{local, global, key, Value};
+    ///
+    /// let db = Database::in_memory()?;
+    ///
+    /// // Set some local data
+    /// db.set(&local!("TEMP"), &key![1, "A"], Value::from("a")).await?;
+    /// db.set(&local!("TEMP"), &key![1, "B"], Value::from("b")).await?;
+    ///
+    /// // Kill the subtree under `[1]`
+    /// db.kill(&local!("TEMP"), &key![1]).await?;
+    ///
+    /// // All descendants are gone
+    /// let val = db.get(&local!("TEMP"), &key![1, "A"]).await?;
+    /// assert_eq!(val, None);
+    ///
+    /// // For globals, use a transaction:
+    /// db.transaction(|txn| async move {
+    ///     txn.kill(&global!("DATA"), &key![1]).await?;
+    ///     Ok(())
+    /// }).await?;
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    pub async fn kill(
+        &self,
+        name: &Name,
+        key: &Key,
+    ) -> crate::error::Result<()> {
+        if matches!(name, Name::Global(_)) {
+            Err(StorageError::GlobalRequiresTransaction)
+        } else {
+            let opt_root = self.get_root(name).await?;
+            match opt_root {
+                None => Ok(()),
+                Some(root) => {
+                    let ctx = TransactionContext::new(
+                        TransactionId::IMPLICIT,
+                        TransactionTimestamp::from(0),
+                    );
+
+                    let opt_new_root =
+                        self.btree.kill_at(root, key, &ctx).await?;
+
+                    match opt_new_root {
+                        Some(new_root) if new_root != root => {
+                            self.update_root(name, new_root).await
+                        }
+                        None => self.remove_root(name).await.map(|_| ()),
+                        _ => Ok(()),
+                    }
+                }
+            }
+        }
+    }
+
     /// Checks the data status of a node (MUMPS `$DATA`).
     ///
     /// Returns information about whether a node has a value and/or descendants.
@@ -964,44 +1031,6 @@ impl Database {
             storage.flush().await?;
         }
         Ok(())
-    }
-
-    /// Deletes a key and all its descendants from the database.
-    ///
-    /// **Note**: Writes to globals require a transaction. Use `db.transaction()`
-    /// or create a `Transaction` manually. Direct calls for globals will error.
-    ///
-    /// For locals (in-memory only), this deletes from the B-tree directly.
-    pub(crate) async fn kill(
-        &self,
-        name: &Name,
-        key: &Key,
-    ) -> crate::error::Result<()> {
-        if matches!(name, Name::Global(_)) {
-            Err(StorageError::GlobalRequiresTransaction)
-        } else {
-            let opt_root = self.get_root(name).await?;
-            match opt_root {
-                None => Ok(()),
-                Some(root) => {
-                    let ctx = TransactionContext::new(
-                        TransactionId::IMPLICIT,
-                        TransactionTimestamp::from(0),
-                    );
-
-                    let opt_new_root =
-                        self.btree.kill_at(root, key, &ctx).await?;
-
-                    match opt_new_root {
-                        Some(new_root) if new_root != root => {
-                            self.update_root(name, new_root).await
-                        }
-                        None => self.remove_root(name).await.map(|_| ()),
-                        _ => Ok(()),
-                    }
-                }
-            }
-        }
     }
 
     /// Collects all entries matching a key prefix into a `Vec`.
