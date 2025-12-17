@@ -76,12 +76,14 @@
 
 #![allow(dead_code)]
 
+mod convert;
+mod db;
+mod ops;
+
 use async_recursion::async_recursion;
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
-use rumps_types::{Key, Name, Subscript};
-use smallvec::SmallVec;
 
 use crate::ast::{Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, UnOp};
 use crate::env::Environment;
@@ -124,6 +126,7 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     io: I,
 }
 
+// Public API
 impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Create a new interpreter for the given AST, database, and I/O context.
     pub(crate) fn new(ast: &'a Ast, db: Database, io: I) -> Result<Self> {
@@ -154,6 +157,43 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         self.io
     }
 
+    /// Evaluate an expression.
+    #[async_recursion]
+    pub(crate) async fn eval(&mut self, id: ExprId) -> Result<Value> {
+        let span = self.ast.expr_span(id).unwrap_or_default();
+        let expr = self
+            .ast
+            .get_expr(id)
+            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+            .clone();
+
+        match expr {
+            Expr::Literal(lit) => Ok(self.literal(&lit)),
+            Expr::Var(name) => self.var(&name, span),
+            Expr::Local(_, _) => {
+                Err(Error::runtime(span, "cannot use local as value; use GET"))
+            }
+            Expr::Global(_, _) => {
+                Err(Error::runtime(span, "cannot use global as value; use GET"))
+            }
+            Expr::Get(inner) => self.get(inner, span).await,
+            Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
+            Expr::Unary(op, operand) => self.unary(op, operand, span).await,
+            Expr::Call(name, args) => self.call(&name, &args, span).await,
+            Expr::Object(fields) => self.object(&fields).await,
+            Expr::Array(elems) => self.array(&elems).await,
+            Expr::Index(base, idx) => self.index(base, idx, span).await,
+            Expr::Field(base, field) => self.field(base, &field, span).await,
+            Expr::Block(stmts, tail) => self.block(&stmts, tail).await,
+            Expr::If(cond, then_br, else_br) => {
+                self.r#if(cond, then_br, else_br).await
+            }
+        }
+    }
+}
+
+// Private helpers
+impl<I: IoContext> Interpreter<'_, I> {
     /// Execute a sequence of statements.
     ///
     /// Uses async recursion over the slice instead of iteration.
@@ -190,40 +230,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         }
     }
 
-    /// Evaluate an expression.
-    #[async_recursion]
-    async fn eval(&mut self, id: ExprId) -> Result<Value> {
-        let span = self.ast.expr_span(id).unwrap_or_default();
-        let expr = self
-            .ast
-            .get_expr(id)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-            .clone();
-
-        match expr {
-            Expr::Literal(lit) => Ok(self.literal(&lit)),
-            Expr::Var(name) => self.var(&name, span),
-            Expr::Local(_, _) => {
-                Err(Error::runtime(span, "cannot use local as value; use GET"))
-            }
-            Expr::Global(_, _) => {
-                Err(Error::runtime(span, "cannot use global as value; use GET"))
-            }
-            Expr::Get(inner) => self.get(inner, span).await,
-            Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
-            Expr::Unary(op, operand) => self.unary(op, operand, span).await,
-            Expr::Call(name, args) => self.call(&name, &args, span).await,
-            Expr::Object(fields) => self.object(&fields).await,
-            Expr::Array(elems) => self.array(&elems).await,
-            Expr::Index(base, idx) => self.index(base, idx, span).await,
-            Expr::Field(base, field) => self.field(base, &field, span).await,
-            Expr::Block(stmts, tail) => self.block_expr(&stmts, tail).await,
-            Expr::If(cond, then_br, else_br) => {
-                self.if_expr(cond, then_br, else_br).await
-            }
-        }
-    }
-
     /// Convert an AST literal to a runtime value.
     fn literal(&mut self, lit: &Literal) -> Value {
         match lit {
@@ -245,45 +251,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             .ok_or_else(|| {
                 Error::runtime(span, format!("undefined variable `{name}`"))
             })
-    }
-
-    /// `GET` primitive; reads a value from a B-tree variable.
-    ///
-    /// The inner expression must be a `Local` or `Global`. Uses the active
-    /// transaction if one exists, otherwise reads directly from the database.
-    #[async_recursion]
-    async fn get(&mut self, inner: ExprId, span: Span) -> Result<Value> {
-        let inner_span = self.ast.expr_span(inner).unwrap_or(span);
-        let inner_expr = self
-            .ast
-            .get_expr(inner)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-            .clone();
-
-        let (name, subs) = match inner_expr {
-            Expr::Local(n, s) => Ok((Name::local(&n), s)),
-            Expr::Global(n, s) => Ok((Name::global(&n), s)),
-            _ => Err(Error::runtime(
-                inner_span,
-                "GET requires a local or global",
-            )),
-        }?;
-
-        let key = self.build_key(&subs).await?;
-
-        let opt_val = match &self.txn {
-            Some(txn) => txn.get(&name, &key).await,
-            None => self.db.get(&name, &key).await,
-        }
-        .map_err(|e| Error::runtime(span, format!("GET failed: {e}")))?;
-
-        opt_val.map(|sv| self.load(sv)).ok_or_else(|| {
-            let prefix = if name.is_global() { "^" } else { "" };
-            Error::runtime(
-                span,
-                format!("undefined variable `{prefix}{}`", name.name()),
-            )
-        })
     }
 
     /// Evaluate a binary operation.
@@ -524,20 +491,20 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Executes statements, then evaluates the trailing expression (if any).
     /// Returns `Option.None` if no trailing expression.
     #[async_recursion]
-    async fn block_expr(
+    async fn block(
         &mut self,
         stmts: &[StmtId],
         tail: Option<ExprId>,
     ) -> Result<Value> {
         self.env.scopes.push();
-        let result = self.block_expr_inner(stmts, tail).await;
+        let result = self.block_inner(stmts, tail).await;
         self.env.scopes.pop();
         result
     }
 
     /// Inner helper for block expression evaluation.
     #[async_recursion]
-    async fn block_expr_inner(
+    async fn block_inner(
         &mut self,
         stmts: &[StmtId],
         tail: Option<ExprId>,
@@ -549,7 +516,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             },
             Some((head, rest)) => {
                 self.exec(*head).await?;
-                self.block_expr_inner(rest, tail).await
+                self.block_inner(rest, tail).await
             }
         }
     }
@@ -559,7 +526,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Returns the value of the taken branch. If no else branch and condition
     /// is false, returns `Option.None`.
     #[async_recursion]
-    async fn if_expr(
+    async fn r#if(
         &mut self,
         cond: ExprId,
         then_br: ExprId,
@@ -587,126 +554,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         Ok(())
     }
 
-    /// Evaluate subscript expressions and build a `Key`.
-    #[async_recursion]
-    async fn build_key(&mut self, subs: &[ExprId]) -> Result<Key> {
-        self.build_key_acc(subs, Vec::with_capacity(subs.len()))
-            .await
-    }
-
-    /// Recursive helper for building a key from subscript expressions.
-    #[async_recursion]
-    async fn build_key_acc(
-        &mut self,
-        subs: &[ExprId],
-        mut acc: Vec<Subscript>,
-    ) -> Result<Key> {
-        match subs.split_first() {
-            None => Ok(Key::from(acc)),
-            Some((head, tail)) => {
-                let val = self.eval(*head).await?;
-                let sub = self.subscript(&val)?;
-                acc.push(sub);
-                self.build_key_acc(tail, acc).await
-            }
-        }
-    }
-
-    /// `SET` primitive; writes a value to a B-tree variable.
-    ///
-    /// The target expression must be a `Local` or `Global`. Dispatches based
-    /// on the name type: globals require an active transaction, locals can
-    /// be set outside transactions.
-    #[async_recursion]
-    async fn set(
-        &mut self,
-        target: ExprId,
-        expr_id: ExprId,
-        span: Span,
-    ) -> Result<()> {
-        let target_span = self.ast.expr_span(target).unwrap_or(span);
-        let target_expr = self
-            .ast
-            .get_expr(target)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-            .clone();
-
-        let (name, subs) = match target_expr {
-            Expr::Local(n, s) => Ok((Name::local(&n), s)),
-            Expr::Global(n, s) => Ok((Name::global(&n), s)),
-            _ => Err(Error::runtime(
-                target_span,
-                "SET requires a local or global",
-            )),
-        }?;
-
-        let key = self.build_key(&subs).await?;
-        let val = self.eval(expr_id).await?;
-        let storage_val = self.store(&val)?;
-
-        if name.is_global() {
-            match self.txn.as_ref() {
-                Some(txn) => {
-                    txn.set(&name, &key, storage_val).await.map_err(|e| {
-                        Error::runtime(span, format!("SET failed: {e}"))
-                    })
-                }
-                None => Err(Error::runtime(
-                    span,
-                    "global SET requires a transaction",
-                )),
-            }
-        } else {
-            self.db
-                .set(&name, &key, storage_val)
-                .await
-                .map_err(|e| Error::runtime(span, format!("SET failed: {e}")))
-        }
-    }
-
-    /// `KILL` primitive; deletes a variable and its descendants.
-    ///
-    /// The target expression must be a `Local` or `Global`. For globals,
-    /// requires an active transaction. For locals, operates directly on
-    /// the database.
-    #[async_recursion]
-    async fn kill(&mut self, target: ExprId, span: Span) -> Result<()> {
-        let target_span = self.ast.expr_span(target).unwrap_or(span);
-        let target_expr = self
-            .ast
-            .get_expr(target)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-            .clone();
-
-        let (name, subs) = match target_expr {
-            Expr::Local(n, s) => Ok((Name::local(&n), s)),
-            Expr::Global(n, s) => Ok((Name::global(&n), s)),
-            _ => Err(Error::runtime(
-                target_span,
-                "KILL requires a local or global",
-            )),
-        }?;
-
-        let key = self.build_key(&subs).await?;
-
-        if name.is_global() {
-            match self.txn.as_ref() {
-                Some(txn) => txn.kill(&name, &key).await.map_err(|e| {
-                    Error::runtime(span, format!("KILL failed: {e}"))
-                }),
-                None => Err(Error::runtime(
-                    span,
-                    "global KILL requires a transaction",
-                )),
-            }
-        } else {
-            self.db
-                .kill(&name, &key)
-                .await
-                .map_err(|e| Error::runtime(span, format!("KILL failed: {e}")))
-        }
-    }
-
     /// Execute an `OUTPUT` statement.
     ///
     /// Writes to stdout via the I/O context.
@@ -718,713 +565,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let val = self.eval(expr_id).await?;
         let s = self.display(&val);
         self.io.stdout(&s, span).await
-    }
-
-    /// Apply a binary operation to two values.
-    fn apply_binop(
-        &mut self,
-        left: &Value,
-        op: BinOp,
-        right: &Value,
-        span: Span,
-    ) -> Result<Value> {
-        match op {
-            // Arithmetic
-            BinOp::Add => self.binop_add(left, right, span),
-            BinOp::Sub => self.binop_sub(left, right, span),
-            BinOp::Mul => self.binop_mul(left, right, span),
-            BinOp::Div => self.binop_div(left, right, span),
-            BinOp::FloorDiv => self.binop_floor_div(left, right, span),
-            BinOp::Mod => self.binop_mod(left, right, span),
-
-            // Comparison
-            BinOp::Eq => self.values_equal(left, right, span).map(Value::Bool),
-            BinOp::Ne => self
-                .values_equal(left, right, span)
-                .map(|eq| Value::Bool(!eq)),
-            BinOp::Lt => self.binop_compare(left, right, span, |ord| {
-                matches!(ord, std::cmp::Ordering::Less)
-            }),
-            BinOp::Gt => self.binop_compare(left, right, span, |ord| {
-                matches!(ord, std::cmp::Ordering::Greater)
-            }),
-            BinOp::Le => self.binop_compare(left, right, span, |ord| {
-                matches!(
-                    ord,
-                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal
-                )
-            }),
-            BinOp::Ge => self.binop_compare(left, right, span, |ord| {
-                matches!(
-                    ord,
-                    std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
-                )
-            }),
-
-            // AND/OR are handled in `binary` for short-circuit semantics
-            BinOp::And | BinOp::Or => unreachable!("handled in binary"),
-
-            // String concatenation
-            BinOp::Concat => Ok(self.binop_concat(left, right)),
-        }
-    }
-
-    /// Unary operation application.
-    fn apply_unop(&self, op: UnOp, val: &Value, span: Span) -> Result<Value> {
-        match op {
-            UnOp::Neg => match val {
-                Value::Int(n) => Ok(Value::Int(-n)),
-                Value::Float(f) => Ok(Value::Float(OrderedFloat(-f.0))),
-                _ => Err(Error::type_err(
-                    span,
-                    format!("cannot negate {}", val.type_name(&self.registry)),
-                )),
-            },
-            UnOp::Not => match val {
-                Value::Bool(b) => Ok(Value::Bool(!b)),
-                _ => Err(Error::type_err(
-                    span,
-                    format!(
-                        "logical NOT requires a boolean; got {}",
-                        val.type_name(&self.registry)
-                    ),
-                )),
-            },
-        }
-    }
-
-    /// Addition with numeric coercion.
-    fn binop_add(
-        &mut self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-    ) -> Result<Value> {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => {
-                Ok(Value::Int(a.wrapping_add(*b)))
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                Ok(Value::Float(OrderedFloat(a.0 + b.0)))
-            }
-            // Int + Float -> Float
-            (Value::Int(a), Value::Float(b)) => {
-                Ok(Value::Float(OrderedFloat(*a as f64 + b.0)))
-            }
-            (Value::Float(a), Value::Int(b)) => {
-                Ok(Value::Float(OrderedFloat(a.0 + *b as f64)))
-            }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot add {} and {}",
-                    left.type_name(&self.registry),
-                    right.type_name(&self.registry)
-                ),
-            )),
-        }
-    }
-
-    /// Subtraction with numeric coercion.
-    fn binop_sub(
-        &mut self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-    ) -> Result<Value> {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => {
-                Ok(Value::Int(a.wrapping_sub(*b)))
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                Ok(Value::Float(OrderedFloat(a.0 - b.0)))
-            }
-            (Value::Int(a), Value::Float(b)) => {
-                Ok(Value::Float(OrderedFloat(*a as f64 - b.0)))
-            }
-            (Value::Float(a), Value::Int(b)) => {
-                Ok(Value::Float(OrderedFloat(a.0 - *b as f64)))
-            }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot subtract {} from {}",
-                    right.type_name(&self.registry),
-                    left.type_name(&self.registry)
-                ),
-            )),
-        }
-    }
-
-    /// Multiplication with numeric coercion.
-    fn binop_mul(
-        &mut self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-    ) -> Result<Value> {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => {
-                Ok(Value::Int(a.wrapping_mul(*b)))
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                Ok(Value::Float(OrderedFloat(a.0 * b.0)))
-            }
-            (Value::Int(a), Value::Float(b)) => {
-                Ok(Value::Float(OrderedFloat(*a as f64 * b.0)))
-            }
-            (Value::Float(a), Value::Int(b)) => {
-                Ok(Value::Float(OrderedFloat(a.0 * *b as f64)))
-            }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot multiply {} and {}",
-                    left.type_name(&self.registry),
-                    right.type_name(&self.registry)
-                ),
-            )),
-        }
-    }
-
-    /// Division (always returns float).
-    fn binop_div(
-        &self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-    ) -> Result<Value> {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => {
-                div_f64(*a as f64, *b as f64, span)
-            }
-            (Value::Float(a), Value::Float(b)) => div_f64(a.0, b.0, span),
-            (Value::Int(a), Value::Float(b)) => div_f64(*a as f64, b.0, span),
-            (Value::Float(a), Value::Int(b)) => div_f64(a.0, *b as f64, span),
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot divide {} by {}",
-                    left.type_name(&self.registry),
-                    right.type_name(&self.registry)
-                ),
-            )),
-        }
-    }
-
-    /// Floor division (integer division).
-    fn binop_floor_div(
-        &mut self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-    ) -> Result<Value> {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => {
-                if *b == 0 {
-                    Err(Error::runtime(span, "division by zero"))
-                } else {
-                    Ok(Value::Int(a.div_euclid(*b)))
-                }
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                if b.0 == 0.0 {
-                    Err(Error::runtime(span, "division by zero"))
-                } else {
-                    Ok(Value::Int((a.0 / b.0).floor() as i64))
-                }
-            }
-            (Value::Int(a), Value::Float(b)) => {
-                if b.0 == 0.0 {
-                    Err(Error::runtime(span, "division by zero"))
-                } else {
-                    Ok(Value::Int((*a as f64 / b.0).floor() as i64))
-                }
-            }
-            (Value::Float(a), Value::Int(b)) => {
-                if *b == 0 {
-                    Err(Error::runtime(span, "division by zero"))
-                } else {
-                    Ok(Value::Int((a.0 / *b as f64).floor() as i64))
-                }
-            }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot floor divide {} by {}",
-                    left.type_name(&self.registry),
-                    right.type_name(&self.registry)
-                ),
-            )),
-        }
-    }
-
-    /// Modulo operation.
-    fn binop_mod(
-        &mut self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-    ) -> Result<Value> {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => {
-                if *b == 0 {
-                    Err(Error::runtime(span, "modulo by zero"))
-                } else {
-                    Ok(Value::Int(a.rem_euclid(*b)))
-                }
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                if b.0 == 0.0 {
-                    Err(Error::runtime(span, "modulo by zero"))
-                } else {
-                    Ok(Value::Float(OrderedFloat(a.0 % b.0)))
-                }
-            }
-            (Value::Int(a), Value::Float(b)) => {
-                if b.0 == 0.0 {
-                    Err(Error::runtime(span, "modulo by zero"))
-                } else {
-                    Ok(Value::Float(OrderedFloat(*a as f64 % b.0)))
-                }
-            }
-            (Value::Float(a), Value::Int(b)) => {
-                if *b == 0 {
-                    Err(Error::runtime(span, "modulo by zero"))
-                } else {
-                    Ok(Value::Float(OrderedFloat(a.0 % *b as f64)))
-                }
-            }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot compute {} mod {}",
-                    left.type_name(&self.registry),
-                    right.type_name(&self.registry)
-                ),
-            )),
-        }
-    }
-
-    /// String concatenation.
-    fn binop_concat(&mut self, left: &Value, right: &Value) -> Value {
-        // Fast path: both are strings
-        let result = match (left, right) {
-            (Value::String(l), Value::String(r)) => {
-                let ls = self.arena.get_str(*l).unwrap_or("");
-                let rs = self.arena.get_str(*r).unwrap_or("");
-                format!("{ls}{rs}")
-            }
-            _ => {
-                let l = self.stringify(left);
-                let r = self.stringify(right);
-                format!("{l}{r}")
-            }
-        };
-        Value::String(self.arena.intern(&result))
-    }
-
-    /// Check equality of two values.
-    ///
-    /// Returns `Err` if the types are incompatible for comparison.
-    fn values_equal(
-        &self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-    ) -> Result<bool> {
-        match (left, right) {
-            (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
-            (Value::Int(a), Value::Int(b)) => Ok(a == b),
-            (Value::Float(a), Value::Float(b)) => Ok(a == b),
-            // Cross-type numeric comparison
-            (Value::Int(a), Value::Float(b)) => Ok((*a as f64) == b.0),
-            (Value::Float(a), Value::Int(b)) => Ok(a.0 == (*b as f64)),
-            (Value::String(a), Value::String(b)) => Ok(a == b),
-            // Arrays: structural equality
-            (Value::Array(a), Value::Array(b)) => {
-                if a.len() != b.len() {
-                    Ok(false)
-                } else {
-                    self.arrays_equal(a, b, span)
-                }
-            }
-            // Objects: structural equality
-            (Value::Object(a), Value::Object(b)) => {
-                if a.len() != b.len() {
-                    Ok(false)
-                } else {
-                    self.objects_equal(a, b, span)
-                }
-            }
-            // Tagged: same type, variant, and payloads
-            (Value::Tagged(ty1, idx1, p1), Value::Tagged(ty2, idx2, p2)) => {
-                if ty1 != ty2 || idx1 != idx2 || p1.len() != p2.len() {
-                    Ok(false)
-                } else {
-                    self.payloads_equal(p1, p2, span)
-                }
-            }
-            // Incompatible types
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot compare {} and {} for equality",
-                    left.type_name(&self.registry),
-                    right.type_name(&self.registry)
-                ),
-            )),
-        }
-    }
-
-    /// Check equality of two arrays element-wise.
-    fn arrays_equal(
-        &self,
-        a: &[ValueId],
-        b: &[ValueId],
-        span: Span,
-    ) -> Result<bool> {
-        a.iter().zip(b.iter()).try_fold(true, |acc, (av, bv)| {
-            self.arena
-                .get(*av)
-                .zip(self.arena.get(*bv))
-                .map(|(va, vb)| self.values_equal(va, vb, span))
-                .unwrap_or(Ok(false))
-                .map(|eq| acc && eq)
-        })
-    }
-
-    /// Check equality of two objects field-wise.
-    fn objects_equal(
-        &self,
-        a: &IndexMap<StringId, ValueId>,
-        b: &IndexMap<StringId, ValueId>,
-        span: Span,
-    ) -> Result<bool> {
-        a.iter().try_fold(true, |acc, (k, av)| {
-            b.get(k)
-                .and_then(|bv| {
-                    self.arena
-                        .get(*av)
-                        .zip(self.arena.get(*bv))
-                        .map(|(va, vb)| self.values_equal(va, vb, span))
-                })
-                .unwrap_or(Ok(false))
-                .map(|eq| acc && eq)
-        })
-    }
-
-    /// Check equality of tagged value payloads.
-    fn payloads_equal(
-        &self,
-        p1: &SmallVec<[ValueId; 2]>,
-        p2: &SmallVec<[ValueId; 2]>,
-        span: Span,
-    ) -> Result<bool> {
-        p1.iter().zip(p2.iter()).try_fold(true, |acc, (av, bv)| {
-            self.arena
-                .get(*av)
-                .zip(self.arena.get(*bv))
-                .map(|(va, vb)| self.values_equal(va, vb, span))
-                .unwrap_or(Ok(false))
-                .map(|eq| acc && eq)
-        })
-    }
-
-    /// Compare two values and apply a predicate to the ordering.
-    fn binop_compare<F>(
-        &self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-        pred: F,
-    ) -> Result<Value>
-    where
-        F: FnOnce(std::cmp::Ordering) -> bool,
-    {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
-            (Value::Float(a), Value::Float(b)) => Ok(a.cmp(b)),
-            // Cross-type numeric comparison
-            (Value::Int(a), Value::Float(b)) => {
-                Ok(OrderedFloat(*a as f64).cmp(b))
-            }
-            (Value::Float(a), Value::Int(b)) => {
-                Ok(a.cmp(&OrderedFloat(*b as f64)))
-            }
-            (Value::String(a), Value::String(b)) => {
-                // Compare by actual string content
-                let sa = self.arena.get_str(*a).unwrap_or("");
-                let sb = self.arena.get_str(*b).unwrap_or("");
-                Ok(sa.cmp(sb))
-            }
-            (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot compare {} and {}",
-                    left.type_name(&self.registry),
-                    right.type_name(&self.registry)
-                ),
-            )),
-        }
-        .map(|ord| Value::Bool(pred(ord)))
-    }
-}
-
-// Value conversion methods
-//
-//
-// These live on Interpreter rather than Value because they need context
-// (arena, registry) that the interpreter owns.
-
-impl<I: IoContext> Interpreter<'_, I> {
-    /// Convert a runtime value to a storage value.
-    ///
-    /// Scalars convert directly; complex values serialize to JSON.
-    pub(crate) fn store(&self, v: &Value) -> Result<rumps_types::Value> {
-        match v {
-            Value::Bool(b) => Ok(rumps_types::Value::Boolean(*b)),
-            Value::Int(i) => Ok(rumps_types::Value::Integer(*i)),
-            Value::Float(f) => Ok(rumps_types::Value::Double(*f)),
-            Value::String(id) => self
-                .arena
-                .get_str(*id)
-                .map(|s| rumps_types::Value::String(s.to_owned()))
-                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            // FIXME: Serialize to JSON. Objects and arrays are straightforward;
-            // sum type encoding needs some thought (we could use strings for
-            // unit enums and maybe the default for payload-bearing enums that
-            // serde uses)
-            Value::Array(_) | Value::Object(_) | Value::Tagged(_, _, _) => {
-                Ok(rumps_types::Value::Json(self.jsonify(v)))
-            }
-        }
-    }
-
-    /// Convert a storage value to a runtime value.
-    pub(crate) fn load(&mut self, v: rumps_types::Value) -> Value {
-        match v {
-            rumps_types::Value::Boolean(b) => Value::Bool(b),
-            rumps_types::Value::Integer(i) => Value::Int(i),
-            rumps_types::Value::Double(d) => Value::Float(d),
-            rumps_types::Value::Char(c) => {
-                Value::String(self.arena.intern(&c.to_string()))
-            }
-            rumps_types::Value::String(s) => {
-                Value::String(self.arena.intern(&s))
-            }
-            rumps_types::Value::Json(j) => self.unjsonify(j),
-        }
-    }
-
-    /// Convert a value to a human-readable display string.
-    ///
-    /// Used for OUTPUT statements.
-    pub(crate) fn display(&self, v: &Value) -> String {
-        self.stringify(v)
-    }
-
-    /// Recursive stringify helper.
-    fn stringify(&self, v: &Value) -> String {
-        match v {
-            // Usually keywords are represented as uppercase, so this will
-            // produce `TRUE`/`FALSE`, even though they are not really keywords
-            Value::Bool(b) => b.to_string().to_uppercase(),
-            Value::Int(n) => n.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::String(id) => {
-                self.arena.get_str(*id).unwrap_or("").to_owned()
-            }
-            Value::Array(arr) => {
-                let items = arr
-                    .iter()
-                    .filter_map(|id| self.arena.get(*id))
-                    .map(|v| self.stringify(v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("[ {items} ]")
-            }
-            Value::Object(obj) => {
-                let fields = obj
-                    .iter()
-                    .map(|(k, vid)| {
-                        let key = self.arena.get_str(*k).unwrap_or("?");
-                        let val = self
-                            .arena
-                            .get(*vid)
-                            .map(|v| self.stringify(v))
-                            .unwrap_or_else(|| "?".to_owned());
-                        format!("{key}: {val}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{{ {fields} }}")
-            }
-            Value::Tagged(ty, idx, payloads) => {
-                let ty_name =
-                    self.registry.type_name(*ty, &self.arena).unwrap_or("?");
-                let var_name = self
-                    .registry
-                    .variant_name(*ty, *idx, &self.arena)
-                    .unwrap_or("?");
-
-                if payloads.is_empty() {
-                    format!("{ty_name}.{var_name}")
-                } else {
-                    let args = payloads
-                        .iter()
-                        .filter_map(|id| self.arena.get(*id))
-                        .map(|v| self.stringify(v))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("{ty_name}.{var_name}({args})")
-                }
-            }
-        }
-    }
-
-    /// Convert a value to JSON.
-    ///
-    /// Used for JSON output and storage serialization.
-    pub(crate) fn jsonify(&self, v: &Value) -> serde_json::Value {
-        match v {
-            Value::Bool(b) => serde_json::Value::Bool(*b),
-            Value::Int(n) => serde_json::json!(*n),
-            Value::Float(f) => serde_json::json!(f.0),
-            Value::String(id) => {
-                let s = self.arena.get_str(*id).unwrap_or("");
-                serde_json::Value::String(s.to_owned())
-            }
-            Value::Array(arr) => {
-                let elems = arr
-                    .iter()
-                    .filter_map(|id| self.arena.get(*id))
-                    .map(|v| self.jsonify(v))
-                    .collect();
-                serde_json::Value::Array(elems)
-            }
-            Value::Object(obj) => {
-                let map = obj
-                    .iter()
-                    .filter_map(|(k, vid)| {
-                        let key = self.arena.get_str(*k)?;
-                        let val = self.arena.get(*vid)?;
-                        Some((key.to_owned(), self.jsonify(val)))
-                    })
-                    .collect();
-                serde_json::Value::Object(map)
-            }
-            // FIXME: Sum type encoding needs thought. For now, use a tagged
-            // object like {"_type": "Option", "_variant": "Some", "_payload": [...]}
-            Value::Tagged(ty, idx, payloads) => {
-                let ty_name =
-                    self.registry.type_name(*ty, &self.arena).unwrap_or("?");
-                let var_name = self
-                    .registry
-                    .variant_name(*ty, *idx, &self.arena)
-                    .unwrap_or("?");
-                let payload_json: Vec<_> = payloads
-                    .iter()
-                    .filter_map(|id| self.arena.get(*id))
-                    .map(|v| self.jsonify(v))
-                    .collect();
-
-                serde_json::json!({
-                    "_type": ty_name,
-                    "_variant": var_name,
-                    "_payload": payload_json
-                })
-            }
-        }
-    }
-
-    /// Convert a JSON value to a runtime value.
-    pub(crate) fn unjsonify(&mut self, j: serde_json::Value) -> Value {
-        match j {
-            serde_json::Value::Null => Value::none(),
-            serde_json::Value::Bool(b) => Value::Bool(b),
-            serde_json::Value::Number(n) => {
-                Value::Float(OrderedFloat(n.as_f64().unwrap_or(0.0)))
-            }
-            serde_json::Value::String(s) => {
-                Value::String(self.arena.intern(&s))
-            }
-            serde_json::Value::Array(arr) => {
-                let dominated = arr.first().is_none_or(|first| {
-                    let tag = json_type_tag(first);
-                    arr.iter().skip(1).all(|v| json_type_tag(v) == tag)
-                });
-
-                if dominated {
-                    let elems = arr
-                        .into_iter()
-                        .map(|v| {
-                            let val = self.unjsonify(v);
-                            self.arena.add(val, Span::default())
-                        })
-                        .collect();
-                    Value::Array(elems)
-                } else {
-                    // TODO: Heterogeneous JSON arrays should map to `Value::Json`
-                    todo!("Value::Json variant for heterogeneous arrays")
-                }
-            }
-            serde_json::Value::Object(obj) => {
-                let fields = obj
-                    .into_iter()
-                    .map(|(k, v)| {
-                        let key = self.arena.intern(&k);
-                        let val = self.unjsonify(v);
-                        let val_id = self.arena.add(val, Span::default());
-                        (key, val_id)
-                    })
-                    .collect();
-                Value::Object(fields)
-            }
-        }
-    }
-
-    /// Convert a value to a subscript for key construction.
-    ///
-    /// Only scalar types (Bool, Int, Float, String) can be subscripts.
-    pub(crate) fn subscript(&self, v: &Value) -> Result<Subscript> {
-        match v {
-            Value::Bool(b) => Ok(Subscript::Boolean(*b)),
-            Value::Int(i) => Ok(Subscript::Number(OrderedFloat(*i as f64))),
-            Value::Float(f) => Ok(Subscript::Number(*f)),
-            Value::String(id) => self
-                .arena
-                .get_str(*id)
-                .map(|s| Subscript::String(s.to_owned()))
-                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            Value::Array(_) | Value::Object(_) | Value::Tagged(_, _, _) => {
-                Err(Error::runtime_no_span(
-                    "complex values cannot be used as subscripts",
-                ))
-            }
-        }
-    }
-}
-
-/// Get a discriminant tag for JSON value type (for homogeneity checks).
-fn json_type_tag(v: &serde_json::Value) -> u8 {
-    match v {
-        serde_json::Value::Null => 0,
-        serde_json::Value::Bool(_) => 1,
-        serde_json::Value::Number(_) => 2,
-        serde_json::Value::String(_) => 3,
-        serde_json::Value::Array(_) => 4,
-        serde_json::Value::Object(_) => 5,
-    }
-}
-
-/// Helper for float division with zero check.
-fn div_f64(a: f64, b: f64, span: Span) -> Result<Value> {
-    if b == 0.0 {
-        Err(Error::runtime(span, "division by zero"))
-    } else {
-        Ok(Value::Float(OrderedFloat(a / b)))
     }
 }
 
