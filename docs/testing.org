@@ -1,0 +1,257 @@
+#+TITLE: Testing the RUMPS Query Language Interpreter
+#+AUTHOR: RUMPS Contributors
+
+* Overview
+The =rumps-query= crate uses a combination of unit tests and integration tests. Unit tests cover individual components (lexer, parser, interpreter); integration tests run complete =.rumps= scripts and snapshot their output. This document focuses on the latter.
+
+* Integration Test Architecture
+** Script-based testing
+Integration tests live in =crates/rumps-query/scripts/= as =.rumps= files. Each script is a self-contained program that exercises some aspect of the interpreter. The test harness discovers these files automatically, runs them against an in-memory database, and compares output to stored snapshots.
+
+This approach has several advantages:
+- *Readability*: Tests are actual RUMPS code, not Rust test boilerplate
+- *Coverage*: Easy to add new tests; just drop a =.rumps= file in the directory
+- *Regression detection*: Snapshot diffs show exactly what changed
+- *Documentation*: Scripts double as usage examples
+
+** Dependencies
+The test harness uses two crates:
+- =datatest-stable=: Data-driven test discovery; finds all =*.rumps= files and generates a test case for each
+- =insta=: Snapshot testing; stores expected output in =.snap= files and diffs against actual output
+
+These are declared in =Cargo.toml=:
+
+#+begin_src toml
+[dev-dependencies]
+datatest-stable = "0.2"
+insta = "1.41"
+#+end_src
+
+The test binary uses a custom harness (=harness = false=):
+
+#+begin_src toml
+[[test]]
+name = "scripts"
+harness = false
+#+end_src
+
+** Test harness
+The harness in =tests/scripts.rs= is minimal:
+
+#+begin_src rust
+use std::path::Path;
+
+use rumps_query::run_capturing;
+use rumps_storage::Database;
+
+fn run_script(path: &Path) -> datatest_stable::Result<()> {
+    let src = std::fs::read_to_string(path)?;
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    let output = rt.block_on(async {
+        let db = match Database::in_memory() {
+            Ok(db) => db,
+            Err(e) => return format!("ERROR: {e}"),
+        };
+        match run_capturing(&src, db).await {
+            Ok(out) => out,
+            Err(e) => format!("ERROR: {e}"),
+        }
+    });
+
+    insta::with_settings!({
+        description => &src,
+        omit_expression => true,
+        snapshot_path => "../snapshots",
+    }, {
+        insta::assert_snapshot!(name, output);
+    });
+
+    Ok(())
+}
+
+datatest_stable::harness!(run_script, "scripts", r".*\.rumps$");
+#+end_src
+
+Key points:
+- =run_capturing= executes a script and captures all =OUTPUT= statements to a string
+- Errors (lex, parse, runtime) are captured as =ERROR: ...= rather than panicking
+- Snapshots include the source as =description=, so reviewers see input and output together
+- Each script runs against a fresh in-memory database; no state leaks between tests
+
+** IoContext abstraction
+To capture output for testing, the interpreter is generic over an =IoContext= trait:
+
+#+begin_src rust
+pub trait IoContext: Send {
+    fn stdout(&mut self, s: &str, span: Span) -> BoxFuture<'_, Result<()>>;
+}
+#+end_src
+
+Two implementations exist:
+- =Io=: Production; writes to actual stdout
+- =TestIo=: Testing; captures output to an internal buffer
+
+The =run_capturing= function uses =TestIo= internally and returns the captured output as a =String=.
+
+* Writing Tests
+** Script structure
+A typical test script:
+
+#+begin_src rumps
+; Test: arithmetic operators
+; Brief description of what's being tested
+
+LET x = 10 + 5
+OUTPUT x
+; Expected: 15
+
+LET y = x * 2
+OUTPUT y
+; Expected: 30
+
+OUTPUT "Arithmetic test complete"
+#+end_src
+
+Comments (=;=) document expected behavior but don't affect output. Only =OUTPUT= statements produce snapshot content.
+
+** Testing side effects
+Some behaviors (e.g., short-circuit evaluation) aren't directly observable via return values. Test these using side effects:
+
+#+begin_src rumps
+; Test: short-circuit AND; second operand should NOT execute
+SET FLAG = FALSE
+
+; This should short-circuit; SET should not run
+LET r = FALSE && { SET FLAG = TRUE; TRUE }
+OUTPUT GET(FLAG)
+; Expected: FALSE (FLAG unchanged)
+
+; This should NOT short-circuit; SET should run
+LET s = TRUE && { SET FLAG = TRUE; TRUE }
+OUTPUT GET(FLAG)
+; Expected: TRUE (FLAG changed)
+#+end_src
+
+** Naming convention
+Scripts are numbered for ordering: =01_lex_simple.rumps=, =02_arithmetic.rumps=, etc. The number prefix keeps related tests grouped when listed alphabetically. The name after the number should describe what's being tested.
+
+** Current test coverage
+| Script                           | Coverage                                     |
+|----------------------------------+----------------------------------------------|
+| =01_lex_simple.rumps=            | Basic lexer tokens                           |
+| =02_arithmetic.rumps=            | Arithmetic operators and precedence          |
+| =03_let_variables.rumps=         | =LET= bindings and scoping                   |
+| =04_set_locals.rumps=            | Primitive =SET= (local variables)            |
+| =05_get_locals.rumps=            | Primitive =GET= (local variables)            |
+| =06_globals.rumps=               | Global variable operations (=^NAME=)         |
+| =07_output.rumps=                | Primitve: =OUTPUT= (behavior)                |
+| =08_if_else.rumps=               | Conditional expressions                      |
+| =09_comparison.rumps=            | Comparison operators (=<= , =>= , ===, etc.) |
+| =10_logical.rumps=               | Logical operators (=&&=, =\vert\vert=, =!=)  |
+| =11_strings.rumps=               | String literals and concatenation            |
+| =12_blocks.rumps=                | Block expressions and scope                  |
+| =13_comments.rumps=              | Comment handling                             |
+| =14_kill.rumps=                  | Primtive: =KILL=                             |
+| =15_arrays_objects.rumps=        | Array and object literals                    |
+| =16_success_criteria.rumps=      | Phase 1 success criteria validation          |
+| =17_type_coercions.rumps=        | Implicit type conversions                    |
+| =18_array_indexing.rumps=        | Array index access                           |
+| =19_object_access.rumps=         | Object field access                          |
+| =20_equality.rumps=              | Equality semantics (=\=\== vs type coercion) |
+| =21_short_circuit.rumps=         | Short-circuit evaluation                     |
+| =22_unary_ops.rumps=             | Unary operators (=-=, =!=)                   |
+| =23_nested_structures.rumps=     | Nested arrays/objects                        |
+| =24_expression_statements.rumps= | Expression statements (side effects)         |
+| =25_option_values.rumps=         | =SOME=/=NONE= option handling                |
+
+* Running Tests
+** Basic invocation
+#+begin_src bash
+cargo test -p rumps-query --test scripts
+#+end_src
+
+This runs all =.rumps= scripts and compares output to snapshots. Tests pass if output matches; tests fail if output differs or snapshots don't exist.
+
+** Reviewing snapshots
+When snapshots change (or don't exist yet), =insta= creates =.snap.new= files. Review them with:
+
+#+begin_src bash
+cargo insta review
+#+end_src
+
+This opens an interactive TUI showing diffs. Accept (=a=), reject (=r=), or skip (=s=) each change.
+
+To accept all pending snapshots non-interactively:
+
+#+begin_src bash
+cargo insta accept
+#+end_src
+
+** Nix users
+If you're using Nix, add =cargo-insta= to your devShell:
+
+#+begin_src nix
+devShells.default = pkgs.mkShell {
+  nativeBuildInputs = with pkgs; [
+    # ... other deps ...
+    cargo-insta
+  ];
+};
+#+end_src
+
+Then =direnv reload= (or re-enter the shell) to pick it up.
+
+Alternatively, rename =.snap.new= files manually:
+
+#+begin_src bash
+cd crates/rumps-query/snapshots
+rename 's/\.new$//' *.snap.new
+#+end_src
+
+** Snapshot file format
+Snapshots live in =crates/rumps-query/snapshots/= with names like =scripts__02_arithmetic.snap=. The format:
+
+#+begin_src text
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: arithmetic\nLET x = 10 + 5\nOUTPUT x\n..."
+---
+15
+30
+Arithmetic test complete
+#+end_src
+
+The =description= field contains the source script; everything after the =---= separator is the actual output.
+
+* Adding New Tests
+1. Create a new =.rumps= file in =crates/rumps-query/scripts/=
+2. Run =cargo test -p rumps-query --test scripts=
+3. Review the new snapshot with =cargo insta review=
+4. Commit both the script and the =.snap= file
+
+If testing error cases, the snapshot will contain =ERROR: ...= with the error message. This is intentional; error messages are part of the contract.
+
+* Unit Tests
+Unit tests for individual components live alongside their implementations:
+- =lexer.rs=: Token generation, error handling
+- =parser.rs=: AST construction, precedence
+- =interpreter.rs=: Expression evaluation, statement execution
+- =env.rs=: Environment/scope management
+- =value.rs=: Value types and operations
+
+Run all unit tests with:
+
+#+begin_src bash
+cargo test -p rumps-query
+#+end_src
+
+This runs both unit tests (148 as of writing) and integration tests (25 scripts).

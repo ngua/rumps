@@ -14,7 +14,7 @@ use std::ops::Range;
 use chumsky::prelude::*;
 use ordered_float::OrderedFloat;
 
-use crate::{Error, Span, Token};
+use crate::{Error, Result, Span, Token};
 
 /// A token paired with its source span.
 #[derive(Debug, Clone, PartialEq)]
@@ -152,13 +152,13 @@ impl<'a> Lexer<'a> {
     }
 
     /// Lexes source code into a stream of spanned tokens.
-    ///
-    /// Returns either a vector of tokens or a vector of lex errors.
-    pub(crate) fn lex(self) -> Result<Vec<Spanned>, Vec<Error>> {
+    pub(crate) fn lex(self) -> Result<Vec<Spanned>> {
         Self::lexer()
             .parse(self.src)
             .map(Spanned::process_indentation)
-            .map_err(|errs| errs.into_iter().map(Self::to_error).collect())
+            .map_err(|errs| {
+                Error::multiple(errs.into_iter().map(Self::to_error).collect())
+            })
     }
 }
 
@@ -478,7 +478,7 @@ mod tests {
             .collect()
     }
 
-    fn lex_err(src: &str) -> Vec<Error> {
+    fn lex_err(src: &str) -> Error {
         Lexer::new(src).lex().expect_err("lex should fail")
     }
 
@@ -533,8 +533,8 @@ mod tests {
 
     #[test]
     fn unterminated_string() {
-        let errs = lex_err(r#""unterminated"#);
-        assert!(!errs.is_empty());
+        let err = lex_err(r#""unterminated"#);
+        assert!(err.to_string().contains("unexpected"));
     }
 
     #[test]
@@ -845,22 +845,21 @@ mod tests {
 
     #[test]
     fn unknown_char_error() {
-        let errs = lex_err("SET x = @invalid");
-        assert!(!errs.is_empty());
-        assert!(errs[0].to_string().contains("unexpected character"));
+        let err = lex_err("SET x = @invalid");
+        assert!(err.to_string().contains("unexpected character"));
     }
 
     // NOTE: Single `&` and `|` now produce `unexpected character` errors
     // rather than specific "expected `&&`" messages.
     #[test]
     fn single_ampersand_error() {
-        let errs = lex_err("a & b");
-        assert!(!errs.is_empty());
+        let err = lex_err("a & b");
+        assert!(err.to_string().contains("unexpected"));
     }
 
     #[test]
     fn single_pipe_error() {
-        let errs = lex_err("a | b");
-        assert!(!errs.is_empty());
+        let err = lex_err("a | b");
+        assert!(err.to_string().contains("unexpected"));
     }
 }

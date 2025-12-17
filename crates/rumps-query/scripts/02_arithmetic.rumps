@@ -1,0 +1,75 @@
+; Test: parse and evaluate arithmetic
+; Tests arithmetic operators with correct precedence
+
+; Basic operations
+LET add = 10 + 5
+OUTPUT add
+; Expected: 15
+
+LET sub = 10 - 5
+OUTPUT sub
+; Expected: 5
+
+LET mul = 10 * 5
+OUTPUT mul
+; Expected: 50
+
+LET div = 10 / 4
+OUTPUT div
+; Expected: 2.5 (or 2 if integer division)
+
+LET intdiv = 10 // 4
+OUTPUT intdiv
+; Expected: 2
+
+LET modulo = 10 % 3
+OUTPUT modulo
+; Expected: 1
+
+; Precedence: mul/div before add/sub
+LET prec1 = 2 + 3 * 4
+OUTPUT prec1
+; Expected: 14 (not 20)
+
+LET prec2 = 10 - 6 / 2
+OUTPUT prec2
+; Expected: 7 (not 2)
+
+; Parentheses override precedence
+LET paren1 = (2 + 3) * 4
+OUTPUT paren1
+; Expected: 20
+
+LET paren2 = (10 - 6) / 2
+OUTPUT paren2
+; Expected: 2
+
+; Unary minus
+LET neg = -5
+OUTPUT neg
+; Expected: -5
+
+LET neg2 = 10 + -3
+OUTPUT neg2
+; Expected: 7
+
+; Nested operations
+LET complex = ((1 + 2) * (3 + 4)) / 7
+OUTPUT complex
+; Expected: 3
+
+; Float arithmetic
+LET f1 = 3.14 * 2.0
+OUTPUT f1
+; Expected: 6.28
+
+LET f2 = 10.0 / 4.0
+OUTPUT f2
+; Expected: 2.5
+
+; Mixed int/float
+LET mixed = 10 + 0.5
+OUTPUT mixed
+; Expected: 10.5
+
+OUTPUT "Arithmetic test complete"

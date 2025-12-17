@@ -10,11 +10,11 @@ use thiserror::Error;
 use crate::{Span, Token};
 
 /// Crate-wide result type.
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Errors produced during lexing, parsing, or interpretation.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("lex error at {span}: {msg}")]
     Lex { span: Span, msg: String },
 
@@ -34,6 +34,9 @@ pub(crate) enum Error {
         to: &'static str,
         msg: String,
     },
+
+    #[error("{}", fmt_multiple(errors))]
+    Multiple { errors: Vec<Error> },
 }
 
 fn fmt_expected(expected: &[String]) -> String {
@@ -44,6 +47,14 @@ fn fmt_expected(expected: &[String]) -> String {
 
 fn fmt_span(span: &Option<Span>) -> String {
     span.map_or(String::new(), |s| format!(" at {s}"))
+}
+
+fn fmt_multiple(errors: &[Error]) -> String {
+    errors
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl Error {
@@ -92,11 +103,23 @@ impl Error {
         }
     }
 
+    /// Create an error from multiple errors.
+    ///
+    /// If the vec contains exactly one error, returns that error directly.
+    /// If empty, panics (caller should check).
+    pub(crate) fn multiple(errors: Vec<Error>) -> Self {
+        match errors.len() {
+            0 => panic!("Error::multiple called with empty vec"),
+            1 => errors.into_iter().next().expect("checked len"),
+            _ => Self::Multiple { errors },
+        }
+    }
+
     pub(crate) fn span(&self) -> Option<Span> {
         match self {
             Self::Lex { span, .. } | Self::Parse { span, .. } => Some(*span),
             Self::Runtime { span, .. } => *span,
-            Self::Coercion { .. } => None,
+            Self::Coercion { .. } | Self::Multiple { .. } => None,
         }
     }
 
@@ -159,6 +182,13 @@ impl fmt::Display for ErrorDisplay<'_> {
             }
             Error::Coercion { from, to, msg } => {
                 write!(f, "cannot coerce {from} to {to}: {msg}")
+            }
+            Error::Multiple { errors } => {
+                let formatted: Vec<_> = errors
+                    .iter()
+                    .map(|e| e.display_with_source(self.src).to_string())
+                    .collect();
+                write!(f, "{}", formatted.join("\n"))
             }
         }
     }

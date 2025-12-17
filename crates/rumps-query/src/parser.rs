@@ -14,8 +14,8 @@ use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
 use crate::{
-    Ast, BinOp, Error, Expr, ExprId, Lexer, Literal, Span, Spanned, Stmt,
-    StmtId, Token, UnOp,
+    Ast, BinOp, Error, Expr, ExprId, Lexer, Literal, Result, Span, Spanned,
+    Stmt, StmtId, Token, UnOp,
 };
 
 /// Shared mutable AST arena for use during parsing.
@@ -42,15 +42,13 @@ impl Parser {
     /// Parse source code into an AST.
     ///
     /// Returns the AST arena and a list of top-level statement IDs.
-    pub(crate) fn parse(src: &str) -> Result<ParseResult, Vec<Error>> {
+    pub(crate) fn parse(src: &str) -> Result<ParseResult> {
         let tokens = Lexer::new(src).lex()?;
         Self::parse_tokens(&tokens)
     }
 
     /// Parse a token stream into an AST.
-    pub(crate) fn parse_tokens(
-        tokens: &[Spanned],
-    ) -> Result<ParseResult, Vec<Error>> {
+    pub(crate) fn parse_tokens(tokens: &[Spanned]) -> Result<ParseResult> {
         let ast = Rc::new(RefCell::new(Ast::new()));
         let parser = Self::program(Rc::clone(&ast));
 
@@ -71,7 +69,9 @@ impl Parser {
 
         parser
             .parse(stream)
-            .map_err(|errs| errs.into_iter().map(Into::into).collect())
+            .map_err(|errs| {
+                Error::multiple(errs.into_iter().map(Into::into).collect())
+            })
             .map(|stmts| {
                 // Extract the AST; try_unwrap if we're the only owner, otherwise take inner
                 let inner = Rc::try_unwrap(ast)

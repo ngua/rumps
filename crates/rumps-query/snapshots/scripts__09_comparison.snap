@@ -1,0 +1,36 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: comparison operators\n; Tests all comparison operators\n\n; Equality\nOUTPUT 5 == 5\n; Expected: true\n\nOUTPUT 5 == 6\n; Expected: false\n\nOUTPUT \"abc\" == \"abc\"\n; Expected: true\n\nOUTPUT \"abc\" == \"def\"\n; Expected: false\n\nOUTPUT TRUE == TRUE\n; Expected: true\n\nOUTPUT TRUE == FALSE\n; Expected: false\n\n; Inequality\nOUTPUT 5 != 6\n; Expected: true\n\nOUTPUT 5 != 5\n; Expected: false\n\n; Less than\nOUTPUT 5 < 10\n; Expected: true\n\nOUTPUT 10 < 5\n; Expected: false\n\nOUTPUT 5 < 5\n; Expected: false\n\n; Greater than\nOUTPUT 10 > 5\n; Expected: true\n\nOUTPUT 5 > 10\n; Expected: false\n\nOUTPUT 5 > 5\n; Expected: false\n\n; Less than or equal\nOUTPUT 5 <= 10\n; Expected: true\n\nOUTPUT 5 <= 5\n; Expected: true\n\nOUTPUT 10 <= 5\n; Expected: false\n\n; Greater than or equal\nOUTPUT 10 >= 5\n; Expected: true\n\nOUTPUT 5 >= 5\n; Expected: true\n\nOUTPUT 5 >= 10\n; Expected: false\n\n; Float comparisons\nOUTPUT 3.14 < 3.15\n; Expected: true\n\nOUTPUT 2.5 >= 2.5\n; Expected: true\n\n; Mixed int/float comparison\nOUTPUT 5 < 5.5\n; Expected: true\n\nOUTPUT 5.0 == 5\n; Expected: true (or false if strict typing)\n\n; String comparisons (lexicographic)\nOUTPUT \"abc\" < \"abd\"\n; Expected: true\n\nOUTPUT \"abc\" < \"ab\"\n; Expected: false\n\nOUTPUT \"apple\" < \"banana\"\n; Expected: true\n\n; Chained comparisons via variables\nLET a = 5\nLET b = 10\nLET c = 15\nOUTPUT a < b\n; Expected: true\n\nOUTPUT b < c\n; Expected: true\n\nOUTPUT a < c\n; Expected: true\n\nOUTPUT \"Comparison test complete\"\n"
+---
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+FALSE
+FALSE
+TRUE
+FALSE
+FALSE
+TRUE
+TRUE
+FALSE
+TRUE
+TRUE
+FALSE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+FALSE
+TRUE
+TRUE
+TRUE
+TRUE
+Comparison test complete

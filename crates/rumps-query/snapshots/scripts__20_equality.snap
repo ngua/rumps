@@ -1,0 +1,25 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: equality for complex types\n; Tests structural equality for arrays, objects, and tagged values\n\n; === Array Equality ===\n\nLET a1 = [1, 2, 3]\nLET a2 = [1, 2, 3]\nLET a3 = [1, 2, 4]\nLET a4 = [1, 2]\n\nOUTPUT a1 == a2\n; Expected: true (same elements)\n\nOUTPUT a1 == a3\n; Expected: false (different last element)\n\nOUTPUT a1 == a4\n; Expected: false (different length)\n\nOUTPUT a1 != a3\n; Expected: true\n\n; Empty arrays\nLET empty1 = []\nLET empty2 = []\nOUTPUT empty1 == empty2\n; Expected: true\n\n; Nested arrays\nLET nested1 = [[1, 2], [3, 4]]\nLET nested2 = [[1, 2], [3, 4]]\nLET nested3 = [[1, 2], [3, 5]]\n\nOUTPUT nested1 == nested2\n; Expected: true\n\nOUTPUT nested1 == nested3\n; Expected: false\n\n; === Object Equality ===\n\nLET o1 = { a: 1, b: 2 }\nLET o2 = { a: 1, b: 2 }\nLET o3 = { a: 1, b: 3 }\nLET o4 = { a: 1 }\n\nOUTPUT o1 == o2\n; Expected: true (same keys and values)\n\nOUTPUT o1 == o3\n; Expected: false (different value)\n\nOUTPUT o1 == o4\n; Expected: false (different keys)\n\nOUTPUT o1 != o3\n; Expected: true\n\n; Empty objects\nLET emptyObj1 = {}\nLET emptyObj2 = {}\nOUTPUT emptyObj1 == emptyObj2\n; Expected: true\n\n; Nested objects\nLET no1 = { outer: { inner: 42 } }\nLET no2 = { outer: { inner: 42 } }\nLET no3 = { outer: { inner: 99 } }\n\nOUTPUT no1 == no2\n; Expected: true\n\nOUTPUT no1 == no3\n; Expected: false\n\n; Objects with arrays\nLET oa1 = { items: [1, 2, 3] }\nLET oa2 = { items: [1, 2, 3] }\nLET oa3 = { items: [1, 2, 4] }\n\nOUTPUT oa1 == oa2\n; Expected: true\n\nOUTPUT oa1 == oa3\n; Expected: false\n\n; === Mixed Numeric Equality ===\n\nOUTPUT 5 == 5.0\n; Expected: true (int equals float)\n\nOUTPUT [1, 2, 3] == [1.0, 2.0, 3.0]\n; Expected: true (if cross-type comparison allowed in arrays)\n\nOUTPUT { x: 5 } == { x: 5.0 }\n; Expected: true (if cross-type comparison allowed in objects)\n\nOUTPUT \"Equality test complete\"\n"
+---
+TRUE
+FALSE
+FALSE
+TRUE
+TRUE
+TRUE
+FALSE
+TRUE
+FALSE
+FALSE
+TRUE
+TRUE
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+TRUE
+TRUE
+Equality test complete

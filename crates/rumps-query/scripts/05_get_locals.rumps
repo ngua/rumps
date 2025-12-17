@@ -1,0 +1,49 @@
+; Test: GET locals
+; Tests retrieving values from local B-tree variables
+
+; Set up test data
+SET x = 42
+SET data(1) = "first"
+SET data(2) = "second"
+SET patient(123, "name") = "John"
+SET patient(123, "age") = 30
+
+; GET simple local
+LET val = GET x
+OUTPUT val
+; Expected: 42 (or Option.Some(42))
+
+; GET with subscript
+LET d1 = GET data(1)
+OUTPUT d1
+; Expected: first
+
+LET d2 = GET data(2)
+OUTPUT d2
+; Expected: second
+
+; GET with multiple subscripts
+LET name = GET patient(123, "name")
+OUTPUT name
+; Expected: John
+
+LET age = GET patient(123, "age")
+OUTPUT age
+; Expected: 30
+
+; GET non-existent key (should return Option.None)
+LET missing = GET data(999)
+OUTPUT missing
+; Expected: Option.None (or similar)
+
+LET missing2 = GET nonexistent
+OUTPUT missing2
+; Expected: Option.None
+
+; GET after overwrite
+SET x = 100
+LET newval = GET x
+OUTPUT newval
+; Expected: 100
+
+OUTPUT "GET locals test complete"

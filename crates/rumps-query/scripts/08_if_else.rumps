@@ -1,0 +1,88 @@
+; Test: IF/ELSE branches
+; Tests conditional expressions and statements
+
+; Simple IF with true condition
+IF TRUE {
+  OUTPUT "TRUE branch taken"
+}
+
+; Simple IF with false condition (no output)
+IF FALSE {
+  OUTPUT "This should not print"
+}
+
+; IF/ELSE with true condition
+IF TRUE {
+  OUTPUT "IF branch"
+} ELSE {
+  OUTPUT "ELSE branch"
+}
+; Expected: IF branch
+
+; IF/ELSE with false condition
+IF FALSE {
+  OUTPUT "IF branch"
+} ELSE {
+  OUTPUT "ELSE branch"
+}
+; Expected: ELSE branch
+
+; IF with comparison
+LET x = 10
+IF x > 5 {
+  OUTPUT "x is greater than 5"
+} ELSE {
+  OUTPUT "x is not greater than 5"
+}
+; Expected: x is greater than 5
+
+; IF with equality
+LET name = "Alice"
+IF name == "Alice" {
+  OUTPUT "Hello, Alice!"
+} ELSE {
+  OUTPUT "You are not Alice"
+}
+; Expected: Hello, Alice!
+
+; IF as expression
+LET result = IF 10 > 5 { "big" } ELSE { "small" }
+OUTPUT result
+; Expected: big
+
+; Nested IF
+LET score = 85
+IF score >= 90 {
+  OUTPUT "A"
+} ELSE {
+  IF score >= 80 {
+    OUTPUT "B"
+  } ELSE {
+    IF score >= 70 {
+      OUTPUT "C"
+    } ELSE {
+      OUTPUT "F"
+    }
+  }
+}
+; Expected: B
+
+; IF with logical operators
+LET a = TRUE
+LET b = FALSE
+IF a AND NOT b {
+  OUTPUT "a is true and b is false"
+}
+; Expected: a is true and b is false
+
+; IF with complex condition
+LET age = 25
+LET hasLicense = TRUE
+IF age >= 18 AND hasLicense {
+  OUTPUT "Can drive"
+} ELSE {
+  OUTPUT "Cannot drive"
+}
+; Expected: Can drive
+
+OUTPUT "IF/ELSE test complete"

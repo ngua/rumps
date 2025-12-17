@@ -1,0 +1,31 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: type coercions\n; Tests implicit numeric coercion and string coercion for concat\n\n; === Numeric Coercion (Int + Float -> Float) ===\n\n; Addition with mixed types\nLET a = 10 + 3.5\nOUTPUT a\n; Expected: 13.5 (Float)\n\nLET b = 3.5 + 10\nOUTPUT b\n; Expected: 13.5 (Float)\n\n; Subtraction with mixed types\nLET c = 10 - 2.5\nOUTPUT c\n; Expected: 7.5 (Float)\n\nLET d = 10.5 - 3\nOUTPUT d\n; Expected: 7.5 (Float)\n\n; Multiplication with mixed types\nLET e = 5 * 2.5\nOUTPUT e\n; Expected: 12.5 (Float)\n\nLET f = 2.5 * 4\nOUTPUT f\n; Expected: 10.0 (Float)\n\n; Division with mixed types\nLET g = 10 / 4.0\nOUTPUT g\n; Expected: 2.5 (Float)\n\nLET h = 10.0 / 4\nOUTPUT h\n; Expected: 2.5 (Float)\n\n; Int division always yields float\nLET i = 10 / 5\nOUTPUT i\n; Expected: 2.0 (Float)\n\n; Floor division with mixed types\nLET j = 10 // 3.0\nOUTPUT j\n; Expected: 3 (Int)\n\nLET k = 10.0 // 3\nOUTPUT k\n; Expected: 3 (Int)\n\n; Modulo with mixed types\nLET l = 10 % 3.5\nOUTPUT l\n; Expected: 3.0 (Float; 10 % 3.5 = 3.0)\n\nLET m = 10.5 % 3\nOUTPUT m\n; Expected: 1.5 (Float; 10.5 % 3 = 1.5)\n\n; === String Coercion (for concat) ===\n\n; Int to string\nOUTPUT \"Number: \" ++ 42\n; Expected: Number: 42\n\n; Float to string\nOUTPUT \"Pi: \" ++ 3.14159\n; Expected: Pi: 3.14159\n\n; Bool to string\nOUTPUT \"Flag: \" ++ TRUE\n; Expected: Flag: TRUE\n\nOUTPUT \"Flag: \" ++ FALSE\n; Expected: Flag: FALSE\n\n; Concat two ints (both coerced to string)\nOUTPUT 1 ++ 2\n; Expected: 12 (string \"1\" ++ \"2\")\n\n; Concat int and float\nOUTPUT 10 ++ 0.5\n; Expected: 100.5 (string \"10\" ++ \"0.5\")\n\n; === Cross-type Numeric Comparison ===\n\nOUTPUT 5 == 5.0\n; Expected: true (int and float compare equal)\n\nOUTPUT 5.0 == 5\n; Expected: true\n\nOUTPUT 10 < 10.5\n; Expected: true\n\nOUTPUT 10.5 > 10\n; Expected: true\n\nOUTPUT 3 >= 3.0\n; Expected: true\n\nOUTPUT 3.0 <= 3\n; Expected: true\n\nOUTPUT \"Type coercion test complete\"\n"
+---
+13.5
+13.5
+7.5
+7.5
+12.5
+10
+2.5
+2.5
+2
+3
+3
+3
+1.5
+Number: 42
+Pi: 3.14159
+Flag: TRUE
+Flag: FALSE
+12
+100.5
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+Type coercion test complete

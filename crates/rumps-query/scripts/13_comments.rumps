@@ -1,0 +1,31 @@
+; Test: comments
+; This entire line is a comment
+
+; Comments should be ignored by the lexer
+LET x = 42 ; inline comment after code
+OUTPUT x
+; Expected: 42
+
+; Multiple comment lines
+; Line 1
+; Line 2
+; Line 3
+
+LET y = 10 ; first inline
+LET z = 20 ; second inline
+
+; Comment with special characters: !@#$%^&*()
+; Comment with "quotes" and 'apostrophes'
+; Comment with numbers 12345
+
+OUTPUT y + z ; should output 30
+; Expected: 30
+
+; Empty comment
+;
+;; Double semicolon
+;;; Triple semicolon
+
+; Comment at end of file
+OUTPUT "Comment test complete"
+; final comment

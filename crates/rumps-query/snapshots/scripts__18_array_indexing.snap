@@ -1,0 +1,27 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: array indexing (including negative)\n; Tests array index access with positive and negative indices\n\nLET arr = [10, 20, 30, 40, 50]\n\n; Positive indexing (0-based)\nOUTPUT arr[0]\n; Expected: 10\n\nOUTPUT arr[1]\n; Expected: 20\n\nOUTPUT arr[2]\n; Expected: 30\n\nOUTPUT arr[3]\n; Expected: 40\n\nOUTPUT arr[4]\n; Expected: 50\n\n; Negative indexing (from end)\nOUTPUT arr[-1]\n; Expected: 50 (last element)\n\nOUTPUT arr[-2]\n; Expected: 40 (second to last)\n\nOUTPUT arr[-3]\n; Expected: 30\n\nOUTPUT arr[-4]\n; Expected: 20\n\nOUTPUT arr[-5]\n; Expected: 10 (first element via negative)\n\n; Index with expression\nLET idx = 2\nOUTPUT arr[idx]\n; Expected: 30\n\nLET neg_idx = -1\nOUTPUT arr[neg_idx]\n; Expected: 50\n\n; Index with arithmetic\nOUTPUT arr[1 + 1]\n; Expected: 30 (arr[2])\n\nOUTPUT arr[5 - 3]\n; Expected: 30 (arr[2])\n\n; Nested array indexing\nLET matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]\nOUTPUT matrix[0][0]\n; Expected: 1\n\nOUTPUT matrix[1][1]\n; Expected: 5\n\nOUTPUT matrix[2][2]\n; Expected: 9\n\nOUTPUT matrix[-1][-1]\n; Expected: 9 (last row, last col)\n\nOUTPUT matrix[0][-1]\n; Expected: 3 (first row, last col)\n\n; Single element array\nLET single = [42]\nOUTPUT single[0]\n; Expected: 42\n\nOUTPUT single[-1]\n; Expected: 42\n\nOUTPUT \"Array indexing test complete\"\n"
+---
+10
+20
+30
+40
+50
+50
+40
+30
+20
+10
+30
+50
+30
+30
+1
+5
+9
+9
+3
+42
+42
+Array indexing test complete

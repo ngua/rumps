@@ -1,0 +1,61 @@
+; Test: string operations
+; Tests string literals and concatenation
+
+; Simple string
+LET s = "Hello"
+OUTPUT s
+; Expected: Hello
+
+; Empty string
+LET empty = ""
+OUTPUT empty
+; Expected: (empty line)
+
+; String with spaces
+LET spaced = "Hello World"
+OUTPUT spaced
+; Expected: Hello World
+
+; String concatenation
+LET a = "Hello"
+LET b = "World"
+LET c = a ++ " " ++ b
+OUTPUT c
+; Expected: Hello World
+
+; Concatenate literals
+OUTPUT "foo" ++ "bar"
+; Expected: foobar
+
+; Concatenate with numbers (coercion)
+OUTPUT "Value: " ++ 42
+; Expected: Value: 42
+
+OUTPUT "Pi is " ++ 3.14
+; Expected: Pi is 3.14
+
+; Concatenate with booleans
+OUTPUT "Flag is " ++ TRUE
+; Expected: Flag is true
+
+; Multiple concatenations
+LET first = "one"
+LET second = "two"
+LET third = "three"
+OUTPUT first ++ ", " ++ second ++ ", " ++ third
+; Expected: one, two, three
+
+; Escape sequences (if supported)
+LET escaped = "Line1\nLine2"
+OUTPUT escaped
+; Expected: Line1 (newline) Line2
+
+LET tabbed = "Col1\tCol2"
+OUTPUT tabbed
+; Expected: Col1 (tab) Col2
+
+LET quoted = "He said \"Hello\""
+OUTPUT quoted
+; Expected: He said "Hello"
+
+OUTPUT "String test complete"

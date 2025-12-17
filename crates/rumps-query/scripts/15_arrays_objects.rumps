@@ -1,0 +1,89 @@
+; Test: arrays and objects
+; Tests array and object literals, indexing, and field access
+
+; Array literal
+LET arr = [1, 2, 3, 4, 5]
+OUTPUT arr
+; Expected: [1, 2, 3, 4, 5]
+
+; Empty array
+LET empty = []
+OUTPUT empty
+; Expected: []
+
+; Array with mixed types
+LET mixed = [1, "two", TRUE, 3.14]
+OUTPUT mixed
+; Expected: [1, "two", true, 3.14]
+
+; Array indexing
+LET nums = [10, 20, 30]
+OUTPUT nums[0]
+; Expected: 10
+
+OUTPUT nums[1]
+; Expected: 20
+
+OUTPUT nums[2]
+; Expected: 30
+
+; Object literal
+LET obj = { name: "Alice", age: 30 }
+OUTPUT obj
+; Expected: { name: "Alice", age: 30 }
+
+; Empty object
+LET emptyObj = {}
+OUTPUT emptyObj
+; Expected: {}
+
+; Field access with dot notation
+LET person = { name: "Bob", age: 25, active: TRUE }
+OUTPUT person.name
+; Expected: Bob
+
+OUTPUT person.age
+; Expected: 25
+
+OUTPUT person.active
+; Expected: true
+
+; Nested objects
+LET nested = {
+  user: {
+    name: "Charlie",
+    address: {
+      city: "NYC",
+      zip: "10001"
+    }
+  }
+}
+OUTPUT nested.user.name
+; Expected: Charlie
+
+OUTPUT nested.user.address.city
+; Expected: NYC
+
+; Object with array value
+LET data = {
+  items: [1, 2, 3],
+  count: 3
+}
+OUTPUT data.items
+; Expected: [1, 2, 3]
+
+OUTPUT data.items[0]
+; Expected: 1
+
+; Array of objects
+LET users = [
+  { name: "Alice", score: 100 },
+  { name: "Bob", score: 85 }
+]
+OUTPUT users[0].name
+; Expected: Alice
+
+OUTPUT users[1].score
+; Expected: 85
+
+OUTPUT "Arrays/Objects test complete"

@@ -1,0 +1,98 @@
+; Test: equality for complex types
+; Tests structural equality for arrays, objects, and tagged values
+
+; === Array Equality ===
+
+LET a1 = [1, 2, 3]
+LET a2 = [1, 2, 3]
+LET a3 = [1, 2, 4]
+LET a4 = [1, 2]
+
+OUTPUT a1 == a2
+; Expected: true (same elements)
+
+OUTPUT a1 == a3
+; Expected: false (different last element)
+
+OUTPUT a1 == a4
+; Expected: false (different length)
+
+OUTPUT a1 != a3
+; Expected: true
+
+; Empty arrays
+LET empty1 = []
+LET empty2 = []
+OUTPUT empty1 == empty2
+; Expected: true
+
+; Nested arrays
+LET nested1 = [[1, 2], [3, 4]]
+LET nested2 = [[1, 2], [3, 4]]
+LET nested3 = [[1, 2], [3, 5]]
+
+OUTPUT nested1 == nested2
+; Expected: true
+
+OUTPUT nested1 == nested3
+; Expected: false
+
+; === Object Equality ===
+
+LET o1 = { a: 1, b: 2 }
+LET o2 = { a: 1, b: 2 }
+LET o3 = { a: 1, b: 3 }
+LET o4 = { a: 1 }
+
+OUTPUT o1 == o2
+; Expected: true (same keys and values)
+
+OUTPUT o1 == o3
+; Expected: false (different value)
+
+OUTPUT o1 == o4
+; Expected: false (different keys)
+
+OUTPUT o1 != o3
+; Expected: true
+
+; Empty objects
+LET emptyObj1 = {}
+LET emptyObj2 = {}
+OUTPUT emptyObj1 == emptyObj2
+; Expected: true
+
+; Nested objects
+LET no1 = { outer: { inner: 42 } }
+LET no2 = { outer: { inner: 42 } }
+LET no3 = { outer: { inner: 99 } }
+
+OUTPUT no1 == no2
+; Expected: true
+
+OUTPUT no1 == no3
+; Expected: false
+
+; Objects with arrays
+LET oa1 = { items: [1, 2, 3] }
+LET oa2 = { items: [1, 2, 3] }
+LET oa3 = { items: [1, 2, 4] }
+
+OUTPUT oa1 == oa2
+; Expected: true
+
+OUTPUT oa1 == oa3
+; Expected: false
+
+; === Mixed Numeric Equality ===
+
+OUTPUT 5 == 5.0
+; Expected: true (int equals float)
+
+OUTPUT [1, 2, 3] == [1.0, 2.0, 3.0]
+; Expected: true (if cross-type comparison allowed in arrays)
+
+OUTPUT { x: 5 } == { x: 5.0 }
+; Expected: true (if cross-type comparison allowed in objects)
+
+OUTPUT "Equality test complete"

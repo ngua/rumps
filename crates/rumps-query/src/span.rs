@@ -17,13 +17,13 @@ use std::ops::Range;
 ///
 /// Using `u32` limits source files to ~4GB, which is plenty.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Span<M = ()> {
+pub struct Span<M = ()> {
     /// Byte offset of the start (inclusive).
-    pub(crate) start: u32,
+    pub start: u32,
     /// Byte offset of the end (exclusive).
-    pub(crate) end: u32,
+    pub end: u32,
     /// Optional metadata attached to this span.
-    pub(crate) meta: M,
+    pub meta: M,
 }
 
 /// Constructors for `Span<()>` (no metadata).

@@ -1,0 +1,110 @@
+; Test: type coercions
+; Tests implicit numeric coercion and string coercion for concat
+
+; === Numeric Coercion (Int + Float -> Float) ===
+
+; Addition with mixed types
+LET a = 10 + 3.5
+OUTPUT a
+; Expected: 13.5 (Float)
+
+LET b = 3.5 + 10
+OUTPUT b
+; Expected: 13.5 (Float)
+
+; Subtraction with mixed types
+LET c = 10 - 2.5
+OUTPUT c
+; Expected: 7.5 (Float)
+
+LET d = 10.5 - 3
+OUTPUT d
+; Expected: 7.5 (Float)
+
+; Multiplication with mixed types
+LET e = 5 * 2.5
+OUTPUT e
+; Expected: 12.5 (Float)
+
+LET f = 2.5 * 4
+OUTPUT f
+; Expected: 10.0 (Float)
+
+; Division with mixed types
+LET g = 10 / 4.0
+OUTPUT g
+; Expected: 2.5 (Float)
+
+LET h = 10.0 / 4
+OUTPUT h
+; Expected: 2.5 (Float)
+
+; Int division always yields float
+LET i = 10 / 5
+OUTPUT i
+; Expected: 2.0 (Float)
+
+; Floor division with mixed types
+LET j = 10 // 3.0
+OUTPUT j
+; Expected: 3 (Int)
+
+LET k = 10.0 // 3
+OUTPUT k
+; Expected: 3 (Int)
+
+; Modulo with mixed types
+LET l = 10 % 3.5
+OUTPUT l
+; Expected: 3.0 (Float; 10 % 3.5 = 3.0)
+
+LET m = 10.5 % 3
+OUTPUT m
+; Expected: 1.5 (Float; 10.5 % 3 = 1.5)
+
+; === String Coercion (for concat) ===
+
+; Int to string
+OUTPUT "Number: " ++ 42
+; Expected: Number: 42
+
+; Float to string
+OUTPUT "Pi: " ++ 3.14159
+; Expected: Pi: 3.14159
+
+; Bool to string
+OUTPUT "Flag: " ++ TRUE
+; Expected: Flag: TRUE
+
+OUTPUT "Flag: " ++ FALSE
+; Expected: Flag: FALSE
+
+; Concat two ints (both coerced to string)
+OUTPUT 1 ++ 2
+; Expected: 12 (string "1" ++ "2")
+
+; Concat int and float
+OUTPUT 10 ++ 0.5
+; Expected: 100.5 (string "10" ++ "0.5")
+
+; === Cross-type Numeric Comparison ===
+
+OUTPUT 5 == 5.0
+; Expected: true (int and float compare equal)
+
+OUTPUT 5.0 == 5
+; Expected: true
+
+OUTPUT 10 < 10.5
+; Expected: true
+
+OUTPUT 10.5 > 10
+; Expected: true
+
+OUTPUT 3 >= 3.0
+; Expected: true
+
+OUTPUT 3.0 <= 3
+; Expected: true
+
+OUTPUT "Type coercion test complete"

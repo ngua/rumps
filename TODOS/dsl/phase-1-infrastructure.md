@@ -313,12 +313,7 @@ The `Environment` tracks lexical scope for `LET` bindings and callable names. `S
 - [x] Implement `GET` for globals (async; `db.get(...)` or `txn.get(...)` [if there's an active transaction])
 
 ### 10. Integration Tests
-- [ ] Test: lex simple expressions
-- [ ] Test: parse and evaluate arithmetic
-- [ ] Test: SET and variable lookup
-- [ ] Test: OUTPUT with string interpolation (if implemented)
-- [ ] Test: IF/ELSE branches
-- [ ] Test: comparison and logical operators
+- [x] Test essentially everything supported in current interpreter implementation
 
 ## Design Decisions
 

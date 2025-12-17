@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: lex simple expressions\n; Tests basic tokenization of literals, identifiers, and operators\n\n; Integer literals\nLET a = 42\nLET b = 0\nLET c = -123\n\n; Float literals\nLET d = 3.14\nLET e = 0.5\nLET f = -2.718\n\n; String literals\nLET s1 = \"hello\"\nLET s2 = \"world with spaces\"\nLET s3 = \"\"\n\n; Boolean keywords\nLET t = TRUE\nLET f = FALSE\n\n; Train-case identifier\nLET my-var = 100\n\n; All operators in one place\nLET x = 1 + 2 - 3 * 4 / 5 % 6\nLET cmp = 1 < 2\nLET eq = 3 == 3\nLET neq = 4 != 5\nLET ge = 10 >= 5\nLET le = 5 <= 10\nLET gt = 10 > 5\nLET lt = 5 < 10\n\n; Logical operators\nLET and1 = TRUE AND FALSE\nLET or1 = TRUE OR FALSE\nLET not1 = NOT TRUE\nLET and2 = TRUE && FALSE\nLET or2 = TRUE || FALSE\nLET not2 = !FALSE\n\n; Concat operator\nLET concat = \"hello\" ++ \" \" ++ \"world\"\n\nOUTPUT \"Lexer test complete\"\n"
+---
+Lexer test complete

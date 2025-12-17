@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: block expressions\n; Tests block syntax with multiple statements and tail expressions\n\n; Simple block with tail expression\nLET x = {\n  LET a = 10\n  LET b = 20\n  a + b\n}\nOUTPUT x\n; Expected: 30\n\n; Block with no tail (returns None)\nLET y = {\n  OUTPUT \"Side effect\"\n}\n; y should be Option.None or unit\n\n; Nested blocks\nLET z = {\n  LET outer = 5\n  {\n    LET inner = 10\n    outer + inner\n  }\n}\nOUTPUT z\n; Expected: 15\n\n; Block with SET (side effect, no return)\n{\n  SET counter = 0\n  SET counter = 1\n  SET counter = 2\n}\nLET c = GET counter\nOUTPUT c\n; Expected: 2\n\n; Block scope isolation\nLET val = 100\n{\n  LET val = 200\n  OUTPUT val\n  ; Expected: 200\n}\nOUTPUT val\n; Expected: 100 (outer val unchanged due to LET shadowing)\n\n; Block with conditional\nLET result = {\n  LET score = 75\n  IF score >= 70 {\n    \"pass\"\n  } ELSE {\n    \"fail\"\n  }\n}\nOUTPUT result\n; Expected: pass\n\n; Multiple statements before tail\nLET multi = {\n  LET a = 1\n  LET b = 2\n  LET c = 3\n  OUTPUT \"Computing...\"\n  a + b + c\n}\nOUTPUT multi\n; Expected: Computing... then 6\n\nOUTPUT \"Block test complete\"\n"
+---
+ERROR: parse error at 139..140: unexpected `newline` (expected: })

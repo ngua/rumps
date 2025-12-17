@@ -1,0 +1,68 @@
+; Test: expression statements
+; Tests using expressions as statements (evaluated for side effects)
+
+; IF as statement (not capturing result)
+LET x = 10
+
+IF x > 5 {
+  OUTPUT "x is big"
+}
+; Expected: x is big
+
+IF x < 5 {
+  OUTPUT "x is small"
+}
+; Expected: (no output; condition false)
+
+; Block as statement
+{
+  OUTPUT "Inside block"
+  LET temp = 42
+  OUTPUT temp
+}
+; Expected: Inside block, 42
+
+; Nested IF statements
+LET a = TRUE
+LET b = FALSE
+
+IF a {
+  IF NOT b {
+    OUTPUT "a is true and b is false"
+  }
+}
+; Expected: a is true and b is false
+
+; Multiple expression statements
+5 + 3
+; Evaluated but result discarded
+"hello"
+; Evaluated but result discarded
+TRUE AND FALSE
+; Evaluated but result discarded
+
+OUTPUT "Made it past expression statements"
+
+; IF/ELSE as statement
+LET mode = "debug"
+
+IF mode == "debug" {
+  OUTPUT "Debug mode enabled"
+} ELSE {
+  OUTPUT "Production mode"
+}
+; Expected: Debug mode enabled
+
+; Block with SET side effects
+{
+  SET data(1) = "first"
+  SET data(2) = "second"
+}
+
+OUTPUT GET data(1)
+; Expected: first
+
+OUTPUT GET data(2)
+; Expected: second
+
+OUTPUT "Expression statements test complete"

@@ -1,0 +1,23 @@
+; Test: Success Criteria from Phase 1 doc
+; This is the exact program from the success criteria section
+
+; LET for simple bindings (sync, no subscripts)
+LET x = 10
+LET y = 20
+LET sum = x + y
+OUTPUT sum
+
+; SET for B-tree locals (async, subscriptable)
+SET z = 100
+SET z(1, "ABC") = 30
+
+; Comparison and branching
+IF sum > 25 {
+  OUTPUT "Large sum"
+} ELSE {
+  OUTPUT "Small sum"
+}
+
+; Expected output:
+; 30
+; Large sum

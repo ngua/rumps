@@ -1,0 +1,65 @@
+; Test: Option values (Option.None and Option.Some)
+; Tests that missing values and blocks without tails return Option.None
+
+; === GET returns Option ===
+
+; GET on non-existent key
+SET data(1) = "exists"
+LET missing = GET data(999)
+OUTPUT missing
+; Expected: Option.None (or undefined variable error)
+
+; GET on existing key
+LET exists = GET data(1)
+OUTPUT exists
+; Expected: exists (the value)
+
+; === Block without tail returns Option.None ===
+
+LET result = {
+  OUTPUT "Side effect only"
+}
+OUTPUT result
+; Expected: Option.None
+
+LET result2 = {
+  LET x = 42
+  OUTPUT x
+  ; No tail expression
+}
+OUTPUT result2
+; Expected: Option.None
+
+; === Block with tail returns value ===
+
+LET result3 = {
+  LET x = 42
+  x
+}
+OUTPUT result3
+; Expected: 42
+
+; === IF without ELSE and false condition ===
+
+LET cond_result = IF FALSE {
+  "never reached"
+}
+OUTPUT cond_result
+; Expected: Option.None
+
+LET cond_result2 = IF TRUE {
+  "reached"
+}
+OUTPUT cond_result2
+; Expected: reached
+
+; === Nested Option scenarios ===
+
+LET outer = {
+  LET inner = IF FALSE { 42 }
+  inner
+}
+OUTPUT outer
+; Expected: Option.None (inner is None, returned as-is)
+
+OUTPUT "Option values test complete"

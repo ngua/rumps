@@ -1,0 +1,19 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: string operations\n; Tests string literals and concatenation\n\n; Simple string\nLET s = \"Hello\"\nOUTPUT s\n; Expected: Hello\n\n; Empty string\nLET empty = \"\"\nOUTPUT empty\n; Expected: (empty line)\n\n; String with spaces\nLET spaced = \"Hello World\"\nOUTPUT spaced\n; Expected: Hello World\n\n; String concatenation\nLET a = \"Hello\"\nLET b = \"World\"\nLET c = a ++ \" \" ++ b\nOUTPUT c\n; Expected: Hello World\n\n; Concatenate literals\nOUTPUT \"foo\" ++ \"bar\"\n; Expected: foobar\n\n; Concatenate with numbers (coercion)\nOUTPUT \"Value: \" ++ 42\n; Expected: Value: 42\n\nOUTPUT \"Pi is \" ++ 3.14\n; Expected: Pi is 3.14\n\n; Concatenate with booleans\nOUTPUT \"Flag is \" ++ TRUE\n; Expected: Flag is true\n\n; Multiple concatenations\nLET first = \"one\"\nLET second = \"two\"\nLET third = \"three\"\nOUTPUT first ++ \", \" ++ second ++ \", \" ++ third\n; Expected: one, two, three\n\n; Escape sequences (if supported)\nLET escaped = \"Line1\\nLine2\"\nOUTPUT escaped\n; Expected: Line1 (newline) Line2\n\nLET tabbed = \"Col1\\tCol2\"\nOUTPUT tabbed\n; Expected: Col1 (tab) Col2\n\nLET quoted = \"He said \\\"Hello\\\"\"\nOUTPUT quoted\n; Expected: He said \"Hello\"\n\nOUTPUT \"String test complete\"\n"
+---
+Hello
+
+Hello World
+Hello World
+foobar
+Value: 42
+Pi is 3.14
+Flag is TRUE
+one, two, three
+Line1
+Line2
+Col1	Col2
+He said "Hello"
+String test complete

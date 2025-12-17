@@ -82,10 +82,10 @@ use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
 use rumps_types::{Key, Name, Subscript};
 use smallvec::SmallVec;
-use tokio::io::{stdout, AsyncWriteExt};
 
 use crate::ast::{Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, UnOp};
 use crate::env::Environment;
+use crate::io::IoContext;
 use crate::value::{StringId, TypeRegistry, Value, ValueArena, ValueId};
 use crate::{Error, Result, Span};
 
@@ -94,7 +94,9 @@ use crate::{Error, Result, Span};
 /// Walks the AST and evaluates expressions/executes statements. Owns the
 /// runtime state (value arena, type registry, environment) and has access
 /// to the database for persistent storage operations.
-pub(crate) struct Interpreter<'a> {
+///
+/// Generic over `I: IoContext` to support both real I/O and test captures.
+pub(crate) struct Interpreter<'a, I: IoContext> {
     /// The parsed AST (borrowed; immutable during interpretation).
     ast: &'a Ast,
 
@@ -117,11 +119,14 @@ pub(crate) struct Interpreter<'a> {
 
     /// Type registry for runtime type information.
     registry: TypeRegistry,
+
+    /// I/O context for output operations.
+    io: I,
 }
 
-impl<'a> Interpreter<'a> {
-    /// Create a new interpreter for the given AST and database.
-    pub(crate) fn new(ast: &'a Ast, db: Database) -> Result<Self> {
+impl<'a, I: IoContext> Interpreter<'a, I> {
+    /// Create a new interpreter for the given AST, database, and I/O context.
+    pub(crate) fn new(ast: &'a Ast, db: Database, io: I) -> Result<Self> {
         let mut arena = ValueArena::new();
         let registry = TypeRegistry::new(&mut arena)?;
 
@@ -132,6 +137,7 @@ impl<'a> Interpreter<'a> {
             txn: None,
             arena,
             registry,
+            io,
         })
     }
 
@@ -141,6 +147,11 @@ impl<'a> Interpreter<'a> {
     pub(crate) async fn run(mut self, stmts: &[StmtId]) -> Result<Self> {
         self.stmts(stmts).await?;
         Ok(self)
+    }
+
+    /// Consume the interpreter and return the I/O context.
+    pub(crate) fn into_io(self) -> I {
+        self.io
     }
 
     /// Execute a sequence of statements.
@@ -744,22 +755,15 @@ impl<'a> Interpreter<'a> {
 
     /// Execute an `OUTPUT` statement.
     ///
-    /// Writes to stdout asynchronously. Future: will support stderr, files, etc.
+    /// Writes to stdout via the I/O context.
+    ///
+    /// TODO Add more targets; stderr, file, etc...
     fn output(&mut self, expr_id: ExprId) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
+            let span = self.ast.expr_span(expr_id).unwrap_or_default();
             let val = self.eval(expr_id).await?;
             let s = self.display(&val);
-
-            let mut out = stdout();
-            out.write_all(s.as_bytes()).await.map_err(|e| {
-                Error::runtime_no_span(format!("output error: {e}"))
-            })?;
-            out.write_all(b"\n").await.map_err(|e| {
-                Error::runtime_no_span(format!("output error: {e}"))
-            })?;
-            out.flush().await.map_err(|e| {
-                Error::runtime_no_span(format!("output error: {e}"))
-            })
+            self.io.stdout(&s, span).await
         })
     }
 
@@ -1218,7 +1222,7 @@ impl<'a> Interpreter<'a> {
 // These live on Interpreter rather than Value because they need context
 // (arena, registry) that the interpreter owns.
 
-impl Interpreter<'_> {
+impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a runtime value to a storage value.
     ///
     /// Scalars convert directly; complex values serialize to JSON.
@@ -1472,11 +1476,12 @@ fn div_f64(a: f64, b: f64, span: Span) -> Result<Value> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::io::TestIo;
 
     /// Create a test interpreter with an in-memory database.
-    fn test_interp(ast: &Ast) -> Interpreter<'_> {
+    fn test_interp(ast: &Ast) -> Interpreter<'_, TestIo> {
         let db = Database::in_memory().expect("in-memory db");
-        Interpreter::new(ast, db).expect("interpreter")
+        Interpreter::new(ast, db, TestIo::new()).expect("interpreter")
     }
 
     /// Build a simple AST with a single expression.

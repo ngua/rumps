@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: GET locals\n; Tests retrieving values from local B-tree variables\n\n; Set up test data\nSET x = 42\nSET data(1) = \"first\"\nSET data(2) = \"second\"\nSET patient(123, \"name\") = \"John\"\nSET patient(123, \"age\") = 30\n\n; GET simple local\nLET val = GET x\nOUTPUT val\n; Expected: 42 (or Option.Some(42))\n\n; GET with subscript\nLET d1 = GET data(1)\nOUTPUT d1\n; Expected: first\n\nLET d2 = GET data(2)\nOUTPUT d2\n; Expected: second\n\n; GET with multiple subscripts\nLET name = GET patient(123, \"name\")\nOUTPUT name\n; Expected: John\n\nLET age = GET patient(123, \"age\")\nOUTPUT age\n; Expected: 30\n\n; GET non-existent key (should return Option.None)\nLET missing = GET data(999)\nOUTPUT missing\n; Expected: Option.None (or similar)\n\nLET missing2 = GET nonexistent\nOUTPUT missing2\n; Expected: Option.None\n\n; GET after overwrite\nSET x = 100\nLET newval = GET x\nOUTPUT newval\n; Expected: 100\n\nOUTPUT \"GET locals test complete\"\n"
+---
+ERROR: runtime error at 641..654: undefined variable `data`

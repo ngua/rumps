@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: Success Criteria from Phase 1 doc\n; This is the exact program from the success criteria section\n\n; LET for simple bindings (sync, no subscripts)\nLET x = 10\nLET y = 20\nLET sum = x + y\nOUTPUT sum\n\n; SET for B-tree locals (async, subscriptable)\nSET z = 100\nSET z(1, \"ABC\") = 30\n\n; Comparison and branching\nIF sum > 25 {\n  OUTPUT \"Large sum\"\n} ELSE {\n  OUTPUT \"Small sum\"\n}\n\n; Expected output:\n; 30\n; Large sum\n"
+---
+30
+Large sum

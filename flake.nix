@@ -59,6 +59,7 @@
               pkg-config
               openssl
               evcxr
+              cargo-insta
             ];
           };
         };

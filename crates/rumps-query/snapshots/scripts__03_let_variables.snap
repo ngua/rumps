@@ -1,0 +1,14 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
+description: "; Test: LET and variable lookup\n; Tests lexical scoping with LET bindings\n\n; Simple binding\nLET x = 42\nOUTPUT x\n; Expected: 42\n\n; Binding using another variable\nLET y = x + 8\nOUTPUT y\n; Expected: 50\n\n; Multiple bindings\nLET a = 1\nLET b = 2\nLET c = 3\nLET sum = a + b + c\nOUTPUT sum\n; Expected: 6\n\n; Shadowing in same scope\nLET val = 10\nLET val = 20\nOUTPUT val\n; Expected: 20\n\n; String variables\nLET name = \"Alice\"\nOUTPUT name\n; Expected: Alice\n\n; Boolean variables\nLET flag = TRUE\nOUTPUT flag\n; Expected: true (or TRUE)\n\n; Using variables in expressions\nLET base = 100\nLET offset = 25\nLET result = base - offset * 2\nOUTPUT result\n; Expected: 50\n\n; Chained variable references\nLET v1 = 5\nLET v2 = v1 * 2\nLET v3 = v2 + v1\nOUTPUT v3\n; Expected: 15\n\nOUTPUT \"LET variable test complete\"\n"
+---
+42
+50
+6
+20
+Alice
+TRUE
+50
+15
+LET variable test complete
