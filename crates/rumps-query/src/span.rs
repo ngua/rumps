@@ -162,6 +162,12 @@ impl chumsky::span::Span for Span {
     }
 }
 
+impl<M> From<Span<M>> for miette::SourceSpan {
+    fn from(s: Span<M>) -> Self {
+        (s.start as usize, (s.end - s.start) as usize).into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

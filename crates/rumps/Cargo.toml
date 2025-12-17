@@ -3,11 +3,18 @@ name = "rumps"
 version = "0.0.1"
 edition = "2021"
 
+[[bin]]
+name = "rumps"
+required-features = ["cli"]
+
 [dependencies]
 rumps-types = { path = "../rumps-types" }
 rumps-storage = { path = "../rumps-storage", default-features = false }
+rumps-query = { path = "../rumps-query", optional = true }
 rumps-derive = { path = "../rumps-derive", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
 csv = { version = "1", optional = true }
+miette = { workspace = true, features = ["fancy"], optional = true }
 tokio = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 
@@ -18,6 +25,7 @@ tokio-test = "0.4"
 default = ["derive"]
 derive = ["rumps-derive", "rumps-storage/derive"]
 examples = ["dep:csv", "dep:tokio", "dep:futures"]
+cli = ["dep:clap", "dep:miette", "dep:rumps-query", "dep:tokio"]
 
 [[example]]
 name = "medical"

@@ -8,6 +8,7 @@ rumps-types = { path = "../rumps-types" }
 rumps-storage = { path = "../rumps-storage" }
 async-recursion = { workspace = true }
 chumsky = "0.9"
+miette = { workspace = true }
 nonempty = { workspace = true }
 futures = { workspace = true }
 indexmap = "2"

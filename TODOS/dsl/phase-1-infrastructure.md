@@ -526,10 +526,10 @@ IF sum > 25 {
 
 Create a `rumps` binary for running scripts against a database.
 
-- [ ] Create `crates/rumps/src/main.rs` (or add `[[bin]]` target)
-- [ ] Add `clap` dependency for argument parsing
-- [ ] Add `miette` dependency with `fancy` feature for pretty errors
-- [ ] Define CLI arguments:
+- [x] Create `crates/rumps/src/main.rs` (or add `[[bin]]` target)
+- [x] Add `clap` dependency for argument parsing
+- [x] Add `miette` dependency with `fancy` feature for pretty errors
+- [x] Define CLI arguments:
   ```rust
   #[derive(clap::Parser)]
   struct Args {
@@ -542,7 +542,7 @@ Create a `rumps` binary for running scripts against a database.
       script: PathBuf,
   }
   ```
-- [ ] Implement `async fn main()`:
+- [x] Implement `async fn main()`:
   - Install miette handler: `miette::set_hook(...)`
   - Parse args with `clap`
   - Create database: `Database::in_memory()` if no `--db`, else `Database::open(path)`
@@ -551,8 +551,8 @@ Create a `rumps` binary for running scripts against a database.
   - Create `Interpreter` with database and AST
   - Execute statements
   - On error, wrap with source via `miette::Report` and print
-- [ ] Use `tokio` runtime (`#[tokio::main]`)
-- [ ] Update `Error` in `rumps-query` to derive `miette::Diagnostic`:
+- [x] Use `tokio` runtime (`#[tokio::main]`)
+- [x] Update `Error` in `rumps-query` to derive `miette::Diagnostic`:
   ```rust
   #[derive(Debug, Error, Diagnostic)]
   pub enum Error {

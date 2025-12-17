@@ -5,6 +5,7 @@
 use std::fmt;
 
 use chumsky::error::Simple;
+use miette::{Diagnostic, LabeledSpan};
 use nonempty::NonEmpty;
 use thiserror::Error;
 
@@ -157,6 +158,53 @@ impl From<Simple<Token, Span>> for Error {
             .filter_map(|exp| exp.as_ref().map(|t| t.to_string()))
             .collect();
         Self::parse(span, msg, expected)
+    }
+}
+
+impl Diagnostic for Error {
+    fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        let code: &'static str = match self {
+            Self::Lex { .. } => "rumps::lex",
+            Self::Parse { .. } => "rumps::parse",
+            Self::Runtime { .. } => "rumps::runtime",
+            Self::Type { .. } => "rumps::type",
+            Self::Coercion { .. } => "rumps::coercion",
+            Self::Multiple { .. } => "rumps::multiple",
+        };
+        Some(Box::new(code))
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
+        let span_to_label = |s: Span, msg: &str| {
+            LabeledSpan::new_with_span(Some(msg.to_owned()), s)
+        };
+
+        match self {
+            Self::Lex { span, .. } => {
+                Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
+            }
+            Self::Parse { span, .. } => {
+                Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
+            }
+            Self::Type { span, .. } => {
+                Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
+            }
+            Self::Runtime { span: Some(s), .. } => {
+                Some(Box::new(std::iter::once(span_to_label(*s, "here"))))
+            }
+            Self::Runtime { span: None, .. } | Self::Coercion { .. } => None,
+            Self::Multiple { errors } => {
+                let labels: Vec<_> = errors
+                    .iter()
+                    .filter_map(|e| e.span())
+                    .map(|s| span_to_label(s, "error"))
+                    .collect();
+                (!labels.is_empty()).then(|| {
+                    Box::new(labels.into_iter())
+                        as Box<dyn Iterator<Item = LabeledSpan>>
+                })
+            }
+        }
     }
 }
 
