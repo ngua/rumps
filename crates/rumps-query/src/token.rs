@@ -21,6 +21,8 @@ pub(crate) enum Token {
     If,
     Else,
     Is,
+    As,
+    Read,
     And,
     Or,
     Not,
@@ -99,6 +101,8 @@ impl Token {
             "IF" => Some(Self::If),
             "ELSE" => Some(Self::Else),
             "IS" => Some(Self::Is),
+            "AS" => Some(Self::As),
+            "READ" => Some(Self::Read),
             "AND" => Some(Self::And),
             "OR" => Some(Self::Or),
             "NOT" => Some(Self::Not),
@@ -120,6 +124,8 @@ impl fmt::Display for Token {
             Self::If => write!(f, "IF"),
             Self::Else => write!(f, "ELSE"),
             Self::Is => write!(f, "IS"),
+            Self::As => write!(f, "AS"),
+            Self::Read => write!(f, "READ"),
             Self::And => write!(f, "AND"),
             Self::Or => write!(f, "OR"),
             Self::Not => write!(f, "NOT"),
@@ -195,6 +201,8 @@ mod tests {
         assert_eq!(Token::keyword("IF"), Some(Token::If));
         assert_eq!(Token::keyword("ELSE"), Some(Token::Else));
         assert_eq!(Token::keyword("IS"), Some(Token::Is));
+        assert_eq!(Token::keyword("AS"), Some(Token::As));
+        assert_eq!(Token::keyword("READ"), Some(Token::Read));
         assert_eq!(Token::keyword("AND"), Some(Token::And));
         assert_eq!(Token::keyword("OR"), Some(Token::Or));
         assert_eq!(Token::keyword("NOT"), Some(Token::Not));

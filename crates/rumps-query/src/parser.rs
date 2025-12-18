@@ -367,7 +367,9 @@ impl Parser {
             let add = Self::add_expr(Rc::clone(&ast), mul);
             let cmp = Self::cmp_expr(Rc::clone(&ast), add);
             let is = Self::is_expr(Rc::clone(&ast), cmp);
-            let and = Self::and_expr(Rc::clone(&ast), is);
+            let as_cast = Self::as_expr(Rc::clone(&ast), is);
+            let read = Self::read_expr(Rc::clone(&ast), as_cast);
+            let and = Self::and_expr(Rc::clone(&ast), read);
             let or = Self::or_expr(Rc::clone(&ast), and);
             Self::coalesce_expr(Rc::clone(&ast), or)
         })
@@ -547,6 +549,58 @@ impl Parser {
 
         // Try variant first, then simple type
         variant_pattern.or(simple_type)
+    }
+
+    /// Type cast: `expr as Type`
+    fn as_expr(
+        ast: AstCell,
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
+        let as_rhs = Self::opt_newlines()
+            .ignore_then(just(Token::As))
+            .then_ignore(Self::opt_newlines())
+            .ignore_then(Self::type_expr(Rc::clone(&ast)));
+
+        operand.clone().then(as_rhs.or_not()).map_with_span(
+            move |(expr, ty), span| match ty {
+                Some((ty_id, _)) => {
+                    let id = ast
+                        .borrow_mut()
+                        .add_expr(Expr::As(expr.0, ty_id), span);
+                    (id, span)
+                }
+                None => expr,
+            },
+        )
+    }
+
+    /// Fallible conversion: `expr read Type`
+    fn read_expr(
+        ast: AstCell,
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
+        let read_rhs = Self::opt_newlines()
+            .ignore_then(just(Token::Read))
+            .then_ignore(Self::opt_newlines())
+            .ignore_then(Self::type_expr(Rc::clone(&ast)));
+
+        operand.clone().then(read_rhs.or_not()).map_with_span(
+            move |(expr, ty), span| match ty {
+                Some((ty_id, _)) => {
+                    let id = ast
+                        .borrow_mut()
+                        .add_expr(Expr::Read(expr.0, ty_id), span);
+                    (id, span)
+                }
+                None => expr,
+            },
+        )
     }
 
     /// Additive: `+`, `-`, `++`

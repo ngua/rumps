@@ -195,22 +195,22 @@ IF pair is Pair(a, b) {
 Explicit type conversion with runtime validation.
 
 ```rumps
-LET n = "42" as Int
+LET f = 42 as Float
 LET s = 3.14 as String
 ; SET arr = json-data as Array[Int] (FUTURE; can't implement now, haven't done JSON yet)
 ```
 
-- [ ] Add `Token::As` keyword to lexer
-- [ ] Add `Expr::As(ExprId, TypeExprId)` to AST
-- [ ] Implement coercion rules in interpreter:
+- [x] Add `Token::As` keyword to lexer
+- [x] Add `Expr::As(ExprId, AstTypeExprId)` to AST
+- [x] Implement coercion rules in interpreter:
   - `Int -> Float`: widen
   - `Float -> Int`: truncate
   - `T -> String`: stringify (any type can convert to string)
   - `Bool -> Int`: `false` -> `0`, `true` -> `1`
   - **NOTE**: Extend this list as new infallible conversions are needed
   - For fallible conversions (`String -> Int`, `String -> Float`, `Int -> Bool`), use `read` (section 4.1)
-- [ ] Add unit tests
-- [ ] Add integration test script
+- [x] Add unit tests
+- [x] Add integration test script (`34_as_cast.rumps`)
 
 ### 4.1. Fallible Conversion Operator (`read`)
 
@@ -239,15 +239,15 @@ IF parsed is Result.Err(e) {
 }
 ```
 
-- [ ] Add `Token::Read` keyword to lexer
-- [ ] Add `Expr::Read(ExprId, TypeExprId)` to AST
-- [ ] Implement in interpreter (returns `Result[T, String]` value, NOT `Err(crate::Error)`):
+- [x] Add `Token::Read` keyword to lexer
+- [x] Add `Expr::Read(ExprId, AstTypeExprId)` to AST
+- [x] Implement in interpreter (returns `Result[T, String]` value, NOT `Err(crate::Error)`):
   - `String -> Int`: parse, `Result.Err` if invalid
   - `String -> Float`: parse, `Result.Err` if invalid
   - `Int -> Bool`: `0` -> `Result.Ok(false)`, `1` -> `Result.Ok(true)`, else `Result.Err`
   - **NOTE**: Extend this list as new fallible conversions are needed
-- [ ] Add unit tests
-- [ ] Add integration test script
+- [x] Add unit tests
+- [x] Add integration test script (`35_read_convert.rumps`)
 
 ### 5. Power Operator (`**`)
 

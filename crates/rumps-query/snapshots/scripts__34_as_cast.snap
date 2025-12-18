@@ -1,0 +1,22 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Type cast operator (AS)\n; Tests infallible type conversions with the `as` keyword\n\n; === Int -> Float (widen) ===\n\nLET i = 42\nLET f = i AS Float\nOUTPUT f\n; Expected: 42\n\n; === Float -> Int (truncate) ===\n\nLET pi = 3.7\nLET truncated = pi AS Int\nOUTPUT truncated\n; Expected: 3\n\nLET neg = -2.9\nLET neg-trunc = neg AS Int\nOUTPUT neg-trunc\n; Expected: -2\n\n; === Bool -> Int ===\n\nLET t = TRUE AS Int\nOUTPUT t\n; Expected: 1\n\nLET f = FALSE AS Int\nOUTPUT f\n; Expected: 0\n\n; === T -> String (stringify anything) ===\n\n; Int to String\nLET n = 123\nLET n-str = n AS String\nOUTPUT n-str\n; Expected: 123\n\n; Float to String\nLET pi-str = 3.14 AS String\nOUTPUT pi-str\n; Expected: 3.14\n\n; Bool to String\nLET b-str = TRUE AS String\nOUTPUT b-str\n; Expected: TRUE\n\nLET b-str2 = FALSE AS String\nOUTPUT b-str2\n; Expected: FALSE\n\n; Array to String\nLET arr = [1, 2, 3]\nLET arr-str = arr AS String\nOUTPUT arr-str\n; Expected: [ 1, 2, 3 ]\n\n; Object to String\nLET obj = { name: \"Alice\", age: 30 }\nLET obj-str = obj AS String\nOUTPUT obj-str\n; Expected: { name: Alice, age: 30 }\n\n; Option to String\nLET some = Option.Some(42)\nLET some-str = some AS String\nOUTPUT some-str\n; Expected: Option.Some(42)\n\nLET none = Option.None\nLET none-str = none AS String\nOUTPUT none-str\n; Expected: Option.None\n\n; === Identity casts ===\n\nLET x = 42 AS Int\nOUTPUT x\n; Expected: 42\n\nLET s = \"hello\" AS String\nOUTPUT s\n; Expected: hello\n\n; === Chained casts ===\n\n; Note: Chained casts like `3.7 AS Int AS Float` require parentheses\nLET chain = (3.7 AS Int) AS Float\nOUTPUT chain\n; Expected: 3\n\n; === Cast with expressions ===\n\nLET result = (10 + 5) AS Float\nOUTPUT result\n; Expected: 15\n\nOUTPUT \"Type cast test complete\"\n"
+---
+42
+3
+-2
+1
+0
+123
+3.14
+TRUE
+FALSE
+[ 1, 2, 3 ]
+{ name: Alice, age: 30 }
+Option.Some(42)
+Option.None
+42
+hello
+3
+15
+Type cast test complete

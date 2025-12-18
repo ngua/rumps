@@ -291,6 +291,23 @@ pub(crate) enum Expr {
     /// patterns, bindings are only visible in the `then` branch of an `IF`.
     Is(ExprId, TypePattern),
 
+    /// Type cast: `expr as Type`.
+    ///
+    /// Explicit infallible type conversion. Supported conversions:
+    /// - `Int -> Float` (widen)
+    /// - `Float -> Int` (truncate)
+    /// - `T -> String` (stringify)
+    /// - `Bool -> Int` (`false` -> `0`, `true` -> `1`)
+    As(ExprId, AstTypeExprId),
+
+    /// Fallible type conversion: `expr read Type`.
+    ///
+    /// Returns `Result[T, String]` instead of runtime error. Conversions:
+    /// - `String -> Int`: parse, `Result.Err` if invalid
+    /// - `String -> Float`: parse, `Result.Err` if invalid
+    /// - `Int -> Bool`: `0`/`1` only, else `Result.Err`
+    Read(ExprId, AstTypeExprId),
+
     /// A block expression: `{ stmt...; expr }`.
     ///
     /// Executes statements for side effects, then evaluates to the trailing

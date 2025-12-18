@@ -202,6 +202,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.variant(&ty, &var, &args, span).await
             }
             Expr::Is(expr, pattern) => self.is(expr, &pattern, span).await,
+            Expr::As(expr, ty) => self.r#as(expr, ty, span).await,
+            Expr::Read(expr, ty) => self.read(expr, ty, span).await,
             Expr::Block(stmts, tail) => self.block(&stmts, tail).await,
             Expr::If(cond, then_br, else_br) => {
                 self.r#if(cond, then_br, else_br).await
@@ -792,6 +794,195 @@ impl<I: IoContext> Interpreter<'_, I> {
         let val = self.eval(expr).await?;
         let matched = self.check_pattern(&val, pattern, span)?;
         Ok(Value::Bool(matched))
+    }
+
+    /// Evaluate a type cast: `expr as Type`.
+    ///
+    /// Infallible conversions:
+    /// - `Int -> Float` (widen)
+    /// - `Float -> Int` (truncate)
+    /// - `T -> String` (stringify)
+    /// - `Bool -> Int` (`false` -> `0`, `true` -> `1`)
+    #[async_recursion]
+    async fn r#as(
+        &mut self,
+        expr: ExprId,
+        ast_ty: AstTypeExprId,
+        span: Span,
+    ) -> Result<Value> {
+        let val = self.eval(expr).await?;
+        let target_ty = self.resolve_type_expr(ast_ty, span)?;
+        let target_base =
+            self.type_exprs.base_type(target_ty).ok_or_else(|| {
+                Error::runtime(span, "invalid target type in cast")
+            })?;
+
+        self.coerce(&val, target_base, span)
+    }
+
+    /// Perform type coercion for `as` casts.
+    fn coerce(
+        &mut self,
+        val: &Value,
+        target: TypeId,
+        span: Span,
+    ) -> Result<Value> {
+        match (val, target) {
+            // Identity casts
+            (Value::Int(_), TypeId::INT)
+            | (Value::Float(_), TypeId::FLOAT)
+            | (Value::Bool(_), TypeId::BOOL)
+            | (Value::Char(_), TypeId::CHAR)
+            | (Value::String(_), TypeId::STRING) => Ok(val.clone()),
+
+            // Int -> Float (widen)
+            (Value::Int(n), TypeId::FLOAT) => {
+                Ok(Value::Float(OrderedFloat(*n as f64)))
+            }
+
+            // Float -> Int (truncate)
+            (Value::Float(f), TypeId::INT) => Ok(Value::Int(f.0 as i64)),
+
+            // Bool -> Int
+            (Value::Bool(b), TypeId::INT) => {
+                Ok(Value::Int(if *b { 1 } else { 0 }))
+            }
+
+            // T -> String (stringify anything)
+            (_, TypeId::STRING) => {
+                let s = self.stringify(val);
+                let id = self.arena.intern(&s);
+                Ok(Value::String(id))
+            }
+
+            // Unsupported conversion
+            _ => {
+                let src_name = val.type_name(&self.registry, &self.type_exprs);
+                let tgt_name = self
+                    .registry
+                    .type_name(target, &self.arena)
+                    .unwrap_or("Unknown");
+                Err(Error::type_err(
+                    span,
+                    format!("cannot cast {src_name} as {tgt_name}"),
+                ))
+            }
+        }
+    }
+
+    /// Evaluate a fallible conversion: `expr read Type`.
+    ///
+    /// Returns `Result[T, String]` (as a RUMPS value), NOT `Err(crate::Error)`.
+    /// Conversions:
+    /// - `String -> Int`: parse, `Result.Err` if invalid
+    /// - `String -> Float`: parse, `Result.Err` if invalid
+    /// - `Int -> Bool`: `0`/`1` only, else `Result.Err`
+    #[async_recursion]
+    async fn read(
+        &mut self,
+        expr: ExprId,
+        ast_ty: AstTypeExprId,
+        span: Span,
+    ) -> Result<Value> {
+        let val = self.eval(expr).await?;
+        let target_ty = self.resolve_type_expr(ast_ty, span)?;
+        let target_base =
+            self.type_exprs.base_type(target_ty).ok_or_else(|| {
+                Error::runtime(span, "invalid target type in read")
+            })?;
+
+        self.try_convert(&val, target_base, span)
+    }
+
+    /// Perform fallible type conversion for `read`.
+    ///
+    /// Returns a RUMPS `Result[T, String]` value.
+    fn try_convert(
+        &mut self,
+        val: &Value,
+        target: TypeId,
+        span: Span,
+    ) -> Result<Value> {
+        match (val, target) {
+            // String -> Int
+            (Value::String(sid), TypeId::INT) => {
+                let s = self
+                    .arena
+                    .get_str(*sid)
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                match s.parse::<i64>() {
+                    Ok(n) => Ok(self.make_result_ok(Value::Int(n), span)),
+                    Err(_) => {
+                        let msg = format!("invalid integer: {s}");
+                        Ok(self.make_result_err(&msg, span))
+                    }
+                }
+            }
+
+            // String -> Float
+            (Value::String(sid), TypeId::FLOAT) => {
+                let s = self
+                    .arena
+                    .get_str(*sid)
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                match s.parse::<f64>() {
+                    Ok(n) => Ok(self
+                        .make_result_ok(Value::Float(OrderedFloat(n)), span)),
+                    Err(_) => {
+                        let msg = format!("invalid float: {s}");
+                        Ok(self.make_result_err(&msg, span))
+                    }
+                }
+            }
+
+            // Int -> Bool (strict: only 0 and 1)
+            (Value::Int(n), TypeId::BOOL) => match *n {
+                0 => Ok(self.make_result_ok(Value::Bool(false), span)),
+                1 => Ok(self.make_result_ok(Value::Bool(true), span)),
+                _ => {
+                    let msg = format!("expected 0 or 1 for Bool, got {n}");
+                    Ok(self.make_result_err(&msg, span))
+                }
+            },
+
+            // Unsupported conversion
+            _ => {
+                let src_name = val.type_name(&self.registry, &self.type_exprs);
+                let tgt_name = self
+                    .registry
+                    .type_name(target, &self.arena)
+                    .unwrap_or("Unknown");
+                Err(Error::type_err(
+                    span,
+                    format!("cannot read {src_name} as {tgt_name}"),
+                ))
+            }
+        }
+    }
+
+    /// Create a `Result.Ok(v)` value.
+    fn make_result_ok(&mut self, v: Value, span: Span) -> Value {
+        let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+        let val_ty = self.value_type_expr(&v);
+        let res_ty = self
+            .type_exprs
+            .app(TypeId::RESULT, smallvec![val_ty, unknown]);
+        let val_id = self.arena.add(v, span);
+        Value::ok(res_ty, val_id)
+    }
+
+    /// Create a `Result.Err(msg)` value.
+    fn make_result_err(&mut self, msg: &str, span: Span) -> Value {
+        let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+        let str_ty = self.type_exprs.named(TypeId::STRING);
+        let res_ty = self
+            .type_exprs
+            .app(TypeId::RESULT, smallvec![unknown, str_ty]);
+        let msg_id = self.arena.intern(msg);
+        let msg_val = self.arena.add(Value::String(msg_id), span);
+        Value::err(res_ty, msg_val)
     }
 
     /// Check if a value matches a type pattern (without binding).
@@ -2921,5 +3112,366 @@ mod tests {
         let mut interp = test_interp(&ast);
         let result = interp.eval(eq_expr).await.unwrap();
         assert_eq!(result, Value::Bool(false));
+    }
+
+    // ===== Type cast (as) tests =====
+
+    #[tokio::test]
+    async fn as_int_to_float() {
+        // 42 as Float -> 42.0
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let ty = ast.add_type_expr(
+            AstTypeExpr::Named("Float".into()),
+            Span::new(6, 11),
+        );
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 11));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cast).await.unwrap();
+        assert_eq!(result, Value::Float(OrderedFloat(42.0)));
+    }
+
+    #[tokio::test]
+    async fn as_float_to_int_truncates() {
+        // 3.7 as Int -> 3
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Float(3.7)), Span::new(0, 3));
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(7, 10));
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 10));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cast).await.unwrap();
+        assert_eq!(result, Value::Int(3));
+    }
+
+    #[tokio::test]
+    async fn as_bool_to_int() {
+        // true as Int -> 1
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4));
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(8, 11));
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 11));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cast).await.unwrap();
+        assert_eq!(result, Value::Int(1));
+
+        // false as Int -> 0
+        let mut ast2 = Ast::new();
+        let val2 =
+            ast2.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(0, 5));
+        let ty2 = ast2
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(9, 12));
+        let cast2 = ast2.add_expr(Expr::As(val2, ty2), Span::new(0, 12));
+
+        let mut interp2 = test_interp(&ast2);
+        let result2 = interp2.eval(cast2).await.unwrap();
+        assert_eq!(result2, Value::Int(0));
+    }
+
+    #[tokio::test]
+    async fn as_int_to_string() {
+        // 42 as String -> "42"
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let ty = ast.add_type_expr(
+            AstTypeExpr::Named("String".into()),
+            Span::new(6, 12),
+        );
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 12));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cast).await.unwrap();
+        match result {
+            Value::String(id) => {
+                assert_eq!(interp.arena.get_str(id), Some("42"));
+            }
+            _ => panic!("expected String"),
+        }
+    }
+
+    #[tokio::test]
+    async fn as_float_to_string() {
+        // 3.14 as String -> "3.14"
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Float(3.14)), Span::new(0, 4));
+        let ty = ast.add_type_expr(
+            AstTypeExpr::Named("String".into()),
+            Span::new(8, 14),
+        );
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 14));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cast).await.unwrap();
+        match result {
+            Value::String(id) => {
+                assert_eq!(interp.arena.get_str(id), Some("3.14"));
+            }
+            _ => panic!("expected String"),
+        }
+    }
+
+    #[tokio::test]
+    async fn as_bool_to_string() {
+        // true as String -> "TRUE"
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4));
+        let ty = ast.add_type_expr(
+            AstTypeExpr::Named("String".into()),
+            Span::new(8, 14),
+        );
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 14));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cast).await.unwrap();
+        match result {
+            Value::String(id) => {
+                assert_eq!(interp.arena.get_str(id), Some("TRUE"));
+            }
+            _ => panic!("expected String"),
+        }
+    }
+
+    #[tokio::test]
+    async fn as_identity_int() {
+        // 42 as Int -> 42 (identity)
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(6, 9));
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 9));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cast).await.unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[tokio::test]
+    async fn as_unsupported_conversion_error() {
+        // "hello" as Int -> error (use `read` for fallible conversions)
+        let mut ast = Ast::new();
+        let val = ast.add_expr(
+            Expr::Literal(Literal::String("hello".into())),
+            Span::new(0, 7),
+        );
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(11, 14));
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 14));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(cast).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("cannot cast"));
+    }
+
+    // ===== Fallible conversion (read) tests =====
+
+    #[tokio::test]
+    async fn read_string_to_int_ok() {
+        // "42" read Int -> Result.Ok(42)
+        let mut ast = Ast::new();
+        let val = ast.add_expr(
+            Expr::Literal(Literal::String("42".into())),
+            Span::new(0, 4),
+        );
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(10, 13));
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 13));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(read).await.unwrap();
+
+        // Should be Result.Ok(42)
+        assert!(result.is_ok(&interp.type_exprs));
+        match &result {
+            Value::Tagged(_, 0, payload) => {
+                let inner = interp.arena.get(payload[0]).unwrap();
+                assert_eq!(inner, &Value::Int(42));
+            }
+            _ => panic!("expected Result.Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_string_to_int_err() {
+        // "abc" read Int -> Result.Err("invalid integer: abc")
+        let mut ast = Ast::new();
+        let val = ast.add_expr(
+            Expr::Literal(Literal::String("abc".into())),
+            Span::new(0, 5),
+        );
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(11, 14));
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 14));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(read).await.unwrap();
+
+        // Should be Result.Err
+        assert!(result.is_err(&interp.type_exprs));
+        match &result {
+            Value::Tagged(_, 1, payload) => {
+                let inner = interp.arena.get(payload[0]).unwrap();
+                match inner {
+                    Value::String(sid) => {
+                        let msg = interp.arena.get_str(*sid).unwrap();
+                        assert!(msg.contains("invalid integer"));
+                    }
+                    _ => panic!("expected error message string"),
+                }
+            }
+            _ => panic!("expected Result.Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_string_to_float_ok() {
+        // "3.14" read Float -> Result.Ok(3.14)
+        let mut ast = Ast::new();
+        let val = ast.add_expr(
+            Expr::Literal(Literal::String("3.14".into())),
+            Span::new(0, 6),
+        );
+        let ty = ast.add_type_expr(
+            AstTypeExpr::Named("Float".into()),
+            Span::new(12, 17),
+        );
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 17));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(read).await.unwrap();
+
+        // Should be Result.Ok(3.14)
+        assert!(result.is_ok(&interp.type_exprs));
+        match &result {
+            Value::Tagged(_, 0, payload) => {
+                let inner = interp.arena.get(payload[0]).unwrap();
+                assert_eq!(inner, &Value::Float(OrderedFloat(3.14)));
+            }
+            _ => panic!("expected Result.Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_string_to_float_err() {
+        // "xyz" read Float -> Result.Err(...)
+        let mut ast = Ast::new();
+        let val = ast.add_expr(
+            Expr::Literal(Literal::String("xyz".into())),
+            Span::new(0, 5),
+        );
+        let ty = ast.add_type_expr(
+            AstTypeExpr::Named("Float".into()),
+            Span::new(11, 16),
+        );
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 16));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(read).await.unwrap();
+
+        // Should be Result.Err
+        assert!(result.is_err(&interp.type_exprs));
+    }
+
+    #[tokio::test]
+    async fn read_int_to_bool_zero() {
+        // 0 read Bool -> Result.Ok(false)
+        let mut ast = Ast::new();
+        let val = ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(0, 1));
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Bool".into()), Span::new(7, 11));
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 11));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(read).await.unwrap();
+
+        assert!(result.is_ok(&interp.type_exprs));
+        match &result {
+            Value::Tagged(_, 0, payload) => {
+                let inner = interp.arena.get(payload[0]).unwrap();
+                assert_eq!(inner, &Value::Bool(false));
+            }
+            _ => panic!("expected Result.Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_int_to_bool_one() {
+        // 1 read Bool -> Result.Ok(true)
+        let mut ast = Ast::new();
+        let val = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(0, 1));
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Bool".into()), Span::new(7, 11));
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 11));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(read).await.unwrap();
+
+        assert!(result.is_ok(&interp.type_exprs));
+        match &result {
+            Value::Tagged(_, 0, payload) => {
+                let inner = interp.arena.get(payload[0]).unwrap();
+                assert_eq!(inner, &Value::Bool(true));
+            }
+            _ => panic!("expected Result.Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_int_to_bool_invalid() {
+        // 42 read Bool -> Result.Err(...)
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Bool".into()), Span::new(8, 12));
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 12));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(read).await.unwrap();
+
+        // Should be Result.Err
+        assert!(result.is_err(&interp.type_exprs));
+        match &result {
+            Value::Tagged(_, 1, payload) => {
+                let inner = interp.arena.get(payload[0]).unwrap();
+                match inner {
+                    Value::String(sid) => {
+                        let msg = interp.arena.get_str(*sid).unwrap();
+                        assert!(msg.contains("expected 0 or 1"));
+                    }
+                    _ => panic!("expected error message string"),
+                }
+            }
+            _ => panic!("expected Result.Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_unsupported_conversion_error() {
+        // 42 read Int -> runtime error (not a fallible conversion)
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(8, 11));
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 11));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(read).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("cannot read"));
     }
 }
