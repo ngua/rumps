@@ -127,32 +127,28 @@ impl Parser {
         ast: AstCell,
     ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         recursive(|stmt| {
-            let let_stmt = Self::let_stmt(Rc::clone(&ast));
-            let set_stmt = Self::set_stmt(Rc::clone(&ast));
-            let kill_stmt = Self::kill_stmt(Rc::clone(&ast));
-            let output_stmt = Self::output_stmt(Rc::clone(&ast));
-            let if_stmt = Self::if_stmt(Rc::clone(&ast), stmt);
-            let expr_stmt = Self::expr_stmt(Rc::clone(&ast));
+            let let_stmt = Self::let_stmt(Rc::clone(&ast), stmt.clone());
+            let set_stmt = Self::set_stmt(Rc::clone(&ast), stmt.clone());
+            let kill_stmt = Self::kill_stmt(Rc::clone(&ast), stmt.clone());
+            let output_stmt = Self::output_stmt(Rc::clone(&ast), stmt.clone());
+            // IF is now parsed as an expression in primary_expr; expr_stmt handles it
+            let expr_stmt = Self::expr_stmt(Rc::clone(&ast), stmt);
 
-            choice((
-                let_stmt,
-                set_stmt,
-                kill_stmt,
-                output_stmt,
-                if_stmt,
-                expr_stmt,
-            ))
+            choice((let_stmt, set_stmt, kill_stmt, output_stmt, expr_stmt))
         })
     }
 
     /// `LET name = expr`
     fn let_stmt(
         ast: AstCell,
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+            + Clone
+            + 'static,
     ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         just(Token::Let)
             .ignore_then(Self::ident())
             .then_ignore(just(Token::Assign))
-            .then(Self::expr(Rc::clone(&ast)))
+            .then(Self::expr(Rc::clone(&ast), stmt))
             .map_with_span(move |(name, (val_id, _)), span| {
                 let id =
                     ast.borrow_mut().add_stmt(Stmt::Let(name, val_id), span);
@@ -164,17 +160,25 @@ impl Parser {
     /// `SET ^global = expr` or `SET ^global(subs...) = expr`
     fn set_stmt(
         ast: AstCell,
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+            + Clone
+            + 'static,
     ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         let ast2 = Rc::clone(&ast);
         let ast3 = Rc::clone(&ast);
         let ast4 = Rc::clone(&ast);
         let ast5 = Rc::clone(&ast);
 
+        let expr1 = Self::expr(Rc::clone(&ast), stmt.clone());
+        let expr2 = Self::expr(Rc::clone(&ast2), stmt.clone());
+        let expr3 = Self::expr(Rc::clone(&ast4), stmt.clone());
+        let expr4 = Self::expr(Rc::clone(&ast5), stmt);
+
         let local_set = just(Token::Set)
             .ignore_then(Self::ident())
-            .then(Self::subscripts(Self::expr(Rc::clone(&ast))).or_not())
+            .then(Self::subscripts(expr1).or_not())
             .then_ignore(just(Token::Assign))
-            .then(Self::expr(Rc::clone(&ast2)))
+            .then(expr2)
             .map_with_span(move |((name, subs), (val_id, _)), span| {
                 let subs = subs.unwrap_or_default();
                 let mut ast_ref = ast3.borrow_mut();
@@ -185,9 +189,9 @@ impl Parser {
 
         let global_set = just(Token::Set)
             .ignore_then(Self::global_name())
-            .then(Self::subscripts(Self::expr(Rc::clone(&ast4))).or_not())
+            .then(Self::subscripts(expr3).or_not())
             .then_ignore(just(Token::Assign))
-            .then(Self::expr(Rc::clone(&ast5)))
+            .then(expr4)
             .map_with_span(move |((name, subs), (val_id, _)), span| {
                 let subs = subs.unwrap_or_default();
                 let mut ast_ref = ast5.borrow_mut();
@@ -203,14 +207,20 @@ impl Parser {
     /// `KILL ^global` or `KILL ^global(subs...)`
     fn kill_stmt(
         ast: AstCell,
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+            + Clone
+            + 'static,
     ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         let ast2 = Rc::clone(&ast);
         let ast3 = Rc::clone(&ast);
         let ast4 = Rc::clone(&ast);
 
+        let expr1 = Self::expr(Rc::clone(&ast), stmt.clone());
+        let expr2 = Self::expr(Rc::clone(&ast3), stmt);
+
         let local_kill = just(Token::Kill)
             .ignore_then(Self::ident())
-            .then(Self::subscripts(Self::expr(Rc::clone(&ast))).or_not())
+            .then(Self::subscripts(expr1).or_not())
             .map_with_span(move |(name, subs), span| {
                 let subs = subs.unwrap_or_default();
                 let mut ast_ref = ast2.borrow_mut();
@@ -221,7 +231,7 @@ impl Parser {
 
         let global_kill = just(Token::Kill)
             .ignore_then(Self::global_name())
-            .then(Self::subscripts(Self::expr(Rc::clone(&ast3))).or_not())
+            .then(Self::subscripts(expr2).or_not())
             .map_with_span(move |(name, subs), span| {
                 let subs = subs.unwrap_or_default();
                 let mut ast_ref = ast4.borrow_mut();
@@ -236,59 +246,16 @@ impl Parser {
     /// `OUTPUT expr`
     fn output_stmt(
         ast: AstCell,
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+            + Clone
+            + 'static,
     ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
         just(Token::Output)
-            .ignore_then(Self::expr(Rc::clone(&ast)))
+            .ignore_then(Self::expr(Rc::clone(&ast), stmt))
             .map_with_span(move |(expr_id, _), span| {
                 let id = ast.borrow_mut().add_stmt(Stmt::Output(expr_id), span);
                 (id, span)
             })
-    }
-
-    /// `IF cond { block } [ELSE { block }]`
-    ///
-    /// Parses an IF expression and wraps it in `Stmt::Expr`. The branches are
-    /// block expressions (`Expr::Block`).
-    fn if_stmt(
-        ast: AstCell,
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> + Clone,
-    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
-        let block = Self::block(stmt);
-
-        just(Token::If)
-            .ignore_then(Self::expr(Rc::clone(&ast)))
-            .then(block.clone())
-            .then(
-                just(Token::Else)
-                    .ignore_then(Self::opt_newlines())
-                    .ignore_then(block)
-                    .or_not(),
-            )
-            .map_with_span(
-                move |((cond, (then_stmts, then_span)), else_block), span| {
-                    let mut ast_mut = ast.borrow_mut();
-
-                    // Convert then-block to Expr::Block
-                    let then_expr = Self::stmts_to_block(
-                        &mut ast_mut,
-                        then_stmts,
-                        then_span,
-                    );
-
-                    // Convert else-block to Expr::Block if present
-                    let else_expr = else_block.map(|(stmts, blk_span)| {
-                        Self::stmts_to_block(&mut ast_mut, stmts, blk_span)
-                    });
-
-                    // Create IF expression
-                    let if_expr = ast_mut
-                        .add_expr(Expr::If(cond.0, then_expr, else_expr), span);
-
-                    // Wrap in Stmt::Expr
-                    let id = ast_mut.add_stmt(Stmt::Expr(if_expr), span);
-                    (id, span)
-                },
-            )
     }
 
     /// Convert a list of statements to a block expression.
@@ -336,50 +303,57 @@ impl Parser {
     /// Expression used as statement.
     fn expr_stmt(
         ast: AstCell,
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+            + Clone
+            + 'static,
     ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
-        Self::expr(Rc::clone(&ast)).map_with_span(move |(expr_id, _), span| {
-            let id = ast.borrow_mut().add_stmt(Stmt::Expr(expr_id), span);
-            (id, span)
-        })
+        Self::expr(Rc::clone(&ast), stmt).map_with_span(
+            move |(expr_id, _), span| {
+                let id = ast.borrow_mut().add_stmt(Stmt::Expr(expr_id), span);
+                (id, span)
+            },
+        )
     }
 
     /// Top-level expression parser with full precedence.
     ///
-    /// Uses `recursive` at the top level to handle cyclic references in the
-    /// grammar (e.g., parenthesized expressions, array elements, etc.).
+    /// Builds the entire precedence chain inside the `recursive` closure,
+    /// so `stmt` is only passed to `primary_expr` where it's actually needed.
     fn expr(
         ast: AstCell,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
-        recursive(|expr| Self::expr_inner(ast, expr))
-    }
-
-    /// Inner expression parser that takes the recursive reference.
-    fn expr_inner(
-        ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
     {
-        Self::coalesce_expr(ast, expr)
+        recursive(move |expr| {
+            // Build precedence chain from highest to lowest
+            let primary =
+                Self::primary_expr(Rc::clone(&ast), expr.clone(), stmt.clone());
+            let postfix =
+                Self::postfix_expr(Rc::clone(&ast), expr.clone(), primary);
+            let unary = Self::unary_expr(Rc::clone(&ast), expr, postfix);
+            let mul = Self::mul_expr(Rc::clone(&ast), unary);
+            let add = Self::add_expr(Rc::clone(&ast), mul);
+            let cmp = Self::cmp_expr(Rc::clone(&ast), add);
+            let and = Self::and_expr(Rc::clone(&ast), cmp);
+            let or = Self::or_expr(Rc::clone(&ast), and);
+            Self::coalesce_expr(Rc::clone(&ast), or)
+        })
     }
 
-    /// Coalesce: `expr ?? expr`
-    ///
-    /// Lowest precedence binary operator. Right-hand side is only evaluated
-    /// if left is `Option.None` or `Result.Err`.
+    /// Coalesce: `expr ?? expr` (lowest precedence)
     fn coalesce_expr(
         ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
     {
         let op = just(Token::QuestionQuestion).to(BinOp::Coalesce);
-
-        Self::or_expr(Rc::clone(&ast), expr.clone())
-            .then(op.then(Self::or_expr(Rc::clone(&ast), expr)).repeated())
+        operand
+            .clone()
+            .then(op.then(operand).repeated())
             .map_with_span(move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
             })
@@ -388,15 +362,15 @@ impl Parser {
     /// Logical OR: `expr || expr` or `expr OR expr`
     fn or_expr(
         ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
     {
         let op = choice((just(Token::PipePipe), just(Token::Or))).to(BinOp::Or);
-
-        Self::and_expr(Rc::clone(&ast), expr.clone())
-            .then(op.then(Self::and_expr(Rc::clone(&ast), expr)).repeated())
+        operand
+            .clone()
+            .then(op.then(operand).repeated())
             .map_with_span(move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
             })
@@ -405,15 +379,15 @@ impl Parser {
     /// Logical AND: `expr && expr` or `expr AND expr`
     fn and_expr(
         ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
     {
         let op = choice((just(Token::AmpAmp), just(Token::And))).to(BinOp::And);
-
-        Self::cmp_expr(Rc::clone(&ast), expr.clone())
-            .then(op.then(Self::cmp_expr(Rc::clone(&ast), expr)).repeated())
+        operand
+            .clone()
+            .then(op.then(operand).repeated())
             .map_with_span(move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
             })
@@ -422,7 +396,7 @@ impl Parser {
     /// Comparison: `<`, `>`, `<=`, `>=`, `==`, `!=`
     fn cmp_expr(
         ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
@@ -435,9 +409,9 @@ impl Parser {
             just(Token::Lt).to(BinOp::Lt),
             just(Token::Gt).to(BinOp::Gt),
         ));
-
-        Self::add_expr(Rc::clone(&ast), expr.clone())
-            .then(op.then(Self::add_expr(Rc::clone(&ast), expr)).repeated())
+        operand
+            .clone()
+            .then(op.then(operand).repeated())
             .map_with_span(move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
             })
@@ -446,7 +420,7 @@ impl Parser {
     /// Additive: `+`, `-`, `++`
     fn add_expr(
         ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
@@ -456,9 +430,9 @@ impl Parser {
             just(Token::Minus).to(BinOp::Sub),
             just(Token::Concat).to(BinOp::Concat),
         ));
-
-        Self::mul_expr(Rc::clone(&ast), expr.clone())
-            .then(op.then(Self::mul_expr(Rc::clone(&ast), expr)).repeated())
+        operand
+            .clone()
+            .then(op.then(operand).repeated())
             .map_with_span(move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
             })
@@ -467,7 +441,7 @@ impl Parser {
     /// Multiplicative: `*`, `/`, `//`, `%`
     fn mul_expr(
         ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
@@ -478,9 +452,9 @@ impl Parser {
             just(Token::Div).to(BinOp::Div),
             just(Token::Modulo).to(BinOp::Mod),
         ));
-
-        Self::unary_expr(Rc::clone(&ast), expr.clone())
-            .then(op.then(Self::unary_expr(Rc::clone(&ast), expr)).repeated())
+        operand
+            .clone()
+            .then(op.then(operand).repeated())
             .map_with_span(move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
             })
@@ -502,10 +476,13 @@ impl Parser {
         })
     }
 
-    /// Unary: `NOT`, `!`, `-`
+    /// Unary: `NOT`, `!`, `-`, `GET`
     fn unary_expr(
         ast: AstCell,
         expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+            + Clone
+            + 'static,
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
@@ -517,12 +494,11 @@ impl Parser {
         ));
 
         let ast2 = Rc::clone(&ast);
-        let ast3 = Rc::clone(&ast);
 
         // Unary is right-associative, so we use recursion
         recursive(move |unary| {
             let ast_inner = Rc::clone(&ast);
-            let ast_get = Rc::clone(&ast3);
+            let ast_get = Rc::clone(&ast2);
             let with_op = op.clone().then(unary.clone()).map_with_span(
                 move |(op, (inner, _)): (UnOp, SpannedExpr), span| {
                     let id = ast_inner
@@ -541,8 +517,7 @@ impl Parser {
                     (id, span)
                 });
 
-            choice((with_op, get_expr))
-                .or(Self::postfix_expr(Rc::clone(&ast2), expr.clone()))
+            choice((with_op, get_expr)).or(operand.clone())
         })
     }
 
@@ -585,6 +560,9 @@ impl Parser {
         expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
             + Clone
             + 'static,
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+            + Clone
+            + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
     {
         let ast2 = Rc::clone(&ast);
@@ -603,8 +581,7 @@ impl Parser {
         // Call: `(args...)`
         let call = just(Token::LParen)
             .ignore_then(
-                expr.clone()
-                    .map(|(id, _)| id)
+                expr.map(|(id, _)| id)
                     .separated_by(just(Token::Comma))
                     .allow_trailing(),
             )
@@ -615,7 +592,7 @@ impl Parser {
 
         let postfix_op = choice((field, index, call));
 
-        Self::primary_expr(Rc::clone(&ast), expr)
+        operand
             .then(postfix_op.repeated())
             .map_with_span(|x, span| (x, span))
             .try_map(move |((base, ops), span), _| {
@@ -665,10 +642,13 @@ impl Parser {
         })
     }
 
-    /// Primary: literals, identifiers, globals, parenthesized, arrays, objects.
+    /// Primary: literals, identifiers, globals, parenthesized, arrays, objects, if.
     fn primary_expr(
         ast: AstCell,
         expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+            + Clone
+            + 'static,
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
@@ -677,6 +657,7 @@ impl Parser {
         let ast3 = Rc::clone(&ast);
         let ast5 = Rc::clone(&ast);
         let ast6 = Rc::clone(&ast);
+        let ast7 = Rc::clone(&ast);
 
         // Literals
         let int_lit = select! { Token::Int(n) => Literal::Int(n) };
@@ -730,9 +711,10 @@ impl Parser {
             });
 
         // Object literal: `{ key: value, ... }`
+        // Must be tried BEFORE block_expr since both start with `{`
         let obj_field = Self::ident()
             .then_ignore(just(Token::Colon))
-            .then(expr.map(|(id, _)| id));
+            .then(expr.clone().map(|(id, _)| id));
 
         let object = just(Token::LBrace)
             .ignore_then(
@@ -744,8 +726,57 @@ impl Parser {
                 (id, span)
             });
 
-        // Order matters: try global before var (both can start with ident pattern)
-        choice((literal, global, var, paren, array, object))
+        // Block expression: `{ stmts... [trailing_expr] }`
+        // Used standalone and by IF, TRANSACTION, etc.
+        let ast8 = Rc::clone(&ast7);
+        let block_parser = Self::block(stmt);
+        let block_expr = block_parser.clone().map_with_span(
+            move |(stmts, blk_span), span| {
+                let id = Self::stmts_to_block(
+                    &mut ast7.borrow_mut(),
+                    stmts,
+                    blk_span,
+                );
+                (id, span)
+            },
+        );
+
+        // IF expression: `IF cond block [ELSE block]`
+        let if_expr = just(Token::If)
+            .ignore_then(expr.map(|(id, _)| id))
+            .then(block_parser.clone())
+            .then(
+                just(Token::Else)
+                    .ignore_then(Self::opt_newlines())
+                    .ignore_then(block_parser)
+                    .or_not(),
+            )
+            .map_with_span(
+                move |((cond, (then_stmts, then_span)), else_block), span| {
+                    let mut ast_mut = ast8.borrow_mut();
+
+                    let then_expr = Self::stmts_to_block(
+                        &mut ast_mut,
+                        then_stmts,
+                        then_span,
+                    );
+
+                    let else_expr = else_block.map(|(stmts, blk_span)| {
+                        Self::stmts_to_block(&mut ast_mut, stmts, blk_span)
+                    });
+
+                    let id = ast_mut
+                        .add_expr(Expr::If(cond, then_expr, else_expr), span);
+                    (id, span)
+                },
+            );
+
+        // Order matters:
+        // - object before block_expr (both start with `{`, object requires `ident:`)
+        // - global before var (both can start with ident pattern)
+        choice((
+            literal, global, var, paren, array, object, block_expr, if_expr,
+        ))
     }
 
     /// Parse an identifier token.
@@ -1299,5 +1330,74 @@ IF sum > 25 {
 "#;
         let result = parse_ok(src);
         assert!(result.stmts.len() >= 7);
+    }
+
+    #[test]
+    fn parse_if_expr_in_let() {
+        // IF expression used in LET binding (the original issue)
+        let result = parse_ok("LET x = IF FALSE { 42 }");
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        let Stmt::Let(name, val_id) = stmt else {
+            panic!("expected Let");
+        };
+        assert_eq!(name, "x");
+        let Expr::If(_, then_blk, else_blk) =
+            result.ast.get_expr(*val_id).unwrap()
+        else {
+            panic!("expected If expression as value");
+        };
+        // then block should contain `42`
+        let Expr::Block(_, Some(tail)) =
+            result.ast.get_expr(*then_blk).unwrap()
+        else {
+            panic!("expected Block with tail");
+        };
+        assert_eq!(
+            result.ast.get_expr(*tail),
+            Some(&Expr::Literal(Literal::Int(42)))
+        );
+        assert!(else_blk.is_none());
+    }
+
+    #[test]
+    fn parse_if_else_expr_in_let() {
+        let result = parse_ok("LET x = IF TRUE { 1 } ELSE { 2 }");
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        let Stmt::Let(name, val_id) = stmt else {
+            panic!("expected Let");
+        };
+        assert_eq!(name, "x");
+        let Expr::If(_, _, else_blk) = result.ast.get_expr(*val_id).unwrap()
+        else {
+            panic!("expected If expression as value");
+        };
+        assert!(else_blk.is_some());
+    }
+
+    #[test]
+    fn parse_block_expr_standalone() {
+        // Standalone block expression
+        let (ast, id) = parse_expr_ok("{ 1 + 2 }");
+        let Expr::Block(stmts, tail) = ast.get_expr(id).unwrap() else {
+            panic!("expected Block");
+        };
+        assert!(stmts.is_empty());
+        assert!(tail.is_some());
+    }
+
+    #[test]
+    fn parse_block_expr_in_let() {
+        let result = parse_ok("LET x = { LET y = 1\ny }");
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        let Stmt::Let(name, val_id) = stmt else {
+            panic!("expected Let");
+        };
+        assert_eq!(name, "x");
+        let Expr::Block(stmts, tail) = result.ast.get_expr(*val_id).unwrap()
+        else {
+            panic!("expected Block");
+        };
+        assert_eq!(stmts.len(), 1); // LET y = 1
+        assert!(tail.is_some()); // y
     }
 }

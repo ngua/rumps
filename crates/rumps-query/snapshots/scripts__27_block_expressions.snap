@@ -1,0 +1,17 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Block and IF expressions in expression contexts\n; Tests that blocks and IF can appear anywhere an expression is expected\n\n; IF expression in LET binding\nLET x = IF TRUE { 42 }\nOUTPUT x\n\nLET y = IF FALSE { 99 }\nOUTPUT y\n\n; IF/ELSE expression in LET binding\nLET a = IF TRUE { \"yes\" } ELSE { \"no\" }\nOUTPUT a\n\nLET b = IF FALSE { \"yes\" } ELSE { \"no\" }\nOUTPUT b\n\n; Nested IF expressions\nLET nested = IF TRUE {\n  IF FALSE { 1 } ELSE { 2 }\n} ELSE {\n  3\n}\nOUTPUT nested\n\n; IF expression in arithmetic\nLET sum = 10 + IF TRUE { 5 } ELSE { 0 }\nOUTPUT sum\n\n; IF expression as argument\nOUTPUT IF TRUE { \"direct if\" } ELSE { \"nope\" }\n\n; Block expression in LET binding\nLET blk = { 1 + 2 }\nOUTPUT blk\n\n; Block with statements and tail\nLET computed = {\n  LET tmp = 10\n  tmp * 2\n}\nOUTPUT computed\n\n; Block in arithmetic\nLET expr = { 5 } + { 3 }\nOUTPUT expr\n\n; IF with block that has statements\nLET complex = IF TRUE {\n  LET inner = 100\n  inner + 1\n} ELSE {\n  0\n}\nOUTPUT complex\n\n; Chained conditionals\nLET grade = 85\nLET letter = IF grade >= 90 { \"A\" } ELSE {\n  IF grade >= 80 { \"B\" } ELSE {\n    IF grade >= 70 { \"C\" } ELSE { \"F\" }\n  }\n}\nOUTPUT letter\n\nOUTPUT \"Block expressions test complete\"\n"
+---
+42
+Option.None
+yes
+no
+2
+15
+direct if
+3
+20
+8
+101
+B
+Block expressions test complete

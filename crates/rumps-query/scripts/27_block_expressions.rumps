@@ -1,0 +1,66 @@
+; Test: Block and IF expressions in expression contexts
+; Tests that blocks and IF can appear anywhere an expression is expected
+
+; IF expression in LET binding
+LET x = IF TRUE { 42 }
+OUTPUT x
+
+LET y = IF FALSE { 99 }
+OUTPUT y
+
+; IF/ELSE expression in LET binding
+LET a = IF TRUE { "yes" } ELSE { "no" }
+OUTPUT a
+
+LET b = IF FALSE { "yes" } ELSE { "no" }
+OUTPUT b
+
+; Nested IF expressions
+LET nested = IF TRUE {
+  IF FALSE { 1 } ELSE { 2 }
+} ELSE {
+  3
+}
+OUTPUT nested
+
+; IF expression in arithmetic
+LET sum = 10 + IF TRUE { 5 } ELSE { 0 }
+OUTPUT sum
+
+; IF expression as argument
+OUTPUT IF TRUE { "direct if" } ELSE { "nope" }
+
+; Block expression in LET binding
+LET blk = { 1 + 2 }
+OUTPUT blk
+
+; Block with statements and tail
+LET computed = {
+  LET tmp = 10
+  tmp * 2
+}
+OUTPUT computed
+
+; Block in arithmetic
+LET expr = { 5 } + { 3 }
+OUTPUT expr
+
+; IF with block that has statements
+LET complex = IF TRUE {
+  LET inner = 100
+  inner + 1
+} ELSE {
+  0
+}
+OUTPUT complex
+
+; Chained conditionals
+LET grade = 85
+LET letter = IF grade >= 90 { "A" } ELSE {
+  IF grade >= 80 { "B" } ELSE {
+    IF grade >= 70 { "C" } ELSE { "F" }
+  }
+}
+OUTPUT letter
+
+OUTPUT "Block expressions test complete"

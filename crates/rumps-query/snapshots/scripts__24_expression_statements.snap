@@ -1,6 +1,13 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
 description: "; Test: expression statements\n; Tests using expressions as statements (evaluated for side effects)\n\n; IF as statement (not capturing result)\nLET x = 10\n\nIF x > 5 {\n  OUTPUT \"x is big\"\n}\n; Expected: x is big\n\nIF x < 5 {\n  OUTPUT \"x is small\"\n}\n; Expected: (no output; condition false)\n\n; Block as statement\n{\n  OUTPUT \"Inside block\"\n  LET temp = 42\n  OUTPUT temp\n}\n; Expected: Inside block, 42\n\n; Nested IF statements\nLET a = TRUE\nLET b = FALSE\n\nIF a {\n  IF NOT b {\n    OUTPUT \"a is true and b is false\"\n  }\n}\n; Expected: a is true and b is false\n\n; Multiple expression statements\n5 + 3\n; Evaluated but result discarded\n\"hello\"\n; Evaluated but result discarded\nTRUE AND FALSE\n; Evaluated but result discarded\n\nOUTPUT \"Made it past expression statements\"\n\n; IF/ELSE as statement\nLET mode = \"debug\"\n\nIF mode == \"debug\" {\n  OUTPUT \"Debug mode enabled\"\n} ELSE {\n  OUTPUT \"Production mode\"\n}\n; Expected: Debug mode enabled\n\n; Block with SET side effects\n{\n  SET data(1) = \"first\"\n  SET data(2) = \"second\"\n}\n\nOUTPUT GET data(1)\n; Expected: first\n\nOUTPUT GET data(2)\n; Expected: second\n\nOUTPUT \"Expression statements test complete\"\n"
 ---
-ERROR: parse error at 307..308: unexpected `newline` (expected: })
+x is big
+Inside block
+42
+a is true and b is false
+Made it past expression statements
+Debug mode enabled
+first
+second
+Expression statements test complete

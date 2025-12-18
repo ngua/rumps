@@ -1,6 +1,20 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
 description: "; Test: OUTPUT statement\n; Tests various OUTPUT scenarios\n\n; Output literal integer\nOUTPUT 42\n; Expected: 42\n\n; Output literal float\nOUTPUT 3.14159\n; Expected: 3.14159\n\n; Output literal string\nOUTPUT \"Hello, World!\"\n; Expected: Hello, World!\n\n; Output literal boolean\nOUTPUT TRUE\nOUTPUT FALSE\n; Expected: true, false\n\n; Output variable\nLET x = 123\nOUTPUT x\n; Expected: 123\n\n; Output expression result\nOUTPUT 10 + 20 * 3\n; Expected: 70\n\n; Output string concatenation\nOUTPUT \"Hello\" ++ \" \" ++ \"RUMPS\"\n; Expected: Hello RUMPS\n\n; Output comparison result\nOUTPUT 5 < 10\n; Expected: true\n\n; Output logical result\nOUTPUT TRUE AND FALSE\n; Expected: false\n\nOUTPUT NOT FALSE\n; Expected: true\n\n; Output from block result\nLET result = {\n  LET a = 5\n  LET b = 10\n  a + b\n}\nOUTPUT result\n; Expected: 15\n\n; Multiple outputs in sequence\nOUTPUT \"Line 1\"\nOUTPUT \"Line 2\"\nOUTPUT \"Line 3\"\n\nOUTPUT \"OUTPUT test complete\"\n"
 ---
-ERROR: parse error at 724..725: unexpected `newline` (expected: })
+42
+3.14159
+Hello, World!
+TRUE
+FALSE
+123
+70
+Hello RUMPS
+TRUE
+FALSE
+TRUE
+15
+Line 1
+Line 2
+Line 3
+OUTPUT test complete

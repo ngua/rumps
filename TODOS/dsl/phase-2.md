@@ -6,6 +6,8 @@ This document tracks the second phase of implementing the RUMPS query language: 
 
 **Testing**: Each feature requires both unit tests and integration tests (`.rumps` script + `.expected` output in `tests/scripts/`).
 
+**NOTE**: If integration tests are failing after modifications to parser, etc..., it may be due to outdated snapshots. Use `cargo insta` to fix
+
 ## Goals
 
 1. Coalesce and optional chaining (`??`, `?.`)
