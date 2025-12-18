@@ -18,7 +18,6 @@ This document tracks the second phase of implementing the RUMPS query language: 
 6. Closures/anonymous functions (`x => expr`)
 7. First-class functions (pass named functions as values)
 8. Pipeline operator (`|>`)
-9. Range operator (`..`)
 
 ## Phase 2 Tasks
 
@@ -477,26 +476,6 @@ value |> transform |> validate |> save
 - [ ] Add unit tests
 - [ ] Add integration test script
 
-### 11. Range Operator (`..`)
-
-Creates a lazy range of integers.
-
-```rumps
-1..10           ; range from 1 to 10 (inclusive? exclusive? TBD)
-0..n            ; range from 0 to n
-1..100 |> MAP x => x * x
-```
-
-- [ ] Add `Token::DotDot` to lexer
-- [ ] Add `Expr::Range(ExprId, ExprId)` to AST (start, end)
-- [ ] Add `Value::Range { start: i64, end: i64 }` variant
-- [ ] Decide: inclusive (`1..=10`) vs exclusive (`1..10`) end
-  - Recommend: `..` is exclusive (like Rust), `..=` is inclusive
-- [ ] Implement range creation in interpreter
-- [ ] Implement iteration protocol for ranges (for use with pipeline/closures)
-- [ ] Add unit tests
-- [ ] Add integration test script
-
 ## Deferred to Later Phases
 
 ### Spread Operator (`...`)
@@ -726,24 +705,6 @@ a |> f |> g |> h     ; ((a |> f) |> g) |> h
 x + 1 |> double      ; (x + 1) |> double
 ```
 
-### Range Semantics
-
-Ranges use Rust-style exclusive end by default:
-
-```rumps
-1..5      ; 1, 2, 3, 4 (exclusive end)
-1..=5     ; 1, 2, 3, 4, 5 (inclusive end)
-```
-
-Ranges are lazy; they don't allocate an array. They're iterable values that work with `|>` and collection operations.
-
-Range precedence is higher than comparison but lower than additive:
-
-```rumps
-1..n + 1       ; 1..(n + 1), not (1..n) + 1
-0..len - 1     ; 0..(len - 1)
-```
-
 ## Success Criteria
 
 The following should work:
@@ -898,11 +859,4 @@ OUTPUT result         ; 100
 LET nums = 10
 LET result2 = nums |> (x => x + 1) |> (x => x * 2)
 OUTPUT result2        ; 22
-
-; Range
-LET r = 1..5
-; r is a range value
-
-; Range with pipeline (when iteration is supported)
-; 1..10 |> MAP x => x * x
 ```

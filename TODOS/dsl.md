@@ -1898,6 +1898,8 @@ When a type annotation is violated, the interpreter raises a runtime error with 
 
 ### Type Checking
 
+**Resolved**: All type checking is **runtime only**. RUMPS is an interpreted query language—type annotations are validated when code executes, not at parse time.
+
 Runtime type checking with `is`:
 
 ```rumps
@@ -2005,9 +2007,30 @@ FUN word-count (words: Array[String]) -> Map[String, Int] {
 }
 ```
 
-### Structural Object Types (Future)
+### Sum and structural object types
 
-For objects with known shape:
+RUMPS supports **sum types** (tagged unions / algebraic data types) for modeling values that can be one of several variants.
+
+#### Definition Syntax
+
+```rumps
+; Simple enumeration (no payloads)
+TYPE Status = Pending | Active | Completed | Failed
+
+; With payloads
+TYPE Status2 =
+  Unknown
+  | Pending(Int)
+  | Completed(Array[Int])
+
+; Parameterized sum types (this one is a builtin)
+TYPE Result[T, E] = Ok(T) | Err(E)
+
+; Parameterized sum types (this one is a builtin)
+TYPE Option[T] = Some(T) | None
+```
+
+`TYPE` can also be used for objects with known shape (similar to Haskell's `data` with a single constructor, but structurally typed):
 
 ```rumps
 ; Inline structural type
@@ -2027,38 +2050,7 @@ FUN admit (p: Patient) {
 }
 ```
 
-**Resolved**: All type checking is **runtime only**. RUMPS is an interpreted query language—type annotations are validated when code executes, not at parse time.
 
-### Sum Types
-
-RUMPS supports **sum types** (tagged unions / algebraic data types) for modeling values that can be one of several variants.
-
-#### Definition Syntax
-
-```rumps
-; Simple enumeration (no payloads)
-TYPE Status =
-  | Pending
-  | Active
-  | Completed
-  | Failed
-
-; With payloads
-TYPE DataStatus =
-  | NoValue
-  | HasValue(value)
-  | HasDescendants
-  | HasBoth(value)
-
-; Parameterized sum types
-TYPE Result[T, E] =
-  | Ok(T)
-  | Err(E)
-
-TYPE Option[T] =
-  | Some(T)
-  | None
-```
 
 #### Constructor Syntax
 
@@ -2075,20 +2067,18 @@ SET opt = Option.None
 
 These are predefined in the standard library:
 
-| Type           | Variants                  | Description             |
-|----------------|---------------------------|-------------------------|
-| `Option[T]`    | `Some(T)`, `None`         | Nullable/optional value |
-| `Result[T, E]` | `Ok(T)`, `Err(E)`         | Success or error        |
-| `DataStatus`   | `NoValue`, `HasValue(v)`, `HasDescendants`, `HasBoth(v)` | Node existence status |
+| Type           | Variants                                                 | Description             |
+|----------------|----------------------------------------------------------|-------------------------|
+| `Option[T]`    | `Some(T)`, `None`                                        | Nullable/optional value |
+| `Result[T, E]` | `Ok(T)`, `Err(E)`                                        | Success or error        |
+| `DataStatus`   | `NoValue`, `HasValue(v)`, `HasDescendants`, `HasBoth(v)` | Node existence status   |
 
 #### Serializing Custom Types (Future)
 
 Currently, users must manually convert custom sum types to/from records for persistence:
 
 ```rumps
-TYPE Status =
-  | Active
-  | Discharged(date)
+TYPE Status = Active | Discharged(date)
 
 ; Manual conversion
 FUN status-to-record (s: Status) {
@@ -2108,7 +2098,7 @@ FUN record-to-status (r) -> Status {
 ```
 
 This is explicit and requires no new language features. Future iterations may add:
-- Derive-style: `TYPE Status DERIVE Serialize = | ...`
+- Derive-style: `TYPE Status DERIVE Serialize = Variant | ...`
 - Associated functions: `TYPE Status WITH { to-record: ..., from-record: ... }`
 - Convention-based: interpreter auto-discovers `TypeName.to-record` / `TypeName.from-record`
 
@@ -2483,7 +2473,7 @@ TYPE Error = {
 - [ ] Implement two-phase lexer → parser using `chumsky` (see Parser Architecture section)
 - [ ] Build AST representation
 - [ ] Implement interpreter that calls Rust storage layer
-- [ ] Sum type definitions (`TYPE ... = | Variant ...`)
+- [ ] Sum type definitions (`TYPE ... = Variant | ...`)
 - [ ] Pattern matching (`MATCH` expressions)
 - [ ] Error handling (`CATCH`, `HANDLE`, `TRY`/`FINALLY`, `THROW`)
 
@@ -2531,7 +2521,7 @@ These tasks should be completed after the storage engine implementation is finis
 - [ ] **Define operator precedence**: Establish clear precedence rules for all operations
 - [x] **Specify type coercion rules**: Conservative coercion — into strings and between numerics, but NOT from strings to numbers (see Type Coercion section)
 - [x] **Design error handling semantics**: `CATCH`, `HANDLE`, `TRY`/`FINALLY` constructs with per-element and fail-fast modes in streams (see Error Handling section)
-- [x] **Design sum types and pattern matching**: `TYPE ... = | Variant1 | Variant2(payload)` syntax, `MATCH` expression with exhaustiveness checking (see Sum Types and Pattern Matching sections)
+- [x] **Design sum types and pattern matching**: `TYPE ... = Variant1 | Variant2(payload)` syntax, `MATCH` expression with exhaustiveness checking (see Sum Types and Pattern Matching sections)
 - [ ] **Establish naming conventions**: Variable naming, function naming, constants
 
 ### Formal Specification
