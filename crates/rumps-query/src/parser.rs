@@ -616,6 +616,11 @@ impl Parser {
             .ignore_then(Self::ident())
             .map_with_span(PostfixOp::Field);
 
+        // Optional field access: `?.field`
+        let opt_field = just(Token::QuestionDot)
+            .ignore_then(Self::ident())
+            .map_with_span(PostfixOp::OptionalField);
+
         // Index: `[expr]` - allow newlines inside
         let index = just(Token::LBracket)
             .ignore_then(Self::opt_newlines())
@@ -639,7 +644,7 @@ impl Parser {
                 PostfixOp::Call(SmallVec::from_vec(args), span)
             });
 
-        let postfix_op = choice((field, index, call));
+        let postfix_op = choice((field, opt_field, index, call));
 
         operand
             .then(postfix_op.repeated())
@@ -666,6 +671,12 @@ impl Parser {
                     let id = ast
                         .borrow_mut()
                         .add_expr(Expr::Field(acc.0, name), span);
+                    Some((id, span))
+                }
+                PostfixOp::OptionalField(name, _) => {
+                    let id = ast
+                        .borrow_mut()
+                        .add_expr(Expr::OptionalField(acc.0, name), span);
                     Some((id, span))
                 }
                 PostfixOp::Index(idx, _) => {
@@ -886,6 +897,7 @@ impl Parser {
 /// Helper enum for postfix operations during folding; carries end span.
 enum PostfixOp {
     Field(String, Span),
+    OptionalField(String, Span),
     Index(ExprId, Span),
     Call(SmallVec<[ExprId; 4]>, Span),
 }
@@ -893,7 +905,10 @@ enum PostfixOp {
 impl PostfixOp {
     fn end(&self) -> Span {
         match self {
-            Self::Field(_, s) | Self::Index(_, s) | Self::Call(_, s) => *s,
+            Self::Field(_, s)
+            | Self::OptionalField(_, s)
+            | Self::Index(_, s)
+            | Self::Call(_, s) => *s,
         }
     }
 }
@@ -1634,5 +1649,106 @@ mod array_parse_debug {
 ]"#;
         let result = Parser::parse(src);
         assert!(result.is_ok(), "Should parse: {:?}", result.err());
+    }
+}
+
+#[cfg(test)]
+mod optional_chaining_tests {
+    use super::*;
+
+    fn parse_expr_ok(src: &str) -> (Ast, ExprId) {
+        let result = Parser::parse(src).expect("should parse");
+        let stmt_id = result.stmts[0];
+        let expr_id = result
+            .ast
+            .get_stmt(stmt_id)
+            .and_then(|s| match s {
+                Stmt::Expr(id) => Some(*id),
+                _ => None,
+            })
+            .expect("expected expression statement");
+        (result.ast, expr_id)
+    }
+
+    #[test]
+    fn parse_optional_field_access() {
+        let (ast, id) = parse_expr_ok("obj?.field");
+        match ast.get_expr(id) {
+            Some(Expr::OptionalField(_, name)) => {
+                assert_eq!(name, "field");
+            }
+            _ => panic!("expected OptionalField"),
+        }
+    }
+
+    #[test]
+    fn parse_optional_chaining_chain() {
+        // a?.b?.c
+        let (ast, id) = parse_expr_ok("a?.b?.c");
+        match ast.get_expr(id) {
+            Some(Expr::OptionalField(inner, name)) => {
+                assert_eq!(name, "c");
+                match ast.get_expr(*inner) {
+                    Some(Expr::OptionalField(_, name2)) => {
+                        assert_eq!(name2, "b");
+                    }
+                    _ => panic!("expected inner OptionalField"),
+                }
+            }
+            _ => panic!("expected OptionalField"),
+        }
+    }
+
+    #[test]
+    fn parse_optional_then_regular() {
+        // a?.b.c
+        let (ast, id) = parse_expr_ok("a?.b.c");
+        match ast.get_expr(id) {
+            Some(Expr::Field(inner, name)) => {
+                assert_eq!(name, "c");
+                match ast.get_expr(*inner) {
+                    Some(Expr::OptionalField(_, name2)) => {
+                        assert_eq!(name2, "b");
+                    }
+                    _ => panic!("expected OptionalField"),
+                }
+            }
+            _ => panic!("expected Field"),
+        }
+    }
+
+    #[test]
+    fn parse_regular_then_optional() {
+        // a.b?.c
+        let (ast, id) = parse_expr_ok("a.b?.c");
+        match ast.get_expr(id) {
+            Some(Expr::OptionalField(inner, name)) => {
+                assert_eq!(name, "c");
+                match ast.get_expr(*inner) {
+                    Some(Expr::Field(_, name2)) => {
+                        assert_eq!(name2, "b");
+                    }
+                    _ => panic!("expected Field"),
+                }
+            }
+            _ => panic!("expected OptionalField"),
+        }
+    }
+
+    #[test]
+    fn parse_optional_with_coalesce() {
+        // a?.b ?? "default"
+        let (ast, id) = parse_expr_ok("a?.b ?? \"default\"");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(lhs, BinOp::Coalesce, _)) => {
+                match ast.get_expr(*lhs) {
+                    Some(Expr::OptionalField(_, name)) => {
+                        assert_eq!(name, "b");
+                    }
+                    _ => panic!("expected OptionalField on lhs"),
+                }
+            }
+            _ => panic!("expected Binary Coalesce"),
+        }
     }
 }

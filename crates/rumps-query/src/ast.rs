@@ -203,6 +203,12 @@ pub(crate) enum Expr {
     /// Field access: `expr.field`.
     Field(ExprId, String),
 
+    /// Optional field access: `expr?.field`.
+    ///
+    /// Short-circuits to `Option.None` if base is `None`; otherwise wraps
+    /// the field value in `Option.Some`.
+    OptionalField(ExprId, String),
+
     /// Variant constructor: `Type.Variant(args...)` or `Type.Variant`.
     ///
     /// Examples: `Option.Some(1)`, `Result.Ok(42)`, `Option.None`

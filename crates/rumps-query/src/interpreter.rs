@@ -184,6 +184,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Array(elems) => self.array(&elems).await,
             Expr::Index(base, idx) => self.index(base, idx, span).await,
             Expr::Field(base, field) => self.field(base, &field, span).await,
+            Expr::OptionalField(base, field) => {
+                self.optional_field(base, &field, span).await
+            }
             Expr::Variant(ty, var, args) => {
                 self.variant(&ty, &var, &args, span).await
             }
@@ -575,6 +578,77 @@ impl<I: IoContext> Interpreter<'_, I> {
                 format!(
                     "cannot access field on {}",
                     base_val.type_name(&self.registry)
+                ),
+            )),
+        }
+    }
+
+    /// Evaluate optional field access: `expr?.field`.
+    ///
+    /// - If base is `Option.None`, returns `Option.None`
+    /// - If base is `Option.Some(v)`, accesses field on `v`, wraps in `Some`
+    /// - If base is any other value, accesses field normally, wraps in `Some`
+    #[async_recursion]
+    async fn optional_field(
+        &mut self,
+        base: ExprId,
+        field: &str,
+        span: Span,
+    ) -> Result<Value> {
+        use crate::value::TypeId;
+
+        let base_val = self.eval(base).await?;
+
+        match base_val {
+            // Option.None -> Option.None (short-circuit)
+            Value::Tagged(ty, 0, _) if ty == TypeId::OPTION => {
+                Ok(Value::none())
+            }
+            // Option.Some(v) -> access field on v, wrap in Some
+            Value::Tagged(ty, 1, ref payload) if ty == TypeId::OPTION => {
+                let inner = payload
+                    .first()
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(span, "Option.Some missing payload")
+                    })?;
+                let result = self.field_access(&inner, field, span)?;
+                let result_id = self.arena.add(result, span);
+                Ok(Value::some(result_id))
+            }
+            // Non-Option value -> access field normally, wrap in Some
+            other => {
+                let result = self.field_access(&other, field, span)?;
+                let result_id = self.arena.add(result, span);
+                Ok(Value::some(result_id))
+            }
+        }
+    }
+
+    /// Helper for field access on a value (without wrapping in Option).
+    fn field_access(
+        &mut self,
+        val: &Value,
+        field: &str,
+        span: Span,
+    ) -> Result<Value> {
+        match val {
+            Value::Object(obj) => {
+                let field_id = self.arena.intern(field);
+                obj.get(&field_id)
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(
+                            span,
+                            format!("field `{field}` not found"),
+                        )
+                    })
+            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "cannot access field on {}",
+                    val.type_name(&self.registry)
                 ),
             )),
         }
@@ -1842,6 +1916,104 @@ mod tests {
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(field).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn optional_field_on_object() {
+        // { x: 42 }?.x -> Option.Some(42)
+        let mut ast = Ast::new();
+        let v = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
+        let obj =
+            ast.add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10));
+        let opt_field = ast
+            .add_expr(Expr::OptionalField(obj, "x".into()), Span::new(0, 13));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(opt_field).await.unwrap();
+        assert!(result.is_some());
+        // Unwrap the Some to get 42
+        match result {
+            Value::Tagged(_, 1, payloads) => {
+                let inner = interp.arena.get(payloads[0]).unwrap();
+                assert_eq!(*inner, Value::Int(42));
+            }
+            _ => panic!("expected Option.Some"),
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_field_on_none() {
+        // Option.None?.x -> Option.None
+        let mut ast = Ast::new();
+        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
+        let none =
+            ast.add_expr(Expr::Field(base, "None".into()), Span::new(0, 11));
+        let opt_field = ast
+            .add_expr(Expr::OptionalField(none, "x".into()), Span::new(0, 14));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(opt_field).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn optional_field_on_some_with_object() {
+        // Option.Some({ x: 99 })?.x -> Option.Some(99)
+        let mut ast = Ast::new();
+        let v =
+            ast.add_expr(Expr::Literal(Literal::Int(99)), Span::new(20, 22));
+        let obj = ast
+            .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(12, 24));
+        let some = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![obj],
+            ),
+            Span::new(0, 25),
+        );
+        let opt_field = ast
+            .add_expr(Expr::OptionalField(some, "x".into()), Span::new(0, 28));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(opt_field).await.unwrap();
+        assert!(result.is_some());
+        match result {
+            Value::Tagged(_, 1, payloads) => {
+                let inner = interp.arena.get(payloads[0]).unwrap();
+                assert_eq!(*inner, Value::Int(99));
+            }
+            _ => panic!("expected Option.Some"),
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_field_missing_field() {
+        // { x: 42 }?.y -> error (field not found)
+        let mut ast = Ast::new();
+        let v = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
+        let obj =
+            ast.add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10));
+        let opt_field = ast
+            .add_expr(Expr::OptionalField(obj, "y".into()), Span::new(0, 13));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(opt_field).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn optional_field_on_non_object() {
+        // 42?.x -> type error
+        let mut ast = Ast::new();
+        let num =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let opt_field =
+            ast.add_expr(Expr::OptionalField(num, "x".into()), Span::new(0, 5));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(opt_field).await;
         assert!(result.is_err());
     }
 }

@@ -1,0 +1,78 @@
+; Optional chaining operator (?.) tests
+; `?.` short-circuits to Option.None if base is None, otherwise wraps result in Some
+
+; === Basic optional chaining on objects ===
+
+; Regular object: wrap result in Some, then coalesce to unwrap
+LET obj = { name: "Alice", age: 30 }
+OUTPUT obj?.name ?? "N/A"
+; Expected: Alice
+
+OUTPUT obj?.age ?? 0
+; Expected: 30
+
+; === Optional chaining on Option.None ===
+
+; None short-circuits; field access is never attempted
+LET none = Option.None
+OUTPUT none?.name ?? "fallback"
+; Expected: fallback
+
+OUTPUT none?.anything ?? "default"
+; Expected: default
+
+; === Optional chaining on Option.Some ===
+
+; Some unwraps, accesses field, re-wraps in Some
+LET some = Option.Some({ x: 42, y: 99 })
+OUTPUT some?.x ?? 0
+; Expected: 42
+
+OUTPUT some?.y ?? 0
+; Expected: 99
+
+; === Chained optional access ===
+
+; Multiple ?. in sequence
+LET nested = { inner: { value: 123 } }
+OUTPUT nested?.inner?.value ?? -1
+; Expected: 123
+
+; Chain through None
+LET outer = Option.None
+OUTPUT outer?.inner?.value ?? -1
+; Expected: -1
+
+; Mixed regular and optional access
+LET obj2 = { data: { num: 55 } }
+OUTPUT obj2.data?.num ?? 0
+; Expected: 55
+
+; === Combining with coalesce ===
+
+; Optional chaining always returns Option, coalesce unwraps
+LET person = { city: "NYC" }
+LET city = person?.city ?? "Unknown"
+OUTPUT city
+; Expected: NYC
+
+; Missing field with coalesce fallback
+LET empty = Option.None
+LET missing = empty?.nonexistent ?? "not found"
+OUTPUT missing
+; Expected: not found
+
+; === Optional chaining result is always Option ===
+
+; Without coalesce, result is Option.Some
+LET result = { value: 10 }?.value
+; result is Option.Some(10), which is truthy
+OUTPUT IF result { "has value" } ELSE { "no value" }
+; Expected: has value
+
+; None result is falsy
+LET result2 = Option.None?.value
+OUTPUT IF result2 { "has value" } ELSE { "no value" }
+; Expected: no value
+
+OUTPUT "Optional chaining tests complete"

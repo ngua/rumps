@@ -109,15 +109,15 @@ Safe field/subscript access that short-circuits to `Option.None` if the base is 
 SET city = patient?.address?.city ?? "N/A"
 ```
 
-- [ ] Add `Token::QuestionDot` to lexer
-- [ ] Add `Expr::OptionalField(ExprId, String)` to AST
-- [ ] Implement in interpreter:
+- [x] Add `Token::QuestionDot` to lexer
+- [x] Add `Expr::OptionalField(ExprId, String)` to AST
+- [x] Implement in interpreter:
   - Evaluate base expression
   - If `Option.None`, return `Option.None`
   - If `Option.Some(v)`, access field on `v`, wrap result in `Option.Some`
   - If non-Option value, access field normally, wrap result in `Option.Some`
-- [ ] Add unit tests
-- [ ] Add integration test script
+- [x] Add unit tests
+- [x] Add integration test script (`30_optional_chaining.rumps`)
 
 ### 3. Type Check Operator (`is`) with Pattern Binding
 

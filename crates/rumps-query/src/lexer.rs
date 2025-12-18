@@ -380,6 +380,7 @@ impl Lexer<'_> {
             just("||").to(Token::PipePipe),
             just("..").to(Token::DotDot),
             just("??").to(Token::QuestionQuestion),
+            just("?.").to(Token::QuestionDot),
         ));
 
         let one_char_ops = choice((
@@ -835,6 +836,36 @@ mod tests {
                 Token::Ident("a".into()),
                 Token::QuestionQuestion,
                 Token::Ident("b".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn optional_chaining_operator() {
+        let tokens = lex_ok("a?.b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::QuestionDot,
+                Token::Ident("b".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn optional_chaining_chain() {
+        let tokens = lex_ok("a?.b?.c");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::QuestionDot,
+                Token::Ident("b".into()),
+                Token::QuestionDot,
+                Token::Ident("c".into()),
                 Token::Eof
             ]
         );
