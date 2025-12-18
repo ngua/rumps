@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
@@ -36,7 +36,7 @@ impl ValueId {
 pub(crate) struct StringId(u32);
 
 impl StringId {
-    const fn idx(self) -> usize {
+    fn idx(self) -> usize {
         self.0 as usize
     }
 }
@@ -65,8 +65,7 @@ impl TypeId {
 pub(crate) struct ValueArena {
     values: Vec<Value>,
     value_spans: Vec<Span>,
-    strings: Vec<String>,
-    string_map: HashMap<String, StringId>,
+    strings: IndexSet<String>,
 }
 
 impl Default for ValueArena {
@@ -81,8 +80,7 @@ impl ValueArena {
         Self {
             values: Vec::new(),
             value_spans: Vec::new(),
-            strings: Vec::new(),
-            string_map: HashMap::new(),
+            strings: IndexSet::new(),
         }
     }
 
@@ -108,25 +106,25 @@ impl ValueArena {
     ///
     /// If the string is already interned, returns the existing ID.
     pub(crate) fn intern(&mut self, s: &str) -> StringId {
-        self.string_map.get(s).copied().unwrap_or_else(|| {
-            let id = StringId(self.strings.len() as u32);
-            let owned = s.to_owned();
-            self.string_map.insert(owned.clone(), id);
-            self.strings.push(owned);
-            id
-        })
+        self.strings.get_index_of(s).map_or_else(
+            || {
+                let (idx, _) = self.strings.insert_full(s.to_owned());
+                StringId(idx as u32)
+            },
+            |idx| StringId(idx as u32),
+        )
     }
 
     /// Get a string by its interned ID.
     pub(crate) fn get_str(&self, id: StringId) -> Option<&str> {
-        self.strings.get(id.idx()).map(String::as_str)
+        self.strings.get_index(id.idx()).map(String::as_str)
     }
 
     /// Look up a string's ID without interning it.
     ///
     /// Returns `None` if the string has not been interned.
-    pub(crate) fn string_map_lookup(&self, s: &str) -> Option<StringId> {
-        self.string_map.get(s).copied()
+    pub(crate) fn lookup_string(&self, s: &str) -> Option<StringId> {
+        self.strings.get_index_of(s).map(|idx| StringId(idx as u32))
     }
 
     fn len(&self) -> usize {

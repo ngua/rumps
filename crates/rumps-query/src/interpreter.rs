@@ -245,7 +245,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Does NOT fall back to B-tree locals; use `GET` for those.
     fn var(&mut self, name: &str, span: Span) -> Result<Value> {
         self.arena
-            .string_map_lookup(name)
+            .lookup_string(name)
             .and_then(|id| self.env.scopes.lookup(id))
             .and_then(|val_id| self.arena.get(val_id).cloned())
             .ok_or_else(|| {
