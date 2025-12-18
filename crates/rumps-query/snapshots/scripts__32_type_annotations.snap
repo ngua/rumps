@@ -1,0 +1,14 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Type annotations on LET bindings\n; Tests `LET x: Type = expr` syntax with type checking\n\n; === Basic type annotations ===\n\n; Int annotation\nLET x: Int = 42\nOUTPUT x\n; Expected: 42\n\n; String annotation\nLET s: String = \"hello\"\nOUTPUT s\n; Expected: hello\n\n; Bool annotation\nLET b: Bool = TRUE\nOUTPUT b\n; Expected: true\n\n; Float annotation\nLET f: Float = 3.14\nOUTPUT f\n; Expected: 3.14\n\n; === Parameterized type annotations ===\n\n; Option[Int] with Some\nLET opt: Option[Int] = Option.Some(10)\nOUTPUT opt\n; Expected: Option.Some(10)\n\n; Option[Int] with None (this tests type compatibility)\n; Note: None is Option[unknown] which should be compatible with Option[Int]\n\n; === Nested type annotations ===\n\n; Array[Int]\nLET arr: Array[Int] = [1, 2, 3]\nOUTPUT arr\n; Expected: [1, 2, 3]\n\n; Array[Option[Int]] - nested parameterized type\nLET arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]\nOUTPUT arr-opt\n; Expected: [Option.Some(1), Option.Some(2)]\n\n; Result[Int, String] - two type parameters\nLET res: Result[Int, String] = Result.Ok(42)\nOUTPUT res\n; Expected: Result.Ok(42)\n\n; === Without annotations (still works) ===\n\nLET no-ann = 123\nOUTPUT no-ann\n; Expected: 123\n\nOUTPUT \"Type annotation test complete\"\n"
+---
+42
+hello
+TRUE
+3.14
+Option.Some(10)
+[ 1, 2, 3 ]
+[ Option.Some(1), Option.Some(2) ]
+Result.Ok(42)
+123
+Type annotation test complete

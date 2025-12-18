@@ -20,6 +20,11 @@ pub(crate) struct ExprId(u32);
 #[repr(transparent)]
 pub(crate) struct StmtId(u32);
 
+/// Index into the type expression arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub(crate) struct AstTypeExprId(u32);
+
 impl ExprId {
     /// The raw index value.
     pub(crate) const fn idx(self) -> usize {
@@ -28,6 +33,13 @@ impl ExprId {
 }
 
 impl StmtId {
+    /// The raw index value.
+    pub(crate) const fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl AstTypeExprId {
     /// The raw index value.
     pub(crate) const fn idx(self) -> usize {
         self.0 as usize
@@ -44,6 +56,8 @@ pub(crate) struct Ast {
     expr_spans: Vec<Span>,
     stmts: Vec<Stmt>,
     stmt_spans: Vec<Span>,
+    type_exprs: Vec<AstTypeExpr>,
+    type_expr_spans: Vec<Span>,
 }
 
 impl Ast {
@@ -97,6 +111,43 @@ impl Ast {
     pub(crate) fn stmt_count(&self) -> usize {
         self.stmts.len()
     }
+
+    /// Add a type expression to the arena.
+    pub(crate) fn add_type_expr(
+        &mut self,
+        te: AstTypeExpr,
+        span: Span,
+    ) -> AstTypeExprId {
+        let id = AstTypeExprId(self.type_exprs.len() as u32);
+        self.type_exprs.push(te);
+        self.type_expr_spans.push(span);
+        id
+    }
+
+    /// Get a type expression by ID.
+    pub(crate) fn get_type_expr(
+        &self,
+        id: AstTypeExprId,
+    ) -> Option<&AstTypeExpr> {
+        self.type_exprs.get(id.idx())
+    }
+
+    /// Get the span of a type expression.
+    pub(crate) fn type_expr_span(&self, id: AstTypeExprId) -> Option<Span> {
+        self.type_expr_spans.get(id.idx()).copied()
+    }
+}
+
+/// A type expression in the AST (for annotations).
+///
+/// Represents syntactic type expressions before resolution to runtime types.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AstTypeExpr {
+    /// Simple named type: `Int`, `String`, `Option`, etc.
+    Named(String),
+
+    /// Parameterized type: `Array[Int]`, `Option[String]`, `Result[Int, String]`.
+    App(String, SmallVec<[AstTypeExprId; 2]>),
 }
 
 /// Binary operators.
@@ -258,8 +309,11 @@ pub(crate) enum Expr {
 /// All recursive references use `ExprId`/`StmtId` indices into the `Ast` arena.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Stmt {
-    /// Lexical binding (sync, not subscriptable): `LET x = expr`.
-    Let(String, ExprId),
+    /// Lexical binding: `LET x = expr` or `LET x: Type = expr`.
+    ///
+    /// The optional `AstTypeExprId` is the type annotation; if present, the
+    /// interpreter validates that the value's type matches.
+    Let(String, Option<AstTypeExprId>, ExprId),
 
     /// B-tree assignment: `SET x(subs...) = expr` or `SET ^NAME(subs...) = expr`.
     ///
@@ -324,10 +378,11 @@ mod tests {
         // Build: LET x = 10
         let val =
             ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
-        let stmt = ast.add_stmt(Stmt::Let("x".into(), val), Span::new(0, 10));
+        let stmt =
+            ast.add_stmt(Stmt::Let("x".into(), None, val), Span::new(0, 10));
 
         assert_eq!(ast.stmt_count(), 1);
-        assert_eq!(ast.get_stmt(stmt), Some(&Stmt::Let("x".into(), val)));
+        assert_eq!(ast.get_stmt(stmt), Some(&Stmt::Let("x".into(), None, val)));
         assert_eq!(ast.stmt_span(stmt), Some(Span::new(0, 10)));
     }
 

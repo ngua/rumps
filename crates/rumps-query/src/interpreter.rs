@@ -87,7 +87,8 @@ use rumps_storage::{Database, Transaction};
 use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{
-    Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, TypePattern, UnOp,
+    Ast, AstTypeExpr, AstTypeExprId, BinOp, Expr, ExprId, Literal, Stmt,
+    StmtId, TypePattern, UnOp,
 };
 use crate::env::Environment;
 use crate::io::IoContext;
@@ -236,7 +237,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             .clone();
 
         match stmt {
-            Stmt::Let(name, expr_id) => self.r#let(&name, expr_id).await,
+            Stmt::Let(name, ty_ann, expr_id) => {
+                self.r#let(&name, ty_ann, expr_id, span).await
+            }
             Stmt::Set(target, expr_id) => self.set(target, expr_id, span).await,
             Stmt::Kill(target) => self.kill(target, span).await,
             Stmt::Output(expr_id) => self.output(expr_id).await,
@@ -551,6 +554,42 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .to_owned()
             })
             .unwrap_or_else(|| "?".to_owned())
+    }
+
+    /// Resolve an AST type expression to a runtime `TypeExprId`.
+    ///
+    /// Looks up type names in the registry and builds the runtime type.
+    fn resolve_type_expr(
+        &mut self,
+        ast_id: AstTypeExprId,
+        span: Span,
+    ) -> Result<TypeExprId> {
+        let ast_ty =
+            self.ast.get_type_expr(ast_id).cloned().ok_or_else(|| {
+                Error::runtime(span, "invalid type expression id")
+            })?;
+
+        match ast_ty {
+            AstTypeExpr::Named(name) => {
+                let name_id = self.arena.intern(&name);
+                let ty_id = self.registry.lookup(name_id).ok_or_else(|| {
+                    Error::type_err(span, format!("unknown type: {name}"))
+                })?;
+                Ok(self.type_exprs.named(ty_id))
+            }
+            AstTypeExpr::App(name, params) => {
+                let name_id = self.arena.intern(&name);
+                let ty_id = self.registry.lookup(name_id).ok_or_else(|| {
+                    Error::type_err(span, format!("unknown type: {name}"))
+                })?;
+                // Recursively resolve type parameters
+                let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
+                    .iter()
+                    .map(|&p| self.resolve_type_expr(p, span))
+                    .collect();
+                Ok(self.type_exprs.app(ty_id, resolved?))
+            }
+        }
     }
 
     /// Create an `Option.None` value with unknown type parameter.
@@ -1183,10 +1222,33 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Execute a `LET` binding.
+    ///
+    /// If a type annotation is present, validates that the value's type matches.
     #[async_recursion]
-    async fn r#let(&mut self, name: &str, expr_id: ExprId) -> Result<()> {
-        let span = self.ast.expr_span(expr_id).unwrap_or_default();
+    async fn r#let(
+        &mut self,
+        name: &str,
+        ty_ann: Option<AstTypeExprId>,
+        expr_id: ExprId,
+        span: Span,
+    ) -> Result<()> {
         let val = self.eval(expr_id).await?;
+
+        // Check type annotation if present
+        if let Some(ast_ty_id) = ty_ann {
+            let expected_ty = self.resolve_type_expr(ast_ty_id, span)?;
+            let actual_ty = self.value_type_expr(&val);
+
+            if !self.type_exprs.eq(expected_ty, actual_ty) {
+                let expected = self.type_expr_name(expected_ty);
+                let actual = self.type_expr_name(actual_ty);
+                return Err(Error::type_err(
+                    span,
+                    format!("type mismatch: expected {expected}, got {actual}"),
+                ));
+            }
+        }
+
         let name_id = self.arena.intern(name);
         let val_id = self.arena.add(val, span);
         self.env.scopes.bind(name_id, val_id);
@@ -1612,7 +1674,7 @@ mod tests {
         let val =
             ast.add_expr(Expr::Literal(Literal::Int(100)), Span::new(8, 11));
         let let_stmt =
-            ast.add_stmt(Stmt::Let("x".into(), val), Span::new(0, 11));
+            ast.add_stmt(Stmt::Let("x".into(), None, val), Span::new(0, 11));
         let var = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
 
         let mut interp = test_interp(&ast);
@@ -1628,12 +1690,14 @@ mod tests {
         // LET x = 10
         let val1 =
             ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
-        let let1 = ast.add_stmt(Stmt::Let("x".into(), val1), Span::new(0, 10));
+        let let1 =
+            ast.add_stmt(Stmt::Let("x".into(), None, val1), Span::new(0, 10));
 
         // Block expr with LET x = 20, returning x
         let val2 =
             ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22));
-        let let2 = ast.add_stmt(Stmt::Let("x".into(), val2), Span::new(12, 22));
+        let let2 =
+            ast.add_stmt(Stmt::Let("x".into(), None, val2), Span::new(12, 22));
         let x_ref = ast.add_expr(Expr::Var("x".into()), Span::new(24, 25));
         let blk_expr = ast
             .add_expr(Expr::Block(vec![let2], Some(x_ref)), Span::new(10, 26));
@@ -1727,16 +1791,16 @@ mod tests {
         // LET result = 0
         let zero =
             ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(13, 14));
-        let let_result =
-            ast.add_stmt(Stmt::Let("result".into(), zero), Span::new(0, 14));
+        let let_result = ast
+            .add_stmt(Stmt::Let("result".into(), None, zero), Span::new(0, 14));
 
         // IF true { LET result = 1 }
         let cond =
             ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7));
         let one =
             ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(25, 26));
-        let set_one =
-            ast.add_stmt(Stmt::Let("result".into(), one), Span::new(10, 26));
+        let set_one = ast
+            .add_stmt(Stmt::Let("result".into(), None, one), Span::new(10, 26));
         let then_blk =
             ast.add_expr(Expr::Block(vec![set_one], None), Span::new(8, 28));
         let if_expr =
@@ -1764,7 +1828,8 @@ mod tests {
             ast.add_expr(Expr::Block(vec![], None), Span::new(9, 12));
         let val =
             ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(30, 32));
-        let let_x = ast.add_stmt(Stmt::Let("x".into(), val), Span::new(22, 32));
+        let let_x =
+            ast.add_stmt(Stmt::Let("x".into(), None, val), Span::new(22, 32));
         let else_blk =
             ast.add_expr(Expr::Block(vec![let_x], None), Span::new(18, 35));
         let if_expr = ast.add_expr(
@@ -1790,12 +1855,14 @@ mod tests {
         // LET x = 10
         let v1 =
             ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
-        let let_x = ast.add_stmt(Stmt::Let("x".into(), v1), Span::new(0, 10));
+        let let_x =
+            ast.add_stmt(Stmt::Let("x".into(), None, v1), Span::new(0, 10));
 
         // LET y = 20
         let v2 =
             ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22));
-        let let_y = ast.add_stmt(Stmt::Let("y".into(), v2), Span::new(12, 22));
+        let let_y =
+            ast.add_stmt(Stmt::Let("y".into(), None, v2), Span::new(12, 22));
 
         // LET sum = x + y
         let x = ast.add_expr(Expr::Var("x".into()), Span::new(34, 35));
@@ -1803,7 +1870,7 @@ mod tests {
         let add =
             ast.add_expr(Expr::Binary(x, BinOp::Add, y), Span::new(34, 39));
         let let_sum =
-            ast.add_stmt(Stmt::Let("sum".into(), add), Span::new(24, 39));
+            ast.add_stmt(Stmt::Let("sum".into(), None, add), Span::new(24, 39));
 
         // Reference to check result (create before interpreter borrows ast)
         let sum_var = ast.add_expr(Expr::Var("sum".into()), Span::new(0, 3));
@@ -1921,8 +1988,8 @@ mod tests {
             Span::new(8, 35),
         );
 
-        let let_x =
-            ast.add_stmt(Stmt::Let("x".into(), if_expr), Span::new(0, 35));
+        let let_x = ast
+            .add_stmt(Stmt::Let("x".into(), None, if_expr), Span::new(0, 35));
         let x_var = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
 
         let mut interp = test_interp(&ast);
@@ -1961,7 +2028,8 @@ mod tests {
         let mut ast = Ast::new();
         let ten =
             ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(10, 12));
-        let let_x = ast.add_stmt(Stmt::Let("x".into(), ten), Span::new(2, 12));
+        let let_x =
+            ast.add_stmt(Stmt::Let("x".into(), None, ten), Span::new(2, 12));
 
         let x = ast.add_expr(Expr::Var("x".into()), Span::new(14, 15));
         let one =
@@ -1985,13 +2053,13 @@ mod tests {
         // outer LET x = 1
         let one = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(8, 9));
         let let_outer =
-            ast.add_stmt(Stmt::Let("x".into(), one), Span::new(0, 9));
+            ast.add_stmt(Stmt::Let("x".into(), None, one), Span::new(0, 9));
 
         // inner block: { LET x = 10; x }
         let ten =
             ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(22, 24));
         let let_inner =
-            ast.add_stmt(Stmt::Let("x".into(), ten), Span::new(13, 24));
+            ast.add_stmt(Stmt::Let("x".into(), None, ten), Span::new(13, 24));
         let x_inner = ast.add_expr(Expr::Var("x".into()), Span::new(26, 27));
         let blk = ast.add_expr(
             Expr::Block(vec![let_inner], Some(x_inner)),

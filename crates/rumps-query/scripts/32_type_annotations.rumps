@@ -1,0 +1,59 @@
+; Test: Type annotations on LET bindings
+; Tests `LET x: Type = expr` syntax with type checking
+
+; === Basic type annotations ===
+
+; Int annotation
+LET x: Int = 42
+OUTPUT x
+; Expected: 42
+
+; String annotation
+LET s: String = "hello"
+OUTPUT s
+; Expected: hello
+
+; Bool annotation
+LET b: Bool = TRUE
+OUTPUT b
+; Expected: true
+
+; Float annotation
+LET f: Float = 3.14
+OUTPUT f
+; Expected: 3.14
+
+; === Parameterized type annotations ===
+
+; Option[Int] with Some
+LET opt: Option[Int] = Option.Some(10)
+OUTPUT opt
+; Expected: Option.Some(10)
+
+; Option[Int] with None (this tests type compatibility)
+; Note: None is Option[unknown] which should be compatible with Option[Int]
+
+; === Nested type annotations ===
+
+; Array[Int]
+LET arr: Array[Int] = [1, 2, 3]
+OUTPUT arr
+; Expected: [1, 2, 3]
+
+; Array[Option[Int]] - nested parameterized type
+LET arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]
+OUTPUT arr-opt
+; Expected: [Option.Some(1), Option.Some(2)]
+
+; Result[Int, String] - two type parameters
+LET res: Result[Int, String] = Result.Ok(42)
+OUTPUT res
+; Expected: Result.Ok(42)
+
+; === Without annotations (still works) ===
+
+LET no-ann = 123
+OUTPUT no-ann
+; Expected: 123
+
+OUTPUT "Type annotation test complete"

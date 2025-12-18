@@ -34,6 +34,7 @@ use nonempty::NonEmpty;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
+use crate::ast::{AstTypeExpr, AstTypeExprId};
 use crate::{
     Ast, BinOp, Error, Expr, ExprId, Lexer, Literal, Result, Span, Spanned,
     Stmt, StmtId, Token, TypePattern, UnOp,
@@ -48,6 +49,7 @@ type ParseErr = Simple<Token, Span>;
 /// Parser output paired with its span.
 type SpannedExpr = (ExprId, Span);
 type SpannedStmt = (StmtId, Span);
+type SpannedTypeExpr = (AstTypeExprId, Span);
 
 /// The result of parsing: the AST arena and the top-level statements.
 #[derive(Debug)]
@@ -158,20 +160,28 @@ impl Parser {
         })
     }
 
-    /// `LET name = expr`
+    /// `LET name = expr` or `LET name: Type = expr`
     fn let_stmt(
         ast: AstCell,
         stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
+        // Optional type annotation: `: Type`
+        let type_ann = just(Token::Colon)
+            .ignore_then(Self::type_expr(Rc::clone(&ast)))
+            .or_not();
+
         just(Token::Let)
             .ignore_then(Self::ident())
+            .then(type_ann)
             .then_ignore(just(Token::Assign))
             .then(Self::expr(Rc::clone(&ast), stmt))
-            .map_with_span(move |(name, (val_id, _)), span| {
-                let id =
-                    ast.borrow_mut().add_stmt(Stmt::Let(name, val_id), span);
+            .map_with_span(move |((name, ty_ann), (val_id, _)), span| {
+                let ty_id = ty_ann.map(|(id, _)| id);
+                let id = ast
+                    .borrow_mut()
+                    .add_stmt(Stmt::Let(name, ty_id, val_id), span);
                 (id, span)
             })
     }
@@ -978,6 +988,38 @@ impl Parser {
             .then_ignore(just(Token::RParen))
             .map(SmallVec::from_vec)
     }
+
+    /// Parse a type expression: `Int`, `Option[Int]`, `Result[T, E]`, etc.
+    fn type_expr(
+        ast: AstCell,
+    ) -> impl chumsky::Parser<Token, SpannedTypeExpr, Error = ParseErr> + Clone
+    {
+        recursive(|ty| {
+            // Type parameters: `[T]` or `[T, E]`
+            let type_params = ty
+                .clone()
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .delimited_by(just(Token::LBracket), just(Token::RBracket))
+                .map(SmallVec::<[SpannedTypeExpr; 2]>::from_vec);
+
+            // Named type optionally followed by type params
+            let ast2 = Rc::clone(&ast);
+            Self::ident().then(type_params.or_not()).map_with_span(
+                move |(name, params), span| {
+                    let te = match params {
+                        None => AstTypeExpr::Named(name),
+                        Some(ps) => AstTypeExpr::App(
+                            name,
+                            ps.into_iter().map(|(id, _)| id).collect(),
+                        ),
+                    };
+                    let id = ast2.borrow_mut().add_type_expr(te, span);
+                    (id, span)
+                },
+            )
+        })
+    }
 }
 
 /// Helper enum for pattern arguments in `is` patterns.
@@ -1339,9 +1381,73 @@ mod tests {
         let result = parse_ok("LET x = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
         match stmt {
-            Stmt::Let(name, _) => assert_eq!(name, "x"),
+            Stmt::Let(name, _, _) => assert_eq!(name, "x"),
             _ => panic!("expected Let"),
         }
+    }
+
+    #[test]
+    fn parse_let_with_type_annotation() {
+        let result = parse_ok("LET x: Int = 10");
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        let Stmt::Let(name, ty_ann, _) = stmt else {
+            panic!("expected Let");
+        };
+        assert_eq!(name, "x");
+        assert!(ty_ann.is_some());
+        let ty_expr = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        match ty_expr {
+            AstTypeExpr::Named(n) => assert_eq!(n, "Int"),
+            _ => panic!("expected Named type"),
+        }
+    }
+
+    #[test]
+    fn parse_let_with_parameterized_type() {
+        let result = parse_ok("LET x: Option[Int] = Option.None");
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        let Stmt::Let(name, ty_ann, _) = stmt else {
+            panic!("expected Let");
+        };
+        assert_eq!(name, "x");
+        assert!(ty_ann.is_some());
+        let ty_expr = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        match ty_expr {
+            AstTypeExpr::App(n, params) => {
+                assert_eq!(n, "Option");
+                assert_eq!(params.len(), 1);
+            }
+            _ => panic!("expected App type"),
+        }
+    }
+
+    #[test]
+    fn parse_let_with_nested_type() {
+        let result = parse_ok("LET x: Array[Option[Int]] = []");
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        let Stmt::Let(_, ty_ann, _) = stmt else {
+            panic!("expected Let");
+        };
+        let ty_expr = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        // Array[Option[Int]]
+        let AstTypeExpr::App(outer, outer_params) = ty_expr else {
+            panic!("expected App type");
+        };
+        assert_eq!(outer, "Array");
+        assert_eq!(outer_params.len(), 1);
+        // Option[Int]
+        let inner = result.ast.get_type_expr(outer_params[0]).unwrap();
+        let AstTypeExpr::App(mid, mid_params) = inner else {
+            panic!("expected nested App type");
+        };
+        assert_eq!(mid, "Option");
+        assert_eq!(mid_params.len(), 1);
+        // Int
+        let innermost = result.ast.get_type_expr(mid_params[0]).unwrap();
+        let AstTypeExpr::Named(name) = innermost else {
+            panic!("expected Named type");
+        };
+        assert_eq!(name, "Int");
     }
 
     #[test]
@@ -1518,7 +1624,7 @@ IF sum > 25 {
         // IF expression used in LET binding (the original issue)
         let result = parse_ok("LET x = IF FALSE { 42 }");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Let(name, val_id) = stmt else {
+        let Stmt::Let(name, _, val_id) = stmt else {
             panic!("expected Let");
         };
         assert_eq!(name, "x");
@@ -1544,7 +1650,7 @@ IF sum > 25 {
     fn parse_if_else_expr_in_let() {
         let result = parse_ok("LET x = IF TRUE { 1 } ELSE { 2 }");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Let(name, val_id) = stmt else {
+        let Stmt::Let(name, _, val_id) = stmt else {
             panic!("expected Let");
         };
         assert_eq!(name, "x");
@@ -1570,7 +1676,7 @@ IF sum > 25 {
     fn parse_block_expr_in_let() {
         let result = parse_ok("LET x = { LET y = 1\ny }");
         let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Let(name, val_id) = stmt else {
+        let Stmt::Let(name, _, val_id) = stmt else {
             panic!("expected Let");
         };
         assert_eq!(name, "x");
@@ -1589,7 +1695,7 @@ IF sum > 25 {
         assert_eq!(result.stmts.len(), 2); // LET and OUTPUT
 
         // Verify the LET contains a binary Add
-        let Stmt::Let(_, val_id) =
+        let Stmt::Let(_, _, val_id) =
             result.ast.get_stmt(result.stmts[0]).unwrap()
         else {
             panic!("expected Let");
@@ -1607,7 +1713,7 @@ IF sum > 25 {
         assert_eq!(result.stmts.len(), 2);
 
         // Should be ((1 + 2) + 3)
-        let Stmt::Let(_, val_id) =
+        let Stmt::Let(_, _, val_id) =
             result.ast.get_stmt(result.stmts[0]).unwrap()
         else {
             panic!("expected Let");
@@ -1627,7 +1733,7 @@ IF sum > 25 {
     fn parse_continuation_with_precedence() {
         // 1 + 2 * 3 should be 1 + (2 * 3)
         let result = parse_ok("LET x = 1\n    + 2\n    * 3");
-        let Stmt::Let(_, val_id) =
+        let Stmt::Let(_, _, val_id) =
             result.ast.get_stmt(result.stmts[0]).unwrap()
         else {
             panic!("expected Let");
