@@ -152,14 +152,22 @@ IF x is Option.Some(_) {
   OUTPUT "Has a value"
 }
 
+; With ELSE branch (bindings NOT visible in ELSE)
+IF x is Option.Some(val) {
+  OUTPUT "Got: " ++ val
+} ELSE {
+  OUTPUT "No value"
+  ; `val` is NOT in scope here
+}
+
 ; Multiple payloads (if we ever have them)
 IF pair is Pair(a, b) {
   OUTPUT a ++ ", " ++ b
 }
 ```
 
-- [ ] Add `Token::Is` keyword to lexer
-- [ ] Define `TypePattern` enum:
+- [x] Add `Token::Is` keyword to lexer
+- [x] Define `TypePattern` enum:
   ```rust
   enum TypePattern {
       Type(TypeId),                                    // `is Int`, `is String`
@@ -168,18 +176,20 @@ IF pair is Pair(a, b) {
       VariantBind(TypeId, u8, SmallVec<[String; 2]>),  // `is Option.Some(val)`
   }
   ```
-- [ ] Add `Expr::Is(ExprId, TypePattern)` to AST
-- [ ] Implement in interpreter:
+- [x] Add `Expr::Is(ExprId, TypePattern)` to AST
+- [x] Implement in interpreter:
   - For `Type(tid)`: check if value's type matches `tid`
   - For `Variant(tid, idx)`: check if value is `Tagged(tid, idx, _)` (variant has no payload)
   - For `VariantWildcard(tid, idx)`: check variant, ignore payload
   - For `VariantBind(tid, idx, names)`: check variant, bind payload values to names in scope
-- [ ] Scope handling for bindings:
+- [x] Scope handling for bindings:
   - Bindings are only visible in the `then` branch of the `IF`
+  - Bindings must NOT be visible in `ELSE` branch or after the `IF` statement
   - Create a new scope frame, bind variables, evaluate body, pop scope
+  - `ELSE` branch (if present) is evaluated in the outer scope (no bindings)
   - Arity check: number of binding names must match variant's payload arity
-- [ ] Add unit tests
-- [ ] Add integration test script
+- [x] Add unit tests
+- [x] Add integration test script (`31_is_operator.rumps`)
 
 ### 4. Type Cast Operator (`as`)
 
@@ -575,7 +585,16 @@ IF x is Option.Some(_) {
 }
 ```
 
-**Binding scope:** Variables bound by `is` are only visible in the `then` branch of the `IF`. They do not leak into the `else` branch or surrounding scope.
+**Binding scope:** Variables bound by `is` are only visible in the `then` branch of the `IF`. They do not leak into the `ELSE` branch or surrounding scope. This is critical for correctness; in the `ELSE` branch, the pattern did not match, so the bindings would have no valid value.
+
+```rumps
+IF x is Option.Some(val) {
+  OUTPUT val           ; `val` is bound here
+} ELSE {
+  OUTPUT "none"        ; `val` is NOT in scope; using it here is an error
+}
+OUTPUT val             ; ERROR: `val` not in scope (binding expired)
+```
 
 **Arity checking:** The number of binding names must match the variant's payload arity:
 ```rumps
@@ -768,6 +787,15 @@ IF result is Result.Err(e) {
   OUTPUT "Error: " ++ e
 } ELSE {
   OUTPUT "Success!"
+  ; `e` is NOT in scope here
+}
+
+; Chained pattern matching with ELSE
+LET maybe = Option.None
+IF maybe is Option.Some(v) {
+  OUTPUT "Got: " ++ (v as String)
+} ELSE {
+  OUTPUT "Nothing there"
 }
 
 ; Wildcard: check variant without binding

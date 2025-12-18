@@ -175,7 +175,8 @@ pub(crate) enum Value {
     /// An interned string.
     String(StringId),
 
-    /// An array of values with element type.
+    /// An array of values with element type. Note that in native RUMPS arrays
+    /// elements must by homogeneous
     Array(TypeExprId, SmallVec<[ValueId; 4]>),
 
     /// An object/record with string keys (insertion order preserved).

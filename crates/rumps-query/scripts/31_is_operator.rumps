@@ -1,0 +1,152 @@
+; Type check operator (is) tests
+; `is` performs runtime type checking and variant matching
+
+; === Simple type checks ===
+
+LET n = 42
+OUTPUT n is Int
+; Expected: TRUE
+
+OUTPUT n is String
+; Expected: FALSE
+
+LET s = "hello"
+OUTPUT s is String
+; Expected: TRUE
+
+OUTPUT s is Int
+; Expected: FALSE
+
+LET b = TRUE
+OUTPUT b is Bool
+; Expected: TRUE
+
+LET f = 3.14
+OUTPUT f is Float
+; Expected: TRUE
+
+; === Variant checks ===
+
+; Option.None (zero-arity: no parens needed)
+LET none = Option.None
+OUTPUT none is Option.None
+; Expected: TRUE
+
+; Variants with payloads require (_) or (name)
+OUTPUT none is Option.Some(_)
+; Expected: FALSE
+
+; Option.Some
+LET some = Option.Some(42)
+OUTPUT some is Option.Some(_)
+; Expected: TRUE
+
+OUTPUT some is Option.None
+; Expected: FALSE
+
+; Result variants
+LET ok = Result.Ok("success")
+OUTPUT ok is Result.Ok(_)
+; Expected: TRUE
+
+OUTPUT ok is Result.Err(_)
+; Expected: FALSE
+
+LET err = Result.Err("failed")
+OUTPUT err is Result.Err(_)
+; Expected: TRUE
+
+OUTPUT err is Result.Ok(_)
+; Expected: FALSE
+
+; === Wildcard variant checks ===
+
+OUTPUT Option.Some(99) is Option.Some(_)
+; Expected: TRUE
+
+OUTPUT Option.None is Option.Some(_)
+; Expected: FALSE
+
+OUTPUT Result.Ok(1) is Result.Ok(_)
+; Expected: TRUE
+
+; === Pattern binding in IF ===
+
+; Binding extracts the payload
+LET x = Option.Some(123)
+IF x is Option.Some(val) {
+  OUTPUT val
+} ELSE {
+  OUTPUT "none"
+}
+; Expected: 123
+
+; Binding not used when no match
+LET y = Option.None
+IF y is Option.Some(val) {
+  OUTPUT val
+} ELSE {
+  OUTPUT "none"
+}
+; Expected: none
+
+; Result binding
+LET r = Result.Ok(999)
+IF r is Result.Ok(data) {
+  OUTPUT data
+} ELSE {
+  OUTPUT "error"
+}
+; Expected: 999
+
+LET r2 = Result.Err("oops")
+IF r2 is Result.Err(e) {
+  OUTPUT e
+} ELSE {
+  OUTPUT "ok"
+}
+; Expected: oops
+
+; === Binding scope isolation ===
+
+; Binding should not leak to outer scope
+LET outer = Option.Some(50)
+IF outer is Option.Some(inner) {
+  OUTPUT inner
+}
+; Expected: 50
+
+; inner should not be accessible here
+; (This would be an error if we tried: OUTPUT inner)
+
+; === Combining with other operators ===
+
+; `is` in boolean expressions (must use wildcard for variants with payload)
+LET val = Option.Some(10)
+OUTPUT val is Option.Some(_) AND TRUE
+; Expected: TRUE
+
+OUTPUT Option.None is Option.Some(_) OR FALSE
+; Expected: FALSE
+
+; Using coalesced value for type check
+LET maybe = Option.Some(42)
+LET unwrapped = maybe ?? 0
+OUTPUT unwrapped is Int
+; Expected: TRUE
+
+; === Nested IF with bindings ===
+
+LET outer2 = Option.Some(Option.Some(77))
+IF outer2 is Option.Some(inner2) {
+  IF inner2 is Option.Some(deepval) {
+    OUTPUT deepval
+  } ELSE {
+    OUTPUT "inner none"
+  }
+} ELSE {
+  OUTPUT "outer none"
+}
+; Expected: 77
+
+OUTPUT "is operator tests complete"

@@ -36,7 +36,7 @@ use smallvec::SmallVec;
 
 use crate::{
     Ast, BinOp, Error, Expr, ExprId, Lexer, Literal, Result, Span, Spanned,
-    Stmt, StmtId, Token, UnOp,
+    Stmt, StmtId, Token, TypePattern, UnOp,
 };
 
 /// Shared mutable AST arena for use during parsing.
@@ -356,7 +356,8 @@ impl Parser {
             let mul = Self::mul_expr(Rc::clone(&ast), unary);
             let add = Self::add_expr(Rc::clone(&ast), mul);
             let cmp = Self::cmp_expr(Rc::clone(&ast), add);
-            let and = Self::and_expr(Rc::clone(&ast), cmp);
+            let is = Self::is_expr(Rc::clone(&ast), cmp);
+            let and = Self::and_expr(Rc::clone(&ast), is);
             let or = Self::or_expr(Rc::clone(&ast), and);
             Self::coalesce_expr(Rc::clone(&ast), or)
         })
@@ -451,6 +452,91 @@ impl Parser {
                 Self::fold_binary(&ast, first, rest, span)
             },
         )
+    }
+
+    /// Type check: `expr is Pattern`
+    ///
+    /// Pattern can be:
+    /// - Simple type: `is Int`, `is String`
+    /// - Variant (zero-arity): `is Option.None`
+    /// - Variant with wildcard: `is Option.Some(_)`
+    /// - Variant with binding: `is Option.Some(val)`
+    fn is_expr(
+        ast: AstCell,
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
+        // Parse a type pattern after `is`
+        let type_pattern = Self::type_pattern();
+
+        let is_rhs = Self::opt_newlines()
+            .ignore_then(just(Token::Is))
+            .then_ignore(Self::opt_newlines())
+            .ignore_then(type_pattern);
+
+        operand.clone().then(is_rhs.or_not()).map_with_span(
+            move |(expr, pattern), span| match pattern {
+                Some(pat) => {
+                    let id =
+                        ast.borrow_mut().add_expr(Expr::Is(expr.0, pat), span);
+                    (id, span)
+                }
+                None => expr,
+            },
+        )
+    }
+
+    /// Parse a type pattern for the `is` operator.
+    fn type_pattern(
+    ) -> impl chumsky::Parser<Token, TypePattern, Error = ParseErr> + Clone
+    {
+        // Wildcard: `_` (underscore is parsed as an identifier)
+        let wildcard = select! { Token::Ident(s) if s == "_" => () };
+
+        // Binding name (any identifier except `_`)
+        let binding = select! { Token::Ident(s) if s != "_" => s };
+
+        // Pattern arguments: `(name)`, `(name1, name2)`, or `(_)`
+        let pattern_args = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(choice((
+                // Wildcard: `(_)`
+                wildcard.to(PatternArgs::Wildcard),
+                // Bindings: `(name)` or `(name1, name2, ...)`
+                binding
+                    .separated_by(
+                        just(Token::Comma).then_ignore(Self::opt_newlines()),
+                    )
+                    .at_least(1)
+                    .map(|names| {
+                        PatternArgs::Bindings(SmallVec::from_vec(names))
+                    }),
+            )))
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen));
+
+        // Type.Variant pattern (with optional args)
+        let variant_pattern = Self::ident()
+            .then_ignore(just(Token::Dot))
+            .then(Self::ident())
+            .then(pattern_args.or_not())
+            .map(|((ty, var), args)| match args {
+                None => TypePattern::Variant(ty, var),
+                Some(PatternArgs::Wildcard) => {
+                    TypePattern::VariantWildcard(ty, var)
+                }
+                Some(PatternArgs::Bindings(names)) => {
+                    TypePattern::VariantBind(ty, var, names)
+                }
+            });
+
+        // Simple type pattern: `Int`, `String`, etc.
+        let simple_type = Self::ident().map(TypePattern::Type);
+
+        // Try variant first, then simple type
+        variant_pattern.or(simple_type)
     }
 
     /// Additive: `+`, `-`, `++`
@@ -892,6 +978,13 @@ impl Parser {
             .then_ignore(just(Token::RParen))
             .map(SmallVec::from_vec)
     }
+}
+
+/// Helper enum for pattern arguments in `is` patterns.
+#[derive(Clone)]
+enum PatternArgs {
+    Wildcard,
+    Bindings(SmallVec<[String; 2]>),
 }
 
 /// Helper enum for postfix operations during folding; carries end span.

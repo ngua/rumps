@@ -25,7 +25,9 @@ mod token;
 mod value;
 
 #[allow(unused_imports)]
-pub(crate) use ast::{Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, UnOp};
+pub(crate) use ast::{
+    Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, TypePattern, UnOp,
+};
 #[allow(unused_imports)]
 pub(crate) use env::{Environment, PrimCtx, PrimFn, PrimResult, Scopes};
 #[allow(unused_imports)]

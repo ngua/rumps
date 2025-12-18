@@ -136,6 +136,26 @@ pub(crate) enum UnOp {
     Not, // `NOT` or `!`
 }
 
+/// A type pattern for the `is` operator.
+///
+/// Used for runtime type checking and variant matching with optional binding.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TypePattern {
+    /// Simple type check: `is Int`, `is String`.
+    Type(String),
+
+    /// Variant check without payload: `is Option.None`.
+    Variant(String, String),
+
+    /// Variant check ignoring payload: `is Option.Some(_)`.
+    VariantWildcard(String, String),
+
+    /// Variant check with binding: `is Option.Some(val)`.
+    ///
+    /// Bindings are only visible in the `then` branch of an `IF`.
+    VariantBind(String, String, SmallVec<[String; 2]>),
+}
+
 /// A literal value in the AST.
 ///
 /// This is the compile-time representation; runtime values (with arena
@@ -213,6 +233,12 @@ pub(crate) enum Expr {
     ///
     /// Examples: `Option.Some(1)`, `Result.Ok(42)`, `Option.None`
     Variant(String, String, SmallVec<[ExprId; 4]>),
+
+    /// Type check: `expr is Pattern`.
+    ///
+    /// Returns `true` if the value matches the pattern. For `VariantBind`
+    /// patterns, bindings are only visible in the `then` branch of an `IF`.
+    Is(ExprId, TypePattern),
 
     /// A block expression: `{ stmt...; expr }`.
     ///

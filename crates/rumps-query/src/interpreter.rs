@@ -86,7 +86,9 @@ use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
 use smallvec::SmallVec;
 
-use crate::ast::{Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, UnOp};
+use crate::ast::{
+    Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, TypePattern, UnOp,
+};
 use crate::env::Environment;
 use crate::io::IoContext;
 use crate::value::{
@@ -198,6 +200,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Variant(ty, var, args) => {
                 self.variant(&ty, &var, &args, span).await
             }
+            Expr::Is(expr, pattern) => self.is(expr, &pattern, span).await,
             Expr::Block(stmts, tail) => self.block(&stmts, tail).await,
             Expr::If(cond, then_br, else_br) => {
                 self.r#if(cond, then_br, else_br).await
@@ -693,6 +696,154 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    /// Evaluate a type check: `expr is Pattern`.
+    ///
+    /// Returns `true` if the value matches the pattern, `false` otherwise.
+    /// For `VariantBind` patterns, bindings are NOT created here; they are
+    /// handled specially by `if_with_bindings` when used as an `IF` condition.
+    #[async_recursion]
+    async fn is(
+        &mut self,
+        expr: ExprId,
+        pattern: &TypePattern,
+        span: Span,
+    ) -> Result<Value> {
+        let val = self.eval(expr).await?;
+        let matched = self.check_pattern(&val, pattern, span)?;
+        Ok(Value::Bool(matched))
+    }
+
+    /// Check if a value matches a type pattern (without binding).
+    fn check_pattern(
+        &self,
+        val: &Value,
+        pattern: &TypePattern,
+        span: Span,
+    ) -> Result<bool> {
+        match pattern {
+            TypePattern::Type(ty_name) => {
+                // Simple type check: `is Int`, `is String`, etc.
+                let ty_id = self.arena.lookup_string(ty_name);
+                let type_id = ty_id.and_then(|id| self.registry.lookup(id));
+                type_id
+                    .map(|tid| self.value_matches_type(val, tid))
+                    .ok_or_else(|| {
+                        Error::runtime(
+                            span,
+                            format!("unknown type `{ty_name}`"),
+                        )
+                    })
+            }
+            TypePattern::Variant(ty_name, var_name) => {
+                // Variant check (zero-arity only): `is Option.None`
+                // Variants with payloads must use `(_)` or `(name)`
+                self.check_variant_zero_arity(val, ty_name, var_name, span)
+            }
+            TypePattern::VariantWildcard(ty_name, var_name) => {
+                // Variant check ignoring payload: `is Option.Some(_)`
+                self.check_variant(val, ty_name, var_name, span)
+            }
+            TypePattern::VariantBind(ty_name, var_name, _) => {
+                // Variant check (bindings handled elsewhere): `is Option.Some(val)`
+                self.check_variant(val, ty_name, var_name, span)
+            }
+        }
+    }
+
+    /// Check variant match, requiring zero-arity.
+    ///
+    /// Used for `is Type.Variant` without parens; variants with payloads
+    /// must use `is Type.Variant(_)` or `is Type.Variant(name)`.
+    fn check_variant_zero_arity(
+        &self,
+        val: &Value,
+        ty_name: &str,
+        var_name: &str,
+        span: Span,
+    ) -> Result<bool> {
+        let (type_id, var_def) =
+            self.lookup_variant(ty_name, var_name, span)?;
+
+        // Enforce zero-arity for bare variant patterns
+        (var_def.arity == 0).then_some(()).ok_or_else(|| {
+            Error::runtime(
+                span,
+                format!(
+                    "`{ty_name}.{var_name}` has {} payload(s); use `{ty_name}.{var_name}(_)` or bind with `{ty_name}.{var_name}(name)`",
+                    var_def.arity
+                ),
+            )
+        })?;
+
+        Ok(match val {
+            Value::Tagged(tid, idx, _) => {
+                *tid == type_id && *idx == var_def.idx
+            }
+            _ => false,
+        })
+    }
+
+    /// Check if a value is a Tagged variant matching the given type and variant.
+    fn check_variant(
+        &self,
+        val: &Value,
+        ty_name: &str,
+        var_name: &str,
+        span: Span,
+    ) -> Result<bool> {
+        let (type_id, var_def) =
+            self.lookup_variant(ty_name, var_name, span)?;
+
+        Ok(match val {
+            Value::Tagged(tid, idx, _) => {
+                *tid == type_id && *idx == var_def.idx
+            }
+            _ => false,
+        })
+    }
+
+    /// Look up a type and variant, returning their IDs.
+    fn lookup_variant(
+        &self,
+        ty_name: &str,
+        var_name: &str,
+        span: Span,
+    ) -> Result<(TypeId, crate::value::VariantDef)> {
+        let ty_id = self.arena.lookup_string(ty_name);
+        let var_id = self.arena.lookup_string(var_name);
+
+        let type_id = ty_id
+            .and_then(|id| self.registry.lookup(id))
+            .ok_or_else(|| {
+                Error::runtime(span, format!("unknown type `{ty_name}`"))
+            })?;
+
+        let var_def = var_id
+            .and_then(|id| self.registry.lookup_variant(type_id, id))
+            .cloned()
+            .ok_or_else(|| {
+                Error::runtime(
+                    span,
+                    format!("unknown variant `{ty_name}.{var_name}`"),
+                )
+            })?;
+
+        Ok((type_id, var_def))
+    }
+
+    /// Check if a value matches a simple type (non-variant).
+    fn value_matches_type(&self, val: &Value, type_id: TypeId) -> bool {
+        match val {
+            Value::Bool(_) => type_id == TypeId::BOOL,
+            Value::Int(_) => type_id == TypeId::INT,
+            Value::Float(_) => type_id == TypeId::FLOAT,
+            Value::String(_) => type_id == TypeId::STRING,
+            Value::Array(_, _) => type_id == TypeId::ARRAY,
+            Value::Object(_) => type_id == TypeId::OBJECT,
+            Value::Tagged(tid, _, _) => *tid == type_id,
+        }
+    }
+
     /// Helper for field access on a value (without wrapping in Option).
     fn field_access(
         &mut self,
@@ -832,6 +983,10 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Returns the value of the taken branch. If no else branch and condition
     /// is false, returns `Option.None`.
+    ///
+    /// Special handling for `is` conditions with bindings: if the condition is
+    /// `expr is Pattern(bindings)`, the bindings are only visible in the then
+    /// branch, not in the else branch.
     #[async_recursion]
     async fn r#if(
         &mut self,
@@ -839,15 +994,98 @@ impl<I: IoContext> Interpreter<'_, I> {
         then_br: ExprId,
         else_br: Option<ExprId>,
     ) -> Result<Value> {
-        let cond_val = self.eval(cond).await?;
-        if cond_val.is_truthy(&self.arena) {
-            self.eval(then_br).await
+        // Check if condition is `Expr::Is` with bindings
+        let cond_expr = self.ast.get_expr(cond).cloned();
+        match cond_expr {
+            Some(Expr::Is(expr, TypePattern::VariantBind(ty, var, names))) => {
+                self.if_with_bindings(expr, &ty, &var, &names, then_br, else_br)
+                    .await
+            }
+            _ => {
+                let cond_val = self.eval(cond).await?;
+                if cond_val.is_truthy(&self.arena) {
+                    self.eval(then_br).await
+                } else {
+                    match else_br {
+                        Some(e) => self.eval(e).await,
+                        None => Ok(Value::none()),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle `IF expr is Type.Variant(bindings) { then } ELSE { else }`.
+    ///
+    /// Bindings are only visible in the then branch.
+    #[async_recursion]
+    async fn if_with_bindings(
+        &mut self,
+        expr: ExprId,
+        ty_name: &str,
+        var_name: &str,
+        names: &[String],
+        then_br: ExprId,
+        else_br: Option<ExprId>,
+    ) -> Result<Value> {
+        let span = self.ast.expr_span(expr).unwrap_or_default();
+        let val = self.eval(expr).await?;
+
+        // Check if the value matches the variant
+        let matched = self.check_variant(&val, ty_name, var_name, span)?;
+
+        if matched {
+            // Extract payloads and bind them
+            let payloads = match &val {
+                Value::Tagged(_, _, p) => p.clone(),
+                _ => SmallVec::new(),
+            };
+
+            // Validate arity
+            (payloads.len() == names.len()).then_some(()).ok_or_else(|| {
+                Error::runtime(
+                    span,
+                    format!(
+                        "`{ty_name}.{var_name}` has {} payload(s), but {} binding(s) provided",
+                        payloads.len(),
+                        names.len()
+                    ),
+                )
+            })?;
+
+            // Push scope, bind, evaluate, pop
+            self.env.scopes.push();
+            self.bind_payloads(names, &payloads, span);
+            let result = self.eval(then_br).await;
+            self.env.scopes.pop();
+            result
         } else {
+            // No match; evaluate else branch (without bindings)
             match else_br {
                 Some(e) => self.eval(e).await,
                 None => Ok(Value::none()),
             }
         }
+    }
+
+    /// Bind payload values to names in the current scope.
+    fn bind_payloads(
+        &mut self,
+        names: &[String],
+        payloads: &[ValueId],
+        span: Span,
+    ) {
+        names
+            .iter()
+            .zip(payloads.iter())
+            .for_each(|(name, &val_id)| {
+                let name_id = self.arena.intern(name);
+                // Re-add the value to get a fresh ValueId in case it matters
+                let val =
+                    self.arena.get(val_id).cloned().unwrap_or(Value::none());
+                let new_val_id = self.arena.add(val, span);
+                self.env.scopes.bind(name_id, new_val_id);
+            });
     }
 
     /// Execute a `LET` binding.
@@ -2082,6 +2320,367 @@ mod tests {
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(opt_field).await;
+        assert!(result.is_err());
+    }
+
+    // ===== `is` operator tests =====
+
+    #[tokio::test]
+    async fn is_simple_type_int() {
+        // 42 is Int -> true
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let is_expr = ast.add_expr(
+            Expr::Is(val, TypePattern::Type("Int".into())),
+            Span::new(0, 8),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(is_expr).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn is_simple_type_mismatch() {
+        // 42 is String -> false
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let is_expr = ast.add_expr(
+            Expr::Is(val, TypePattern::Type("String".into())),
+            Span::new(0, 11),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(is_expr).await.unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn is_variant_none() {
+        // Option.None is Option.None -> true
+        let mut ast = Ast::new();
+        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
+        let none =
+            ast.add_expr(Expr::Field(base, "None".into()), Span::new(0, 11));
+        let is_expr = ast.add_expr(
+            Expr::Is(
+                none,
+                TypePattern::Variant("Option".into(), "None".into()),
+            ),
+            Span::new(0, 26),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(is_expr).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn is_variant_some_wildcard() {
+        // Option.Some(42) is Option.Some(_) -> true
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
+        let some = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![val],
+            ),
+            Span::new(0, 15),
+        );
+        let is_expr = ast.add_expr(
+            Expr::Is(
+                some,
+                TypePattern::VariantWildcard("Option".into(), "Some".into()),
+            ),
+            Span::new(0, 30),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(is_expr).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn is_variant_mismatch() {
+        // Option.None is Option.Some(_) -> false
+        let mut ast = Ast::new();
+        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
+        let none =
+            ast.add_expr(Expr::Field(base, "None".into()), Span::new(0, 11));
+        let is_expr = ast.add_expr(
+            Expr::Is(
+                none,
+                TypePattern::VariantWildcard("Option".into(), "Some".into()),
+            ),
+            Span::new(0, 26),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(is_expr).await.unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn is_variant_bind_in_if() {
+        // IF Option.Some(42) is Option.Some(val) { val } ELSE { 0 }
+        // -> 42
+        let mut ast = Ast::new();
+
+        // Option.Some(42)
+        let forty_two =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
+        let some = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![forty_two],
+            ),
+            Span::new(0, 15),
+        );
+
+        // is Option.Some(val)
+        let is_expr = ast.add_expr(
+            Expr::Is(
+                some,
+                TypePattern::VariantBind(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec!["val".into()],
+                ),
+            ),
+            Span::new(0, 35),
+        );
+
+        // then: { val }
+        let val_ref = ast.add_expr(Expr::Var("val".into()), Span::new(38, 41));
+        let then_blk =
+            ast.add_expr(Expr::Block(vec![], Some(val_ref)), Span::new(37, 43));
+
+        // else: { 0 }
+        let zero =
+            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(51, 52));
+        let else_blk =
+            ast.add_expr(Expr::Block(vec![], Some(zero)), Span::new(50, 54));
+
+        // IF
+        let if_expr = ast.add_expr(
+            Expr::If(is_expr, then_blk, Some(else_blk)),
+            Span::new(0, 54),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(if_expr).await.unwrap();
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[tokio::test]
+    async fn is_variant_bind_else_branch() {
+        // IF Option.None is Option.Some(val) { val } ELSE { 99 }
+        // -> 99 (bindings not visible in else)
+        let mut ast = Ast::new();
+
+        // Option.None
+        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(3, 9));
+        let none =
+            ast.add_expr(Expr::Field(base, "None".into()), Span::new(3, 14));
+
+        // is Option.Some(val)
+        let is_expr = ast.add_expr(
+            Expr::Is(
+                none,
+                TypePattern::VariantBind(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec!["val".into()],
+                ),
+            ),
+            Span::new(0, 35),
+        );
+
+        // then: { val }
+        let val_ref = ast.add_expr(Expr::Var("val".into()), Span::new(38, 41));
+        let then_blk =
+            ast.add_expr(Expr::Block(vec![], Some(val_ref)), Span::new(37, 43));
+
+        // else: { 99 }
+        let ninety_nine =
+            ast.add_expr(Expr::Literal(Literal::Int(99)), Span::new(51, 53));
+        let else_blk = ast.add_expr(
+            Expr::Block(vec![], Some(ninety_nine)),
+            Span::new(50, 55),
+        );
+
+        // IF
+        let if_expr = ast.add_expr(
+            Expr::If(is_expr, then_blk, Some(else_blk)),
+            Span::new(0, 55),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(if_expr).await.unwrap();
+        assert_eq!(result, Value::Int(99));
+    }
+
+    #[tokio::test]
+    async fn is_variant_bind_scope_isolated() {
+        // `val` should NOT be visible after the IF
+        // IF Option.Some(42) is Option.Some(val) { val } ELSE { 0 }
+        // val  // should error
+        let mut ast = Ast::new();
+
+        // Option.Some(42)
+        let forty_two =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
+        let some = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![forty_two],
+            ),
+            Span::new(0, 15),
+        );
+
+        // is Option.Some(val)
+        let is_expr = ast.add_expr(
+            Expr::Is(
+                some,
+                TypePattern::VariantBind(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec!["val".into()],
+                ),
+            ),
+            Span::new(0, 35),
+        );
+
+        // then: { val }
+        let val_ref1 = ast.add_expr(Expr::Var("val".into()), Span::new(38, 41));
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(val_ref1)), Span::new(37, 43));
+
+        // else: { 0 }
+        let zero =
+            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(51, 52));
+        let else_blk =
+            ast.add_expr(Expr::Block(vec![], Some(zero)), Span::new(50, 54));
+
+        // IF
+        let if_expr = ast.add_expr(
+            Expr::If(is_expr, then_blk, Some(else_blk)),
+            Span::new(0, 54),
+        );
+        let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 54));
+
+        // val (after if)
+        let val_ref2 = ast.add_expr(Expr::Var("val".into()), Span::new(56, 59));
+
+        let mut interp = test_interp(&ast);
+        interp.exec(if_stmt).await.unwrap();
+        // val should NOT be visible
+        let result = interp.eval(val_ref2).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn is_unknown_type_error() {
+        // 42 is Unknown -> error
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let is_expr = ast.add_expr(
+            Expr::Is(val, TypePattern::Type("Unknown".into())),
+            Span::new(0, 12),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(is_expr).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn is_result_ok() {
+        // Result.Ok(1) is Result.Ok(_) -> true
+        let mut ast = Ast::new();
+        let one =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11));
+        let ok = ast.add_expr(
+            Expr::Variant(
+                "Result".into(),
+                "Ok".into(),
+                smallvec::smallvec![one],
+            ),
+            Span::new(0, 12),
+        );
+        let is_expr = ast.add_expr(
+            Expr::Is(
+                ok,
+                TypePattern::VariantWildcard("Result".into(), "Ok".into()),
+            ),
+            Span::new(0, 25),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(is_expr).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn is_result_err() {
+        // Result.Err("oops") is Result.Ok(_) -> false
+        let mut ast = Ast::new();
+        let msg = ast.add_expr(
+            Expr::Literal(Literal::String("oops".into())),
+            Span::new(11, 17),
+        );
+        let err = ast.add_expr(
+            Expr::Variant(
+                "Result".into(),
+                "Err".into(),
+                smallvec::smallvec![msg],
+            ),
+            Span::new(0, 18),
+        );
+        let is_expr = ast.add_expr(
+            Expr::Is(
+                err,
+                TypePattern::VariantWildcard("Result".into(), "Ok".into()),
+            ),
+            Span::new(0, 30),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(is_expr).await.unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn is_variant_with_payload_requires_parens() {
+        // `is Option.Some` without parens is an error (must use `(_)` or `(name)`)
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
+        let some = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![val],
+            ),
+            Span::new(0, 15),
+        );
+        let is_expr = ast.add_expr(
+            Expr::Is(
+                some,
+                TypePattern::Variant("Option".into(), "Some".into()),
+            ),
+            Span::new(0, 30),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(is_expr).await;
         assert!(result.is_err());
     }
 }

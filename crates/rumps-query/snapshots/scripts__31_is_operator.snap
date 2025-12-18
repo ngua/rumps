@@ -1,0 +1,31 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Type check operator (is) tests\n; `is` performs runtime type checking and variant matching\n\n; === Simple type checks ===\n\nLET n = 42\nOUTPUT n is Int\n; Expected: TRUE\n\nOUTPUT n is String\n; Expected: FALSE\n\nLET s = \"hello\"\nOUTPUT s is String\n; Expected: TRUE\n\nOUTPUT s is Int\n; Expected: FALSE\n\nLET b = TRUE\nOUTPUT b is Bool\n; Expected: TRUE\n\nLET f = 3.14\nOUTPUT f is Float\n; Expected: TRUE\n\n; === Variant checks ===\n\n; Option.None\nLET none = Option.None\nOUTPUT none is Option.None\n; Expected: TRUE\n\nOUTPUT none is Option.Some\n; Expected: FALSE\n\n; Option.Some\nLET some = Option.Some(42)\nOUTPUT some is Option.Some\n; Expected: TRUE\n\nOUTPUT some is Option.None\n; Expected: FALSE\n\n; Result variants\nLET ok = Result.Ok(\"success\")\nOUTPUT ok is Result.Ok\n; Expected: TRUE\n\nOUTPUT ok is Result.Err\n; Expected: FALSE\n\nLET err = Result.Err(\"failed\")\nOUTPUT err is Result.Err\n; Expected: TRUE\n\nOUTPUT err is Result.Ok\n; Expected: FALSE\n\n; === Wildcard variant checks ===\n\nOUTPUT Option.Some(99) is Option.Some(_)\n; Expected: TRUE\n\nOUTPUT Option.None is Option.Some(_)\n; Expected: FALSE\n\nOUTPUT Result.Ok(1) is Result.Ok(_)\n; Expected: TRUE\n\n; === Pattern binding in IF ===\n\n; Binding extracts the payload\nLET x = Option.Some(123)\nIF x is Option.Some(val) {\n  OUTPUT val\n} ELSE {\n  OUTPUT \"none\"\n}\n; Expected: 123\n\n; Binding not used when no match\nLET y = Option.None\nIF y is Option.Some(val) {\n  OUTPUT val\n} ELSE {\n  OUTPUT \"none\"\n}\n; Expected: none\n\n; Result binding\nLET r = Result.Ok(999)\nIF r is Result.Ok(data) {\n  OUTPUT data\n} ELSE {\n  OUTPUT \"error\"\n}\n; Expected: 999\n\nLET r2 = Result.Err(\"oops\")\nIF r2 is Result.Err(e) {\n  OUTPUT e\n} ELSE {\n  OUTPUT \"ok\"\n}\n; Expected: oops\n\n; === Binding scope isolation ===\n\n; Binding should not leak to outer scope\nLET outer = Option.Some(50)\nIF outer is Option.Some(inner) {\n  OUTPUT inner\n}\n; Expected: 50\n\n; inner should not be accessible here\n; (This would be an error if we tried: OUTPUT inner)\n\n; === Combining with other operators ===\n\n; `is` in boolean expressions\nLET val = Option.Some(10)\nOUTPUT val is Option.Some AND TRUE\n; Expected: TRUE\n\nOUTPUT Option.None is Option.Some OR FALSE\n; Expected: FALSE\n\n; Using coalesced value for type check\nLET maybe = Option.Some(42)\nLET unwrapped = maybe ?? 0\nOUTPUT unwrapped is Int\n; Expected: TRUE\n\n; === Nested IF with bindings ===\n\nLET outer2 = Option.Some(Option.Some(77))\nIF outer2 is Option.Some(inner2) {\n  IF inner2 is Option.Some(deepval) {\n    OUTPUT deepval\n  } ELSE {\n    OUTPUT \"inner none\"\n  }\n} ELSE {\n  OUTPUT \"outer none\"\n}\n; Expected: 77\n\nOUTPUT \"is operator tests complete\"\n"
+---
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+TRUE
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+123
+none
+999
+oops
+50
+TRUE
+FALSE
+TRUE
+77
+is operator tests complete
