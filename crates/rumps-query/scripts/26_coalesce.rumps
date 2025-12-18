@@ -1,0 +1,7 @@
+; Coalesce operator (??) tests
+; Basic parsing and error behavior tests
+; (Full Option/Result tests require fixes to parser; see TODOS/dsl/phase-2.md)
+
+; Test: Type error on non-Option/Result value
+; This should output an error since Int is not Option or Result
+OUTPUT 42 ?? 0

@@ -362,7 +362,27 @@ impl Parser {
             + 'static,
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
     {
-        Self::or_expr(ast, expr)
+        Self::coalesce_expr(ast, expr)
+    }
+
+    /// Coalesce: `expr ?? expr`
+    ///
+    /// Lowest precedence binary operator. Right-hand side is only evaluated
+    /// if left is `Option.None` or `Result.Err`.
+    fn coalesce_expr(
+        ast: AstCell,
+        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
+        let op = just(Token::QuestionQuestion).to(BinOp::Coalesce);
+
+        Self::or_expr(Rc::clone(&ast), expr.clone())
+            .then(op.then(Self::or_expr(Rc::clone(&ast), expr)).repeated())
+            .map_with_span(move |(first, rest), span| {
+                Self::fold_binary(&ast, first, rest, span)
+            })
     }
 
     /// Logical OR: `expr || expr` or `expr OR expr`
@@ -1060,6 +1080,45 @@ mod tests {
                 assert_eq!(args.len(), 2);
             }
             _ => panic!("expected Call"),
+        }
+    }
+
+    #[test]
+    fn parse_coalesce() {
+        let (ast, id) = parse_expr_ok("a ?? b");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(_, BinOp::Coalesce, _)) => {}
+            _ => panic!("expected Binary Coalesce"),
+        }
+    }
+
+    #[test]
+    fn parse_coalesce_chain() {
+        // a ?? b ?? c should be (a ?? b) ?? c (left-associative)
+        let (ast, id) = parse_expr_ok("a ?? b ?? c");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(lhs, BinOp::Coalesce, _)) => {
+                match ast.get_expr(*lhs) {
+                    Some(Expr::Binary(_, BinOp::Coalesce, _)) => {}
+                    _ => panic!("expected nested Coalesce on lhs"),
+                }
+            }
+            _ => panic!("expected Binary Coalesce"),
+        }
+    }
+
+    #[test]
+    fn parse_coalesce_precedence() {
+        // a + b ?? c should be (a + b) ?? c (?? is lower precedence than +)
+        let (ast, id) = parse_expr_ok("a + b ?? c");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(lhs, BinOp::Coalesce, _)) => {
+                match ast.get_expr(*lhs) {
+                    Some(Expr::Binary(_, BinOp::Add, _)) => {}
+                    _ => panic!("expected Add on lhs"),
+                }
+            }
+            _ => panic!("expected Binary Coalesce at top"),
         }
     }
 

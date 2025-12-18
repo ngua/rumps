@@ -379,6 +379,7 @@ impl Lexer<'_> {
             just("&&").to(Token::AmpAmp),
             just("||").to(Token::PipePipe),
             just("..").to(Token::DotDot),
+            just("??").to(Token::QuestionQuestion),
         ));
 
         let one_char_ops = choice((
@@ -815,6 +816,20 @@ mod tests {
         assert_eq!(
             tokens,
             vec![Token::Int(1), Token::DotDot, Token::Int(10), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn coalesce_operator() {
+        let tokens = lex_ok("a ?? b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::QuestionQuestion,
+                Token::Ident("b".into()),
+                Token::Eof
+            ]
         );
     }
 

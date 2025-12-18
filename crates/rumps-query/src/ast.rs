@@ -124,6 +124,9 @@ pub(crate) enum BinOp {
 
     // String
     Concat, // `++`
+
+    // Coalesce
+    Coalesce, // `??`
 }
 
 /// Unary operators.

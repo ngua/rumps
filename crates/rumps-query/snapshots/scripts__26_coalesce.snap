@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Coalesce operator (??) tests\n; Basic parsing and error behavior tests\n; (Full Option/Result tests require fixes to parser; see TODOS/dsl/phase-2.md)\n\n; Test: Type error on non-Option/Result value\n; This should output an error since Int is not Option or Result\nOUTPUT 42 ?? 0\n"
+---
+ERROR: type error at 269..276: `??` requires Option or Result; got Int

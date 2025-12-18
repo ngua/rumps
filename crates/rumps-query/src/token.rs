@@ -64,16 +64,17 @@ pub(crate) enum Token {
     Concat, // ++
 
     // Punctuation
-    LParen,   // (
-    RParen,   // )
-    LBrace,   // {
-    RBrace,   // }
-    LBracket, // [
-    RBracket, // ]
-    Comma,    // ,
-    Colon,    // :
-    Dot,      // .
-    DotDot,   // ..
+    LParen,           // (
+    RParen,           // )
+    LBrace,           // {
+    RBrace,           // }
+    LBracket,         // [
+    RBracket,         // ]
+    Comma,            // ,
+    Colon,            // :
+    Dot,              // .
+    DotDot,           // ..
+    QuestionQuestion, // ??
 
     // Special
     Newline,
@@ -152,6 +153,7 @@ impl fmt::Display for Token {
             Self::Colon => write!(f, ":"),
             Self::Dot => write!(f, "."),
             Self::DotDot => write!(f, ".."),
+            Self::QuestionQuestion => write!(f, "??"),
             Self::Newline => write!(f, "newline"),
             Self::Indent => write!(f, "indent"),
             Self::Dedent => write!(f, "dedent"),

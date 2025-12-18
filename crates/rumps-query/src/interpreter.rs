@@ -255,7 +255,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Evaluate a binary operation.
     ///
-    /// Handles short-circuit evaluation for `AND` and `OR`.
+    /// Handles short-circuit evaluation for `AND`, `OR`, and `Coalesce`.
     #[async_recursion]
     async fn binary(
         &mut self,
@@ -319,12 +319,71 @@ impl<I: IoContext> Interpreter<'_, I> {
                     )),
                 }
             }
+            // Coalesce: unwrap Option.Some/Result.Ok, or evaluate right for None/Err
+            BinOp::Coalesce => {
+                let left = self.eval(lhs).await?;
+                self.coalesce(left, rhs, span).await
+            }
             // All other operators evaluate both sides
             _ => {
                 let left = self.eval(lhs).await?;
                 let right = self.eval(rhs).await?;
                 self.apply_binop(&left, op, &right, span)
             }
+        }
+    }
+
+    /// Coalesce operator implementation.
+    ///
+    /// - `Option.Some(v)` -> `v` (unwrapped)
+    /// - `Option.None` -> evaluate and return rhs
+    /// - `Result.Ok(v)` -> `v` (unwrapped)
+    /// - `Result.Err(_)` -> evaluate and return rhs (error discarded)
+    /// - Other types -> type error
+    #[async_recursion]
+    async fn coalesce(
+        &mut self,
+        left: Value,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<Value> {
+        use crate::value::TypeId;
+
+        match left {
+            // Option.Some(v) -> unwrap to v
+            Value::Tagged(ty, 1, ref payload) if ty == TypeId::OPTION => {
+                payload
+                    .first()
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(span, "Option.Some missing payload")
+                    })
+            }
+            // Option.None -> evaluate rhs
+            Value::Tagged(ty, 0, _) if ty == TypeId::OPTION => {
+                self.eval(rhs).await
+            }
+            // Result.Ok(v) -> unwrap to v
+            Value::Tagged(ty, 0, ref payload) if ty == TypeId::RESULT => {
+                payload
+                    .first()
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(span, "Result.Ok missing payload")
+                    })
+            }
+            // Result.Err(_) -> evaluate rhs (error discarded)
+            Value::Tagged(ty, 1, _) if ty == TypeId::RESULT => {
+                self.eval(rhs).await
+            }
+            // Other types -> type error
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "`??` requires Option or Result; got {}",
+                    left.type_name(&self.registry)
+                ),
+            )),
         }
     }
 
@@ -1369,5 +1428,143 @@ mod tests {
 
         let outer_result = interp.eval(x_outer).await.unwrap();
         assert_eq!(outer_result, Value::Int(1));
+    }
+
+    #[tokio::test]
+    async fn coalesce_option_none() {
+        // (IF false { 42 }) ?? 0 -> 0
+        // IF false without else returns Option.None
+        let mut ast = Ast::new();
+
+        let cond =
+            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9));
+        let then_val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(11, 16));
+        let if_expr =
+            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(1, 17));
+
+        let fallback =
+            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(22, 23));
+        let coalesce = ast.add_expr(
+            Expr::Binary(if_expr, BinOp::Coalesce, fallback),
+            Span::new(0, 23),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(coalesce).await.unwrap();
+        assert_eq!(result, Value::Int(0));
+    }
+
+    #[tokio::test]
+    async fn coalesce_non_option_error() {
+        // 42 ?? 0 -> type error (Int is not Option or Result)
+        let mut ast = Ast::new();
+
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(6, 7));
+        let coalesce = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Coalesce, rhs), Span::new(0, 7));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(coalesce).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Option or Result"));
+    }
+
+    #[tokio::test]
+    async fn coalesce_string_error() {
+        // "hello" ?? "fallback" -> type error
+        let mut ast = Ast::new();
+
+        let lhs = ast.add_expr(
+            Expr::Literal(Literal::String("hello".into())),
+            Span::new(0, 7),
+        );
+        let rhs = ast.add_expr(
+            Expr::Literal(Literal::String("fallback".into())),
+            Span::new(11, 21),
+        );
+        let coalesce = ast.add_expr(
+            Expr::Binary(lhs, BinOp::Coalesce, rhs),
+            Span::new(0, 21),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(coalesce).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn coalesce_short_circuit() {
+        // Option.None ?? (side effect not visible, but rhs is evaluated)
+        // We test that rhs IS evaluated when lhs is None
+        // (IF false { 1 }) ?? 99 -> 99
+        let mut ast = Ast::new();
+
+        let cond =
+            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9));
+        let then_val =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(11, 15));
+        let if_expr =
+            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(1, 16));
+
+        let fallback =
+            ast.add_expr(Expr::Literal(Literal::Int(99)), Span::new(21, 23));
+        let coalesce = ast.add_expr(
+            Expr::Binary(if_expr, BinOp::Coalesce, fallback),
+            Span::new(0, 23),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(coalesce).await.unwrap();
+        assert_eq!(result, Value::Int(99));
+    }
+
+    #[tokio::test]
+    async fn coalesce_chain() {
+        // (IF false { 1 }) ?? (IF false { 2 }) ?? 3 -> 3
+        let mut ast = Ast::new();
+
+        // First: IF false { 1 } -> None
+        let cond1 =
+            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9));
+        let val1 =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
+        let blk1 =
+            ast.add_expr(Expr::Block(vec![], Some(val1)), Span::new(11, 15));
+        let if1 = ast.add_expr(Expr::If(cond1, blk1, None), Span::new(1, 16));
+
+        // Second: IF false { 2 } -> None
+        let cond2 = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(24, 29));
+        let val2 =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(32, 33));
+        let blk2 =
+            ast.add_expr(Expr::Block(vec![], Some(val2)), Span::new(31, 35));
+        let if2 = ast.add_expr(Expr::If(cond2, blk2, None), Span::new(21, 36));
+
+        // Third: literal 3
+        let three =
+            ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(41, 42));
+
+        // Build: (if1 ?? if2) ?? 3
+        let c1 = ast.add_expr(
+            Expr::Binary(if1, BinOp::Coalesce, if2),
+            Span::new(0, 37),
+        );
+        let c2 = ast.add_expr(
+            Expr::Binary(c1, BinOp::Coalesce, three),
+            Span::new(0, 42),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(c2).await.unwrap();
+        assert_eq!(result, Value::Int(3));
     }
 }

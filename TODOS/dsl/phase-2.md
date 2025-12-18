@@ -31,17 +31,27 @@ SET config = user-config ?? default-config
 SET value = risky-operation() ?? "fallback"  ; works with Result too
 ```
 
-- [ ] Add `Token::QuestionQuestion` to lexer
-- [ ] Add `BinOp::Coalesce` to AST
-- [ ] Implement in interpreter:
+- [x] Add `Token::QuestionQuestion` to lexer
+- [x] Add `BinOp::Coalesce` to AST
+- [x] Implement in interpreter:
   - Evaluate left operand
   - If `Tagged(OPTION, 1, [v])` (i.e., `Some(v)`), return `v` (unwrapped)
   - If `Tagged(OPTION, 0, [])` (i.e., `None`), evaluate and return right operand
   - If `Tagged(RESULT, 0, [v])` (i.e., `Ok(v)`), return `v` (unwrapped)
   - If `Tagged(RESULT, 1, [_])` (i.e., `Err(_)`), evaluate and return right operand (error discarded)
-  - If left is any other value (not an Option/Result), return it as-is (non-container values are "present")
-- [ ] Add unit tests
-- [ ] Add integration test script
+  - If left is any other value (not an Option/Result), return type error
+- [x] Add unit tests
+- [x] Add integration test script (partial; see note below)
+
+**Note: Parser limitation with `IF` expressions**
+
+The current parser does not allow `IF` expressions in expression contexts (e.g., `LET x = IF FALSE { 42 }`). `IF` is only parsed at the statement level. This blocks full integration testing of `??` with `Option.None` values from `IF` without `ELSE`.
+
+The parser architecture has two separate grammars:
+- **Statement grammar**: includes `IF`, `LET`, `SET`, `OUTPUT`, etc.
+- **Expression grammar**: includes literals, variables, binary ops, blocks `{ }`, but NOT `IF`
+
+To fix this, `IF` needs to be added to `primary_expr` in the expression grammar, similar to how block expressions `{ ... }` are handled. This would allow `IF` to appear anywhere an expression is expected.
 
 ### 2. Optional Chaining Operator (`?.`)
 

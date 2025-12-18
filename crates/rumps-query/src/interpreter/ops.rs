@@ -82,8 +82,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 },
             ),
 
-            // AND/OR are handled in `binary` for short-circuit semantics
-            BinOp::And | BinOp::Or => unreachable!("handled in binary"),
+            // AND/OR/Coalesce are handled in `binary` for short-circuit semantics
+            BinOp::And | BinOp::Or | BinOp::Coalesce => {
+                unreachable!("handled in binary")
+            }
 
             // String concatenation
             BinOp::Concat => Ok(self.binop_concat(left, right)),
