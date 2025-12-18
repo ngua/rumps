@@ -21,6 +21,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Bool(b) => Ok(rumps_types::Value::Boolean(*b)),
             Value::Int(i) => Ok(rumps_types::Value::Integer(*i)),
             Value::Float(f) => Ok(rumps_types::Value::Double(*f)),
+            Value::Char(c) => Ok(rumps_types::Value::Char(*c)),
             Value::String(id) => self
                 .arena
                 .get_str(*id)
@@ -39,9 +40,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             rumps_types::Value::Boolean(b) => Value::Bool(b),
             rumps_types::Value::Integer(i) => Value::Int(i),
             rumps_types::Value::Double(d) => Value::Float(d),
-            rumps_types::Value::Char(c) => {
-                Value::String(self.arena.intern(&c.to_string()))
-            }
+            rumps_types::Value::Char(c) => Value::Char(c),
             rumps_types::Value::String(s) => {
                 Value::String(self.arena.intern(&s))
             }
@@ -64,6 +63,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Bool(b) => b.to_string().to_uppercase(),
             Value::Int(n) => n.to_string(),
             Value::Float(f) => f.to_string(),
+            Value::Char(c) => format!("'{c}'"),
             Value::String(id) => {
                 self.arena.get_str(*id).unwrap_or("").to_owned()
             }
@@ -126,6 +126,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Bool(b) => serde_json::Value::Bool(*b),
             Value::Int(n) => serde_json::json!(*n),
             Value::Float(f) => serde_json::json!(f.0),
+            Value::Char(c) => serde_json::Value::String(c.to_string()),
             Value::String(id) => {
                 let s = self.arena.get_str(*id).unwrap_or("");
                 serde_json::Value::String(s.to_owned())
@@ -231,12 +232,13 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a value to a subscript for key construction.
     ///
-    /// Only scalar types (Bool, Int, Float, String) can be subscripts.
+    /// Only scalar types (Bool, Int, Float, Char, String) can be subscripts.
     pub(crate) fn subscript(&self, v: &Value) -> Result<Subscript> {
         match v {
             Value::Bool(b) => Ok(Subscript::Boolean(*b)),
             Value::Int(i) => Ok(Subscript::Number(OrderedFloat(*i as f64))),
             Value::Float(f) => Ok(Subscript::Number(*f)),
+            Value::Char(c) => Ok(Subscript::String(c.to_string())),
             Value::String(id) => self
                 .arena
                 .get_str(*id)

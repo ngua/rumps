@@ -63,10 +63,12 @@ impl TypeId {
     pub(crate) const OPTION: Self = Self(6);
     /// Builtin type: `Result`.
     pub(crate) const RESULT: Self = Self(7);
+    /// Builtin type: `Char`.
+    pub(crate) const CHAR: Self = Self(8);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
-    pub(crate) const UNKNOWN: Self = Self(8);
+    pub(crate) const UNKNOWN: Self = Self(9);
 
     const fn idx(self) -> usize {
         self.0 as usize
@@ -174,6 +176,9 @@ pub(crate) enum Value {
     /// NaN cannot be represented).
     Float(OrderedFloat<f64>),
 
+    /// A single UTF-8 character.
+    Char(char),
+
     /// An interned string.
     String(StringId),
 
@@ -205,6 +210,7 @@ impl Value {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Float(f) => f.0 != 0.0,
+            Self::Char(c) => *c != '\0',
             Self::String(id) => {
                 arena.get_str(*id).map(|s| !s.is_empty()).unwrap_or(false)
             }
@@ -231,6 +237,7 @@ impl Value {
             Self::Bool(_) => "Bool",
             Self::Int(_) => "Int",
             Self::Float(_) => "Float",
+            Self::Char(_) => "Char",
             Self::String(_) => "String",
             Self::Array(..) => "Array",
             Self::Object(_) => "Object",
@@ -312,6 +319,7 @@ pub(crate) enum BuiltinType {
     Bool,
     Int,
     Float,
+    Char,
     String,
     Array,
     Object,
@@ -323,6 +331,7 @@ impl BuiltinType {
             Self::Bool => "Bool",
             Self::Int => "Int",
             Self::Float => "Float",
+            Self::Char => "Char",
             Self::String => "String",
             Self::Array => "Array",
             Self::Object => "Object",
@@ -553,8 +562,8 @@ impl TypeRegistry {
 
     /// Register all built-in types (called from `new`).
     ///
-    /// Registers in order: Bool, Int, Float, String, Array, Object, Option, Result.
-    /// Option and Result are at indices 6 and 7 respectively.
+    /// Registers in order: Bool, Int, Float, String, Array, Object, Option, Result, Char.
+    /// Option and Result are at indices 6 and 7 respectively; Char is at index 8.
     fn register_builtins(&mut self, arena: &mut ValueArena) -> Result<()> {
         // Primitives (indices 0-5)
         let bool_name = arena.intern("Bool");
@@ -641,6 +650,17 @@ impl TypeRegistry {
             ))
         })?;
 
+        // Char at index 8
+        let char_name = arena.intern("Char");
+        let ch = self.register(TypeDef::Builtin(BuiltinType::Char), char_name);
+        (ch == TypeId::CHAR).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Char at index {}, expected {}",
+                ch.0,
+                TypeId::CHAR.0
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -711,7 +731,7 @@ mod tests {
         let mut arena = ValueArena::new();
         let reg = TypeRegistry::new(&mut arena).unwrap();
 
-        assert_eq!(reg.len(), 8); // 6 primitives + Option + Result
+        assert_eq!(reg.len(), 9); // 7 primitives + Option + Result
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

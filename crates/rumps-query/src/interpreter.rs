@@ -533,6 +533,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Bool(_) => self.type_exprs.named(TypeId::BOOL),
             Value::Int(_) => self.type_exprs.named(TypeId::INT),
             Value::Float(_) => self.type_exprs.named(TypeId::FLOAT),
+            Value::Char(_) => self.type_exprs.named(TypeId::CHAR),
             Value::String(_) => self.type_exprs.named(TypeId::STRING),
             Value::Array(elem_ty, _) => {
                 // Array[elem_ty]
@@ -923,6 +924,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Bool(_) => type_id == TypeId::BOOL,
             Value::Int(_) => type_id == TypeId::INT,
             Value::Float(_) => type_id == TypeId::FLOAT,
+            Value::Char(_) => type_id == TypeId::CHAR,
             Value::String(_) => type_id == TypeId::STRING,
             Value::Array(_, _) => type_id == TypeId::ARRAY,
             Value::Object(_) => type_id == TypeId::OBJECT,
