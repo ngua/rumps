@@ -19,7 +19,6 @@ This document tracks the second phase of implementing the RUMPS query language: 
 7. First-class functions (pass named functions as values)
 8. Pipeline operator (`|>`)
 9. Range operator (`..`)
-10. Regex pattern matching (`matches`, `/pattern/`)
 
 ## Phase 2 Tasks
 
@@ -488,43 +487,6 @@ Creates a lazy range of integers.
 - [ ] Add unit tests
 - [ ] Add integration test script
 
-### 12. Regex Pattern Matching (`matches`)
-
-Pattern matching with regex literals.
-
-```rumps
-IF email matches /^[^@]+@[^@]+\.[^@]+$/ {
-  OUTPUT "Valid email"
-}
-
-IF ssn matches /^\d{3}-\d{2}-\d{4}$/ {
-  OUTPUT "Valid SSN format"
-}
-
-; Negation
-IF input matches! /[<>]/ {
-  OUTPUT "No angle brackets"
-}
-```
-
-- [ ] Add regex literal support to lexer (`/pattern/`)
-  - Handle escape sequences (`\/`, `\\`)
-  - Consider flags suffix (`/pattern/i` for case-insensitive)
-- [ ] Add `Token::Regex(String)` for regex literals
-- [ ] Add `Token::Matches` keyword to lexer
-- [ ] Add `Expr::Matches(ExprId, String)` to AST (value, pattern)
-- [ ] Add `regex` crate dependency
-- [ ] Implement in interpreter:
-  - Compile regex (cache compiled patterns)
-  - Return `true`/`false` for match
-- [ ] Add unit tests
-- [ ] Add integration test script
-
-**Deferred regex features** (for later):
-- Named capture groups (`(?<name>...)`) and `Match.name` access
-- `matches!` negation syntax (can use `NOT (x matches /.../)` for now)
-- Regex flags (`/pattern/i`, `/pattern/m`)
-
 ## Deferred to Later Phases
 
 ### Spread Operator (`...`)
@@ -763,25 +725,6 @@ Range precedence is higher than comparison but lower than additive:
 0..len - 1     ; 0..(len - 1)
 ```
 
-### Regex Literals
-
-Regex literals use `/pattern/` syntax. The pattern is compiled at first use and cached.
-
-```rumps
-/^hello/           ; anchored at start
-/world$/           ; anchored at end
-/\d{3}-\d{4}/      ; digit patterns
-```
-
-The `matches` operator returns a boolean. For capture groups and more advanced features, use a `Regex.match(pattern, string)` function (deferred).
-
-Regex literals cannot span multiple lines. Use string concatenation for complex patterns:
-
-```rumps
-LET pattern = "^(" ++ part1 ++ ")|(" ++ part2 ++ ")$"
-IF text matches Regex.compile(pattern) { ... }
-```
-
 ## Success Criteria
 
 The following should work:
@@ -934,21 +877,4 @@ LET r = 1..5
 
 ; Range with pipeline (when iteration is supported)
 ; 1..10 |> MAP x => x * x
-
-; Regex matching
-LET email = "user@example.com"
-IF email matches /^[^@]+@[^@]+\.[^@]+$/ {
-  OUTPUT "Valid email"
-}
-
-LET phone = "555-1234"
-IF phone matches /^\d{3}-\d{4}$/ {
-  OUTPUT "Valid phone"
-}
-
-; Negated match
-LET input = "safe text"
-IF NOT (input matches /<script>/) {
-  OUTPUT "No script tags"
-}
 ```
