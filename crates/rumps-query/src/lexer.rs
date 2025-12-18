@@ -338,9 +338,9 @@ impl Lexer<'_> {
             },
         );
 
-        // Train-case continuation: `-` immediately followed by alphabetic
+        // Train-case continuation: `-` immediately followed by alphanumeric
         let train_cont = just('-')
-            .then(filter(|c: &char| c.is_alphabetic()))
+            .then(filter(|c: &char| c.is_alphanumeric()))
             .then(Self::ident_cont().repeated())
             .map(|((hyphen, first), rest)| {
                 let mut s = String::with_capacity(2 + rest.len());
@@ -530,6 +530,13 @@ mod tests {
             tokens,
             vec![Token::Ident("my-long-variable-name".into()), Token::Eof]
         );
+
+        // Trailing numbers
+        let tokens = lex_ok("my-var-2");
+        assert_eq!(tokens, vec![Token::Ident("my-var-2".into()), Token::Eof]);
+
+        let tokens = lex_ok("var-123abc");
+        assert_eq!(tokens, vec![Token::Ident("var-123abc".into()), Token::Eof]);
     }
 
     #[test]
