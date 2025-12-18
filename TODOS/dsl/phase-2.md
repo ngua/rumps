@@ -8,7 +8,7 @@ This document tracks the second phase of implementing the RUMPS query language: 
 
 ## Goals
 
-1. Option/nullable value handling (`??`, `?.`)
+1. Coalesce and optional chaining (`??`, `?.`)
 2. Runtime type checking and casting (`is`, `as`)
 3. Arithmetic power operator (`**`)
 4. Function types (`(Int, Int) -> Int`)
@@ -21,22 +21,25 @@ This document tracks the second phase of implementing the RUMPS query language: 
 
 ## Phase 2 Tasks
 
-### 1. Null Coalesce Operator (`??`)
+### 1. Coalesce Operator (`??`)
 
-Returns the left operand if it's not `Option.None`, otherwise returns the right operand.
+Unwraps a "success" container (`Option.Some` or `Result.Ok`), or falls back to the right operand.
 
 ```rumps
 SET name = GET ^PATIENT(id, "NAME") ?? "Unknown"
 SET config = user-config ?? default-config
+SET value = risky-operation() ?? "fallback"  ; works with Result too
 ```
 
 - [ ] Add `Token::QuestionQuestion` to lexer
-- [ ] Add `BinOp::NullCoalesce` to AST
+- [ ] Add `BinOp::Coalesce` to AST
 - [ ] Implement in interpreter:
   - Evaluate left operand
   - If `Tagged(OPTION, 1, [v])` (i.e., `Some(v)`), return `v` (unwrapped)
   - If `Tagged(OPTION, 0, [])` (i.e., `None`), evaluate and return right operand
-  - If left is any other value (not an Option), return it as-is (non-Option values are "present")
+  - If `Tagged(RESULT, 0, [v])` (i.e., `Ok(v)`), return `v` (unwrapped)
+  - If `Tagged(RESULT, 1, [_])` (i.e., `Err(_)`), evaluate and return right operand (error discarded)
+  - If left is any other value (not an Option/Result), return it as-is (non-container values are "present")
 - [ ] Add unit tests
 - [ ] Add integration test script
 
@@ -502,16 +505,21 @@ REDUCE (acc, x => acc + x) 0 [1, 2, 3]
 
 ## Design Decisions
 
-### `??` Unwraps `Some`
+### `??` Unwraps Success Containers
 
-The null coalesce operator unwraps `Option.Some(v)` to `v`, not returning `Some(v)`:
+The coalesce operator unwraps `Option.Some(v)` or `Result.Ok(v)` to `v`, returning the fallback otherwise:
 
 ```rumps
+; Option
 SET x = Some(42) ?? 0   ; x = 42, not Some(42)
 SET y = None ?? 0       ; y = 0
+
+; Result
+SET a = Ok(42) ?? 0     ; a = 42
+SET b = Err("oops") ?? 0  ; b = 0 (error discarded)
 ```
 
-This matches Rust's `unwrap_or` semantics and is more ergonomic for the common case.
+For `Option`, this matches Rust's `unwrap_or` semantics. For `Result`, the error is intentionally discarded; if you need to handle the error, use `is Result.Err(e)` pattern binding instead.
 
 ### `?.` Returns `Option`
 
