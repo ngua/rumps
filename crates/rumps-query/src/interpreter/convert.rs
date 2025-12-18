@@ -5,10 +5,11 @@
 
 use ordered_float::OrderedFloat;
 use rumps_types::Subscript;
+use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::io::IoContext;
-use crate::value::Value;
+use crate::value::{TypeExprArena, TypeExprId, TypeId, Value};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -26,7 +27,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .map(|s| rumps_types::Value::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
             // Serialize to JSON for complex values
-            Value::Array(_) | Value::Object(_) | Value::Tagged(_, _, _) => {
+            Value::Array(_, _) | Value::Object(_) | Value::Tagged(_, _, _) => {
                 Ok(rumps_types::Value::Json(self.jsonify(v)))
             }
         }
@@ -66,8 +67,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::String(id) => {
                 self.arena.get_str(*id).unwrap_or("").to_owned()
             }
-            Value::Array(arr) => {
-                let items = arr
+            Value::Array(_, elems) => {
+                let items = elems
                     .iter()
                     .filter_map(|id| self.arena.get(*id))
                     .map(|v| self.stringify(v))
@@ -126,7 +127,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let s = self.arena.get_str(*id).unwrap_or("");
                 serde_json::Value::String(s.to_owned())
             }
-            Value::Array(arr) => {
+            Value::Array(_, arr) => {
                 let elems = arr
                     .iter()
                     .filter_map(|id| self.arena.get(*id))
@@ -186,14 +187,22 @@ impl<I: IoContext> Interpreter<'_, I> {
                 });
 
                 if dominated {
-                    let elems = arr
+                    // Get element type from first element, or NEVER for empty
+                    let elem_ty = match arr.first() {
+                        None => self.type_exprs.named(TypeId::NEVER),
+                        Some(first) => {
+                            json_type_expr(first, &mut self.type_exprs)
+                        }
+                    };
+
+                    let elems: SmallVec<[_; 4]> = arr
                         .into_iter()
                         .map(|v| {
                             let val = self.unjsonify(v);
                             self.arena.add(val, Span::default())
                         })
                         .collect();
-                    Value::Array(elems)
+                    Value::Array(elem_ty, elems)
                 } else {
                     // TODO: Heterogeneous JSON arrays should map to `Value::Json`
                     todo!("Value::Json variant for heterogeneous arrays")
@@ -227,7 +236,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| Subscript::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            Value::Array(_) | Value::Object(_) | Value::Tagged(_, _, _) => {
+            Value::Array(_, _) | Value::Object(_) | Value::Tagged(_, _, _) => {
                 Err(Error::runtime_no_span(
                     "complex values cannot be used as subscripts",
                 ))
@@ -245,5 +254,26 @@ fn json_type_tag(v: &serde_json::Value) -> u8 {
         serde_json::Value::String(_) => 3,
         serde_json::Value::Array(_) => 4,
         serde_json::Value::Object(_) => 5,
+    }
+}
+
+/// Get a `TypeExprId` for a JSON value's type.
+fn json_type_expr(
+    v: &serde_json::Value,
+    arena: &mut TypeExprArena,
+) -> TypeExprId {
+    match v {
+        serde_json::Value::Null => arena.named(TypeId::OPTION),
+        serde_json::Value::Bool(_) => arena.named(TypeId::BOOL),
+        serde_json::Value::Number(_) => arena.named(TypeId::FLOAT),
+        serde_json::Value::String(_) => arena.named(TypeId::STRING),
+        serde_json::Value::Array(arr) => {
+            let elem_ty = match arr.first() {
+                None => arena.named(TypeId::NEVER),
+                Some(first) => json_type_expr(first, arena),
+            };
+            arena.app(TypeId::ARRAY, smallvec::smallvec![elem_ty])
+        }
+        serde_json::Value::Object(_) => arena.named(TypeId::OBJECT),
     }
 }

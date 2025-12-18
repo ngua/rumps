@@ -84,11 +84,15 @@ use async_recursion::async_recursion;
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
+use smallvec::SmallVec;
 
 use crate::ast::{Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, UnOp};
 use crate::env::Environment;
 use crate::io::IoContext;
-use crate::value::{StringId, TypeRegistry, Value, ValueArena, ValueId};
+use crate::value::{
+    StringId, TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value,
+    ValueArena, ValueId,
+};
 use crate::{Error, Result, Span};
 
 /// The RUMPS interpreter.
@@ -122,6 +126,9 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// Type registry for runtime type information.
     registry: TypeRegistry,
 
+    /// Arena for type expressions (e.g., `Array[Int]`).
+    type_exprs: TypeExprArena,
+
     /// I/O context for output operations.
     io: I,
 }
@@ -140,6 +147,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             txn: None,
             arena,
             registry,
+            type_exprs: TypeExprArena::new(),
             io,
         })
     }
@@ -444,32 +452,92 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate an array literal.
+    /// Evaluate an array literal, enforcing homogeneous element types.
     #[async_recursion]
     async fn array(&mut self, elems: &[ExprId]) -> Result<Value> {
-        let vec = self
-            .array_elems(elems, Vec::with_capacity(elems.len()))
-            .await?;
-        Ok(Value::Array(vec))
+        match elems.split_first() {
+            None => {
+                // Empty array has element type `NEVER` (bottom type)
+                let elem_ty = self.type_exprs.named(TypeId::NEVER);
+                Ok(Value::Array(elem_ty, SmallVec::new()))
+            }
+            Some((first, rest)) => {
+                let first_span = self.ast.expr_span(*first).unwrap_or_default();
+                let first_val = self.eval(*first).await?;
+                let elem_ty = self.value_type_expr(&first_val);
+                let first_id = self.arena.add(first_val, first_span);
+
+                let mut acc = SmallVec::new();
+                acc.push(first_id);
+
+                self.array_elems(rest, elem_ty, acc, first_span).await
+            }
+        }
     }
 
-    /// Recursively evaluate array elements.
+    /// Recursively evaluate and type-check array elements.
     #[async_recursion]
     async fn array_elems(
         &mut self,
         elems: &[ExprId],
-        mut acc: Vec<ValueId>,
-    ) -> Result<Vec<ValueId>> {
+        elem_ty: TypeExprId,
+        mut acc: SmallVec<[ValueId; 4]>,
+        first_span: Span,
+    ) -> Result<Value> {
         match elems.split_first() {
-            None => Ok(acc),
+            None => Ok(Value::Array(elem_ty, acc)),
             Some((expr_id, tail)) => {
                 let span = self.ast.expr_span(*expr_id).unwrap_or_default();
                 let val = self.eval(*expr_id).await?;
-                let val_id = self.arena.add(val, span);
-                acc.push(val_id);
-                self.array_elems(tail, acc).await
+                let val_ty = self.value_type_expr(&val);
+
+                if self.type_exprs.eq(elem_ty, val_ty) {
+                    let val_id = self.arena.add(val, span);
+                    acc.push(val_id);
+                    self.array_elems(tail, elem_ty, acc, first_span).await
+                } else {
+                    Err(Error::type_err(
+                        span,
+                        format!(
+                            "array element type mismatch: expected {} (from {}..{}), got {}",
+                            self.type_expr_name(elem_ty),
+                            first_span.start,
+                            first_span.end,
+                            self.type_expr_name(val_ty)
+                        ),
+                    ))
+                }
             }
         }
+    }
+
+    /// Get the type expression for a runtime value.
+    fn value_type_expr(&mut self, v: &Value) -> TypeExprId {
+        match v {
+            Value::Bool(_) => self.type_exprs.named(TypeId::BOOL),
+            Value::Int(_) => self.type_exprs.named(TypeId::INT),
+            Value::Float(_) => self.type_exprs.named(TypeId::FLOAT),
+            Value::String(_) => self.type_exprs.named(TypeId::STRING),
+            Value::Array(elem_ty, _) => {
+                // Array[elem_ty]
+                self.type_exprs
+                    .app(TypeId::ARRAY, smallvec::smallvec![*elem_ty])
+            }
+            Value::Object(_) => self.type_exprs.named(TypeId::OBJECT),
+            Value::Tagged(ty, _, _) => self.type_exprs.named(*ty),
+        }
+    }
+
+    /// Get a human-readable name for a type expression (for error messages).
+    fn type_expr_name(&self, id: TypeExprId) -> String {
+        self.type_exprs
+            .format(id, |ty| {
+                self.registry
+                    .type_name(ty, &self.arena)
+                    .unwrap_or("?")
+                    .to_owned()
+            })
+            .unwrap_or_else(|| "?".to_owned())
     }
 
     /// Evaluate index access (array or object).
@@ -484,15 +552,15 @@ impl<I: IoContext> Interpreter<'_, I> {
         let idx_val = self.eval(idx).await?;
 
         match (&base_val, &idx_val) {
-            (Value::Array(arr), Value::Int(i)) => {
+            (Value::Array(_, elems), Value::Int(i)) => {
                 let index = if *i < 0 {
                     // Negative indexing from end
-                    arr.len().checked_sub((-*i) as usize)
+                    elems.len().checked_sub((-*i) as usize)
                 } else {
                     Some(*i as usize)
                 };
                 index
-                    .and_then(|idx| arr.get(idx))
+                    .and_then(|idx| elems.get(idx))
                     .and_then(|id| self.arena.get(*id).cloned())
                     .ok_or_else(|| {
                         Error::runtime(
@@ -1261,8 +1329,8 @@ mod tests {
         let mut interp = test_interp(&ast);
         let result = interp.eval(arr).await.unwrap();
         match result {
-            Value::Array(ids) => {
-                assert_eq!(ids.len(), 3);
+            Value::Array(_, elems) => {
+                assert_eq!(elems.len(), 3);
             }
             _ => panic!("expected array"),
         }

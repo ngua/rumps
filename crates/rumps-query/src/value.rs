@@ -47,10 +47,24 @@ impl StringId {
 pub(crate) struct TypeId(u32);
 
 impl TypeId {
-    /// Reserved index for the `Option` type.
+    /// Builtin type: `Bool`.
+    pub(crate) const BOOL: Self = Self(0);
+    /// Builtin type: `Int`.
+    pub(crate) const INT: Self = Self(1);
+    /// Builtin type: `Float`.
+    pub(crate) const FLOAT: Self = Self(2);
+    /// Builtin type: `String`.
+    pub(crate) const STRING: Self = Self(3);
+    /// Builtin type: `Array`.
+    pub(crate) const ARRAY: Self = Self(4);
+    /// Builtin type: `Object`.
+    pub(crate) const OBJECT: Self = Self(5);
+    /// Builtin type: `Option`.
     pub(crate) const OPTION: Self = Self(6);
-    /// Reserved index for the `Result` type.
+    /// Builtin type: `Result`.
     pub(crate) const RESULT: Self = Self(7);
+    /// Bottom type for empty arrays; compatible with any element type.
+    pub(crate) const NEVER: Self = Self(8);
 
     const fn idx(self) -> usize {
         self.0 as usize
@@ -161,8 +175,8 @@ pub(crate) enum Value {
     /// An interned string.
     String(StringId),
 
-    /// An array of values.
-    Array(Vec<ValueId>),
+    /// An array of values with element type.
+    Array(TypeExprId, SmallVec<[ValueId; 4]>),
 
     /// An object/record with string keys (insertion order preserved).
     Object(IndexMap<StringId, ValueId>),
@@ -187,7 +201,7 @@ impl Value {
             Self::String(id) => {
                 arena.get_str(*id).map(|s| !s.is_empty()).unwrap_or(false)
             }
-            Self::Array(arr) => !arr.is_empty(),
+            Self::Array(_, elems) => !elems.is_empty(),
             Self::Object(obj) => !obj.is_empty(),
             Self::Tagged(ty, idx, _) => {
                 // Option.None and Result.Err are falsy
@@ -205,7 +219,7 @@ impl Value {
             Self::Int(_) => "Int",
             Self::Float(_) => "Float",
             Self::String(_) => "String",
-            Self::Array(_) => "Array",
+            Self::Array(..) => "Array",
             Self::Object(_) => "Object",
             Self::Tagged(ty, _, _) => reg
                 .get_def(*ty)
@@ -354,6 +368,59 @@ impl TypeExprArena {
         params: SmallVec<[TypeExprId; 2]>,
     ) -> TypeExprId {
         self.add(TypeExpr::App(ty, params))
+    }
+
+    /// Check if two type expressions are structurally equal.
+    pub(crate) fn eq(&self, a: TypeExprId, b: TypeExprId) -> bool {
+        self.get(a)
+            .zip(self.get(b))
+            .is_some_and(|(ta, tb)| self.exprs_eq(ta, tb))
+    }
+
+    /// Structural equality of type expressions.
+    ///
+    /// `NEVER` (bottom type) is compatible with any type.
+    fn exprs_eq(&self, a: &TypeExpr, b: &TypeExpr) -> bool {
+        match (a, b) {
+            // NEVER is compatible with anything (empty array element type)
+            (TypeExpr::Named(TypeId::NEVER), _)
+            | (_, TypeExpr::Named(TypeId::NEVER)) => true,
+            (TypeExpr::Named(ta), TypeExpr::Named(tb)) => ta == tb,
+            (TypeExpr::App(ta, pa), TypeExpr::App(tb, pb)) => {
+                ta == tb
+                    && pa.len() == pb.len()
+                    && pa.iter().zip(pb.iter()).all(|(a, b)| self.eq(*a, *b))
+            }
+            _ => false,
+        }
+    }
+
+    /// Format a type expression for display.
+    ///
+    /// The `name_fn` closure converts `TypeId` to a name string.
+    pub(crate) fn format<F>(&self, id: TypeExprId, name_fn: F) -> Option<String>
+    where
+        F: Fn(TypeId) -> String + Copy,
+    {
+        self.get(id).map(|expr| self.format_expr(expr, name_fn))
+    }
+
+    fn format_expr<F>(&self, expr: &TypeExpr, name_fn: F) -> String
+    where
+        F: Fn(TypeId) -> String + Copy,
+    {
+        match expr {
+            TypeExpr::Named(ty) => name_fn(*ty),
+            TypeExpr::App(ty, params) => {
+                let name = name_fn(*ty);
+                let args = params
+                    .iter()
+                    .filter_map(|p| self.format(*p, name_fn))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{name}[{args}]")
+            }
+        }
     }
 }
 
@@ -643,6 +710,8 @@ mod tests {
     fn truthy_falsy() {
         let mut arena = ValueArena::new();
         let _reg = TypeRegistry::new(&mut arena).unwrap();
+        let mut type_arena = TypeExprArena::new();
+        let int_ty = type_arena.named(TypeId::INT);
 
         // Falsy values
         assert!(!Value::Bool(false).is_truthy(&arena));
@@ -651,7 +720,7 @@ mod tests {
 
         let empty_str = arena.intern("");
         assert!(!Value::String(empty_str).is_truthy(&arena));
-        assert!(!Value::Array(vec![]).is_truthy(&arena));
+        assert!(!Value::Array(int_ty, SmallVec::new()).is_truthy(&arena));
         assert!(!Value::Object(IndexMap::new()).is_truthy(&arena));
 
         let none = Value::none();

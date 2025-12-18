@@ -159,7 +159,6 @@ IF pair is Pair(a, b) {
 ```
 
 - [ ] Add `Token::Is` keyword to lexer
-- [ ] Add `Expr::Is(ExprId, TypePattern)` to AST
 - [ ] Define `TypePattern` enum:
   ```rust
   enum TypePattern {
@@ -169,6 +168,7 @@ IF pair is Pair(a, b) {
       VariantBind(TypeId, u8, SmallVec<[String; 2]>),  // `is Option.Some(val)`
   }
   ```
+- [ ] Add `Expr::Is(ExprId, TypePattern)` to AST
 - [ ] Implement in interpreter:
   - For `Type(tid)`: check if value's type matches `tid`
   - For `Variant(tid, idx)`: check if value is `Tagged(tid, idx, _)` (variant has no payload)

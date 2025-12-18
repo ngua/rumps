@@ -11,11 +11,6 @@ LET empty = []
 OUTPUT empty
 ; Expected: []
 
-; Array with mixed types
-LET mixed = [1, "two", TRUE, 3.14]
-OUTPUT mixed
-; Expected: [1, "two", true, 3.14]
-
 ; Array indexing
 LET nums = [10, 20, 30]
 OUTPUT nums[0]

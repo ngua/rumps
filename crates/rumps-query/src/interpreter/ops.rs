@@ -367,8 +367,8 @@ fn values_equal(
         (Value::Int(a), Value::Float(b)) => Ok((*a as f64) == b.0),
         (Value::Float(a), Value::Int(b)) => Ok(a.0 == (*b as f64)),
         (Value::String(a), Value::String(b)) => Ok(a == b),
-        // Arrays: structural equality
-        (Value::Array(a), Value::Array(b)) => {
+        // Arrays: structural equality (type is checked implicitly by elements)
+        (Value::Array(_, a), Value::Array(_, b)) => {
             if a.len() != b.len() {
                 Ok(false)
             } else {
@@ -405,8 +405,8 @@ fn values_equal(
 
 /// Check equality of two arrays element-wise.
 fn arrays_equal(
-    a: &[ValueId],
-    b: &[ValueId],
+    a: &SmallVec<[ValueId; 4]>,
+    b: &SmallVec<[ValueId; 4]>,
     arena: &ValueArena,
     reg: &TypeRegistry,
     span: Span,
