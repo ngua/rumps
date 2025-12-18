@@ -57,9 +57,9 @@ OUTPUT o1 != o3
 ; Expected: true
 
 ; Empty objects
-LET emptyObj1 = {}
-LET emptyObj2 = {}
-OUTPUT emptyObj1 == emptyObj2
+LET empty-obj-a = {}
+LET empty-obj-b = {}
+OUTPUT empty-obj-a == empty-obj-b
 ; Expected: true
 
 ; Nested objects

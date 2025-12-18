@@ -28,8 +28,8 @@ OUTPUT obj
 ; Expected: { name: "Alice", age: 30 }
 
 ; Empty object
-LET emptyObj = {}
-OUTPUT emptyObj
+LET empty-obj = {}
+OUTPUT empty-obj
 ; Expected: {}
 
 ; Field access with dot notation

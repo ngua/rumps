@@ -41,16 +41,16 @@ OUTPUT result3
 
 ; === IF without ELSE and false condition ===
 
-LET cond_result = IF FALSE {
+LET cond-result = IF FALSE {
   "never reached"
 }
-OUTPUT cond_result
+OUTPUT cond-result
 ; Expected: Option.None
 
-LET cond_result2 = IF TRUE {
+LET second-cond-result = IF TRUE {
   "reached"
 }
-OUTPUT cond_result2
+OUTPUT second-cond-result
 ; Expected: reached
 
 ; === Nested Option scenarios ===

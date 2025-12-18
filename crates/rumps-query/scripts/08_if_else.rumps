@@ -77,8 +77,8 @@ IF a AND NOT b {
 
 ; IF with complex condition
 LET age = 25
-LET hasLicense = TRUE
-IF age >= 18 AND hasLicense {
+LET has-license = TRUE
+IF age >= 18 AND has-license {
   OUTPUT "Can drive"
 } ELSE {
   OUTPUT "Cannot drive"

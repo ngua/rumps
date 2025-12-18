@@ -40,8 +40,8 @@ LET idx = 2
 OUTPUT arr[idx]
 ; Expected: 30
 
-LET neg_idx = -1
-OUTPUT arr[neg_idx]
+LET neg-idx = -1
+OUTPUT arr[neg-idx]
 ; Expected: 50
 
 ; Index with arithmetic

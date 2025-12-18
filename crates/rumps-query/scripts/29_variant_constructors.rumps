@@ -65,20 +65,20 @@ OUTPUT conditional
 
 ; === Coalesce with explicit variants ===
 
-LET some_val = Option.Some(42)
-OUTPUT some_val ?? 0
+LET some-val = Option.Some(42)
+OUTPUT some-val ?? 0
 ; Expected: 42
 
-LET none_val = Option.None
-OUTPUT none_val ?? 99
+LET none-val = Option.None
+OUTPUT none-val ?? 99
 ; Expected: 99
 
-LET ok_val = Result.Ok("data")
-OUTPUT ok_val ?? "fallback"
+LET ok-val = Result.Ok("data")
+OUTPUT ok-val ?? "fallback"
 ; Expected: data
 
-LET err_val = Result.Err("oops")
-OUTPUT err_val ?? "recovered"
+LET err-val = Result.Err("oops")
+OUTPUT err-val ?? "recovered"
 ; Expected: recovered
 
 ; === Variant in object ===
