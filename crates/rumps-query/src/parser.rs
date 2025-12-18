@@ -2,6 +2,26 @@
 //!
 //! Transforms a token stream into an AST using chumsky. Uses `RefCell` to build
 //! the arena-allocated AST during parsing.
+//!
+//! # Whitespace Handling
+//!
+//! The lexer emits `Newline`, `Indent`, and `Dedent` tokens to track source
+//! structure. Rather than filtering these in the lexer, the parser handles them
+//! explicitly via `opt_newlines()`. This preserves all tokens in the stream for:
+//!
+//! - **Formatters**: A future formatter needs the original whitespace structure
+//! - **Source maps**: Accurate span information for error messages
+//! - **Round-tripping**: Parse then re-emit without losing formatting
+//!
+//! The parser allows optional newlines (and indent/dedent) in these contexts:
+//!
+//! - **Binary operators**: Before and after operators for expression continuation
+//!   (`1\n    + 2` parses as `1 + 2`)
+//! - **Delimited constructs**: Inside `[]`, `()`, and `{}` for multi-line arrays,
+//!   function calls, objects, and blocks
+//!
+//! Newlines remain significant as statement separators at the top level and
+//! inside block expressions.
 
 #![allow(dead_code)]
 
@@ -351,12 +371,16 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
     {
         let op = just(Token::QuestionQuestion).to(BinOp::Coalesce);
-        operand
-            .clone()
-            .then(op.then(operand).repeated())
-            .map_with_span(move |(first, rest), span| {
+        // Allow newlines before/after operator for continuation
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
-            })
+            },
+        )
     }
 
     /// Logical OR: `expr || expr` or `expr OR expr`
@@ -368,12 +392,16 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
     {
         let op = choice((just(Token::PipePipe), just(Token::Or))).to(BinOp::Or);
-        operand
-            .clone()
-            .then(op.then(operand).repeated())
-            .map_with_span(move |(first, rest), span| {
+        // Allow newlines before/after operator for continuation
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
-            })
+            },
+        )
     }
 
     /// Logical AND: `expr && expr` or `expr AND expr`
@@ -385,12 +413,16 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
     {
         let op = choice((just(Token::AmpAmp), just(Token::And))).to(BinOp::And);
-        operand
-            .clone()
-            .then(op.then(operand).repeated())
-            .map_with_span(move |(first, rest), span| {
+        // Allow newlines before/after operator for continuation
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
-            })
+            },
+        )
     }
 
     /// Comparison: `<`, `>`, `<=`, `>=`, `==`, `!=`
@@ -409,12 +441,16 @@ impl Parser {
             just(Token::Lt).to(BinOp::Lt),
             just(Token::Gt).to(BinOp::Gt),
         ));
-        operand
-            .clone()
-            .then(op.then(operand).repeated())
-            .map_with_span(move |(first, rest), span| {
+        // Allow newlines before/after operator for continuation
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
-            })
+            },
+        )
     }
 
     /// Additive: `+`, `-`, `++`
@@ -430,12 +466,16 @@ impl Parser {
             just(Token::Minus).to(BinOp::Sub),
             just(Token::Concat).to(BinOp::Concat),
         ));
-        operand
-            .clone()
-            .then(op.then(operand).repeated())
-            .map_with_span(move |(first, rest), span| {
+        // Allow newlines before/after operator for continuation
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
-            })
+            },
+        )
     }
 
     /// Multiplicative: `*`, `/`, `//`, `%`
@@ -452,12 +492,16 @@ impl Parser {
             just(Token::Div).to(BinOp::Div),
             just(Token::Modulo).to(BinOp::Mod),
         ));
-        operand
-            .clone()
-            .then(op.then(operand).repeated())
-            .map_with_span(move |(first, rest), span| {
+        // Allow newlines before/after operator for continuation
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            move |(first, rest), span| {
                 Self::fold_binary(&ast, first, rest, span)
-            })
+            },
+        )
     }
 
     /// Folds a sequence of binary operations left-to-right.
@@ -572,19 +616,24 @@ impl Parser {
             .ignore_then(Self::ident())
             .map_with_span(PostfixOp::Field);
 
-        // Index: `[expr]`
+        // Index: `[expr]` - allow newlines inside
         let index = just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
             .ignore_then(expr.clone())
+            .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBracket))
             .map_with_span(|(idx, _), span| PostfixOp::Index(idx, span));
 
-        // Call: `(args...)`
+        // Call: `(args...)` - allow newlines around arguments
+        let call_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let call = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
             .ignore_then(
                 expr.map(|(id, _)| id)
-                    .separated_by(just(Token::Comma))
+                    .separated_by(call_sep)
                     .allow_trailing(),
             )
+            .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen))
             .map_with_span(|args, span| {
                 PostfixOp::Call(SmallVec::from_vec(args), span)
@@ -691,19 +740,25 @@ impl Parser {
                 (id, span)
             });
 
-        // Parenthesized expression
+        // Parenthesized expression - allow newlines inside
         let paren = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
             .ignore_then(expr.clone())
+            .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen));
 
         // Array literal: `[expr, ...]`
+        // Allow newlines around elements for multi-line arrays
+        let arr_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let array = just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
             .ignore_then(
                 expr.clone()
                     .map(|(id, _)| id)
-                    .separated_by(just(Token::Comma))
+                    .separated_by(arr_sep)
                     .allow_trailing(),
             )
+            .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBracket))
             .map_with_span(move |elems, span| {
                 let id = ast5.borrow_mut().add_expr(Expr::Array(elems), span);

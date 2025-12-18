@@ -39,12 +39,12 @@ OUTPUT x      ; Should print 6
 
 Currently fails with: `parse error: unexpected '+' (expected statement)`
 
-**Implementation**: Post-lex filter that removes `Newline` tokens immediately followed by `Indent`. This effectively joins continuation lines at the token level. The parser already skips `Indent`/`Dedent` as whitespace, so no parser changes needed.
+**Implementation**: Parser handles `Newline`/`Indent`/`Dedent` tokens via `opt_newlines()`. All whitespace tokens are preserved in the token stream for formatters; the parser skips them where continuation is allowed (binary operators, array/object contents, function arguments, etc.).
 
-- [x] Add `filter_continuation_newlines` pass after `process_indentation` in lexer
-- [x] Add unit tests for lexer filtering
+- [x] Update parser to use `opt_newlines()` around binary operators
+- [x] Update parser to handle newlines in arrays, objects, function calls
 - [x] Add parser tests for continuation cases
-- [x] Add integration test script
+- [x] Add integration test script (`28_indent_continuation.rumps`)
 
 ### 1. Coalesce Operator (`??`)
 
