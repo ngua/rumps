@@ -23,7 +23,41 @@ This document tracks the second phase of implementing the RUMPS query language: 
 
 ## Phase 2 Tasks
 
-### 0. Indentation-Based Expression Continuation
+### 0.1. Variant Constructor Syntax
+
+**PRIORITY: HIGH** - Core infrastructure needed before other Phase 2 features.
+
+The type system supports `Option` and `Result` variants with payloads, but there was no syntax to construct them explicitly. This blocks testing of `??`, `is`, pattern matching, etc.
+
+**Implemented**:
+
+```rumps
+; With payload
+LET some = Option.Some(42)
+LET ok = Result.Ok("success")
+LET err = Result.Err("failed")
+
+; Zero-arity
+LET none = Option.None
+
+; Nested
+LET nested = Option.Some(Result.Ok(1))
+
+; With expressions
+LET x = 10
+LET computed = Option.Some(x * 2)
+```
+
+- [x] Add `Expr::Variant(type_name, variant_name, args)` to AST
+- [x] Add `TypeRegistry::lookup_variant()` method
+- [x] Modify parser's `fold_postfix` to handle `Type.Variant(args)` syntax
+- [x] Add interpreter evaluation for `Expr::Variant`
+- [x] Modify `field()` to handle zero-arity variants like `Option.None`
+- [x] Add parser unit tests
+- [x] Add interpreter unit tests
+- [x] Add integration test script (`29_variant_constructors.rumps`)
+
+### 0.2. Indentation-Based Expression Continuation
 
 **PRIORITY: HIGH** - Core infrastructure that should have been working in Phase 1.
 

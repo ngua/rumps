@@ -1,0 +1,26 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Variant constructor tests\n; Tests explicit construction of Option and Result variants\n\n; === Option.Some ===\n\nLET some1 = Option.Some(42)\nOUTPUT some1\n; Expected: Option.Some(42)\n\nLET some2 = Option.Some(\"hello\")\nOUTPUT some2\n; Expected: Option.Some(hello)\n\n; === Option.None ===\n\nLET none = Option.None\nOUTPUT none\n; Expected: Option.None\n\n; === Result.Ok ===\n\nLET ok1 = Result.Ok(100)\nOUTPUT ok1\n; Expected: Result.Ok(100)\n\nLET ok2 = Result.Ok(\"success\")\nOUTPUT ok2\n; Expected: Result.Ok(success)\n\n; === Result.Err ===\n\nLET err1 = Result.Err(\"failed\")\nOUTPUT err1\n; Expected: Result.Err(failed)\n\nLET err2 = Result.Err(404)\nOUTPUT err2\n; Expected: Result.Err(404)\n\n; === Nested variants ===\n\nLET nested1 = Option.Some(Result.Ok(1))\nOUTPUT nested1\n; Expected: Option.Some(Result.Ok(1))\n\nLET nested2 = Result.Ok(Option.Some(\"inner\"))\nOUTPUT nested2\n; Expected: Result.Ok(Option.Some(inner))\n\nLET nested3 = Option.Some(Option.None)\nOUTPUT nested3\n; Expected: Option.Some(Option.None)\n\n; === Variants with expressions ===\n\nLET x = 10\nLET computed = Option.Some(x * 2)\nOUTPUT computed\n; Expected: Option.Some(20)\n\nLET cond = TRUE\nLET conditional = Result.Ok(IF cond { \"yes\" } ELSE { \"no\" })\nOUTPUT conditional\n; Expected: Result.Ok(yes)\n\n; === Coalesce with explicit variants ===\n\nLET some_val = Option.Some(42)\nOUTPUT some_val ?? 0\n; Expected: 42\n\nLET none_val = Option.None\nOUTPUT none_val ?? 99\n; Expected: 99\n\nLET ok_val = Result.Ok(\"data\")\nOUTPUT ok_val ?? \"fallback\"\n; Expected: data\n\nLET err_val = Result.Err(\"oops\")\nOUTPUT err_val ?? \"recovered\"\n; Expected: recovered\n\n; === Variant in object ===\n\nLET obj = {\n  status: Result.Ok(\"active\"),\n  value: Option.Some(123)\n}\nOUTPUT obj.status\n; Expected: Result.Ok(active)\nOUTPUT obj.value\n; Expected: Option.Some(123)\n\n; === Variant in array ===\n\nLET arr = [Option.Some(1), Option.None, Option.Some(3)]\nOUTPUT arr[0]\n; Expected: Option.Some(1)\nOUTPUT arr[1]\n; Expected: Option.None\nOUTPUT arr[2]\n; Expected: Option.Some(3)\n\nOUTPUT \"Variant constructor tests complete\"\n"
+---
+Option.Some(42)
+Option.Some(hello)
+Option.None
+Result.Ok(100)
+Result.Ok(success)
+Result.Err(failed)
+Result.Err(404)
+Option.Some(Result.Ok(1))
+Result.Ok(Option.Some(inner))
+Option.Some(Option.None)
+Option.Some(20)
+Result.Ok(yes)
+42
+99
+data
+recovered
+Result.Ok(active)
+Option.Some(123)
+Option.Some(1)
+Option.None
+Option.Some(3)
+Variant constructor tests complete

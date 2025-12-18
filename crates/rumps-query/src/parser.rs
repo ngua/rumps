@@ -675,16 +675,32 @@ impl Parser {
                     Some((id, span))
                 }
                 PostfixOp::Call(args, _) => {
-                    // Convert the base expression to a function call if it's a Var
+                    // Convert base to function call or variant constructor
                     let base_expr = ast.borrow().get_expr(acc.0).cloned();
                     base_expr.and_then(|e| match e {
+                        // Simple call: `func(args)`
                         Expr::Var(name) => {
                             let id = ast
                                 .borrow_mut()
                                 .add_expr(Expr::Call(name, args), span);
                             Some((id, span))
                         }
-                        _ => None, // Not a simple identifier; parse error
+                        // Variant constructor: `Type.Variant(args)`
+                        Expr::Field(inner, var_name) => {
+                            let inner_expr =
+                                ast.borrow().get_expr(inner).cloned();
+                            inner_expr.and_then(|ie| match ie {
+                                Expr::Var(ty_name) => {
+                                    let id = ast.borrow_mut().add_expr(
+                                        Expr::Variant(ty_name, var_name, args),
+                                        span,
+                                    );
+                                    Some((id, span))
+                                }
+                                _ => None,
+                            })
+                        }
+                        _ => None,
                     })
                 }
             }
@@ -1519,6 +1535,79 @@ IF sum > 25 {
         else {
             panic!("expected Mul on rhs");
         };
+    }
+
+    #[test]
+    fn parse_variant_with_args() {
+        let (ast, id) = parse_expr_ok("Option.Some(42)");
+        match ast.get_expr(id) {
+            Some(Expr::Variant(ty, var, args)) => {
+                assert_eq!(ty, "Option");
+                assert_eq!(var, "Some");
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("expected Variant"),
+        }
+    }
+
+    #[test]
+    fn parse_variant_result_ok() {
+        let (ast, id) = parse_expr_ok("Result.Ok(1)");
+        match ast.get_expr(id) {
+            Some(Expr::Variant(ty, var, args)) => {
+                assert_eq!(ty, "Result");
+                assert_eq!(var, "Ok");
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("expected Variant"),
+        }
+    }
+
+    #[test]
+    fn parse_variant_result_err() {
+        let (ast, id) = parse_expr_ok("Result.Err(\"oops\")");
+        match ast.get_expr(id) {
+            Some(Expr::Variant(ty, var, args)) => {
+                assert_eq!(ty, "Result");
+                assert_eq!(var, "Err");
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("expected Variant"),
+        }
+    }
+
+    #[test]
+    fn parse_variant_zero_arity_as_field() {
+        // Zero-arity variants parse as Field; interpreter handles them
+        let (ast, id) = parse_expr_ok("Option.None");
+        match ast.get_expr(id) {
+            Some(Expr::Field(_, field)) => {
+                assert_eq!(field, "None");
+            }
+            _ => panic!("expected Field"),
+        }
+    }
+
+    #[test]
+    fn parse_variant_nested() {
+        // Option.Some(Result.Ok(1))
+        let (ast, id) = parse_expr_ok("Option.Some(Result.Ok(1))");
+        match ast.get_expr(id) {
+            Some(Expr::Variant(ty, var, args)) => {
+                assert_eq!(ty, "Option");
+                assert_eq!(var, "Some");
+                assert_eq!(args.len(), 1);
+                // Inner should also be Variant
+                match ast.get_expr(args[0]) {
+                    Some(Expr::Variant(ty2, var2, _)) => {
+                        assert_eq!(ty2, "Result");
+                        assert_eq!(var2, "Ok");
+                    }
+                    _ => panic!("expected inner Variant"),
+                }
+            }
+            _ => panic!("expected outer Variant"),
+        }
     }
 }
 

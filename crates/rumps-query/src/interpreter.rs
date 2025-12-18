@@ -184,6 +184,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Array(elems) => self.array(&elems).await,
             Expr::Index(base, idx) => self.index(base, idx, span).await,
             Expr::Field(base, field) => self.field(base, &field, span).await,
+            Expr::Variant(ty, var, args) => {
+                self.variant(&ty, &var, &args, span).await
+            }
             Expr::Block(stmts, tail) => self.block(&stmts, tail).await,
             Expr::If(cond, then_br, else_br) => {
                 self.r#if(cond, then_br, else_br).await
@@ -514,6 +517,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Evaluate field access.
+    ///
+    /// Also handles zero-arity variant constructors like `Option.None`.
     #[async_recursion]
     async fn field(
         &mut self,
@@ -521,6 +526,36 @@ impl<I: IoContext> Interpreter<'_, I> {
         field: &str,
         span: Span,
     ) -> Result<Value> {
+        // Check for zero-arity variant: `Type.Variant` where base is a type name
+        let base_expr = self.ast.get_expr(base).cloned();
+        if let Some(Expr::Var(ref ty_name)) = base_expr {
+            let ty_id = self.arena.intern(ty_name);
+            let field_id = self.arena.intern(field);
+            if let Some(type_id) = self.registry.lookup(ty_id) {
+                if let Some(var_def) =
+                    self.registry.lookup_variant(type_id, field_id)
+                {
+                    // Zero-arity variant
+                    if var_def.arity == 0 {
+                        return Ok(Value::Tagged(
+                            type_id,
+                            var_def.idx,
+                            smallvec::SmallVec::new(),
+                        ));
+                    }
+                    // Non-zero arity variant without args is an error
+                    return Err(Error::runtime(
+                        span,
+                        format!(
+                            "`{ty_name}.{field}` requires {} argument(s)",
+                            var_def.arity
+                        ),
+                    ));
+                }
+            }
+        }
+
+        // Regular field access
         let base_val = self.eval(base).await?;
 
         match &base_val {
@@ -542,6 +577,77 @@ impl<I: IoContext> Interpreter<'_, I> {
                     base_val.type_name(&self.registry)
                 ),
             )),
+        }
+    }
+
+    /// Evaluate a variant constructor: `Type.Variant(args...)`.
+    #[async_recursion]
+    async fn variant(
+        &mut self,
+        ty_name: &str,
+        var_name: &str,
+        args: &[ExprId],
+        span: Span,
+    ) -> Result<Value> {
+        let ty_id = self.arena.intern(ty_name);
+        let var_id = self.arena.intern(var_name);
+
+        let type_id = self.registry.lookup(ty_id).ok_or_else(|| {
+            Error::runtime(span, format!("unknown type `{ty_name}`"))
+        })?;
+
+        let var_def = self
+            .registry
+            .lookup_variant(type_id, var_id)
+            .ok_or_else(|| {
+                Error::runtime(
+                    span,
+                    format!("unknown variant `{ty_name}.{var_name}`"),
+                )
+            })?;
+
+        // Validate arity
+        let expected = var_def.arity as usize;
+        let got = args.len();
+        (expected == got).then_some(()).ok_or_else(|| {
+            Error::runtime(
+                span,
+                format!(
+                    "`{ty_name}.{var_name}` expects {expected} argument(s), got {got}"
+                ),
+            )
+        })?;
+
+        let idx = var_def.idx;
+
+        // Evaluate arguments
+        self.variant_args(type_id, idx, args, span).await
+    }
+
+    /// Helper to evaluate variant arguments and build the Tagged value.
+    #[async_recursion]
+    async fn variant_args(
+        &mut self,
+        type_id: crate::value::TypeId,
+        idx: u8,
+        args: &[ExprId],
+        span: Span,
+    ) -> Result<Value> {
+        match args.split_first() {
+            None => Ok(Value::Tagged(type_id, idx, smallvec::SmallVec::new())),
+            Some((head, tail)) => {
+                let val = self.eval(*head).await?;
+                let val_id = self.arena.add(val, span);
+                let mut rest =
+                    match self.variant_args(type_id, idx, tail, span).await? {
+                        Value::Tagged(_, _, payloads) => payloads,
+                        _ => smallvec::SmallVec::new(),
+                    };
+                // Prepend since we're building from head
+                let mut result = smallvec::smallvec![val_id];
+                result.append(&mut rest);
+                Ok(Value::Tagged(type_id, idx, result))
+            }
         }
     }
 
@@ -1566,5 +1672,176 @@ mod tests {
         let mut interp = test_interp(&ast);
         let result = interp.eval(c2).await.unwrap();
         assert_eq!(result, Value::Int(3));
+    }
+
+    #[tokio::test]
+    async fn variant_option_some() {
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
+        let variant = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![val],
+            ),
+            Span::new(0, 15),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(variant).await.unwrap();
+        match result {
+            Value::Tagged(ty, idx, payloads) => {
+                assert_eq!(ty, crate::value::TypeId::OPTION);
+                assert_eq!(idx, 1); // Some is index 1
+                assert_eq!(payloads.len(), 1);
+            }
+            _ => panic!("expected Tagged"),
+        }
+    }
+
+    #[tokio::test]
+    async fn variant_option_none_via_field() {
+        // Option.None parses as Field; interpreter converts it
+        let mut ast = Ast::new();
+        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
+        let field =
+            ast.add_expr(Expr::Field(base, "None".into()), Span::new(0, 11));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(field).await.unwrap();
+        match result {
+            Value::Tagged(ty, idx, payloads) => {
+                assert_eq!(ty, crate::value::TypeId::OPTION);
+                assert_eq!(idx, 0); // None is index 0
+                assert!(payloads.is_empty());
+            }
+            _ => panic!("expected Tagged"),
+        }
+    }
+
+    #[tokio::test]
+    async fn variant_result_ok() {
+        let mut ast = Ast::new();
+        let val = ast.add_expr(
+            Expr::Literal(Literal::String("success".into())),
+            Span::new(10, 19),
+        );
+        let variant = ast.add_expr(
+            Expr::Variant(
+                "Result".into(),
+                "Ok".into(),
+                smallvec::smallvec![val],
+            ),
+            Span::new(0, 20),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(variant).await.unwrap();
+        match result {
+            Value::Tagged(ty, idx, payloads) => {
+                assert_eq!(ty, crate::value::TypeId::RESULT);
+                assert_eq!(idx, 0); // Ok is index 0
+                assert_eq!(payloads.len(), 1);
+            }
+            _ => panic!("expected Tagged"),
+        }
+    }
+
+    #[tokio::test]
+    async fn variant_result_err() {
+        let mut ast = Ast::new();
+        let val = ast.add_expr(
+            Expr::Literal(Literal::String("oops".into())),
+            Span::new(11, 17),
+        );
+        let variant = ast.add_expr(
+            Expr::Variant(
+                "Result".into(),
+                "Err".into(),
+                smallvec::smallvec![val],
+            ),
+            Span::new(0, 18),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(variant).await.unwrap();
+        match result {
+            Value::Tagged(ty, idx, payloads) => {
+                assert_eq!(ty, crate::value::TypeId::RESULT);
+                assert_eq!(idx, 1); // Err is index 1
+                assert_eq!(payloads.len(), 1);
+            }
+            _ => panic!("expected Tagged"),
+        }
+    }
+
+    #[tokio::test]
+    async fn variant_unknown_type_error() {
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11));
+        let variant = ast.add_expr(
+            Expr::Variant(
+                "Unknown".into(),
+                "Foo".into(),
+                smallvec::smallvec![val],
+            ),
+            Span::new(0, 12),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(variant).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn variant_unknown_variant_error() {
+        let mut ast = Ast::new();
+        let val =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11));
+        let variant = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Foo".into(),
+                smallvec::smallvec![val],
+            ),
+            Span::new(0, 12),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(variant).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn variant_arity_mismatch_error() {
+        // Option.Some expects 1 arg, giving 0
+        let mut ast = Ast::new();
+        let variant = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![],
+            ),
+            Span::new(0, 11),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(variant).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn variant_some_requires_args() {
+        // Accessing Option.Some without args (as field) is an error
+        let mut ast = Ast::new();
+        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
+        let field =
+            ast.add_expr(Expr::Field(base, "Some".into()), Span::new(0, 11));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(field).await;
+        assert!(result.is_err());
     }
 }

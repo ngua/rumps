@@ -427,6 +427,20 @@ impl TypeRegistry {
         })
     }
 
+    /// Look up a variant by name within a sum type.
+    pub(crate) fn lookup_variant(
+        &self,
+        ty: TypeId,
+        name: StringId,
+    ) -> Option<&VariantDef> {
+        self.get_def(ty).and_then(|def| match def {
+            TypeDef::Builtin(_) => None,
+            TypeDef::Sum { variants, .. } => {
+                variants.iter().find(|v| v.name == name)
+            }
+        })
+    }
+
     /// Register all built-in types (called from `new`).
     ///
     /// Registers in order: Bool, Int, Float, String, Array, Object, Option, Result.

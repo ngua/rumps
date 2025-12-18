@@ -1,0 +1,105 @@
+; Variant constructor tests
+; Tests explicit construction of Option and Result variants
+
+; === Option.Some ===
+
+LET some1 = Option.Some(42)
+OUTPUT some1
+; Expected: Option.Some(42)
+
+LET some2 = Option.Some("hello")
+OUTPUT some2
+; Expected: Option.Some(hello)
+
+; === Option.None ===
+
+LET none = Option.None
+OUTPUT none
+; Expected: Option.None
+
+; === Result.Ok ===
+
+LET ok1 = Result.Ok(100)
+OUTPUT ok1
+; Expected: Result.Ok(100)
+
+LET ok2 = Result.Ok("success")
+OUTPUT ok2
+; Expected: Result.Ok(success)
+
+; === Result.Err ===
+
+LET err1 = Result.Err("failed")
+OUTPUT err1
+; Expected: Result.Err(failed)
+
+LET err2 = Result.Err(404)
+OUTPUT err2
+; Expected: Result.Err(404)
+
+; === Nested variants ===
+
+LET nested1 = Option.Some(Result.Ok(1))
+OUTPUT nested1
+; Expected: Option.Some(Result.Ok(1))
+
+LET nested2 = Result.Ok(Option.Some("inner"))
+OUTPUT nested2
+; Expected: Result.Ok(Option.Some(inner))
+
+LET nested3 = Option.Some(Option.None)
+OUTPUT nested3
+; Expected: Option.Some(Option.None)
+
+; === Variants with expressions ===
+
+LET x = 10
+LET computed = Option.Some(x * 2)
+OUTPUT computed
+; Expected: Option.Some(20)
+
+LET cond = TRUE
+LET conditional = Result.Ok(IF cond { "yes" } ELSE { "no" })
+OUTPUT conditional
+; Expected: Result.Ok(yes)
+
+; === Coalesce with explicit variants ===
+
+LET some_val = Option.Some(42)
+OUTPUT some_val ?? 0
+; Expected: 42
+
+LET none_val = Option.None
+OUTPUT none_val ?? 99
+; Expected: 99
+
+LET ok_val = Result.Ok("data")
+OUTPUT ok_val ?? "fallback"
+; Expected: data
+
+LET err_val = Result.Err("oops")
+OUTPUT err_val ?? "recovered"
+; Expected: recovered
+
+; === Variant in object ===
+
+LET obj = {
+  status: Result.Ok("active"),
+  value: Option.Some(123)
+}
+OUTPUT obj.status
+; Expected: Result.Ok(active)
+OUTPUT obj.value
+; Expected: Option.Some(123)
+
+; === Variant in array ===
+
+LET arr = [Option.Some(1), Option.None, Option.Some(3)]
+OUTPUT arr[0]
+; Expected: Option.Some(1)
+OUTPUT arr[1]
+; Expected: Option.None
+OUTPUT arr[2]
+; Expected: Option.Some(3)
+
+OUTPUT "Variant constructor tests complete"

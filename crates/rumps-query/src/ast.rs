@@ -203,6 +203,11 @@ pub(crate) enum Expr {
     /// Field access: `expr.field`.
     Field(ExprId, String),
 
+    /// Variant constructor: `Type.Variant(args...)` or `Type.Variant`.
+    ///
+    /// Examples: `Option.Some(1)`, `Result.Ok(42)`, `Option.None`
+    Variant(String, String, SmallVec<[ExprId; 4]>),
+
     /// A block expression: `{ stmt...; expr }`.
     ///
     /// Executes statements for side effects, then evaluates to the trailing
