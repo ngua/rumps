@@ -1,7 +1,60 @@
 ; Coalesce operator (??) tests
-; Basic parsing and error behavior tests
-; (Full Option/Result tests require fixes to parser; see TODOS/dsl/phase-2.md)
+; `??` unwraps Option.Some/Result.Ok or falls back to right operand
 
-; Test: Type error on non-Option/Result value
-; This should output an error since Int is not Option or Result
-OUTPUT 42 ?? 0
+; === Option.None coalesces to fallback ===
+
+; IF without ELSE and false condition returns Option.None
+LET none1 = IF FALSE { "unreachable" }
+OUTPUT none1 ?? "fallback1"
+; Expected: fallback1
+
+; Block without trailing expression returns Option.None
+; (using OUTPUT statement which has no return value)
+LET none2 = {
+  OUTPUT "side effect only"
+}
+OUTPUT none2 ?? "fallback2"
+; Expected: fallback2
+
+; Another block without tail
+LET none3 = {
+  LET temp = 42
+  OUTPUT temp
+}
+OUTPUT none3 ?? "fallback3"
+; Expected: fallback3
+
+; === Chained coalesce ===
+
+; Chain of None values falls through to final fallback
+LET result = (IF FALSE { 1 }) ?? (IF FALSE { 2 }) ?? 3
+OUTPUT result
+; Expected: 3
+
+; First non-None wins (but with None on left)
+LET chain2 = (IF FALSE { "a" }) ?? "b"
+OUTPUT chain2
+; Expected: b
+
+; === Coalesce with nested IF ===
+
+; Nested IF returning None (outer false, inner never evaluated)
+LET nested = IF FALSE {
+  IF TRUE { "inner" }
+}
+OUTPUT nested ?? "outer-fallback"
+; Expected: outer-fallback
+
+; === Coalesce in expressions ===
+
+; Coalesce result can be used in further expressions
+LET val = ((IF FALSE { 10 }) ?? 5) + 1
+OUTPUT val
+; Expected: 6
+
+; Coalesce with string concatenation
+LET greeting = (IF FALSE { "Hi" }) ?? "Hello"
+OUTPUT greeting ++ " World"
+; Expected: Hello World
+
+OUTPUT "Coalesce tests complete"

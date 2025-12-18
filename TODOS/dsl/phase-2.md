@@ -45,16 +45,6 @@ SET value = risky-operation() ?? "fallback"  ; works with Result too
 - [x] Add unit tests
 - [x] Add integration test script (partial; see note below)
 
-**Note: Parser limitation with `IF` expressions**
-
-The current parser does not allow `IF` expressions in expression contexts (e.g., `LET x = IF FALSE { 42 }`). `IF` is only parsed at the statement level. This blocks full integration testing of `??` with `Option.None` values from `IF` without `ELSE`.
-
-The parser architecture has two separate grammars:
-- **Statement grammar**: includes `IF`, `LET`, `SET`, `OUTPUT`, etc.
-- **Expression grammar**: includes literals, variables, binary ops, blocks `{ }`, but NOT `IF`
-
-To fix this, `IF` needs to be added to `primary_expr` in the expression grammar, similar to how block expressions `{ ... }` are handled. This would allow `IF` to appear anywhere an expression is expected.
-
 ### 2. Optional Chaining Operator (`?.`)
 
 Safe field/subscript access that short-circuits to `Option.None` if the base is `None`.
