@@ -118,6 +118,83 @@ impl Spanned {
             result.push(Self::new(Token::Dedent, span));
         });
     }
+
+    /// Filters tokens to enable expression continuation on indented lines.
+    ///
+    /// Removes:
+    /// - `Newline` tokens immediately followed by `Indent` (outside braces)
+    /// - `Newline` tokens inside indented regions (NOT followed by `Dedent`)
+    /// - `Newline` tokens inside `[ ]` or `( )` (parser doesn't handle them)
+    /// - All `Indent` and `Dedent` tokens everywhere (only used for this pass)
+    ///
+    /// Does NOT filter `Newline` inside `{ }` since braces contain statements.
+    fn filter_continuation_newlines(tokens: Vec<Self>) -> Vec<Self> {
+        // Precompute what follows each Newline
+        let newline_next: std::collections::HashMap<usize, Option<&Token>> = (0
+            ..tokens.len())
+            .filter(|&i| matches!(tokens[i].tok, Token::Newline))
+            .map(|i| (i, tokens.get(i + 1).map(|t| &t.tok)))
+            .collect();
+
+        // State: (indent_depth, brace_depth, bracket_paren_depth)
+        // brace_depth: `{ }` - keep newlines inside (statement separator)
+        // bracket_paren_depth: `[ ]` and `( )` - filter newlines inside
+        let skip: std::collections::HashSet<usize> = tokens
+            .iter()
+            .enumerate()
+            .scan((0usize, 0usize, 0usize), |(indent, brace, bp), (i, t)| {
+                let skip = match t.tok {
+                    Token::LBrace => {
+                        *brace += 1;
+                        false
+                    }
+                    Token::RBrace => {
+                        *brace = brace.saturating_sub(1);
+                        false
+                    }
+                    Token::LBracket | Token::LParen => {
+                        *bp += 1;
+                        false
+                    }
+                    Token::RBracket | Token::RParen => {
+                        *bp = bp.saturating_sub(1);
+                        false
+                    }
+                    // Always filter Indent/Dedent; only used for this pass
+                    Token::Indent => {
+                        *indent += 1;
+                        true
+                    }
+                    Token::Dedent => {
+                        *indent = indent.saturating_sub(1);
+                        true
+                    }
+                    // Inside brackets/parens: filter all newlines
+                    Token::Newline if *bp > 0 => true,
+                    // Inside braces: keep newlines for statement separation
+                    Token::Newline if *brace > 0 => false,
+                    // Outside all delimiters: continuation logic
+                    Token::Newline => {
+                        let next = newline_next.get(&i).copied().flatten();
+                        match next {
+                            Some(Token::Indent) => true,
+                            Some(Token::Dedent) => false,
+                            _ => *indent > 0,
+                        }
+                    }
+                    _ => false,
+                };
+                Some((i, skip))
+            })
+            .filter_map(|(i, skip)| skip.then_some(i))
+            .collect();
+
+        tokens
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, t)| (!skip.contains(&i)).then_some(t))
+            .collect()
+    }
 }
 
 /// Lexer for RUMPS source code.
@@ -136,6 +213,7 @@ impl<'a> Lexer<'a> {
         Self::lexer()
             .parse(self.src)
             .map(Spanned::process_indentation)
+            .map(Spanned::filter_continuation_newlines)
             .map_err(|errs| {
                 NonEmpty::collect(errs.into_iter().map(Self::to_error))
                     .map(Error::multiple)
@@ -728,16 +806,25 @@ mod tests {
     }
 
     #[test]
-    fn indentation_basic() {
+    fn indentation_filtered_for_continuation() {
+        // Indent/Dedent are filtered out to enable expression continuation
         let tokens = lex_ok("IF x\n  OUTPUT y");
-        assert!(tokens.contains(&Token::Indent));
+        assert!(!tokens.contains(&Token::Indent));
+        assert!(!tokens.contains(&Token::Dedent));
+        // But the actual tokens remain
+        assert!(tokens.contains(&Token::If));
+        assert!(tokens.contains(&Token::Output));
     }
 
     #[test]
-    fn indentation_dedent() {
+    fn indentation_newline_preserved_at_dedent() {
+        // The Newline before dedent is preserved as statement separator
         let tokens = lex_ok("IF x\n  OUTPUT y\nSET z = 1");
-        assert!(tokens.contains(&Token::Indent));
-        assert!(tokens.contains(&Token::Dedent));
+        assert!(!tokens.contains(&Token::Indent));
+        assert!(!tokens.contains(&Token::Dedent));
+        // Newline before SET should remain
+        assert!(tokens.contains(&Token::Newline));
+        assert!(tokens.contains(&Token::Set));
     }
 
     #[test]
@@ -851,5 +938,130 @@ mod tests {
     fn single_pipe_error() {
         let err = lex_err("a | b");
         assert!(err.to_string().contains("unexpected"));
+    }
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+
+    #[test]
+    fn continuation_filters_indent_region() {
+        let src = "LET x = 1\n    + 2\nOUTPUT x";
+        let tokens: Vec<_> = Lexer::new(src)
+            .lex()
+            .expect("lex")
+            .iter()
+            .map(|t| t.tok.clone())
+            .collect();
+
+        // Indent and Dedent should be filtered
+        assert!(!tokens.contains(&Token::Indent));
+        assert!(!tokens.contains(&Token::Dedent));
+
+        // Int(1) should be followed directly by Plus
+        let int_pos = tokens.iter().position(|t| *t == Token::Int(1)).unwrap();
+        assert_eq!(tokens[int_pos + 1], Token::Plus);
+
+        // Newline should appear before OUTPUT (statement separator)
+        assert!(tokens.contains(&Token::Newline));
+    }
+
+    #[test]
+    fn multi_line_continuation() {
+        let src = "LET x = 1\n    + 2\n    + 3\nOUTPUT x";
+        let tokens: Vec<_> = Lexer::new(src)
+            .lex()
+            .expect("lex")
+            .iter()
+            .map(|t| t.tok.clone())
+            .collect();
+
+        // No Indent/Dedent tokens
+        assert!(!tokens.contains(&Token::Indent));
+        assert!(!tokens.contains(&Token::Dedent));
+
+        // Should have continuous expression: Int(1), Plus, Int(2), Plus, Int(3)
+        let positions: Vec<_> = tokens
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                matches!(t, Token::Int(_) | Token::Plus).then_some(i)
+            })
+            .collect();
+        // Should be 5 consecutive tokens
+        assert_eq!(positions.len(), 5);
+    }
+
+    #[test]
+    fn no_continuation_without_indent() {
+        let src = "LET x = 1\nOUTPUT x";
+        let tokens: Vec<_> = Lexer::new(src)
+            .lex()
+            .expect("lex")
+            .iter()
+            .map(|t| t.tok.clone())
+            .collect();
+
+        // Newline should remain (no Indent after it)
+        assert!(tokens.contains(&Token::Newline));
+    }
+}
+
+#[cfg(test)]
+mod array_in_continuation_test {
+    use super::*;
+
+    #[test]
+    fn array_after_continuations() {
+        // This is the pattern that's failing
+        let src = r#"LET x = 1
+    + 2
+LET arr = [
+    1,
+    2
+]
+OUTPUT arr[0]"#;
+
+        let tokens: Vec<_> = Lexer::new(src)
+            .lex()
+            .expect("lex")
+            .iter()
+            .map(|t| t.tok.clone())
+            .collect();
+
+        eprintln!("Tokens:");
+        tokens.iter().for_each(|t| eprintln!("  {:?}", t));
+
+        // Try parsing
+        use crate::Parser;
+        match Parser::parse(src) {
+            Ok(r) => eprintln!("Parsed {} statements", r.stmts.len()),
+            Err(e) => panic!("Parse error: {}", e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod array_indent_debug {
+    use super::*;
+
+    #[test]
+    fn existing_array_tokens() {
+        // This is from test 23 which works
+        let src = r#"LET matrix3d = [
+  [[1, 2], [3, 4]],
+  [[5, 6], [7, 8]]
+]"#;
+
+        let tokens: Vec<_> = Lexer::new(src)
+            .lex()
+            .expect("lex")
+            .iter()
+            .map(|t| t.tok.clone())
+            .collect();
+
+        eprintln!("Tokens for working array:");
+        tokens.iter().for_each(|t| eprintln!("  {:?}", t));
     }
 }

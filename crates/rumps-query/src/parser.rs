@@ -716,10 +716,12 @@ impl Parser {
             .then_ignore(just(Token::Colon))
             .then(expr.clone().map(|(id, _)| id));
 
+        // Allow newlines around fields for multi-line objects
+        let obj_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let object = just(Token::LBrace)
-            .ignore_then(
-                obj_field.separated_by(just(Token::Comma)).allow_trailing(),
-            )
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(obj_field.separated_by(obj_sep).allow_trailing())
+            .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
             .map_with_span(move |fields, span| {
                 let id = ast6.borrow_mut().add_expr(Expr::Object(fields), span);
@@ -1399,5 +1401,94 @@ IF sum > 25 {
         };
         assert_eq!(stmts.len(), 1); // LET y = 1
         assert!(tail.is_some()); // y
+    }
+
+    #[test]
+    fn parse_indented_continuation() {
+        // 1 + 2 across two lines
+        let result = parse_ok("LET x = 1\n    + 2\nOUTPUT x");
+        assert_eq!(result.stmts.len(), 2); // LET and OUTPUT
+
+        // Verify the LET contains a binary Add
+        let Stmt::Let(_, val_id) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        let Expr::Binary(_, BinOp::Add, _) =
+            result.ast.get_expr(*val_id).unwrap()
+        else {
+            panic!("expected Binary Add");
+        };
+    }
+
+    #[test]
+    fn parse_multi_line_continuation() {
+        let result = parse_ok("LET x = 1\n    + 2\n    + 3\nOUTPUT x");
+        assert_eq!(result.stmts.len(), 2);
+
+        // Should be ((1 + 2) + 3)
+        let Stmt::Let(_, val_id) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        let Expr::Binary(lhs, BinOp::Add, _) =
+            result.ast.get_expr(*val_id).unwrap()
+        else {
+            panic!("expected outer Add");
+        };
+        let Expr::Binary(_, BinOp::Add, _) = result.ast.get_expr(*lhs).unwrap()
+        else {
+            panic!("expected inner Add");
+        };
+    }
+
+    #[test]
+    fn parse_continuation_with_precedence() {
+        // 1 + 2 * 3 should be 1 + (2 * 3)
+        let result = parse_ok("LET x = 1\n    + 2\n    * 3");
+        let Stmt::Let(_, val_id) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        // Top should be Add
+        let Expr::Binary(_, BinOp::Add, rhs) =
+            result.ast.get_expr(*val_id).unwrap()
+        else {
+            panic!("expected Add at top");
+        };
+        // RHS should be Mul
+        let Expr::Binary(_, BinOp::Mul, _) = result.ast.get_expr(*rhs).unwrap()
+        else {
+            panic!("expected Mul on rhs");
+        };
+    }
+}
+
+#[cfg(test)]
+mod array_parse_debug {
+    use super::*;
+
+    #[test]
+    fn parse_test23_array() {
+        // Exact content from test 23
+        let src = r#"LET matrix3d = [
+  [[1, 2], [3, 4]],
+  [[5, 6], [7, 8]]
+]"#;
+        let result = Parser::parse(src);
+        assert!(result.is_ok(), "Should parse: {:?}", result.err());
+    }
+
+    #[test]
+    fn parse_simple_array_newlines() {
+        let src = r#"LET arr = [
+    1,
+    2
+]"#;
+        let result = Parser::parse(src);
+        assert!(result.is_ok(), "Should parse: {:?}", result.err());
     }
 }

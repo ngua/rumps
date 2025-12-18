@@ -23,6 +23,29 @@ This document tracks the second phase of implementing the RUMPS query language: 
 
 ## Phase 2 Tasks
 
+### 0. Indentation-Based Expression Continuation
+
+**PRIORITY: HIGH** - Core infrastructure that should have been working in Phase 1.
+
+The lexer correctly emits `Indent`/`Dedent` tokens, but the parser ignores them. Expressions should continue across newlines when indented:
+
+```rumps
+LET x = 1
+    + 2       ; Indent after newline = continuation
+    + 3       ; Same indent level = still continuing
+
+OUTPUT x      ; Should print 6
+```
+
+Currently fails with: `parse error: unexpected '+' (expected statement)`
+
+**Implementation**: Post-lex filter that removes `Newline` tokens immediately followed by `Indent`. This effectively joins continuation lines at the token level. The parser already skips `Indent`/`Dedent` as whitespace, so no parser changes needed.
+
+- [x] Add `filter_continuation_newlines` pass after `process_indentation` in lexer
+- [x] Add unit tests for lexer filtering
+- [x] Add parser tests for continuation cases
+- [x] Add integration test script
+
 ### 1. Coalesce Operator (`??`)
 
 Unwraps a "success" container (`Option.Some` or `Result.Ok`), or falls back to the right operand.
