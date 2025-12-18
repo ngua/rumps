@@ -11,7 +11,7 @@ This document tracks the second phase of implementing the RUMPS query language: 
 ## Goals
 
 1. Coalesce and optional chaining (`??`, `?.`)
-2. Runtime type checking and casting (`is`, `as`)
+2. Runtime type checking and casting (`is`, `as`, `read`)
 3. Arithmetic power operator (`**`)
 4. Function types (`(Int, Int) -> Int`)
 5. Named functions (`FUN`) with higher-order support
@@ -195,22 +195,57 @@ IF pair is Pair(a, b) {
 Explicit type conversion with runtime validation.
 
 ```rumps
-SET n = "42" as Int
-SET s = 3.14 as String
-SET arr = json-data as Array[Int]
+LET n = "42" as Int
+LET s = 3.14 as String
+; SET arr = json-data as Array[Int] (FUTURE; can't implement now, haven't done JSON yet)
 ```
 
 - [ ] Add `Token::As` keyword to lexer
 - [ ] Add `Expr::As(ExprId, TypeExprId)` to AST
 - [ ] Implement coercion rules in interpreter:
-  - `String -> Int`: parse, error if invalid
-  - `String -> Float`: parse, error if invalid
   - `Int -> Float`: widen
   - `Float -> Int`: truncate
-  - `Any -> String`: stringify
-  - `Int -> Bool`: `0` -> `false`, else `true`
+  - `T -> String`: stringify (any type can convert to string)
   - `Bool -> Int`: `false` -> `0`, `true` -> `1`
-  - Failed conversions produce runtime errors with clear messages
+  - **NOTE**: Extend this list as new infallible conversions are needed
+  - For fallible conversions (`String -> Int`, `String -> Float`, `Int -> Bool`), use `read` (section 4.1)
+- [ ] Add unit tests
+- [ ] Add integration test script
+
+### 4.1. Fallible Conversion Operator (`read`)
+
+Explicit type conversion that returns a `Result[T, String]` instead of throwing a runtime error. Use this for conversions that may fail based on the input value.
+
+```rumps
+; String parsing
+LET n = "42" read Int           ; Result.Ok(42)
+LET bad = "abc" read Int        ; Result.Err("invalid integer: abc")
+
+LET f = "3.14" read Float       ; Result.Ok(3.14)
+LET bad2 = "xyz" read Float     ; Result.Err("invalid float: xyz")
+
+; Strict bool conversion (only 0 and 1)
+LET t = 1 read Bool             ; Result.Ok(true)
+LET f = 0 read Bool             ; Result.Ok(false)
+LET bad3 = 42 read Bool         ; Result.Err("expected 0 or 1 for Bool, got 42")
+
+; Chain with ?? for default
+LET port = env-port read Int ?? 8080
+
+; Chain with is for error handling
+LET parsed = user-input read Int
+IF parsed is Result.Err(e) {
+  OUTPUT "Parse error: " ++ e
+}
+```
+
+- [ ] Add `Token::Read` keyword to lexer
+- [ ] Add `Expr::Read(ExprId, TypeExprId)` to AST
+- [ ] Implement in interpreter (returns `Result[T, String]` value, NOT `Err(crate::Error)`):
+  - `String -> Int`: parse, `Result.Err` if invalid
+  - `String -> Float`: parse, `Result.Err` if invalid
+  - `Int -> Bool`: `0` -> `Result.Ok(false)`, `1` -> `Result.Ok(true)`, else `Result.Err`
+  - **NOTE**: Extend this list as new fallible conversions are needed
 - [ ] Add unit tests
 - [ ] Add integration test script
 
@@ -595,12 +630,24 @@ To check payload type after unwrapping:
 (x ?? 0) is Int    ; true
 ```
 
-### `as` vs Implicit Coercion
+### `as` vs `read` vs Implicit Coercion
 
-`as` is for explicit conversions that may fail or lose precision. Implicit coercion (Phase 1) handles safe cases like `Int + Float`. Use `as` when:
-- Parsing strings to numbers (`"42" as Int`)
-- Narrowing (`Float as Int`)
-- The conversion might fail
+Three levels of type conversion:
+
+1. **Implicit coercion** (Phase 1): Automatic, safe widening in expressions like `Int + Float`.
+
+2. **`as`** (infallible): Explicit conversions that always succeed but may lose precision:
+   - `Float as Int` (truncates)
+   - `42 as Float` (widens)
+   - `T as String` (stringify anything)
+   - `Bool as Int` (`false` -> `0`, `true` -> `1`)
+
+3. **`read`** (fallible): Conversions that may fail; returns `Result[T, String]`:
+   - `"42" read Int` -> `Result.Ok(42)`
+   - `"bad" read Int` -> `Result.Err("invalid integer: bad")`
+   - `1 read Bool` -> `Result.Ok(true)` (only `0` and `1` valid)
+
+Use `read` when parsing user input or data that might be malformed. Chain with `??` for defaults or `is Result.Err(e)` to handle errors.
 
 ### Functions Return Last Expression
 
@@ -764,12 +811,34 @@ IF opt is Option.Some(_) {
   OUTPUT "Has some value"
 }
 
-; Type casting
-LET n = "123" as Int
-OUTPUT n + 1  ; 124
-
+; Type casting (infallible)
 LET s = 3.14 as String
 OUTPUT "Pi is " ++ s
+
+LET f = 42 as Float
+OUTPUT f + 0.5  ; 42.5
+
+; Fallible conversion with read
+LET parsed = "123" read Int
+IF parsed is Result.Ok(n) {
+  OUTPUT n + 1  ; 124
+}
+
+LET bad = "abc" read Int
+IF bad is Result.Err(e) {
+  OUTPUT "Error: " ++ e  ; "Error: invalid integer: abc"
+}
+
+; read with ?? for defaults
+LET port = "8080" read Int ?? 3000
+OUTPUT port  ; 8080
+
+LET fallback = "invalid" read Int ?? 3000
+OUTPUT fallback  ; 3000
+
+; Strict bool conversion
+LET b = 1 read Bool ?? false
+OUTPUT b  ; true
 
 ; Power
 OUTPUT 2 ** 10  ; 1024
