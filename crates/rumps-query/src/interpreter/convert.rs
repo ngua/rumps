@@ -92,12 +92,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .join(", ");
                 format!("{{ {fields} }}")
             }
-            Value::Tagged(ty, idx, payloads) => {
-                let ty_name =
-                    self.registry.type_name(*ty, &self.arena).unwrap_or("?");
-                let var_name = self
-                    .registry
-                    .variant_name(*ty, *idx, &self.arena)
+            Value::Tagged(ty_expr, idx, payloads) => {
+                let base_ty = self.type_exprs.base_type(*ty_expr);
+                let ty_name = base_ty
+                    .and_then(|ty| self.registry.type_name(ty, &self.arena))
+                    .unwrap_or("?");
+                let var_name = base_ty
+                    .and_then(|ty| {
+                        self.registry.variant_name(ty, *idx, &self.arena)
+                    })
                     .unwrap_or("?");
 
                 if payloads.is_empty() {
@@ -147,12 +150,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 serde_json::Value::Object(map)
             }
             // Sum type encoding: tagged object
-            Value::Tagged(ty, idx, payloads) => {
-                let ty_name =
-                    self.registry.type_name(*ty, &self.arena).unwrap_or("?");
-                let var_name = self
-                    .registry
-                    .variant_name(*ty, *idx, &self.arena)
+            Value::Tagged(ty_expr, idx, payloads) => {
+                let base_ty = self.type_exprs.base_type(*ty_expr);
+                let ty_name = base_ty
+                    .and_then(|ty| self.registry.type_name(ty, &self.arena))
+                    .unwrap_or("?");
+                let var_name = base_ty
+                    .and_then(|ty| {
+                        self.registry.variant_name(ty, *idx, &self.arena)
+                    })
                     .unwrap_or("?");
                 let payload_json: Vec<_> = payloads
                     .iter()
@@ -172,7 +178,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a JSON value to a runtime value.
     pub(crate) fn unjsonify(&mut self, j: serde_json::Value) -> Value {
         match j {
-            serde_json::Value::Null => Value::none(),
+            serde_json::Value::Null => self.make_none(),
             serde_json::Value::Bool(b) => Value::Bool(b),
             serde_json::Value::Number(n) => {
                 Value::Float(OrderedFloat(n.as_f64().unwrap_or(0.0)))
@@ -187,9 +193,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 });
 
                 if dominated {
-                    // Get element type from first element, or NEVER for empty
+                    // Get element type from first element, or UNKNOWN for empty
                     let elem_ty = match arr.first() {
-                        None => self.type_exprs.named(TypeId::NEVER),
+                        None => self.type_exprs.named(TypeId::UNKNOWN),
                         Some(first) => {
                             json_type_expr(first, &mut self.type_exprs)
                         }
@@ -269,7 +275,7 @@ fn json_type_expr(
         serde_json::Value::String(_) => arena.named(TypeId::STRING),
         serde_json::Value::Array(arr) => {
             let elem_ty = match arr.first() {
-                None => arena.named(TypeId::NEVER),
+                None => arena.named(TypeId::UNKNOWN),
                 Some(first) => json_type_expr(first, arena),
             };
             arena.app(TypeId::ARRAY, smallvec::smallvec![elem_ty])

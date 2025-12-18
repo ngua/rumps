@@ -84,7 +84,7 @@ use async_recursion::async_recursion;
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{
     Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, TypePattern, UnOp,
@@ -295,7 +295,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 span,
                                 format!(
                                     "logical AND requires booleans; got Bool and {}",
-                                    right.type_name(&self.registry)
+                                    right.type_name(&self.registry, &self.type_exprs)
                                 ),
                             )),
                         }
@@ -304,7 +304,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         span,
                         format!(
                             "logical AND requires booleans; got {}",
-                            left.type_name(&self.registry)
+                            left.type_name(&self.registry, &self.type_exprs)
                         ),
                     )),
                 }
@@ -322,7 +322,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 span,
                                 format!(
                                     "logical OR requires booleans; got Bool and {}",
-                                    right.type_name(&self.registry)
+                                    right.type_name(&self.registry, &self.type_exprs)
                                 ),
                             )),
                         }
@@ -331,7 +331,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         span,
                         format!(
                             "logical OR requires booleans; got {}",
-                            left.type_name(&self.registry)
+                            left.type_name(&self.registry, &self.type_exprs)
                         ),
                     )),
                 }
@@ -364,11 +364,21 @@ impl<I: IoContext> Interpreter<'_, I> {
         rhs: ExprId,
         span: Span,
     ) -> Result<Value> {
-        use crate::value::TypeId;
+        // Helper to check if type expression has a given base type
+        let is_option = |ty_expr: TypeExprId| {
+            self.type_exprs
+                .base_type(ty_expr)
+                .is_some_and(|t| t == TypeId::OPTION)
+        };
+        let is_result = |ty_expr: TypeExprId| {
+            self.type_exprs
+                .base_type(ty_expr)
+                .is_some_and(|t| t == TypeId::RESULT)
+        };
 
-        match left {
+        match &left {
             // Option.Some(v) -> unwrap to v
-            Value::Tagged(ty, 1, ref payload) if ty == TypeId::OPTION => {
+            Value::Tagged(ty_expr, 1, payload) if is_option(*ty_expr) => {
                 payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
@@ -377,11 +387,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
             }
             // Option.None -> evaluate rhs
-            Value::Tagged(ty, 0, _) if ty == TypeId::OPTION => {
+            Value::Tagged(ty_expr, 0, _) if is_option(*ty_expr) => {
                 self.eval(rhs).await
             }
             // Result.Ok(v) -> unwrap to v
-            Value::Tagged(ty, 0, ref payload) if ty == TypeId::RESULT => {
+            Value::Tagged(ty_expr, 0, payload) if is_result(*ty_expr) => {
                 payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
@@ -390,7 +400,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
             }
             // Result.Err(_) -> evaluate rhs (error discarded)
-            Value::Tagged(ty, 1, _) if ty == TypeId::RESULT => {
+            Value::Tagged(ty_expr, 1, _) if is_result(*ty_expr) => {
                 self.eval(rhs).await
             }
             // Other types -> type error
@@ -398,7 +408,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "`??` requires Option or Result; got {}",
-                    left.type_name(&self.registry)
+                    left.type_name(&self.registry, &self.type_exprs)
                 ),
             )),
         }
@@ -460,8 +470,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn array(&mut self, elems: &[ExprId]) -> Result<Value> {
         match elems.split_first() {
             None => {
-                // Empty array has element type `NEVER` (bottom type)
-                let elem_ty = self.type_exprs.named(TypeId::NEVER);
+                // Empty array has element type `UNKNOWN`
+                let elem_ty = self.type_exprs.named(TypeId::UNKNOWN);
                 Ok(Value::Array(elem_ty, SmallVec::new()))
             }
             Some((first, rest)) => {
@@ -527,7 +537,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .app(TypeId::ARRAY, smallvec::smallvec![*elem_ty])
             }
             Value::Object(_) => self.type_exprs.named(TypeId::OBJECT),
-            Value::Tagged(ty, _, _) => self.type_exprs.named(*ty),
+            Value::Tagged(ty_expr, _, _) => *ty_expr,
         }
     }
 
@@ -541,6 +551,26 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .to_owned()
             })
             .unwrap_or_else(|| "?".to_owned())
+    }
+
+    /// Create an `Option.None` value with unknown type parameter.
+    fn make_none(&mut self) -> Value {
+        let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+        let opt_ty = self.type_exprs.app(TypeId::OPTION, smallvec![unknown]);
+        Value::none(opt_ty)
+    }
+
+    /// Create an `Option.Some(v)` value, inferring the type from the inner value.
+    fn make_some(&mut self, inner: ValueId) -> Value {
+        let inner_val = self.arena.get(inner).cloned().unwrap_or(Value::Int(0));
+        let inner_ty = self.value_type_expr(&inner_val);
+        let opt_ty = self.type_exprs.app(TypeId::OPTION, smallvec![inner_ty]);
+        Value::some(opt_ty, inner)
+    }
+
+    /// Create an `Option.None` with the same type parameter as another Option.
+    fn make_none_like(&mut self, other_opt_ty: TypeExprId) -> Value {
+        Value::none(other_opt_ty)
     }
 
     /// Evaluate index access (array or object).
@@ -583,8 +613,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot index {} with {}",
-                    base_val.type_name(&self.registry),
-                    idx_val.type_name(&self.registry)
+                    base_val.type_name(&self.registry, &self.type_exprs),
+                    idx_val.type_name(&self.registry, &self.type_exprs)
                 ),
             )),
         }
@@ -609,11 +639,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if let Some(var_def) =
                     self.registry.lookup_variant(type_id, field_id)
                 {
+                    let idx = var_def.idx;
+                    let arity = var_def.arity;
                     // Zero-arity variant
-                    if var_def.arity == 0 {
+                    if arity == 0 {
+                        let ty_expr =
+                            self.build_variant_type_expr(type_id, idx, &[]);
                         return Ok(Value::Tagged(
-                            type_id,
-                            var_def.idx,
+                            ty_expr,
+                            idx,
                             smallvec::SmallVec::new(),
                         ));
                     }
@@ -621,8 +655,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     return Err(Error::runtime(
                         span,
                         format!(
-                            "`{ty_name}.{field}` requires {} argument(s)",
-                            var_def.arity
+                            "`{ty_name}.{field}` requires {arity} argument(s)"
                         ),
                     ));
                 }
@@ -648,7 +681,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot access field on {}",
-                    base_val.type_name(&self.registry)
+                    base_val.type_name(&self.registry, &self.type_exprs)
                 ),
             )),
         }
@@ -666,17 +699,25 @@ impl<I: IoContext> Interpreter<'_, I> {
         field: &str,
         span: Span,
     ) -> Result<Value> {
-        use crate::value::TypeId;
-
         let base_val = self.eval(base).await?;
 
-        match base_val {
+        match &base_val {
             // Option.None -> Option.None (short-circuit)
-            Value::Tagged(ty, 0, _) if ty == TypeId::OPTION => {
-                Ok(Value::none())
+            Value::Tagged(ty_expr, 0, _)
+                if self
+                    .type_exprs
+                    .base_type(*ty_expr)
+                    .is_some_and(|t| t == TypeId::OPTION) =>
+            {
+                Ok(self.make_none_like(*ty_expr))
             }
             // Option.Some(v) -> access field on v, wrap in Some
-            Value::Tagged(ty, 1, ref payload) if ty == TypeId::OPTION => {
+            Value::Tagged(ty_expr, 1, payload)
+                if self
+                    .type_exprs
+                    .base_type(*ty_expr)
+                    .is_some_and(|t| t == TypeId::OPTION) =>
+            {
                 let inner = payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
@@ -685,13 +726,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })?;
                 let result = self.field_access(&inner, field, span)?;
                 let result_id = self.arena.add(result, span);
-                Ok(Value::some(result_id))
+                Ok(self.make_some(result_id))
             }
             // Non-Option value -> access field normally, wrap in Some
             other => {
-                let result = self.field_access(&other, field, span)?;
+                let result = self.field_access(other, field, span)?;
                 let result_id = self.arena.add(result, span);
-                Ok(Value::some(result_id))
+                Ok(self.make_some(result_id))
             }
         }
     }
@@ -776,8 +817,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         })?;
 
         Ok(match val {
-            Value::Tagged(tid, idx, _) => {
-                *tid == type_id && *idx == var_def.idx
+            Value::Tagged(ty_expr, idx, _) => {
+                self.type_exprs
+                    .base_type(*ty_expr)
+                    .is_some_and(|t| t == type_id)
+                    && *idx == var_def.idx
             }
             _ => false,
         })
@@ -795,8 +839,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.lookup_variant(ty_name, var_name, span)?;
 
         Ok(match val {
-            Value::Tagged(tid, idx, _) => {
-                *tid == type_id && *idx == var_def.idx
+            Value::Tagged(ty_expr, idx, _) => {
+                self.type_exprs
+                    .base_type(*ty_expr)
+                    .is_some_and(|t| t == type_id)
+                    && *idx == var_def.idx
             }
             _ => false,
         })
@@ -840,7 +887,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::String(_) => type_id == TypeId::STRING,
             Value::Array(_, _) => type_id == TypeId::ARRAY,
             Value::Object(_) => type_id == TypeId::OBJECT,
-            Value::Tagged(tid, _, _) => *tid == type_id,
+            Value::Tagged(ty_expr, _, _) => self
+                .type_exprs
+                .base_type(*ty_expr)
+                .is_some_and(|t| t == type_id),
         }
     }
 
@@ -867,7 +917,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot access field on {}",
-                    val.type_name(&self.registry)
+                    val.type_name(&self.registry, &self.type_exprs)
                 ),
             )),
         }
@@ -913,34 +963,76 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         let idx = var_def.idx;
 
-        // Evaluate arguments
-        self.variant_args(type_id, idx, args, span).await
+        // Evaluate arguments and collect their values and types
+        let (payloads, payload_types) =
+            self.eval_variant_args(args, span).await?;
+
+        // Build the type expression with inferred type parameters
+        let ty_expr =
+            self.build_variant_type_expr(type_id, idx, &payload_types);
+
+        Ok(Value::Tagged(ty_expr, idx, payloads))
     }
 
-    /// Helper to evaluate variant arguments and build the Tagged value.
+    /// Evaluate variant arguments and return (values, types).
     #[async_recursion]
-    async fn variant_args(
+    async fn eval_variant_args(
         &mut self,
-        type_id: crate::value::TypeId,
-        idx: u8,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<(SmallVec<[ValueId; 4]>, SmallVec<[TypeExprId; 4]>)> {
         match args.split_first() {
-            None => Ok(Value::Tagged(type_id, idx, smallvec::SmallVec::new())),
+            None => Ok((SmallVec::new(), SmallVec::new())),
             Some((head, tail)) => {
                 let val = self.eval(*head).await?;
+                let val_ty = self.value_type_expr(&val);
                 let val_id = self.arena.add(val, span);
-                let mut rest =
-                    match self.variant_args(type_id, idx, tail, span).await? {
-                        Value::Tagged(_, _, payloads) => payloads,
-                        _ => smallvec::SmallVec::new(),
-                    };
+                let (mut rest_vals, mut rest_tys) =
+                    self.eval_variant_args(tail, span).await?;
                 // Prepend since we're building from head
-                let mut result = smallvec::smallvec![val_id];
-                result.append(&mut rest);
-                Ok(Value::Tagged(type_id, idx, result))
+                let mut vals = smallvec::smallvec![val_id];
+                vals.append(&mut rest_vals);
+                let mut tys = smallvec::smallvec![val_ty];
+                tys.append(&mut rest_tys);
+                Ok((vals, tys))
             }
+        }
+    }
+
+    /// Build a `TypeExprId` for a variant, inferring type params from payloads.
+    ///
+    /// For `Option.Some(42)` → `Option[Int]`
+    /// For `Option.None` → `Option[Unknown]`
+    /// For `Result.Ok(42)` → `Result[Int, Unknown]`
+    /// For `Result.Err("x")` → `Result[Unknown, String]`
+    fn build_variant_type_expr(
+        &mut self,
+        type_id: TypeId,
+        var_idx: u8,
+        payload_types: &[TypeExprId],
+    ) -> TypeExprId {
+        let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+
+        // Special handling for built-in types Option and Result
+        if type_id == TypeId::OPTION {
+            // Option[T]: None has no payload, Some has T
+            let t = payload_types.first().copied().unwrap_or(unknown);
+            self.type_exprs.app(TypeId::OPTION, smallvec::smallvec![t])
+        } else if type_id == TypeId::RESULT {
+            // Result[T, E]: Ok has T, Err has E
+            let (t, e) = if var_idx == 0 {
+                // Ok(v) → Result[type_of(v), Unknown]
+                (payload_types.first().copied().unwrap_or(unknown), unknown)
+            } else {
+                // Err(e) → Result[Unknown, type_of(e)]
+                (unknown, payload_types.first().copied().unwrap_or(unknown))
+            };
+            self.type_exprs
+                .app(TypeId::RESULT, smallvec::smallvec![t, e])
+        } else {
+            // For other types, use Unknown for all type params
+            // (Future: read type_params from TypeDef and infer properly)
+            self.type_exprs.named(type_id)
         }
     }
 
@@ -970,7 +1062,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         match stmts.split_first() {
             None => match tail {
                 Some(e) => self.eval(e).await,
-                None => Ok(Value::none()),
+                None => Ok(self.make_none()),
             },
             Some((head, rest)) => {
                 self.exec(*head).await?;
@@ -1003,12 +1095,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             _ => {
                 let cond_val = self.eval(cond).await?;
-                if cond_val.is_truthy(&self.arena) {
+                if cond_val.is_truthy(&self.arena, &self.type_exprs) {
                     self.eval(then_br).await
                 } else {
                     match else_br {
                         Some(e) => self.eval(e).await,
-                        None => Ok(Value::none()),
+                        None => Ok(self.make_none()),
                     }
                 }
             }
@@ -1063,7 +1155,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // No match; evaluate else branch (without bindings)
             match else_br {
                 Some(e) => self.eval(e).await,
-                None => Ok(Value::none()),
+                None => Ok(self.make_none()),
             }
         }
     }
@@ -1075,6 +1167,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         payloads: &[ValueId],
         span: Span,
     ) {
+        // Fallback value if arena lookup fails (shouldn't happen normally)
+        let fallback = self.make_none();
         names
             .iter()
             .zip(payloads.iter())
@@ -1082,7 +1176,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let name_id = self.arena.intern(name);
                 // Re-add the value to get a fresh ValueId in case it matters
                 let val =
-                    self.arena.get(val_id).cloned().unwrap_or(Value::none());
+                    self.arena.get(val_id).cloned().unwrap_or(fallback.clone());
                 let new_val_id = self.arena.add(val, span);
                 self.env.scopes.bind(name_id, new_val_id);
             });
@@ -1805,7 +1899,7 @@ mod tests {
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(if_expr).await.unwrap();
-        assert!(result.is_none());
+        assert!(result.is_none(&interp.type_exprs));
     }
 
     #[tokio::test]
@@ -1858,7 +1952,7 @@ mod tests {
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(blk).await.unwrap();
-        assert!(result.is_none());
+        assert!(result.is_none(&interp.type_exprs));
     }
 
     #[tokio::test]
@@ -2071,8 +2165,9 @@ mod tests {
         let mut interp = test_interp(&ast);
         let result = interp.eval(variant).await.unwrap();
         match result {
-            Value::Tagged(ty, idx, payloads) => {
-                assert_eq!(ty, crate::value::TypeId::OPTION);
+            Value::Tagged(ty_expr, idx, payloads) => {
+                let base = interp.type_exprs.base_type(ty_expr);
+                assert_eq!(base, Some(crate::value::TypeId::OPTION));
                 assert_eq!(idx, 1); // Some is index 1
                 assert_eq!(payloads.len(), 1);
             }
@@ -2091,8 +2186,9 @@ mod tests {
         let mut interp = test_interp(&ast);
         let result = interp.eval(field).await.unwrap();
         match result {
-            Value::Tagged(ty, idx, payloads) => {
-                assert_eq!(ty, crate::value::TypeId::OPTION);
+            Value::Tagged(ty_expr, idx, payloads) => {
+                let base = interp.type_exprs.base_type(ty_expr);
+                assert_eq!(base, Some(crate::value::TypeId::OPTION));
                 assert_eq!(idx, 0); // None is index 0
                 assert!(payloads.is_empty());
             }
@@ -2119,8 +2215,9 @@ mod tests {
         let mut interp = test_interp(&ast);
         let result = interp.eval(variant).await.unwrap();
         match result {
-            Value::Tagged(ty, idx, payloads) => {
-                assert_eq!(ty, crate::value::TypeId::RESULT);
+            Value::Tagged(ty_expr, idx, payloads) => {
+                let base = interp.type_exprs.base_type(ty_expr);
+                assert_eq!(base, Some(crate::value::TypeId::RESULT));
                 assert_eq!(idx, 0); // Ok is index 0
                 assert_eq!(payloads.len(), 1);
             }
@@ -2147,8 +2244,9 @@ mod tests {
         let mut interp = test_interp(&ast);
         let result = interp.eval(variant).await.unwrap();
         match result {
-            Value::Tagged(ty, idx, payloads) => {
-                assert_eq!(ty, crate::value::TypeId::RESULT);
+            Value::Tagged(ty_expr, idx, payloads) => {
+                let base = interp.type_exprs.base_type(ty_expr);
+                assert_eq!(base, Some(crate::value::TypeId::RESULT));
                 assert_eq!(idx, 1); // Err is index 1
                 assert_eq!(payloads.len(), 1);
             }
@@ -2237,7 +2335,7 @@ mod tests {
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(opt_field).await.unwrap();
-        assert!(result.is_some());
+        assert!(result.is_some(&interp.type_exprs));
         // Unwrap the Some to get 42
         match result {
             Value::Tagged(_, 1, payloads) => {
@@ -2260,7 +2358,7 @@ mod tests {
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(opt_field).await.unwrap();
-        assert!(result.is_none());
+        assert!(result.is_none(&interp.type_exprs));
     }
 
     #[tokio::test]
@@ -2284,7 +2382,7 @@ mod tests {
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(opt_field).await.unwrap();
-        assert!(result.is_some());
+        assert!(result.is_some(&interp.type_exprs));
         match result {
             Value::Tagged(_, 1, payloads) => {
                 let inner = interp.arena.get(payloads[0]).unwrap();
@@ -2682,5 +2780,76 @@ mod tests {
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await;
         assert!(result.is_err());
+    }
+
+    // ===== Structural type equality tests =====
+
+    #[tokio::test]
+    async fn tagged_values_structural_equality() {
+        // Two Option.Some(1) values created separately should be equal,
+        // even though they have different TypeExprIds.
+        let mut ast = Ast::new();
+        let one_a =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
+        let some_a = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![one_a],
+            ),
+            Span::new(0, 14),
+        );
+        let one_b =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(32, 33));
+        let some_b = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![one_b],
+            ),
+            Span::new(20, 34),
+        );
+        let eq_expr = ast.add_expr(
+            Expr::Binary(some_a, BinOp::Eq, some_b),
+            Span::new(0, 40),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(eq_expr).await.unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn tagged_values_different_payloads_not_equal() {
+        // Option.Some(1) != Option.Some(2)
+        let mut ast = Ast::new();
+        let one =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
+        let some_one = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![one],
+            ),
+            Span::new(0, 14),
+        );
+        let two =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(32, 33));
+        let some_two = ast.add_expr(
+            Expr::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec::smallvec![two],
+            ),
+            Span::new(20, 34),
+        );
+        let eq_expr = ast.add_expr(
+            Expr::Binary(some_one, BinOp::Eq, some_two),
+            Span::new(0, 40),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(eq_expr).await.unwrap();
+        assert_eq!(result, Value::Bool(false));
     }
 }

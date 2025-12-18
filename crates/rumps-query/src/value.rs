@@ -63,8 +63,10 @@ impl TypeId {
     pub(crate) const OPTION: Self = Self(6);
     /// Builtin type: `Result`.
     pub(crate) const RESULT: Self = Self(7);
-    /// Bottom type for empty arrays; compatible with any element type.
-    pub(crate) const NEVER: Self = Self(8);
+    /// Placeholder type for uninferred type parameters; compatible with any type.
+    /// Used for empty arrays (unknown element type) and partial variant types
+    /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
+    pub(crate) const UNKNOWN: Self = Self(8);
 
     const fn idx(self) -> usize {
         self.0 as usize
@@ -184,17 +186,21 @@ pub(crate) enum Value {
 
     /// A tagged value (sum type variant).
     ///
-    /// - `TypeId`: the sum type (e.g., `Option`, `Result`)
+    /// - `TypeExprId`: the full parameterized type (e.g., `Option[Int]`, `Result[Int, String]`)
     /// - `u8`: the variant index (e.g., `0` for `None`, `1` for `Some`)
-    /// - `SmallVec`: the payload values (most variants have 0-2)
-    Tagged(TypeId, u8, SmallVec<[ValueId; 2]>),
+    /// - `SmallVec`: the payload values (most variants have 0-4)
+    Tagged(TypeExprId, u8, SmallVec<[ValueId; 4]>),
 }
 
 impl Value {
     /// Check if this value is truthy.
     ///
     /// Falsy values: `false`, `0`, `0.0`, `""`, `[]`, `{}`, `Option.None`, `Result.Err`
-    pub(crate) fn is_truthy(&self, arena: &ValueArena) -> bool {
+    pub(crate) fn is_truthy(
+        &self,
+        arena: &ValueArena,
+        type_exprs: &TypeExprArena,
+    ) -> bool {
         match self {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
@@ -204,17 +210,23 @@ impl Value {
             }
             Self::Array(_, elems) => !elems.is_empty(),
             Self::Object(obj) => !obj.is_empty(),
-            Self::Tagged(ty, idx, _) => {
-                // Option.None and Result.Err are falsy
-                let is_none = *ty == TypeId::OPTION && *idx == 0;
-                let is_err = *ty == TypeId::RESULT && *idx == 1;
-                !(is_none || is_err)
+            Self::Tagged(ty_expr, idx, _) => {
+                // Option.None and Result.Err are falsy; other variants are truthy
+                match type_exprs.base_type(*ty_expr) {
+                    Some(TypeId::OPTION) => *idx != 0, // Some is truthy
+                    Some(TypeId::RESULT) => *idx == 0, // Ok is truthy
+                    _ => true, // Unknown tagged → truthy
+                }
             }
         }
     }
 
     /// Get the type name of this value for error messages.
-    pub(crate) fn type_name(&self, reg: &TypeRegistry) -> &'static str {
+    pub(crate) fn type_name(
+        &self,
+        reg: &TypeRegistry,
+        type_exprs: &TypeExprArena,
+    ) -> &'static str {
         match self {
             Self::Bool(_) => "Bool",
             Self::Int(_) => "Int",
@@ -222,8 +234,9 @@ impl Value {
             Self::String(_) => "String",
             Self::Array(..) => "Array",
             Self::Object(_) => "Object",
-            Self::Tagged(ty, _, _) => reg
-                .get_def(*ty)
+            Self::Tagged(ty_expr, _, _) => type_exprs
+                .base_type(*ty_expr)
+                .and_then(|ty| reg.get_def(ty))
                 .map(|def| match def {
                     TypeDef::Builtin(b) => b.name(),
                     TypeDef::Sum { .. } => "Tagged",
@@ -232,44 +245,64 @@ impl Value {
         }
     }
 
-    /// Create an `Option.None` value.
-    pub(crate) fn none() -> Self {
-        Self::Tagged(TypeId::OPTION, 0, SmallVec::new())
+    /// Create an `Option.None` value with the given type expression.
+    pub(crate) fn none(ty_expr: TypeExprId) -> Self {
+        Self::Tagged(ty_expr, 0, SmallVec::new())
     }
 
-    /// Create an `Option.Some(v)` value.
-    pub(crate) fn some(v: ValueId) -> Self {
-        Self::Tagged(TypeId::OPTION, 1, smallvec::smallvec![v])
+    /// Create an `Option.Some(v)` value with the given type expression.
+    pub(crate) fn some(ty_expr: TypeExprId, v: ValueId) -> Self {
+        Self::Tagged(ty_expr, 1, smallvec::smallvec![v])
     }
 
-    /// Create a `Result.Ok(v)` value.
-    pub(crate) fn ok(v: ValueId) -> Self {
-        Self::Tagged(TypeId::RESULT, 0, smallvec::smallvec![v])
+    /// Create a `Result.Ok(v)` value with the given type expression.
+    pub(crate) fn ok(ty_expr: TypeExprId, v: ValueId) -> Self {
+        Self::Tagged(ty_expr, 0, smallvec::smallvec![v])
     }
 
-    /// Create a `Result.Err(e)` value.
-    pub(crate) fn err(e: ValueId) -> Self {
-        Self::Tagged(TypeId::RESULT, 1, smallvec::smallvec![e])
+    /// Create a `Result.Err(e)` value with the given type expression.
+    pub(crate) fn err(ty_expr: TypeExprId, e: ValueId) -> Self {
+        Self::Tagged(ty_expr, 1, smallvec::smallvec![e])
     }
 
     /// Check if this is `Option.None`.
-    pub(crate) fn is_none(&self) -> bool {
-        matches!(self, Self::Tagged(ty, 0, _) if *ty == TypeId::OPTION)
+    pub(crate) fn is_none(&self, type_exprs: &TypeExprArena) -> bool {
+        match self {
+            Self::Tagged(ty_expr, 0, _) => type_exprs
+                .base_type(*ty_expr)
+                .is_some_and(|ty| ty == TypeId::OPTION),
+            _ => false,
+        }
     }
 
     /// Check if this is `Option.Some`.
-    pub(crate) fn is_some(&self) -> bool {
-        matches!(self, Self::Tagged(ty, 1, _) if *ty == TypeId::OPTION)
+    pub(crate) fn is_some(&self, type_exprs: &TypeExprArena) -> bool {
+        match self {
+            Self::Tagged(ty_expr, 1, _) => type_exprs
+                .base_type(*ty_expr)
+                .is_some_and(|ty| ty == TypeId::OPTION),
+            _ => false,
+        }
     }
 
     /// Check if this is `Result.Ok`.
-    pub(crate) fn is_ok(&self) -> bool {
-        matches!(self, Self::Tagged(ty, 0, _) if *ty == TypeId::RESULT)
+    pub(crate) fn is_ok(&self, type_exprs: &TypeExprArena) -> bool {
+        match self {
+            Self::Tagged(ty_expr, 0, _) => type_exprs
+                .base_type(*ty_expr)
+                .is_some_and(|ty| ty == TypeId::RESULT),
+            _ => false,
+        }
     }
 
     /// Check if this is `Result.Err`.
-    pub(crate) fn is_err(&self) -> bool {
-        matches!(self, Self::Tagged(ty, 1, _) if *ty == TypeId::RESULT)
+    pub(crate) fn is_err(&self, type_exprs: &TypeExprArena) -> bool {
+        match self {
+            Self::Tagged(ty_expr, 1, _) => type_exprs
+                .base_type(*ty_expr)
+                .is_some_and(|ty| ty == TypeId::RESULT),
+            _ => false,
+        }
     }
 }
 
@@ -357,6 +390,15 @@ impl TypeExprArena {
         self.exprs.get(id.idx())
     }
 
+    /// Get the base `TypeId` from a type expression.
+    ///
+    /// For `Named(T)` returns `T`; for `App(T, params)` returns `T`.
+    pub(crate) fn base_type(&self, id: TypeExprId) -> Option<TypeId> {
+        self.get(id).map(|expr| match expr {
+            TypeExpr::Named(ty) | TypeExpr::App(ty, _) => *ty,
+        })
+    }
+
     /// Add a simple named type expression.
     pub(crate) fn named(&mut self, ty: TypeId) -> TypeExprId {
         self.add(TypeExpr::Named(ty))
@@ -380,12 +422,12 @@ impl TypeExprArena {
 
     /// Structural equality of type expressions.
     ///
-    /// `NEVER` (bottom type) is compatible with any type.
+    /// `UNKNOWN` is compatible with any type (used for uninferred type params).
     fn exprs_eq(&self, a: &TypeExpr, b: &TypeExpr) -> bool {
         match (a, b) {
-            // NEVER is compatible with anything (empty array element type)
-            (TypeExpr::Named(TypeId::NEVER), _)
-            | (_, TypeExpr::Named(TypeId::NEVER)) => true,
+            // UNKNOWN is compatible with anything (uninferred type parameter)
+            (TypeExpr::Named(TypeId::UNKNOWN), _)
+            | (_, TypeExpr::Named(TypeId::UNKNOWN)) => true,
             (TypeExpr::Named(ta), TypeExpr::Named(tb)) => ta == tb,
             (TypeExpr::App(ta, pa), TypeExpr::App(tb, pb)) => {
                 ta == tb
@@ -616,12 +658,20 @@ mod tests {
     use super::*;
 
     /// Test helper: unwrap `Option.Some(v)` or `Result.Ok(v)`.
-    fn unwrap_inner(v: &Value) -> Option<ValueId> {
+    fn unwrap_inner(v: &Value, type_exprs: &TypeExprArena) -> Option<ValueId> {
         match v {
-            Value::Tagged(ty, 1, p) if *ty == TypeId::OPTION => {
+            Value::Tagged(ty_expr, 1, p)
+                if type_exprs
+                    .base_type(*ty_expr)
+                    .is_some_and(|ty| ty == TypeId::OPTION) =>
+            {
                 p.first().copied()
             }
-            Value::Tagged(ty, 0, p) if *ty == TypeId::RESULT => {
+            Value::Tagged(ty_expr, 0, p)
+                if type_exprs
+                    .base_type(*ty_expr)
+                    .is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
                 p.first().copied()
             }
             _ => None,
@@ -676,75 +726,108 @@ mod tests {
     fn option_values() {
         let mut arena = ValueArena::new();
         let _reg = TypeRegistry::new(&mut arena).unwrap();
+        let mut type_exprs = TypeExprArena::new();
 
-        let none = Value::none();
-        assert!(none.is_none());
-        assert!(!none.is_some());
+        // Option[Unknown] for None
+        let unknown = type_exprs.named(TypeId::UNKNOWN);
+        let opt_unknown =
+            type_exprs.app(TypeId::OPTION, smallvec::smallvec![unknown]);
+
+        let none = Value::none(opt_unknown);
+        assert!(none.is_none(&type_exprs));
+        assert!(!none.is_some(&type_exprs));
+
+        // Option[Int] for Some(42)
+        let int_ty = type_exprs.named(TypeId::INT);
+        let opt_int =
+            type_exprs.app(TypeId::OPTION, smallvec::smallvec![int_ty]);
 
         let inner = arena.add(Value::Int(42), Span::new(0, 2));
-        let some = Value::some(inner);
-        assert!(!some.is_none());
-        assert!(some.is_some());
-        assert_eq!(unwrap_inner(&some), Some(inner));
+        let some = Value::some(opt_int, inner);
+        assert!(!some.is_none(&type_exprs));
+        assert!(some.is_some(&type_exprs));
+        assert_eq!(unwrap_inner(&some, &type_exprs), Some(inner));
     }
 
     #[test]
     fn result_values() {
         let mut arena = ValueArena::new();
         let _reg = TypeRegistry::new(&mut arena).unwrap();
+        let mut type_exprs = TypeExprArena::new();
+
+        // Result[Int, Unknown] for Ok(42)
+        let int_ty = type_exprs.named(TypeId::INT);
+        let unknown = type_exprs.named(TypeId::UNKNOWN);
+        let res_ok = type_exprs
+            .app(TypeId::RESULT, smallvec::smallvec![int_ty, unknown]);
 
         let val = arena.add(Value::Int(42), Span::new(0, 2));
-        let ok = Value::ok(val);
-        assert!(ok.is_ok());
-        assert!(!ok.is_err());
-        assert_eq!(unwrap_inner(&ok), Some(val));
+        let ok = Value::ok(res_ok, val);
+        assert!(ok.is_ok(&type_exprs));
+        assert!(!ok.is_err(&type_exprs));
+        assert_eq!(unwrap_inner(&ok, &type_exprs), Some(val));
+
+        // Result[Unknown, String] for Err("error")
+        let str_ty = type_exprs.named(TypeId::STRING);
+        let res_err = type_exprs
+            .app(TypeId::RESULT, smallvec::smallvec![unknown, str_ty]);
 
         let err_str = arena.intern("error");
         let err_val = arena.add(Value::String(err_str), Span::new(3, 8));
-        let err = Value::err(err_val);
-        assert!(!err.is_ok());
-        assert!(err.is_err());
-        assert!(unwrap_inner(&err).is_none()); // Err doesn't unwrap
+        let err = Value::err(res_err, err_val);
+        assert!(!err.is_ok(&type_exprs));
+        assert!(err.is_err(&type_exprs));
+        assert!(unwrap_inner(&err, &type_exprs).is_none()); // Err doesn't unwrap
     }
 
     #[test]
     fn truthy_falsy() {
         let mut arena = ValueArena::new();
         let _reg = TypeRegistry::new(&mut arena).unwrap();
-        let mut type_arena = TypeExprArena::new();
-        let int_ty = type_arena.named(TypeId::INT);
+        let mut type_exprs = TypeExprArena::new();
+        let int_ty = type_exprs.named(TypeId::INT);
+        let unknown = type_exprs.named(TypeId::UNKNOWN);
 
         // Falsy values
-        assert!(!Value::Bool(false).is_truthy(&arena));
-        assert!(!Value::Int(0).is_truthy(&arena));
-        assert!(!Value::Float(OrderedFloat(0.0)).is_truthy(&arena));
+        assert!(!Value::Bool(false).is_truthy(&arena, &type_exprs));
+        assert!(!Value::Int(0).is_truthy(&arena, &type_exprs));
+        assert!(!Value::Float(OrderedFloat(0.0)).is_truthy(&arena, &type_exprs));
 
         let empty_str = arena.intern("");
-        assert!(!Value::String(empty_str).is_truthy(&arena));
-        assert!(!Value::Array(int_ty, SmallVec::new()).is_truthy(&arena));
-        assert!(!Value::Object(IndexMap::new()).is_truthy(&arena));
+        assert!(!Value::String(empty_str).is_truthy(&arena, &type_exprs));
+        assert!(!Value::Array(int_ty, SmallVec::new())
+            .is_truthy(&arena, &type_exprs));
+        assert!(!Value::Object(IndexMap::new()).is_truthy(&arena, &type_exprs));
 
-        let none = Value::none();
-        assert!(!none.is_truthy(&arena));
+        let opt_unknown =
+            type_exprs.app(TypeId::OPTION, smallvec::smallvec![unknown]);
+        let none = Value::none(opt_unknown);
+        assert!(!none.is_truthy(&arena, &type_exprs));
 
+        let res_err_ty = type_exprs
+            .app(TypeId::RESULT, smallvec::smallvec![unknown, int_ty]);
         let err_val = arena.add(Value::Int(42), Span::new(5, 7));
-        let err = Value::err(err_val);
-        assert!(!err.is_truthy(&arena));
+        let err = Value::err(res_err_ty, err_val);
+        assert!(!err.is_truthy(&arena, &type_exprs));
 
         // Truthy values
-        assert!(Value::Bool(true).is_truthy(&arena));
-        assert!(Value::Int(1).is_truthy(&arena));
-        assert!(Value::Float(OrderedFloat(0.1)).is_truthy(&arena));
+        assert!(Value::Bool(true).is_truthy(&arena, &type_exprs));
+        assert!(Value::Int(1).is_truthy(&arena, &type_exprs));
+        assert!(Value::Float(OrderedFloat(0.1)).is_truthy(&arena, &type_exprs));
 
         let hello = arena.intern("hello");
-        assert!(Value::String(hello).is_truthy(&arena));
+        assert!(Value::String(hello).is_truthy(&arena, &type_exprs));
 
+        let opt_int =
+            type_exprs.app(TypeId::OPTION, smallvec::smallvec![int_ty]);
         let val = arena.add(Value::Int(1), Span::new(10, 11));
-        let some = Value::some(val);
-        assert!(some.is_truthy(&arena));
+        let some = Value::some(opt_int, val);
+        assert!(some.is_truthy(&arena, &type_exprs));
 
-        let ok = Value::ok(val);
-        assert!(ok.is_truthy(&arena));
+        let res_ok_ty = type_exprs
+            .app(TypeId::RESULT, smallvec::smallvec![int_ty, unknown]);
+        let ok = Value::ok(res_ok_ty, val);
+        assert!(ok.is_truthy(&arena, &type_exprs));
     }
 
     #[test]
