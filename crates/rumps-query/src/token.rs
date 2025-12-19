@@ -43,6 +43,7 @@ pub(crate) enum Token {
     Plus,     // +
     Minus,    // -
     Mul,      // *
+    StarStar, // **
     Div,      // /
     FloorDiv, // //
     Modulo,   // %
@@ -139,6 +140,7 @@ impl fmt::Display for Token {
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
             Self::Mul => write!(f, "*"),
+            Self::StarStar => write!(f, "**"),
             Self::Div => write!(f, "/"),
             Self::FloorDiv => write!(f, "//"),
             Self::Modulo => write!(f, "%"),

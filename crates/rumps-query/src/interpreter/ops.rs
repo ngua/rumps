@@ -33,6 +33,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             BinOp::Div => self.binop_div(left, right, span),
             BinOp::FloorDiv => self.binop_floor_div(left, right, span),
             BinOp::Mod => self.binop_mod(left, right, span),
+            BinOp::Pow => self.binop_pow(left, right, span),
             BinOp::Eq => self.values_equal(left, right, span).map(Value::Bool),
             BinOp::Ne => self
                 .values_equal(left, right, span)
@@ -312,6 +313,59 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot compute {} mod {}",
+                    self.type_name(left),
+                    self.type_name(right)
+                ),
+            )),
+        }
+    }
+
+    /// Power/exponentiation.
+    fn binop_pow(
+        &self,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        match (left, right) {
+            // Int ** Int: use checked_pow with u32 exponent
+            (Value::Int(base), Value::Int(exp)) => {
+                if *exp < 0 {
+                    // Negative exponent: convert to float
+                    Ok(Value::Float(OrderedFloat(
+                        (*base as f64).powf(*exp as f64),
+                    )))
+                } else {
+                    // Non-negative exponent: try integer power
+                    u32::try_from(*exp)
+                        .ok()
+                        .and_then(|e| base.checked_pow(e))
+                        .map_or_else(
+                            || {
+                                // Overflow: fall back to float
+                                Ok(Value::Float(OrderedFloat(
+                                    (*base as f64).powf(*exp as f64),
+                                )))
+                            },
+                            |r| Ok(Value::Int(r)),
+                        )
+                }
+            }
+            // Float ** Float
+            (Value::Float(a), Value::Float(b)) => {
+                Ok(Value::Float(OrderedFloat(a.0.powf(b.0))))
+            }
+            // Mixed: coerce to float
+            (Value::Int(a), Value::Float(b)) => {
+                Ok(Value::Float(OrderedFloat((*a as f64).powf(b.0))))
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                Ok(Value::Float(OrderedFloat(a.0.powf(*b as f64))))
+            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "cannot raise {} to power {}",
                     self.type_name(left),
                     self.type_name(right)
                 ),

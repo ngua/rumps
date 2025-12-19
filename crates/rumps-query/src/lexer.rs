@@ -371,6 +371,7 @@ impl Lexer<'_> {
         // Split into groups to avoid tuple size limits
         let two_char = choice((
             just("++").to(Token::Concat),
+            just("**").to(Token::StarStar),
             just("//").to(Token::FloorDiv),
             just("==").to(Token::Eq),
             just("!=").to(Token::Ne),

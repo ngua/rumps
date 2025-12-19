@@ -363,7 +363,8 @@ impl Parser {
             let postfix =
                 Self::postfix_expr(Rc::clone(&ast), expr.clone(), primary);
             let unary = Self::unary_expr(Rc::clone(&ast), expr, postfix);
-            let mul = Self::mul_expr(Rc::clone(&ast), unary);
+            let pow = Self::pow_expr(Rc::clone(&ast), unary);
+            let mul = Self::mul_expr(Rc::clone(&ast), pow);
             let add = Self::add_expr(Rc::clone(&ast), mul);
             let cmp = Self::cmp_expr(Rc::clone(&ast), add);
             let is = Self::is_expr(Rc::clone(&ast), cmp);
@@ -626,6 +627,53 @@ impl Parser {
                 Self::fold_binary(&ast, first, rest, span)
             },
         )
+    }
+
+    /// Power: `**` (right-associative)
+    fn pow_expr(
+        ast: AstCell,
+        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
+    {
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(just(Token::StarStar))
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            move |(first, rest), span| {
+                Self::fold_binary_right(&ast, first, rest, span)
+            },
+        )
+    }
+
+    /// Folds a sequence of power operations right-to-left.
+    fn fold_binary_right(
+        ast: &AstCell,
+        first: SpannedExpr,
+        rest: Vec<(Token, SpannedExpr)>,
+        _outer_span: Span,
+    ) -> SpannedExpr {
+        rest.into_iter()
+            .rfold(None, |acc: Option<SpannedExpr>, (_tok, expr)| match acc {
+                None => Some(expr),
+                Some(rhs) => {
+                    let span = expr.1.merge(rhs.1);
+                    let id = ast.borrow_mut().add_expr(
+                        Expr::Binary(expr.0, BinOp::Pow, rhs.0),
+                        span,
+                    );
+                    Some((id, span))
+                }
+            })
+            .map_or(first, |rhs| {
+                let span = first.1.merge(rhs.1);
+                let id = ast
+                    .borrow_mut()
+                    .add_expr(Expr::Binary(first.0, BinOp::Pow, rhs.0), span);
+                (id, span)
+            })
     }
 
     /// Multiplicative: `*`, `/`, `//`, `%`

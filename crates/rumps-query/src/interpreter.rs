@@ -1649,6 +1649,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn eval_pow_int() {
+        let mut ast = Ast::new();
+        let lhs = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(0, 1));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(5, 7));
+        let pow =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 7));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(pow).await.unwrap();
+        assert_eq!(result, Value::Int(1024));
+    }
+
+    #[tokio::test]
+    async fn eval_pow_float() {
+        let mut ast = Ast::new();
+        let lhs =
+            ast.add_expr(Expr::Literal(Literal::Float(2.0)), Span::new(0, 3));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Float(0.5)), Span::new(7, 10));
+        let pow =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 10));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(pow).await.unwrap();
+        // 2.0 ** 0.5 = sqrt(2) ≈ 1.41421...
+        match result {
+            Value::Float(f) => assert!((f.0 - 1.41421356).abs() < 0.0001),
+            _ => panic!("expected Float"),
+        }
+    }
+
+    #[tokio::test]
+    async fn eval_pow_negative_exp() {
+        let mut ast = Ast::new();
+        let lhs = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(0, 1));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Int(-1)), Span::new(5, 7));
+        let pow =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 7));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(pow).await.unwrap();
+        // 2 ** -1 = 0.5
+        assert_eq!(result, Value::Float(OrderedFloat(0.5)));
+    }
+
+    #[tokio::test]
+    async fn eval_pow_mixed() {
+        let mut ast = Ast::new();
+        let lhs = ast.add_expr(Expr::Literal(Literal::Int(4)), Span::new(0, 1));
+        let rhs =
+            ast.add_expr(Expr::Literal(Literal::Float(0.5)), Span::new(5, 8));
+        let pow =
+            ast.add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 8));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(pow).await.unwrap();
+        // 4 ** 0.5 = 2.0
+        assert_eq!(result, Value::Float(OrderedFloat(2.0)));
+    }
+
+    #[tokio::test]
     async fn eval_eq() {
         let mut ast = Ast::new();
         let lhs =

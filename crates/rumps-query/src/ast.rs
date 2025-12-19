@@ -160,6 +160,7 @@ pub(crate) enum BinOp {
     Div,      // `/`
     FloorDiv, // `//`
     Mod,      // `%`
+    Pow,      // `**`
 
     // Comparison
     Eq, // `==`

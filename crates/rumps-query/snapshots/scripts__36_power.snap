@@ -1,0 +1,19 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Power operator (**)\n; Tests exponentiation with right-associativity\n\n; === Int ** Int ===\n\nLET sq = 2 ** 10\nOUTPUT sq\n; Expected: 1024\n\nLET cube = 3 ** 3\nOUTPUT cube\n; Expected: 27\n\nLET zero-pow = 5 ** 0\nOUTPUT zero-pow\n; Expected: 1\n\nLET one-pow = 7 ** 1\nOUTPUT one-pow\n; Expected: 7\n\n; === Float ** Float ===\n\nLET sqrt2 = 2.0 ** 0.5\nOUTPUT sqrt2\n; Expected: 1.4142135623730951 (approximately)\n\nLET cubert = 8.0 ** (1.0 / 3.0)\nOUTPUT cubert\n; Expected: 2.0\n\n; === Negative exponent (Int -> Float) ===\n\nLET half = 2 ** -1\nOUTPUT half\n; Expected: 0.5\n\nLET quarter = 2 ** -2\nOUTPUT quarter\n; Expected: 0.25\n\n; === Mixed Int/Float ===\n\nLET mixed1 = 4 ** 0.5\nOUTPUT mixed1\n; Expected: 2\n\nLET mixed2 = 2.0 ** 3\nOUTPUT mixed2\n; Expected: 8\n\n; === Right-associativity ===\n; 2 ** 3 ** 2 should be 2 ** (3 ** 2) = 2 ** 9 = 512\n; NOT (2 ** 3) ** 2 = 8 ** 2 = 64\n\nLET right-assoc = 2 ** 3 ** 2\nOUTPUT right-assoc\n; Expected: 512\n\n; === Precedence: higher than multiplication ===\n; 2 * 3 ** 2 should be 2 * (3 ** 2) = 2 * 9 = 18\n; NOT (2 * 3) ** 2 = 6 ** 2 = 36\n\nLET prec = 2 * 3 ** 2\nOUTPUT prec\n; Expected: 18\n\n; === Combinations ===\n\nLET combo = 10 ** 2 + 5\nOUTPUT combo\n; Expected: 105\n\nLET combo2 = (2 + 3) ** 2\nOUTPUT combo2\n; Expected: 25\n\nOUTPUT \"Power test complete\"\n"
+---
+1024
+27
+1
+7
+1.4142135623730951
+2
+0.5
+0.25
+2
+8
+512
+18
+105
+25
+Power test complete

@@ -258,15 +258,16 @@ SET squared = x ** 2
 SET cubed = 2 ** 10
 ```
 
-- [ ] Add `Token::StarStar` to lexer
-- [ ] Add `BinOp::Power` to AST
-- [ ] Update parser precedence (power is higher than multiplicative, right-associative)
-- [ ] Implement in interpreter:
-  - `Int ** Int`: use `i64::pow` (handle overflow)
+- [x] Add `Token::StarStar` to lexer
+- [x] Add `BinOp::Pow` to AST
+- [x] Update parser precedence (power is higher than multiplicative, right-associative)
+- [x] Implement in interpreter:
+  - `Int ** Int`: use `i64::checked_pow` (overflow falls back to float)
   - `Float ** Float`: use `f64::powf`
   - `Int ** Float` or `Float ** Int`: coerce to float, use `powf`
-- [ ] Add unit tests
-- [ ] Add integration test script
+  - `Int ** negative Int`: coerce to float for fractional result
+- [x] Add unit tests
+- [x] Add integration test script (`36_power.rumps`)
 
 ### 6. Function Types
 
