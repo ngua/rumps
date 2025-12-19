@@ -965,12 +965,19 @@ impl Parser {
                     Some((id, span))
                 }
                 PostfixOp::Call(args, _) => {
-                    // Check for variant constructor pattern: `Type.Variant(args)`
-                    // Otherwise treat as expression-based call: `expr(args)`
+                    // HACK: Check for variant constructor `Type.Variant(args)` using
+                    // uppercase heuristic. This conflates field access with namespace
+                    // resolution; remove in Phase 3.0 when name resolution pass is added.
+                    // See: TODOS/dsl/phase-3.md, Section 0.4
                     let base_expr = ast.borrow().get_expr(acc.0).cloned();
                     let variant_opt =
                         base_expr.as_ref().and_then(|e| match e {
-                            Expr::Field(inner, var_name) => {
+                            Expr::Field(inner, var_name)
+                                if var_name
+                                    .chars()
+                                    .next()
+                                    .is_some_and(|c| c.is_uppercase()) =>
+                            {
                                 let inner_expr =
                                     ast.borrow().get_expr(*inner).cloned();
                                 inner_expr.and_then(|ie| match ie {
@@ -984,7 +991,6 @@ impl Parser {
                             _ => None,
                         });
 
-                    // If it matches variant pattern, create Variant; otherwise Call
                     let id = variant_opt.map_or_else(
                         || {
                             ast.borrow_mut()
@@ -1175,12 +1181,18 @@ impl Parser {
             .map(|(name, ty)| (name, ty));
 
         // Multi-param closure: `(params) => expr` or `(params) -> Type => expr`
+        // Also handles nullary: `() => expr`
         let param_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        // Parse either empty params `()` or non-empty params `(a, b, ...)`
+        let params_or_empty =
+            just(Token::RParen).to(Vec::new()).or(closure_param
+                .separated_by(param_sep)
+                .allow_trailing()
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RParen)));
         let closure_multi = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(closure_param.separated_by(param_sep).allow_trailing())
-            .then_ignore(Self::opt_newlines())
-            .then_ignore(just(Token::RParen))
+            .ignore_then(params_or_empty)
             .then_ignore(Self::opt_newlines())
             .then(
                 just(Token::Arrow)
@@ -2674,6 +2686,250 @@ mod optional_chaining_tests {
                 assert!(ret.is_some());
             }
             _ => panic!("expected Fun"),
+        }
+    }
+
+    #[test]
+    fn parse_object_field_closure() {
+        // Object with closure field: `{ inc: x => x + 1 }`
+        let result = Parser::parse("LET ops = { inc: x => x + 1 }");
+        match result {
+            Ok(r) => {
+                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
+                match stmt {
+                    Stmt::Let(_, _, expr_id) => {
+                        let expr = r.ast.get_expr(*expr_id).unwrap();
+                        match expr {
+                            Expr::Object(fields) => {
+                                assert_eq!(fields.len(), 1);
+                                assert_eq!(fields[0].0, "inc");
+                            }
+                            _ => panic!("expected Object, got {:?}", expr),
+                        }
+                    }
+                    _ => panic!("expected Let"),
+                }
+            }
+            Err(e) => panic!("parse failed: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_object_field_closure_call() {
+        // Calling closure from object field: `ops.inc(5)`
+        let result = Parser::parse("LET ops = { inc: x => x + 1 }\nops.inc(5)");
+        match result {
+            Ok(r) => {
+                assert_eq!(r.stmts.len(), 2);
+                let stmt = r.ast.get_stmt(r.stmts[1]).unwrap();
+                match stmt {
+                    Stmt::Expr(expr_id) => {
+                        let expr = r.ast.get_expr(*expr_id).unwrap();
+                        match expr {
+                            Expr::Call(callee, args) => {
+                                // Callee should be Field(ops, "inc")
+                                let callee_expr =
+                                    r.ast.get_expr(*callee).unwrap();
+                                match callee_expr {
+                                    Expr::Field(base, name) => {
+                                        assert_eq!(name, "inc");
+                                        let base_expr =
+                                            r.ast.get_expr(*base).unwrap();
+                                        match base_expr {
+                                            Expr::Var(v) => {
+                                                assert_eq!(v, "ops")
+                                            }
+                                            _ => panic!(
+                                                "expected Var, got {:?}",
+                                                base_expr
+                                            ),
+                                        }
+                                    }
+                                    _ => panic!(
+                                        "expected Field, got {:?}",
+                                        callee_expr
+                                    ),
+                                }
+                                assert_eq!(args.len(), 1);
+                            }
+                            _ => panic!("expected Call, got {:?}", expr),
+                        }
+                    }
+                    _ => panic!("expected Expr stmt"),
+                }
+            }
+            Err(e) => panic!("parse failed: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_let_nullary_closure() {
+        // LET with nullary closure: `LET f = () => 42`
+        let result = Parser::parse("LET f = () => 42");
+        match result {
+            Ok(r) => {
+                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
+                match stmt {
+                    Stmt::Let(name, _, expr_id) => {
+                        assert_eq!(name, "f");
+                        let expr = r.ast.get_expr(*expr_id).unwrap();
+                        match expr {
+                            Expr::Closure { params, .. } => {
+                                assert!(params.is_empty());
+                            }
+                            _ => panic!("expected Closure, got {:?}", expr),
+                        }
+                    }
+                    _ => panic!("expected Let"),
+                }
+            }
+            Err(e) => panic!("parse failed: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_nullary_closure_alone() {
+        // Nullary closure: `() => 42`
+        let result = Parser::parse("() => 42");
+        match result {
+            Ok(r) => {
+                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
+                match stmt {
+                    Stmt::Expr(expr_id) => {
+                        let expr = r.ast.get_expr(*expr_id).unwrap();
+                        match expr {
+                            Expr::Closure { params, .. } => {
+                                assert!(params.is_empty());
+                            }
+                            _ => panic!("expected Closure, got {:?}", expr),
+                        }
+                    }
+                    _ => panic!("expected Expr stmt"),
+                }
+            }
+            Err(e) => panic!("parse failed: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_object_paren_expr() {
+        // Parenthesized expr in object field: `{ x: (42) }`
+        let result = Parser::parse("LET obj = { x: (42) }");
+        match result {
+            Ok(r) => {
+                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
+                match stmt {
+                    Stmt::Let(_, _, expr_id) => {
+                        let expr = r.ast.get_expr(*expr_id).unwrap();
+                        match expr {
+                            Expr::Object(fields) => {
+                                assert_eq!(fields.len(), 1);
+                                assert_eq!(fields[0].0, "x");
+                            }
+                            _ => panic!("expected Object, got {:?}", expr),
+                        }
+                    }
+                    _ => panic!("expected Let"),
+                }
+            }
+            Err(e) => panic!("parse failed: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_object_unary_closure() {
+        // Unary closure in object field: `{ inc: (x) => x + 1 }`
+        let result = Parser::parse("LET obj = { inc: (x) => x + 1 }");
+        match result {
+            Ok(r) => {
+                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
+                match stmt {
+                    Stmt::Let(_, _, expr_id) => {
+                        let expr = r.ast.get_expr(*expr_id).unwrap();
+                        match expr {
+                            Expr::Object(fields) => {
+                                assert_eq!(fields.len(), 1);
+                                assert_eq!(fields[0].0, "inc");
+                                let field_expr =
+                                    r.ast.get_expr(fields[0].1).unwrap();
+                                match field_expr {
+                                    Expr::Closure { params, .. } => {
+                                        assert_eq!(params.len(), 1);
+                                    }
+                                    _ => panic!(
+                                        "expected Closure, got {:?}",
+                                        field_expr
+                                    ),
+                                }
+                            }
+                            _ => panic!("expected Object, got {:?}", expr),
+                        }
+                    }
+                    _ => panic!("expected Let"),
+                }
+            }
+            Err(e) => panic!("parse failed: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_object_nullary_bare() {
+        // Bare nullary closure object: `{ x: () => 1 }`
+        let result = Parser::parse("{ x: () => 1 }");
+        match result {
+            Ok(r) => {
+                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
+                match stmt {
+                    Stmt::Expr(expr_id) => {
+                        let expr = r.ast.get_expr(*expr_id).unwrap();
+                        match expr {
+                            Expr::Object(fields) => {
+                                assert_eq!(fields.len(), 1);
+                            }
+                            _ => panic!("expected Object, got {:?}", expr),
+                        }
+                    }
+                    _ => panic!("expected Expr stmt, got {:?}", stmt),
+                }
+            }
+            Err(e) => panic!("parse failed: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn parse_object_nullary_closure() {
+        // Nullary closure in object field: `{ getter: () => 42 }`
+        let result = Parser::parse("LET obj = { getter: () => 42 }");
+        match result {
+            Ok(r) => {
+                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
+                match stmt {
+                    Stmt::Let(_, _, expr_id) => {
+                        let expr = r.ast.get_expr(*expr_id).unwrap();
+                        match expr {
+                            Expr::Object(fields) => {
+                                assert_eq!(fields.len(), 1);
+                                assert_eq!(fields[0].0, "getter");
+                                // Check it's a closure
+                                let field_expr =
+                                    r.ast.get_expr(fields[0].1).unwrap();
+                                match field_expr {
+                                    Expr::Closure { params, .. } => {
+                                        assert!(params.is_empty());
+                                    }
+                                    _ => panic!(
+                                        "expected Closure, got {:?}",
+                                        field_expr
+                                    ),
+                                }
+                            }
+                            _ => panic!("expected Object, got {:?}", expr),
+                        }
+                    }
+                    _ => panic!("expected Let"),
+                }
+            }
+            Err(e) => panic!("parse failed: {:?}", e),
         }
     }
 }

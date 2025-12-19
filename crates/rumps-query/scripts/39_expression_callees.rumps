@@ -155,4 +155,26 @@ LET factorial = make_factorial()
 OUTPUT factorial(5)
 ; Expected: 120
 
+; === Object field closures ===
+
+LET ops = { inc: x => x + 1, mul: x => x * 2 }
+OUTPUT ops.inc(5)
+; Expected: 6
+
+OUTPUT ops.mul(21)
+; Expected: 42
+
+; Nullary closure in object
+LET counter = { value: () => 42 }
+OUTPUT counter.value()
+; Expected: 42
+
+; Chained object field calls
+LET math = {
+  add: (a, b) => a + b,
+  sq: x => x * x
+}
+OUTPUT math.sq(math.add(3, 4))
+; Expected: 49 (3+4=7, 7*7=49)
+
 OUTPUT "Expression callees test complete"

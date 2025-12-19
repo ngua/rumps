@@ -1083,7 +1083,12 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Evaluate field access.
     ///
-    /// Also handles zero-arity variant constructors like `Option.None`.
+    /// HACK: Also handles zero-arity variant constructors like `Option.None` by
+    /// checking if the base is a type name. This conflates runtime field access
+    /// with compile-time namespace resolution. In Phase 3.0, a name resolution
+    /// pass will convert `Type.Variant` to `Expr::Path` before interpretation,
+    /// and this method will become purely runtime field access on objects.
+    /// See: `TODOS/dsl/phase-3.md`, Section 0.3
     #[async_recursion]
     async fn field(
         &mut self,
@@ -1122,31 +1127,33 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             });
 
-        // If variant lookup produced a result, use it; otherwise regular field access
-        let base_val = match variant_result {
-            Some(result) => result?,
-            None => self.eval(base).await?,
-        };
+        // If variant lookup produced a result, return it directly
+        if let Some(result) = variant_result {
+            result
+        } else {
+            // Regular field access
+            let base_val = self.eval(base).await?;
 
-        match &base_val {
-            Value::Object(obj) => {
-                let field_id = self.arena.intern(field);
-                obj.get(&field_id)
-                    .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!("field `{field}` not found"),
-                        )
-                    })
+            match &base_val {
+                Value::Object(obj) => {
+                    let field_id = self.arena.intern(field);
+                    obj.get(&field_id)
+                        .and_then(|id| self.arena.get(*id).cloned())
+                        .ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                format!("field `{field}` not found"),
+                            )
+                        })
+                }
+                _ => Err(Error::type_err(
+                    span,
+                    format!(
+                        "cannot access field on {}",
+                        base_val.type_name(&self.registry, &self.type_exprs)
+                    ),
+                )),
             }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot access field on {}",
-                    base_val.type_name(&self.registry, &self.type_exprs)
-                ),
-            )),
         }
     }
 
@@ -1558,7 +1565,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.type_exprs.base_type(ty).map_or_else(
             || {
                 // Function type: check if value is a function/closure with matching signature
-                self.type_exprs.fn_parts(ty).map_or(false, |(params, ret)| {
+                self.type_exprs.fn_parts(ty).is_some_and(|(params, ret)| {
                     self.fn_value_matches(val, params, ret)
                 })
             },
@@ -1581,11 +1588,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     // Check param types (if annotated)
                     && params.iter().zip(expected_params.iter()).all(
                         |((_, actual_ty), expected_ty)| {
-                            actual_ty.map_or(true, |a| self.type_exprs.eq(a, *expected_ty))
+                            actual_ty.is_none_or(|a| self.type_exprs.eq(a, *expected_ty))
                         },
                     )
                     // Check return type (if annotated)
-                    && ret.map_or(true, |r| self.type_exprs.eq(r, expected_ret))
+                    && ret.is_none_or(|r| self.type_exprs.eq(r, expected_ret))
             }
             _ => false,
         }

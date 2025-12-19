@@ -34,6 +34,89 @@ The following already exists and will be leveraged:
 
 ## Phase 3 Tasks
 
+### 0. Separate Field Access from Path Resolution
+
+Currently `.` conflates two semantically different operations:
+1. **Field access**: runtime operation on a *value* (`obj.field`)
+2. **Path/namespace access**: compile-time name resolution (`Option.None`, future `Math.sin`)
+
+This creates complexity in the interpreter and will get worse with modules. Fix by adding a name resolution phase.
+
+#### Current State (Problem)
+
+The parser emits `Expr::Field` for all `.` access, then the interpreter checks at runtime:
+- Is this `TypeName.Variant`? → Create variant value
+- Otherwise → Runtime field access on object
+
+This is fragile: `ops.inc(5)` currently requires checking if `ops` is a type name at interpretation time.
+
+#### Target State (Solution)
+
+1. Parser emits `Expr::Field(base, name)` for ALL `.` access (no change)
+2. Add name resolution pass between parsing and interpretation
+3. Resolution converts qualified names to `Expr::Path` nodes:
+   - `Option.None` → `Expr::Path(["Option", "None"])`
+   - `Option.Some(x)` → `Expr::Variant("Option", "Some", [x])` (already exists)
+4. `Expr::Field` remains purely for runtime field access on values
+
+#### 0.1 AST Changes
+
+- [ ] Add `Expr::Path(SmallVec<[String; 2]>)` for resolved namespace paths
+- [ ] Keep `Expr::Field` for runtime field access only
+- [ ] Keep `Expr::Variant` for variant construction with args
+
+#### 0.2 Name Resolution Pass
+
+- [ ] Add `resolve` module with `NameResolver` struct
+- [ ] Walk AST after parsing, before interpretation
+- [ ] For each `Expr::Field(base, name)`:
+  - If `base` is `Expr::Var(type_name)` and `type_name` is a registered type:
+    - If `name` is a zero-arity variant → convert to `Expr::Path([type_name, name])`
+    - If followed by call with args → already handled by `Expr::Variant`
+  - Otherwise → leave as `Expr::Field` (runtime field access)
+- [ ] For `Expr::Call` where callee is `Expr::Field`:
+  - If matches `Type.Variant(args)` pattern → convert to `Expr::Variant`
+  - Otherwise → leave as `Expr::Call` (method-like call on object field)
+
+#### 0.3 Interpreter Changes
+
+- [ ] Remove type registry lookups from `field()` method
+- [ ] `field()` becomes purely runtime field access on `Value::Object`
+- [ ] Add `eval_path()` for `Expr::Path` nodes (lookup in registry, return variant value)
+- [ ] Simplify `call()` since variant detection moved to resolution
+
+#### 0.4 Parser Cleanup
+
+- [ ] Remove uppercase check hack from `PostfixOp::Call` handling
+- [ ] Parser just emits `Expr::Field` and `Expr::Call`; resolution does the rest
+
+#### 0.5 Future: Modules
+
+This separation enables clean module support later:
+
+```rumps
+IMPORT Math
+
+OUTPUT Math.sin(3.14)   ; Path resolves to module export
+OUTPUT Math.PI          ; Path resolves to module constant
+
+LET obj = { sin: x => x }
+OUTPUT obj.sin(3.14)    ; Field access on object (different!)
+```
+
+Both use `.` syntax, but:
+- `Math.sin` → `Expr::Path` (resolved at compile time)
+- `obj.sin` → `Expr::Field` (resolved at runtime)
+
+#### 0.6 Tests
+
+- [ ] Add resolution tests for type paths
+- [ ] Add resolution tests for field access (should remain `Expr::Field`)
+- [ ] Verify existing variant tests still pass
+- [ ] Verify object field closure tests still pass
+
+---
+
 ### 1. Tuples
 
 Fixed-size heterogeneous sequences. Unlike arrays, tuples can hold different types and have a known length at compile time.
