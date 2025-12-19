@@ -44,11 +44,10 @@ use nonempty::NonEmpty;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
+mod cst;
+mod lower;
+
 use crate::ast::{BinOp, Literal, TypePattern, UnOp};
-use crate::cst::{
-    CstExpr, CstExprKind, CstStmt, CstStmtKind, CstTypeExpr, CstTypeExprKind,
-};
-use crate::lower::lower_program;
 use crate::{Ast, Error, Lexer, Result, Span, Spanned, StmtId, Token};
 
 /// Parser error type for token-based parsing.
@@ -106,13 +105,13 @@ impl Parser {
                     })
             })
             .map(|cst_stmts| {
-                let (ast, stmts) = lower_program(cst_stmts);
+                let (ast, stmts) = lower::program(cst_stmts);
                 ParseResult { ast, stmts }
             })
     }
 
     /// Program: zero or more statements separated by newlines, ending with EOF.
-    fn program() -> impl chumsky::Parser<Token, Vec<CstStmt>, Error = ParseErr>
+    fn program() -> impl chumsky::Parser<Token, Vec<cst::Stmt>, Error = ParseErr>
     {
         Self::opt_newlines()
             .ignore_then(
@@ -144,7 +143,7 @@ impl Parser {
     }
 
     /// A single statement.
-    fn stmt() -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+    fn stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         recursive(|stmt| {
             let let_stmt = Self::let_stmt(stmt.clone());
             let set_stmt = Self::set_stmt(stmt.clone());
@@ -166,10 +165,10 @@ impl Parser {
 
     /// `LET name = expr` or `LET name: Type = expr`
     fn let_stmt(
-        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         let type_ann =
             just(Token::Colon).ignore_then(Self::type_expr()).or_not();
 
@@ -179,17 +178,17 @@ impl Parser {
             .then_ignore(just(Token::Assign))
             .then(Self::expr(stmt))
             .map_with_span(|((name, ty_ann), val), span| {
-                CstStmt::new(CstStmtKind::Let(name, ty_ann, val), span)
+                cst::Stmt::new(cst::StmtKind::Let(name, ty_ann, val), span)
             })
     }
 
     /// `SET name = expr` or `SET name(subs...) = expr`
     /// `SET ^global = expr` or `SET ^global(subs...) = expr`
     fn set_stmt(
-        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         let expr = Self::expr(stmt);
 
         let local_set = just(Token::Set)
@@ -199,8 +198,9 @@ impl Parser {
             .then(expr.clone())
             .map_with_span(|((name, subs), val), span| {
                 let subs = subs.unwrap_or_default();
-                let target = CstExpr::new(CstExprKind::Local(name, subs), span);
-                CstStmt::new(CstStmtKind::Set(target, val), span)
+                let target =
+                    cst::Expr::new(cst::ExprKind::Local(name, subs), span);
+                cst::Stmt::new(cst::StmtKind::Set(target, val), span)
             });
 
         let global_set = just(Token::Set)
@@ -211,8 +211,8 @@ impl Parser {
             .map_with_span(|((name, subs), val), span| {
                 let subs = subs.unwrap_or_default();
                 let target =
-                    CstExpr::new(CstExprKind::Global(name, subs), span);
-                CstStmt::new(CstStmtKind::Set(target, val), span)
+                    cst::Expr::new(cst::ExprKind::Global(name, subs), span);
+                cst::Stmt::new(cst::StmtKind::Set(target, val), span)
             });
 
         global_set.or(local_set)
@@ -221,10 +221,10 @@ impl Parser {
     /// `KILL name` or `KILL name(subs...)`
     /// `KILL ^global` or `KILL ^global(subs...)`
     fn kill_stmt(
-        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         let expr = Self::expr(stmt);
 
         let local_kill = just(Token::Kill)
@@ -232,8 +232,9 @@ impl Parser {
             .then(Self::subscripts(expr.clone()).or_not())
             .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                let target = CstExpr::new(CstExprKind::Local(name, subs), span);
-                CstStmt::new(CstStmtKind::Kill(target), span)
+                let target =
+                    cst::Expr::new(cst::ExprKind::Local(name, subs), span);
+                cst::Stmt::new(cst::StmtKind::Kill(target), span)
             });
 
         let global_kill = just(Token::Kill)
@@ -242,8 +243,8 @@ impl Parser {
             .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
                 let target =
-                    CstExpr::new(CstExprKind::Global(name, subs), span);
-                CstStmt::new(CstStmtKind::Kill(target), span)
+                    cst::Expr::new(cst::ExprKind::Global(name, subs), span);
+                cst::Stmt::new(cst::StmtKind::Kill(target), span)
             });
 
         global_kill.or(local_kill)
@@ -251,23 +252,23 @@ impl Parser {
 
     /// `OUTPUT expr`
     fn output_stmt(
-        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         just(Token::Output)
             .ignore_then(Self::expr(stmt))
             .map_with_span(|expr, span| {
-                CstStmt::new(CstStmtKind::Output(expr), span)
+                cst::Stmt::new(cst::StmtKind::Output(expr), span)
             })
     }
 
     /// `FUN name (params) { body }` or `FUN name (params) -> Type { body }`
     fn fun_stmt(
-        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         // Parameter: `name` or `name: Type`
         let param = Self::ident()
             .then(
@@ -308,8 +309,8 @@ impl Parser {
                 |(((name, params_vec), ret), (stmts, blk_span)), span| {
                     let params = SmallVec::from_vec(params_vec);
                     let body = Self::stmts_to_block(stmts, blk_span);
-                    CstStmt::new(
-                        CstStmtKind::Fun {
+                    cst::Stmt::new(
+                        cst::StmtKind::Fun {
                             name,
                             params,
                             ret,
@@ -323,13 +324,13 @@ impl Parser {
 
     /// Convert a list of statements to a block expression.
     ///
-    /// If the last statement is `CstStmtKind::Expr(e)`, extracts `e` as the
+    /// If the last statement is `cst::StmtKind::Expr(e)`, extracts `e` as the
     /// trailing expression (block's value). Otherwise, the block has no tail.
-    fn stmts_to_block(stmts: Vec<CstStmt>, span: Span) -> CstExpr {
+    fn stmts_to_block(stmts: Vec<cst::Stmt>, span: Span) -> cst::Expr {
         // Check if last statement is Expr; if so, use it as tail
         let has_tail = stmts
             .last()
-            .map(|s| matches!(&s.kind, CstStmtKind::Expr(_)))
+            .map(|s| matches!(&s.kind, cst::StmtKind::Expr(_)))
             .unwrap_or(false);
 
         if has_tail {
@@ -337,19 +338,19 @@ impl Parser {
             let mut iter = stmts.into_iter();
             let block_stmts: Vec<_> = iter.by_ref().take(n).collect();
             let tail = iter.next().and_then(|s| match s.kind {
-                CstStmtKind::Expr(e) => Some(Box::new(e)),
+                cst::StmtKind::Expr(e) => Some(Box::new(e)),
                 _ => None,
             });
-            CstExpr::new(CstExprKind::Block(block_stmts, tail), span)
+            cst::Expr::new(cst::ExprKind::Block(block_stmts, tail), span)
         } else {
-            CstExpr::new(CstExprKind::Block(stmts, None), span)
+            cst::Expr::new(cst::ExprKind::Block(stmts, None), span)
         }
     }
 
     /// `{ stmts... }` block, returns statements and the block's span.
     fn block(
-        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr> + Clone,
-    ) -> impl chumsky::Parser<Token, (Vec<CstStmt>, Span), Error = ParseErr> + Clone
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> + Clone,
+    ) -> impl chumsky::Parser<Token, (Vec<cst::Stmt>, Span), Error = ParseErr> + Clone
     {
         Self::opt_newlines()
             .ignore_then(just(Token::LBrace))
@@ -366,21 +367,21 @@ impl Parser {
 
     /// Expression used as statement.
     fn expr_stmt(
-        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         Self::expr(stmt).map_with_span(|expr, span| {
-            CstStmt::new(CstStmtKind::Expr(expr), span)
+            cst::Stmt::new(cst::StmtKind::Expr(expr), span)
         })
     }
 
     /// Top-level expression parser with full precedence.
     fn expr(
-        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         recursive(move |expr| {
             let primary = Self::primary_expr(expr.clone(), stmt.clone());
             let postfix = Self::postfix_expr(expr.clone(), primary);
@@ -400,10 +401,10 @@ impl Parser {
 
     /// Coalesce: `expr ?? expr` (lowest precedence)
     fn coalesce_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let op = just(Token::QuestionQuestion).to(BinOp::Coalesce);
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
@@ -416,10 +417,10 @@ impl Parser {
 
     /// Logical OR: `expr || expr` or `expr OR expr`
     fn or_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let op = choice((just(Token::PipePipe), just(Token::Or))).to(BinOp::Or);
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
@@ -432,10 +433,10 @@ impl Parser {
 
     /// Logical AND: `expr && expr` or `expr AND expr`
     fn and_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let op = choice((just(Token::AmpAmp), just(Token::And))).to(BinOp::And);
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
@@ -448,10 +449,10 @@ impl Parser {
 
     /// Comparison: `<`, `>`, `<=`, `>=`, `==`, `!=`
     fn cmp_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let op = choice((
             just(Token::Eq).to(BinOp::Eq),
             just(Token::Ne).to(BinOp::Ne),
@@ -471,10 +472,10 @@ impl Parser {
 
     /// Type check: `expr is Pattern`
     fn is_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let type_pattern = Self::type_pattern();
 
         let is_rhs = Self::opt_newlines()
@@ -485,7 +486,7 @@ impl Parser {
         operand.clone().then(is_rhs.or_not()).map_with_span(
             |(expr, pattern), span| match pattern {
                 Some(pat) => {
-                    CstExpr::new(CstExprKind::Is(Box::new(expr), pat), span)
+                    cst::Expr::new(cst::ExprKind::Is(Box::new(expr), pat), span)
                 }
                 None => expr,
             },
@@ -542,10 +543,10 @@ impl Parser {
 
     /// Type cast: `expr as Type`
     fn as_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let as_rhs = Self::opt_newlines()
             .ignore_then(just(Token::As))
             .then_ignore(Self::opt_newlines())
@@ -553,9 +554,10 @@ impl Parser {
 
         operand.clone().then(as_rhs.or_not()).map_with_span(
             |(expr, ty), span| match ty {
-                Some(ty_expr) => {
-                    CstExpr::new(CstExprKind::As(Box::new(expr), ty_expr), span)
-                }
+                Some(ty_expr) => cst::Expr::new(
+                    cst::ExprKind::As(Box::new(expr), ty_expr),
+                    span,
+                ),
                 None => expr,
             },
         )
@@ -563,10 +565,10 @@ impl Parser {
 
     /// Fallible conversion: `expr read Type`
     fn read_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let read_rhs = Self::opt_newlines()
             .ignore_then(just(Token::Read))
             .then_ignore(Self::opt_newlines())
@@ -574,8 +576,8 @@ impl Parser {
 
         operand.clone().then(read_rhs.or_not()).map_with_span(
             |(expr, ty), span| match ty {
-                Some(ty_expr) => CstExpr::new(
-                    CstExprKind::Read(Box::new(expr), ty_expr),
+                Some(ty_expr) => cst::Expr::new(
+                    cst::ExprKind::Read(Box::new(expr), ty_expr),
                     span,
                 ),
                 None => expr,
@@ -585,10 +587,10 @@ impl Parser {
 
     /// Additive: `+`, `-`, `++`
     fn add_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let op = choice((
             just(Token::Plus).to(BinOp::Add),
             just(Token::Minus).to(BinOp::Sub),
@@ -605,10 +607,10 @@ impl Parser {
 
     /// Power: `**` (right-associative)
     fn pow_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let op_rhs = Self::opt_newlines()
             .ignore_then(just(Token::StarStar))
             .then_ignore(Self::opt_newlines())
@@ -620,16 +622,16 @@ impl Parser {
 
     /// Folds a sequence of power operations right-to-left.
     fn fold_binary_right(
-        first: CstExpr,
-        rest: Vec<(Token, CstExpr)>,
-    ) -> CstExpr {
+        first: cst::Expr,
+        rest: Vec<(Token, cst::Expr)>,
+    ) -> cst::Expr {
         rest.into_iter()
-            .rfold(None, |acc: Option<CstExpr>, (_tok, expr)| match acc {
+            .rfold(None, |acc: Option<cst::Expr>, (_tok, expr)| match acc {
                 None => Some(expr),
                 Some(rhs) => {
                     let span = Span::new(expr.span.start, rhs.span.end);
-                    Some(CstExpr::new(
-                        CstExprKind::Binary(
+                    Some(cst::Expr::new(
+                        cst::ExprKind::Binary(
                             Box::new(expr),
                             BinOp::Pow,
                             Box::new(rhs),
@@ -640,8 +642,8 @@ impl Parser {
             })
             .map_or(first.clone(), |rhs| {
                 let span = Span::new(first.span.start, rhs.span.end);
-                CstExpr::new(
-                    CstExprKind::Binary(
+                cst::Expr::new(
+                    cst::ExprKind::Binary(
                         Box::new(first),
                         BinOp::Pow,
                         Box::new(rhs),
@@ -653,10 +655,10 @@ impl Parser {
 
     /// Multiplicative: `*`, `/`, `//`, `%`
     fn mul_expr(
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let op = choice((
             just(Token::Mul).to(BinOp::Mul),
             just(Token::FloorDiv).to(BinOp::FloorDiv),
@@ -674,14 +676,14 @@ impl Parser {
 
     /// Folds a sequence of binary operations left-to-right.
     fn fold_binary(
-        first: CstExpr,
-        rest: Vec<(BinOp, CstExpr)>,
+        first: cst::Expr,
+        rest: Vec<(BinOp, cst::Expr)>,
         _outer_span: Span,
-    ) -> CstExpr {
+    ) -> cst::Expr {
         rest.into_iter().fold(first, |lhs, (op, rhs)| {
             let span = Span::new(lhs.span.start, rhs.span.end);
-            CstExpr::new(
-                CstExprKind::Binary(Box::new(lhs), op, Box::new(rhs)),
+            cst::Expr::new(
+                cst::ExprKind::Binary(Box::new(lhs), op, Box::new(rhs)),
                 span,
             )
         })
@@ -689,13 +691,13 @@ impl Parser {
 
     /// Unary: `NOT`, `!`, `-`, `GET`
     fn unary_expr(
-        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let op = choice((
             just(Token::Not).to(UnOp::Not),
             just(Token::Bang).to(UnOp::Not),
@@ -705,7 +707,10 @@ impl Parser {
         recursive(move |unary| {
             let with_op = op.clone().then(unary.clone()).map_with_span(
                 |(op, inner), span| {
-                    CstExpr::new(CstExprKind::Unary(op, Box::new(inner)), span)
+                    cst::Expr::new(
+                        cst::ExprKind::Unary(op, Box::new(inner)),
+                        span,
+                    )
                 },
             );
 
@@ -713,7 +718,7 @@ impl Parser {
             let get_expr = just(Token::Get)
                 .ignore_then(Self::gettable(expr.clone()))
                 .map_with_span(|inner, span| {
-                    CstExpr::new(CstExprKind::Get(Box::new(inner)), span)
+                    cst::Expr::new(cst::ExprKind::Get(Box::new(inner)), span)
                 });
 
             choice((with_op, get_expr)).or(operand.clone())
@@ -722,22 +727,22 @@ impl Parser {
 
     /// Target for `GET`: a local or global B-tree variable.
     fn gettable(
-        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let global = Self::global_name()
             .then(Self::subscripts(expr.clone()).or_not())
             .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                CstExpr::new(CstExprKind::Global(name, subs), span)
+                cst::Expr::new(cst::ExprKind::Global(name, subs), span)
             });
 
         let local = Self::ident()
             .then(Self::subscripts(expr).or_not())
             .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                CstExpr::new(CstExprKind::Local(name, subs), span)
+                cst::Expr::new(cst::ExprKind::Local(name, subs), span)
             });
 
         choice((global, local))
@@ -745,13 +750,13 @@ impl Parser {
 
     /// Postfix: field access `.field`, index `[expr]`, call `(args...)`
     fn postfix_expr(
-        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         // Field access: `.field`
         let field = just(Token::Dot)
             .ignore_then(Self::ident())
@@ -768,7 +773,7 @@ impl Parser {
             .ignore_then(expr.clone())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBracket))
-            .map_with_span(|idx, span| PostfixOp::Index(idx, span));
+            .map_with_span(|idx, span| PostfixOp::Index(Box::new(idx), span));
 
         // Call: `(args...)`
         let call_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
@@ -792,33 +797,33 @@ impl Parser {
     }
 
     /// Folds postfix operations left-to-right.
-    fn fold_postfix(base: CstExpr, ops: Vec<PostfixOp>) -> Option<CstExpr> {
+    fn fold_postfix(base: cst::Expr, ops: Vec<PostfixOp>) -> Option<cst::Expr> {
         ops.into_iter().try_fold(base, |acc, op| {
             let span = Span::new(acc.span.start, op.end().end);
             match op {
-                PostfixOp::Field(name, _) => Some(CstExpr::new(
-                    CstExprKind::Field(Box::new(acc), name),
+                PostfixOp::Field(name, _) => Some(cst::Expr::new(
+                    cst::ExprKind::Field(Box::new(acc), name),
                     span,
                 )),
-                PostfixOp::OptionalField(name, _) => Some(CstExpr::new(
-                    CstExprKind::OptionalField(Box::new(acc), name),
+                PostfixOp::OptionalField(name, _) => Some(cst::Expr::new(
+                    cst::ExprKind::OptionalField(Box::new(acc), name),
                     span,
                 )),
-                PostfixOp::Index(idx, _) => Some(CstExpr::new(
-                    CstExprKind::Index(Box::new(acc), Box::new(idx)),
+                PostfixOp::Index(idx, _) => Some(cst::Expr::new(
+                    cst::ExprKind::Index(Box::new(acc), idx),
                     span,
                 )),
                 PostfixOp::Call(args, _) => {
                     // Check for variant constructor `Type.Variant(args)`
                     let variant_opt = match &acc.kind {
-                        CstExprKind::Field(inner, var_name)
+                        cst::ExprKind::Field(inner, var_name)
                             if var_name
                                 .chars()
                                 .next()
                                 .is_some_and(|c| c.is_uppercase()) =>
                         {
                             match &inner.kind {
-                                CstExprKind::Var(ty_name) => {
+                                cst::ExprKind::Var(ty_name) => {
                                     Some((ty_name.clone(), var_name.clone()))
                                 }
                                 _ => None,
@@ -829,20 +834,20 @@ impl Parser {
 
                     let kind = variant_opt.map_or_else(
                         || {
-                            CstExprKind::Call(
+                            cst::ExprKind::Call(
                                 Box::new(acc.clone()),
                                 args.clone(),
                             )
                         },
                         |(ty_name, var_name)| {
-                            CstExprKind::Variant(
+                            cst::ExprKind::Variant(
                                 ty_name,
                                 var_name,
                                 args.clone(),
                             )
                         },
                     );
-                    Some(CstExpr::new(kind, span))
+                    Some(cst::Expr::new(kind, span))
                 }
             }
         })
@@ -850,13 +855,13 @@ impl Parser {
 
     /// Primary: literals, identifiers, globals, parenthesized, arrays, objects, if.
     fn primary_expr(
-        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         // Literals
         let int_lit = select! { Token::Int(n) => Literal::Int(n) };
         let float_lit =
@@ -869,12 +874,12 @@ impl Parser {
 
         let literal = choice((int_lit, float_lit, str_lit, bool_lit))
             .map_with_span(|lit, span| {
-                CstExpr::new(CstExprKind::Literal(lit), span)
+                cst::Expr::new(cst::ExprKind::Literal(lit), span)
             });
 
         // Lexical variable
         let var = Self::ident().map_with_span(|name, span| {
-            CstExpr::new(CstExprKind::Var(name), span)
+            cst::Expr::new(cst::ExprKind::Var(name), span)
         });
 
         // Global with optional subscripts
@@ -882,7 +887,7 @@ impl Parser {
             .then(Self::subscripts(expr.clone()).or_not())
             .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                CstExpr::new(CstExprKind::Global(name, subs), span)
+                cst::Expr::new(cst::ExprKind::Global(name, subs), span)
             });
 
         // Parenthesized expression
@@ -900,7 +905,7 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBracket))
             .map_with_span(|elems, span| {
-                CstExpr::new(CstExprKind::Array(elems), span)
+                cst::Expr::new(cst::ExprKind::Array(elems), span)
             });
 
         // Object literal
@@ -915,7 +920,7 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
             .map_with_span(|fields, span| {
-                CstExpr::new(CstExprKind::Object(fields), span)
+                cst::Expr::new(cst::ExprKind::Object(fields), span)
             });
 
         // Block expression
@@ -943,8 +948,8 @@ impl Parser {
                     let else_expr = else_block.map(|(stmts, blk_span)| {
                         Self::stmts_to_block(stmts, blk_span)
                     });
-                    CstExpr::new(
-                        CstExprKind::If(
+                    cst::Expr::new(
+                        cst::ExprKind::If(
                             Box::new(cond),
                             Box::new(then_expr),
                             else_expr.map(Box::new),
@@ -962,8 +967,8 @@ impl Parser {
             .then(expr.clone())
             .map_with_span(|(name, body), span| {
                 let params = smallvec::smallvec![(name, None)];
-                CstExpr::new(
-                    CstExprKind::Closure {
+                cst::Expr::new(
+                    cst::ExprKind::Closure {
                         params,
                         ret: None,
                         body: Box::new(body),
@@ -1006,8 +1011,8 @@ impl Parser {
             .then(expr)
             .map_with_span(|((params_vec, ret), body), span| {
                 let params = SmallVec::from_vec(params_vec);
-                CstExpr::new(
-                    CstExprKind::Closure {
+                cst::Expr::new(
+                    cst::ExprKind::Closure {
                         params,
                         ret,
                         body: Box::new(body),
@@ -1045,10 +1050,10 @@ impl Parser {
 
     /// Parse subscripts: `(expr, expr, ...)`
     fn subscripts(
-        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, Vec<CstExpr>, Error = ParseErr> + Clone
+    ) -> impl chumsky::Parser<Token, Vec<cst::Expr>, Error = ParseErr> + Clone
     {
         just(Token::LParen)
             .ignore_then(
@@ -1061,7 +1066,7 @@ impl Parser {
 
     /// Parse a type expression.
     fn type_expr(
-    ) -> impl chumsky::Parser<Token, CstTypeExpr, Error = ParseErr> + Clone
+    ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
     {
         recursive(|ty| {
             // Type parameters: `[T]` or `[T, E]`
@@ -1075,10 +1080,10 @@ impl Parser {
             let atom = Self::ident().then(type_params.or_not()).map_with_span(
                 |(name, params), span| {
                     let kind = match params {
-                        None => CstTypeExprKind::Named(name),
-                        Some(ps) => CstTypeExprKind::App(name, ps),
+                        None => cst::TypeExprKind::Named(name),
+                        Some(ps) => cst::TypeExprKind::App(name, ps),
                     };
-                    TypeAtomOrParams::Single(CstTypeExpr::new(kind, span))
+                    TypeAtomOrParams::Single(cst::TypeExpr::new(kind, span))
                 },
             );
 
@@ -1114,21 +1119,21 @@ impl Parser {
     /// Build a function type or standalone type from parsed components.
     fn build_fn_type(
         left: TypeAtomOrParams,
-        arrow_ret: Option<CstTypeExpr>,
+        arrow_ret: Option<cst::TypeExpr>,
         span: Span,
-    ) -> std::result::Result<CstTypeExpr, ParseErr> {
+    ) -> std::result::Result<cst::TypeExpr, ParseErr> {
         match (left, arrow_ret) {
             // `T -> R`: single param function
             (TypeAtomOrParams::Single(param), Some(ret)) => {
-                Ok(CstTypeExpr::new(
-                    CstTypeExprKind::Fn(vec![param], Box::new(ret)),
+                Ok(cst::TypeExpr::new(
+                    cst::TypeExprKind::Fn(vec![param], Box::new(ret)),
                     span,
                 ))
             }
             // `(T, U, ...) -> R` or `() -> R`
             (TypeAtomOrParams::Params(params, _), Some(ret)) => {
-                Ok(CstTypeExpr::new(
-                    CstTypeExprKind::Fn(params, Box::new(ret)),
+                Ok(cst::TypeExpr::new(
+                    cst::TypeExprKind::Fn(params, Box::new(ret)),
                     span,
                 ))
             }
@@ -1155,19 +1160,11 @@ impl Parser {
     }
 }
 
-/// Helper for `CstExpr` to update span.
-impl CstExpr {
-    fn with_span(mut self, span: Span) -> Self {
-        self.span = span;
-        self
-    }
-}
-
 /// Helper for parsing function type syntax.
 #[derive(Clone)]
 enum TypeAtomOrParams {
-    Single(CstTypeExpr),
-    Params(Vec<CstTypeExpr>, Span),
+    Single(cst::TypeExpr),
+    Params(Vec<cst::TypeExpr>, Span),
 }
 
 /// Helper enum for pattern arguments in `is` patterns.
@@ -1181,8 +1178,8 @@ enum PatternArgs {
 enum PostfixOp {
     Field(String, Span),
     OptionalField(String, Span),
-    Index(CstExpr, Span),
-    Call(Vec<CstExpr>, Span),
+    Index(Box<cst::Expr>, Span),
+    Call(Vec<cst::Expr>, Span),
 }
 
 impl PostfixOp {

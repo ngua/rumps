@@ -972,3 +972,32 @@ LET nums = 10
 LET result2 = nums |> (x => x + 1) |> (x => x * 2)
 OUTPUT result2        ; 22
 ```
+
+## Implementation Notes
+
+### Parser Refactoring: CST Intermediate Representation
+
+The parser was refactored to use a two-pass architecture:
+
+```text
+Tokens  -->  CST (owned, boxed)  -->  AST (arena-allocated)
+             ^^^^^^^^^^^^^^^^^^       ^^^^^^^^^^^^^^^^^^^^^
+             chumsky produces         lowering pass produces
+```
+
+**Rationale**: Chumsky parsers must implement `Clone`, which forced the previous implementation to use `Rc<RefCell<Ast>>` with pervasive `Rc::clone()` calls (62+ clones, numbered variables like `ast2`, `ast3`, etc.). The CST decouples parsing from arena allocation:
+
+1. **Parsing**: Chumsky parsers return owned CST nodes (`cst::Expr`, `cst::Stmt`, `cst::TypeExpr`). Since CST uses `Box<T>` for recursion, no shared state is needed.
+
+2. **Lowering**: A single pass (`lower.rs`) converts CST to AST with direct `&mut Ast` access. No `Rc` cloning, no numbered variables.
+
+**Files added** (under `parser/` submodule):
+- `parser/cst.rs`: CST type definitions mirroring AST but with `Box<T>` recursion
+- `parser/lower.rs`: CST to AST lowering pass
+
+**Trade-offs**:
+- Extra heap allocation for CST nodes before lowering (negligible for typical program sizes)
+- Two traversals instead of one (negligible; I/O dominates)
+- Duplicate type definitions (intentional separation of concerns)
+
+The public API (`Parser::parse`, `ParseResult`) remains unchanged.

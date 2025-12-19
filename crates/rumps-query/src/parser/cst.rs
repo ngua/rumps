@@ -20,7 +20,7 @@
 //! from arena allocation:
 //!
 //! 1. **Parsing**: Chumsky parsers return owned CST nodes. Since CST uses
-//!    `Box<CstExpr>` for recursion, no shared state is needed.
+//!    `Box<Expr>` for recursion, no shared state is needed.
 //!
 //! 2. **Lowering**: A single pass converts CST to AST with direct `&mut Ast`
 //!    access. No `Rc` cloning, no numbered variables.
@@ -36,12 +36,12 @@
 //!
 //! # CST vs AST
 //!
-//! | Aspect | CST | AST |
-//! |--------|-----|-----|
-//! | Recursion | `Box<CstExpr>` | `ExprId` (arena index) |
-//! | Spans | Inline (`Span` field) | Parallel vectors |
-//! | Ownership | Owned tree | Arena-backed IDs |
-//! | Mutability | Immutable after parse | Built via `&mut Ast` |
+//! | **Aspect** | **CST**               | **AST**                      |
+//! |------------|-----------------------|------------------------------|
+//! | Recursion  | `Box<cst::Expr>`      | `ExprId` (arena index)       |
+//! | Spans      | Inline (`Span` field) | Parallel vectors             |
+//! | Ownership  | Owned tree            | Arena-backed IDs             |
+//! | Mutability | Immutable after parse | Built via `&mut Ast`         |
 
 use smallvec::SmallVec;
 
@@ -50,21 +50,30 @@ use crate::Span;
 
 /// A CST expression node with inline span.
 #[derive(Clone, Debug)]
-pub(crate) struct CstExpr {
-    pub kind: CstExprKind,
+pub(crate) struct Expr {
+    pub kind: ExprKind,
     pub span: Span,
 }
 
-impl CstExpr {
+impl Expr {
     /// Create a new CST expression.
-    pub(crate) fn new(kind: CstExprKind, span: Span) -> Self {
+    pub(crate) fn new(kind: ExprKind, span: Span) -> Self {
         Self { kind, span }
+    }
+
+    /// Update the span (used when wrapping in outer context).
+    pub(crate) fn with_span(mut self, span: Span) -> Self {
+        self.span = span;
+        self
     }
 }
 
 /// The kind of a CST expression.
+// NOTE: `Closure` is large due to `SmallVec` inline storage for params. This is
+// intentional; closures with 1-4 params avoid allocation. CST is short-lived.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
-pub(crate) enum CstExprKind {
+pub(crate) enum ExprKind {
     /// A literal value.
     Literal(Literal),
 
@@ -72,128 +81,128 @@ pub(crate) enum CstExprKind {
     Var(String),
 
     /// A local B-tree variable with subscripts.
-    Local(String, Vec<CstExpr>),
+    Local(String, Vec<Expr>),
 
     /// A global B-tree variable with subscripts.
-    Global(String, Vec<CstExpr>),
+    Global(String, Vec<Expr>),
 
     /// `GET` primitive.
-    Get(Box<CstExpr>),
+    Get(Box<Expr>),
 
     /// A binary operation.
-    Binary(Box<CstExpr>, BinOp, Box<CstExpr>),
+    Binary(Box<Expr>, BinOp, Box<Expr>),
 
     /// A unary operation.
-    Unary(UnOp, Box<CstExpr>),
+    Unary(UnOp, Box<Expr>),
 
     /// A function call.
-    Call(Box<CstExpr>, Vec<CstExpr>),
+    Call(Box<Expr>, Vec<Expr>),
 
     /// An object literal.
-    Object(Vec<(String, CstExpr)>),
+    Object(Vec<(String, Expr)>),
 
     /// An array literal.
-    Array(Vec<CstExpr>),
+    Array(Vec<Expr>),
 
     /// Index access.
-    Index(Box<CstExpr>, Box<CstExpr>),
+    Index(Box<Expr>, Box<Expr>),
 
     /// Field access.
-    Field(Box<CstExpr>, String),
+    Field(Box<Expr>, String),
 
     /// Optional field access.
-    OptionalField(Box<CstExpr>, String),
+    OptionalField(Box<Expr>, String),
 
     /// Variant constructor.
-    Variant(String, String, Vec<CstExpr>),
+    Variant(String, String, Vec<Expr>),
 
     /// Type check.
-    Is(Box<CstExpr>, TypePattern),
+    Is(Box<Expr>, TypePattern),
 
     /// Type cast.
-    As(Box<CstExpr>, CstTypeExpr),
+    As(Box<Expr>, TypeExpr),
 
     /// Fallible conversion.
-    Read(Box<CstExpr>, CstTypeExpr),
+    Read(Box<Expr>, TypeExpr),
 
     /// A block expression.
-    Block(Vec<CstStmt>, Option<Box<CstExpr>>),
+    Block(Vec<Stmt>, Option<Box<Expr>>),
 
     /// Conditional expression.
-    If(Box<CstExpr>, Box<CstExpr>, Option<Box<CstExpr>>),
+    If(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
 
     /// Closure.
     Closure {
-        params: SmallVec<[(String, Option<CstTypeExpr>); 4]>,
-        ret: Option<CstTypeExpr>,
-        body: Box<CstExpr>,
+        params: SmallVec<[(String, Option<TypeExpr>); 4]>,
+        ret: Option<TypeExpr>,
+        body: Box<Expr>,
     },
 }
 
 /// A CST statement node with inline span.
 #[derive(Clone, Debug)]
-pub(crate) struct CstStmt {
-    pub kind: CstStmtKind,
+pub(crate) struct Stmt {
+    pub kind: StmtKind,
     pub span: Span,
 }
 
-impl CstStmt {
+impl Stmt {
     /// Create a new CST statement.
-    pub(crate) fn new(kind: CstStmtKind, span: Span) -> Self {
+    pub(crate) fn new(kind: StmtKind, span: Span) -> Self {
         Self { kind, span }
     }
 }
 
 /// The kind of a CST statement.
 #[derive(Clone, Debug)]
-pub(crate) enum CstStmtKind {
+pub(crate) enum StmtKind {
     /// Lexical binding.
-    Let(String, Option<CstTypeExpr>, CstExpr),
+    Let(String, Option<TypeExpr>, Expr),
 
     /// B-tree assignment.
-    Set(CstExpr, CstExpr),
+    Set(Expr, Expr),
 
     /// Delete a variable or subtree.
-    Kill(CstExpr),
+    Kill(Expr),
 
     /// Output a value.
-    Output(CstExpr),
+    Output(Expr),
 
     /// An expression used as a statement.
-    Expr(CstExpr),
+    Expr(Expr),
 
     /// Named function definition.
     Fun {
         name: String,
-        params: SmallVec<[(String, Option<CstTypeExpr>); 4]>,
-        ret: Option<CstTypeExpr>,
-        body: CstExpr,
+        params: SmallVec<[(String, Option<TypeExpr>); 4]>,
+        ret: Option<TypeExpr>,
+        body: Expr,
     },
 }
 
 /// A CST type expression with inline span.
 #[derive(Clone, Debug)]
-pub(crate) struct CstTypeExpr {
-    pub kind: CstTypeExprKind,
+pub(crate) struct TypeExpr {
+    pub kind: TypeExprKind,
     pub span: Span,
 }
 
-impl CstTypeExpr {
+impl TypeExpr {
     /// Create a new CST type expression.
-    pub(crate) fn new(kind: CstTypeExprKind, span: Span) -> Self {
+    pub(crate) fn new(kind: TypeExprKind, span: Span) -> Self {
         Self { kind, span }
     }
 }
 
 /// The kind of a CST type expression.
 #[derive(Clone, Debug)]
-pub(crate) enum CstTypeExprKind {
+pub(crate) enum TypeExprKind {
     /// Simple named type.
     Named(String),
 
     /// Parameterized type.
-    App(String, Vec<CstTypeExpr>),
+    App(String, Vec<TypeExpr>),
 
     /// Function type.
-    Fn(Vec<CstTypeExpr>, Box<CstTypeExpr>),
+    Fn(Vec<TypeExpr>, Box<TypeExpr>),
 }
