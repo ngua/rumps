@@ -15,7 +15,6 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use miette::{NamedSource, Report};
-use rumps_query::run;
 use rumps_storage::Database;
 
 /// RUMPS query language interpreter.
@@ -57,7 +56,7 @@ async fn run(args: Args) -> miette::Result<()> {
     }
     .map_err(|e| miette::miette!("failed to open database: {e}"))?;
 
-    run(&src, db).await.map_err(|e| {
+    rumps_query::run(&src, db).await.map_err(|e| {
         let name = args.script.display().to_string();
         Report::new(e).with_source_code(NamedSource::new(name, src.clone()))
     })
