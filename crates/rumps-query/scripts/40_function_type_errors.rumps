@@ -1,0 +1,12 @@
+; Test: Function Type Errors
+; This script tests that type checking catches errors in function calls.
+; Each section should produce a type error.
+
+; === Wrong argument type ===
+
+FUN add (a: Int, b: Int) -> Int {
+  a + b
+}
+
+; Passing string to Int parameter
+OUTPUT add("hello", 5)

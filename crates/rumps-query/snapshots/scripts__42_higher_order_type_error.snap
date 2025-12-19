@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Higher-Order Function Type Error\n; Passing a function with wrong signature to higher-order function.\n\nFUN apply (f: (Int) -> Int, x: Int) -> Int {\n  f(x)\n}\n\n; Pass a function that takes String instead of Int\nFUN greet (name: String) -> String {\n  \"Hello, \" ++ name\n}\n\nOUTPUT apply(greet, 5)\n"
+---
+ERROR: type error at 283..298: expected `(Int) -> Int`, got `Function` for parameter `f`

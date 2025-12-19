@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Return Type Error\n; Function returns wrong type.\n\nFUN get_number () -> Int {\n  \"not a number\"\n}\n\nOUTPUT get_number()\n"
+---
+ERROR: type error at 112..124: expected return type `Int`, got `String`

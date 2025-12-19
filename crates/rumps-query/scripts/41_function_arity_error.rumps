@@ -1,0 +1,9 @@
+; Test: Function Arity Error
+; Calling a function with wrong number of arguments.
+
+FUN add (a: Int, b: Int) -> Int {
+  a + b
+}
+
+; Too few arguments
+OUTPUT add(5)

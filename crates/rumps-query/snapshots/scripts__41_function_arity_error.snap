@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Function Arity Error\n; Calling a function with wrong number of arguments.\n\nFUN add (a: Int, b: Int) -> Int {\n  a + b\n}\n\n; Too few arguments\nOUTPUT add(5)\n"
+---
+ERROR: runtime error at 155..161: expected 2 arguments, got 1

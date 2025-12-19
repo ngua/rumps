@@ -511,24 +511,24 @@ OUTPUT (x => x * 2)(21)           ; 42
 - [x] Add unit tests (basic calling)
 - [x] Add integration test script (`38_named_functions.rumps`)
 
-**Remaining:**
+**Remaining (all complete):**
 
-- [ ] Expression-based callees (`ops.inc(5)`, `make_adder(5)(10)`, `(x => x)(5)`):
+- [x] Expression-based callees (`ops.inc(5)`, `make_adder(5)(10)`, `(x => x)(5)`):
   - Change AST: `Expr::Call(String, args)` -> `Expr::Call(ExprId, args)`
   - Parser: treat `(args)` as postfix operator in `fold_postfix`, like `.field` or `[idx]`
   - Interpreter: evaluate callee expression, then dispatch based on value type
   - Handle chained calls: `f(a)(b)` parses as `Call(Call(f, [a]), [b])`
-- [ ] Validate objects containing closures cannot be serialized:
-  - `Interpreter::jsonify` must recursively check object values
-  - If any value is `Value::Closure` or `Value::Function`, return error
-  - Type error message: `"objects containing closures cannot be serialized to JSON"`
-- [ ] Runtime type checking for function/closure params and return types:
-  - If param has type annotation, validate argument against type expr
-  - For function types, check that argument is callable with matching signature
-  - If return type annotation, check result type before returning
-  - Produce clear error: `"expected (Int) -> Int, got Int for parameter 'f'"`
-- [ ] Add unit tests (expression-based callees, type checking)
-- [ ] Add integration test script (expression-based callees, type errors)
+- [x] Validate objects containing closures cannot be serialized:
+  - `Interpreter::jsonify` recursively checks object values
+  - If any value is `Value::Closure` or `Value::Function`, returns error
+  - Error messages: `"closures cannot be serialized to JSON"` / `"functions cannot be serialized to JSON"`
+- [x] Runtime type checking for function/closure params and return types:
+  - `bind_params` validates arguments against param type annotations
+  - `fn_value_matches` checks callable values against function type signatures
+  - `check_return_type` validates return value against return type annotation
+  - Clear error messages for type mismatches
+- [x] Add unit tests (expression-based callees, type checking)
+- [x] Add integration test script (`39_expression_callees.rumps`)
 
 ### 10. Pipeline Operator (`|>`)
 

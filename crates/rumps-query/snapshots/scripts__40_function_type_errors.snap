@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Function Type Errors\n; This script tests that type checking catches errors in function calls.\n; Each section should produce a type error.\n\n; === Wrong argument type ===\n\nFUN add (a: Int, b: Int) -> Int {\n  a + b\n}\n\n; Passing string to Int parameter\nOUTPUT add(\"hello\", 5)\n"
+---
+ERROR: type error at 264..279: expected `Int`, got `String` for parameter `a`
