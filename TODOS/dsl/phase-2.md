@@ -321,7 +321,7 @@ Int -> Int
 
 ### 7. Closures (Anonymous Functions)
 
-Lambda expressions with arrow syntax and optional type annotations. Type annotations can be any type expression, including function types.
+Lambda expressions with arrow syntax and optional type annotations. Type annotations can be any type expression, including function types. Closures are first-class values and can be bound to variables via `LET`, then called like any function.
 
 ```rumps
 ; Simple closure (untyped)
@@ -350,6 +350,22 @@ x => {
 
 ; Closure returning a closure
 (n: Int) -> (Int) -> Int => (x => x + n)
+
+; Binding closures to variables and calling them
+LET double = x => x * 2
+OUTPUT double(5)              ; 10
+
+LET add = (a: Int, b: Int) -> Int => a + b
+OUTPUT add(3, 4)              ; 7
+
+; Closure with captured variable, bound and called
+LET factor = 3
+LET scale = (x: Int) -> Int => x * factor
+OUTPUT scale(10)              ; 30
+
+; Passing a bound closure to a higher-order function
+LET square = (x: Int) -> Int => x * x
+OUTPUT apply(square, 5)       ; 25 (assuming apply is defined)
 ```
 
 - [ ] Add `Token::FatArrow` (`=>`) to lexer
@@ -442,10 +458,10 @@ FUN compose (f: (Int) -> Int, g: (Int) -> Int) -> (Int) -> Int {
 
 ### 9. Function Calls and First-Class Functions
 
-Complete the existing `Expr::Call` implementation and support named functions as first-class values.
+Complete the existing `Expr::Call` implementation and support named functions as first-class values. Critically, since closures can be bound to variables (section 7), the call evaluation must check lexically bound variables when resolving the callee.
 
 ```rumps
-; Direct calls
+; Direct calls to named functions
 greet("World")
 SET sum = add(10, 20)
 SET area = square(side) * 4
@@ -461,10 +477,20 @@ OUTPUT apply(double, 5)           ; 10
 ; Compose named functions
 LET sq-then-dbl = compose(double, square)
 OUTPUT sq-then-dbl(3)             ; 18 (square(3)=9, double(9)=18)
+
+; Calling closures bound to variables
+LET double = x => x * 2
+OUTPUT double(10)                 ; 20 (looks up `double` in scope, finds closure)
+
+LET ops = { inc: x => x + 1, dec: x => x - 1 }
+OUTPUT ops.inc(5)                 ; 6 (field access yields closure, then call)
 ```
 
 - [ ] Implement `Expr::Call` in interpreter:
-  - Look up function by name OR evaluate callee expression
+  - Evaluate callee expression:
+    - If callee is an identifier, first check named function registry
+    - If not found in registry, look up identifier in lexical scope (may be a bound closure)
+    - Otherwise, evaluate callee as a general expression (e.g., field access returning a closure)
   - If callee is `Value::Closure` or `Value::Function`, apply it
   - Evaluate arguments
   - Create new scope with parameters bound to arguments
