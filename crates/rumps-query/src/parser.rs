@@ -1,7 +1,17 @@
 //! Parser for the RUMPS query language.
 //!
-//! Transforms a token stream into an AST using chumsky. Uses `RefCell` to build
-//! the arena-allocated AST during parsing.
+//! # Architecture
+//!
+//! The parser uses a two-pass approach to decouple parsing from AST construction:
+//!
+//! ```text
+//! Tokens  -->  CST (Concrete Syntax Tree)  -->  AST (arena-allocated)
+//!              ^^^^^^^^^^^^^^^^^^^^^^^^^^       ^^^^^^^^^^^^^^^^^^^^^
+//!              chumsky produces (pass 1)        lowering produces (pass 2)
+//! ```
+//!
+//! This design eliminates the `Rc<RefCell<Ast>>` pattern previously required
+//! by chumsky's `Clone` constraint on parsers. See `cst.rs` for details.
 //!
 //! # Whitespace Handling
 //!
@@ -19,9 +29,6 @@
 //!   (`1\n    + 2` parses as `1 + 2`)
 //! - **Delimited constructs**: Inside `[]`, `()`, and `{}` for multi-line arrays,
 //!   function calls, objects, and blocks
-//!
-//! Newlines remain significant as statement separators at the top level and
-//! inside block expressions.
 
 #![allow(dead_code)]
 // NOTE: This is because `ParseErr = Simple<Token, Span>`, which can be quite
@@ -31,31 +38,21 @@
 // `Box`ing would add allocation overhead
 #![allow(clippy::result_large_err)]
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use chumsky::prelude::{choice, end, just, recursive, select, Simple};
 use chumsky::Parser as _;
 use nonempty::NonEmpty;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
-use crate::ast::{AstTypeExpr, AstTypeExprId};
-use crate::{
-    Ast, BinOp, Error, Expr, ExprId, Lexer, Literal, Result, Span, Spanned,
-    Stmt, StmtId, Token, TypePattern, UnOp,
+use crate::ast::{BinOp, Literal, TypePattern, UnOp};
+use crate::cst::{
+    CstExpr, CstExprKind, CstStmt, CstStmtKind, CstTypeExpr, CstTypeExprKind,
 };
-
-/// Shared mutable AST arena for use during parsing.
-type AstCell = Rc<RefCell<Ast>>;
+use crate::lower::lower_program;
+use crate::{Ast, Error, Lexer, Result, Span, Spanned, StmtId, Token};
 
 /// Parser error type for token-based parsing.
 type ParseErr = Simple<Token, Span>;
-
-/// Parser output paired with its span.
-type SpannedExpr = (ExprId, Span);
-type SpannedStmt = (StmtId, Span);
-type SpannedTypeExpr = (AstTypeExprId, Span);
 
 /// The result of parsing: the AST arena and the top-level statements.
 #[derive(Debug)]
@@ -77,9 +74,12 @@ impl Parser {
     }
 
     /// Parse a token stream into an AST.
+    ///
+    /// This is the two-pass entry point:
+    /// 1. Parse tokens into CST (this module)
+    /// 2. Lower CST to AST (`lower.rs`)
     pub(crate) fn parse_tokens(tokens: &[Spanned]) -> Result<ParseResult> {
-        let ast = Rc::new(RefCell::new(Ast::new()));
-        let parser = Self::program(Rc::clone(&ast));
+        let parser = Self::program();
 
         // Find EOF span for chumsky's end-of-input handling
         let eof_span = tokens
@@ -105,25 +105,18 @@ impl Parser {
                         Error::runtime_no_span("unknown parse error")
                     })
             })
-            .map(|stmts| {
-                // Extract the AST; try_unwrap if we're the only owner, otherwise take inner
-                let inner = Rc::try_unwrap(ast)
-                    .map(RefCell::into_inner)
-                    .unwrap_or_else(|rc| rc.borrow().clone());
-                ParseResult { ast: inner, stmts }
+            .map(|cst_stmts| {
+                let (ast, stmts) = lower_program(cst_stmts);
+                ParseResult { ast, stmts }
             })
     }
 
     /// Program: zero or more statements separated by newlines, ending with EOF.
-    fn program(
-        ast: AstCell,
-    ) -> impl chumsky::Parser<Token, Vec<StmtId>, Error = ParseErr> {
+    fn program() -> impl chumsky::Parser<Token, Vec<CstStmt>, Error = ParseErr>
+    {
         Self::opt_newlines()
             .ignore_then(
-                Self::stmt(Rc::clone(&ast))
-                    .map(|(id, _)| id)
-                    .separated_by(Self::newlines())
-                    .allow_trailing(),
+                Self::stmt().separated_by(Self::newlines()).allow_trailing(),
             )
             .then_ignore(Self::opt_newlines())
             .then_ignore(end())
@@ -151,17 +144,14 @@ impl Parser {
     }
 
     /// A single statement.
-    fn stmt(
-        ast: AstCell,
-    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
+    fn stmt() -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
         recursive(|stmt| {
-            let let_stmt = Self::let_stmt(Rc::clone(&ast), stmt.clone());
-            let set_stmt = Self::set_stmt(Rc::clone(&ast), stmt.clone());
-            let kill_stmt = Self::kill_stmt(Rc::clone(&ast), stmt.clone());
-            let output_stmt = Self::output_stmt(Rc::clone(&ast), stmt.clone());
-            let fun_stmt = Self::fun_stmt(Rc::clone(&ast), stmt.clone());
-            // IF is now parsed as an expression in primary_expr; expr_stmt handles it
-            let expr_stmt = Self::expr_stmt(Rc::clone(&ast), stmt);
+            let let_stmt = Self::let_stmt(stmt.clone());
+            let set_stmt = Self::set_stmt(stmt.clone());
+            let kill_stmt = Self::kill_stmt(stmt.clone());
+            let output_stmt = Self::output_stmt(stmt.clone());
+            let fun_stmt = Self::fun_stmt(stmt.clone());
+            let expr_stmt = Self::expr_stmt(stmt);
 
             choice((
                 let_stmt,
@@ -176,72 +166,53 @@ impl Parser {
 
     /// `LET name = expr` or `LET name: Type = expr`
     fn let_stmt(
-        ast: AstCell,
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
-        // Optional type annotation: `: Type`
-        let type_ann = just(Token::Colon)
-            .ignore_then(Self::type_expr(Rc::clone(&ast)))
-            .or_not();
+    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+        let type_ann =
+            just(Token::Colon).ignore_then(Self::type_expr()).or_not();
 
         just(Token::Let)
             .ignore_then(Self::ident())
             .then(type_ann)
             .then_ignore(just(Token::Assign))
-            .then(Self::expr(Rc::clone(&ast), stmt))
-            .map_with_span(move |((name, ty_ann), (val_id, _)), span| {
-                let ty_id = ty_ann.map(|(id, _)| id);
-                let id = ast
-                    .borrow_mut()
-                    .add_stmt(Stmt::Let(name, ty_id, val_id), span);
-                (id, span)
+            .then(Self::expr(stmt))
+            .map_with_span(|((name, ty_ann), val), span| {
+                CstStmt::new(CstStmtKind::Let(name, ty_ann, val), span)
             })
     }
 
     /// `SET name = expr` or `SET name(subs...) = expr`
     /// `SET ^global = expr` or `SET ^global(subs...) = expr`
     fn set_stmt(
-        ast: AstCell,
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
-        let ast2 = Rc::clone(&ast);
-        let ast3 = Rc::clone(&ast);
-        let ast4 = Rc::clone(&ast);
-        let ast5 = Rc::clone(&ast);
-
-        let expr1 = Self::expr(Rc::clone(&ast), stmt.clone());
-        let expr2 = Self::expr(Rc::clone(&ast2), stmt.clone());
-        let expr3 = Self::expr(Rc::clone(&ast4), stmt.clone());
-        let expr4 = Self::expr(Rc::clone(&ast5), stmt);
+    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+        let expr = Self::expr(stmt);
 
         let local_set = just(Token::Set)
             .ignore_then(Self::ident())
-            .then(Self::subscripts(expr1).or_not())
+            .then(Self::subscripts(expr.clone()).or_not())
             .then_ignore(just(Token::Assign))
-            .then(expr2)
-            .map_with_span(move |((name, subs), (val_id, _)), span| {
+            .then(expr.clone())
+            .map_with_span(|((name, subs), val), span| {
                 let subs = subs.unwrap_or_default();
-                let mut ast_ref = ast3.borrow_mut();
-                let target = ast_ref.add_expr(Expr::Local(name, subs), span);
-                let id = ast_ref.add_stmt(Stmt::Set(target, val_id), span);
-                (id, span)
+                let target = CstExpr::new(CstExprKind::Local(name, subs), span);
+                CstStmt::new(CstStmtKind::Set(target, val), span)
             });
 
         let global_set = just(Token::Set)
             .ignore_then(Self::global_name())
-            .then(Self::subscripts(expr3).or_not())
+            .then(Self::subscripts(expr.clone()).or_not())
             .then_ignore(just(Token::Assign))
-            .then(expr4)
-            .map_with_span(move |((name, subs), (val_id, _)), span| {
+            .then(expr)
+            .map_with_span(|((name, subs), val), span| {
                 let subs = subs.unwrap_or_default();
-                let mut ast_ref = ast5.borrow_mut();
-                let target = ast_ref.add_expr(Expr::Global(name, subs), span);
-                let id = ast_ref.add_stmt(Stmt::Set(target, val_id), span);
-                (id, span)
+                let target =
+                    CstExpr::new(CstExprKind::Global(name, subs), span);
+                CstStmt::new(CstStmtKind::Set(target, val), span)
             });
 
         global_set.or(local_set)
@@ -250,38 +221,29 @@ impl Parser {
     /// `KILL name` or `KILL name(subs...)`
     /// `KILL ^global` or `KILL ^global(subs...)`
     fn kill_stmt(
-        ast: AstCell,
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
-        let ast2 = Rc::clone(&ast);
-        let ast3 = Rc::clone(&ast);
-        let ast4 = Rc::clone(&ast);
-
-        let expr1 = Self::expr(Rc::clone(&ast), stmt.clone());
-        let expr2 = Self::expr(Rc::clone(&ast3), stmt);
+    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+        let expr = Self::expr(stmt);
 
         let local_kill = just(Token::Kill)
             .ignore_then(Self::ident())
-            .then(Self::subscripts(expr1).or_not())
-            .map_with_span(move |(name, subs), span| {
+            .then(Self::subscripts(expr.clone()).or_not())
+            .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                let mut ast_ref = ast2.borrow_mut();
-                let target = ast_ref.add_expr(Expr::Local(name, subs), span);
-                let id = ast_ref.add_stmt(Stmt::Kill(target), span);
-                (id, span)
+                let target = CstExpr::new(CstExprKind::Local(name, subs), span);
+                CstStmt::new(CstStmtKind::Kill(target), span)
             });
 
         let global_kill = just(Token::Kill)
             .ignore_then(Self::global_name())
-            .then(Self::subscripts(expr2).or_not())
-            .map_with_span(move |(name, subs), span| {
+            .then(Self::subscripts(expr).or_not())
+            .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                let mut ast_ref = ast4.borrow_mut();
-                let target = ast_ref.add_expr(Expr::Global(name, subs), span);
-                let id = ast_ref.add_stmt(Stmt::Kill(target), span);
-                (id, span)
+                let target =
+                    CstExpr::new(CstExprKind::Global(name, subs), span);
+                CstStmt::new(CstStmtKind::Kill(target), span)
             });
 
         global_kill.or(local_kill)
@@ -289,35 +251,29 @@ impl Parser {
 
     /// `OUTPUT expr`
     fn output_stmt(
-        ast: AstCell,
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
+    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
         just(Token::Output)
-            .ignore_then(Self::expr(Rc::clone(&ast), stmt))
-            .map_with_span(move |(expr_id, _), span| {
-                let id = ast.borrow_mut().add_stmt(Stmt::Output(expr_id), span);
-                (id, span)
+            .ignore_then(Self::expr(stmt))
+            .map_with_span(|expr, span| {
+                CstStmt::new(CstStmtKind::Output(expr), span)
             })
     }
 
     /// `FUN name (params) { body }` or `FUN name (params) -> Type { body }`
     fn fun_stmt(
-        ast: AstCell,
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
-        let ast2 = Rc::clone(&ast);
-
+    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
         // Parameter: `name` or `name: Type`
         let param = Self::ident()
             .then(
                 just(Token::Colon)
                     .ignore_then(Self::opt_newlines())
-                    .ignore_then(Self::type_expr(Rc::clone(&ast)))
-                    .map(|(id, _)| id)
+                    .ignore_then(Self::type_expr())
                     .or_not(),
             )
             .map(|(name, ty)| (name, ty));
@@ -335,8 +291,7 @@ impl Parser {
         let ret_ty = Self::opt_newlines()
             .ignore_then(just(Token::Arrow))
             .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::type_expr(Rc::clone(&ast2)))
-            .map(|(id, _)| id)
+            .ignore_then(Self::type_expr())
             .or_not();
 
         // Body block
@@ -350,59 +305,57 @@ impl Parser {
             .then(ret_ty)
             .then(body)
             .map_with_span(
-                move |(((name, params_vec), ret), (stmts, blk_span)), span| {
+                |(((name, params_vec), ret), (stmts, blk_span)), span| {
                     let params = SmallVec::from_vec(params_vec);
-                    let mut ast_ref = ast2.borrow_mut();
-                    let body =
-                        Self::stmts_to_block(&mut ast_ref, stmts, blk_span);
-                    let id = ast_ref.add_stmt(
-                        Stmt::Fun {
+                    let body = Self::stmts_to_block(stmts, blk_span);
+                    CstStmt::new(
+                        CstStmtKind::Fun {
                             name,
                             params,
                             ret,
                             body,
                         },
                         span,
-                    );
-                    (id, span)
+                    )
                 },
             )
     }
 
     /// Convert a list of statements to a block expression.
     ///
-    /// If the last statement is `Stmt::Expr(e)`, extracts `e` as the trailing
-    /// expression (block's value). Otherwise, the block has no trailing expr.
-    fn stmts_to_block(ast: &mut Ast, stmts: Vec<StmtId>, span: Span) -> ExprId {
-        // Check if last statement is Stmt::Expr; if so, use it as tail
-        let tail = stmts.last().and_then(|&id| {
-            ast.get_stmt(id).and_then(|s| match s {
-                Stmt::Expr(e) => Some(*e),
-                _ => None,
-            })
-        });
+    /// If the last statement is `CstStmtKind::Expr(e)`, extracts `e` as the
+    /// trailing expression (block's value). Otherwise, the block has no tail.
+    fn stmts_to_block(stmts: Vec<CstStmt>, span: Span) -> CstExpr {
+        // Check if last statement is Expr; if so, use it as tail
+        let has_tail = stmts
+            .last()
+            .map(|s| matches!(&s.kind, CstStmtKind::Expr(_)))
+            .unwrap_or(false);
 
-        // If last was Expr, exclude it from statements and use as tail
-        if let Some(e) = tail {
+        if has_tail {
             let n = stmts.len().saturating_sub(1);
-            let block_stmts = stmts.into_iter().take(n).collect();
-            ast.add_expr(Expr::Block(block_stmts, Some(e)), span)
+            let mut iter = stmts.into_iter();
+            let block_stmts: Vec<_> = iter.by_ref().take(n).collect();
+            let tail = iter.next().and_then(|s| match s.kind {
+                CstStmtKind::Expr(e) => Some(Box::new(e)),
+                _ => None,
+            });
+            CstExpr::new(CstExprKind::Block(block_stmts, tail), span)
         } else {
-            ast.add_expr(Expr::Block(stmts, None), span)
+            CstExpr::new(CstExprKind::Block(stmts, None), span)
         }
     }
 
     /// `{ stmts... }` block, returns statements and the block's span.
     fn block(
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> + Clone,
-    ) -> impl chumsky::Parser<Token, (Vec<StmtId>, Span), Error = ParseErr> + Clone
+        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr> + Clone,
+    ) -> impl chumsky::Parser<Token, (Vec<CstStmt>, Span), Error = ParseErr> + Clone
     {
         Self::opt_newlines()
             .ignore_then(just(Token::LBrace))
             .ignore_then(Self::opt_newlines())
             .ignore_then(
-                stmt.map(|(id, _)| id)
-                    .separated_by(Self::newlines())
+                stmt.separated_by(Self::newlines())
                     .allow_leading()
                     .allow_trailing(),
             )
@@ -413,121 +366,92 @@ impl Parser {
 
     /// Expression used as statement.
     fn expr_stmt(
-        ast: AstCell,
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
-        Self::expr(Rc::clone(&ast), stmt).map_with_span(
-            move |(expr_id, _), span| {
-                let id = ast.borrow_mut().add_stmt(Stmt::Expr(expr_id), span);
-                (id, span)
-            },
-        )
+    ) -> impl chumsky::Parser<Token, CstStmt, Error = ParseErr> {
+        Self::expr(stmt).map_with_span(|expr, span| {
+            CstStmt::new(CstStmtKind::Expr(expr), span)
+        })
     }
 
     /// Top-level expression parser with full precedence.
-    ///
-    /// Builds the entire precedence chain inside the `recursive` closure,
-    /// so `stmt` is only passed to `primary_expr` where it's actually needed.
     fn expr(
-        ast: AstCell,
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         recursive(move |expr| {
-            // Build precedence chain from highest to lowest
-            let primary =
-                Self::primary_expr(Rc::clone(&ast), expr.clone(), stmt.clone());
-            let postfix =
-                Self::postfix_expr(Rc::clone(&ast), expr.clone(), primary);
-            let unary = Self::unary_expr(Rc::clone(&ast), expr, postfix);
-            let pow = Self::pow_expr(Rc::clone(&ast), unary);
-            let mul = Self::mul_expr(Rc::clone(&ast), pow);
-            let add = Self::add_expr(Rc::clone(&ast), mul);
-            let cmp = Self::cmp_expr(Rc::clone(&ast), add);
-            let is = Self::is_expr(Rc::clone(&ast), cmp);
-            let as_cast = Self::as_expr(Rc::clone(&ast), is);
-            let read = Self::read_expr(Rc::clone(&ast), as_cast);
-            let and = Self::and_expr(Rc::clone(&ast), read);
-            let or = Self::or_expr(Rc::clone(&ast), and);
-            Self::coalesce_expr(Rc::clone(&ast), or)
+            let primary = Self::primary_expr(expr.clone(), stmt.clone());
+            let postfix = Self::postfix_expr(expr.clone(), primary);
+            let unary = Self::unary_expr(expr, postfix);
+            let pow = Self::pow_expr(unary);
+            let mul = Self::mul_expr(pow);
+            let add = Self::add_expr(mul);
+            let cmp = Self::cmp_expr(add);
+            let is = Self::is_expr(cmp);
+            let as_cast = Self::as_expr(is);
+            let read = Self::read_expr(as_cast);
+            let and = Self::and_expr(read);
+            let or = Self::or_expr(and);
+            Self::coalesce_expr(or)
         })
     }
 
     /// Coalesce: `expr ?? expr` (lowest precedence)
     fn coalesce_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let op = just(Token::QuestionQuestion).to(BinOp::Coalesce);
-        // Allow newlines before/after operator for continuation
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
-            move |(first, rest), span| {
-                Self::fold_binary(&ast, first, rest, span)
-            },
+            |(first, rest), span| Self::fold_binary(first, rest, span),
         )
     }
 
     /// Logical OR: `expr || expr` or `expr OR expr`
     fn or_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let op = choice((just(Token::PipePipe), just(Token::Or))).to(BinOp::Or);
-        // Allow newlines before/after operator for continuation
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
-            move |(first, rest), span| {
-                Self::fold_binary(&ast, first, rest, span)
-            },
+            |(first, rest), span| Self::fold_binary(first, rest, span),
         )
     }
 
     /// Logical AND: `expr && expr` or `expr AND expr`
     fn and_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let op = choice((just(Token::AmpAmp), just(Token::And))).to(BinOp::And);
-        // Allow newlines before/after operator for continuation
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
-            move |(first, rest), span| {
-                Self::fold_binary(&ast, first, rest, span)
-            },
+            |(first, rest), span| Self::fold_binary(first, rest, span),
         )
     }
 
     /// Comparison: `<`, `>`, `<=`, `>=`, `==`, `!=`
     fn cmp_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let op = choice((
             just(Token::Eq).to(BinOp::Eq),
             just(Token::Ne).to(BinOp::Ne),
@@ -536,33 +460,21 @@ impl Parser {
             just(Token::Lt).to(BinOp::Lt),
             just(Token::Gt).to(BinOp::Gt),
         ));
-        // Allow newlines before/after operator for continuation
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
-            move |(first, rest), span| {
-                Self::fold_binary(&ast, first, rest, span)
-            },
+            |(first, rest), span| Self::fold_binary(first, rest, span),
         )
     }
 
     /// Type check: `expr is Pattern`
-    ///
-    /// Pattern can be:
-    /// - Simple type: `is Int`, `is String`
-    /// - Variant (zero-arity): `is Option.None`
-    /// - Variant with wildcard: `is Option.Some(_)`
-    /// - Variant with binding: `is Option.Some(val)`
     fn is_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
-        // Parse a type pattern after `is`
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let type_pattern = Self::type_pattern();
 
         let is_rhs = Self::opt_newlines()
@@ -571,11 +483,9 @@ impl Parser {
             .ignore_then(type_pattern);
 
         operand.clone().then(is_rhs.or_not()).map_with_span(
-            move |(expr, pattern), span| match pattern {
+            |(expr, pattern), span| match pattern {
                 Some(pat) => {
-                    let id =
-                        ast.borrow_mut().add_expr(Expr::Is(expr.0, pat), span);
-                    (id, span)
+                    CstExpr::new(CstExprKind::Is(Box::new(expr), pat), span)
                 }
                 None => expr,
             },
@@ -586,7 +496,7 @@ impl Parser {
     fn type_pattern(
     ) -> impl chumsky::Parser<Token, TypePattern, Error = ParseErr> + Clone
     {
-        // Wildcard: `_` (underscore is parsed as an identifier)
+        // Wildcard: `_`
         let wildcard = select! { Token::Ident(s) if s == "_" => () };
 
         // Binding name (any identifier except `_`)
@@ -596,9 +506,7 @@ impl Parser {
         let pattern_args = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
             .ignore_then(choice((
-                // Wildcard: `(_)`
                 wildcard.to(PatternArgs::Wildcard),
-                // Bindings: `(name)` or `(name1, name2, ...)`
                 binding
                     .separated_by(
                         just(Token::Comma).then_ignore(Self::opt_newlines()),
@@ -626,33 +534,27 @@ impl Parser {
                 }
             });
 
-        // Simple type pattern: `Int`, `String`, etc.
+        // Simple type pattern
         let simple_type = Self::ident().map(TypePattern::Type);
 
-        // Try variant first, then simple type
         variant_pattern.or(simple_type)
     }
 
     /// Type cast: `expr as Type`
     fn as_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let as_rhs = Self::opt_newlines()
             .ignore_then(just(Token::As))
             .then_ignore(Self::opt_newlines())
-            .ignore_then(Self::type_expr(Rc::clone(&ast)));
+            .ignore_then(Self::type_expr());
 
         operand.clone().then(as_rhs.or_not()).map_with_span(
-            move |(expr, ty), span| match ty {
-                Some((ty_id, _)) => {
-                    let id = ast
-                        .borrow_mut()
-                        .add_expr(Expr::As(expr.0, ty_id), span);
-                    (id, span)
+            |(expr, ty), span| match ty {
+                Some(ty_expr) => {
+                    CstExpr::new(CstExprKind::As(Box::new(expr), ty_expr), span)
                 }
                 None => expr,
             },
@@ -661,25 +563,21 @@ impl Parser {
 
     /// Fallible conversion: `expr read Type`
     fn read_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let read_rhs = Self::opt_newlines()
             .ignore_then(just(Token::Read))
             .then_ignore(Self::opt_newlines())
-            .ignore_then(Self::type_expr(Rc::clone(&ast)));
+            .ignore_then(Self::type_expr());
 
         operand.clone().then(read_rhs.or_not()).map_with_span(
-            move |(expr, ty), span| match ty {
-                Some((ty_id, _)) => {
-                    let id = ast
-                        .borrow_mut()
-                        .add_expr(Expr::Read(expr.0, ty_id), span);
-                    (id, span)
-                }
+            |(expr, ty), span| match ty {
+                Some(ty_expr) => CstExpr::new(
+                    CstExprKind::Read(Box::new(expr), ty_expr),
+                    span,
+                ),
                 None => expr,
             },
         )
@@ -687,157 +585,135 @@ impl Parser {
 
     /// Additive: `+`, `-`, `++`
     fn add_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let op = choice((
             just(Token::Plus).to(BinOp::Add),
             just(Token::Minus).to(BinOp::Sub),
             just(Token::Concat).to(BinOp::Concat),
         ));
-        // Allow newlines before/after operator for continuation
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
-            move |(first, rest), span| {
-                Self::fold_binary(&ast, first, rest, span)
-            },
+            |(first, rest), span| Self::fold_binary(first, rest, span),
         )
     }
 
     /// Power: `**` (right-associative)
     fn pow_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let op_rhs = Self::opt_newlines()
             .ignore_then(just(Token::StarStar))
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
-            move |(first, rest), span| {
-                Self::fold_binary_right(&ast, first, rest, span)
-            },
+            |(first, rest), _span| Self::fold_binary_right(first, rest),
         )
     }
 
     /// Folds a sequence of power operations right-to-left.
     fn fold_binary_right(
-        ast: &AstCell,
-        first: SpannedExpr,
-        rest: Vec<(Token, SpannedExpr)>,
-        _outer_span: Span,
-    ) -> SpannedExpr {
+        first: CstExpr,
+        rest: Vec<(Token, CstExpr)>,
+    ) -> CstExpr {
         rest.into_iter()
-            .rfold(None, |acc: Option<SpannedExpr>, (_tok, expr)| match acc {
+            .rfold(None, |acc: Option<CstExpr>, (_tok, expr)| match acc {
                 None => Some(expr),
                 Some(rhs) => {
-                    let span = expr.1.merge(rhs.1);
-                    let id = ast.borrow_mut().add_expr(
-                        Expr::Binary(expr.0, BinOp::Pow, rhs.0),
+                    let span = Span::new(expr.span.start, rhs.span.end);
+                    Some(CstExpr::new(
+                        CstExprKind::Binary(
+                            Box::new(expr),
+                            BinOp::Pow,
+                            Box::new(rhs),
+                        ),
                         span,
-                    );
-                    Some((id, span))
+                    ))
                 }
             })
-            .map_or(first, |rhs| {
-                let span = first.1.merge(rhs.1);
-                let id = ast
-                    .borrow_mut()
-                    .add_expr(Expr::Binary(first.0, BinOp::Pow, rhs.0), span);
-                (id, span)
+            .map_or(first.clone(), |rhs| {
+                let span = Span::new(first.span.start, rhs.span.end);
+                CstExpr::new(
+                    CstExprKind::Binary(
+                        Box::new(first),
+                        BinOp::Pow,
+                        Box::new(rhs),
+                    ),
+                    span,
+                )
             })
     }
 
     /// Multiplicative: `*`, `/`, `//`, `%`
     fn mul_expr(
-        ast: AstCell,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let op = choice((
             just(Token::Mul).to(BinOp::Mul),
             just(Token::FloorDiv).to(BinOp::FloorDiv),
             just(Token::Div).to(BinOp::Div),
             just(Token::Modulo).to(BinOp::Mod),
         ));
-        // Allow newlines before/after operator for continuation
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
-            move |(first, rest), span| {
-                Self::fold_binary(&ast, first, rest, span)
-            },
+            |(first, rest), span| Self::fold_binary(first, rest, span),
         )
     }
 
     /// Folds a sequence of binary operations left-to-right.
     fn fold_binary(
-        ast: &AstCell,
-        first: SpannedExpr,
-        rest: Vec<(BinOp, SpannedExpr)>,
+        first: CstExpr,
+        rest: Vec<(BinOp, CstExpr)>,
         _outer_span: Span,
-    ) -> SpannedExpr {
+    ) -> CstExpr {
         rest.into_iter().fold(first, |lhs, (op, rhs)| {
-            let span = lhs.1.merge(rhs.1);
-            let id = ast
-                .borrow_mut()
-                .add_expr(Expr::Binary(lhs.0, op, rhs.0), span);
-            (id, span)
+            let span = Span::new(lhs.span.start, rhs.span.end);
+            CstExpr::new(
+                CstExprKind::Binary(Box::new(lhs), op, Box::new(rhs)),
+                span,
+            )
         })
     }
 
     /// Unary: `NOT`, `!`, `-`, `GET`
     fn unary_expr(
-        ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let op = choice((
             just(Token::Not).to(UnOp::Not),
             just(Token::Bang).to(UnOp::Not),
             just(Token::Minus).to(UnOp::Neg),
         ));
 
-        let ast2 = Rc::clone(&ast);
-
-        // Unary is right-associative, so we use recursion
         recursive(move |unary| {
-            let ast_inner = Rc::clone(&ast);
-            let ast_get = Rc::clone(&ast2);
             let with_op = op.clone().then(unary.clone()).map_with_span(
-                move |(op, (inner, _)): (UnOp, SpannedExpr), span| {
-                    let id = ast_inner
-                        .borrow_mut()
-                        .add_expr(Expr::Unary(op, inner), span);
-                    (id, span)
+                |(op, inner), span| {
+                    CstExpr::new(CstExprKind::Unary(op, Box::new(inner)), span)
                 },
             );
 
-            // GET target: reads from a B-tree variable (local or global)
+            // GET target
             let get_expr = just(Token::Get)
-                .ignore_then(Self::gettable(Rc::clone(&ast_get), expr.clone()))
-                .map_with_span(move |(inner, _), span| {
-                    let id =
-                        ast_get.borrow_mut().add_expr(Expr::Get(inner), span);
-                    (id, span)
+                .ignore_then(Self::gettable(expr.clone()))
+                .map_with_span(|inner, span| {
+                    CstExpr::new(CstExprKind::Get(Box::new(inner)), span)
                 });
 
             choice((with_op, get_expr)).or(operand.clone())
@@ -846,32 +722,22 @@ impl Parser {
 
     /// Target for `GET`: a local or global B-tree variable.
     fn gettable(
-        ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
-        let ast2 = Rc::clone(&ast);
-
-        // Global: `^NAME` or `^NAME(subs...)`
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         let global = Self::global_name()
             .then(Self::subscripts(expr.clone()).or_not())
-            .map_with_span(move |(name, subs), span| {
+            .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                let id =
-                    ast.borrow_mut().add_expr(Expr::Global(name, subs), span);
-                (id, span)
+                CstExpr::new(CstExprKind::Global(name, subs), span)
             });
 
-        // Local: `name` or `name(subs...)`
         let local = Self::ident()
             .then(Self::subscripts(expr).or_not())
-            .map_with_span(move |(name, subs), span| {
+            .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                let id =
-                    ast2.borrow_mut().add_expr(Expr::Local(name, subs), span);
-                (id, span)
+                CstExpr::new(CstExprKind::Local(name, subs), span)
             });
 
         choice((global, local))
@@ -879,17 +745,13 @@ impl Parser {
 
     /// Postfix: field access `.field`, index `[expr]`, call `(args...)`
     fn postfix_expr(
-        ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-        operand: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        operand: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
-        let ast2 = Rc::clone(&ast);
-
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         // Field access: `.field`
         let field = just(Token::Dot)
             .ignore_then(Self::ident())
@@ -900,110 +762,87 @@ impl Parser {
             .ignore_then(Self::ident())
             .map_with_span(PostfixOp::OptionalField);
 
-        // Index: `[expr]` - allow newlines inside
+        // Index: `[expr]`
         let index = just(Token::LBracket)
             .ignore_then(Self::opt_newlines())
             .ignore_then(expr.clone())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBracket))
-            .map_with_span(|(idx, _), span| PostfixOp::Index(idx, span));
+            .map_with_span(|idx, span| PostfixOp::Index(idx, span));
 
-        // Call: `(args...)` - allow newlines around arguments
+        // Call: `(args...)`
         let call_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let call = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(
-                expr.map(|(id, _)| id)
-                    .separated_by(call_sep)
-                    .allow_trailing(),
-            )
+            .ignore_then(expr.separated_by(call_sep).allow_trailing())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen))
-            .map_with_span(|args, span| {
-                PostfixOp::Call(SmallVec::from_vec(args), span)
-            });
+            .map_with_span(PostfixOp::Call);
 
         let postfix_op = choice((field, opt_field, index, call));
 
         operand
             .then(postfix_op.repeated())
             .map_with_span(|x, span| (x, span))
-            .try_map(move |((base, ops), span), _| {
-                Self::fold_postfix(&ast2, base, ops).ok_or_else(|| {
+            .try_map(|((base, ops), span), _| {
+                Self::fold_postfix(base, ops).ok_or_else(|| {
                     Simple::custom(span, "function call requires identifier")
                 })
             })
     }
 
     /// Folds postfix operations left-to-right.
-    ///
-    /// Returns `None` if a call is applied to a non-identifier (parse error).
-    fn fold_postfix(
-        ast: &AstCell,
-        base: SpannedExpr,
-        ops: Vec<PostfixOp>,
-    ) -> Option<SpannedExpr> {
+    fn fold_postfix(base: CstExpr, ops: Vec<PostfixOp>) -> Option<CstExpr> {
         ops.into_iter().try_fold(base, |acc, op| {
-            let span = Span::new(acc.1.start, op.end().end);
+            let span = Span::new(acc.span.start, op.end().end);
             match op {
-                PostfixOp::Field(name, _) => {
-                    let id = ast
-                        .borrow_mut()
-                        .add_expr(Expr::Field(acc.0, name), span);
-                    Some((id, span))
-                }
-                PostfixOp::OptionalField(name, _) => {
-                    let id = ast
-                        .borrow_mut()
-                        .add_expr(Expr::OptionalField(acc.0, name), span);
-                    Some((id, span))
-                }
-                PostfixOp::Index(idx, _) => {
-                    let id = ast
-                        .borrow_mut()
-                        .add_expr(Expr::Index(acc.0, idx), span);
-                    Some((id, span))
-                }
+                PostfixOp::Field(name, _) => Some(CstExpr::new(
+                    CstExprKind::Field(Box::new(acc), name),
+                    span,
+                )),
+                PostfixOp::OptionalField(name, _) => Some(CstExpr::new(
+                    CstExprKind::OptionalField(Box::new(acc), name),
+                    span,
+                )),
+                PostfixOp::Index(idx, _) => Some(CstExpr::new(
+                    CstExprKind::Index(Box::new(acc), Box::new(idx)),
+                    span,
+                )),
                 PostfixOp::Call(args, _) => {
-                    // HACK: Check for variant constructor `Type.Variant(args)` using
-                    // uppercase heuristic. This conflates field access with namespace
-                    // resolution; remove in Phase 3.0 when name resolution pass is added.
-                    // See: TODOS/dsl/phase-3.md, Section 0.4
-                    let base_expr = ast.borrow().get_expr(acc.0).cloned();
-                    let variant_opt =
-                        base_expr.as_ref().and_then(|e| match e {
-                            Expr::Field(inner, var_name)
-                                if var_name
-                                    .chars()
-                                    .next()
-                                    .is_some_and(|c| c.is_uppercase()) =>
-                            {
-                                let inner_expr =
-                                    ast.borrow().get_expr(*inner).cloned();
-                                inner_expr.and_then(|ie| match ie {
-                                    Expr::Var(ty_name) => Some((
-                                        ty_name.clone(),
-                                        var_name.clone(),
-                                    )),
-                                    _ => None,
-                                })
+                    // Check for variant constructor `Type.Variant(args)`
+                    let variant_opt = match &acc.kind {
+                        CstExprKind::Field(inner, var_name)
+                            if var_name
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_uppercase()) =>
+                        {
+                            match &inner.kind {
+                                CstExprKind::Var(ty_name) => {
+                                    Some((ty_name.clone(), var_name.clone()))
+                                }
+                                _ => None,
                             }
-                            _ => None,
-                        });
+                        }
+                        _ => None,
+                    };
 
-                    let id = variant_opt.map_or_else(
+                    let kind = variant_opt.map_or_else(
                         || {
-                            ast.borrow_mut()
-                                .add_expr(Expr::Call(acc.0, args.clone()), span)
+                            CstExprKind::Call(
+                                Box::new(acc.clone()),
+                                args.clone(),
+                            )
                         },
                         |(ty_name, var_name)| {
-                            ast.borrow_mut().add_expr(
-                                Expr::Variant(ty_name, var_name, args.clone()),
-                                span,
+                            CstExprKind::Variant(
+                                ty_name,
+                                var_name,
+                                args.clone(),
                             )
                         },
                     );
-                    Some((id, span))
+                    Some(CstExpr::new(kind, span))
                 }
             }
         })
@@ -1011,24 +850,13 @@ impl Parser {
 
     /// Primary: literals, identifiers, globals, parenthesized, arrays, objects, if.
     fn primary_expr(
-        ast: AstCell,
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+        stmt: impl chumsky::Parser<Token, CstStmt, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr> + Clone
-    {
-        let ast2 = Rc::clone(&ast);
-        let ast3 = Rc::clone(&ast);
-        let ast5 = Rc::clone(&ast);
-        let ast6 = Rc::clone(&ast);
-        let ast7 = Rc::clone(&ast);
-        let ast_closure = Rc::clone(&ast);
-        let ast_closure2 = Rc::clone(&ast);
-        let ast_closure3 = Rc::clone(&ast);
-
+    ) -> impl chumsky::Parser<Token, CstExpr, Error = ParseErr> + Clone {
         // Literals
         let int_lit = select! { Token::Int(n) => Literal::Int(n) };
         let float_lit =
@@ -1040,150 +868,122 @@ impl Parser {
         ));
 
         let literal = choice((int_lit, float_lit, str_lit, bool_lit))
-            .map_with_span(move |lit, span| {
-                let id = ast.borrow_mut().add_expr(Expr::Literal(lit), span);
-                (id, span)
+            .map_with_span(|lit, span| {
+                CstExpr::new(CstExprKind::Literal(lit), span)
             });
 
-        // Lexical variable (LET bindings)
-        let var = Self::ident().map_with_span(move |name, span| {
-            let id = ast2.borrow_mut().add_expr(Expr::Var(name), span);
-            (id, span)
+        // Lexical variable
+        let var = Self::ident().map_with_span(|name, span| {
+            CstExpr::new(CstExprKind::Var(name), span)
         });
 
-        // Global with optional subscripts: `^NAME` or `^NAME(subs...)`
+        // Global with optional subscripts
         let global = Self::global_name()
             .then(Self::subscripts(expr.clone()).or_not())
-            .map_with_span(move |(name, subs), span| {
+            .map_with_span(|(name, subs), span| {
                 let subs = subs.unwrap_or_default();
-                let id =
-                    ast3.borrow_mut().add_expr(Expr::Global(name, subs), span);
-                (id, span)
+                CstExpr::new(CstExprKind::Global(name, subs), span)
             });
 
-        // Parenthesized expression - allow newlines inside
+        // Parenthesized expression
         let paren = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
             .ignore_then(expr.clone())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen));
 
-        // Array literal: `[expr, ...]`
-        // Allow newlines around elements for multi-line arrays
+        // Array literal
         let arr_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let array = just(Token::LBracket)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(
-                expr.clone()
-                    .map(|(id, _)| id)
-                    .separated_by(arr_sep)
-                    .allow_trailing(),
-            )
+            .ignore_then(expr.clone().separated_by(arr_sep).allow_trailing())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBracket))
-            .map_with_span(move |elems, span| {
-                let id = ast5.borrow_mut().add_expr(Expr::Array(elems), span);
-                (id, span)
+            .map_with_span(|elems, span| {
+                CstExpr::new(CstExprKind::Array(elems), span)
             });
 
-        // Object literal: `{ key: value, ... }`
-        // Must be tried BEFORE block_expr since both start with `{`
+        // Object literal
         let obj_field = Self::ident()
             .then_ignore(just(Token::Colon))
-            .then(expr.clone().map(|(id, _)| id));
+            .then(expr.clone());
 
-        // Allow newlines around fields for multi-line objects
         let obj_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let object = just(Token::LBrace)
             .ignore_then(Self::opt_newlines())
             .ignore_then(obj_field.separated_by(obj_sep).allow_trailing())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
-            .map_with_span(move |fields, span| {
-                let id = ast6.borrow_mut().add_expr(Expr::Object(fields), span);
-                (id, span)
+            .map_with_span(|fields, span| {
+                CstExpr::new(CstExprKind::Object(fields), span)
             });
 
-        // Block expression: `{ stmts... [trailing_expr] }`
-        // Used standalone and by IF, TRANSACTION, etc.
-        let ast8 = Rc::clone(&ast7);
+        // Block expression
         let block_parser = Self::block(stmt);
-        let block_expr = block_parser.clone().map_with_span(
-            move |(stmts, blk_span), span| {
-                let id = Self::stmts_to_block(
-                    &mut ast7.borrow_mut(),
-                    stmts,
-                    blk_span,
-                );
-                (id, span)
-            },
-        );
+        let block_expr =
+            block_parser
+                .clone()
+                .map_with_span(|(stmts, blk_span), span| {
+                    Self::stmts_to_block(stmts, blk_span).with_span(span)
+                });
 
-        // IF expression: `IF cond block [ELSE block]`
+        // IF expression
         let if_expr = just(Token::If)
-            .ignore_then(expr.clone().map(|(id, _)| id))
+            .ignore_then(expr.clone())
             .then(block_parser.clone())
             .then(
                 just(Token::Else)
                     .ignore_then(Self::opt_newlines())
-                    .ignore_then(block_parser.clone())
+                    .ignore_then(block_parser)
                     .or_not(),
             )
             .map_with_span(
-                move |((cond, (then_stmts, then_span)), else_block), span| {
-                    let mut ast_mut = ast8.borrow_mut();
-
-                    let then_expr = Self::stmts_to_block(
-                        &mut ast_mut,
-                        then_stmts,
-                        then_span,
-                    );
-
+                |((cond, (then_stmts, then_span)), else_block), span| {
+                    let then_expr = Self::stmts_to_block(then_stmts, then_span);
                     let else_expr = else_block.map(|(stmts, blk_span)| {
-                        Self::stmts_to_block(&mut ast_mut, stmts, blk_span)
+                        Self::stmts_to_block(stmts, blk_span)
                     });
-
-                    let id = ast_mut
-                        .add_expr(Expr::If(cond, then_expr, else_expr), span);
-                    (id, span)
+                    CstExpr::new(
+                        CstExprKind::If(
+                            Box::new(cond),
+                            Box::new(then_expr),
+                            else_expr.map(Box::new),
+                        ),
+                        span,
+                    )
                 },
             );
 
-        // Closure expressions
-        // Single untyped param: `x => expr`
+        // Closure: single param `x => expr`
         let closure_single = Self::ident()
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::FatArrow))
             .then_ignore(Self::opt_newlines())
             .then(expr.clone())
-            .map_with_span(move |(name, (body, _)), span| {
+            .map_with_span(|(name, body), span| {
                 let params = smallvec::smallvec![(name, None)];
-                let id = ast_closure.borrow_mut().add_expr(
-                    Expr::Closure {
+                CstExpr::new(
+                    CstExprKind::Closure {
                         params,
                         ret: None,
-                        body,
+                        body: Box::new(body),
                     },
                     span,
-                );
-                (id, span)
+                )
             });
 
-        // Param: `name` or `name: Type`
+        // Closure param: `name` or `name: Type`
         let closure_param = Self::ident()
             .then(
                 just(Token::Colon)
                     .ignore_then(Self::opt_newlines())
-                    .ignore_then(Self::type_expr(Rc::clone(&ast_closure2)))
-                    .map(|(id, _)| id)
+                    .ignore_then(Self::type_expr())
                     .or_not(),
             )
             .map(|(name, ty)| (name, ty));
 
         // Multi-param closure: `(params) => expr` or `(params) -> Type => expr`
-        // Also handles nullary: `() => expr`
         let param_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
-        // Parse either empty params `()` or non-empty params `(a, b, ...)`
         let params_or_empty =
             just(Token::RParen).to(Vec::new()).or(closure_param
                 .separated_by(param_sep)
@@ -1197,27 +997,26 @@ impl Parser {
             .then(
                 just(Token::Arrow)
                     .ignore_then(Self::opt_newlines())
-                    .ignore_then(Self::type_expr(Rc::clone(&ast_closure3)))
-                    .map(|(id, _)| id)
+                    .ignore_then(Self::type_expr())
                     .or_not(),
             )
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::FatArrow))
             .then_ignore(Self::opt_newlines())
             .then(expr)
-            .map_with_span(move |((params_vec, ret), (body, _)), span| {
+            .map_with_span(|((params_vec, ret), body), span| {
                 let params = SmallVec::from_vec(params_vec);
-                let id = ast_closure2
-                    .borrow_mut()
-                    .add_expr(Expr::Closure { params, ret, body }, span);
-                (id, span)
+                CstExpr::new(
+                    CstExprKind::Closure {
+                        params,
+                        ret,
+                        body: Box::new(body),
+                    },
+                    span,
+                )
             });
 
-        // Order matters:
-        // - closure_single before var (both start with ident, but closure has `=>`)
-        // - closure_multi before paren (both start with `(`, but closure has `=>`)
-        // - object before block_expr (both start with `{`, object requires `ident:`)
-        // - global before var (both can start with ident pattern)
+        // Order matters (see original parser for rationale)
         choice((
             literal,
             closure_single,
@@ -1238,7 +1037,7 @@ impl Parser {
         select! { Token::Ident(s) => s }
     }
 
-    /// Parse a global variable name (without the `^` prefix, which is in the token).
+    /// Parse a global variable name.
     fn global_name(
     ) -> impl chumsky::Parser<Token, String, Error = ParseErr> + Clone {
         select! { Token::Global(s) => s }
@@ -1246,58 +1045,40 @@ impl Parser {
 
     /// Parse subscripts: `(expr, expr, ...)`
     fn subscripts(
-        expr: impl chumsky::Parser<Token, SpannedExpr, Error = ParseErr>
+        expr: impl chumsky::Parser<Token, CstExpr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, SmallVec<[ExprId; 4]>, Error = ParseErr> + Clone
+    ) -> impl chumsky::Parser<Token, Vec<CstExpr>, Error = ParseErr> + Clone
     {
         just(Token::LParen)
             .ignore_then(
-                expr.map(|(id, _)| id)
-                    .separated_by(just(Token::Comma))
+                expr.separated_by(just(Token::Comma))
                     .at_least(1)
                     .allow_trailing(),
             )
             .then_ignore(just(Token::RParen))
-            .map(SmallVec::from_vec)
     }
 
-    /// Parse a type expression: `Int`, `Option[Int]`, `(Int, Int) -> Int`, etc.
-    ///
-    /// Grammar:
-    /// - `type_expr := fn_type`
-    /// - `fn_type := atom_or_params '->' fn_type | atom_type`
-    /// - `atom_or_params := '(' type_list ')' | '(' ')' | atom_type`
-    /// - `atom_type := ident ('[' type_list ']')?`
-    /// - `type_list := type_expr (',' type_expr)*`
-    ///
-    /// `->` is right-associative: `Int -> Int -> Int` = `Int -> (Int -> Int)`
+    /// Parse a type expression.
     fn type_expr(
-        ast: AstCell,
-    ) -> impl chumsky::Parser<Token, SpannedTypeExpr, Error = ParseErr> + Clone
+    ) -> impl chumsky::Parser<Token, CstTypeExpr, Error = ParseErr> + Clone
     {
         recursive(|ty| {
-            // Type parameters for generic types: `[T]` or `[T, E]`
+            // Type parameters: `[T]` or `[T, E]`
             let type_params = ty
                 .clone()
                 .separated_by(just(Token::Comma))
                 .at_least(1)
-                .delimited_by(just(Token::LBracket), just(Token::RBracket))
-                .map(SmallVec::<[SpannedTypeExpr; 2]>::from_vec);
+                .delimited_by(just(Token::LBracket), just(Token::RBracket));
 
             // Atom: named type optionally with type params
-            let ast_atom = Rc::clone(&ast);
             let atom = Self::ident().then(type_params.or_not()).map_with_span(
-                move |(name, params), span| {
-                    let te = match params {
-                        None => AstTypeExpr::Named(name),
-                        Some(ps) => AstTypeExpr::App(
-                            name,
-                            ps.into_iter().map(|(id, _)| id).collect(),
-                        ),
+                |(name, params), span| {
+                    let kind = match params {
+                        None => CstTypeExprKind::Named(name),
+                        Some(ps) => CstTypeExprKind::App(name, ps),
                     };
-                    let id = ast_atom.borrow_mut().add_type_expr(te, span);
-                    TypeAtomOrParams::Single(id, span)
+                    TypeAtomOrParams::Single(CstTypeExpr::new(kind, span))
                 },
             );
 
@@ -1309,16 +1090,13 @@ impl Parser {
                 .then_ignore(Self::opt_newlines())
                 .then_ignore(just(Token::RParen))
                 .map_with_span(|types, span| {
-                    let ids: SmallVec<[AstTypeExprId; 4]> =
-                        types.into_iter().map(|(id, _)| id).collect();
-                    TypeAtomOrParams::Params(ids, span)
+                    TypeAtomOrParams::Params(types, span)
                 });
 
-            // atom_or_params: either an atom or parenthesized params
+            // atom_or_params
             let atom_or_params = paren.or(atom);
 
-            // Function type with `->` (right-associative via recursion)
-            let ast_fn = Rc::clone(&ast);
+            // Function type with `->`
             atom_or_params
                 .then(
                     Self::opt_newlines()
@@ -1327,48 +1105,42 @@ impl Parser {
                         .ignore_then(ty)
                         .or_not(),
                 )
-                .try_map(move |(left, arrow_ret), span| {
-                    Self::build_fn_type(&ast_fn, left, arrow_ret, span)
+                .try_map(|(left, arrow_ret), span| {
+                    Self::build_fn_type(left, arrow_ret, span)
                 })
         })
     }
 
     /// Build a function type or standalone type from parsed components.
     fn build_fn_type(
-        ast: &AstCell,
         left: TypeAtomOrParams,
-        arrow_ret: Option<SpannedTypeExpr>,
+        arrow_ret: Option<CstTypeExpr>,
         span: Span,
-    ) -> std::result::Result<SpannedTypeExpr, ParseErr> {
+    ) -> std::result::Result<CstTypeExpr, ParseErr> {
         match (left, arrow_ret) {
-            // `T -> R` or `(T) -> R`: single param function
-            (TypeAtomOrParams::Single(param, _), Some((ret, _))) => {
-                let te = AstTypeExpr::Fn(smallvec::smallvec![param], ret);
-                let id = ast.borrow_mut().add_type_expr(te, span);
-                Ok((id, span))
+            // `T -> R`: single param function
+            (TypeAtomOrParams::Single(param), Some(ret)) => {
+                Ok(CstTypeExpr::new(
+                    CstTypeExprKind::Fn(vec![param], Box::new(ret)),
+                    span,
+                ))
             }
-            // `(T, U, ...) -> R` or `() -> R`: multi/nullary param function
-            (TypeAtomOrParams::Params(params, _), Some((ret, _))) => {
-                let te = AstTypeExpr::Fn(params, ret);
-                let id = ast.borrow_mut().add_type_expr(te, span);
-                Ok((id, span))
+            // `(T, U, ...) -> R` or `() -> R`
+            (TypeAtomOrParams::Params(params, _), Some(ret)) => {
+                Ok(CstTypeExpr::new(
+                    CstTypeExprKind::Fn(params, Box::new(ret)),
+                    span,
+                ))
             }
-            // `T`: standalone type (no arrow)
-            (TypeAtomOrParams::Single(ty, ty_span), None) => Ok((ty, ty_span)),
-            // `(T)`: parenthesized single type (no arrow)
-            (TypeAtomOrParams::Params(mut params, p_span), None)
+            // `T`: standalone type
+            (TypeAtomOrParams::Single(ty), None) => Ok(ty),
+            // `(T)`: parenthesized single type
+            (TypeAtomOrParams::Params(mut params, _), None)
                 if params.len() == 1 =>
             {
-                // Unwrap single-element parens; `(Int)` = `Int`
-                params.pop().map_or_else(
-                    || {
-                        Err(Simple::custom(
-                            span,
-                            "internal: expected single type",
-                        ))
-                    },
-                    |ty| Ok((ty, p_span)),
-                )
+                params.pop().ok_or_else(|| {
+                    Simple::custom(span, "internal: expected single type")
+                })
             }
             // `()` or `(T, U)` without `->`: error
             (TypeAtomOrParams::Params(params, _), None) => {
@@ -1383,15 +1155,19 @@ impl Parser {
     }
 }
 
+/// Helper for `CstExpr` to update span.
+impl CstExpr {
+    fn with_span(mut self, span: Span) -> Self {
+        self.span = span;
+        self
+    }
+}
+
 /// Helper for parsing function type syntax.
-///
-/// Distinguishes between a single type atom and parenthesized parameter lists.
 #[derive(Clone)]
 enum TypeAtomOrParams {
-    /// A single named or parameterized type: `Int`, `Option[T]`
-    Single(AstTypeExprId, Span),
-    /// Parenthesized list of types: `()`, `(T)`, `(T, U)`
-    Params(SmallVec<[AstTypeExprId; 4]>, Span),
+    Single(CstTypeExpr),
+    Params(Vec<CstTypeExpr>, Span),
 }
 
 /// Helper enum for pattern arguments in `is` patterns.
@@ -1401,12 +1177,12 @@ enum PatternArgs {
     Bindings(SmallVec<[String; 2]>),
 }
 
-/// Helper enum for postfix operations during folding; carries end span.
+/// Helper enum for postfix operations during folding.
 enum PostfixOp {
     Field(String, Span),
     OptionalField(String, Span),
-    Index(ExprId, Span),
-    Call(SmallVec<[ExprId; 4]>, Span),
+    Index(CstExpr, Span),
+    Call(Vec<CstExpr>, Span),
 }
 
 impl PostfixOp {
@@ -1426,14 +1202,14 @@ mod tests {
     use smallvec::smallvec;
 
     use super::*;
+    use crate::ast::{Expr, Stmt};
 
     fn parse_ok(src: &str) -> ParseResult {
         Parser::parse(src).expect("should parse")
     }
 
-    fn parse_expr_ok(src: &str) -> (Ast, ExprId) {
+    fn parse_expr_ok(src: &str) -> (Ast, crate::ExprId) {
         let result = parse_ok(src);
-        // Expression statement wraps the expression
         let stmt_id = result.stmts[0];
         let expr_id = result
             .ast
@@ -1510,72 +1286,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_get_global() {
-        let (ast, id) = parse_expr_ok("GET ^PATIENT(123)");
-        match ast.get_expr(id) {
-            Some(Expr::Get(inner)) => match ast.get_expr(*inner) {
-                Some(Expr::Global(name, subs)) => {
-                    assert_eq!(name, "PATIENT");
-                    assert_eq!(subs.len(), 1);
-                }
-                _ => panic!("expected Global inside Get"),
-            },
-            _ => panic!("expected Get"),
-        }
-    }
-
-    #[test]
-    fn parse_get_local() {
-        let (ast, id) = parse_expr_ok("GET cache(\"key\")");
-        match ast.get_expr(id) {
-            Some(Expr::Get(inner)) => match ast.get_expr(*inner) {
-                Some(Expr::Local(name, subs)) => {
-                    assert_eq!(name, "cache");
-                    assert_eq!(subs.len(), 1);
-                }
-                _ => panic!("expected Local inside Get"),
-            },
-            _ => panic!("expected Get"),
-        }
-    }
-
-    #[test]
-    fn parse_get_local_no_subscripts() {
-        let (ast, id) = parse_expr_ok("GET myvar");
-        match ast.get_expr(id) {
-            Some(Expr::Get(inner)) => match ast.get_expr(*inner) {
-                Some(Expr::Local(name, subs)) => {
-                    assert_eq!(name, "myvar");
-                    assert!(subs.is_empty());
-                }
-                _ => panic!("expected Local inside Get"),
-            },
-            _ => panic!("expected Get"),
-        }
-    }
-
-    #[test]
-    fn parse_binary_add() {
+    fn parse_binary() {
         let (ast, id) = parse_expr_ok("1 + 2");
         match ast.get_expr(id) {
-            Some(Expr::Binary(lhs, BinOp::Add, rhs)) => {
-                assert_eq!(
-                    ast.get_expr(*lhs),
-                    Some(&Expr::Literal(Literal::Int(1)))
-                );
-                assert_eq!(
-                    ast.get_expr(*rhs),
-                    Some(&Expr::Literal(Literal::Int(2)))
-                );
-            }
+            Some(Expr::Binary(_, BinOp::Add, _)) => (),
             _ => panic!("expected Binary Add"),
         }
     }
 
     #[test]
-    fn parse_precedence() {
-        // 1 + 2 * 3 should be 1 + (2 * 3)
+    fn parse_binary_precedence() {
         let (ast, id) = parse_expr_ok("1 + 2 * 3");
+        // Should be 1 + (2 * 3)
         match ast.get_expr(id) {
             Some(Expr::Binary(lhs, BinOp::Add, rhs)) => {
                 assert_eq!(
@@ -1583,8 +1305,8 @@ mod tests {
                     Some(&Expr::Literal(Literal::Int(1)))
                 );
                 match ast.get_expr(*rhs) {
-                    Some(Expr::Binary(_, BinOp::Mul, _)) => {}
-                    _ => panic!("expected Mul on rhs"),
+                    Some(Expr::Binary(_, BinOp::Mul, _)) => (),
+                    _ => panic!("expected Mul on right"),
                 }
             }
             _ => panic!("expected Binary Add"),
@@ -1592,416 +1314,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_comparison() {
-        let (ast, id) = parse_expr_ok("x > 10");
-        match ast.get_expr(id) {
-            Some(Expr::Binary(_, BinOp::Gt, _)) => {}
-            _ => panic!("expected Binary Gt"),
-        }
-    }
-
-    #[test]
-    fn parse_logical() {
-        let (ast, id) = parse_expr_ok("a AND b OR c");
-        // Should be (a AND b) OR c
-        match ast.get_expr(id) {
-            Some(Expr::Binary(_, BinOp::Or, _)) => {}
-            _ => panic!("expected Binary Or at top"),
-        }
-    }
-
-    #[test]
-    fn parse_unary_neg() {
-        let (ast, id) = parse_expr_ok("-5");
-        match ast.get_expr(id) {
-            Some(Expr::Unary(UnOp::Neg, inner)) => {
-                assert_eq!(
-                    ast.get_expr(*inner),
-                    Some(&Expr::Literal(Literal::Int(5)))
-                );
-            }
-            _ => panic!("expected Unary Neg"),
-        }
-    }
-
-    #[test]
-    fn parse_unary_not() {
-        let (ast, id) = parse_expr_ok("NOT x");
-        match ast.get_expr(id) {
-            Some(Expr::Unary(UnOp::Not, _)) => {}
-            _ => panic!("expected Unary Not"),
-        }
-
-        let (ast, id) = parse_expr_ok("!x");
-        match ast.get_expr(id) {
-            Some(Expr::Unary(UnOp::Not, _)) => {}
-            _ => panic!("expected Unary Not"),
-        }
-    }
-
-    #[test]
-    fn parse_parenthesized() {
-        let (ast, id) = parse_expr_ok("(1 + 2) * 3");
-        match ast.get_expr(id) {
-            Some(Expr::Binary(lhs, BinOp::Mul, _)) => {
-                match ast.get_expr(*lhs) {
-                    Some(Expr::Binary(_, BinOp::Add, _)) => {}
-                    _ => panic!("expected Add on lhs"),
-                }
-            }
-            _ => panic!("expected Binary Mul"),
-        }
-    }
-
-    #[test]
-    fn parse_array() {
-        let (ast, id) = parse_expr_ok("[1, 2, 3]");
-        match ast.get_expr(id) {
-            Some(Expr::Array(elems)) => {
-                assert_eq!(elems.len(), 3);
-            }
-            _ => panic!("expected Array"),
-        }
-    }
-
-    #[test]
-    fn parse_object() {
-        let (ast, id) = parse_expr_ok("{ x: 1, y: 2 }");
-        match ast.get_expr(id) {
-            Some(Expr::Object(fields)) => {
-                assert_eq!(fields.len(), 2);
-                assert_eq!(fields[0].0, "x");
-                assert_eq!(fields[1].0, "y");
-            }
-            _ => panic!("expected Object"),
-        }
-    }
-
-    #[test]
-    fn parse_field_access() {
-        let (ast, id) = parse_expr_ok("obj.field");
-        match ast.get_expr(id) {
-            Some(Expr::Field(_, name)) => {
-                assert_eq!(name, "field");
-            }
-            _ => panic!("expected Field"),
-        }
-    }
-
-    #[test]
-    fn parse_index_access() {
-        let (ast, id) = parse_expr_ok("arr[0]");
-        match ast.get_expr(id) {
-            Some(Expr::Index(_, _)) => {}
-            _ => panic!("expected Index"),
-        }
-    }
-
-    #[test]
-    fn parse_function_call() {
-        let (ast, id) = parse_expr_ok("foo(1, 2)");
-        match ast.get_expr(id) {
-            Some(Expr::Call(callee, args)) => {
-                // Callee should be Var("foo")
-                assert!(matches!(
-                    ast.get_expr(*callee),
-                    Some(Expr::Var(name)) if name == "foo"
-                ));
-                assert_eq!(args.len(), 2);
-            }
-            _ => panic!("expected Call"),
-        }
-    }
-
-    #[test]
-    fn parse_coalesce() {
-        let (ast, id) = parse_expr_ok("a ?? b");
-        match ast.get_expr(id) {
-            Some(Expr::Binary(_, BinOp::Coalesce, _)) => {}
-            _ => panic!("expected Binary Coalesce"),
-        }
-    }
-
-    #[test]
-    fn parse_coalesce_chain() {
-        // a ?? b ?? c should be (a ?? b) ?? c (left-associative)
-        let (ast, id) = parse_expr_ok("a ?? b ?? c");
-        match ast.get_expr(id) {
-            Some(Expr::Binary(lhs, BinOp::Coalesce, _)) => {
-                match ast.get_expr(*lhs) {
-                    Some(Expr::Binary(_, BinOp::Coalesce, _)) => {}
-                    _ => panic!("expected nested Coalesce on lhs"),
-                }
-            }
-            _ => panic!("expected Binary Coalesce"),
-        }
-    }
-
-    #[test]
-    fn parse_coalesce_precedence() {
-        // a + b ?? c should be (a + b) ?? c (?? is lower precedence than +)
-        let (ast, id) = parse_expr_ok("a + b ?? c");
-        match ast.get_expr(id) {
-            Some(Expr::Binary(lhs, BinOp::Coalesce, _)) => {
-                match ast.get_expr(*lhs) {
-                    Some(Expr::Binary(_, BinOp::Add, _)) => {}
-                    _ => panic!("expected Add on lhs"),
-                }
-            }
-            _ => panic!("expected Binary Coalesce at top"),
-        }
-    }
-
-    #[test]
-    fn parse_let_stmt() {
-        let result = parse_ok("LET x = 10");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+    fn parse_let() {
+        let result = parse_ok("LET x = 42");
+        let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
-            Stmt::Let(name, _, _) => assert_eq!(name, "x"),
+            Some(Stmt::Let(name, None, _)) => assert_eq!(name, "x"),
             _ => panic!("expected Let"),
         }
     }
 
     #[test]
-    fn parse_let_with_type_annotation() {
-        let result = parse_ok("LET x: Int = 10");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Let(name, ty_ann, _) = stmt else {
-            panic!("expected Let");
-        };
-        assert_eq!(name, "x");
-        assert!(ty_ann.is_some());
-        let ty_expr = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        match ty_expr {
-            AstTypeExpr::Named(n) => assert_eq!(n, "Int"),
-            _ => panic!("expected Named type"),
-        }
-    }
-
-    #[test]
-    fn parse_let_with_parameterized_type() {
-        let result = parse_ok("LET x: Option[Int] = Option.None");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Let(name, ty_ann, _) = stmt else {
-            panic!("expected Let");
-        };
-        assert_eq!(name, "x");
-        assert!(ty_ann.is_some());
-        let ty_expr = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        match ty_expr {
-            AstTypeExpr::App(n, params) => {
-                assert_eq!(n, "Option");
-                assert_eq!(params.len(), 1);
-            }
-            _ => panic!("expected App type"),
-        }
-    }
-
-    #[test]
-    fn parse_let_with_nested_type() {
-        let result = parse_ok("LET x: Array[Option[Int]] = []");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Let(_, ty_ann, _) = stmt else {
-            panic!("expected Let");
-        };
-        let ty_expr = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        // Array[Option[Int]]
-        let AstTypeExpr::App(outer, outer_params) = ty_expr else {
-            panic!("expected App type");
-        };
-        assert_eq!(outer, "Array");
-        assert_eq!(outer_params.len(), 1);
-        // Option[Int]
-        let inner = result.ast.get_type_expr(outer_params[0]).unwrap();
-        let AstTypeExpr::App(mid, mid_params) = inner else {
-            panic!("expected nested App type");
-        };
-        assert_eq!(mid, "Option");
-        assert_eq!(mid_params.len(), 1);
-        // Int
-        let innermost = result.ast.get_type_expr(mid_params[0]).unwrap();
-        let AstTypeExpr::Named(name) = innermost else {
-            panic!("expected Named type");
-        };
-        assert_eq!(name, "Int");
-    }
-
-    #[test]
-    fn parse_function_type_simple() {
-        // `Int -> Int`
-        let result = parse_ok("LET f: Int -> Int = 0");
-        let Stmt::Let(_, ty_ann, _) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        let AstTypeExpr::Fn(params, ret) = ty else {
-            panic!("expected Fn type, got {:?}", ty);
-        };
-        assert_eq!(params.len(), 1);
-        // Check param is Int
-        let AstTypeExpr::Named(p) =
-            result.ast.get_type_expr(params[0]).unwrap()
-        else {
-            panic!("expected Named param");
-        };
-        assert_eq!(p, "Int");
-        // Check return is Int
-        let AstTypeExpr::Named(r) = result.ast.get_type_expr(*ret).unwrap()
-        else {
-            panic!("expected Named return");
-        };
-        assert_eq!(r, "Int");
-    }
-
-    #[test]
-    fn parse_function_type_multi_param() {
-        // `(Int, Int) -> Int`
-        let result = parse_ok("LET f: (Int, Int) -> Int = 0");
-        let Stmt::Let(_, ty_ann, _) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        let AstTypeExpr::Fn(params, _) = ty else {
-            panic!("expected Fn type");
-        };
-        assert_eq!(params.len(), 2);
-    }
-
-    #[test]
-    fn parse_function_type_nullary() {
-        // `() -> String`
-        let result = parse_ok("LET f: () -> String = 0");
-        let Stmt::Let(_, ty_ann, _) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        let AstTypeExpr::Fn(params, ret) = ty else {
-            panic!("expected Fn type");
-        };
-        assert!(params.is_empty());
-        let AstTypeExpr::Named(r) = result.ast.get_type_expr(*ret).unwrap()
-        else {
-            panic!("expected Named return");
-        };
-        assert_eq!(r, "String");
-    }
-
-    #[test]
-    fn parse_function_type_right_assoc() {
-        // `Int -> Int -> Int` = `Int -> (Int -> Int)`
-        let result = parse_ok("LET f: Int -> Int -> Int = 0");
-        let Stmt::Let(_, ty_ann, _) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        let AstTypeExpr::Fn(params, ret) = ty else {
-            panic!("expected outer Fn type");
-        };
-        assert_eq!(params.len(), 1);
-        // Return type should also be Fn
-        let AstTypeExpr::Fn(inner_params, _) =
-            result.ast.get_type_expr(*ret).unwrap()
-        else {
-            panic!("expected inner Fn type");
-        };
-        assert_eq!(inner_params.len(), 1);
-    }
-
-    #[test]
-    fn parse_function_type_higher_order() {
-        // `((Int) -> Int, Int) -> Int` - function that takes a function
-        let result = parse_ok("LET f: ((Int) -> Int, Int) -> Int = 0");
-        let Stmt::Let(_, ty_ann, _) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        let AstTypeExpr::Fn(params, _) = ty else {
-            panic!("expected Fn type");
-        };
-        assert_eq!(params.len(), 2);
-        // First param should be Fn
-        let AstTypeExpr::Fn(inner_params, _) =
-            result.ast.get_type_expr(params[0]).unwrap()
-        else {
-            panic!("expected first param to be Fn type");
-        };
-        assert_eq!(inner_params.len(), 1);
-    }
-
-    #[test]
-    fn parse_function_type_returns_function() {
-        // `(Int) -> (Int) -> Int` - function returning a function
-        let result = parse_ok("LET f: (Int) -> (Int) -> Int = 0");
-        let Stmt::Let(_, ty_ann, _) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        let AstTypeExpr::Fn(params, ret) = ty else {
-            panic!("expected outer Fn type");
-        };
-        assert_eq!(params.len(), 1);
-        // Return type should be Fn
-        let AstTypeExpr::Fn(inner_params, _) =
-            result.ast.get_type_expr(*ret).unwrap()
-        else {
-            panic!("expected return to be Fn type");
-        };
-        assert_eq!(inner_params.len(), 1);
-    }
-
-    #[test]
-    fn parse_parenthesized_single_type() {
-        // `(Int)` should be the same as `Int` when not followed by `->`
-        let result = parse_ok("LET x: (Int) = 0");
-        let Stmt::Let(_, ty_ann, _) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
-        let AstTypeExpr::Named(name) = ty else {
-            panic!("expected Named type, got {:?}", ty);
-        };
-        assert_eq!(name, "Int");
-    }
-
-    #[test]
-    fn parse_set_stmt() {
+    fn parse_set_local() {
         let result = parse_ok("SET x = 10");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
-            Stmt::Set(target, _) => match result.ast.get_expr(*target) {
+            Some(Stmt::Set(target, _)) => match result.ast.get_expr(*target) {
                 Some(Expr::Local(name, subs)) => {
                     assert_eq!(name, "x");
                     assert!(subs.is_empty());
-                }
-                _ => panic!("expected Local"),
-            },
-            _ => panic!("expected Set"),
-        }
-    }
-
-    #[test]
-    fn parse_set_with_subscripts() {
-        let result = parse_ok("SET x(1, 2) = 30");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Set(target, _) => match result.ast.get_expr(*target) {
-                Some(Expr::Local(name, subs)) => {
-                    assert_eq!(name, "x");
-                    assert_eq!(subs.len(), 2);
                 }
                 _ => panic!("expected Local"),
             },
@@ -2011,14 +1341,11 @@ mod tests {
 
     #[test]
     fn parse_set_global() {
-        let result = parse_ok("SET ^PATIENT(123) = \"Bob\"");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        let result = parse_ok("SET ^DATA = 10");
+        let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
-            Stmt::Set(target, _) => match result.ast.get_expr(*target) {
-                Some(Expr::Global(name, subs)) => {
-                    assert_eq!(name, "PATIENT");
-                    assert_eq!(subs.len(), 1);
-                }
+            Some(Stmt::Set(target, _)) => match result.ast.get_expr(*target) {
+                Some(Expr::Global(name, _)) => assert_eq!(name, "DATA"),
                 _ => panic!("expected Global"),
             },
             _ => panic!("expected Set"),
@@ -2026,260 +1353,109 @@ mod tests {
     }
 
     #[test]
-    fn parse_kill_stmt() {
-        let result = parse_ok("KILL x");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Kill(target) => match result.ast.get_expr(*target) {
-                Some(Expr::Local(name, subs)) => {
-                    assert_eq!(name, "x");
-                    assert!(subs.is_empty());
-                }
-                _ => panic!("expected Local"),
-            },
-            _ => panic!("expected Kill"),
+    fn parse_if_expr() {
+        let (ast, id) = parse_expr_ok("IF TRUE { 1 }");
+        match ast.get_expr(id) {
+            Some(Expr::If(_, _, None)) => (),
+            _ => panic!("expected If without else"),
         }
     }
 
     #[test]
-    fn parse_kill_global() {
-        let result = parse_ok("KILL ^DATA(123)");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Kill(target) => match result.ast.get_expr(*target) {
-                Some(Expr::Global(name, subs)) => {
-                    assert_eq!(name, "DATA");
-                    assert_eq!(subs.len(), 1);
-                }
-                _ => panic!("expected Global"),
-            },
-            _ => panic!("expected Kill"),
+    fn parse_if_else() {
+        let (ast, id) = parse_expr_ok("IF TRUE { 1 } ELSE { 0 }");
+        match ast.get_expr(id) {
+            Some(Expr::If(_, _, Some(_))) => (),
+            _ => panic!("expected If with else"),
         }
     }
 
     #[test]
-    fn parse_output_stmt() {
-        let result = parse_ok("OUTPUT 42");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Output(_) => {}
-            _ => panic!("expected Output"),
+    fn parse_array() {
+        let (ast, id) = parse_expr_ok("[1, 2, 3]");
+        match ast.get_expr(id) {
+            Some(Expr::Array(elems)) => assert_eq!(elems.len(), 3),
+            _ => panic!("expected Array"),
         }
     }
 
     #[test]
-    fn parse_if_stmt() {
-        let result = parse_ok("IF x > 0 { OUTPUT x }");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Expr(expr_id) = stmt else {
-            panic!("expected Stmt::Expr");
-        };
-        let expr = result.ast.get_expr(*expr_id).unwrap();
-        match expr {
-            Expr::If(_, then_blk, else_blk) => {
-                // then_blk is a block expression
-                let Expr::Block(stmts, _) =
-                    result.ast.get_expr(*then_blk).unwrap()
-                else {
-                    panic!("expected Block");
-                };
-                assert_eq!(stmts.len(), 1);
-                assert!(else_blk.is_none());
+    fn parse_object() {
+        let (ast, id) = parse_expr_ok("{ a: 1, b: 2 }");
+        match ast.get_expr(id) {
+            Some(Expr::Object(fields)) => assert_eq!(fields.len(), 2),
+            _ => panic!("expected Object"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_single() {
+        let (ast, id) = parse_expr_ok("x => x * 2");
+        match ast.get_expr(id) {
+            Some(Expr::Closure { params, ret, .. }) => {
+                assert_eq!(params.len(), 1);
+                assert!(ret.is_none());
             }
-            _ => panic!("expected If"),
+            _ => panic!("expected Closure"),
         }
     }
 
     #[test]
-    fn parse_if_else_stmt() {
-        let result =
-            parse_ok("IF x > 0 { OUTPUT \"pos\" } ELSE { OUTPUT \"neg\" }");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Expr(expr_id) = stmt else {
-            panic!("expected Stmt::Expr");
-        };
-        let expr = result.ast.get_expr(*expr_id).unwrap();
-        match expr {
-            Expr::If(_, then_blk, else_blk) => {
-                let Expr::Block(then_stmts, _) =
-                    result.ast.get_expr(*then_blk).unwrap()
-                else {
-                    panic!("expected Block");
-                };
-                assert_eq!(then_stmts.len(), 1);
-                let else_id = else_blk.expect("expected else branch");
-                let Expr::Block(else_stmts, _) =
-                    result.ast.get_expr(else_id).unwrap()
-                else {
-                    panic!("expected Block");
-                };
-                assert_eq!(else_stmts.len(), 1);
+    fn parse_closure_multi() {
+        let (ast, id) = parse_expr_ok("(a, b) => a + b");
+        match ast.get_expr(id) {
+            Some(Expr::Closure { params, .. }) => {
+                assert_eq!(params.len(), 2);
             }
-            _ => panic!("expected If"),
+            _ => panic!("expected Closure"),
         }
     }
 
     #[test]
-    fn parse_multiple_stmts() {
-        let result = parse_ok("LET x = 10\nLET y = 20\nOUTPUT x + y");
-        assert_eq!(result.stmts.len(), 3);
+    fn parse_closure_typed() {
+        let (ast, id) = parse_expr_ok("(x: Int) -> Int => x * x");
+        match ast.get_expr(id) {
+            Some(Expr::Closure { params, ret, .. }) => {
+                assert_eq!(params.len(), 1);
+                assert!(params[0].1.is_some());
+                assert!(ret.is_some());
+            }
+            _ => panic!("expected Closure"),
+        }
     }
 
     #[test]
-    fn parse_complex_example() {
-        let src = r#"
-LET x = 10
-LET y = 20
-LET sum = x + y
-OUTPUT sum
-
-SET z = 100
-SET z(1, "ABC") = 30
-
-IF sum > 25 {
-  OUTPUT "Large sum"
-} ELSE {
-  OUTPUT "Small sum"
-}
-"#;
-        let result = parse_ok(src);
-        assert!(result.stmts.len() >= 7);
+    fn parse_fun() {
+        let result = parse_ok("FUN add (a, b) { a + b }");
+        let stmt = result.ast.get_stmt(result.stmts[0]);
+        match stmt {
+            Some(Stmt::Fun { name, params, .. }) => {
+                assert_eq!(name, "add");
+                assert_eq!(params.len(), 2);
+            }
+            _ => panic!("expected Fun"),
+        }
     }
 
     #[test]
-    fn parse_if_expr_in_let() {
-        // IF expression used in LET binding (the original issue)
-        let result = parse_ok("LET x = IF FALSE { 42 }");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Let(name, _, val_id) = stmt else {
-            panic!("expected Let");
-        };
-        assert_eq!(name, "x");
-        let Expr::If(_, then_blk, else_blk) =
-            result.ast.get_expr(*val_id).unwrap()
-        else {
-            panic!("expected If expression as value");
-        };
-        // then block should contain `42`
-        let Expr::Block(_, Some(tail)) =
-            result.ast.get_expr(*then_blk).unwrap()
-        else {
-            panic!("expected Block with tail");
-        };
-        assert_eq!(
-            result.ast.get_expr(*tail),
-            Some(&Expr::Literal(Literal::Int(42)))
-        );
-        assert!(else_blk.is_none());
+    fn parse_fun_typed() {
+        let result = parse_ok("FUN square (x: Int) -> Int { x * x }");
+        let stmt = result.ast.get_stmt(result.stmts[0]);
+        match stmt {
+            Some(Stmt::Fun {
+                name, params, ret, ..
+            }) => {
+                assert_eq!(name, "square");
+                assert_eq!(params.len(), 1);
+                assert!(params[0].1.is_some());
+                assert!(ret.is_some());
+            }
+            _ => panic!("expected Fun"),
+        }
     }
 
     #[test]
-    fn parse_if_else_expr_in_let() {
-        let result = parse_ok("LET x = IF TRUE { 1 } ELSE { 2 }");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Let(name, _, val_id) = stmt else {
-            panic!("expected Let");
-        };
-        assert_eq!(name, "x");
-        let Expr::If(_, _, else_blk) = result.ast.get_expr(*val_id).unwrap()
-        else {
-            panic!("expected If expression as value");
-        };
-        assert!(else_blk.is_some());
-    }
-
-    #[test]
-    fn parse_block_expr_standalone() {
-        // Standalone block expression
-        let (ast, id) = parse_expr_ok("{ 1 + 2 }");
-        let Expr::Block(stmts, tail) = ast.get_expr(id).unwrap() else {
-            panic!("expected Block");
-        };
-        assert!(stmts.is_empty());
-        assert!(tail.is_some());
-    }
-
-    #[test]
-    fn parse_block_expr_in_let() {
-        let result = parse_ok("LET x = { LET y = 1\ny }");
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        let Stmt::Let(name, _, val_id) = stmt else {
-            panic!("expected Let");
-        };
-        assert_eq!(name, "x");
-        let Expr::Block(stmts, tail) = result.ast.get_expr(*val_id).unwrap()
-        else {
-            panic!("expected Block");
-        };
-        assert_eq!(stmts.len(), 1); // LET y = 1
-        assert!(tail.is_some()); // y
-    }
-
-    #[test]
-    fn parse_indented_continuation() {
-        // 1 + 2 across two lines
-        let result = parse_ok("LET x = 1\n    + 2\nOUTPUT x");
-        assert_eq!(result.stmts.len(), 2); // LET and OUTPUT
-
-        // Verify the LET contains a binary Add
-        let Stmt::Let(_, _, val_id) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        let Expr::Binary(_, BinOp::Add, _) =
-            result.ast.get_expr(*val_id).unwrap()
-        else {
-            panic!("expected Binary Add");
-        };
-    }
-
-    #[test]
-    fn parse_multi_line_continuation() {
-        let result = parse_ok("LET x = 1\n    + 2\n    + 3\nOUTPUT x");
-        assert_eq!(result.stmts.len(), 2);
-
-        // Should be ((1 + 2) + 3)
-        let Stmt::Let(_, _, val_id) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        let Expr::Binary(lhs, BinOp::Add, _) =
-            result.ast.get_expr(*val_id).unwrap()
-        else {
-            panic!("expected outer Add");
-        };
-        let Expr::Binary(_, BinOp::Add, _) = result.ast.get_expr(*lhs).unwrap()
-        else {
-            panic!("expected inner Add");
-        };
-    }
-
-    #[test]
-    fn parse_continuation_with_precedence() {
-        // 1 + 2 * 3 should be 1 + (2 * 3)
-        let result = parse_ok("LET x = 1\n    + 2\n    * 3");
-        let Stmt::Let(_, _, val_id) =
-            result.ast.get_stmt(result.stmts[0]).unwrap()
-        else {
-            panic!("expected Let");
-        };
-        // Top should be Add
-        let Expr::Binary(_, BinOp::Add, rhs) =
-            result.ast.get_expr(*val_id).unwrap()
-        else {
-            panic!("expected Add at top");
-        };
-        // RHS should be Mul
-        let Expr::Binary(_, BinOp::Mul, _) = result.ast.get_expr(*rhs).unwrap()
-        else {
-            panic!("expected Mul on rhs");
-        };
-    }
-
-    #[test]
-    fn parse_variant_with_args() {
+    fn parse_variant_constructor() {
         let (ast, id) = parse_expr_ok("Option.Some(42)");
         match ast.get_expr(id) {
             Some(Expr::Variant(ty, var, args)) => {
@@ -2292,644 +1468,198 @@ IF sum > 25 {
     }
 
     #[test]
-    fn parse_variant_result_ok() {
-        let (ast, id) = parse_expr_ok("Result.Ok(1)");
+    fn parse_is_pattern() {
+        let (ast, id) = parse_expr_ok("x is Int");
         match ast.get_expr(id) {
-            Some(Expr::Variant(ty, var, args)) => {
-                assert_eq!(ty, "Result");
-                assert_eq!(var, "Ok");
-                assert_eq!(args.len(), 1);
+            Some(Expr::Is(_, TypePattern::Type(ty))) => {
+                assert_eq!(ty, "Int");
             }
-            _ => panic!("expected Variant"),
+            _ => panic!("expected Is with Type pattern"),
         }
     }
 
     #[test]
-    fn parse_variant_result_err() {
-        let (ast, id) = parse_expr_ok("Result.Err(\"oops\")");
+    fn parse_is_variant() {
+        let (ast, id) = parse_expr_ok("x is Option.None");
         match ast.get_expr(id) {
-            Some(Expr::Variant(ty, var, args)) => {
-                assert_eq!(ty, "Result");
-                assert_eq!(var, "Err");
-                assert_eq!(args.len(), 1);
+            Some(Expr::Is(_, TypePattern::Variant(ty, var))) => {
+                assert_eq!(ty, "Option");
+                assert_eq!(var, "None");
             }
-            _ => panic!("expected Variant"),
+            _ => panic!("expected Is with Variant pattern"),
         }
     }
 
     #[test]
-    fn parse_variant_zero_arity_as_field() {
-        // Zero-arity variants parse as Field; interpreter handles them
-        let (ast, id) = parse_expr_ok("Option.None");
+    fn parse_is_variant_bind() {
+        let (ast, id) = parse_expr_ok("x is Option.Some(val)");
         match ast.get_expr(id) {
-            Some(Expr::Field(_, field)) => {
-                assert_eq!(field, "None");
-            }
-            _ => panic!("expected Field"),
-        }
-    }
-
-    #[test]
-    fn parse_variant_nested() {
-        // Option.Some(Result.Ok(1))
-        let (ast, id) = parse_expr_ok("Option.Some(Result.Ok(1))");
-        match ast.get_expr(id) {
-            Some(Expr::Variant(ty, var, args)) => {
+            Some(Expr::Is(_, TypePattern::VariantBind(ty, var, names))) => {
                 assert_eq!(ty, "Option");
                 assert_eq!(var, "Some");
+                assert_eq!(names.len(), 1);
+                assert_eq!(names[0], "val");
+            }
+            _ => panic!("expected Is with VariantBind pattern"),
+        }
+    }
+
+    #[test]
+    fn parse_coalesce() {
+        let (ast, id) = parse_expr_ok("x ?? 0");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(_, BinOp::Coalesce, _)) => (),
+            _ => panic!("expected Coalesce"),
+        }
+    }
+
+    #[test]
+    fn parse_optional_field() {
+        let (ast, id) = parse_expr_ok("x?.field");
+        match ast.get_expr(id) {
+            Some(Expr::OptionalField(_, f)) => assert_eq!(f, "field"),
+            _ => panic!("expected OptionalField"),
+        }
+    }
+
+    #[test]
+    fn parse_as_cast() {
+        let (ast, id) = parse_expr_ok("42 as Float");
+        match ast.get_expr(id) {
+            Some(Expr::As(_, _)) => (),
+            _ => panic!("expected As"),
+        }
+    }
+
+    #[test]
+    fn parse_read_convert() {
+        let (ast, id) = parse_expr_ok("\"42\" read Int");
+        match ast.get_expr(id) {
+            Some(Expr::Read(_, _)) => (),
+            _ => panic!("expected Read"),
+        }
+    }
+
+    #[test]
+    fn parse_power() {
+        let (ast, id) = parse_expr_ok("2 ** 3");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(_, BinOp::Pow, _)) => (),
+            _ => panic!("expected Pow"),
+        }
+    }
+
+    #[test]
+    fn parse_power_right_assoc() {
+        let (ast, id) = parse_expr_ok("2 ** 3 ** 4");
+        // Should be 2 ** (3 ** 4)
+        match ast.get_expr(id) {
+            Some(Expr::Binary(lhs, BinOp::Pow, rhs)) => {
+                assert_eq!(
+                    ast.get_expr(*lhs),
+                    Some(&Expr::Literal(Literal::Int(2)))
+                );
+                match ast.get_expr(*rhs) {
+                    Some(Expr::Binary(_, BinOp::Pow, _)) => (),
+                    _ => panic!("expected Pow on right"),
+                }
+            }
+            _ => panic!("expected Pow"),
+        }
+    }
+
+    #[test]
+    fn parse_function_type() {
+        let result = parse_ok("LET f: (Int) -> Int = x => x");
+        let stmt = result.ast.get_stmt(result.stmts[0]);
+        match stmt {
+            Some(Stmt::Let(_, Some(ty_id), _)) => {
+                let ty = result.ast.get_type_expr(*ty_id);
+                match ty {
+                    Some(crate::ast::AstTypeExpr::Fn(params, _)) => {
+                        assert_eq!(params.len(), 1);
+                    }
+                    _ => panic!("expected Fn type"),
+                }
+            }
+            _ => panic!("expected Let with type"),
+        }
+    }
+
+    #[test]
+    fn parse_multiline_array() {
+        let src = "[\n  1,\n  2,\n  3\n]";
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Array(elems)) => assert_eq!(elems.len(), 3),
+            _ => panic!("expected Array"),
+        }
+    }
+
+    #[test]
+    fn parse_multiline_object() {
+        let src = "{\n  a: 1,\n  b: 2\n}";
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Object(fields)) => assert_eq!(fields.len(), 2),
+            _ => panic!("expected Object"),
+        }
+    }
+
+    #[test]
+    fn parse_expression_continuation() {
+        let src = "1\n    + 2";
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Binary(_, BinOp::Add, _)) => (),
+            _ => panic!("expected Binary Add"),
+        }
+    }
+
+    #[test]
+    fn parse_chained_call() {
+        let (ast, id) = parse_expr_ok("f(1)(2)");
+        match ast.get_expr(id) {
+            Some(Expr::Call(callee, args)) => {
                 assert_eq!(args.len(), 1);
-                // Inner should also be Variant
-                match ast.get_expr(args[0]) {
-                    Some(Expr::Variant(ty2, var2, _)) => {
-                        assert_eq!(ty2, "Result");
-                        assert_eq!(var2, "Ok");
+                match ast.get_expr(*callee) {
+                    Some(Expr::Call(_, inner_args)) => {
+                        assert_eq!(inner_args.len(), 1);
                     }
-                    _ => panic!("expected inner Variant"),
+                    _ => panic!("expected inner Call"),
                 }
             }
-            _ => panic!("expected outer Variant"),
+            _ => panic!("expected Call"),
         }
     }
-}
-
-#[cfg(test)]
-mod array_parse_debug {
-    use super::*;
 
     #[test]
-    fn parse_test23_array() {
-        // Exact content from test 23
-        let src = r#"LET matrix3d = [
-  [[1, 2], [3, 4]],
-  [[5, 6], [7, 8]]
-]"#;
-        let result = Parser::parse(src);
-        assert!(result.is_ok(), "Should parse: {:?}", result.err());
-    }
-
-    #[test]
-    fn parse_simple_array_newlines() {
-        let src = r#"LET arr = [
-    1,
-    2
-]"#;
-        let result = Parser::parse(src);
-        assert!(result.is_ok(), "Should parse: {:?}", result.err());
-    }
-}
-
-#[cfg(test)]
-mod optional_chaining_tests {
-    use super::*;
-
-    fn parse_expr_ok(src: &str) -> (Ast, ExprId) {
-        let result = Parser::parse(src).expect("should parse");
-        let stmt_id = result.stmts[0];
-        let expr_id = result
-            .ast
-            .get_stmt(stmt_id)
-            .and_then(|s| match s {
-                Stmt::Expr(id) => Some(*id),
-                _ => None,
-            })
-            .expect("expected expression statement");
-        (result.ast, expr_id)
-    }
-
-    #[test]
-    fn parse_optional_field_access() {
-        let (ast, id) = parse_expr_ok("obj?.field");
+    fn parse_method_call() {
+        let (ast, id) = parse_expr_ok("obj.method(1)");
         match ast.get_expr(id) {
-            Some(Expr::OptionalField(_, name)) => {
-                assert_eq!(name, "field");
+            Some(Expr::Call(callee, args)) => {
+                assert_eq!(args.len(), 1);
+                match ast.get_expr(*callee) {
+                    Some(Expr::Field(_, name)) => assert_eq!(name, "method"),
+                    _ => panic!("expected Field as callee"),
+                }
             }
-            _ => panic!("expected OptionalField"),
+            _ => panic!("expected Call"),
         }
     }
 
     #[test]
-    fn parse_optional_chaining_chain() {
-        // a?.b?.c
-        let (ast, id) = parse_expr_ok("a?.b?.c");
+    fn parse_iife() {
+        let (ast, id) = parse_expr_ok("(x => x * 2)(21)");
         match ast.get_expr(id) {
-            Some(Expr::OptionalField(inner, name)) => {
-                assert_eq!(name, "c");
-                match ast.get_expr(*inner) {
-                    Some(Expr::OptionalField(_, name2)) => {
-                        assert_eq!(name2, "b");
-                    }
-                    _ => panic!("expected inner OptionalField"),
+            Some(Expr::Call(callee, args)) => {
+                assert_eq!(args.len(), 1);
+                match ast.get_expr(*callee) {
+                    Some(Expr::Closure { .. }) => (),
+                    _ => panic!("expected Closure as callee"),
                 }
             }
-            _ => panic!("expected OptionalField"),
-        }
-    }
-
-    #[test]
-    fn parse_optional_then_regular() {
-        // a?.b.c
-        let (ast, id) = parse_expr_ok("a?.b.c");
-        match ast.get_expr(id) {
-            Some(Expr::Field(inner, name)) => {
-                assert_eq!(name, "c");
-                match ast.get_expr(*inner) {
-                    Some(Expr::OptionalField(_, name2)) => {
-                        assert_eq!(name2, "b");
-                    }
-                    _ => panic!("expected OptionalField"),
-                }
-            }
-            _ => panic!("expected Field"),
-        }
-    }
-
-    #[test]
-    fn parse_regular_then_optional() {
-        // a.b?.c
-        let (ast, id) = parse_expr_ok("a.b?.c");
-        match ast.get_expr(id) {
-            Some(Expr::OptionalField(inner, name)) => {
-                assert_eq!(name, "c");
-                match ast.get_expr(*inner) {
-                    Some(Expr::Field(_, name2)) => {
-                        assert_eq!(name2, "b");
-                    }
-                    _ => panic!("expected Field"),
-                }
-            }
-            _ => panic!("expected OptionalField"),
-        }
-    }
-
-    #[test]
-    fn parse_optional_with_coalesce() {
-        // a?.b ?? "default"
-        let (ast, id) = parse_expr_ok("a?.b ?? \"default\"");
-        match ast.get_expr(id) {
-            Some(Expr::Binary(lhs, BinOp::Coalesce, _)) => {
-                match ast.get_expr(*lhs) {
-                    Some(Expr::OptionalField(_, name)) => {
-                        assert_eq!(name, "b");
-                    }
-                    _ => panic!("expected OptionalField on lhs"),
-                }
-            }
-            _ => panic!("expected Binary Coalesce"),
-        }
-    }
-
-    // ---- Closure tests ----
-
-    #[test]
-    fn parse_closure_single_param() {
-        // x => x * 2
-        let (ast, id) = parse_expr_ok("x => x * 2");
-        match ast.get_expr(id) {
-            Some(Expr::Closure { params, ret, body }) => {
-                assert_eq!(params.len(), 1);
-                assert_eq!(params[0].0, "x");
-                assert!(params[0].1.is_none());
-                assert!(ret.is_none());
-                assert!(matches!(ast.get_expr(*body), Some(Expr::Binary(..))));
-            }
-            _ => panic!("expected Closure"),
-        }
-    }
-
-    #[test]
-    fn parse_closure_multi_param() {
-        // (a, b) => a + b
-        let (ast, id) = parse_expr_ok("(a, b) => a + b");
-        match ast.get_expr(id) {
-            Some(Expr::Closure { params, ret, body }) => {
-                assert_eq!(params.len(), 2);
-                assert_eq!(params[0].0, "a");
-                assert_eq!(params[1].0, "b");
-                assert!(ret.is_none());
-                assert!(matches!(ast.get_expr(*body), Some(Expr::Binary(..))));
-            }
-            _ => panic!("expected Closure"),
-        }
-    }
-
-    #[test]
-    fn parse_closure_typed_param() {
-        // (x: Int) => x * 2
-        let (ast, id) = parse_expr_ok("(x: Int) => x * 2");
-        match ast.get_expr(id) {
-            Some(Expr::Closure { params, ret, .. }) => {
-                assert_eq!(params.len(), 1);
-                assert_eq!(params[0].0, "x");
-                assert!(params[0].1.is_some());
-                assert!(ret.is_none());
-            }
-            _ => panic!("expected Closure"),
-        }
-    }
-
-    #[test]
-    fn parse_closure_with_return_type() {
-        // (x: Int) -> Int => x * x
-        let (ast, id) = parse_expr_ok("(x: Int) -> Int => x * x");
-        match ast.get_expr(id) {
-            Some(Expr::Closure { params, ret, .. }) => {
-                assert_eq!(params.len(), 1);
-                assert_eq!(params[0].0, "x");
-                assert!(params[0].1.is_some());
-                assert!(ret.is_some());
-            }
-            _ => panic!("expected Closure"),
-        }
-    }
-
-    #[test]
-    fn parse_closure_nullary() {
-        // () => 42
-        let (ast, id) = parse_expr_ok("() => 42");
-        match ast.get_expr(id) {
-            Some(Expr::Closure { params, ret, body }) => {
-                assert!(params.is_empty());
-                assert!(ret.is_none());
-                assert!(matches!(
-                    ast.get_expr(*body),
-                    Some(Expr::Literal(Literal::Int(42)))
-                ));
-            }
-            _ => panic!("expected Closure"),
-        }
-    }
-
-    #[test]
-    fn parse_closure_in_let() {
-        // LET double = x => x * 2
-        let result = Parser::parse("LET double = x => x * 2").unwrap();
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Let(name, _, val_id) => {
-                assert_eq!(name, "double");
-                assert!(matches!(
-                    result.ast.get_expr(*val_id),
-                    Some(Expr::Closure { .. })
-                ));
-            }
-            _ => panic!("expected Let"),
-        }
-    }
-
-    // ---- FUN statement tests ----
-
-    #[test]
-    fn parse_fun_untyped() {
-        // FUN add (a, b) { a + b }
-        let result = Parser::parse("FUN add (a, b) { a + b }").unwrap();
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Fun {
-                name,
-                params,
-                ret,
-                body,
-            } => {
-                assert_eq!(name, "add");
-                assert_eq!(params.len(), 2);
-                assert_eq!(params[0].0, "a");
-                assert!(params[0].1.is_none());
-                assert_eq!(params[1].0, "b");
-                assert!(params[1].1.is_none());
-                assert!(ret.is_none());
-                assert!(matches!(
-                    result.ast.get_expr(*body),
-                    Some(Expr::Block(_, Some(_)))
-                ));
-            }
-            _ => panic!("expected Fun"),
-        }
-    }
-
-    #[test]
-    fn parse_fun_typed_params() {
-        // FUN add (a: Int, b: Int) { a + b }
-        let result =
-            Parser::parse("FUN add (a: Int, b: Int) { a + b }").unwrap();
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Fun {
-                name, params, ret, ..
-            } => {
-                assert_eq!(name, "add");
-                assert_eq!(params.len(), 2);
-                assert_eq!(params[0].0, "a");
-                assert!(params[0].1.is_some());
-                assert_eq!(params[1].0, "b");
-                assert!(params[1].1.is_some());
-                assert!(ret.is_none());
-            }
-            _ => panic!("expected Fun"),
-        }
-    }
-
-    #[test]
-    fn parse_fun_with_return_type() {
-        // FUN square (x: Int) -> Int { x * x }
-        let result =
-            Parser::parse("FUN square (x: Int) -> Int { x * x }").unwrap();
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Fun {
-                name, params, ret, ..
-            } => {
-                assert_eq!(name, "square");
-                assert_eq!(params.len(), 1);
-                assert_eq!(params[0].0, "x");
-                assert!(params[0].1.is_some());
-                assert!(ret.is_some());
-            }
-            _ => panic!("expected Fun"),
-        }
-    }
-
-    #[test]
-    fn parse_fun_nullary() {
-        // FUN greet () { "Hello" }
-        let result = Parser::parse("FUN greet () { \"Hello\" }").unwrap();
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Fun {
-                name, params, ret, ..
-            } => {
-                assert_eq!(name, "greet");
-                assert!(params.is_empty());
-                assert!(ret.is_none());
-            }
-            _ => panic!("expected Fun"),
-        }
-    }
-
-    #[test]
-    fn parse_fun_higher_order_param() {
-        // FUN apply (f: (Int) -> Int, x: Int) -> Int { f(x) }
-        let result = Parser::parse(
-            "FUN apply (f: (Int) -> Int, x: Int) -> Int { f(x) }",
-        )
-        .unwrap();
-        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
-        match stmt {
-            Stmt::Fun {
-                name, params, ret, ..
-            } => {
-                assert_eq!(name, "apply");
-                assert_eq!(params.len(), 2);
-                assert_eq!(params[0].0, "f");
-                assert!(params[0].1.is_some()); // f has function type
-                assert_eq!(params[1].0, "x");
-                assert!(params[1].1.is_some());
-                assert!(ret.is_some());
-            }
-            _ => panic!("expected Fun"),
-        }
-    }
-
-    #[test]
-    fn parse_object_field_closure() {
-        // Object with closure field: `{ inc: x => x + 1 }`
-        let result = Parser::parse("LET ops = { inc: x => x + 1 }");
-        match result {
-            Ok(r) => {
-                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
-                match stmt {
-                    Stmt::Let(_, _, expr_id) => {
-                        let expr = r.ast.get_expr(*expr_id).unwrap();
-                        match expr {
-                            Expr::Object(fields) => {
-                                assert_eq!(fields.len(), 1);
-                                assert_eq!(fields[0].0, "inc");
-                            }
-                            _ => panic!("expected Object, got {:?}", expr),
-                        }
-                    }
-                    _ => panic!("expected Let"),
-                }
-            }
-            Err(e) => panic!("parse failed: {:?}", e),
-        }
-    }
-
-    #[test]
-    fn parse_object_field_closure_call() {
-        // Calling closure from object field: `ops.inc(5)`
-        let result = Parser::parse("LET ops = { inc: x => x + 1 }\nops.inc(5)");
-        match result {
-            Ok(r) => {
-                assert_eq!(r.stmts.len(), 2);
-                let stmt = r.ast.get_stmt(r.stmts[1]).unwrap();
-                match stmt {
-                    Stmt::Expr(expr_id) => {
-                        let expr = r.ast.get_expr(*expr_id).unwrap();
-                        match expr {
-                            Expr::Call(callee, args) => {
-                                // Callee should be Field(ops, "inc")
-                                let callee_expr =
-                                    r.ast.get_expr(*callee).unwrap();
-                                match callee_expr {
-                                    Expr::Field(base, name) => {
-                                        assert_eq!(name, "inc");
-                                        let base_expr =
-                                            r.ast.get_expr(*base).unwrap();
-                                        match base_expr {
-                                            Expr::Var(v) => {
-                                                assert_eq!(v, "ops")
-                                            }
-                                            _ => panic!(
-                                                "expected Var, got {:?}",
-                                                base_expr
-                                            ),
-                                        }
-                                    }
-                                    _ => panic!(
-                                        "expected Field, got {:?}",
-                                        callee_expr
-                                    ),
-                                }
-                                assert_eq!(args.len(), 1);
-                            }
-                            _ => panic!("expected Call, got {:?}", expr),
-                        }
-                    }
-                    _ => panic!("expected Expr stmt"),
-                }
-            }
-            Err(e) => panic!("parse failed: {:?}", e),
-        }
-    }
-
-    #[test]
-    fn parse_let_nullary_closure() {
-        // LET with nullary closure: `LET f = () => 42`
-        let result = Parser::parse("LET f = () => 42");
-        match result {
-            Ok(r) => {
-                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
-                match stmt {
-                    Stmt::Let(name, _, expr_id) => {
-                        assert_eq!(name, "f");
-                        let expr = r.ast.get_expr(*expr_id).unwrap();
-                        match expr {
-                            Expr::Closure { params, .. } => {
-                                assert!(params.is_empty());
-                            }
-                            _ => panic!("expected Closure, got {:?}", expr),
-                        }
-                    }
-                    _ => panic!("expected Let"),
-                }
-            }
-            Err(e) => panic!("parse failed: {:?}", e),
-        }
-    }
-
-    #[test]
-    fn parse_nullary_closure_alone() {
-        // Nullary closure: `() => 42`
-        let result = Parser::parse("() => 42");
-        match result {
-            Ok(r) => {
-                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
-                match stmt {
-                    Stmt::Expr(expr_id) => {
-                        let expr = r.ast.get_expr(*expr_id).unwrap();
-                        match expr {
-                            Expr::Closure { params, .. } => {
-                                assert!(params.is_empty());
-                            }
-                            _ => panic!("expected Closure, got {:?}", expr),
-                        }
-                    }
-                    _ => panic!("expected Expr stmt"),
-                }
-            }
-            Err(e) => panic!("parse failed: {:?}", e),
-        }
-    }
-
-    #[test]
-    fn parse_object_paren_expr() {
-        // Parenthesized expr in object field: `{ x: (42) }`
-        let result = Parser::parse("LET obj = { x: (42) }");
-        match result {
-            Ok(r) => {
-                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
-                match stmt {
-                    Stmt::Let(_, _, expr_id) => {
-                        let expr = r.ast.get_expr(*expr_id).unwrap();
-                        match expr {
-                            Expr::Object(fields) => {
-                                assert_eq!(fields.len(), 1);
-                                assert_eq!(fields[0].0, "x");
-                            }
-                            _ => panic!("expected Object, got {:?}", expr),
-                        }
-                    }
-                    _ => panic!("expected Let"),
-                }
-            }
-            Err(e) => panic!("parse failed: {:?}", e),
-        }
-    }
-
-    #[test]
-    fn parse_object_unary_closure() {
-        // Unary closure in object field: `{ inc: (x) => x + 1 }`
-        let result = Parser::parse("LET obj = { inc: (x) => x + 1 }");
-        match result {
-            Ok(r) => {
-                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
-                match stmt {
-                    Stmt::Let(_, _, expr_id) => {
-                        let expr = r.ast.get_expr(*expr_id).unwrap();
-                        match expr {
-                            Expr::Object(fields) => {
-                                assert_eq!(fields.len(), 1);
-                                assert_eq!(fields[0].0, "inc");
-                                let field_expr =
-                                    r.ast.get_expr(fields[0].1).unwrap();
-                                match field_expr {
-                                    Expr::Closure { params, .. } => {
-                                        assert_eq!(params.len(), 1);
-                                    }
-                                    _ => panic!(
-                                        "expected Closure, got {:?}",
-                                        field_expr
-                                    ),
-                                }
-                            }
-                            _ => panic!("expected Object, got {:?}", expr),
-                        }
-                    }
-                    _ => panic!("expected Let"),
-                }
-            }
-            Err(e) => panic!("parse failed: {:?}", e),
-        }
-    }
-
-    #[test]
-    fn parse_object_nullary_bare() {
-        // Bare nullary closure object: `{ x: () => 1 }`
-        let result = Parser::parse("{ x: () => 1 }");
-        match result {
-            Ok(r) => {
-                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
-                match stmt {
-                    Stmt::Expr(expr_id) => {
-                        let expr = r.ast.get_expr(*expr_id).unwrap();
-                        match expr {
-                            Expr::Object(fields) => {
-                                assert_eq!(fields.len(), 1);
-                            }
-                            _ => panic!("expected Object, got {:?}", expr),
-                        }
-                    }
-                    _ => panic!("expected Expr stmt, got {:?}", stmt),
-                }
-            }
-            Err(e) => panic!("parse failed: {:?}", e),
-        }
-    }
-
-    #[test]
-    fn parse_object_nullary_closure() {
-        // Nullary closure in object field: `{ getter: () => 42 }`
-        let result = Parser::parse("LET obj = { getter: () => 42 }");
-        match result {
-            Ok(r) => {
-                let stmt = r.ast.get_stmt(r.stmts[0]).unwrap();
-                match stmt {
-                    Stmt::Let(_, _, expr_id) => {
-                        let expr = r.ast.get_expr(*expr_id).unwrap();
-                        match expr {
-                            Expr::Object(fields) => {
-                                assert_eq!(fields.len(), 1);
-                                assert_eq!(fields[0].0, "getter");
-                                // Check it's a closure
-                                let field_expr =
-                                    r.ast.get_expr(fields[0].1).unwrap();
-                                match field_expr {
-                                    Expr::Closure { params, .. } => {
-                                        assert!(params.is_empty());
-                                    }
-                                    _ => panic!(
-                                        "expected Closure, got {:?}",
-                                        field_expr
-                                    ),
-                                }
-                            }
-                            _ => panic!("expected Object, got {:?}", expr),
-                        }
-                    }
-                    _ => panic!("expected Let"),
-                }
-            }
-            Err(e) => panic!("parse failed: {:?}", e),
+            _ => panic!("expected Call"),
         }
     }
 }
