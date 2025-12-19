@@ -321,7 +321,9 @@ Int -> Int
 
 ### 7. Closures (Anonymous Functions)
 
-Lambda expressions with arrow syntax and optional type annotations. Type annotations can be any type expression, including function types. Closures are first-class values and can be bound to variables via `LET`, then called like any function.
+Lambda expressions with arrow syntax and optional type annotations. Type annotations can be any type expression, including function types. Closures are first-class values and can be bound to variables via `LET`.
+
+**Note**: Calling closures requires `Expr::Call` (section 9). This section focuses on closure creation and binding.
 
 ```rumps
 ; Simple closure (untyped)
@@ -351,21 +353,13 @@ x => {
 ; Closure returning a closure
 (n: Int) -> (Int) -> Int => (x => x + n)
 
-; Binding closures to variables and calling them
+; Binding closures to variables
 LET double = x => x * 2
-OUTPUT double(5)              ; 10
-
 LET add = (a: Int, b: Int) -> Int => a + b
-OUTPUT add(3, 4)              ; 7
 
-; Closure with captured variable, bound and called
+; Closure capturing a variable
 LET factor = 3
 LET scale = (x: Int) -> Int => x * factor
-OUTPUT scale(10)              ; 30
-
-; Passing a bound closure to a higher-order function
-LET square = (x: Int) -> Int => x * x
-OUTPUT apply(square, 5)       ; 25 (assuming apply is defined)
 ```
 
 - [ ] Add `Token::FatArrow` (`=>`) to lexer
@@ -377,6 +371,7 @@ OUTPUT apply(square, 5)       ; 25 (assuming apply is defined)
       body: ExprId,
   }
   ```
+- [ ] Define `CapturedEnv` for closures (captured lexical scope)
 - [ ] Add `Value::Closure` variant to runtime values:
   ```rust
   Value::Closure {
@@ -387,10 +382,8 @@ OUTPUT apply(square, 5)       ; 25 (assuming apply is defined)
   }
   ```
 - [ ] Implement closure creation (captures current environment)
-- [ ] Implement closure application (like function call but with captured env)
-- [ ] Runtime type checking (same as named functions, including function type params)
 - [ ] Add unit tests
-- [ ] Add integration test script
+- [ ] Add integration test script (minimal: bind closures, verify they're values)
 
 ### 8. Named Functions (`FUN`)
 
@@ -482,6 +475,12 @@ OUTPUT sq-then-dbl(3)             ; 18 (square(3)=9, double(9)=18)
 LET double = x => x * 2
 OUTPUT double(10)                 ; 20 (looks up `double` in scope, finds closure)
 
+; Calling closure with captured variable
+LET factor = 3
+LET scale = (x: Int) -> Int => x * factor
+OUTPUT scale(10)                  ; 30
+
+; Closures in objects
 LET ops = { inc: x => x + 1, dec: x => x - 1 }
 OUTPUT ops.inc(5)                 ; 6 (field access yields closure, then call)
 ```
@@ -512,6 +511,8 @@ OUTPUT ops.inc(5)                 ; 6 (field access yields closure, then call)
   - Untyped closure: `apply(x => x * 2, 5)`
   - Typed closure: `apply((x: Int) -> Int => x * 2, 5)`
   - Validate against the declared function type (arity, param types, return type)
+- [ ] Implement closure application (restore captured env, bind params, evaluate body)
+- [ ] Runtime type checking for function/closure params and return types
 - [ ] Add unit tests
 - [ ] Add integration test script
 
