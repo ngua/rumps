@@ -148,6 +148,12 @@ pub(crate) enum AstTypeExpr {
 
     /// Parameterized type: `Array[Int]`, `Option[String]`, `Result[Int, String]`.
     App(String, SmallVec<[AstTypeExprId; 2]>),
+
+    /// Function type: `(Int, Int) -> Int`, `Int -> Int`, `() -> String`.
+    ///
+    /// - First element: parameter types (may be empty for nullary)
+    /// - Second element: return type
+    Fn(SmallVec<[AstTypeExprId; 4]>, AstTypeExprId),
 }
 
 /// Binary operators.

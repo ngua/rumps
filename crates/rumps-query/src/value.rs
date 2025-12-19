@@ -371,11 +371,13 @@ impl TypeExprId {
 
 /// A type expression for annotations (not stored in values; used for validation).
 ///
-/// Examples: `Int`, `Array[String]`, `Result[Int, String]`
+/// Examples: `Int`, `Array[String]`, `Result[Int, String]`, `(Int) -> Int`
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TypeExpr {
     Named(TypeId),
     App(TypeId, SmallVec<[TypeExprId; 2]>),
+    /// Function type: `(params...) -> return`
+    Fn(SmallVec<[TypeExprId; 4]>, TypeExprId),
 }
 
 /// Arena for type expressions.
@@ -402,9 +404,11 @@ impl TypeExprArena {
     /// Get the base `TypeId` from a type expression.
     ///
     /// For `Named(T)` returns `T`; for `App(T, params)` returns `T`.
+    /// For `Fn` returns `None` (function types have no base type).
     pub(crate) fn base_type(&self, id: TypeExprId) -> Option<TypeId> {
-        self.get(id).map(|expr| match expr {
-            TypeExpr::Named(ty) | TypeExpr::App(ty, _) => *ty,
+        self.get(id).and_then(|expr| match expr {
+            TypeExpr::Named(ty) | TypeExpr::App(ty, _) => Some(*ty),
+            TypeExpr::Fn(..) => None,
         })
     }
 
@@ -443,6 +447,11 @@ impl TypeExprArena {
                     && pa.len() == pb.len()
                     && pa.iter().zip(pb.iter()).all(|(a, b)| self.eq(*a, *b))
             }
+            (TypeExpr::Fn(pa, ra), TypeExpr::Fn(pb, rb)) => {
+                pa.len() == pb.len()
+                    && pa.iter().zip(pb.iter()).all(|(a, b)| self.eq(*a, *b))
+                    && self.eq(*ra, *rb)
+            }
             _ => false,
         }
     }
@@ -472,7 +481,27 @@ impl TypeExprArena {
                     .join(", ");
                 format!("{name}[{args}]")
             }
+            TypeExpr::Fn(params, ret) => {
+                let args = params
+                    .iter()
+                    .filter_map(|p| self.format(*p, name_fn))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ret_str = self
+                    .format(*ret, name_fn)
+                    .unwrap_or_else(|| "?".to_owned());
+                format!("({args}) -> {ret_str}")
+            }
         }
+    }
+
+    /// Add a function type expression (e.g., `(Int, Int) -> Int`).
+    pub(crate) fn fn_type(
+        &mut self,
+        params: SmallVec<[TypeExprId; 4]>,
+        ret: TypeExprId,
+    ) -> TypeExprId {
+        self.add(TypeExpr::Fn(params, ret))
     }
 }
 

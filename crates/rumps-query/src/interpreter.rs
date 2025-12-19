@@ -592,6 +592,16 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect();
                 Ok(self.type_exprs.app(ty_id, resolved?))
             }
+            AstTypeExpr::Fn(params, ret) => {
+                // Recursively resolve param types
+                let resolved_params: Result<SmallVec<[TypeExprId; 4]>> = params
+                    .iter()
+                    .map(|&p| self.resolve_type_expr(p, span))
+                    .collect();
+                // Resolve return type
+                let resolved_ret = self.resolve_type_expr(ret, span)?;
+                Ok(self.type_exprs.fn_type(resolved_params?, resolved_ret))
+            }
         }
     }
 

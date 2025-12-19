@@ -1091,13 +1091,22 @@ impl Parser {
             .map(SmallVec::from_vec)
     }
 
-    /// Parse a type expression: `Int`, `Option[Int]`, `Result[T, E]`, etc.
+    /// Parse a type expression: `Int`, `Option[Int]`, `(Int, Int) -> Int`, etc.
+    ///
+    /// Grammar:
+    /// - `type_expr := fn_type`
+    /// - `fn_type := atom_or_params '->' fn_type | atom_type`
+    /// - `atom_or_params := '(' type_list ')' | '(' ')' | atom_type`
+    /// - `atom_type := ident ('[' type_list ']')?`
+    /// - `type_list := type_expr (',' type_expr)*`
+    ///
+    /// `->` is right-associative: `Int -> Int -> Int` = `Int -> (Int -> Int)`
     fn type_expr(
         ast: AstCell,
     ) -> impl chumsky::Parser<Token, SpannedTypeExpr, Error = ParseErr> + Clone
     {
         recursive(|ty| {
-            // Type parameters: `[T]` or `[T, E]`
+            // Type parameters for generic types: `[T]` or `[T, E]`
             let type_params = ty
                 .clone()
                 .separated_by(just(Token::Comma))
@@ -1105,9 +1114,9 @@ impl Parser {
                 .delimited_by(just(Token::LBracket), just(Token::RBracket))
                 .map(SmallVec::<[SpannedTypeExpr; 2]>::from_vec);
 
-            // Named type optionally followed by type params
-            let ast2 = Rc::clone(&ast);
-            Self::ident().then(type_params.or_not()).map_with_span(
+            // Atom: named type optionally with type params
+            let ast_atom = Rc::clone(&ast);
+            let atom = Self::ident().then(type_params.or_not()).map_with_span(
                 move |(name, params), span| {
                     let te = match params {
                         None => AstTypeExpr::Named(name),
@@ -1116,12 +1125,102 @@ impl Parser {
                             ps.into_iter().map(|(id, _)| id).collect(),
                         ),
                     };
-                    let id = ast2.borrow_mut().add_type_expr(te, span);
-                    (id, span)
+                    let id = ast_atom.borrow_mut().add_type_expr(te, span);
+                    TypeAtomOrParams::Single(id, span)
                 },
-            )
+            );
+
+            // Parenthesized: `()`, `(T)`, or `(T, U, ...)`
+            let sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+            let paren = just(Token::LParen)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(ty.clone().separated_by(sep).allow_trailing())
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RParen))
+                .map_with_span(|types, span| {
+                    let ids: SmallVec<[AstTypeExprId; 4]> =
+                        types.into_iter().map(|(id, _)| id).collect();
+                    TypeAtomOrParams::Params(ids, span)
+                });
+
+            // atom_or_params: either an atom or parenthesized params
+            let atom_or_params = paren.or(atom);
+
+            // Function type with `->` (right-associative via recursion)
+            let ast_fn = Rc::clone(&ast);
+            atom_or_params
+                .then(
+                    Self::opt_newlines()
+                        .ignore_then(just(Token::Arrow))
+                        .ignore_then(Self::opt_newlines())
+                        .ignore_then(ty)
+                        .or_not(),
+                )
+                .try_map(move |(left, arrow_ret), span| {
+                    Self::build_fn_type(&ast_fn, left, arrow_ret, span)
+                })
         })
     }
+
+    /// Build a function type or standalone type from parsed components.
+    fn build_fn_type(
+        ast: &AstCell,
+        left: TypeAtomOrParams,
+        arrow_ret: Option<SpannedTypeExpr>,
+        span: Span,
+    ) -> std::result::Result<SpannedTypeExpr, ParseErr> {
+        match (left, arrow_ret) {
+            // `T -> R` or `(T) -> R`: single param function
+            (TypeAtomOrParams::Single(param, _), Some((ret, _))) => {
+                let te = AstTypeExpr::Fn(smallvec::smallvec![param], ret);
+                let id = ast.borrow_mut().add_type_expr(te, span);
+                Ok((id, span))
+            }
+            // `(T, U, ...) -> R` or `() -> R`: multi/nullary param function
+            (TypeAtomOrParams::Params(params, _), Some((ret, _))) => {
+                let te = AstTypeExpr::Fn(params, ret);
+                let id = ast.borrow_mut().add_type_expr(te, span);
+                Ok((id, span))
+            }
+            // `T`: standalone type (no arrow)
+            (TypeAtomOrParams::Single(ty, ty_span), None) => Ok((ty, ty_span)),
+            // `(T)`: parenthesized single type (no arrow)
+            (TypeAtomOrParams::Params(mut params, p_span), None)
+                if params.len() == 1 =>
+            {
+                // Unwrap single-element parens; `(Int)` = `Int`
+                params.pop().map_or_else(
+                    || {
+                        Err(Simple::custom(
+                            span,
+                            "internal: expected single type",
+                        ))
+                    },
+                    |ty| Ok((ty, p_span)),
+                )
+            }
+            // `()` or `(T, U)` without `->`: error
+            (TypeAtomOrParams::Params(params, _), None) => {
+                let msg = if params.is_empty() {
+                    "empty parentheses require `->` for nullary function type"
+                } else {
+                    "multiple types in parentheses require `->` for function type"
+                };
+                Err(Simple::custom(span, msg))
+            }
+        }
+    }
+}
+
+/// Helper for parsing function type syntax.
+///
+/// Distinguishes between a single type atom and parenthesized parameter lists.
+#[derive(Clone)]
+enum TypeAtomOrParams {
+    /// A single named or parameterized type: `Int`, `Option[T]`
+    Single(AstTypeExprId, Span),
+    /// Parenthesized list of types: `()`, `(T)`, `(T, U)`
+    Params(SmallVec<[AstTypeExprId; 4]>, Span),
 }
 
 /// Helper enum for pattern arguments in `is` patterns.
@@ -1548,6 +1647,157 @@ mod tests {
         let innermost = result.ast.get_type_expr(mid_params[0]).unwrap();
         let AstTypeExpr::Named(name) = innermost else {
             panic!("expected Named type");
+        };
+        assert_eq!(name, "Int");
+    }
+
+    #[test]
+    fn parse_function_type_simple() {
+        // `Int -> Int`
+        let result = parse_ok("LET f: Int -> Int = 0");
+        let Stmt::Let(_, ty_ann, _) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        let AstTypeExpr::Fn(params, ret) = ty else {
+            panic!("expected Fn type, got {:?}", ty);
+        };
+        assert_eq!(params.len(), 1);
+        // Check param is Int
+        let AstTypeExpr::Named(p) =
+            result.ast.get_type_expr(params[0]).unwrap()
+        else {
+            panic!("expected Named param");
+        };
+        assert_eq!(p, "Int");
+        // Check return is Int
+        let AstTypeExpr::Named(r) = result.ast.get_type_expr(*ret).unwrap()
+        else {
+            panic!("expected Named return");
+        };
+        assert_eq!(r, "Int");
+    }
+
+    #[test]
+    fn parse_function_type_multi_param() {
+        // `(Int, Int) -> Int`
+        let result = parse_ok("LET f: (Int, Int) -> Int = 0");
+        let Stmt::Let(_, ty_ann, _) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        let AstTypeExpr::Fn(params, _) = ty else {
+            panic!("expected Fn type");
+        };
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn parse_function_type_nullary() {
+        // `() -> String`
+        let result = parse_ok("LET f: () -> String = 0");
+        let Stmt::Let(_, ty_ann, _) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        let AstTypeExpr::Fn(params, ret) = ty else {
+            panic!("expected Fn type");
+        };
+        assert!(params.is_empty());
+        let AstTypeExpr::Named(r) = result.ast.get_type_expr(*ret).unwrap()
+        else {
+            panic!("expected Named return");
+        };
+        assert_eq!(r, "String");
+    }
+
+    #[test]
+    fn parse_function_type_right_assoc() {
+        // `Int -> Int -> Int` = `Int -> (Int -> Int)`
+        let result = parse_ok("LET f: Int -> Int -> Int = 0");
+        let Stmt::Let(_, ty_ann, _) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        let AstTypeExpr::Fn(params, ret) = ty else {
+            panic!("expected outer Fn type");
+        };
+        assert_eq!(params.len(), 1);
+        // Return type should also be Fn
+        let AstTypeExpr::Fn(inner_params, _) =
+            result.ast.get_type_expr(*ret).unwrap()
+        else {
+            panic!("expected inner Fn type");
+        };
+        assert_eq!(inner_params.len(), 1);
+    }
+
+    #[test]
+    fn parse_function_type_higher_order() {
+        // `((Int) -> Int, Int) -> Int` - function that takes a function
+        let result = parse_ok("LET f: ((Int) -> Int, Int) -> Int = 0");
+        let Stmt::Let(_, ty_ann, _) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        let AstTypeExpr::Fn(params, _) = ty else {
+            panic!("expected Fn type");
+        };
+        assert_eq!(params.len(), 2);
+        // First param should be Fn
+        let AstTypeExpr::Fn(inner_params, _) =
+            result.ast.get_type_expr(params[0]).unwrap()
+        else {
+            panic!("expected first param to be Fn type");
+        };
+        assert_eq!(inner_params.len(), 1);
+    }
+
+    #[test]
+    fn parse_function_type_returns_function() {
+        // `(Int) -> (Int) -> Int` - function returning a function
+        let result = parse_ok("LET f: (Int) -> (Int) -> Int = 0");
+        let Stmt::Let(_, ty_ann, _) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        let AstTypeExpr::Fn(params, ret) = ty else {
+            panic!("expected outer Fn type");
+        };
+        assert_eq!(params.len(), 1);
+        // Return type should be Fn
+        let AstTypeExpr::Fn(inner_params, _) =
+            result.ast.get_type_expr(*ret).unwrap()
+        else {
+            panic!("expected return to be Fn type");
+        };
+        assert_eq!(inner_params.len(), 1);
+    }
+
+    #[test]
+    fn parse_parenthesized_single_type() {
+        // `(Int)` should be the same as `Int` when not followed by `->`
+        let result = parse_ok("LET x: (Int) = 0");
+        let Stmt::Let(_, ty_ann, _) =
+            result.ast.get_stmt(result.stmts[0]).unwrap()
+        else {
+            panic!("expected Let");
+        };
+        let ty = result.ast.get_type_expr(ty_ann.unwrap()).unwrap();
+        let AstTypeExpr::Named(name) = ty else {
+            panic!("expected Named type, got {:?}", ty);
         };
         assert_eq!(name, "Int");
     }

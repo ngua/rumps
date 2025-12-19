@@ -292,10 +292,10 @@ Int -> Int
 (Int) -> (Int) -> Int
 ```
 
-- [ ] Add `Token::Arrow` (`->`) to lexer
+- [x] Add `Token::Arrow` (`->`) to lexer
   - **Must** parse before `-` to avoid consuming as `Minus`
-- [ ] Add lexer tests for `->` token
-- [ ] Extend AST type expression representation:
+- [x] Add lexer tests for `->` token
+- [x] Extend AST type expression representation:
   ```rust
   /// Type expression in the AST (for annotations).
   enum AstTypeExpr {
@@ -304,7 +304,7 @@ Int -> Int
       Fn(SmallVec<[AstTypeExprId; 4]>, AstTypeExprId),    // `(Int, Int) -> Int`
   }
   ```
-- [ ] Extend runtime `TypeExpr` in `value.rs`:
+- [x] Extend runtime `TypeExpr` in `value.rs`:
   ```rust
   enum TypeExpr {
       Named(TypeId),
@@ -312,12 +312,12 @@ Int -> Int
       Fn(SmallVec<[TypeExprId; 4]>, TypeExprId),  // params, return
   }
   ```
-- [ ] Update parser to handle function type syntax:
+- [x] Update parser to handle function type syntax:
   - `->` is right-associative: `Int -> Int -> Int` parses as `Int -> (Int -> Int)`
   - Parentheses group parameters: `(Int, Int) -> Int`
   - Empty parens for nullary: `() -> Int`
-- [ ] Implement type expression resolution (AST -> runtime `TypeExprId`)
-- [ ] Add unit tests for function type parsing
+- [x] Implement type expression resolution (AST -> runtime `TypeExprId`)
+- [x] Add unit tests for function type parsing
 
 ### 7. Closures (Anonymous Functions)
 

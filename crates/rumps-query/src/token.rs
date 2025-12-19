@@ -78,6 +78,7 @@ pub(crate) enum Token {
     Colon,            // :
     Dot,              // .
     DotDot,           // ..
+    Arrow,            // ->
     QuestionQuestion, // ??
     QuestionDot,      // ?.
 
@@ -165,6 +166,7 @@ impl fmt::Display for Token {
             Self::Colon => write!(f, ":"),
             Self::Dot => write!(f, "."),
             Self::DotDot => write!(f, ".."),
+            Self::Arrow => write!(f, "->"),
             Self::QuestionQuestion => write!(f, "??"),
             Self::QuestionDot => write!(f, "?."),
             Self::Newline => write!(f, "newline"),

@@ -380,6 +380,7 @@ impl Lexer<'_> {
             just("&&").to(Token::AmpAmp),
             just("||").to(Token::PipePipe),
             just("..").to(Token::DotDot),
+            just("->").to(Token::Arrow),
             just("??").to(Token::QuestionQuestion),
             just("?.").to(Token::QuestionDot),
         ));
@@ -874,6 +875,69 @@ mod tests {
                 Token::Ident("b".into()),
                 Token::QuestionDot,
                 Token::Ident("c".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn arrow_token() {
+        let tokens = lex_ok("Int -> Int");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("Int".into()),
+                Token::Arrow,
+                Token::Ident("Int".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn arrow_not_minus() {
+        // `->` should lex as Arrow, not Minus followed by Gt
+        let tokens = lex_ok("a->b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::Arrow,
+                Token::Ident("b".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn arrow_in_function_type() {
+        // `(Int, Int) -> Int`
+        let tokens = lex_ok("(Int, Int) -> Int");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::LParen,
+                Token::Ident("Int".into()),
+                Token::Comma,
+                Token::Ident("Int".into()),
+                Token::RParen,
+                Token::Arrow,
+                Token::Ident("Int".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn minus_still_works() {
+        // Ensure `-` still works when not followed by `>`
+        let tokens = lex_ok("a - b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::Minus,
+                Token::Ident("b".into()),
                 Token::Eof
             ]
         );
