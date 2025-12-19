@@ -50,7 +50,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             BinOp::Ge => {
                 self.binop_cmp(left, right, span, |o| o != Ordering::Less)
             }
-            BinOp::And | BinOp::Or | BinOp::Coalesce => {
+            BinOp::And | BinOp::Or | BinOp::Coalesce | BinOp::Pipe => {
                 unreachable!("handled in binary")
             }
             BinOp::Concat => Ok(self.binop_concat(left, right)),

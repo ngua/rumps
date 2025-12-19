@@ -379,6 +379,7 @@ impl Lexer<'_> {
             just(">=").to(Token::Ge),
             just("&&").to(Token::AmpAmp),
             just("||").to(Token::PipePipe),
+            just("|>").to(Token::Pipe),
             just("..").to(Token::DotDot),
             just("->").to(Token::Arrow),
             just("=>").to(Token::FatArrow),
@@ -948,6 +949,36 @@ mod tests {
     fn unknown_char_error() {
         let err = lex_err("SET x = @invalid");
         assert!(err.to_string().contains("unexpected character"));
+    }
+
+    #[test]
+    fn pipe_operator() {
+        let tokens = lex_ok("a |> b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::Pipe,
+                Token::Ident("b".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn pipe_chain() {
+        let tokens = lex_ok("a |> b |> c");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::Pipe,
+                Token::Ident("b".into()),
+                Token::Pipe,
+                Token::Ident("c".into()),
+                Token::Eof
+            ]
+        );
     }
 
     // NOTE: Single `&` and `|` now produce `unexpected character` errors

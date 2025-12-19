@@ -80,6 +80,7 @@ pub(crate) enum Token {
     QuestionQuestion, // ??
     QuestionDot,      // ?.
     FatArrow,         // =>
+    Pipe,             // |>
 
     // Special
     Newline,
@@ -173,6 +174,7 @@ impl fmt::Display for Token {
             Self::QuestionQuestion => write!(f, "??"),
             Self::QuestionDot => write!(f, "?."),
             Self::FatArrow => write!(f, "=>"),
+            Self::Pipe => write!(f, "|>"),
             Self::Newline => write!(f, "newline"),
             Self::Indent => write!(f, "indent"),
             Self::Dedent => write!(f, "dedent"),

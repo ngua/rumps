@@ -482,7 +482,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let left = self.eval(lhs).await?;
                 self.coalesce(left, rhs, span).await
             }
-            // All other operators evaluate both sides
+            // Pipeline: both sides evaluated, but requires async function call
+            BinOp::Pipe => {
+                let left = self.eval(lhs).await?;
+                let right = self.eval(rhs).await?;
+                self.pipeline(left, right, span).await
+            }
+            // All other operators: both sides evaluated, sync computation
             _ => {
                 let left = self.eval(lhs).await?;
                 let right = self.eval(rhs).await?;
@@ -552,6 +558,134 @@ impl<I: IoContext> Interpreter<'_, I> {
                     left.type_name(&self.registry, &self.type_exprs)
                 ),
             )),
+        }
+    }
+
+    /// Pipeline operator implementation.
+    ///
+    /// Applies the right operand (function/closure) to the left operand (value):
+    /// `value |> func` becomes `func(value)`
+    #[async_recursion]
+    async fn pipeline(
+        &mut self,
+        left: Value,
+        right: Value,
+        span: Span,
+    ) -> Result<Value> {
+        // Intern left value as argument
+        let arg_id = self.arena.add(left, span);
+
+        match right {
+            Value::Closure {
+                params,
+                ret,
+                body,
+                env,
+            } => {
+                self.call_closure_with_vals(
+                    &params,
+                    ret,
+                    body,
+                    &env,
+                    &[arg_id],
+                    span,
+                )
+                .await
+            }
+            Value::Function {
+                params, ret, body, ..
+            } => {
+                self.call_function_with_vals(
+                    &params,
+                    ret,
+                    body,
+                    &[arg_id],
+                    span,
+                )
+                .await
+            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "`|>` requires function on right side; got {}",
+                    right.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
+    /// Call a closure with pre-evaluated arguments.
+    #[async_recursion]
+    async fn call_closure_with_vals(
+        &mut self,
+        params: &[(StringId, Option<TypeExprId>)],
+        ret: Option<TypeExprId>,
+        body: ExprId,
+        env: &CapturedEnv,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        if params.len() != args.len() {
+            Err(Error::runtime(
+                span,
+                format!(
+                    "expected {} arguments, got {}",
+                    params.len(),
+                    args.len()
+                ),
+            ))
+        } else {
+            // Save current scope stack and replace with captured environment
+            let saved = self.env.scopes.save();
+            self.env.scopes.restore_from_captured(env);
+
+            // Push new scope for parameters
+            self.env.scopes.push();
+            self.bind_params(params, args, span)?;
+
+            // Evaluate body
+            let result = self.eval(body).await;
+
+            // Restore original scope stack
+            self.env.scopes.restore(saved);
+
+            // Validate return type if annotated
+            result.and_then(|val| self.check_return_type(val, ret, span))
+        }
+    }
+
+    /// Call a named function with pre-evaluated arguments.
+    #[async_recursion]
+    async fn call_function_with_vals(
+        &mut self,
+        params: &[(StringId, Option<TypeExprId>)],
+        ret: Option<TypeExprId>,
+        body: ExprId,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        if params.len() != args.len() {
+            Err(Error::runtime(
+                span,
+                format!(
+                    "expected {} arguments, got {}",
+                    params.len(),
+                    args.len()
+                ),
+            ))
+        } else {
+            // Push new scope for parameters
+            self.env.scopes.push();
+            self.bind_params(params, args, span)?;
+
+            // Evaluate body
+            let result = self.eval(body).await;
+
+            // Pop parameter scope
+            self.env.scopes.pop();
+
+            // Validate return type if annotated
+            result.and_then(|val| self.check_return_type(val, ret, span))
         }
     }
 
@@ -4617,5 +4751,187 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("expected return type"));
+    }
+
+    // ===== Pipeline (|>) tests =====
+
+    #[tokio::test]
+    async fn pipe_with_closure() {
+        // 5 |> (x => x * 2) -> 10
+        let mut ast = Ast::new();
+
+        let five =
+            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
+
+        // Closure: x => x * 2
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(6, 7));
+        let two =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(12, 13));
+        let mul =
+            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(6, 13));
+        let closure = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body: mul,
+            },
+            Span::new(4, 14),
+        );
+
+        let pipe = ast.add_expr(
+            Expr::Binary(five, BinOp::Pipe, closure),
+            Span::new(0, 14),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(pipe).await.unwrap();
+        assert_eq!(result, Value::Int(10));
+    }
+
+    #[tokio::test]
+    async fn pipe_with_named_function() {
+        // FUN double (x) { x * 2 }
+        // 5 |> double -> 10
+        let mut ast = Ast::new();
+
+        // Function body: x * 2
+        let x_body = ast.add_expr(Expr::Var("x".into()), Span::new(18, 19));
+        let two =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(22, 23));
+        let mul = ast
+            .add_expr(Expr::Binary(x_body, BinOp::Mul, two), Span::new(18, 23));
+        let body =
+            ast.add_expr(Expr::Block(vec![], Some(mul)), Span::new(16, 25));
+
+        let fun = ast.add_stmt(
+            Stmt::Fun {
+                name: "double".into(),
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(0, 26),
+        );
+
+        // 5 |> double
+        let five =
+            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(30, 31));
+        let func_ref =
+            ast.add_expr(Expr::Var("double".into()), Span::new(35, 41));
+        let pipe = ast.add_expr(
+            Expr::Binary(five, BinOp::Pipe, func_ref),
+            Span::new(30, 41),
+        );
+
+        let mut interp = test_interp(&ast);
+        interp.exec(fun).await.unwrap();
+        let result = interp.eval(pipe).await.unwrap();
+        assert_eq!(result, Value::Int(10));
+    }
+
+    #[tokio::test]
+    async fn pipe_chain() {
+        // 5 |> (x => x * 2) |> (x => x + 1) -> 11
+        let mut ast = Ast::new();
+
+        let five =
+            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
+
+        // Closure 1: x => x * 2
+        let x1 = ast.add_expr(Expr::Var("x".into()), Span::new(6, 7));
+        let two =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(12, 13));
+        let mul =
+            ast.add_expr(Expr::Binary(x1, BinOp::Mul, two), Span::new(6, 13));
+        let c1 = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body: mul,
+            },
+            Span::new(4, 14),
+        );
+
+        // Closure 2: x => x + 1
+        let x2 = ast.add_expr(Expr::Var("x".into()), Span::new(22, 23));
+        let one =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(28, 29));
+        let add =
+            ast.add_expr(Expr::Binary(x2, BinOp::Add, one), Span::new(22, 29));
+        let c2 = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body: add,
+            },
+            Span::new(20, 30),
+        );
+
+        // (5 |> c1) |> c2
+        let p1 =
+            ast.add_expr(Expr::Binary(five, BinOp::Pipe, c1), Span::new(0, 15));
+        let p2 =
+            ast.add_expr(Expr::Binary(p1, BinOp::Pipe, c2), Span::new(0, 31));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(p2).await.unwrap();
+        assert_eq!(result, Value::Int(11));
+    }
+
+    #[tokio::test]
+    async fn pipe_non_function_error() {
+        // 5 |> 10 -> error (10 is not a function)
+        let mut ast = Ast::new();
+
+        let five =
+            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
+        let ten =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(5, 7));
+        let pipe =
+            ast.add_expr(Expr::Binary(five, BinOp::Pipe, ten), Span::new(0, 7));
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(pipe).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("|>"));
+        assert!(err.to_string().contains("function"));
+    }
+
+    #[tokio::test]
+    async fn pipe_arity_mismatch_error() {
+        // 5 |> ((a, b) => a + b) -> error (arity mismatch)
+        let mut ast = Ast::new();
+
+        let five =
+            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
+
+        // Closure: (a, b) => a + b (expects 2 args)
+        let a = ast.add_expr(Expr::Var("a".into()), Span::new(12, 13));
+        let b = ast.add_expr(Expr::Var("b".into()), Span::new(16, 17));
+        let add =
+            ast.add_expr(Expr::Binary(a, BinOp::Add, b), Span::new(12, 17));
+        let closure = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![
+                    ("a".into(), None),
+                    ("b".into(), None)
+                ],
+                ret: None,
+                body: add,
+            },
+            Span::new(5, 18),
+        );
+
+        let pipe = ast.add_expr(
+            Expr::Binary(five, BinOp::Pipe, closure),
+            Span::new(0, 18),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(pipe).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("expected 2 arguments"));
     }
 }

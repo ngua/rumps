@@ -185,6 +185,9 @@ pub(crate) enum BinOp {
 
     // Coalesce
     Coalesce, // `??`
+
+    // Pipeline
+    Pipe, // `|>`
 }
 
 /// Unary operators.

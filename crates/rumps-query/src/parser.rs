@@ -395,11 +395,28 @@ impl Parser {
             let read = Self::read_expr(as_cast);
             let and = Self::and_expr(read);
             let or = Self::or_expr(and);
-            Self::coalesce_expr(or)
+            let coalesce = Self::coalesce_expr(or);
+            Self::pipe_expr(coalesce)
         })
     }
 
-    /// Coalesce: `expr ?? expr` (lowest precedence)
+    /// Pipeline: `expr |> expr` (lowest precedence, left-associative)
+    fn pipe_expr(
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let op = just(Token::Pipe).to(BinOp::Pipe);
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            |(first, rest), span| Self::fold_binary(first, rest, span),
+        )
+    }
+
+    /// Coalesce: `expr ?? expr`
     fn coalesce_expr(
         operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
@@ -1657,6 +1674,81 @@ mod tests {
                 }
             }
             _ => panic!("expected Call"),
+        }
+    }
+
+    #[test]
+    fn parse_pipe() {
+        let (ast, id) = parse_expr_ok("x |> f");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(_, BinOp::Pipe, _)) => (),
+            _ => panic!("expected Pipe"),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_chain() {
+        // `a |> f |> g` should parse as `(a |> f) |> g` (left-associative)
+        let (ast, id) = parse_expr_ok("a |> f |> g");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(lhs, BinOp::Pipe, rhs)) => {
+                // rhs should be `g`
+                assert!(matches!(ast.get_expr(*rhs), Some(Expr::Var(_))));
+                // lhs should be `a |> f`
+                match ast.get_expr(*lhs) {
+                    Some(Expr::Binary(_, BinOp::Pipe, _)) => (),
+                    _ => panic!("expected Pipe on left"),
+                }
+            }
+            _ => panic!("expected Pipe"),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_with_closure() {
+        let (ast, id) = parse_expr_ok("5 |> (x => x * 2)");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(lhs, BinOp::Pipe, rhs)) => {
+                assert!(matches!(
+                    ast.get_expr(*lhs),
+                    Some(Expr::Literal(Literal::Int(5)))
+                ));
+                assert!(matches!(
+                    ast.get_expr(*rhs),
+                    Some(Expr::Closure { .. })
+                ));
+            }
+            _ => panic!("expected Pipe"),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_precedence_lower_than_add() {
+        // `x + 1 |> f` should parse as `(x + 1) |> f`
+        let (ast, id) = parse_expr_ok("x + 1 |> f");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(lhs, BinOp::Pipe, _)) => {
+                match ast.get_expr(*lhs) {
+                    Some(Expr::Binary(_, BinOp::Add, _)) => (),
+                    _ => panic!("expected Add on left of Pipe"),
+                }
+            }
+            _ => panic!("expected Pipe"),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_precedence_lower_than_coalesce() {
+        // `x ?? 0 |> f` should parse as `(x ?? 0) |> f`
+        let (ast, id) = parse_expr_ok("x ?? 0 |> f");
+        match ast.get_expr(id) {
+            Some(Expr::Binary(lhs, BinOp::Pipe, _)) => {
+                match ast.get_expr(*lhs) {
+                    Some(Expr::Binary(_, BinOp::Coalesce, _)) => (),
+                    _ => panic!("expected Coalesce on left of Pipe"),
+                }
+            }
+            _ => panic!("expected Pipe"),
         }
     }
 }

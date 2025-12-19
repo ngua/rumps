@@ -544,15 +544,15 @@ FILTER (x => x > 2) (MAP (x => x * 2) [1, 2, 3])
 value |> transform |> validate |> save
 ```
 
-- [ ] Add `Token::Pipe` (`|>`) to lexer
-- [ ] Add `BinOp::Pipe` to AST
-- [ ] Implement in interpreter:
+- [x] Add `Token::Pipe` (`|>`) to lexer
+- [x] Add `BinOp::Pipe` to AST
+- [x] Implement in interpreter:
   - Evaluate left operand (the value)
   - Evaluate right operand (should be a function/closure)
   - Apply right to left: `right(left)`
-- [ ] Left-associative, low precedence
-- [ ] Add unit tests
-- [ ] Add integration test script
+- [x] Left-associative, low precedence
+- [x] Add unit tests
+- [x] Add integration test script (`45_pipeline.rumps`)
 
 ## Deferred to Later Phases
 
@@ -997,7 +997,7 @@ Tokens  -->  CST (owned, boxed)  -->  AST (arena-allocated)
 
 **Trade-offs**:
 - Extra heap allocation for CST nodes before lowering (negligible for typical program sizes)
-- Two traversals instead of one (negligible; I/O dominates)
+- Two traversals instead of one (negligible; I/O dominates in DB query languages)
 - Duplicate type definitions (intentional separation of concerns)
 
 The public API (`Parser::parse`, `ParseResult`) remains unchanged.

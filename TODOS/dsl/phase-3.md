@@ -105,7 +105,7 @@ OUTPUT obj.sin(3.14)    ; Field access on object (different!)
 ```
 
 Both use `.` syntax, but:
-- `Math.sin` → `Expr::Path` (resolved at compile time)
+- `Math.sin` → `Expr::Path` (resolved at parse time)
 - `obj.sin` → `Expr::Field` (resolved at runtime)
 
 #### 0.6 Tests
