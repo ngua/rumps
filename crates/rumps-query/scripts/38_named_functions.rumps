@@ -1,0 +1,140 @@
+; Test: Named Functions (FUN)
+; Tests function definition, calls, recursion, and first-class functions
+
+; === Simple untyped function ===
+
+FUN double (x) {
+  x * 2
+}
+
+OUTPUT double(21)
+; Expected: 42
+
+OUTPUT double(0)
+; Expected: 0
+
+; === Function with multiple parameters ===
+
+FUN add (a, b) {
+  a + b
+}
+
+OUTPUT add(10, 32)
+; Expected: 42
+
+; === Typed function ===
+
+FUN square (x: Int) -> Int {
+  x * x
+}
+
+OUTPUT square(7)
+; Expected: 49
+
+OUTPUT square(0)
+; Expected: 0
+
+; === Nullary function ===
+
+FUN greeting () {
+  "Hello, World!"
+}
+
+OUTPUT greeting()
+; Expected: Hello, World!
+
+; === Function returning computed value ===
+
+FUN hypotenuse (a: Int, b: Int) -> Float {
+  (a ** 2 + b ** 2) ** 0.5
+}
+
+OUTPUT hypotenuse(3, 4)
+; Expected: 5
+
+; === Recursive function ===
+
+FUN factorial (n) {
+  IF n <= 1 { 1 } ELSE { n * factorial(n - 1) }
+}
+
+OUTPUT factorial(0)
+; Expected: 1
+
+OUTPUT factorial(1)
+; Expected: 1
+
+OUTPUT factorial(5)
+; Expected: 120
+
+OUTPUT factorial(10)
+; Expected: 3628800
+
+; === Recursive Fibonacci ===
+
+FUN fib (n) {
+  IF n <= 1 { n } ELSE { fib(n - 1) + fib(n - 2) }
+}
+
+OUTPUT fib(0)
+; Expected: 0
+
+OUTPUT fib(1)
+; Expected: 1
+
+OUTPUT fib(10)
+; Expected: 55
+
+; === Function as first-class value ===
+
+FUN triple (x) {
+  x * 3
+}
+
+LET f = triple
+OUTPUT f
+; Expected: <function triple(1)>
+
+; === Multiple functions ===
+
+FUN inc (x) { x + 1 }
+FUN dec (x) { x - 1 }
+
+OUTPUT inc(5)
+; Expected: 6
+
+OUTPUT dec(5)
+; Expected: 4
+
+; === Function with local state ===
+
+FUN compute (a, b, c) {
+  LET temp = a + b
+  temp * c
+}
+
+OUTPUT compute(2, 3, 4)
+; Expected: 20
+
+; === Nested function calls ===
+
+OUTPUT square(double(3))
+; Expected: 36 (double(3)=6, square(6)=36)
+
+OUTPUT double(square(3))
+; Expected: 18 (square(3)=9, double(9)=18)
+
+OUTPUT add(double(5), triple(3))
+; Expected: 19 (double(5)=10, triple(3)=9)
+
+; === Function shadowing parameter ===
+
+FUN shadow-test (x) {
+  LET x = 100
+  x
+}
+
+OUTPUT shadow-test(42)
+; Expected: 100
+
+OUTPUT "Named functions test complete"

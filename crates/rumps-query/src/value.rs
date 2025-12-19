@@ -189,6 +189,11 @@ impl CapturedEnv {
     pub(crate) fn lookup(&self, name: StringId) -> Option<ValueId> {
         self.bindings.get(&name).copied()
     }
+
+    /// Get the bindings map (for restoring scope from captured environment).
+    pub(crate) fn bindings(&self) -> &HashMap<StringId, ValueId> {
+        &self.bindings
+    }
 }
 
 /// A runtime value.
@@ -240,6 +245,18 @@ pub(crate) enum Value {
         body: ExprId,
         env: CapturedEnv,
     },
+
+    /// A named function reference.
+    ///
+    /// When a named function is referenced without being called (e.g., `f` instead
+    /// of `f(x)`), it produces this value. This enables passing functions to
+    /// higher-order functions.
+    Function {
+        name: StringId,
+        params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
+        ret: Option<TypeExprId>,
+        body: ExprId,
+    },
 }
 
 impl Value {
@@ -269,8 +286,8 @@ impl Value {
                     _ => true, // Unknown tagged → truthy
                 }
             }
-            // Closures are always truthy (like functions in most languages)
-            Self::Closure { .. } => true,
+            // Closures and functions are always truthy (like functions in most languages)
+            Self::Closure { .. } | Self::Function { .. } => true,
         }
     }
 
@@ -297,6 +314,7 @@ impl Value {
                 })
                 .unwrap_or("Unknown"),
             Self::Closure { .. } => "Closure",
+            Self::Function { .. } => "Function",
         }
     }
 

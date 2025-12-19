@@ -370,6 +370,21 @@ pub(crate) enum Stmt {
     ///
     /// This is the canonical way to use `Expr::If` and `Expr::Block` as statements.
     Expr(ExprId),
+
+    /// Named function definition: `FUN name (params) { body }`.
+    ///
+    /// - `name`: the function's identifier
+    /// - `params`: parameter names with optional type annotations
+    /// - `ret`: optional return type annotation
+    /// - `body`: the function body expression (typically a block)
+    ///
+    /// Named functions support recursion (the name is visible in the body).
+    Fun {
+        name: String,
+        params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        ret: Option<AstTypeExprId>,
+        body: ExprId,
+    },
 }
 
 #[cfg(test)]

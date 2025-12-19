@@ -80,6 +80,8 @@ mod convert;
 mod db;
 mod ops;
 
+use std::collections::HashMap;
+
 use async_recursion::async_recursion;
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
@@ -97,6 +99,15 @@ use crate::value::{
     Value, ValueArena, ValueId,
 };
 use crate::{Error, Result, Span};
+
+/// A named function definition stored in the function registry.
+#[derive(Clone, Debug)]
+struct FunctionDef {
+    name: StringId,
+    params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
+    ret: Option<TypeExprId>,
+    body: ExprId,
+}
 
 /// The RUMPS interpreter.
 ///
@@ -132,6 +143,9 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// Arena for type expressions (e.g., `Array[Int]`).
     type_exprs: TypeExprArena,
 
+    /// Registry of named functions (FUN definitions).
+    functions: HashMap<StringId, FunctionDef>,
+
     /// I/O context for output operations.
     io: I,
 }
@@ -151,6 +165,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             arena,
             registry,
             type_exprs: TypeExprArena::new(),
+            functions: HashMap::new(),
             io,
         })
     }
@@ -252,7 +267,66 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Evaluate for side effects, discard result
                 self.eval(expr_id).await.map(|_| ())
             }
+            Stmt::Fun {
+                name,
+                params,
+                ret,
+                body,
+            } => self.fun(&name, &params, ret, body, span),
         }
+    }
+
+    /// Define a named function.
+    ///
+    /// Registers the function in the function registry. The function is
+    /// immediately available for recursive calls.
+    fn fun(
+        &mut self,
+        name: &str,
+        params: &[(String, Option<AstTypeExprId>)],
+        ret: Option<AstTypeExprId>,
+        body: ExprId,
+        span: Span,
+    ) -> Result<()> {
+        let name_id = self.arena.intern(name);
+
+        // Resolve parameter types
+        let resolved_params: Result<
+            SmallVec<[(StringId, Option<TypeExprId>); 4]>,
+        > = params
+            .iter()
+            .map(|(pname, ty)| {
+                let pname_id = self.arena.intern(pname);
+                let ty_id = ty
+                    .map(|ast_id| {
+                        let s = self.ast.type_expr_span(ast_id).unwrap_or(span);
+                        self.resolve_type_expr(ast_id, s)
+                    })
+                    .transpose()?;
+                Ok((pname_id, ty_id))
+            })
+            .collect();
+
+        // Resolve return type
+        let resolved_ret = ret
+            .map(|ast_id| {
+                let s = self.ast.type_expr_span(ast_id).unwrap_or(span);
+                self.resolve_type_expr(ast_id, s)
+            })
+            .transpose()?;
+
+        // Register the function
+        self.functions.insert(
+            name_id,
+            FunctionDef {
+                name: name_id,
+                params: resolved_params?,
+                ret: resolved_ret,
+                body,
+            },
+        );
+
+        Ok(())
     }
 
     /// Convert an AST literal to a runtime value.
@@ -316,10 +390,22 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Does NOT fall back to B-tree locals; use `GET` for those.
     fn var(&mut self, name: &str, span: Span) -> Result<Value> {
-        self.arena
-            .lookup_string(name)
-            .and_then(|id| self.env.scopes.lookup(id))
+        let name_id = self.arena.intern(name);
+
+        // First try lexical scope
+        self.env
+            .scopes
+            .lookup(name_id)
             .and_then(|val_id| self.arena.get(val_id).cloned())
+            .or_else(|| {
+                // If not in scope, check if it's a named function
+                self.functions.get(&name_id).map(|def| Value::Function {
+                    name: def.name,
+                    params: def.params.clone(),
+                    ret: def.ret,
+                    body: def.body,
+                })
+            })
             .ok_or_else(|| {
                 Error::runtime(span, format!("undefined variable `{name}`"))
             })
@@ -481,16 +567,188 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.apply_unop(op, &val, span)
     }
 
-    /// Evaluate a function call.
+    /// Call a function by name.
+    ///
+    /// Resolution order:
+    /// 1. Named functions (from FUN definitions)
+    /// 2. Lexical scope (may be a bound closure)
     #[async_recursion]
     async fn call(
         &mut self,
-        _name: &str,
-        _args: &[ExprId],
+        name: &str,
+        args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
-        // TODO: Function calls will be implemented in later phases
-        Err(Error::runtime(span, "function calls not yet implemented"))
+        let name_id = self.arena.intern(name);
+
+        // Try named function first
+        if let Some(def) = self.functions.get(&name_id).cloned() {
+            self.call_function(&def.params, def.ret, def.body, args, span)
+                .await
+        } else if let Some(val_id) = self.env.scopes.lookup(name_id) {
+            // Try lexical scope (closure)
+            let callee = self
+                .arena
+                .get(val_id)
+                .cloned()
+                .ok_or_else(|| Error::runtime(span, "invalid value id"))?;
+            self.call_value(callee, args, span).await
+        } else {
+            Err(Error::runtime(span, format!("undefined function `{name}`")))
+        }
+    }
+
+    /// Call a function or closure value.
+    #[async_recursion]
+    async fn call_value(
+        &mut self,
+        callee: Value,
+        args: &[ExprId],
+        span: Span,
+    ) -> Result<Value> {
+        match callee {
+            Value::Closure {
+                params,
+                ret,
+                body,
+                env,
+            } => {
+                self.call_closure(&params, ret, body, &env, args, span)
+                    .await
+            }
+            Value::Function {
+                params, ret, body, ..
+            } => self.call_function(&params, ret, body, args, span).await,
+            _ => Err(Error::runtime(
+                span,
+                format!(
+                    "cannot call non-function value of type {}",
+                    callee.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
+    /// Call a named function (no captured environment).
+    #[async_recursion]
+    async fn call_function(
+        &mut self,
+        params: &[(StringId, Option<TypeExprId>)],
+        _ret: Option<TypeExprId>,
+        body: ExprId,
+        args: &[ExprId],
+        span: Span,
+    ) -> Result<Value> {
+        // Check arity
+        if params.len() != args.len() {
+            Err(Error::runtime(
+                span,
+                format!(
+                    "expected {} arguments, got {}",
+                    params.len(),
+                    args.len()
+                ),
+            ))
+        } else {
+            // Evaluate arguments
+            let arg_vals = self.eval_args(args).await?;
+
+            // Push new scope and bind parameters
+            self.env.scopes.push();
+            self.bind_params(params, &arg_vals, span)?;
+
+            // Evaluate body
+            let result = self.eval(body).await;
+
+            // Pop scope
+            self.env.scopes.pop();
+
+            result
+        }
+    }
+
+    /// Call a closure (with captured environment).
+    #[async_recursion]
+    async fn call_closure(
+        &mut self,
+        params: &[(StringId, Option<TypeExprId>)],
+        _ret: Option<TypeExprId>,
+        body: ExprId,
+        env: &CapturedEnv,
+        args: &[ExprId],
+        span: Span,
+    ) -> Result<Value> {
+        // Check arity
+        if params.len() != args.len() {
+            Err(Error::runtime(
+                span,
+                format!(
+                    "expected {} arguments, got {}",
+                    params.len(),
+                    args.len()
+                ),
+            ))
+        } else {
+            // Evaluate arguments in current environment
+            let arg_vals = self.eval_args(args).await?;
+
+            // Save current scope stack and replace with captured environment
+            let saved_scopes = self.env.scopes.save();
+            self.env.scopes.restore_from_captured(env);
+
+            // Push new scope for parameters
+            self.env.scopes.push();
+            self.bind_params(params, &arg_vals, span)?;
+
+            // Evaluate body
+            let result = self.eval(body).await;
+
+            // Restore original scope stack
+            self.env.scopes.restore(saved_scopes);
+
+            result
+        }
+    }
+
+    /// Evaluate a list of argument expressions.
+    #[async_recursion]
+    async fn eval_args(&mut self, args: &[ExprId]) -> Result<Vec<ValueId>> {
+        self.eval_args_rec(args, Vec::with_capacity(args.len()))
+            .await
+    }
+
+    #[async_recursion]
+    async fn eval_args_rec(
+        &mut self,
+        args: &[ExprId],
+        mut acc: Vec<ValueId>,
+    ) -> Result<Vec<ValueId>> {
+        match args.split_first() {
+            None => Ok(acc),
+            Some((head, tail)) => {
+                let span = self.ast.expr_span(*head).unwrap_or_default();
+                let val = self.eval(*head).await?;
+                let val_id = self.arena.add(val, span);
+                acc.push(val_id);
+                self.eval_args_rec(tail, acc).await
+            }
+        }
+    }
+
+    /// Bind parameters to argument values in the current scope.
+    fn bind_params(
+        &mut self,
+        params: &[(StringId, Option<TypeExprId>)],
+        args: &[ValueId],
+        _span: Span,
+    ) -> Result<()> {
+        params
+            .iter()
+            .zip(args.iter())
+            .try_for_each(|((name, _ty), val_id)| {
+                self.env.scopes.bind(*name, *val_id);
+                Ok(())
+            })
     }
 
     /// Evaluate an object literal.
@@ -594,7 +852,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Value::Object(_) => self.type_exprs.named(TypeId::OBJECT),
             Value::Tagged(ty_expr, _, _) => *ty_expr,
-            Value::Closure { params, ret, .. } => {
+            Value::Closure { params, ret, .. }
+            | Value::Function { params, ret, .. } => {
                 // Build function type from params and return type
                 let param_tys: SmallVec<[TypeExprId; 4]> = params
                     .iter()
@@ -1197,8 +1456,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .type_exprs
                 .base_type(*ty_expr)
                 .is_some_and(|t| t == type_id),
-            // Closures don't have a simple TypeId; use function type expressions
-            Value::Closure { .. } => false,
+            // Closures and functions don't have a simple TypeId; use function type expressions
+            Value::Closure { .. } | Value::Function { .. } => false,
         }
     }
 
@@ -3743,5 +4002,212 @@ mod tests {
         let result = interp.eval(closure).await.unwrap();
         let displayed = interp.display(&result);
         assert_eq!(displayed, "<closure(2)>");
+    }
+
+    // ---- FUN statement tests ----
+
+    #[tokio::test]
+    async fn fun_definition_simple() {
+        // FUN double (x) { x * 2 }
+        let mut ast = Ast::new();
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(17, 18));
+        let two =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(21, 22));
+        let body_expr =
+            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(17, 22));
+        let body = ast
+            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(15, 24));
+        let fun = ast.add_stmt(
+            Stmt::Fun {
+                name: "double".into(),
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(0, 24),
+        );
+
+        let mut interp = test_interp(&ast);
+        interp.exec(fun).await.unwrap();
+
+        // Function should be registered
+        let name_id = interp.arena.intern("double");
+        assert!(interp.functions.contains_key(&name_id));
+    }
+
+    #[tokio::test]
+    async fn fun_call_simple() {
+        // FUN double (x) { x * 2 }
+        // double(21)
+        let mut ast = Ast::new();
+
+        // Function body: x * 2
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(17, 18));
+        let two =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(21, 22));
+        let body_expr =
+            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(17, 22));
+        let body = ast
+            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(15, 24));
+        let fun = ast.add_stmt(
+            Stmt::Fun {
+                name: "double".into(),
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(0, 24),
+        );
+
+        // Call: double(21)
+        let arg =
+            ast.add_expr(Expr::Literal(Literal::Int(21)), Span::new(32, 34));
+        let call = ast.add_expr(
+            Expr::Call("double".into(), smallvec::smallvec![arg]),
+            Span::new(26, 35),
+        );
+
+        let mut interp = test_interp(&ast);
+        interp.exec(fun).await.unwrap();
+        let result = interp.eval(call).await.unwrap();
+
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[tokio::test]
+    async fn fun_as_value() {
+        // FUN square (x) { x * x }
+        // LET f = square
+        // f should be a Value::Function
+        let mut ast = Ast::new();
+
+        let x1 = ast.add_expr(Expr::Var("x".into()), Span::new(17, 18));
+        let x2 = ast.add_expr(Expr::Var("x".into()), Span::new(21, 22));
+        let body_expr =
+            ast.add_expr(Expr::Binary(x1, BinOp::Mul, x2), Span::new(17, 22));
+        let body = ast
+            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(15, 24));
+        let fun = ast.add_stmt(
+            Stmt::Fun {
+                name: "square".into(),
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(0, 24),
+        );
+
+        // Reference: square (no call)
+        let square_ref =
+            ast.add_expr(Expr::Var("square".into()), Span::new(36, 42));
+
+        let mut interp = test_interp(&ast);
+        interp.exec(fun).await.unwrap();
+        let result = interp.eval(square_ref).await.unwrap();
+
+        assert!(matches!(result, Value::Function { .. }));
+    }
+
+    #[tokio::test]
+    async fn fun_recursive_factorial() {
+        // FUN factorial (n) {
+        //   IF n <= 1 { 1 }
+        //   ELSE { n * factorial(n - 1) }
+        // }
+        // factorial(5) should be 120
+        let mut ast = Ast::new();
+
+        // n <= 1
+        let n1 = ast.add_expr(Expr::Var("n".into()), Span::new(0, 1));
+        let one1 =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(5, 6));
+        let cond =
+            ast.add_expr(Expr::Binary(n1, BinOp::Le, one1), Span::new(0, 6));
+
+        // Then: 1
+        let then_expr =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11));
+        let then_block = ast
+            .add_expr(Expr::Block(vec![], Some(then_expr)), Span::new(8, 12));
+
+        // Else: n * factorial(n - 1)
+        let n2 = ast.add_expr(Expr::Var("n".into()), Span::new(20, 21));
+        let n3 = ast.add_expr(Expr::Var("n".into()), Span::new(35, 36));
+        let one2 =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(39, 40));
+        let n_minus_1 =
+            ast.add_expr(Expr::Binary(n3, BinOp::Sub, one2), Span::new(35, 40));
+        let rec_call = ast.add_expr(
+            Expr::Call("factorial".into(), smallvec::smallvec![n_minus_1]),
+            Span::new(24, 41),
+        );
+        let else_expr = ast.add_expr(
+            Expr::Binary(n2, BinOp::Mul, rec_call),
+            Span::new(20, 41),
+        );
+        let else_block = ast
+            .add_expr(Expr::Block(vec![], Some(else_expr)), Span::new(18, 43));
+
+        // IF expr
+        let if_expr = ast.add_expr(
+            Expr::If(cond, then_block, Some(else_block)),
+            Span::new(0, 43),
+        );
+        let body =
+            ast.add_expr(Expr::Block(vec![], Some(if_expr)), Span::new(0, 45));
+
+        let fun = ast.add_stmt(
+            Stmt::Fun {
+                name: "factorial".into(),
+                params: smallvec::smallvec![("n".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(0, 50),
+        );
+
+        // Call: factorial(5)
+        let five =
+            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(60, 61));
+        let call = ast.add_expr(
+            Expr::Call("factorial".into(), smallvec::smallvec![five]),
+            Span::new(52, 62),
+        );
+
+        let mut interp = test_interp(&ast);
+        interp.exec(fun).await.unwrap();
+        let result = interp.eval(call).await.unwrap();
+
+        assert_eq!(result, Value::Int(120));
+    }
+
+    #[tokio::test]
+    async fn fun_display() {
+        // Function displays as <function name(n)>
+        let mut ast = Ast::new();
+        let body =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(15, 17));
+        let body_block =
+            ast.add_expr(Expr::Block(vec![], Some(body)), Span::new(13, 19));
+        let fun = ast.add_stmt(
+            Stmt::Fun {
+                name: "test".into(),
+                params: smallvec::smallvec![
+                    ("x".into(), None),
+                    ("y".into(), None)
+                ],
+                ret: None,
+                body: body_block,
+            },
+            Span::new(0, 19),
+        );
+
+        let fun_ref = ast.add_expr(Expr::Var("test".into()), Span::new(20, 24));
+
+        let mut interp = test_interp(&ast);
+        interp.exec(fun).await.unwrap();
+        let result = interp.eval(fun_ref).await.unwrap();
+        let displayed = interp.display(&result);
+        assert_eq!(displayed, "<function test(2)>");
     }
 }

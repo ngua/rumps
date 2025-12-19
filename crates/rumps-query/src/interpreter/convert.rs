@@ -27,12 +27,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| rumps_types::Value::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            // Serialize to JSON for complex values (including closures, which
+            // Serialize to JSON for complex values (closures and functions
             // will error in jsonify)
             Value::Array(_, _)
             | Value::Object(_)
             | Value::Tagged(_, _, _)
-            | Value::Closure { .. } => {
+            | Value::Closure { .. }
+            | Value::Function { .. } => {
                 self.jsonify(v).map(rumps_types::Value::Json)
             }
         }
@@ -123,6 +124,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Display as <closure(n)> where n is the number of parameters
                 format!("<closure({})>", params.len())
             }
+            Value::Function { name, params, .. } => {
+                // Display as <function name(n)> where n is the number of parameters
+                let fn_name = self.arena.get_str(*name).unwrap_or("?");
+                format!("<function {}({})>", fn_name, params.len())
+            }
         }
     }
 
@@ -185,6 +191,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Value::Closure { .. } => Err(Error::runtime_no_span(
                 "closures cannot be serialized to JSON",
+            )),
+            Value::Function { .. } => Err(Error::runtime_no_span(
+                "functions cannot be serialized to JSON",
             )),
         }
     }
@@ -260,7 +269,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Array(_, _)
             | Value::Object(_)
             | Value::Tagged(_, _, _)
-            | Value::Closure { .. } => Err(Error::runtime_no_span(
+            | Value::Closure { .. }
+            | Value::Function { .. } => Err(Error::runtime_no_span(
                 "complex values cannot be used as subscripts",
             )),
         }

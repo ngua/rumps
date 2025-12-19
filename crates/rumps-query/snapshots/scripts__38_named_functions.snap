@@ -1,0 +1,27 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Named Functions (FUN)\n; Tests function definition, calls, recursion, and first-class functions\n\n; === Simple untyped function ===\n\nFUN double (x) {\n  x * 2\n}\n\nOUTPUT double(21)\n; Expected: 42\n\nOUTPUT double(0)\n; Expected: 0\n\n; === Function with multiple parameters ===\n\nFUN add (a, b) {\n  a + b\n}\n\nOUTPUT add(10, 32)\n; Expected: 42\n\n; === Typed function ===\n\nFUN square (x: Int) -> Int {\n  x * x\n}\n\nOUTPUT square(7)\n; Expected: 49\n\nOUTPUT square(0)\n; Expected: 0\n\n; === Nullary function ===\n\nFUN greeting () {\n  \"Hello, World!\"\n}\n\nOUTPUT greeting()\n; Expected: Hello, World!\n\n; === Function returning computed value ===\n\nFUN hypotenuse (a: Int, b: Int) -> Float {\n  (a ** 2 + b ** 2) ** 0.5\n}\n\nOUTPUT hypotenuse(3, 4)\n; Expected: 5\n\n; === Recursive function ===\n\nFUN factorial (n) {\n  IF n <= 1 { 1 } ELSE { n * factorial(n - 1) }\n}\n\nOUTPUT factorial(0)\n; Expected: 1\n\nOUTPUT factorial(1)\n; Expected: 1\n\nOUTPUT factorial(5)\n; Expected: 120\n\nOUTPUT factorial(10)\n; Expected: 3628800\n\n; === Recursive Fibonacci ===\n\nFUN fib (n) {\n  IF n <= 1 { n } ELSE { fib(n - 1) + fib(n - 2) }\n}\n\nOUTPUT fib(0)\n; Expected: 0\n\nOUTPUT fib(1)\n; Expected: 1\n\nOUTPUT fib(10)\n; Expected: 55\n\n; === Function as first-class value ===\n\nFUN triple (x) {\n  x * 3\n}\n\nLET f = triple\nOUTPUT f\n; Expected: <function triple(1)>\n\n; === Multiple functions ===\n\nFUN inc (x) { x + 1 }\nFUN dec (x) { x - 1 }\n\nOUTPUT inc(5)\n; Expected: 6\n\nOUTPUT dec(5)\n; Expected: 4\n\n; === Function with local state ===\n\nFUN compute (a, b, c) {\n  LET temp = a + b\n  temp * c\n}\n\nOUTPUT compute(2, 3, 4)\n; Expected: 20\n\n; === Nested function calls ===\n\nOUTPUT square(double(3))\n; Expected: 36 (double(3)=6, square(6)=36)\n\nOUTPUT double(square(3))\n; Expected: 18 (square(3)=9, double(9)=18)\n\nOUTPUT add(double(5), triple(3))\n; Expected: 19 (double(5)=10, triple(3)=9)\n\n; === Function shadowing parameter ===\n\nFUN shadow-test (x) {\n  LET x = 100\n  x\n}\n\nOUTPUT shadow-test(42)\n; Expected: 100\n\nOUTPUT \"Named functions test complete\"\n"
+---
+42
+0
+42
+49
+0
+Hello, World!
+5
+1
+1
+120
+3628800
+0
+1
+55
+<function triple(1)>
+6
+4
+20
+36
+18
+19
+100
+Named functions test complete

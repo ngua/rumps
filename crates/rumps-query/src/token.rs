@@ -25,6 +25,7 @@ pub(crate) enum Token {
     Not,
     True,
     False,
+    Fun,
 
     // Literals
     Int(i64),
@@ -110,6 +111,7 @@ impl Token {
             "NOT" => Some(Self::Not),
             "TRUE" => Some(Self::True),
             "FALSE" => Some(Self::False),
+            "FUN" => Some(Self::Fun),
             _ => None,
         }
     }
@@ -133,6 +135,7 @@ impl fmt::Display for Token {
             Self::Not => write!(f, "NOT"),
             Self::True => write!(f, "TRUE"),
             Self::False => write!(f, "FALSE"),
+            Self::Fun => write!(f, "FUN"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::String(s) => write!(f, "\"{s}\""),
@@ -213,6 +216,7 @@ mod tests {
         assert_eq!(Token::keyword("NOT"), Some(Token::Not));
         assert_eq!(Token::keyword("TRUE"), Some(Token::True));
         assert_eq!(Token::keyword("FALSE"), Some(Token::False));
+        assert_eq!(Token::keyword("FUN"), Some(Token::Fun));
     }
 
     #[test]

@@ -74,6 +74,29 @@ impl Scopes {
     pub(crate) fn stack(&self) -> &[HashMap<StringId, ValueId>] {
         &self.stack
     }
+
+    /// Save the current scope stack (for closure calls).
+    ///
+    /// Returns the saved stack, leaving the current stack with a single empty frame.
+    pub(crate) fn save(&mut self) -> Vec<HashMap<StringId, ValueId>> {
+        std::mem::replace(&mut self.stack, vec![HashMap::new()])
+    }
+
+    /// Restore a previously saved scope stack.
+    pub(crate) fn restore(&mut self, saved: Vec<HashMap<StringId, ValueId>>) {
+        self.stack = saved;
+    }
+
+    /// Restore scope from a captured environment (for closure calls).
+    ///
+    /// Creates a fresh scope stack with the captured bindings.
+    pub(crate) fn restore_from_captured(
+        &mut self,
+        env: &crate::value::CapturedEnv,
+    ) {
+        let frame = env.bindings().iter().map(|(k, v)| (*k, *v)).collect();
+        self.stack = vec![frame];
+    }
 }
 
 /// Result type for primitive function execution.

@@ -159,10 +159,18 @@ impl Parser {
             let set_stmt = Self::set_stmt(Rc::clone(&ast), stmt.clone());
             let kill_stmt = Self::kill_stmt(Rc::clone(&ast), stmt.clone());
             let output_stmt = Self::output_stmt(Rc::clone(&ast), stmt.clone());
+            let fun_stmt = Self::fun_stmt(Rc::clone(&ast), stmt.clone());
             // IF is now parsed as an expression in primary_expr; expr_stmt handles it
             let expr_stmt = Self::expr_stmt(Rc::clone(&ast), stmt);
 
-            choice((let_stmt, set_stmt, kill_stmt, output_stmt, expr_stmt))
+            choice((
+                let_stmt,
+                set_stmt,
+                kill_stmt,
+                output_stmt,
+                fun_stmt,
+                expr_stmt,
+            ))
         })
     }
 
@@ -292,6 +300,73 @@ impl Parser {
                 let id = ast.borrow_mut().add_stmt(Stmt::Output(expr_id), span);
                 (id, span)
             })
+    }
+
+    /// `FUN name (params) { body }` or `FUN name (params) -> Type { body }`
+    fn fun_stmt(
+        ast: AstCell,
+        stmt: impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, SpannedStmt, Error = ParseErr> {
+        let ast2 = Rc::clone(&ast);
+
+        // Parameter: `name` or `name: Type`
+        let param = Self::ident()
+            .then(
+                just(Token::Colon)
+                    .ignore_then(Self::opt_newlines())
+                    .ignore_then(Self::type_expr(Rc::clone(&ast)))
+                    .map(|(id, _)| id)
+                    .or_not(),
+            )
+            .map(|(name, ty)| (name, ty));
+
+        let param_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+
+        // Parameter list: `(params...)`
+        let params = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(param.separated_by(param_sep).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen));
+
+        // Optional return type: `-> Type`
+        let ret_ty = Self::opt_newlines()
+            .ignore_then(just(Token::Arrow))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::type_expr(Rc::clone(&ast2)))
+            .map(|(id, _)| id)
+            .or_not();
+
+        // Body block
+        let body = Self::block(stmt);
+
+        just(Token::Fun)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then_ignore(Self::opt_newlines())
+            .then(params)
+            .then(ret_ty)
+            .then(body)
+            .map_with_span(
+                move |(((name, params_vec), ret), (stmts, blk_span)), span| {
+                    let params = SmallVec::from_vec(params_vec);
+                    let mut ast_ref = ast2.borrow_mut();
+                    let body =
+                        Self::stmts_to_block(&mut ast_ref, stmts, blk_span);
+                    let id = ast_ref.add_stmt(
+                        Stmt::Fun {
+                            name,
+                            params,
+                            ret,
+                            body,
+                        },
+                        span,
+                    );
+                    (id, span)
+                },
+            )
     }
 
     /// Convert a list of statements to a block expression.
@@ -2476,6 +2551,119 @@ mod optional_chaining_tests {
                 ));
             }
             _ => panic!("expected Let"),
+        }
+    }
+
+    // ---- FUN statement tests ----
+
+    #[test]
+    fn parse_fun_untyped() {
+        // FUN add (a, b) { a + b }
+        let result = Parser::parse("FUN add (a, b) { a + b }").unwrap();
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        match stmt {
+            Stmt::Fun {
+                name,
+                params,
+                ret,
+                body,
+            } => {
+                assert_eq!(name, "add");
+                assert_eq!(params.len(), 2);
+                assert_eq!(params[0].0, "a");
+                assert!(params[0].1.is_none());
+                assert_eq!(params[1].0, "b");
+                assert!(params[1].1.is_none());
+                assert!(ret.is_none());
+                assert!(matches!(
+                    result.ast.get_expr(*body),
+                    Some(Expr::Block(_, Some(_)))
+                ));
+            }
+            _ => panic!("expected Fun"),
+        }
+    }
+
+    #[test]
+    fn parse_fun_typed_params() {
+        // FUN add (a: Int, b: Int) { a + b }
+        let result =
+            Parser::parse("FUN add (a: Int, b: Int) { a + b }").unwrap();
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        match stmt {
+            Stmt::Fun {
+                name, params, ret, ..
+            } => {
+                assert_eq!(name, "add");
+                assert_eq!(params.len(), 2);
+                assert_eq!(params[0].0, "a");
+                assert!(params[0].1.is_some());
+                assert_eq!(params[1].0, "b");
+                assert!(params[1].1.is_some());
+                assert!(ret.is_none());
+            }
+            _ => panic!("expected Fun"),
+        }
+    }
+
+    #[test]
+    fn parse_fun_with_return_type() {
+        // FUN square (x: Int) -> Int { x * x }
+        let result =
+            Parser::parse("FUN square (x: Int) -> Int { x * x }").unwrap();
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        match stmt {
+            Stmt::Fun {
+                name, params, ret, ..
+            } => {
+                assert_eq!(name, "square");
+                assert_eq!(params.len(), 1);
+                assert_eq!(params[0].0, "x");
+                assert!(params[0].1.is_some());
+                assert!(ret.is_some());
+            }
+            _ => panic!("expected Fun"),
+        }
+    }
+
+    #[test]
+    fn parse_fun_nullary() {
+        // FUN greet () { "Hello" }
+        let result = Parser::parse("FUN greet () { \"Hello\" }").unwrap();
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        match stmt {
+            Stmt::Fun {
+                name, params, ret, ..
+            } => {
+                assert_eq!(name, "greet");
+                assert!(params.is_empty());
+                assert!(ret.is_none());
+            }
+            _ => panic!("expected Fun"),
+        }
+    }
+
+    #[test]
+    fn parse_fun_higher_order_param() {
+        // FUN apply (f: (Int) -> Int, x: Int) -> Int { f(x) }
+        let result = Parser::parse(
+            "FUN apply (f: (Int) -> Int, x: Int) -> Int { f(x) }",
+        )
+        .unwrap();
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        match stmt {
+            Stmt::Fun {
+                name, params, ret, ..
+            } => {
+                assert_eq!(name, "apply");
+                assert_eq!(params.len(), 2);
+                assert_eq!(params[0].0, "f");
+                assert!(params[0].1.is_some()); // f has function type
+                assert_eq!(params[1].0, "x");
+                assert!(params[1].1.is_some());
+                assert!(ret.is_some());
+            }
+            _ => panic!("expected Fun"),
         }
     }
 }

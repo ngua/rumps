@@ -362,8 +362,8 @@ LET factor = 3
 LET scale = (x: Int) -> Int => x * factor
 ```
 
-- [ ] Add `Token::FatArrow` (`=>`) to lexer
-- [ ] Add AST representation:
+- [x] Add `Token::FatArrow` (`=>`) to lexer
+- [x] Add AST representation:
   ```rust
   Expr::Closure {
       params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,  // name + optional type expr
@@ -371,8 +371,8 @@ LET scale = (x: Int) -> Int => x * factor
       body: ExprId,
   }
   ```
-- [ ] Define `CapturedEnv` for closures (captured lexical scope)
-- [ ] Add `Value::Closure` variant to runtime values:
+- [x] Define `CapturedEnv` for closures (captured lexical scope)
+- [x] Add `Value::Closure` variant to runtime values:
   ```rust
   Value::Closure {
       params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
@@ -381,9 +381,9 @@ LET scale = (x: Int) -> Int => x * factor
       env: CapturedEnv,  // captured lexical scope
   }
   ```
-- [ ] Implement closure creation (captures current environment)
-- [ ] Add unit tests
-- [ ] Add integration test script (minimal: bind closures, verify they're values)
+- [x] Implement closure creation (captures current environment)
+- [x] Add unit tests
+- [x] Add integration test script (minimal: bind closures, verify they're values)
 
 ### 8. Named Functions (`FUN`)
 
@@ -427,8 +427,8 @@ FUN compose (f: (Int) -> Int, g: (Int) -> Int) -> (Int) -> Int {
 }
 ```
 
-- [ ] Add `Token::Fun` keyword to lexer
-- [ ] Add AST representation:
+- [x] Add `Token::Fun` keyword to lexer
+- [x] Add AST representation:
   ```rust
   Stmt::Fun {
       name: String,
@@ -437,21 +437,23 @@ FUN compose (f: (Int) -> Int, g: (Int) -> Int) -> (Int) -> Int {
       body: ExprId,
   }
   ```
-- [ ] Parse type annotations using full type expression grammar (section 6)
-- [ ] Add function storage to interpreter (name -> definition)
-- [ ] Implement function definition (stores in environment)
-- [ ] Support recursion (function visible in its own body)
+- [x] Parse type annotations using full type expression grammar (section 6)
+- [x] Add function storage to interpreter (name -> definition)
+- [x] Implement function definition (stores in environment)
+- [x] Support recursion (function visible in its own body)
 - [ ] Runtime type checking at call site:
   - If param has type annotation, validate argument against type expr
   - For function types, check that argument is callable with matching signature
   - If return type annotation, check result type before returning
   - Produce clear error: `"expected (Int) -> Int, got Int for parameter 'f'"`
-- [ ] Add unit tests
-- [ ] Add integration test script
+- [x] Add unit tests
+- [x] Add integration test script
 
 ### 9. Function Calls and First-Class Functions
 
 Complete the existing `Expr::Call` implementation and support named functions as first-class values. Critically, since closures can be bound to variables (section 7), the call evaluation must check lexically bound variables when resolving the callee.
+
+**NOTE**: Basic name-based function calling was implemented alongside Step 8. This step completes expression-based callees and runtime type checking.
 
 ```rumps
 ; Direct calls to named functions
@@ -480,41 +482,53 @@ LET factor = 3
 LET scale = (x: Int) -> Int => x * factor
 OUTPUT scale(10)                  ; 30
 
-; Closures in objects
+; Closures in objects (requires expression-based callee)
 LET ops = { inc: x => x + 1, dec: x => x - 1 }
 OUTPUT ops.inc(5)                 ; 6 (field access yields closure, then call)
+
+; Chained calls (requires expression-based callee)
+FUN make_adder (n) { x => x + n }
+OUTPUT make_adder(5)(10)          ; 15
+
+; IIFE (requires expression-based callee)
+OUTPUT (x => x * 2)(21)           ; 42
 ```
 
-- [ ] Implement `Expr::Call` in interpreter:
-  - Evaluate callee expression:
-    - If callee is an identifier, first check named function registry
-    - If not found in registry, look up identifier in lexical scope (may be a bound closure)
-    - Otherwise, evaluate callee as a general expression (e.g., field access returning a closure)
+**Implemented in Step 8:**
+
+- [x] Implement `Expr::Call` in interpreter (name-based):
+  - If callee is an identifier, first check named function registry
+  - If not found in registry, look up identifier in lexical scope (may be a bound closure)
   - If callee is `Value::Closure` or `Value::Function`, apply it
   - Evaluate arguments
   - Create new scope with parameters bound to arguments
   - Evaluate function body
   - Return result (last expression value)
-- [ ] Add `Value::Function` variant for named function references:
-  ```rust
-  Value::Function {
-      name: StringId,
-      params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
-      ret: Option<TypeExprId>,
-      body: ExprId,
-  }
-  ```
-- [ ] Resolve bare identifiers: if name refers to a function (not a variable), produce `Value::Function`
-- [ ] Arity checking (error if wrong number of arguments)
-- [ ] Accept both `Value::Function` and `Value::Closure` at call sites expecting function-typed arguments:
-  - Named function reference: `apply(square, 5)`
-  - Untyped closure: `apply(x => x * 2, 5)`
-  - Typed closure: `apply((x: Int) -> Int => x * 2, 5)`
-  - Validate against the declared function type (arity, param types, return type)
-- [ ] Implement closure application (restore captured env, bind params, evaluate body)
-- [ ] Runtime type checking for function/closure params and return types
-- [ ] Add unit tests
-- [ ] Add integration test script
+- [x] Add `Value::Function` variant for named function references
+- [x] Resolve bare identifiers: if name refers to a function (not a variable), produce `Value::Function`
+- [x] Arity checking (error if wrong number of arguments)
+- [x] Implement closure application (restore captured env, bind params, evaluate body)
+- [x] Add unit tests (basic calling)
+- [x] Add integration test script (`38_named_functions.rumps`)
+
+**Remaining:**
+
+- [ ] Expression-based callees (`ops.inc(5)`, `make_adder(5)(10)`, `(x => x)(5)`):
+  - Change AST: `Expr::Call(String, args)` -> `Expr::Call(ExprId, args)`
+  - Parser: treat `(args)` as postfix operator in `fold_postfix`, like `.field` or `[idx]`
+  - Interpreter: evaluate callee expression, then dispatch based on value type
+  - Handle chained calls: `f(a)(b)` parses as `Call(Call(f, [a]), [b])`
+- [ ] Validate objects containing closures cannot be serialized:
+  - `Interpreter::jsonify` must recursively check object values
+  - If any value is `Value::Closure` or `Value::Function`, return error
+  - Type error message: `"objects containing closures cannot be serialized to JSON"`
+- [ ] Runtime type checking for function/closure params and return types:
+  - If param has type annotation, validate argument against type expr
+  - For function types, check that argument is callable with matching signature
+  - If return type annotation, check result type before returning
+  - Produce clear error: `"expected (Int) -> Int, got Int for parameter 'f'"`
+- [ ] Add unit tests (expression-based callees, type checking)
+- [ ] Add integration test script (expression-based callees, type errors)
 
 ### 10. Pipeline Operator (`|>`)
 
