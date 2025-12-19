@@ -492,6 +492,24 @@ impl TypeExprArena {
         self.add(TypeExpr::App(ty, params))
     }
 
+    /// Get function type parts: `(params, return_type)`.
+    ///
+    /// Returns `None` if the type expression is not a function type.
+    pub(crate) fn fn_parts(
+        &self,
+        id: TypeExprId,
+    ) -> Option<(&SmallVec<[TypeExprId; 4]>, TypeExprId)> {
+        self.get(id).and_then(|expr| match expr {
+            TypeExpr::Fn(params, ret) => Some((params, *ret)),
+            _ => None,
+        })
+    }
+
+    /// Check if a type expression is a function type.
+    pub(crate) fn is_fn(&self, id: TypeExprId) -> bool {
+        self.get(id).is_some_and(|e| matches!(e, TypeExpr::Fn(..)))
+    }
+
     /// Check if two type expressions are structurally equal.
     pub(crate) fn eq(&self, a: TypeExprId, b: TypeExprId) -> bool {
         self.get(a)

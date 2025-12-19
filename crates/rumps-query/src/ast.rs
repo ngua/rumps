@@ -264,10 +264,16 @@ pub(crate) enum Expr {
     /// A unary operation.
     Unary(UnOp, ExprId),
 
-    /// A function call.
+    /// A function call: `callee(args...)`.
     ///
+    /// The callee is an expression (identifier, field access, another call, etc.).
     /// Most functions have 0-4 arguments, so `SmallVec` avoids heap allocation.
-    Call(String, SmallVec<[ExprId; 4]>),
+    ///
+    /// Examples:
+    /// - `foo(1, 2)` -> `Call(Var("foo"), [1, 2])`
+    /// - `ops.inc(5)` -> `Call(Field(Var("ops"), "inc"), [5])`
+    /// - `make_adder(5)(10)` -> `Call(Call(Var("make_adder"), [5]), [10])`
+    Call(ExprId, SmallVec<[ExprId; 4]>),
 
     /// An object/record literal: `{ key: value, ... }`.
     Object(Vec<(String, ExprId)>),

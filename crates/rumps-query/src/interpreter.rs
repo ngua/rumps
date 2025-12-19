@@ -205,7 +205,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Get(inner) => self.get(inner, span).await,
             Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
             Expr::Unary(op, operand) => self.unary(op, operand, span).await,
-            Expr::Call(name, args) => self.call(&name, &args, span).await,
+            Expr::Call(callee, args) => self.call(callee, &args, span).await,
             Expr::Object(fields) => self.object(&fields).await,
             Expr::Array(elems) => self.array(&elems).await,
             Expr::Index(base, idx) => self.index(base, idx, span).await,
@@ -567,13 +567,43 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.apply_unop(op, &val, span)
     }
 
-    /// Call a function by name.
+    /// Call a function with an expression-based callee.
+    ///
+    /// The callee can be:
+    /// - A variable (`foo(x)`) resolved via name-based lookup
+    /// - A field access (`obj.method(x)`) evaluated then called
+    /// - Another call (`make_adder(5)(10)`) for chained calls
+    /// - A closure literal (`(x => x * 2)(5)`) for IIFE
+    #[async_recursion]
+    async fn call(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        span: Span,
+    ) -> Result<Value> {
+        let callee_expr =
+            self.ast.get_expr(callee).cloned().ok_or_else(|| {
+                Error::runtime(span, "invalid callee expression")
+            })?;
+
+        // For variable callees, use name-based resolution (functions first)
+        match callee_expr {
+            Expr::Var(ref name) => self.call_by_name(name, args, span).await,
+            _ => {
+                // Evaluate callee expression and call the result
+                let callee_val = self.eval(callee).await?;
+                self.call_value(callee_val, args, span).await
+            }
+        }
+    }
+
+    /// Call a function by name (for `Var` callees).
     ///
     /// Resolution order:
     /// 1. Named functions (from FUN definitions)
     /// 2. Lexical scope (may be a bound closure)
     #[async_recursion]
-    async fn call(
+    async fn call_by_name(
         &mut self,
         name: &str,
         args: &[ExprId],
@@ -581,20 +611,28 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         let name_id = self.arena.intern(name);
 
-        // Try named function first
-        if let Some(def) = self.functions.get(&name_id).cloned() {
-            self.call_function(&def.params, def.ret, def.body, args, span)
-                .await
-        } else if let Some(val_id) = self.env.scopes.lookup(name_id) {
-            // Try lexical scope (closure)
-            let callee = self
-                .arena
-                .get(val_id)
-                .cloned()
-                .ok_or_else(|| Error::runtime(span, "invalid value id"))?;
-            self.call_value(callee, args, span).await
-        } else {
-            Err(Error::runtime(span, format!("undefined function `{name}`")))
+        // Clone function def to avoid borrow issues with async
+        let func_def = self.functions.get(&name_id).cloned();
+        let scope_val = func_def.as_ref().map_or_else(
+            || {
+                self.env
+                    .scopes
+                    .lookup(name_id)
+                    .and_then(|val_id| self.arena.get(val_id).cloned())
+            },
+            |_| None,
+        );
+
+        match (func_def, scope_val) {
+            (Some(def), _) => {
+                self.call_function(&def.params, def.ret, def.body, args, span)
+                    .await
+            }
+            (None, Some(callee)) => self.call_value(callee, args, span).await,
+            (None, None) => Err(Error::runtime(
+                span,
+                format!("undefined function `{name}`"),
+            )),
         }
     }
 
@@ -634,7 +672,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn call_function(
         &mut self,
         params: &[(StringId, Option<TypeExprId>)],
-        _ret: Option<TypeExprId>,
+        ret: Option<TypeExprId>,
         body: ExprId,
         args: &[ExprId],
         span: Span,
@@ -663,7 +701,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Pop scope
             self.env.scopes.pop();
 
-            result
+            // Validate return type if annotated
+            result.and_then(|val| self.check_return_type(val, ret, span))
         }
     }
 
@@ -672,7 +711,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn call_closure(
         &mut self,
         params: &[(StringId, Option<TypeExprId>)],
-        _ret: Option<TypeExprId>,
+        ret: Option<TypeExprId>,
         body: ExprId,
         env: &CapturedEnv,
         args: &[ExprId],
@@ -706,8 +745,32 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Restore original scope stack
             self.env.scopes.restore(saved_scopes);
 
-            result
+            // Validate return type if annotated
+            result.and_then(|val| self.check_return_type(val, ret, span))
         }
+    }
+
+    /// Check that a return value matches the declared return type.
+    fn check_return_type(
+        &self,
+        val: Value,
+        ret: Option<TypeExprId>,
+        span: Span,
+    ) -> Result<Value> {
+        ret.map_or(Ok(val.clone()), |expected_ty| {
+            if self.value_matches_type_expr(&val, expected_ty) {
+                Ok(val)
+            } else {
+                let expected = self.format_type_expr(expected_ty);
+                let actual = val.type_name(&self.registry, &self.type_exprs);
+                Err(Error::type_err(
+                    span,
+                    format!(
+                        "expected return type `{expected}`, got `{actual}`"
+                    ),
+                ))
+            }
+        })
     }
 
     /// Evaluate a list of argument expressions.
@@ -736,16 +799,39 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Bind parameters to argument values in the current scope.
+    ///
+    /// Validates each argument against its declared type (if any).
     fn bind_params(
         &mut self,
         params: &[(StringId, Option<TypeExprId>)],
         args: &[ValueId],
-        _span: Span,
+        span: Span,
     ) -> Result<()> {
         params
             .iter()
             .zip(args.iter())
-            .try_for_each(|((name, _ty), val_id)| {
+            .try_for_each(|((name, ty), val_id)| {
+                // Validate type if annotated
+                ty.map_or(Ok(()), |expected_ty| {
+                    self.arena.get(*val_id).map_or(Ok(()), |val| {
+                        if self.value_matches_type_expr(val, expected_ty) {
+                            Ok(())
+                        } else {
+                            let pname =
+                                self.arena.get_str(*name).unwrap_or("?");
+                            let expected = self.format_type_expr(expected_ty);
+                            let actual =
+                                val.type_name(&self.registry, &self.type_exprs);
+                            Err(Error::type_err(
+                                span,
+                                format!(
+                                    "expected `{expected}`, got `{actual}` \
+                                     for parameter `{pname}`"
+                                ),
+                            ))
+                        }
+                    })
+                })?;
                 self.env.scopes.bind(*name, *val_id);
                 Ok(())
             })
@@ -1007,38 +1093,40 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         // Check for zero-arity variant: `Type.Variant` where base is a type name
         let base_expr = self.ast.get_expr(base).cloned();
-        if let Some(Expr::Var(ref ty_name)) = base_expr {
-            let ty_id = self.arena.intern(ty_name);
-            let field_id = self.arena.intern(field);
-            if let Some(type_id) = self.registry.lookup(ty_id) {
-                if let Some(var_def) =
-                    self.registry.lookup_variant(type_id, field_id)
-                {
-                    let idx = var_def.idx;
-                    let arity = var_def.arity;
-                    // Zero-arity variant
-                    if arity == 0 {
-                        let ty_expr =
-                            self.build_variant_type_expr(type_id, idx, &[]);
-                        return Ok(Value::Tagged(
-                            ty_expr,
-                            idx,
-                            smallvec::SmallVec::new(),
-                        ));
-                    }
-                    // Non-zero arity variant without args is an error
-                    return Err(Error::runtime(
+        let variant_info = base_expr.as_ref().and_then(|e| match e {
+            Expr::Var(ty_name) => {
+                let ty_id = self.arena.intern(ty_name);
+                let field_id = self.arena.intern(field);
+                self.registry.lookup(ty_id).and_then(|type_id| {
+                    self.registry
+                        .lookup_variant(type_id, field_id)
+                        .map(|v| (ty_name.clone(), type_id, v.idx, v.arity))
+                })
+            }
+            _ => None,
+        });
+
+        let variant_result =
+            variant_info.map(|(ty_name, type_id, idx, arity)| {
+                if arity == 0 {
+                    let ty_expr =
+                        self.build_variant_type_expr(type_id, idx, &[]);
+                    Ok(Value::Tagged(ty_expr, idx, smallvec::SmallVec::new()))
+                } else {
+                    Err(Error::runtime(
                         span,
                         format!(
                             "`{ty_name}.{field}` requires {arity} argument(s)"
                         ),
-                    ));
+                    ))
                 }
-            }
-        }
+            });
 
-        // Regular field access
-        let base_val = self.eval(base).await?;
+        // If variant lookup produced a result, use it; otherwise regular field access
+        let base_val = match variant_result {
+            Some(result) => result?,
+            None => self.eval(base).await?,
+        };
 
         match &base_val {
             Value::Object(obj) => {
@@ -1459,6 +1547,60 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Closures and functions don't have a simple TypeId; use function type expressions
             Value::Closure { .. } | Value::Function { .. } => false,
         }
+    }
+
+    /// Check if a value matches a type expression.
+    ///
+    /// For simple types, delegates to `value_matches_type`.
+    /// For function types, checks arity and param/return type compatibility.
+    fn value_matches_type_expr(&self, val: &Value, ty: TypeExprId) -> bool {
+        // Try simple type first
+        self.type_exprs.base_type(ty).map_or_else(
+            || {
+                // Function type: check if value is a function/closure with matching signature
+                self.type_exprs.fn_parts(ty).map_or(false, |(params, ret)| {
+                    self.fn_value_matches(val, params, ret)
+                })
+            },
+            |type_id| self.value_matches_type(val, type_id),
+        )
+    }
+
+    /// Check if a function/closure value matches a function type.
+    fn fn_value_matches(
+        &self,
+        val: &Value,
+        expected_params: &[TypeExprId],
+        expected_ret: TypeExprId,
+    ) -> bool {
+        match val {
+            Value::Closure { params, ret, .. }
+            | Value::Function { params, ret, .. } => {
+                // Check arity
+                params.len() == expected_params.len()
+                    // Check param types (if annotated)
+                    && params.iter().zip(expected_params.iter()).all(
+                        |((_, actual_ty), expected_ty)| {
+                            actual_ty.map_or(true, |a| self.type_exprs.eq(a, *expected_ty))
+                        },
+                    )
+                    // Check return type (if annotated)
+                    && ret.map_or(true, |r| self.type_exprs.eq(r, expected_ret))
+            }
+            _ => false,
+        }
+    }
+
+    /// Format a type expression for error messages.
+    fn format_type_expr(&self, ty: TypeExprId) -> String {
+        self.type_exprs
+            .format(ty, |tid| {
+                self.registry
+                    .type_name(tid, &self.arena)
+                    .unwrap_or("?")
+                    .to_owned()
+            })
+            .unwrap_or_else(|| "?".to_owned())
     }
 
     /// Helper for field access on a value (without wrapping in Option).
@@ -4062,8 +4204,10 @@ mod tests {
         // Call: double(21)
         let arg =
             ast.add_expr(Expr::Literal(Literal::Int(21)), Span::new(32, 34));
+        let callee =
+            ast.add_expr(Expr::Var("double".into()), Span::new(26, 32));
         let call = ast.add_expr(
-            Expr::Call("double".into(), smallvec::smallvec![arg]),
+            Expr::Call(callee, smallvec::smallvec![arg]),
             Span::new(26, 35),
         );
 
@@ -4137,8 +4281,10 @@ mod tests {
             ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(39, 40));
         let n_minus_1 =
             ast.add_expr(Expr::Binary(n3, BinOp::Sub, one2), Span::new(35, 40));
+        let rec_callee =
+            ast.add_expr(Expr::Var("factorial".into()), Span::new(24, 33));
         let rec_call = ast.add_expr(
-            Expr::Call("factorial".into(), smallvec::smallvec![n_minus_1]),
+            Expr::Call(rec_callee, smallvec::smallvec![n_minus_1]),
             Span::new(24, 41),
         );
         let else_expr = ast.add_expr(
@@ -4169,8 +4315,10 @@ mod tests {
         // Call: factorial(5)
         let five =
             ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(60, 61));
+        let callee =
+            ast.add_expr(Expr::Var("factorial".into()), Span::new(52, 61));
         let call = ast.add_expr(
-            Expr::Call("factorial".into(), smallvec::smallvec![five]),
+            Expr::Call(callee, smallvec::smallvec![five]),
             Span::new(52, 62),
         );
 
@@ -4209,5 +4357,258 @@ mod tests {
         let result = interp.eval(fun_ref).await.unwrap();
         let displayed = interp.display(&result);
         assert_eq!(displayed, "<function test(2)>");
+    }
+
+    // ---- Expression-based callees tests ----
+
+    #[tokio::test]
+    async fn call_field_closure() {
+        // LET ops = { inc: x => x + 1 }
+        // ops.inc(5) should be 6
+        let mut ast = Ast::new();
+
+        // Closure: x => x + 1
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
+        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(4, 5));
+        let body =
+            ast.add_expr(Expr::Binary(x, BinOp::Add, one), Span::new(0, 5));
+        let closure = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(0, 10),
+        );
+
+        // Object: { inc: closure }
+        let obj = ast.add_expr(
+            Expr::Object(vec![("inc".into(), closure)]),
+            Span::new(10, 30),
+        );
+
+        // LET ops = obj
+        let let_ops =
+            ast.add_stmt(Stmt::Let("ops".into(), None, obj), Span::new(0, 35));
+
+        // ops.inc
+        let ops_var = ast.add_expr(Expr::Var("ops".into()), Span::new(40, 43));
+        let field_access =
+            ast.add_expr(Expr::Field(ops_var, "inc".into()), Span::new(40, 47));
+
+        // ops.inc(5)
+        let five =
+            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(48, 49));
+        let call = ast.add_expr(
+            Expr::Call(field_access, smallvec::smallvec![five]),
+            Span::new(40, 50),
+        );
+
+        let mut interp = test_interp(&ast);
+        interp.exec(let_ops).await.unwrap();
+        let result = interp.eval(call).await.unwrap();
+
+        assert_eq!(result, Value::Int(6));
+    }
+
+    #[tokio::test]
+    async fn call_chained() {
+        // FUN make_adder (n) { x => x + n }
+        // make_adder(5)(10) should be 15
+        let mut ast = Ast::new();
+
+        // Closure body: x + n
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
+        let n = ast.add_expr(Expr::Var("n".into()), Span::new(4, 5));
+        let add_expr =
+            ast.add_expr(Expr::Binary(x, BinOp::Add, n), Span::new(0, 5));
+
+        // Closure: x => x + n
+        let closure = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body: add_expr,
+            },
+            Span::new(0, 10),
+        );
+
+        // Function body block containing closure
+        let body =
+            ast.add_expr(Expr::Block(vec![], Some(closure)), Span::new(0, 15));
+
+        // FUN make_adder (n) { ... }
+        let fun = ast.add_stmt(
+            Stmt::Fun {
+                name: "make_adder".into(),
+                params: smallvec::smallvec![("n".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(0, 20),
+        );
+
+        // make_adder(5)
+        let five =
+            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(30, 31));
+        let callee1 =
+            ast.add_expr(Expr::Var("make_adder".into()), Span::new(25, 35));
+        let call1 = ast.add_expr(
+            Expr::Call(callee1, smallvec::smallvec![five]),
+            Span::new(25, 32),
+        );
+
+        // make_adder(5)(10)
+        let ten =
+            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(33, 35));
+        let call2 = ast.add_expr(
+            Expr::Call(call1, smallvec::smallvec![ten]),
+            Span::new(25, 36),
+        );
+
+        let mut interp = test_interp(&ast);
+        interp.exec(fun).await.unwrap();
+        let result = interp.eval(call2).await.unwrap();
+
+        assert_eq!(result, Value::Int(15));
+    }
+
+    #[tokio::test]
+    async fn call_iife() {
+        // (x => x * 2)(21) should be 42
+        let mut ast = Ast::new();
+
+        // Closure body: x * 2
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
+        let two = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5));
+        let body =
+            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(0, 5));
+
+        // Closure: x => x * 2
+        let closure = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(0, 10),
+        );
+
+        // (closure)(21)
+        let arg =
+            ast.add_expr(Expr::Literal(Literal::Int(21)), Span::new(12, 14));
+        let call = ast.add_expr(
+            Expr::Call(closure, smallvec::smallvec![arg]),
+            Span::new(0, 15),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(call).await.unwrap();
+
+        assert_eq!(result, Value::Int(42));
+    }
+
+    // ---- Type checking tests ----
+
+    #[tokio::test]
+    async fn type_check_param_error() {
+        // FUN add (a: Int, b: Int) { a + b }
+        // add("x", 1) should fail
+        let mut ast = Ast::new();
+
+        // Type expression for Int
+        let int_ty = ast.add_type_expr(
+            crate::ast::AstTypeExpr::Named("Int".into()),
+            Span::new(0, 3),
+        );
+
+        // Function body: a + b
+        let a = ast.add_expr(Expr::Var("a".into()), Span::new(20, 21));
+        let b = ast.add_expr(Expr::Var("b".into()), Span::new(24, 25));
+        let body_expr =
+            ast.add_expr(Expr::Binary(a, BinOp::Add, b), Span::new(20, 25));
+        let body = ast
+            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(18, 27));
+
+        let fun = ast.add_stmt(
+            Stmt::Fun {
+                name: "add".into(),
+                params: smallvec::smallvec![
+                    ("a".into(), Some(int_ty)),
+                    ("b".into(), Some(int_ty))
+                ],
+                ret: None,
+                body,
+            },
+            Span::new(0, 30),
+        );
+
+        // Call: add("x", 1)
+        let str_arg = ast.add_expr(
+            Expr::Literal(Literal::String("x".into())),
+            Span::new(35, 38),
+        );
+        let int_arg =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(40, 41));
+        let callee = ast.add_expr(Expr::Var("add".into()), Span::new(32, 35));
+        let call = ast.add_expr(
+            Expr::Call(callee, smallvec::smallvec![str_arg, int_arg]),
+            Span::new(32, 42),
+        );
+
+        let mut interp = test_interp(&ast);
+        interp.exec(fun).await.unwrap();
+        let result = interp.eval(call).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("expected"));
+        assert!(err.to_string().contains("Int"));
+    }
+
+    #[tokio::test]
+    async fn type_check_return_error() {
+        // FUN bad () -> Int { "not an int" }
+        // bad() should fail return type check
+        let mut ast = Ast::new();
+
+        // Type expression for Int
+        let int_ty = ast.add_type_expr(
+            crate::ast::AstTypeExpr::Named("Int".into()),
+            Span::new(0, 3),
+        );
+
+        // Function body: "not an int"
+        let str_lit = ast.add_expr(
+            Expr::Literal(Literal::String("not an int".into())),
+            Span::new(20, 32),
+        );
+        let body =
+            ast.add_expr(Expr::Block(vec![], Some(str_lit)), Span::new(18, 34));
+
+        let fun = ast.add_stmt(
+            Stmt::Fun {
+                name: "bad".into(),
+                params: smallvec::smallvec![],
+                ret: Some(int_ty),
+                body,
+            },
+            Span::new(0, 35),
+        );
+
+        // Call: bad()
+        let callee = ast.add_expr(Expr::Var("bad".into()), Span::new(40, 43));
+        let call = ast.add_expr(
+            Expr::Call(callee, smallvec::smallvec![]),
+            Span::new(40, 45),
+        );
+
+        let mut interp = test_interp(&ast);
+        interp.exec(fun).await.unwrap();
+        let result = interp.eval(call).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("expected return type"));
     }
 }

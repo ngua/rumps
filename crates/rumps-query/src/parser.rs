@@ -965,33 +965,39 @@ impl Parser {
                     Some((id, span))
                 }
                 PostfixOp::Call(args, _) => {
-                    // Convert base to function call or variant constructor
+                    // Check for variant constructor pattern: `Type.Variant(args)`
+                    // Otherwise treat as expression-based call: `expr(args)`
                     let base_expr = ast.borrow().get_expr(acc.0).cloned();
-                    base_expr.and_then(|e| match e {
-                        // Simple call: `func(args)`
-                        Expr::Var(name) => {
-                            let id = ast
-                                .borrow_mut()
-                                .add_expr(Expr::Call(name, args), span);
-                            Some((id, span))
-                        }
-                        // Variant constructor: `Type.Variant(args)`
-                        Expr::Field(inner, var_name) => {
-                            let inner_expr =
-                                ast.borrow().get_expr(inner).cloned();
-                            inner_expr.and_then(|ie| match ie {
-                                Expr::Var(ty_name) => {
-                                    let id = ast.borrow_mut().add_expr(
-                                        Expr::Variant(ty_name, var_name, args),
-                                        span,
-                                    );
-                                    Some((id, span))
-                                }
-                                _ => None,
-                            })
-                        }
-                        _ => None,
-                    })
+                    let variant_opt =
+                        base_expr.as_ref().and_then(|e| match e {
+                            Expr::Field(inner, var_name) => {
+                                let inner_expr =
+                                    ast.borrow().get_expr(*inner).cloned();
+                                inner_expr.and_then(|ie| match ie {
+                                    Expr::Var(ty_name) => Some((
+                                        ty_name.clone(),
+                                        var_name.clone(),
+                                    )),
+                                    _ => None,
+                                })
+                            }
+                            _ => None,
+                        });
+
+                    // If it matches variant pattern, create Variant; otherwise Call
+                    let id = variant_opt.map_or_else(
+                        || {
+                            ast.borrow_mut()
+                                .add_expr(Expr::Call(acc.0, args.clone()), span)
+                        },
+                        |(ty_name, var_name)| {
+                            ast.borrow_mut().add_expr(
+                                Expr::Variant(ty_name, var_name, args.clone()),
+                                span,
+                            )
+                        },
+                    );
+                    Some((id, span))
                 }
             }
         })
@@ -1683,8 +1689,12 @@ mod tests {
     fn parse_function_call() {
         let (ast, id) = parse_expr_ok("foo(1, 2)");
         match ast.get_expr(id) {
-            Some(Expr::Call(name, args)) => {
-                assert_eq!(name, "foo");
+            Some(Expr::Call(callee, args)) => {
+                // Callee should be Var("foo")
+                assert!(matches!(
+                    ast.get_expr(*callee),
+                    Some(Expr::Var(name)) if name == "foo"
+                ));
                 assert_eq!(args.len(), 2);
             }
             _ => panic!("expected Call"),
