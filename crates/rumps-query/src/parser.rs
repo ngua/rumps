@@ -938,6 +938,9 @@ impl Parser {
         let ast5 = Rc::clone(&ast);
         let ast6 = Rc::clone(&ast);
         let ast7 = Rc::clone(&ast);
+        let ast_closure = Rc::clone(&ast);
+        let ast_closure2 = Rc::clone(&ast);
+        let ast_closure3 = Rc::clone(&ast);
 
         // Literals
         let int_lit = select! { Token::Int(n) => Literal::Int(n) };
@@ -1031,12 +1034,12 @@ impl Parser {
 
         // IF expression: `IF cond block [ELSE block]`
         let if_expr = just(Token::If)
-            .ignore_then(expr.map(|(id, _)| id))
+            .ignore_then(expr.clone().map(|(id, _)| id))
             .then(block_parser.clone())
             .then(
                 just(Token::Else)
                     .ignore_then(Self::opt_newlines())
-                    .ignore_then(block_parser)
+                    .ignore_then(block_parser.clone())
                     .or_not(),
             )
             .map_with_span(
@@ -1059,11 +1062,80 @@ impl Parser {
                 },
             );
 
+        // Closure expressions
+        // Single untyped param: `x => expr`
+        let closure_single = Self::ident()
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::FatArrow))
+            .then_ignore(Self::opt_newlines())
+            .then(expr.clone())
+            .map_with_span(move |(name, (body, _)), span| {
+                let params = smallvec::smallvec![(name, None)];
+                let id = ast_closure.borrow_mut().add_expr(
+                    Expr::Closure {
+                        params,
+                        ret: None,
+                        body,
+                    },
+                    span,
+                );
+                (id, span)
+            });
+
+        // Param: `name` or `name: Type`
+        let closure_param = Self::ident()
+            .then(
+                just(Token::Colon)
+                    .ignore_then(Self::opt_newlines())
+                    .ignore_then(Self::type_expr(Rc::clone(&ast_closure2)))
+                    .map(|(id, _)| id)
+                    .or_not(),
+            )
+            .map(|(name, ty)| (name, ty));
+
+        // Multi-param closure: `(params) => expr` or `(params) -> Type => expr`
+        let param_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        let closure_multi = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(closure_param.separated_by(param_sep).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+            .then_ignore(Self::opt_newlines())
+            .then(
+                just(Token::Arrow)
+                    .ignore_then(Self::opt_newlines())
+                    .ignore_then(Self::type_expr(Rc::clone(&ast_closure3)))
+                    .map(|(id, _)| id)
+                    .or_not(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::FatArrow))
+            .then_ignore(Self::opt_newlines())
+            .then(expr)
+            .map_with_span(move |((params_vec, ret), (body, _)), span| {
+                let params = SmallVec::from_vec(params_vec);
+                let id = ast_closure2
+                    .borrow_mut()
+                    .add_expr(Expr::Closure { params, ret, body }, span);
+                (id, span)
+            });
+
         // Order matters:
+        // - closure_single before var (both start with ident, but closure has `=>`)
+        // - closure_multi before paren (both start with `(`, but closure has `=>`)
         // - object before block_expr (both start with `{`, object requires `ident:`)
         // - global before var (both can start with ident pattern)
         choice((
-            literal, global, var, paren, array, object, block_expr, if_expr,
+            literal,
+            closure_single,
+            closure_multi,
+            global,
+            var,
+            paren,
+            array,
+            object,
+            block_expr,
+            if_expr,
         ))
     }
 
@@ -2306,6 +2378,104 @@ mod optional_chaining_tests {
                 }
             }
             _ => panic!("expected Binary Coalesce"),
+        }
+    }
+
+    // ---- Closure tests ----
+
+    #[test]
+    fn parse_closure_single_param() {
+        // x => x * 2
+        let (ast, id) = parse_expr_ok("x => x * 2");
+        match ast.get_expr(id) {
+            Some(Expr::Closure { params, ret, body }) => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(params[0].0, "x");
+                assert!(params[0].1.is_none());
+                assert!(ret.is_none());
+                assert!(matches!(ast.get_expr(*body), Some(Expr::Binary(..))));
+            }
+            _ => panic!("expected Closure"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_multi_param() {
+        // (a, b) => a + b
+        let (ast, id) = parse_expr_ok("(a, b) => a + b");
+        match ast.get_expr(id) {
+            Some(Expr::Closure { params, ret, body }) => {
+                assert_eq!(params.len(), 2);
+                assert_eq!(params[0].0, "a");
+                assert_eq!(params[1].0, "b");
+                assert!(ret.is_none());
+                assert!(matches!(ast.get_expr(*body), Some(Expr::Binary(..))));
+            }
+            _ => panic!("expected Closure"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_typed_param() {
+        // (x: Int) => x * 2
+        let (ast, id) = parse_expr_ok("(x: Int) => x * 2");
+        match ast.get_expr(id) {
+            Some(Expr::Closure { params, ret, .. }) => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(params[0].0, "x");
+                assert!(params[0].1.is_some());
+                assert!(ret.is_none());
+            }
+            _ => panic!("expected Closure"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_with_return_type() {
+        // (x: Int) -> Int => x * x
+        let (ast, id) = parse_expr_ok("(x: Int) -> Int => x * x");
+        match ast.get_expr(id) {
+            Some(Expr::Closure { params, ret, .. }) => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(params[0].0, "x");
+                assert!(params[0].1.is_some());
+                assert!(ret.is_some());
+            }
+            _ => panic!("expected Closure"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_nullary() {
+        // () => 42
+        let (ast, id) = parse_expr_ok("() => 42");
+        match ast.get_expr(id) {
+            Some(Expr::Closure { params, ret, body }) => {
+                assert!(params.is_empty());
+                assert!(ret.is_none());
+                assert!(matches!(
+                    ast.get_expr(*body),
+                    Some(Expr::Literal(Literal::Int(42)))
+                ));
+            }
+            _ => panic!("expected Closure"),
+        }
+    }
+
+    #[test]
+    fn parse_closure_in_let() {
+        // LET double = x => x * 2
+        let result = Parser::parse("LET double = x => x * 2").unwrap();
+        let stmt = result.ast.get_stmt(result.stmts[0]).unwrap();
+        match stmt {
+            Stmt::Let(name, _, val_id) => {
+                assert_eq!(name, "double");
+                assert!(matches!(
+                    result.ast.get_expr(*val_id),
+                    Some(Expr::Closure { .. })
+                ));
+            }
+            _ => panic!("expected Let"),
         }
     }
 }

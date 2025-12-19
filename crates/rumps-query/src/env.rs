@@ -69,6 +69,11 @@ impl Scopes {
     fn depth(&self) -> usize {
         self.stack.len()
     }
+
+    /// Get a reference to the scope stack (for closure capture).
+    pub(crate) fn stack(&self) -> &[HashMap<StringId, ValueId>] {
+        &self.stack
+    }
 }
 
 /// Result type for primitive function execution.

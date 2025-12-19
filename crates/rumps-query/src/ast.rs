@@ -326,6 +326,19 @@ pub(crate) enum Expr {
     /// Evaluates to the value of the taken branch. If no else branch and
     /// condition is false, evaluates to `Option.None`.
     If(ExprId, ExprId, Option<ExprId>),
+
+    /// Closure (anonymous function): `x => expr` or `(a, b) => expr`.
+    ///
+    /// - params: parameter names with optional type annotations
+    /// - return type annotation (optional)
+    /// - body expression
+    ///
+    /// Closures capture their lexical environment at creation time (by value).
+    Closure {
+        params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        ret: Option<AstTypeExprId>,
+        body: ExprId,
+    },
 }
 
 /// A statement node.

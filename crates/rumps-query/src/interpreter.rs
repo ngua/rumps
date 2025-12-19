@@ -93,8 +93,8 @@ use crate::ast::{
 use crate::env::Environment;
 use crate::io::IoContext;
 use crate::value::{
-    StringId, TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value,
-    ValueArena, ValueId,
+    CapturedEnv, StringId, TypeExprArena, TypeExprId, TypeId, TypeRegistry,
+    Value, ValueArena, ValueId,
 };
 use crate::{Error, Result, Span};
 
@@ -208,6 +208,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::If(cond, then_br, else_br) => {
                 self.r#if(cond, then_br, else_br).await
             }
+            Expr::Closure { params, ret, body } => {
+                self.closure(&params, ret, body)
+            }
         }
     }
 }
@@ -260,6 +263,53 @@ impl<I: IoContext> Interpreter<'_, I> {
             Literal::Float(f) => Value::Float(OrderedFloat(*f)),
             Literal::String(s) => Value::String(self.arena.intern(s)),
         }
+    }
+
+    /// Create a closure value from AST closure parameters and body.
+    ///
+    /// Captures the current lexical environment by value. Parameter and return
+    /// type annotations are resolved to runtime type expressions.
+    fn closure(
+        &mut self,
+        params: &[(String, Option<AstTypeExprId>)],
+        ret: Option<AstTypeExprId>,
+        body: ExprId,
+    ) -> Result<Value> {
+        // Capture the current lexical environment
+        let env = CapturedEnv::capture(self.env.scopes.stack());
+
+        // Resolve parameter types and intern names
+        let resolved_params: Result<
+            SmallVec<[(StringId, Option<TypeExprId>); 4]>,
+        > = params
+            .iter()
+            .map(|(name, ty)| {
+                let name_id = self.arena.intern(name);
+                let ty_id = ty
+                    .map(|ast_id| {
+                        let span =
+                            self.ast.type_expr_span(ast_id).unwrap_or_default();
+                        self.resolve_type_expr(ast_id, span)
+                    })
+                    .transpose()?;
+                Ok((name_id, ty_id))
+            })
+            .collect();
+
+        // Resolve return type
+        let resolved_ret = ret
+            .map(|ast_id| {
+                let span = self.ast.type_expr_span(ast_id).unwrap_or_default();
+                self.resolve_type_expr(ast_id, span)
+            })
+            .transpose()?;
+
+        Ok(Value::Closure {
+            params: resolved_params?,
+            ret: resolved_ret,
+            body,
+            env,
+        })
     }
 
     /// Evaluate a lexical variable reference (LET bindings only).
@@ -544,6 +594,20 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Value::Object(_) => self.type_exprs.named(TypeId::OBJECT),
             Value::Tagged(ty_expr, _, _) => *ty_expr,
+            Value::Closure { params, ret, .. } => {
+                // Build function type from params and return type
+                let param_tys: SmallVec<[TypeExprId; 4]> = params
+                    .iter()
+                    .map(|(_, ty)| {
+                        ty.unwrap_or_else(|| {
+                            self.type_exprs.named(TypeId::UNKNOWN)
+                        })
+                    })
+                    .collect();
+                let ret_ty = ret
+                    .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
+                self.type_exprs.fn_type(param_tys, ret_ty)
+            }
         }
     }
 
@@ -1133,6 +1197,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .type_exprs
                 .base_type(*ty_expr)
                 .is_some_and(|t| t == type_id),
+            // Closures don't have a simple TypeId; use function type expressions
+            Value::Closure { .. } => false,
         }
     }
 
@@ -3546,5 +3612,136 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("cannot read"));
+    }
+
+    // ---- Closure tests ----
+
+    #[tokio::test]
+    async fn closure_creation_simple() {
+        // x => x * 2
+        let mut ast = Ast::new();
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(5, 6));
+        let two =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(9, 10));
+        let body =
+            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(5, 10));
+        let closure = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(0, 10),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(closure).await.unwrap();
+
+        match result {
+            Value::Closure { params, ret, .. } => {
+                assert_eq!(params.len(), 1);
+                assert!(ret.is_none());
+            }
+            _ => panic!("expected Closure"),
+        }
+    }
+
+    #[tokio::test]
+    async fn closure_creation_with_types() {
+        // (x: Int) -> Int => x * x
+        let mut ast = Ast::new();
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(4, 7));
+        let ret_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(12, 15));
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(19, 20));
+        let x2 = ast.add_expr(Expr::Var("x".into()), Span::new(23, 24));
+        let body =
+            ast.add_expr(Expr::Binary(x, BinOp::Mul, x2), Span::new(19, 24));
+        let closure = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![("x".into(), Some(int_ty))],
+                ret: Some(ret_ty),
+                body,
+            },
+            Span::new(0, 24),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(closure).await.unwrap();
+
+        match result {
+            Value::Closure { params, ret, .. } => {
+                assert_eq!(params.len(), 1);
+                assert!(params[0].1.is_some()); // has type annotation
+                assert!(ret.is_some()); // has return type
+            }
+            _ => panic!("expected Closure"),
+        }
+    }
+
+    #[tokio::test]
+    async fn closure_captures_environment() {
+        // LET factor = 3
+        // LET triple = x => x * factor
+        // triple is a closure that captures `factor`
+        let mut ast = Ast::new();
+        let three =
+            ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(13, 14));
+        let let_factor = ast.add_stmt(
+            Stmt::Let("factor".into(), None, three),
+            Span::new(0, 14),
+        );
+
+        let x = ast.add_expr(Expr::Var("x".into()), Span::new(25, 26));
+        let factor =
+            ast.add_expr(Expr::Var("factor".into()), Span::new(29, 35));
+        let body = ast
+            .add_expr(Expr::Binary(x, BinOp::Mul, factor), Span::new(25, 35));
+        let closure = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![("x".into(), None)],
+                ret: None,
+                body,
+            },
+            Span::new(16, 35),
+        );
+
+        let mut interp = test_interp(&ast);
+        interp.exec(let_factor).await.unwrap();
+        let result = interp.eval(closure).await.unwrap();
+
+        match &result {
+            Value::Closure { env, .. } => {
+                // The closure should have captured `factor`
+                let factor_id = interp.arena.lookup_string("factor").unwrap();
+                assert!(env.lookup(factor_id).is_some());
+            }
+            _ => panic!("expected Closure"),
+        }
+    }
+
+    #[tokio::test]
+    async fn closure_display() {
+        // Closure displays as <closure(n)>
+        let mut ast = Ast::new();
+        let body =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(5, 7));
+        let closure = ast.add_expr(
+            Expr::Closure {
+                params: smallvec::smallvec![
+                    ("x".into(), None),
+                    ("y".into(), None)
+                ],
+                ret: None,
+                body,
+            },
+            Span::new(0, 7),
+        );
+
+        let mut interp = test_interp(&ast);
+        let result = interp.eval(closure).await.unwrap();
+        let displayed = interp.display(&result);
+        assert_eq!(displayed, "<closure(2)>");
     }
 }

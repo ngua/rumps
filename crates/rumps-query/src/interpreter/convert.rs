@@ -27,9 +27,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| rumps_types::Value::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            // Serialize to JSON for complex values
-            Value::Array(_, _) | Value::Object(_) | Value::Tagged(_, _, _) => {
-                Ok(rumps_types::Value::Json(self.jsonify(v)))
+            // Serialize to JSON for complex values (including closures, which
+            // will error in jsonify)
+            Value::Array(_, _)
+            | Value::Object(_)
+            | Value::Tagged(_, _, _)
+            | Value::Closure { .. } => {
+                self.jsonify(v).map(rumps_types::Value::Json)
             }
         }
     }
@@ -115,40 +119,46 @@ impl<I: IoContext> Interpreter<'_, I> {
                     format!("{ty_name}.{var_name}({args})")
                 }
             }
+            Value::Closure { params, .. } => {
+                // Display as <closure(n)> where n is the number of parameters
+                format!("<closure({})>", params.len())
+            }
         }
     }
 
     /// Convert a value to JSON.
     ///
     /// Used for JSON output and storage serialization.
-    pub(crate) fn jsonify(&self, v: &Value) -> serde_json::Value {
+    /// Returns an error for values that cannot be serialized (e.g., closures).
+    pub(crate) fn jsonify(&self, v: &Value) -> Result<serde_json::Value> {
         match v {
-            Value::Bool(b) => serde_json::Value::Bool(*b),
-            Value::Int(n) => serde_json::json!(*n),
-            Value::Float(f) => serde_json::json!(f.0),
-            Value::Char(c) => serde_json::Value::String(c.to_string()),
+            Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
+            Value::Int(n) => Ok(serde_json::json!(*n)),
+            Value::Float(f) => Ok(serde_json::json!(f.0)),
+            Value::Char(c) => Ok(serde_json::Value::String(c.to_string())),
             Value::String(id) => {
                 let s = self.arena.get_str(*id).unwrap_or("");
-                serde_json::Value::String(s.to_owned())
+                Ok(serde_json::Value::String(s.to_owned()))
             }
             Value::Array(_, arr) => {
-                let elems = arr
+                let elems: Result<Vec<_>> = arr
                     .iter()
                     .filter_map(|id| self.arena.get(*id))
                     .map(|v| self.jsonify(v))
                     .collect();
-                serde_json::Value::Array(elems)
+                Ok(serde_json::Value::Array(elems?))
             }
             Value::Object(obj) => {
-                let map = obj
+                let map: Result<serde_json::Map<_, _>> = obj
                     .iter()
                     .filter_map(|(k, vid)| {
                         let key = self.arena.get_str(*k)?;
                         let val = self.arena.get(*vid)?;
-                        Some((key.to_owned(), self.jsonify(val)))
+                        Some((key.to_owned(), val))
                     })
+                    .map(|(k, v)| self.jsonify(v).map(|jv| (k, jv)))
                     .collect();
-                serde_json::Value::Object(map)
+                Ok(serde_json::Value::Object(map?))
             }
             // Sum type encoding: tagged object
             Value::Tagged(ty_expr, idx, payloads) => {
@@ -161,18 +171,21 @@ impl<I: IoContext> Interpreter<'_, I> {
                         self.registry.variant_name(ty, *idx, &self.arena)
                     })
                     .unwrap_or("?");
-                let payload_json: Vec<_> = payloads
+                let payload_json: Result<Vec<_>> = payloads
                     .iter()
                     .filter_map(|id| self.arena.get(*id))
                     .map(|v| self.jsonify(v))
                     .collect();
 
-                serde_json::json!({
+                Ok(serde_json::json!({
                     "_type": ty_name,
                     "_variant": var_name,
-                    "_payload": payload_json
-                })
+                    "_payload": payload_json?
+                }))
             }
+            Value::Closure { .. } => Err(Error::runtime_no_span(
+                "closures cannot be serialized to JSON",
+            )),
         }
     }
 
@@ -244,11 +257,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| Subscript::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            Value::Array(_, _) | Value::Object(_) | Value::Tagged(_, _, _) => {
-                Err(Error::runtime_no_span(
-                    "complex values cannot be used as subscripts",
-                ))
-            }
+            Value::Array(_, _)
+            | Value::Object(_)
+            | Value::Tagged(_, _, _)
+            | Value::Closure { .. } => Err(Error::runtime_no_span(
+                "complex values cannot be used as subscripts",
+            )),
         }
     }
 }

@@ -381,6 +381,7 @@ impl Lexer<'_> {
             just("||").to(Token::PipePipe),
             just("..").to(Token::DotDot),
             just("->").to(Token::Arrow),
+            just("=>").to(Token::FatArrow),
             just("??").to(Token::QuestionQuestion),
             just("?.").to(Token::QuestionDot),
         ));

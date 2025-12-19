@@ -17,6 +17,7 @@ use indexmap::{IndexMap, IndexSet};
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
+use crate::ast::ExprId;
 use crate::{Result, Span};
 
 /// Index into the value arena.
@@ -158,6 +159,38 @@ impl ValueArena {
     }
 }
 
+/// Captured lexical environment for closures.
+///
+/// When a closure is created, it captures the current lexical scope by value.
+/// This flattened map contains all bindings accessible at capture time.
+/// Since closures capture by value (not reference), later rebindings of the
+/// same name in the outer scope do not affect the captured value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CapturedEnv {
+    bindings: HashMap<StringId, ValueId>,
+}
+
+impl CapturedEnv {
+    /// Create a captured environment from a snapshot of the current scope stack.
+    ///
+    /// Flattens all visible bindings into a single map. If the same name appears
+    /// in multiple scopes, the innermost (most recent) binding wins (since
+    /// `collect()` into `HashMap` keeps the last value for duplicate keys).
+    pub(crate) fn capture(scopes: &[HashMap<StringId, ValueId>]) -> Self {
+        let bindings = scopes
+            .iter()
+            .flat_map(|frame| frame.iter())
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        Self { bindings }
+    }
+
+    /// Look up a name in the captured environment.
+    pub(crate) fn lookup(&self, name: StringId) -> Option<ValueId> {
+        self.bindings.get(&name).copied()
+    }
+}
+
 /// A runtime value.
 ///
 /// Uses `StringId` for interned strings and `ValueId` for nested values,
@@ -195,6 +228,18 @@ pub(crate) enum Value {
     /// - `u8`: the variant index (e.g., `0` for `None`, `1` for `Some`)
     /// - `SmallVec`: the payload values (most variants have 0-4)
     Tagged(TypeExprId, u8, SmallVec<[ValueId; 4]>),
+
+    /// A closure (anonymous function) with captured environment.
+    ///
+    /// Closures capture their lexical scope at creation time by value.
+    /// The body is an AST expression ID; the interpreter evaluates it
+    /// with the captured environment restored when the closure is called.
+    Closure {
+        params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
+        ret: Option<TypeExprId>,
+        body: ExprId,
+        env: CapturedEnv,
+    },
 }
 
 impl Value {
@@ -224,6 +269,8 @@ impl Value {
                     _ => true, // Unknown tagged → truthy
                 }
             }
+            // Closures are always truthy (like functions in most languages)
+            Self::Closure { .. } => true,
         }
     }
 
@@ -249,6 +296,7 @@ impl Value {
                     TypeDef::Sum { .. } => "Tagged",
                 })
                 .unwrap_or("Unknown"),
+            Self::Closure { .. } => "Closure",
         }
     }
 

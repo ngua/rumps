@@ -1,0 +1,58 @@
+; Test: Closures
+; Tests closure definition, binding, and display
+
+; === Single parameter closure ===
+
+LET double = x => x * 2
+OUTPUT double
+; Expected: <closure(1)>
+
+LET identity = x => x
+OUTPUT identity
+; Expected: <closure(1)>
+
+; === Multi-parameter closure ===
+
+LET add = (a, b) => a + b
+OUTPUT add
+; Expected: <closure(2)>
+
+LET triple = (a, b, c) => a + b + c
+OUTPUT triple
+; Expected: <closure(3)>
+
+; === Nullary closure ===
+
+LET const = () => 42
+OUTPUT const
+; Expected: <closure(0)>
+
+; === Typed parameter closure ===
+
+LET typed = (x: Int) => x + 1
+OUTPUT typed
+; Expected: <closure(1)>
+
+LET multi-typed = (x: Int, y: String) => y
+OUTPUT multi-typed
+; Expected: <closure(2)>
+
+; === Closure with return type ===
+
+LET with-ret = (x: Int) -> Int => x * x
+OUTPUT with-ret
+; Expected: <closure(1)>
+
+; === Nested closure in expression ===
+
+LET nested = (x => x + 1)
+OUTPUT nested
+; Expected: <closure(1)>
+
+; === Closure with complex body ===
+
+LET complex = (a, b) => { a * b + 1 }
+OUTPUT complex
+; Expected: <closure(2)>
+
+OUTPUT "Closure test complete"
