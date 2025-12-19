@@ -292,6 +292,9 @@ Int -> Int
 (Int) -> (Int) -> Int
 ```
 
+- [ ] Add `Token::Arrow` (`->`) to lexer
+  - **Must** parse before `-` to avoid consuming as `Minus`
+- [ ] Add lexer tests for `->` token
 - [ ] Extend AST type expression representation:
   ```rust
   /// Type expression in the AST (for annotations).
@@ -315,123 +318,8 @@ Int -> Int
   - Empty parens for nullary: `() -> Int`
 - [ ] Implement type expression resolution (AST -> runtime `TypeExprId`)
 - [ ] Add unit tests for function type parsing
-- [ ] Add integration tests
 
-### 7. Named Functions (`FUN`)
-
-User-defined named functions with optional type annotations. Type annotations can be any type expression, including function types for higher-order functions.
-
-```rumps
-; Untyped (types inferred/unchecked)
-FUN greet (name) {
-  OUTPUT "Hello, " ++ name ++ "!"
-}
-
-; Typed parameters
-FUN add (a: Int, b: Int) {
-  a + b
-}
-
-; Typed parameters and return type
-FUN square (x: Int) -> Int {
-  x * x
-}
-
-; Recursive
-FUN factorial (n: Int) -> Int {
-  IF n <= 1 { 1 }
-  ELSE { n * factorial(n - 1) }
-}
-
-; Higher-order: function parameter
-FUN apply (f: (Int) -> Int, x: Int) -> Int {
-  f(x)
-}
-
-; Higher-order: returns a function
-FUN make-adder (n: Int) -> (Int) -> Int {
-  x => x + n
-}
-
-; Composition
-FUN compose (f: (Int) -> Int, g: (Int) -> Int) -> (Int) -> Int {
-  x => f(g(x))
-}
-```
-
-- [ ] Add `Token::Fun` keyword to lexer
-- [ ] Add `Token::Arrow` (`->`) for return type annotation
-- [ ] Add AST representation:
-  ```rust
-  Stmt::Fun {
-      name: String,
-      params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,  // name + optional type expr
-      ret: Option<AstTypeExprId>,                               // optional return type expr
-      body: ExprId,
-  }
-  ```
-- [ ] Parse type annotations using full type expression grammar (section 6)
-- [ ] Add function storage to interpreter (name -> definition)
-- [ ] Implement function definition (stores in environment)
-- [ ] Support recursion (function visible in its own body)
-- [ ] Runtime type checking at call site:
-  - If param has type annotation, validate argument against type expr
-  - For function types, check that argument is callable with matching signature
-  - If return type annotation, check result type before returning
-  - Produce clear error: `"expected (Int) -> Int, got Int for parameter 'f'"`
-- [ ] Add unit tests
-- [ ] Add integration test script
-
-### 8. Function Calls and First-Class Functions
-
-Complete the existing `Expr::Call` implementation and support named functions as first-class values.
-
-```rumps
-; Direct calls
-greet("World")
-SET sum = add(10, 20)
-SET area = square(side) * 4
-
-; Named function as value (no parens = reference, not call)
-LET f = square         ; f is now a function value
-OUTPUT f(5)            ; 25
-
-; Pass named function to higher-order function
-OUTPUT apply(square, 5)           ; 25
-OUTPUT apply(double, 5)           ; 10
-
-; Compose named functions
-LET sq-then-dbl = compose(double, square)
-OUTPUT sq-then-dbl(3)             ; 18 (square(3)=9, double(9)=18)
-```
-
-- [ ] Implement `Expr::Call` in interpreter:
-  - Look up function by name OR evaluate callee expression
-  - If callee is `Value::Closure` or `Value::Function`, apply it
-  - Evaluate arguments
-  - Create new scope with parameters bound to arguments
-  - Evaluate function body
-  - Return result (last expression value)
-- [ ] Add `Value::Function` variant for named function references:
-  ```rust
-  Value::Function {
-      name: StringId,
-      params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
-      ret: Option<TypeExprId>,
-      body: ExprId,
-  }
-  ```
-- [ ] Resolve bare identifiers: if name refers to a function (not a variable), produce `Value::Function`
-- [ ] Arity checking (error if wrong number of arguments)
-- [ ] Accept both `Value::Function` and `Value::Closure` at call sites expecting function-typed arguments:
-  - Named function reference: `apply(square, 5)`
-  - Untyped closure: `apply(x => x * 2, 5)`
-  - Typed closure: `apply((x: Int) -> Int => x * 2, 5)`
-  - Validate against the declared function type (arity, param types, return type)
-- [ ] Add unit tests
-- [ ] Add integration test script
-
-### 9. Closures (Anonymous Functions)
+### 7. Closures (Anonymous Functions)
 
 Lambda expressions with arrow syntax and optional type annotations. Type annotations can be any type expression, including function types.
 
@@ -485,6 +373,119 @@ x => {
 - [ ] Implement closure creation (captures current environment)
 - [ ] Implement closure application (like function call but with captured env)
 - [ ] Runtime type checking (same as named functions, including function type params)
+- [ ] Add unit tests
+- [ ] Add integration test script
+
+### 8. Named Functions (`FUN`)
+
+User-defined named functions with optional type annotations. Type annotations can be any type expression, including function types for higher-order functions.
+
+```rumps
+; Untyped (types inferred/unchecked)
+FUN greet (name) {
+  OUTPUT "Hello, " ++ name ++ "!"
+}
+
+; Typed parameters
+FUN add (a: Int, b: Int) {
+  a + b
+}
+
+; Typed parameters and return type
+FUN square (x: Int) -> Int {
+  x * x
+}
+
+; Recursive
+FUN factorial (n: Int) -> Int {
+  IF n <= 1 { 1 }
+  ELSE { n * factorial(n - 1) }
+}
+
+; Higher-order: function parameter
+FUN apply (f: (Int) -> Int, x: Int) -> Int {
+  f(x)
+}
+
+; Higher-order: returns a function
+FUN make-adder (n: Int) -> (Int) -> Int {
+  x => x + n
+}
+
+; Composition
+FUN compose (f: (Int) -> Int, g: (Int) -> Int) -> (Int) -> Int {
+  x => f(g(x))
+}
+```
+
+- [ ] Add `Token::Fun` keyword to lexer
+- [ ] Add AST representation:
+  ```rust
+  Stmt::Fun {
+      name: String,
+      params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,  // name + optional type expr
+      ret: Option<AstTypeExprId>,                               // optional return type expr
+      body: ExprId,
+  }
+  ```
+- [ ] Parse type annotations using full type expression grammar (section 6)
+- [ ] Add function storage to interpreter (name -> definition)
+- [ ] Implement function definition (stores in environment)
+- [ ] Support recursion (function visible in its own body)
+- [ ] Runtime type checking at call site:
+  - If param has type annotation, validate argument against type expr
+  - For function types, check that argument is callable with matching signature
+  - If return type annotation, check result type before returning
+  - Produce clear error: `"expected (Int) -> Int, got Int for parameter 'f'"`
+- [ ] Add unit tests
+- [ ] Add integration test script
+
+### 9. Function Calls and First-Class Functions
+
+Complete the existing `Expr::Call` implementation and support named functions as first-class values.
+
+```rumps
+; Direct calls
+greet("World")
+SET sum = add(10, 20)
+SET area = square(side) * 4
+
+; Named function as value (no parens = reference, not call)
+LET f = square         ; f is now a function value
+OUTPUT f(5)            ; 25
+
+; Pass named function to higher-order function
+OUTPUT apply(square, 5)           ; 25
+OUTPUT apply(double, 5)           ; 10
+
+; Compose named functions
+LET sq-then-dbl = compose(double, square)
+OUTPUT sq-then-dbl(3)             ; 18 (square(3)=9, double(9)=18)
+```
+
+- [ ] Implement `Expr::Call` in interpreter:
+  - Look up function by name OR evaluate callee expression
+  - If callee is `Value::Closure` or `Value::Function`, apply it
+  - Evaluate arguments
+  - Create new scope with parameters bound to arguments
+  - Evaluate function body
+  - Return result (last expression value)
+- [ ] Add `Value::Function` variant for named function references:
+  ```rust
+  Value::Function {
+      name: StringId,
+      params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
+      ret: Option<TypeExprId>,
+      body: ExprId,
+  }
+  ```
+- [ ] Resolve bare identifiers: if name refers to a function (not a variable), produce `Value::Function`
+- [ ] Arity checking (error if wrong number of arguments)
+- [ ] Accept both `Value::Function` and `Value::Closure` at call sites expecting function-typed arguments:
+  - Named function reference: `apply(square, 5)`
+  - Untyped closure: `apply(x => x * 2, 5)`
+  - Typed closure: `apply((x: Int) -> Int => x * 2, 5)`
+  - Validate against the declared function type (arity, param types, return type)
 - [ ] Add unit tests
 - [ ] Add integration test script
 
