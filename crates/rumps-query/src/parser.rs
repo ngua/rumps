@@ -24,6 +24,12 @@
 //! inside block expressions.
 
 #![allow(dead_code)]
+// NOTE: This is because `ParseErr = Simple<Token, Span>`, which can be quite
+// large. Boxing it would infect the entire parser. This is only for errors,
+// which are not the happy path, so I'm not too concerned about size here.
+// It's also a warning for 136 bytes, which is not _that_ large and anyway
+// `Box`ing would add allocation overhead
+#![allow(clippy::result_large_err)]
 
 use std::cell::RefCell;
 use std::rc::Rc;

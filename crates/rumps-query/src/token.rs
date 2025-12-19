@@ -1,7 +1,4 @@
 //! Token definitions for the RUMPS query language.
-//!
-//! This is a minimal subset for Phase 1. See `TODOS/dsl.md` for the full
-//! language specification.
 
 #![allow(dead_code)]
 
@@ -93,8 +90,10 @@ impl Token {
     /// Returns the keyword token for a given identifier, if it matches
     /// (case-insensitive).
     pub(crate) fn keyword(s: &str) -> Option<Self> {
-        let upper = s.to_ascii_uppercase();
-        match upper.as_str() {
+        // NOTE All keywords are case-insensitive
+        //
+        // E.g. `SET`, `set`, `SeT`, `sET` are all equivalent
+        match s.to_ascii_uppercase().as_str() {
             "LET" => Some(Self::Let),
             "SET" => Some(Self::Set),
             "GET" => Some(Self::Get),
