@@ -1,0 +1,6 @@
+; Error: missing required field in struct type
+
+TYPE Person = { name: String, age: Int }
+
+; Missing `age` field
+LET p: Person = { name: "Alice" }

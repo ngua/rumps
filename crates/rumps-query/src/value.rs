@@ -320,6 +320,7 @@ impl Value {
                 .map(|def| match def {
                     TypeDef::Builtin(b) => b.name(),
                     TypeDef::Sum { .. } => "Tagged",
+                    TypeDef::Struct { .. } => "Struct",
                 })
                 .unwrap_or("Unknown"),
             Self::Closure { .. } => "Closure",
@@ -430,6 +431,15 @@ pub(crate) enum TypeDef {
         name: StringId,
         type_params: SmallVec<[StringId; 2]>,
         variants: SmallVec<[VariantDef; 4]>,
+    },
+    /// Structural object type alias.
+    ///
+    /// Maps field names to their expected types. At runtime, values are
+    /// `Value::Object`; the struct type is used for optional validation
+    /// when assigning to a typed variable (`LET x: StructName = ...`).
+    Struct {
+        name: StringId,
+        fields: IndexMap<StringId, TypeExprId>,
     },
 }
 
@@ -699,7 +709,9 @@ impl TypeRegistry {
     ) -> Option<&'a str> {
         self.get_def(id).and_then(|def| match def {
             TypeDef::Builtin(b) => Some(b.name()),
-            TypeDef::Sum { name, .. } => arena.get_str(*name),
+            TypeDef::Sum { name, .. } | TypeDef::Struct { name, .. } => {
+                arena.get_str(*name)
+            }
         })
     }
 
@@ -711,7 +723,7 @@ impl TypeRegistry {
         arena: &'a ValueArena,
     ) -> Option<&'a str> {
         self.get_def(ty).and_then(|def| match def {
-            TypeDef::Builtin(_) => None,
+            TypeDef::Builtin(_) | TypeDef::Struct { .. } => None,
             TypeDef::Sum { variants, .. } => variants
                 .iter()
                 .find(|v| v.idx == idx)
@@ -726,7 +738,7 @@ impl TypeRegistry {
         name: StringId,
     ) -> Option<&VariantDef> {
         self.get_def(ty).and_then(|def| match def {
-            TypeDef::Builtin(_) => None,
+            TypeDef::Builtin(_) | TypeDef::Struct { .. } => None,
             TypeDef::Sum { variants, .. } => {
                 variants.iter().find(|v| v.name == name)
             }

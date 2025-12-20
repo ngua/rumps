@@ -1,0 +1,10 @@
+; Error: passing object missing required fields to function
+
+TYPE Person = { name: String, age: Int }
+
+FUN greet (p: Person) -> String {
+  "Hello, " ++ p.name ++ "!"
+}
+
+; Missing `age` field
+OUTPUT greet({ name: "Alice" })

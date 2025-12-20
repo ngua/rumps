@@ -380,9 +380,10 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Register a user-defined type declaration.
     ///
-    /// Processes `TYPE Name = Variant1 | Variant2(T) | ...` and registers
+    /// Processes `TYPE Name = Variant1 | Variant2(T) | ...` (sum type) or
+    /// `TYPE Name = { field: Type, ... }` (struct type) and registers
     /// the type in the type registry. Errors if a type with the same name
-    /// already exists or if payload types reference undeclared type parameters.
+    /// already exists or if referenced types are undeclared.
     fn type_decl(
         &mut self,
         name: &str,
@@ -434,6 +435,35 @@ impl<I: IoContext> Interpreter<'_, I> {
                         name: name_id,
                         type_params: type_param_ids,
                         variants: variant_defs,
+                    },
+                    name_id,
+                );
+            }
+            TypeDefAst::Struct(fields) => {
+                // Struct types don't support type parameters (for now)
+                if !type_params.is_empty() {
+                    Err(Error::runtime(
+                        span,
+                        "struct types do not support type parameters",
+                    ))?;
+                }
+
+                // Resolve each field's type and build the field map
+                let resolved: Result<IndexMap<StringId, TypeExprId>> = fields
+                    .iter()
+                    .map(|(fname, ast_ty_id)| {
+                        let fname_id = self.arena.intern(fname);
+                        let ty_expr =
+                            self.resolve_type_expr(*ast_ty_id, span)?;
+                        Ok((fname_id, ty_expr))
+                    })
+                    .collect();
+
+                // Register the struct type
+                self.registry.register(
+                    crate::value::TypeDef::Struct {
+                        name: name_id,
+                        fields: resolved?,
                     },
                     name_id,
                 );
@@ -1127,28 +1157,96 @@ impl<I: IoContext> Interpreter<'_, I> {
             .try_for_each(|((name, ty), val_id)| {
                 // Validate type if annotated
                 ty.map_or(Ok(()), |expected_ty| {
-                    self.arena.get(*val_id).map_or(Ok(()), |val| {
-                        if self.value_matches_type_expr(val, expected_ty) {
-                            Ok(())
-                        } else {
-                            let pname =
-                                self.arena.get_str(*name).unwrap_or("?");
-                            let expected = self.format_type_expr(expected_ty);
-                            let actual =
-                                val.type_name(&self.registry, &self.type_exprs);
-                            Err(Error::type_err(
-                                span,
-                                format!(
-                                    "expected `{expected}`, got `{actual}` \
-                                     for parameter `{pname}`"
-                                ),
-                            ))
-                        }
+                    self.arena.get(*val_id).cloned().map_or(Ok(()), |val| {
+                        self.validate_param(&val, expected_ty, *name, span)
                     })
                 })?;
                 self.env.scopes.bind(*name, *val_id);
                 Ok(())
             })
+    }
+
+    /// Validate a function parameter against its expected type.
+    ///
+    /// Provides detailed error messages, especially for struct types.
+    fn validate_param(
+        &mut self,
+        val: &Value,
+        expected_ty: TypeExprId,
+        param_name: StringId,
+        span: Span,
+    ) -> Result<()> {
+        // Check if expected type is a struct type
+        let maybe_struct = self
+            .type_exprs
+            .base_type(expected_ty)
+            .and_then(|ty_id| self.registry.get_def(ty_id))
+            .and_then(|def| match def {
+                crate::value::TypeDef::Struct { fields, .. } => {
+                    Some(fields.clone())
+                }
+                _ => None,
+            });
+
+        match maybe_struct {
+            Some(expected_fields) => {
+                // Struct type: validate with detailed errors
+                match val {
+                    Value::Object(obj) => {
+                        expected_fields.iter().try_for_each(|(fname_id, _)| {
+                            obj.get(fname_id).map(|_| ()).ok_or_else(|| {
+                                let pname = self
+                                    .arena
+                                    .get_str(param_name)
+                                    .unwrap_or("?");
+                                let fname = self
+                                    .arena
+                                    .get_str(*fname_id)
+                                    .unwrap_or("?");
+                                Error::type_err(
+                                    span,
+                                    format!(
+                                        "parameter `{pname}`: missing field `{fname}`"
+                                    ),
+                                )
+                            })
+                        })
+                    }
+                    _ => {
+                        let pname =
+                            self.arena.get_str(param_name).unwrap_or("?");
+                        let expected = self.format_type_expr(expected_ty);
+                        let actual =
+                            val.type_name(&self.registry, &self.type_exprs);
+                        Err(Error::type_err(
+                            span,
+                            format!(
+                                "parameter `{pname}`: expected `{expected}`, \
+                                 got `{actual}`"
+                            ),
+                        ))
+                    }
+                }
+            }
+            None => {
+                // Non-struct type: use standard matching
+                if self.value_matches_type_expr(val, expected_ty) {
+                    Ok(())
+                } else {
+                    let pname = self.arena.get_str(param_name).unwrap_or("?");
+                    let expected = self.format_type_expr(expected_ty);
+                    let actual =
+                        val.type_name(&self.registry, &self.type_exprs);
+                    Err(Error::type_err(
+                        span,
+                        format!(
+                            "parameter `{pname}`: expected `{expected}`, \
+                             got `{actual}`"
+                        ),
+                    ))
+                }
+            }
+        }
     }
 
     /// Evaluate an object literal.
@@ -1958,7 +2056,25 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Char(_) => type_id == TypeId::CHAR,
             Value::String(_) => type_id == TypeId::STRING,
             Value::Array(_, _) => type_id == TypeId::ARRAY,
-            Value::Object(_) => type_id == TypeId::OBJECT,
+            Value::Object(obj) => {
+                // Object matches Object type directly, or any struct type
+                // whose required fields are present (extensible-record style)
+                if type_id == TypeId::OBJECT {
+                    true
+                } else {
+                    self.registry.get_def(type_id).is_some_and(|def| {
+                        match def {
+                            crate::value::TypeDef::Struct {
+                                fields, ..
+                            } => {
+                                // Check all required fields are present
+                                fields.iter().all(|(f, _)| obj.contains_key(f))
+                            }
+                            _ => false,
+                        }
+                    })
+                }
+            }
             Value::Tuple(_, _) => type_id == TypeId::TUPLE,
             Value::Tagged(ty_expr, _, _) => self
                 .type_exprs
@@ -2328,19 +2444,89 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Check type annotation if present (applies to the entire value)
         if let Some(ast_ty_id) = ty_ann {
             let expected_ty = self.resolve_type_expr(ast_ty_id, span)?;
-            let actual_ty = self.value_type_expr(&val);
-
-            if !self.type_exprs.eq(expected_ty, actual_ty) {
-                let expected = self.type_expr_name(expected_ty);
-                let actual = self.type_expr_name(actual_ty);
-                Err(Error::type_err(
-                    span,
-                    format!("type mismatch: expected {expected}, got {actual}"),
-                ))?;
-            }
+            self.validate_type(&val, expected_ty, span)?;
         }
 
         self.destructure(pat, &val, span)
+    }
+
+    /// Validate that a value conforms to an expected type.
+    ///
+    /// For struct types, validates extensible-record style: the object must
+    /// have at least the declared fields (extra fields are allowed).
+    fn validate_type(
+        &mut self,
+        val: &Value,
+        expected_ty: TypeExprId,
+        span: Span,
+    ) -> Result<()> {
+        // Check if expected type is a struct type
+        let maybe_struct = self
+            .type_exprs
+            .base_type(expected_ty)
+            .and_then(|ty_id| self.registry.get_def(ty_id))
+            .and_then(|def| match def {
+                crate::value::TypeDef::Struct { fields, .. } => {
+                    Some(fields.clone())
+                }
+                _ => None,
+            });
+
+        match maybe_struct {
+            Some(expected_fields) => {
+                // Struct type: validate object has required fields
+                self.validate_struct(val, &expected_fields, span)
+            }
+            None => {
+                // Non-struct type: use exact type matching
+                let actual_ty = self.value_type_expr(val);
+                if self.type_exprs.eq(expected_ty, actual_ty) {
+                    Ok(())
+                } else {
+                    let expected = self.type_expr_name(expected_ty);
+                    let actual = self.type_expr_name(actual_ty);
+                    Err(Error::type_err(
+                        span,
+                        format!(
+                            "type mismatch: expected {expected}, got {actual}"
+                        ),
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Validate that an object has all required struct fields.
+    ///
+    /// Extensible-record style: extra fields in the object are allowed.
+    fn validate_struct(
+        &mut self,
+        val: &Value,
+        expected_fields: &IndexMap<StringId, TypeExprId>,
+        span: Span,
+    ) -> Result<()> {
+        match val {
+            Value::Object(obj) => {
+                // Check each expected field is present
+                expected_fields.iter().try_for_each(|(fname_id, _)| {
+                    obj.get(fname_id).map(|_| ()).ok_or_else(|| {
+                        let fname =
+                            self.arena.get_str(*fname_id).unwrap_or("?");
+                        Error::type_err(
+                            span,
+                            format!("missing required field `{fname}`"),
+                        )
+                    })
+                })
+            }
+            _ => {
+                let actual = val.type_name(&self.registry, &self.type_exprs);
+                Err(Error::type_err(
+                    span,
+                    format!("expected struct (Object), got {actual}"),
+                ))
+            }
+        }
     }
 
     /// Destructure a value according to a binding pattern, creating bindings.

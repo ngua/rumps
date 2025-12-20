@@ -1,0 +1,62 @@
+; Structural object type aliases
+
+; Define a struct type
+TYPE Person = {
+  name: String,
+  age: Int
+}
+
+; Construct an object matching the type
+LET p: Person = { name: "Alice", age: 30 }
+OUTPUT p.name
+OUTPUT p.age
+
+; Extra fields are allowed (extensible-record style)
+LET p2: Person = { name: "Bob", age: 25, occupation: "Developer" }
+OUTPUT p2.name
+OUTPUT p2.occupation
+
+; Direct field access (no MATCH required)
+TYPE Address = {
+  street: String,
+  city: String,
+  zip: String
+}
+
+LET addr: Address = { street: "123 Main St", city: "NYC", zip: "10001" }
+OUTPUT addr.city
+
+; Nested struct types
+TYPE Patient = {
+  id: Int,
+  name: String,
+  active: Bool
+}
+
+TYPE PatientRecord = {
+  patient: Patient,
+  address: Address
+}
+
+LET rec = {
+  patient: { id: 1, name: "Charlie", active: true },
+  address: { street: "456 Oak Ave", city: "LA", zip: "90001" }
+}
+OUTPUT rec.patient.name
+OUTPUT rec.address.city
+
+; Function with struct type parameter
+FUN greet (p: Person) -> String {
+  "Hello, " ++ p.name ++ "!"
+}
+
+OUTPUT greet({ name: "Diana", age: 28 })
+
+; Function returning struct-compatible object
+FUN make_person (name: String, age: Int) -> Object {
+  { name: name, age: age }
+}
+
+LET p3 = make_person("Eve", 35)
+OUTPUT p3.name
+OUTPUT p3.age

@@ -337,15 +337,18 @@ pub(crate) struct VariantAst {
 }
 
 /// A type definition body for user-defined types.
-///
-/// Currently only sum types are supported; struct types will be added later.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum TypeDefAst {
     /// Sum type: `Variant1 | Variant2(T) | ...`
     ///
     /// Each variant is a named constructor with optional payload types.
     Sum(SmallVec<[VariantAst; 4]>),
-    // Struct will be added in Phase 3.2
+
+    /// Structural object type alias: `{ field1: Type1, field2: Type2, ... }`
+    ///
+    /// Each entry is `(field_name, field_type)`. At runtime these map to
+    /// `Value::Object`; the struct type enables optional validation.
+    Struct(Vec<(String, AstTypeExprId)>),
 }
 
 /// A literal value in the AST.

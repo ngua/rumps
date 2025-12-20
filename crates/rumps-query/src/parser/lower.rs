@@ -294,6 +294,13 @@ fn lower_type_def(ast: &mut Ast, def: cst::TypeDefCst) -> Result<TypeDefAst> {
                 .collect::<Result<SmallVec<_>>>()?;
             Ok(TypeDefAst::Sum(lowered))
         }
+        cst::TypeDefCst::Struct(fields) => {
+            let lowered = fields
+                .into_iter()
+                .map(|(name, ty)| lower_type_expr(ast, ty).map(|id| (name, id)))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(TypeDefAst::Struct(lowered))
+        }
     }
 }
 

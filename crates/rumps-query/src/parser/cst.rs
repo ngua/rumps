@@ -268,4 +268,7 @@ pub(crate) struct VariantCst {
 pub(crate) enum TypeDefCst {
     /// Sum type: `Variant1 | Variant2(T) | ...`
     Sum(Vec<VariantCst>),
+
+    /// Structural object type alias: `{ field1: Type1, field2: Type2, ... }`
+    Struct(Vec<(String, TypeExpr)>),
 }

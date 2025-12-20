@@ -423,7 +423,7 @@ OUTPUT rec.patient.name  ; "Bob"
 
 #### 3.1 TypeDef Extension
 
-- [ ] Add `TypeDef::Struct` variant:
+- [x] Add `TypeDef::Struct` variant:
   ```rust
   TypeDef::Struct {
       name: StringId,
@@ -433,17 +433,17 @@ OUTPUT rec.patient.name  ; "Bob"
 
 #### 3.2 Parser
 
-- [ ] Parse `TYPE Name = { field: Type, ... }`
-- [ ] Reuse existing object literal parsing for field definitions
-- [ ] Handle newlines inside struct definition
+- [x] Parse `TYPE Name = { field: Type, ... }`
+- [x] Reuse existing object literal parsing for field definitions
+- [x] Handle newlines inside struct definition
 
 #### 3.3 Interpreter
 
-- [ ] Register `TypeDef::Struct` in `TypeRegistry`
-- [ ] When assigning to typed variable (`LET x: TypeName = ...`):
+- [x] Register `TypeDef::Struct` in `TypeRegistry`
+- [x] When assigning to typed variable (`LET x: TypeName = ...`):
   - If type is a struct, validate object **has required fields**
   - Additional fields are OK (i.e. extensible-record style)
-- [ ] Field access on objects with struct type works via existing `Expr::Field`
+- [x] Field access on objects with struct type works via existing `Expr::Field`
 
 #### 3.4 Type Validation Strategy
 
@@ -461,9 +461,9 @@ LET p2 = { id: 1, name: "X", age: 20, active: true }
 
 #### 3.5 Tests
 
-- [ ] Add parser tests for struct type declarations
-- [ ] Add interpreter tests for struct registration and validation
-- [ ] Add integration test script (`XX_struct_types.rumps`)
+- [x] Add parser tests for struct type declarations
+- [x] Add interpreter tests for struct registration and validation
+- [x] Add integration test script (`56_struct_types.rumps`)
 
 ---
 

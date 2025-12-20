@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: struct type requires object value\n\nTYPE Person = { name: String, age: Int }\n\n; Wrong type (Int instead of Object)\nLET p: Person = 42\n"
+---
+ERROR: type error at 123..141: expected struct (Object), got Int

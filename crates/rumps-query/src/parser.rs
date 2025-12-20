@@ -463,10 +463,11 @@ impl Parser {
             )
     }
 
-    /// `TYPE Name = Variant1 | Variant2(T) | ...`
-    /// `TYPE Name[T] = Left(T) | Right(T)`
+    /// `TYPE Name = Variant1 | Variant2(T) | ...` (sum type)
+    /// `TYPE Name[T] = Left(T) | Right(T)` (parameterized sum type)
+    /// `TYPE Name = { field1: Type1, field2: Type2 }` (struct type alias)
     ///
-    /// User-defined sum type declaration.
+    /// User-defined type declaration (sum type or struct).
     fn type_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         // Type parameters: `[T]` or `[T, U]`
         let type_param_sep =
@@ -475,7 +476,7 @@ impl Parser {
             .ignore_then(Self::opt_newlines())
             .ignore_then(
                 Self::ident()
-                    .separated_by(type_param_sep)
+                    .separated_by(type_param_sep.clone())
                     .at_least(1)
                     .allow_trailing(),
             )
@@ -483,6 +484,8 @@ impl Parser {
             .then_ignore(just(Token::RBracket))
             .or_not()
             .map(|ps| ps.unwrap_or_default());
+
+        // --- Sum type definition ---
 
         // Variant: `Name` or `Name(Type, Type, ...)`
         let payload_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
@@ -505,10 +508,36 @@ impl Parser {
             .ignore_then(just(Token::SinglePipe))
             .then_ignore(Self::opt_newlines());
 
-        let variants = variant
+        let sum_def = variant
             .separated_by(variant_sep)
             .at_least(1)
-            .allow_leading(); // Allow leading `|` for multi-line formatting
+            .allow_leading() // Allow leading `|` for multi-line formatting
+            .map(cst::TypeDefCst::Sum);
+
+        // --- Struct type definition ---
+
+        // Struct field: `name: Type`
+        let struct_field = Self::ident()
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::Colon))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_expr());
+
+        let struct_field_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+
+        let struct_def = just(Token::LBrace)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                struct_field.separated_by(struct_field_sep).allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBrace))
+            .map(cst::TypeDefCst::Struct);
+
+        // --- Combined type definition (struct or sum) ---
+
+        let type_def = struct_def.or(sum_def);
 
         just(Token::Type)
             .ignore_then(Self::opt_newlines())
@@ -517,13 +546,13 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
-            .then(variants)
-            .map_with_span(|((name, type_params), variants), span| {
+            .then(type_def)
+            .map_with_span(|((name, type_params), def), span| {
                 cst::Stmt::new(
                     cst::StmtKind::Type {
                         name,
                         type_params,
-                        def: cst::TypeDefCst::Sum(variants),
+                        def,
                     },
                     span,
                 )
@@ -2059,6 +2088,7 @@ mod tests {
                         assert_eq!(variants[2].name, "Completed");
                         assert!(variants.iter().all(|v| v.payloads.is_empty()));
                     }
+                    crate::ast::TypeDefAst::Struct(_) => panic!("expected Sum"),
                 }
             }
             _ => panic!("expected Type"),
@@ -2081,6 +2111,7 @@ mod tests {
                         assert_eq!(variants[1].name, "KeyPress");
                         assert_eq!(variants[1].payloads.len(), 1);
                     }
+                    crate::ast::TypeDefAst::Struct(_) => panic!("expected Sum"),
                 }
             }
             _ => panic!("expected Type"),
@@ -2118,6 +2149,57 @@ mod tests {
                     crate::ast::TypeDefAst::Sum(variants) => {
                         assert_eq!(variants.len(), 3);
                     }
+                    crate::ast::TypeDefAst::Struct(_) => panic!("expected Sum"),
+                }
+            }
+            _ => panic!("expected Type"),
+        }
+    }
+
+    #[test]
+    fn parse_struct_type() {
+        // Struct type alias
+        let result = parse_ok("TYPE Person = { name: String, age: Int }");
+        let stmt = result.ast.get_stmt(result.stmts[0]);
+        match stmt {
+            Some(Stmt::Type {
+                name,
+                type_params,
+                def,
+            }) => {
+                assert_eq!(name, "Person");
+                assert!(type_params.is_empty());
+                match def {
+                    crate::ast::TypeDefAst::Struct(fields) => {
+                        assert_eq!(fields.len(), 2);
+                        assert_eq!(fields[0].0, "name");
+                        assert_eq!(fields[1].0, "age");
+                    }
+                    crate::ast::TypeDefAst::Sum(_) => panic!("expected Struct"),
+                }
+            }
+            _ => panic!("expected Type"),
+        }
+    }
+
+    #[test]
+    fn parse_struct_type_multiline() {
+        // Multi-line struct type
+        let src =
+            "TYPE Patient = {\n  id: Int,\n  name: String,\n  active: Bool\n}";
+        let result = parse_ok(src);
+        let stmt = result.ast.get_stmt(result.stmts[0]);
+        match stmt {
+            Some(Stmt::Type { name, def, .. }) => {
+                assert_eq!(name, "Patient");
+                match def {
+                    crate::ast::TypeDefAst::Struct(fields) => {
+                        assert_eq!(fields.len(), 3);
+                        assert_eq!(fields[0].0, "id");
+                        assert_eq!(fields[1].0, "name");
+                        assert_eq!(fields[2].0, "active");
+                    }
+                    crate::ast::TypeDefAst::Sum(_) => panic!("expected Struct"),
                 }
             }
             _ => panic!("expected Type"),

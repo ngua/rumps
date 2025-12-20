@@ -1,0 +1,14 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Structural object type aliases\n\n; Define a struct type\nTYPE Person = {\n  name: String,\n  age: Int\n}\n\n; Construct an object matching the type\nLET p: Person = { name: \"Alice\", age: 30 }\nOUTPUT p.name\nOUTPUT p.age\n\n; Extra fields are allowed (extensible-record style)\nLET p2: Person = { name: \"Bob\", age: 25, occupation: \"Developer\" }\nOUTPUT p2.name\nOUTPUT p2.occupation\n\n; Direct field access (no MATCH required)\nTYPE Address = {\n  street: String,\n  city: String,\n  zip: String\n}\n\nLET addr: Address = { street: \"123 Main St\", city: \"NYC\", zip: \"10001\" }\nOUTPUT addr.city\n\n; Nested struct types\nTYPE Patient = {\n  id: Int,\n  name: String,\n  active: Bool\n}\n\nTYPE PatientRecord = {\n  patient: Patient,\n  address: Address\n}\n\nLET rec = {\n  patient: { id: 1, name: \"Charlie\", active: true },\n  address: { street: \"456 Oak Ave\", city: \"LA\", zip: \"90001\" }\n}\nOUTPUT rec.patient.name\nOUTPUT rec.address.city\n\n; Function with struct type parameter\nFUN greet (p: Person) -> String {\n  \"Hello, \" ++ p.name ++ \"!\"\n}\n\nOUTPUT greet({ name: \"Diana\", age: 28 })\n\n; Function returning struct-compatible object\nFUN make_person (name: String, age: Int) -> Object {\n  { name: name, age: age }\n}\n\nLET p3 = make_person(\"Eve\", 35)\nOUTPUT p3.name\nOUTPUT p3.age\n"
+---
+Alice
+30
+Bob
+Developer
+NYC
+Charlie
+LA
+Hello, Diana!
+Eve
+35

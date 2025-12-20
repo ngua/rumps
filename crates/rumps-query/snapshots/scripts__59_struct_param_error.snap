@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: passing object missing required fields to function\n\nTYPE Person = { name: String, age: Int }\n\nFUN greet (p: Person) -> String {\n  \"Hello, \" ++ p.name ++ \"!\"\n}\n\n; Missing `age` field\nOUTPUT greet({ name: \"Alice\" })\n"
+---
+ERROR: type error at 198..222: parameter `p`: missing field `age`

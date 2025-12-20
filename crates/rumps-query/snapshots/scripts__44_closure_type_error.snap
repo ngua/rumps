@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Test: Closure Parameter Type Error\n; Calling a typed closure with wrong argument type.\n\nLET double = (x: Int) -> Int => x * 2\n\n; Pass string to Int parameter\nOUTPUT double(\"hello\")\n"
 ---
-ERROR: type error at 167..182: expected `Int`, got `String` for parameter `x`
+ERROR: type error at 167..182: parameter `x`: expected `Int`, got `String`
