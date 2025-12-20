@@ -20,6 +20,7 @@ mod interpreter;
 mod io;
 mod lexer;
 mod parser;
+mod resolve;
 mod span;
 mod token;
 mod value;
@@ -50,6 +51,11 @@ pub(crate) use value::{
     ValueArena, ValueId,
 };
 
+/// Run a RUMPS script, outputting to stdout.
+pub async fn run(src: &str, db: Database) -> Result<()> {
+    run_with_io(src, db, Io).await.map(|_| ())
+}
+
 /// Run a RUMPS script with a custom I/O context.
 ///
 /// Parses the source, interprets it against the given database, and uses the
@@ -59,15 +65,10 @@ pub async fn run_with_io<I: IoContext>(
     db: Database,
     io: I,
 ) -> Result<I> {
-    let result = Parser::parse(src)?;
-    let interp = Interpreter::new(&result.ast, db, io)?;
+    let mut result = Parser::parse(src)?;
+    let interp = Interpreter::new(&mut result.ast, db, io)?;
     let interp = interp.run(&result.stmts).await?;
     Ok(interp.into_io())
-}
-
-/// Run a RUMPS script, outputting to stdout.
-pub async fn run(src: &str, db: Database) -> Result<()> {
-    run_with_io(src, db, Io).await.map(|_| ())
 }
 
 /// Run a RUMPS script and capture output to a string.

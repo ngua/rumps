@@ -126,6 +126,7 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> ExprId {
             let arg_ids = lower_exprs(ast, args);
             Expr::Variant(ty, var, arg_ids)
         }
+        // NOTE: No `Path` case; `Expr::Path` is created by name resolution, not parsing.
         cst::ExprKind::Is(inner, pattern) => {
             let inner_id = lower_expr(ast, *inner);
             Expr::Is(inner_id, pattern)

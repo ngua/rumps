@@ -114,6 +114,11 @@ pub(crate) enum ExprKind {
     OptionalField(Box<Expr>, String),
 
     /// Variant constructor.
+    ///
+    /// NOTE: `Expr::Path` exists in AST but not CST. The name resolution pass
+    /// (after CST->AST lowering) converts `Field(Var(Type), Variant)` to
+    /// `Expr::Path` for zero-arity variants. The parser never produces paths
+    /// directly; it emits generic `Field` and `Call` nodes.
     Variant(String, String, Vec<Expr>),
 
     /// Type check.

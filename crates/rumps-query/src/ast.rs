@@ -132,6 +132,18 @@ impl Ast {
         self.type_exprs.get(id.idx())
     }
 
+    /// Replace an expression in place (for name resolution).
+    pub(crate) fn set_expr(&mut self, id: ExprId, e: Expr) {
+        if let Some(slot) = self.exprs.get_mut(id.idx()) {
+            *slot = e;
+        }
+    }
+
+    /// Iterate over all expression IDs.
+    pub(crate) fn expr_ids(&self) -> impl Iterator<Item = ExprId> {
+        (0..self.exprs.len()).map(|i| ExprId(i as u32))
+    }
+
     /// Get the span of a type expression.
     pub(crate) fn type_expr_span(&self, id: AstTypeExprId) -> Option<Span> {
         self.type_expr_spans.get(id.idx()).copied()
@@ -296,10 +308,17 @@ pub(crate) enum Expr {
     /// the field value in `Option.Some`.
     OptionalField(ExprId, String),
 
-    /// Variant constructor: `Type.Variant(args...)` or `Type.Variant`.
+    /// Variant constructor: `Type.Variant(args...)`.
     ///
-    /// Examples: `Option.Some(1)`, `Result.Ok(42)`, `Option.None`
+    /// Examples: `Option.Some(1)`, `Result.Ok(42)`
     Variant(String, String, SmallVec<[ExprId; 4]>),
+
+    /// Resolved namespace path: `Type.Variant` for zero-arity variants.
+    ///
+    /// Created by the name resolution pass from `Field(Var(type), variant)`
+    /// when the base is a registered type and the field is a zero-arity variant.
+    /// Examples: `Option.None` -> `Path(["Option", "None"])`
+    Path(SmallVec<[String; 4]>),
 
     /// Type check: `expr is Pattern`.
     ///

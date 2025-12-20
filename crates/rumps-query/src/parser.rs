@@ -830,42 +830,10 @@ impl Parser {
                     cst::ExprKind::Index(Box::new(acc), idx),
                     span,
                 )),
-                PostfixOp::Call(args, _) => {
-                    // Check for variant constructor `Type.Variant(args)`
-                    let variant_opt = match &acc.kind {
-                        cst::ExprKind::Field(inner, var_name)
-                            if var_name
-                                .chars()
-                                .next()
-                                .is_some_and(|c| c.is_uppercase()) =>
-                        {
-                            match &inner.kind {
-                                cst::ExprKind::Var(ty_name) => {
-                                    Some((ty_name.clone(), var_name.clone()))
-                                }
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    };
-
-                    let kind = variant_opt.map_or_else(
-                        || {
-                            cst::ExprKind::Call(
-                                Box::new(acc.clone()),
-                                args.clone(),
-                            )
-                        },
-                        |(ty_name, var_name)| {
-                            cst::ExprKind::Variant(
-                                ty_name,
-                                var_name,
-                                args.clone(),
-                            )
-                        },
-                    );
-                    Some(cst::Expr::new(kind, span))
-                }
+                PostfixOp::Call(args, _) => Some(cst::Expr::new(
+                    cst::ExprKind::Call(Box::new(acc), args),
+                    span,
+                )),
             }
         })
     }
@@ -1470,14 +1438,19 @@ mod tests {
 
     #[test]
     fn parse_variant_constructor() {
-        let (ast, id) = parse_expr_ok("Option.Some(42)");
+        // Parser produces Call(Field(...)); resolve converts to Variant
+        let (mut ast, id) = parse_expr_ok("Option.Some(42)");
+        let mut arena = crate::ValueArena::new();
+        let registry =
+            crate::TypeRegistry::new(&mut arena).expect("registry failed");
+        crate::resolve::resolve(&mut ast, &mut arena, &registry);
         match ast.get_expr(id) {
             Some(Expr::Variant(ty, var, args)) => {
                 assert_eq!(ty, "Option");
                 assert_eq!(var, "Some");
                 assert_eq!(args.len(), 1);
             }
-            _ => panic!("expected Variant"),
+            _ => panic!("expected Variant after resolution"),
         }
     }
 

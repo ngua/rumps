@@ -153,9 +153,15 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 // Public API
 impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Create a new interpreter for the given AST, database, and I/O context.
-    pub(crate) fn new(ast: &'a Ast, db: Database, io: I) -> Result<Self> {
+    ///
+    /// This is the main constructor. It creates the value arena and type
+    /// registry, runs name resolution on the AST, and sets up the interpreter.
+    /// Takes `&mut Ast` because resolution mutates it, but stores `&Ast`
+    /// since interpretation only reads.
+    pub(crate) fn new(ast: &'a mut Ast, db: Database, io: I) -> Result<Self> {
         let mut arena = ValueArena::new();
         let registry = TypeRegistry::new(&mut arena)?;
+        crate::resolve::resolve(ast, &mut arena, &registry);
 
         Ok(Self {
             ast,
@@ -181,6 +187,31 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Consume the interpreter and return the I/O context.
     pub(crate) fn into_io(self) -> I {
         self.io
+    }
+
+    /// Create an interpreter with a pre-created arena and registry.
+    ///
+    /// Used by tests that need direct control over the arena/registry,
+    /// bypassing name resolution.
+    #[cfg(test)]
+    pub(crate) fn with_arena(
+        ast: &'a Ast,
+        db: Database,
+        io: I,
+        arena: ValueArena,
+        registry: TypeRegistry,
+    ) -> Self {
+        Self {
+            ast,
+            env: Environment::new(),
+            db,
+            txn: None,
+            arena,
+            registry,
+            type_exprs: TypeExprArena::new(),
+            functions: HashMap::new(),
+            io,
+        }
     }
 
     /// Evaluate an expression.
@@ -216,6 +247,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Variant(ty, var, args) => {
                 self.variant(&ty, &var, &args, span).await
             }
+            Expr::Path(segments) => self.path(&segments, span),
             Expr::Is(expr, pattern) => self.is(expr, &pattern, span).await,
             Expr::As(expr, ty) => self.r#as(expr, ty, span).await,
             Expr::Read(expr, ty) => self.read(expr, ty, span).await,
@@ -1215,14 +1247,48 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate field access.
+    /// Evaluate a resolved namespace path: `Type.Variant` for zero-arity variants.
     ///
-    /// HACK: Also handles zero-arity variant constructors like `Option.None` by
-    /// checking if the base is a type name. This conflates runtime field access
-    /// with compile-time namespace resolution. In Phase 3.0, a name resolution
-    /// pass will convert `Type.Variant` to `Expr::Path` before interpretation,
-    /// and this method will become purely runtime field access on objects.
-    /// See: `TODOS/dsl/phase-3.md`, Section 0.3
+    /// Created by the name resolution pass from `Expr::Field(Var(type), variant)`.
+    /// Currently only handles paths of length 2 (type + variant).
+    fn path(&mut self, segments: &[String], span: Span) -> Result<Value> {
+        match segments {
+            [ty_name, var_name] => {
+                let ty_id = self.arena.intern(ty_name);
+                let var_id = self.arena.intern(var_name);
+
+                let type_id = self.registry.lookup(ty_id).ok_or_else(|| {
+                    Error::runtime(span, format!("unknown type `{ty_name}`"))
+                })?;
+
+                let v = self
+                    .registry
+                    .lookup_variant(type_id, var_id)
+                    .ok_or_else(|| {
+                        Error::runtime(
+                            span,
+                            format!(
+                                "type `{ty_name}` has no variant `{var_name}`"
+                            ),
+                        )
+                    })?;
+
+                let idx = v.idx;
+                let ty_expr = self.build_variant_type_expr(type_id, idx, &[]);
+                Ok(Value::Tagged(ty_expr, idx, smallvec::SmallVec::new()))
+            }
+            _ => Err(Error::runtime(
+                span,
+                format!("unsupported path length: {}", segments.len()),
+            )),
+        }
+    }
+
+    /// Evaluate field access on an object value.
+    ///
+    /// After name resolution, this method is purely for runtime field access
+    /// on `Value::Object`. Zero-arity variants like `Option.None` are handled
+    /// by `Expr::Path` (resolved at parse time).
     #[async_recursion]
     async fn field(
         &mut self,
@@ -1230,64 +1296,27 @@ impl<I: IoContext> Interpreter<'_, I> {
         field: &str,
         span: Span,
     ) -> Result<Value> {
-        // Check for zero-arity variant: `Type.Variant` where base is a type name
-        let base_expr = self.ast.get_expr(base).cloned();
-        let variant_info = base_expr.as_ref().and_then(|e| match e {
-            Expr::Var(ty_name) => {
-                let ty_id = self.arena.intern(ty_name);
+        let base_val = self.eval(base).await?;
+
+        match &base_val {
+            Value::Object(obj) => {
                 let field_id = self.arena.intern(field);
-                self.registry.lookup(ty_id).and_then(|type_id| {
-                    self.registry
-                        .lookup_variant(type_id, field_id)
-                        .map(|v| (ty_name.clone(), type_id, v.idx, v.arity))
-                })
+                obj.get(&field_id)
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(
+                            span,
+                            format!("field `{field}` not found"),
+                        )
+                    })
             }
-            _ => None,
-        });
-
-        let variant_result =
-            variant_info.map(|(ty_name, type_id, idx, arity)| {
-                if arity == 0 {
-                    let ty_expr =
-                        self.build_variant_type_expr(type_id, idx, &[]);
-                    Ok(Value::Tagged(ty_expr, idx, smallvec::SmallVec::new()))
-                } else {
-                    Err(Error::runtime(
-                        span,
-                        format!(
-                            "`{ty_name}.{field}` requires {arity} argument(s)"
-                        ),
-                    ))
-                }
-            });
-
-        // If variant lookup produced a result, return it directly
-        if let Some(result) = variant_result {
-            result
-        } else {
-            // Regular field access
-            let base_val = self.eval(base).await?;
-
-            match &base_val {
-                Value::Object(obj) => {
-                    let field_id = self.arena.intern(field);
-                    obj.get(&field_id)
-                        .and_then(|id| self.arena.get(*id).cloned())
-                        .ok_or_else(|| {
-                            Error::runtime(
-                                span,
-                                format!("field `{field}` not found"),
-                            )
-                        })
-                }
-                _ => Err(Error::type_err(
-                    span,
-                    format!(
-                        "cannot access field on {}",
-                        base_val.type_name(&self.registry, &self.type_exprs)
-                    ),
-                )),
-            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "cannot access field on {}",
+                    base_val.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
         }
     }
 
@@ -2087,9 +2116,13 @@ mod tests {
     use crate::io::TestIo;
 
     /// Create a test interpreter with an in-memory database.
+    ///
+    /// Uses `with_arena` since tests build ASTs directly (no parsing/resolution).
     fn test_interp(ast: &Ast) -> Interpreter<'_, TestIo> {
         let db = Database::in_memory().expect("in-memory db");
-        Interpreter::new(ast, db, TestIo::new()).expect("interpreter")
+        let mut arena = ValueArena::new();
+        let registry = TypeRegistry::new(&mut arena).expect("registry");
+        Interpreter::with_arena(ast, db, TestIo::new(), arena, registry)
     }
 
     /// Build a simple AST with a single expression.
@@ -3118,15 +3151,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn variant_option_none_via_field() {
-        // Option.None parses as Field; interpreter converts it
+    async fn variant_option_none_via_path() {
+        // Option.None is resolved to Expr::Path by the resolution pass
         let mut ast = Ast::new();
-        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
-        let field =
-            ast.add_expr(Expr::Field(base, "None".into()), Span::new(0, 11));
+        let path = ast.add_expr(
+            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
+            Span::new(0, 11),
+        );
 
         let mut interp = test_interp(&ast);
-        let result = interp.eval(field).await.unwrap();
+        let result = interp.eval(path).await.unwrap();
         match result {
             Value::Tagged(ty_expr, idx, payloads) => {
                 let base = interp.type_exprs.base_type(ty_expr);
@@ -3292,9 +3326,10 @@ mod tests {
     async fn optional_field_on_none() {
         // Option.None?.x -> Option.None
         let mut ast = Ast::new();
-        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
-        let none =
-            ast.add_expr(Expr::Field(base, "None".into()), Span::new(0, 11));
+        let none = ast.add_expr(
+            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
+            Span::new(0, 11),
+        );
         let opt_field = ast
             .add_expr(Expr::OptionalField(none, "x".into()), Span::new(0, 14));
 
@@ -3401,9 +3436,10 @@ mod tests {
     async fn is_variant_none() {
         // Option.None is Option.None -> true
         let mut ast = Ast::new();
-        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
-        let none =
-            ast.add_expr(Expr::Field(base, "None".into()), Span::new(0, 11));
+        let none = ast.add_expr(
+            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
+            Span::new(0, 11),
+        );
         let is_expr = ast.add_expr(
             Expr::Is(
                 none,
@@ -3448,9 +3484,10 @@ mod tests {
     async fn is_variant_mismatch() {
         // Option.None is Option.Some(_) -> false
         let mut ast = Ast::new();
-        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
-        let none =
-            ast.add_expr(Expr::Field(base, "None".into()), Span::new(0, 11));
+        let none = ast.add_expr(
+            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
+            Span::new(0, 11),
+        );
         let is_expr = ast.add_expr(
             Expr::Is(
                 none,
@@ -3523,10 +3560,11 @@ mod tests {
         // -> 99 (bindings not visible in else)
         let mut ast = Ast::new();
 
-        // Option.None
-        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(3, 9));
-        let none =
-            ast.add_expr(Expr::Field(base, "None".into()), Span::new(3, 14));
+        // Option.None (resolved to Path)
+        let none = ast.add_expr(
+            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
+            Span::new(3, 14),
+        );
 
         // is Option.Some(val)
         let is_expr = ast.add_expr(
