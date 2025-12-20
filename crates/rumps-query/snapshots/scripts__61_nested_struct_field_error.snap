@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: wrong field type in nested struct\n\nTYPE Address = { street: String, city: String, zip: String }\nTYPE Patient = { id: Int, name: String, address: Address }\n\n; address.zip should be String, not Int\nLET p: Patient = {\n  id: 1,\n  name: \"Alice\",\n  address: { street: \"123 Main\", city: \"NYC\", zip: 10001 }\n}\n"
+---
+ERROR: type error at 205..310: field `zip`: expected `String`, got `Int`

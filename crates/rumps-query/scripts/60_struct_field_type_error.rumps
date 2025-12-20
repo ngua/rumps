@@ -1,0 +1,6 @@
+; Error: wrong field type in struct
+
+TYPE Person = { name: String, age: Int }
+
+; age should be Int, not String
+LET p: Person = { name: "Alice", age: "thirty" }

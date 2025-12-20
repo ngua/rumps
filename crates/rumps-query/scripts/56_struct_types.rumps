@@ -38,7 +38,7 @@ TYPE PatientRecord = {
   address: Address
 }
 
-LET rec = {
+LET rec: PatientRecord = {
   patient: { id: 1, name: "Charlie", active: true },
   address: { street: "456 Oak Ave", city: "LA", zip: "90001" }
 }
