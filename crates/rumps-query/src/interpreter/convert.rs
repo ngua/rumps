@@ -31,6 +31,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // will error in jsonify)
             Value::Array(_, _)
             | Value::Object(_)
+            | Value::Tuple(_, _)
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
             | Value::Function { .. } => {
@@ -80,6 +81,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[ {items} ]")
+            }
+            Value::Tuple(_, elems) => {
+                let items = elems
+                    .iter()
+                    .filter_map(|id| self.arena.get(*id))
+                    .map(|v| self.stringify(v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({items})")
             }
             Value::Object(obj) => {
                 let fields = obj
@@ -153,6 +163,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .map(|v| self.jsonify(v))
                     .collect();
                 Ok(serde_json::Value::Array(elems?))
+            }
+            Value::Tuple(_, elems) => {
+                // Tuples serialize as JSON arrays
+                let items: Result<Vec<_>> = elems
+                    .iter()
+                    .filter_map(|id| self.arena.get(*id))
+                    .map(|v| self.jsonify(v))
+                    .collect();
+                Ok(serde_json::Value::Array(items?))
             }
             Value::Object(obj) => {
                 let map: Result<serde_json::Map<_, _>> = obj
@@ -268,6 +287,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
             Value::Array(_, _)
             | Value::Object(_)
+            | Value::Tuple(_, _)
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
             | Value::Function { .. } => Err(Error::runtime_no_span(

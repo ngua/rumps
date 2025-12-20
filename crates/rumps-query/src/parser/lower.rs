@@ -109,6 +109,15 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> ExprId {
                 elems.into_iter().map(|e| lower_expr(ast, e)).collect();
             Expr::Array(elem_ids)
         }
+        cst::ExprKind::Tuple(elems) => {
+            let elem_ids =
+                elems.into_iter().map(|e| lower_expr(ast, e)).collect();
+            Expr::Tuple(elem_ids)
+        }
+        cst::ExprKind::TupleIndex(base, idx) => {
+            let base_id = lower_expr(ast, *base);
+            Expr::TupleIndex(base_id, idx)
+        }
         cst::ExprKind::Index(base, idx) => {
             let base_id = lower_expr(ast, *base);
             let idx_id = lower_expr(ast, *idx);
@@ -194,6 +203,11 @@ fn lower_type_expr(ast: &mut Ast, ty: cst::TypeExpr) -> AstTypeExprId {
                 .collect();
             let ret_id = lower_type_expr(ast, *ret);
             AstTypeExpr::Fn(param_ids, ret_id)
+        }
+        cst::TypeExprKind::Tuple(elems) => {
+            let elem_ids =
+                elems.into_iter().map(|t| lower_type_expr(ast, t)).collect();
+            AstTypeExpr::Tuple(elem_ids)
         }
     };
     ast.add_type_expr(te, span)

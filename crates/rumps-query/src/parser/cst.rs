@@ -104,6 +104,12 @@ pub(crate) enum ExprKind {
     /// An array literal.
     Array(Vec<Expr>),
 
+    /// A tuple literal.
+    Tuple(Vec<Expr>),
+
+    /// Tuple index access: `tuple.0`, `tuple.1`.
+    TupleIndex(Box<Expr>, u32),
+
     /// Index access.
     Index(Box<Expr>, Box<Expr>),
 
@@ -210,4 +216,7 @@ pub(crate) enum TypeExprKind {
 
     /// Function type.
     Fn(Vec<TypeExpr>, Box<TypeExpr>),
+
+    /// Tuple type: `(Int, String)`, `(Bool, Int, Float)`.
+    Tuple(Vec<TypeExpr>),
 }

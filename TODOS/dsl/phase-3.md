@@ -11,13 +11,14 @@ This document tracks the third phase of implementing the RUMPS query language: u
 ## Goals
 
 1. Tuples (`(a, b, c)`)
-2. User-defined sum types (`TYPE Status = Pending | Active`)
-3. Structural object type aliases (`TYPE Patient = { name: String, age: Int }`)
-4. Pattern matching (`MATCH`)
-5. Regex pattern matching (`matches`, `/pattern/`)
+2. Destructuring bindings (`LET (a, b) = ...`, `LET { x, y } = ...`)
+3. User-defined sum types (`TYPE Status = Pending | Active`)
+4. Structural object type aliases (`TYPE Patient = { name: String, age: Int }`)
+5. Pattern matching (`MATCH`)
 6. Higher-order collection operations (`MAP`, `FILTER`, `REDUCE`)
 7. Range operator (`..`)
 8. Spread operators (`...`)
+9. Regex pattern matching (`matches`, `/pattern/`)
 
 ## Existing Infrastructure
 
@@ -61,34 +62,34 @@ This is fragile: `ops.inc(5)` currently requires checking if `ops` is a type nam
 
 #### 0.1 AST Changes
 
-- [ ] Add `Expr::Path(SmallVec<[String; 2]>)` for resolved namespace paths
-- [ ] Keep `Expr::Field` for runtime field access only
-- [ ] Keep `Expr::Variant` for variant construction with args
+- [x] Add `Expr::Path(SmallVec<[String; 2]>)` for resolved namespace paths
+- [x] Keep `Expr::Field` for runtime field access only
+- [x] Keep `Expr::Variant` for variant construction with args
 
 #### 0.2 Name Resolution Pass
 
-- [ ] Add `resolve` module with `NameResolver` struct
-- [ ] Walk AST after parsing, before interpretation
-- [ ] For each `Expr::Field(base, name)`:
+- [x] Add `resolve` module with `NameResolver` struct
+- [x] Walk AST after parsing, before interpretation
+- [x] For each `Expr::Field(base, name)`:
   - If `base` is `Expr::Var(type_name)` and `type_name` is a registered type:
     - If `name` is a zero-arity variant → convert to `Expr::Path([type_name, name])`
     - If followed by call with args → already handled by `Expr::Variant`
   - Otherwise → leave as `Expr::Field` (runtime field access)
-- [ ] For `Expr::Call` where callee is `Expr::Field`:
+- [x] For `Expr::Call` where callee is `Expr::Field`:
   - If matches `Type.Variant(args)` pattern → convert to `Expr::Variant`
   - Otherwise → leave as `Expr::Call` (method-like call on object field)
 
 #### 0.3 Interpreter Changes
 
-- [ ] Remove type registry lookups from `field()` method
-- [ ] `field()` becomes purely runtime field access on `Value::Object`
-- [ ] Add `eval_path()` for `Expr::Path` nodes (lookup in registry, return variant value)
-- [ ] Simplify `call()` since variant detection moved to resolution
+- [x] Remove type registry lookups from `field()` method
+- [x] `field()` becomes purely runtime field access on `Value::Object`
+- [x] Add `eval_path()` for `Expr::Path` nodes (lookup in registry, return variant value)
+- [x] Simplify `call()` since variant detection moved to resolution
 
 #### 0.4 Parser Cleanup
 
-- [ ] Remove uppercase check hack from `PostfixOp::Call` handling
-- [ ] Parser just emits `Expr::Field` and `Expr::Call`; resolution does the rest
+- [x] Remove uppercase check hack from `PostfixOp::Call` handling
+- [x] Parser just emits `Expr::Field` and `Expr::Call`; resolution does the rest
 
 #### 0.5 Future: Modules
 
@@ -110,10 +111,10 @@ Both use `.` syntax, but:
 
 #### 0.6 Tests
 
-- [ ] Add resolution tests for type paths
-- [ ] Add resolution tests for field access (should remain `Expr::Field`)
-- [ ] Verify existing variant tests still pass
-- [ ] Verify object field closure tests still pass
+- [x] Add resolution tests for type paths
+- [x] Add resolution tests for field access (should remain `Expr::Field`)
+- [x] Verify existing variant tests still pass
+- [x] Verify object field closure tests still pass
 
 ---
 
@@ -155,37 +156,125 @@ LET (quot, rem) = divmod(17, 5)
 
 #### 1.1 AST
 
-- [ ] Add `Expr::Tuple(SmallVec<[ExprId; 4]>)` for tuple literals
-- [ ] Add `AstTypeExpr::Tuple(SmallVec<[AstTypeExprId; 4]>)` for tuple types
+- [x] Add `Expr::Tuple(SmallVec<[ExprId; 4]>)` for tuple literals
+- [x] Add `Expr::TupleIndex(ExprId, u32)` for tuple index access
+- [x] Add `AstTypeExpr::Tuple(SmallVec<[AstTypeExprId; 4]>)` for tuple types
 
 #### 1.2 Value
 
-- [ ] Add `Value::Tuple(SmallVec<[ValueId; 4]>)` for runtime tuple values
-- [ ] Add `TypeExpr::Tuple(SmallVec<[TypeExprId; 4]>)` for tuple type expressions
+- [x] Add `Value::Tuple(TypeExprId, SmallVec<[ValueId; 4]>)` for runtime tuple values
+- [x] Add `TypeExpr::Tuple(SmallVec<[TypeExprId; 4]>)` for tuple type expressions
+- [x] Add `TypeId::TUPLE` constant
 
 #### 1.3 Parser
 
-- [ ] Parse tuple literals: `(expr, expr, ...)` (must have at least 2 elements or trailing comma)
-- [ ] Distinguish from parenthesized expressions: `(expr)` is grouping, `(expr,)` or `(a, b)` is tuple
-- [ ] Parse tuple types: `(Type, Type, ...)`
-- [ ] Parse tuple index access: `expr.0`, `expr.1`, etc.
+- [x] Parse tuple literals: `(expr, expr, ...)` (must have at least 2 elements or trailing comma)
+- [x] Distinguish from parenthesized expressions: `(expr)` is grouping, `(expr,)` or `(a, b)` is tuple
+- [x] Parse tuple types: `(Type, Type, ...)`
+- [x] Parse tuple index access: `expr.0`, `expr.1`, etc.
 
 #### 1.4 Interpreter
 
-- [ ] Evaluate tuple construction
-- [ ] Implement index access for tuples (`.0`, `.1`, etc.)
-- [ ] Validate index is in bounds
-- [ ] Support tuple destructuring in `LET`
+- [x] Evaluate tuple construction
+- [x] Implement index access for tuples (`.0`, `.1`, etc.)
+- [x] Validate index is in bounds
 
 #### 1.5 Tests
 
-- [ ] Add parser tests for tuple literals and types
-- [ ] Add interpreter tests for construction and access
-- [ ] Add integration test script (`XX_tuples.rumps`)
+- [x] Add parser tests for tuple literals and types
+- [x] Add interpreter tests for construction and access
+- [x] Add integration test script (`46_tuples.rumps`)
 
 ---
 
-### 2. User-Defined Sum Types (`TYPE ... = Variant | ...`)
+### 2. Destructuring Bindings
+
+Bind multiple variables at once by destructuring tuples, objects, and arrays. This is simpler than full `MATCH` pattern matching; it covers the common case of extracting values from composite types.
+
+```rumps
+; Tuple destructuring
+LET (a, b) = (1, 2)
+OUTPUT a  ; 1
+OUTPUT b  ; 2
+
+; Nested tuple destructuring
+LET ((x, y), z) = ((1, 2), 3)
+
+; Object destructuring (shorthand: field name = variable name)
+LET { name, age } = { name: "Alice", age: 30, extra: true }
+OUTPUT name  ; "Alice"
+OUTPUT age   ; 30
+
+; Object destructuring with rename
+LET { name: n, age: a } = { name: "Bob", age: 25 }
+OUTPUT n  ; "Bob"
+
+; Array destructuring (fixed prefix)
+LET [first, second] = [1, 2, 3, 4]
+OUTPUT first   ; 1
+OUTPUT second  ; 2
+
+; Array destructuring with rest
+LET [head, ...tail] = [1, 2, 3, 4]
+OUTPUT head  ; 1
+OUTPUT tail  ; [2, 3, 4]
+
+; Combining with functions
+FUN divmod (a: Int, b: Int) -> (Int, Int) { (a / b, a % b) }
+LET (quot, rem) = divmod(17, 5)
+OUTPUT quot  ; 3
+OUTPUT rem   ; 2
+```
+
+#### 2.1 AST
+
+- [ ] Add `BindingPattern` enum:
+  ```rust
+  enum BindingPattern {
+      /// Simple variable: `x`
+      Var(String),
+      /// Tuple: `(a, b, c)`
+      Tuple(SmallVec<[BindingPattern; 4]>),
+      /// Object: `{ name, age }` or `{ name: n, age: a }`
+      Object(SmallVec<[(String, BindingPattern); 4]>),
+      /// Array prefix: `[a, b]` or `[head, ...tail]`
+      Array(SmallVec<[BindingPattern; 4]>, Option<String>),  // (patterns, rest_var)
+      /// Wildcard: `_` (ignore this position)
+      Wildcard,
+  }
+  ```
+- [ ] Modify `Stmt::Let` to use `BindingPattern` instead of just `String`
+
+#### 2.2 Parser
+
+- [ ] Parse `LET (a, b) = expr` as tuple destructuring
+- [ ] Parse `LET { name, age } = expr` as object destructuring (shorthand)
+- [ ] Parse `LET { name: n } = expr` as object destructuring (with rename)
+- [ ] Parse `LET [a, b] = expr` as array destructuring
+- [ ] Parse `LET [head, ...tail] = expr` as array destructuring with rest
+- [ ] Parse `LET _ = expr` as wildcard (evaluate but discard)
+- [ ] Support nested patterns: `LET ((a, b), c) = ...`
+
+#### 2.3 Interpreter
+
+- [ ] Implement `destructure(pattern, value) -> Vec<(String, Value)>`:
+  - `Var(name)` -> bind name to entire value
+  - `Tuple(pats)` -> match `Value::Tuple`, recursively destructure elements
+  - `Object(fields)` -> match `Value::Object`, extract named fields
+  - `Array(pats, rest)` -> match `Value::Array`, bind prefix and optional rest
+  - `Wildcard` -> return empty bindings (discard)
+- [ ] Error if structure doesn't match (e.g., tuple size mismatch)
+- [ ] Bind all extracted variables in scope
+
+#### 2.4 Tests
+
+- [ ] Add parser tests for destructuring patterns
+- [ ] Add interpreter tests for all pattern types
+- [ ] Add integration test script (`XX_destructuring.rumps`)
+
+---
+
+### 3. User-Defined Sum Types (`TYPE ... = Variant | ...`)
 
 Allow users to define their own sum types (tagged unions / ADTs).
 
@@ -270,7 +359,7 @@ IF s is Status.Active {
 
 ---
 
-### 3. Structural Object Type Aliases (`TYPE ... = { ... }`)
+### 4. Structural Object Type Aliases (`TYPE ... = { ... }`)
 
 Named aliases for structural object types. These map to `Value::Object` at runtime but provide:
 - Named type for documentation and readability
@@ -366,7 +455,7 @@ LET p2 = { id: 1, name: "X", age: 20, active: true }
 
 ---
 
-### 4. Pattern Matching (`MATCH`)
+### 5. Pattern Matching (`MATCH`)
 
 The `MATCH` expression enables exhaustive, type-safe branching on values. Primary way to destructure sum types.
 
@@ -652,56 +741,6 @@ fn matches(&self, pat: &Pattern, val: &Value) -> Option<Vec<(StringId, ValueId)>
 
 ---
 
-### 5. Regex Pattern Matching (`matches`)
-
-Pattern matching with regex literals.
-
-```rumps
-IF email matches /^[^@]+@[^@]+\.[^@]+$/ {
-  OUTPUT "Valid email"
-}
-
-IF ssn matches /^\d{3}-\d{2}-\d{4}$/ {
-  OUTPUT "Valid SSN format"
-}
-
-; Negation via NOT
-IF NOT (input matches /[<>]/) {
-  OUTPUT "No angle brackets"
-}
-```
-
-#### 5.1 Lexer
-
-- [ ] Add regex literal support (`/pattern/`)
-  - Handle escape sequences (`\/`, `\\`)
-  - Regex ends at unescaped `/`
-- [ ] Add `Token::Regex(String)` for regex literals
-- [ ] Add `Token::Matches` keyword
-
-#### 5.2 AST
-
-- [ ] Add `Expr::Matches(ExprId, String)` (value, pattern)
-
-#### 5.3 Interpreter
-
-- [ ] Add `regex` crate dependency
-- [ ] Compile regex on first use (cache compiled patterns)
-- [ ] Evaluate: coerce left to string, test against regex, return `Bool`
-
-#### 5.4 Tests
-
-- [ ] Add lexer tests for regex literals
-- [ ] Add parser tests
-- [ ] Add interpreter tests
-- [ ] Add integration test script (`XX_regex.rumps`)
-
-**Deferred regex features** (for later):
-- Named capture groups (`(?<name>...)`) and `Match.name` access
-- Regex flags (`/pattern/i`, `/pattern/m`)
-
----
-
 ### 6. Higher-Order Collection Operations
 
 With function types and closures in place from Phase 2, these are straightforward.
@@ -837,6 +876,56 @@ LET config = { ...defaults, ...user }  ; { color: "red", size: "large" }
 - [ ] Add parser tests for spread in arrays and objects
 - [ ] Add interpreter tests
 - [ ] Add integration test script (`XX_spread.rumps`)
+
+---
+
+### 9. Regex Pattern Matching (`matches`)
+
+Pattern matching with regex literals.
+
+```rumps
+IF email matches /^[^@]+@[^@]+\.[^@]+$/ {
+  OUTPUT "Valid email"
+}
+
+IF ssn matches /^\d{3}-\d{2}-\d{4}$/ {
+  OUTPUT "Valid SSN format"
+}
+
+; Negation via NOT
+IF NOT (input matches /[<>]/) {
+  OUTPUT "No angle brackets"
+}
+```
+
+#### 9.1 Lexer
+
+- [ ] Add regex literal support (`/pattern/`)
+  - Handle escape sequences (`\/`, `\\`)
+  - Regex ends at unescaped `/`
+- [ ] Add `Token::Regex(String)` for regex literals
+- [ ] Add `Token::Matches` keyword
+
+#### 9.2 AST
+
+- [ ] Add `Expr::Matches(ExprId, String)` (value, pattern)
+
+#### 9.3 Interpreter
+
+- [ ] Add `regex` crate dependency
+- [ ] Compile regex on first use (cache compiled patterns)
+- [ ] Evaluate: coerce left to string, test against regex, return `Bool`
+
+#### 9.4 Tests
+
+- [ ] Add lexer tests for regex literals
+- [ ] Add parser tests
+- [ ] Add interpreter tests
+- [ ] Add integration test script (`XX_regex.rumps`)
+
+**Deferred regex features** (for later):
+- Named capture groups (`(?<name>...)`) and `Match.name` access
+- Regex flags (`/pattern/i`, `/pattern/m`)
 
 ---
 

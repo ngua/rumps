@@ -1,0 +1,22 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Tuple literals and access\n\n; Basic tuple construction\nLET pair = (1, \"hello\")\nOUTPUT pair.0\nOUTPUT pair.1\n\n; Triple\nLET triple = (true, 42, \"world\")\nOUTPUT triple.0\nOUTPUT triple.1\nOUTPUT triple.2\n\n; Nested tuples\nLET nested = ((1, 2), (3, 4))\nLET inner1 = nested.0\nLET inner2 = nested.1\nOUTPUT inner1.0\nOUTPUT inner1.1\nOUTPUT inner2.0\nOUTPUT inner2.1\n\n; Empty tuple (unit)\nLET unit = ()\nOUTPUT unit\n\n; Single-element tuple (trailing comma required)\nLET single = (42,)\nOUTPUT single.0\n\n; Tuple in expression\nLET first = (1, 2).0\nLET second = (1, 2).1\nLET sum = first + second\nOUTPUT sum\n\n; Tuple with function results\nLET expr_tuple = (1 + 2, 3 * 4, \"test\")\nOUTPUT expr_tuple.0\nOUTPUT expr_tuple.1\nOUTPUT expr_tuple.2\n\n; Tuple truthiness (non-empty is truthy)\nIF pair {\n  OUTPUT \"pair is truthy\"\n}\n\n; Tuple passed to closure\nLET get_first = t => t.0\nLET get_second = t => t.1\nOUTPUT get_first((10, 20))\nOUTPUT get_second((10, 20))\n"
+---
+1
+hello
+TRUE
+42
+world
+1
+2
+3
+4
+()
+42
+3
+3
+12
+test
+pair is truthy
+10
+20

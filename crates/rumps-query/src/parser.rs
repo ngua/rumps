@@ -774,10 +774,19 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
-        // Field access: `.field`
-        let field = just(Token::Dot)
-            .ignore_then(Self::ident())
-            .map_with_span(PostfixOp::Field);
+        // Field access: `.field` or tuple index `.0`, `.1`, etc.
+        let field_or_tuple_idx = just(Token::Dot).ignore_then(
+            // Try tuple index first (integer literal)
+            select! { Token::Int(n) => n }
+                .try_map(|n, span| {
+                    u32::try_from(n).map_err(|_| {
+                        Simple::custom(span, "tuple index too large")
+                    })
+                })
+                .map_with_span(PostfixOp::TupleIndex)
+                // Otherwise, it's a field access
+                .or(Self::ident().map_with_span(PostfixOp::Field)),
+        );
 
         // Optional field access: `?.field`
         let opt_field = just(Token::QuestionDot)
@@ -801,7 +810,7 @@ impl Parser {
             .then_ignore(just(Token::RParen))
             .map_with_span(PostfixOp::Call);
 
-        let postfix_op = choice((field, opt_field, index, call));
+        let postfix_op = choice((field_or_tuple_idx, opt_field, index, call));
 
         operand
             .then(postfix_op.repeated())
@@ -824,6 +833,10 @@ impl Parser {
                 )),
                 PostfixOp::OptionalField(name, _) => Some(cst::Expr::new(
                     cst::ExprKind::OptionalField(Box::new(acc), name),
+                    span,
+                )),
+                PostfixOp::TupleIndex(idx, _) => Some(cst::Expr::new(
+                    cst::ExprKind::TupleIndex(Box::new(acc), idx),
                     span,
                 )),
                 PostfixOp::Index(idx, _) => Some(cst::Expr::new(
@@ -875,12 +888,67 @@ impl Parser {
                 cst::Expr::new(cst::ExprKind::Global(name, subs), span)
             });
 
-        // Parenthesized expression
-        let paren = just(Token::LParen)
+        // Parenthesized expression or tuple literal
+        // - `(expr)` -> parenthesized expression
+        // - `(expr,)` -> single-element tuple
+        // - `(expr, expr, ...)` -> multi-element tuple
+        // - `()` -> empty tuple
+        //
+        // We manually detect trailing comma instead of using `allow_trailing()`
+        // so we can distinguish `(x)` from `(x,)`.
+        let paren_or_tuple = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(expr.clone())
-            .then_ignore(Self::opt_newlines())
-            .then_ignore(just(Token::RParen));
+            .ignore_then(
+                // Empty: `()`
+                just(Token::RParen).to(ParenContents::Empty).or(
+                    // First element
+                    expr.clone()
+                        .then(
+                            // More elements or trailing comma
+                            just(Token::Comma)
+                                .ignore_then(Self::opt_newlines())
+                                .ignore_then(
+                                    expr.clone()
+                                        .separated_by(
+                                            just(Token::Comma).then_ignore(
+                                                Self::opt_newlines(),
+                                            ),
+                                        )
+                                        .allow_trailing(),
+                                )
+                                .or_not(),
+                        )
+                        .then_ignore(Self::opt_newlines())
+                        .then_ignore(just(Token::RParen))
+                        .map(|(first, rest)| match rest {
+                            None => {
+                                // `(x)` - single element, no comma
+                                ParenContents::Elements(vec![first], false)
+                            }
+                            Some(mut more) => {
+                                // `(x,)` or `(x, y, ...)` - has comma
+                                let mut elems = vec![first];
+                                elems.append(&mut more);
+                                ParenContents::Elements(elems, true)
+                            }
+                        }),
+                ),
+            )
+            .map_with_span(|contents, span| match contents {
+                ParenContents::Empty => {
+                    cst::Expr::new(cst::ExprKind::Tuple(vec![]), span)
+                }
+                ParenContents::Elements(mut elems, has_comma) => {
+                    if elems.len() == 1 && !has_comma {
+                        // Single element without comma: parenthesized
+                        elems.pop().unwrap()
+                    } else {
+                        // Multiple elements or has comma: tuple
+                        cst::Expr::new(cst::ExprKind::Tuple(elems), span)
+                    }
+                }
+            });
+        let paren = paren_or_tuple;
 
         // Array literal
         let arr_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
@@ -1072,15 +1140,20 @@ impl Parser {
                 },
             );
 
-            // Parenthesized: `()`, `(T)`, or `(T, U, ...)`
+            // Parenthesized: `()`, `(T)`, `(T,)`, or `(T, U, ...)`
             let sep = just(Token::Comma).then_ignore(Self::opt_newlines());
             let paren = just(Token::LParen)
                 .ignore_then(Self::opt_newlines())
-                .ignore_then(ty.clone().separated_by(sep).allow_trailing())
+                .ignore_then(
+                    ty.clone()
+                        .separated_by(sep)
+                        .allow_trailing()
+                        .then(just(Token::Comma).or_not()),
+                )
                 .then_ignore(Self::opt_newlines())
                 .then_ignore(just(Token::RParen))
-                .map_with_span(|types, span| {
-                    TypeAtomOrParams::Params(types, span)
+                .map_with_span(|(types, trailing), span| {
+                    TypeAtomOrParams::Params(types, span, trailing.is_some())
                 });
 
             // atom_or_params
@@ -1101,7 +1174,7 @@ impl Parser {
         })
     }
 
-    /// Build a function type or standalone type from parsed components.
+    /// Build a function type, tuple type, or standalone type from parsed components.
     fn build_fn_type(
         left: TypeAtomOrParams,
         arrow_ret: Option<cst::TypeExpr>,
@@ -1116,7 +1189,7 @@ impl Parser {
                 ))
             }
             // `(T, U, ...) -> R` or `() -> R`
-            (TypeAtomOrParams::Params(params, _), Some(ret)) => {
+            (TypeAtomOrParams::Params(params, _, _), Some(ret)) => {
                 Ok(cst::TypeExpr::new(
                     cst::TypeExprKind::Fn(params, Box::new(ret)),
                     span,
@@ -1124,22 +1197,29 @@ impl Parser {
             }
             // `T`: standalone type
             (TypeAtomOrParams::Single(ty), None) => Ok(ty),
-            // `(T)`: parenthesized single type
-            (TypeAtomOrParams::Params(mut params, _), None)
+            // `(T)` without trailing comma: parenthesized single type
+            (TypeAtomOrParams::Params(mut params, _, false), None)
                 if params.len() == 1 =>
             {
                 params.pop().ok_or_else(|| {
                     Simple::custom(span, "internal: expected single type")
                 })
             }
-            // `()` or `(T, U)` without `->`: error
-            (TypeAtomOrParams::Params(params, _), None) => {
-                let msg = if params.is_empty() {
-                    "empty parentheses require `->` for nullary function type"
-                } else {
-                    "multiple types in parentheses require `->` for function type"
-                };
-                Err(Simple::custom(span, msg))
+            // `(T,)` with trailing comma: single-element tuple type
+            (TypeAtomOrParams::Params(params, _, true), None)
+                if params.len() == 1 =>
+            {
+                Ok(cst::TypeExpr::new(cst::TypeExprKind::Tuple(params), span))
+            }
+            // `()`: empty tuple / unit type
+            (TypeAtomOrParams::Params(params, _, _), None)
+                if params.is_empty() =>
+            {
+                Ok(cst::TypeExpr::new(cst::TypeExprKind::Tuple(params), span))
+            }
+            // `(T, U, ...)`: multi-element tuple type
+            (TypeAtomOrParams::Params(params, _, _), None) => {
+                Ok(cst::TypeExpr::new(cst::TypeExprKind::Tuple(params), span))
             }
         }
     }
@@ -1149,7 +1229,8 @@ impl Parser {
 #[derive(Clone)]
 enum TypeAtomOrParams {
     Single(cst::TypeExpr),
-    Params(Vec<cst::TypeExpr>, Span),
+    /// (types, span, has_trailing_comma)
+    Params(Vec<cst::TypeExpr>, Span, bool),
 }
 
 /// Helper enum for pattern arguments in `is` patterns.
@@ -1159,10 +1240,18 @@ enum PatternArgs {
     Bindings(SmallVec<[String; 2]>),
 }
 
+/// Helper enum for parenthesized expressions vs tuples.
+#[derive(Clone)]
+enum ParenContents {
+    Empty,
+    Elements(Vec<cst::Expr>, bool), // (elements, has_trailing_comma)
+}
+
 /// Helper enum for postfix operations during folding.
 enum PostfixOp {
     Field(String, Span),
     OptionalField(String, Span),
+    TupleIndex(u32, Span),
     Index(Box<cst::Expr>, Span),
     Call(Vec<cst::Expr>, Span),
 }
@@ -1172,6 +1261,7 @@ impl PostfixOp {
         match self {
             Self::Field(_, s)
             | Self::OptionalField(_, s)
+            | Self::TupleIndex(_, s)
             | Self::Index(_, s)
             | Self::Call(_, s) => *s,
         }

@@ -70,6 +70,8 @@ impl TypeId {
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
     pub(crate) const UNKNOWN: Self = Self(9);
+    /// Builtin type: `Tuple`.
+    pub(crate) const TUPLE: Self = Self(10);
 
     const fn idx(self) -> usize {
         self.0 as usize
@@ -227,6 +229,12 @@ pub(crate) enum Value {
     /// An object/record with string keys (insertion order preserved).
     Object(IndexMap<StringId, ValueId>),
 
+    /// A tuple value (heterogeneous, fixed-size sequence).
+    ///
+    /// Unlike arrays, tuples can hold different types and support positional
+    /// access (`.0`, `.1`, etc.). The `TypeExprId` encodes the element types.
+    Tuple(TypeExprId, SmallVec<[ValueId; 4]>),
+
     /// A tagged value (sum type variant).
     ///
     /// - `TypeExprId`: the full parameterized type (e.g., `Option[Int]`, `Result[Int, String]`)
@@ -276,7 +284,7 @@ impl Value {
             Self::String(id) => {
                 arena.get_str(*id).map(|s| !s.is_empty()).unwrap_or(false)
             }
-            Self::Array(_, elems) => !elems.is_empty(),
+            Self::Array(_, elems) | Self::Tuple(_, elems) => !elems.is_empty(),
             Self::Object(obj) => !obj.is_empty(),
             Self::Tagged(ty_expr, idx, _) => {
                 // Option.None and Result.Err are falsy; other variants are truthy
@@ -305,6 +313,7 @@ impl Value {
             Self::String(_) => "String",
             Self::Array(..) => "Array",
             Self::Object(_) => "Object",
+            Self::Tuple(..) => "Tuple",
             Self::Tagged(ty_expr, _, _) => type_exprs
                 .base_type(*ty_expr)
                 .and_then(|ty| reg.get_def(ty))
@@ -444,6 +453,8 @@ enum TypeExpr {
     App(TypeId, SmallVec<[TypeExprId; 2]>),
     /// Function type: `(params...) -> return`
     Fn(SmallVec<[TypeExprId; 4]>, TypeExprId),
+    /// Tuple type: `(Int, String, Bool)`
+    Tuple(SmallVec<[TypeExprId; 4]>),
 }
 
 /// Arena for type expressions.
@@ -470,11 +481,11 @@ impl TypeExprArena {
     /// Get the base `TypeId` from a type expression.
     ///
     /// For `Named(T)` returns `T`; for `App(T, params)` returns `T`.
-    /// For `Fn` returns `None` (function types have no base type).
+    /// For `Fn` and `Tuple` returns `None` (compound types have no single base).
     pub(crate) fn base_type(&self, id: TypeExprId) -> Option<TypeId> {
         self.get(id).and_then(|expr| match expr {
             TypeExpr::Named(ty) | TypeExpr::App(ty, _) => Some(*ty),
-            TypeExpr::Fn(..) => None,
+            TypeExpr::Fn(..) | TypeExpr::Tuple(..) => None,
         })
     }
 
@@ -536,6 +547,10 @@ impl TypeExprArena {
                     && pa.iter().zip(pb.iter()).all(|(a, b)| self.eq(*a, *b))
                     && self.eq(*ra, *rb)
             }
+            (TypeExpr::Tuple(ea), TypeExpr::Tuple(eb)) => {
+                ea.len() == eb.len()
+                    && ea.iter().zip(eb.iter()).all(|(a, b)| self.eq(*a, *b))
+            }
             _ => false,
         }
     }
@@ -576,6 +591,14 @@ impl TypeExprArena {
                     .unwrap_or_else(|| "?".to_owned());
                 format!("({args}) -> {ret_str}")
             }
+            TypeExpr::Tuple(elems) => {
+                let parts = elems
+                    .iter()
+                    .filter_map(|p| self.format(*p, name_fn))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({parts})")
+            }
         }
     }
 
@@ -586,6 +609,31 @@ impl TypeExprArena {
         ret: TypeExprId,
     ) -> TypeExprId {
         self.add(TypeExpr::Fn(params, ret))
+    }
+
+    /// Add a tuple type expression (e.g., `(Int, String, Bool)`).
+    pub(crate) fn tuple(
+        &mut self,
+        elems: SmallVec<[TypeExprId; 4]>,
+    ) -> TypeExprId {
+        self.add(TypeExpr::Tuple(elems))
+    }
+
+    /// Get tuple element types if this is a tuple type.
+    pub(crate) fn tuple_elems(
+        &self,
+        id: TypeExprId,
+    ) -> Option<&SmallVec<[TypeExprId; 4]>> {
+        self.get(id).and_then(|expr| match expr {
+            TypeExpr::Tuple(elems) => Some(elems),
+            _ => None,
+        })
+    }
+
+    /// Check if a type expression is a tuple type.
+    pub(crate) fn is_tuple(&self, id: TypeExprId) -> bool {
+        self.get(id)
+            .is_some_and(|e| matches!(e, TypeExpr::Tuple(..)))
     }
 }
 

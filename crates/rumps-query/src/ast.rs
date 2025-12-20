@@ -166,6 +166,12 @@ pub(crate) enum AstTypeExpr {
     /// - First element: parameter types (may be empty for nullary)
     /// - Second element: return type
     Fn(SmallVec<[AstTypeExprId; 4]>, AstTypeExprId),
+
+    /// Tuple type: `(Int, String)`, `(Bool, Int, Float)`.
+    ///
+    /// Tuple types have two or more element types (single-element tuples require
+    /// a trailing comma: `(Int,)`).
+    Tuple(SmallVec<[AstTypeExprId; 4]>),
 }
 
 /// Binary operators.
@@ -295,6 +301,17 @@ pub(crate) enum Expr {
 
     /// An array literal: `[expr, ...]`.
     Array(Vec<ExprId>),
+
+    /// A tuple literal: `(a, b)`, `(x, y, z)`, `(single,)`.
+    ///
+    /// Tuples are heterogeneous fixed-size sequences. Access by numeric index
+    /// (`.0`, `.1`, etc.) is handled by `TupleIndex`.
+    Tuple(SmallVec<[ExprId; 4]>),
+
+    /// Tuple index access: `tuple.0`, `tuple.1`.
+    ///
+    /// The index is a compile-time constant; runtime indexing uses `Index`.
+    TupleIndex(ExprId, u32),
 
     /// Index access: `expr[index]`.
     Index(ExprId, ExprId),

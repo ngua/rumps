@@ -239,6 +239,10 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Call(callee, args) => self.call(callee, &args, span).await,
             Expr::Object(fields) => self.object(&fields).await,
             Expr::Array(elems) => self.array(&elems).await,
+            Expr::Tuple(elems) => self.tuple(&elems, span).await,
+            Expr::TupleIndex(base, idx) => {
+                self.tuple_index(base, idx, span).await
+            }
             Expr::Index(base, idx) => self.index(base, idx, span).await,
             Expr::Field(base, field) => self.field(base, &field, span).await,
             Expr::OptionalField(base, field) => {
@@ -1089,6 +1093,74 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    /// Evaluate a tuple literal.
+    ///
+    /// Unlike arrays, tuples are heterogeneous; each element can have a different type.
+    #[async_recursion]
+    async fn tuple(&mut self, elems: &[ExprId], span: Span) -> Result<Value> {
+        self.tuple_elems(elems, SmallVec::new(), SmallVec::new(), span)
+            .await
+    }
+
+    /// Recursively evaluate tuple elements, collecting values and types.
+    #[async_recursion]
+    async fn tuple_elems(
+        &mut self,
+        elems: &[ExprId],
+        mut vals: SmallVec<[ValueId; 4]>,
+        mut tys: SmallVec<[TypeExprId; 4]>,
+        span: Span,
+    ) -> Result<Value> {
+        match elems.split_first() {
+            None => {
+                let ty = self.type_exprs.tuple(tys);
+                Ok(Value::Tuple(ty, vals))
+            }
+            Some((expr_id, tail)) => {
+                let elem_span = self.ast.expr_span(*expr_id).unwrap_or(span);
+                let val = self.eval(*expr_id).await?;
+                let ty = self.value_type_expr(&val);
+                let val_id = self.arena.add(val, elem_span);
+                vals.push(val_id);
+                tys.push(ty);
+                self.tuple_elems(tail, vals, tys, span).await
+            }
+        }
+    }
+
+    /// Evaluate tuple index access: `tuple.0`, `tuple.1`, etc.
+    #[async_recursion]
+    async fn tuple_index(
+        &mut self,
+        base: ExprId,
+        idx: u32,
+        span: Span,
+    ) -> Result<Value> {
+        let base_val = self.eval(base).await?;
+
+        match &base_val {
+            Value::Tuple(_, elems) => elems
+                .get(idx as usize)
+                .and_then(|id| self.arena.get(*id).cloned())
+                .ok_or_else(|| {
+                    Error::runtime(
+                        span,
+                        format!(
+                            "tuple index `{idx}` out of bounds; tuple has {} element(s)",
+                            elems.len()
+                        ),
+                    )
+                }),
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "cannot index `{}` with `.{idx}`; expected tuple",
+                    base_val.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
     /// Get the type expression for a runtime value.
     fn value_type_expr(&mut self, v: &Value) -> TypeExprId {
         match v {
@@ -1103,6 +1175,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .app(TypeId::ARRAY, smallvec::smallvec![*elem_ty])
             }
             Value::Object(_) => self.type_exprs.named(TypeId::OBJECT),
+            Value::Tuple(ty, _) => *ty,
             Value::Tagged(ty_expr, _, _) => *ty_expr,
             Value::Closure { params, ret, .. }
             | Value::Function { params, ret, .. } => {
@@ -1176,6 +1249,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Resolve return type
                 let resolved_ret = self.resolve_type_expr(ret, span)?;
                 Ok(self.type_exprs.fn_type(resolved_params?, resolved_ret))
+            }
+            AstTypeExpr::Tuple(elems) => {
+                // Recursively resolve element types
+                let resolved: Result<SmallVec<[TypeExprId; 4]>> = elems
+                    .iter()
+                    .map(|&e| self.resolve_type_expr(e, span))
+                    .collect();
+                Ok(self.type_exprs.tuple(resolved?))
             }
         }
     }
@@ -1710,6 +1791,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::String(_) => type_id == TypeId::STRING,
             Value::Array(_, _) => type_id == TypeId::ARRAY,
             Value::Object(_) => type_id == TypeId::OBJECT,
+            Value::Tuple(_, _) => type_id == TypeId::TUPLE,
             Value::Tagged(ty_expr, _, _) => self
                 .type_exprs
                 .base_type(*ty_expr)
