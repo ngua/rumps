@@ -1,0 +1,89 @@
+; User-defined sum types (TYPE declarations)
+
+; Simple enumeration with no payloads
+TYPE Status = Pending | Active | Completed | Failed
+
+; Create values using the defined type
+LET s1 = Status.Pending
+LET s2 = Status.Active
+LET s3 = Status.Completed
+LET s4 = Status.Failed
+
+OUTPUT s1
+OUTPUT s2
+OUTPUT s3
+OUTPUT s4
+
+; Test with is operator
+IF s1 is Status.Pending {
+  OUTPUT "s1 is Pending"
+}
+
+IF s2 is Status.Active {
+  OUTPUT "s2 is Active"
+}
+
+; Sum type with payloads
+TYPE Event = Click(Int, Int) | KeyPress(String) | Resize(Int, Int)
+
+LET click = Event.Click(100, 200)
+LET key = Event.KeyPress("Enter")
+LET resize = Event.Resize(1920, 1080)
+
+OUTPUT click
+OUTPUT key
+OUTPUT resize
+
+; Test is with bindings
+IF click is Event.Click(x, y) {
+  OUTPUT "Click at: " ++ x ++ ", " ++ y
+}
+
+IF key is Event.KeyPress(k) {
+  OUTPUT "Key: " ++ k
+}
+
+; Parameterized type (generic)
+TYPE Either[L, R] = Left(L) | Right(R)
+
+LET left = Either.Left("error message")
+LET right = Either.Right(42)
+
+OUTPUT left
+OUTPUT right
+
+; Test is with generic variants
+IF left is Either.Left(msg) {
+  OUTPUT "Got left: " ++ msg
+}
+
+IF right is Either.Right(val) {
+  OUTPUT "Got right: " ++ val
+}
+
+; Multi-line syntax (use Outcome to avoid conflict with builtin Result)
+TYPE Outcome[T, E] =
+  Success(T)
+  | Failure(E)
+
+LET ok = Outcome.Success(100)
+LET err = Outcome.Failure("failed")
+
+OUTPUT ok
+OUTPUT err
+
+; Test wildcard patterns
+IF ok is Outcome.Success(_) {
+  OUTPUT "ok is Success (wildcard)"
+}
+
+; Single type parameter
+TYPE Maybe[T] = Just(T) | Nothing
+
+LET just = Maybe.Just("hello")
+LET nothing = Maybe.Nothing
+
+OUTPUT just
+OUTPUT nothing
+
+OUTPUT "User-defined sum types complete"

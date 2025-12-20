@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use super::cst;
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId, RestPattern,
-    Stmt, StmtId,
+    Stmt, StmtId, TypeDefAst, VariantAst,
 };
 
 /// Lower a CST program (list of statements) to AST.
@@ -63,6 +63,18 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> StmtId {
                 params: params_lowered,
                 ret: ret_id,
                 body: body_id,
+            }
+        }
+        cst::StmtKind::Type {
+            name,
+            type_params,
+            def,
+        } => {
+            let def_lowered = lower_type_def(ast, def);
+            Stmt::Type {
+                name,
+                type_params: SmallVec::from_vec(type_params),
+                def: def_lowered,
             }
         }
     };
@@ -243,5 +255,31 @@ fn lower_rest_pattern(pat: cst::RestPattern) -> RestPattern {
     match pat {
         cst::RestPattern::Ignore => RestPattern::Ignore,
         cst::RestPattern::Bind(name) => RestPattern::Bind(name),
+    }
+}
+
+/// Lower a CST type definition to AST.
+fn lower_type_def(ast: &mut Ast, def: cst::TypeDefCst) -> TypeDefAst {
+    match def {
+        cst::TypeDefCst::Sum(variants) => {
+            let lowered = variants
+                .into_iter()
+                .map(|v| lower_variant(ast, v))
+                .collect();
+            TypeDefAst::Sum(lowered)
+        }
+    }
+}
+
+/// Lower a CST variant to AST.
+fn lower_variant(ast: &mut Ast, v: cst::VariantCst) -> VariantAst {
+    let payloads = v
+        .payloads
+        .into_iter()
+        .map(|t| lower_type_expr(ast, t))
+        .collect();
+    VariantAst {
+        name: v.name,
+        payloads,
     }
 }

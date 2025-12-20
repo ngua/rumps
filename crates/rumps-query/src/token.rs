@@ -26,6 +26,7 @@ pub(crate) enum Token {
     True,
     False,
     Fun,
+    Type,
 
     // Literals
     Int(i64),
@@ -82,6 +83,7 @@ pub(crate) enum Token {
     QuestionDot,      // ?.
     FatArrow,         // =>
     Pipe,             // |>
+    SinglePipe,       // | (variant separator)
 
     // Special
     Newline,
@@ -114,6 +116,7 @@ impl Token {
             "TRUE" => Some(Self::True),
             "FALSE" => Some(Self::False),
             "FUN" => Some(Self::Fun),
+            "TYPE" => Some(Self::Type),
             _ => None,
         }
     }
@@ -138,6 +141,7 @@ impl fmt::Display for Token {
             Self::True => write!(f, "TRUE"),
             Self::False => write!(f, "FALSE"),
             Self::Fun => write!(f, "FUN"),
+            Self::Type => write!(f, "TYPE"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::String(s) => write!(f, "\"{s}\""),
@@ -177,6 +181,7 @@ impl fmt::Display for Token {
             Self::QuestionDot => write!(f, "?."),
             Self::FatArrow => write!(f, "=>"),
             Self::Pipe => write!(f, "|>"),
+            Self::SinglePipe => write!(f, "|"),
             Self::Newline => write!(f, "newline"),
             Self::Indent => write!(f, "indent"),
             Self::Dedent => write!(f, "dedent"),

@@ -284,6 +284,28 @@ pub(crate) enum TypePattern {
     VariantBind(String, String, SmallVec<[String; 2]>),
 }
 
+/// A variant definition in a user-defined sum type.
+///
+/// Each variant has a name and zero or more payload types.
+/// Examples: `None` (arity 0), `Some(Int)` (arity 1), `Pair(Int, String)` (arity 2).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct VariantAst {
+    pub name: String,
+    pub payloads: SmallVec<[AstTypeExprId; 2]>,
+}
+
+/// A type definition body for user-defined types.
+///
+/// Currently only sum types are supported; struct types will be added later.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TypeDefAst {
+    /// Sum type: `Variant1 | Variant2(T) | ...`
+    ///
+    /// Each variant is a named constructor with optional payload types.
+    Sum(SmallVec<[VariantAst; 4]>),
+    // Struct will be added in Phase 3.2
+}
+
 /// A literal value in the AST.
 ///
 /// This is the compile-time representation; runtime values (with arena
@@ -482,6 +504,22 @@ pub(crate) enum Stmt {
         params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<AstTypeExprId>,
         body: ExprId,
+    },
+
+    /// User-defined type declaration: `TYPE Name = ...` or `TYPE Name[T] = ...`.
+    ///
+    /// - `name`: the type's identifier (e.g., `Status`, `Event`)
+    /// - `type_params`: optional type parameters (e.g., `[T]`, `[L, R]`)
+    /// - `def`: the type definition body (sum type or struct)
+    ///
+    /// Examples:
+    /// - `TYPE Status = Pending | Active | Completed`
+    /// - `TYPE Event = Click(Int, Int) | KeyPress(Char)`
+    /// - `TYPE Either[L, R] = Left(L) | Right(R)`
+    Type {
+        name: String,
+        type_params: SmallVec<[String; 2]>,
+        def: TypeDefAst,
     },
 }
 

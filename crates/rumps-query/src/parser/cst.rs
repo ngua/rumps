@@ -217,6 +217,13 @@ pub(crate) enum StmtKind {
         ret: Option<TypeExpr>,
         body: Expr,
     },
+
+    /// User-defined type declaration.
+    Type {
+        name: String,
+        type_params: Vec<String>,
+        def: TypeDefCst,
+    },
 }
 
 /// A CST type expression with inline span.
@@ -247,4 +254,18 @@ pub(crate) enum TypeExprKind {
 
     /// Tuple type: `(Int, String)`, `(Bool, Int, Float)`.
     Tuple(Vec<TypeExpr>),
+}
+
+/// A variant definition in a user-defined sum type (CST form).
+#[derive(Clone, Debug)]
+pub(crate) struct VariantCst {
+    pub name: String,
+    pub payloads: Vec<TypeExpr>,
+}
+
+/// A type definition body (CST form).
+#[derive(Clone, Debug)]
+pub(crate) enum TypeDefCst {
+    /// Sum type: `Variant1 | Variant2(T) | ...`
+    Sum(Vec<VariantCst>),
 }

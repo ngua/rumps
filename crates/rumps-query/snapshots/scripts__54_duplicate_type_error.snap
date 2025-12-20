@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: duplicate type declaration error\n; Declaring a type with the same name twice should fail\n\nTYPE Status = Pending | Active\n\n; This should fail: Status already defined\nTYPE Status = Open | Closed\n"
+---
+ERROR: runtime error at 173..200: type `Status` is already defined

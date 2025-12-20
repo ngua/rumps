@@ -317,13 +317,13 @@ IF s is Status.Active {
 
 #### 2.1 Lexer
 
-- [ ] Add `Token::Type` keyword (`TYPE`)
-- [ ] Add `Token::Pipe` (`|`) for variant separator
-  - Note: Already have `Token::PipePipe` for `||`; need single pipe
+- [x] Add `Token::Type` keyword (`TYPE`)
+- [x] Add `Token::SinglePipe` (`|`) for variant separator
+  - Note: Already have `Token::PipePipe` for `||`; added `Token::SinglePipe` for single pipe
 
 #### 2.2 AST
 
-- [ ] Add `Stmt::Type` for type declarations:
+- [x] Add `Stmt::Type` for type declarations:
   ```rust
   Stmt::Type {
       name: String,
@@ -331,14 +331,14 @@ IF s is Status.Active {
       def: TypeDefAst,
   }
   ```
-- [ ] Add `TypeDefAst` enum:
+- [x] Add `TypeDefAst` enum:
   ```rust
   enum TypeDefAst {
       Sum(SmallVec<[VariantAst; 4]>),
       Struct(Vec<(String, AstTypeExprId)>),  // for Phase 3.2
   }
   ```
-- [ ] Add `VariantAst`:
+- [x] Add `VariantAst`:
   ```rust
   struct VariantAst {
       name: String,
@@ -348,26 +348,26 @@ IF s is Status.Active {
 
 #### 2.3 Parser
 
-- [ ] Parse `TYPE Name = Variant1 | Variant2(T) | ...`
-- [ ] Handle type parameters: `TYPE Name[T, U] = ...`
-- [ ] Allow newlines between variants (indentation-based)
-- [ ] Variants can have zero or more typed payloads
+- [x] Parse `TYPE Name = Variant1 | Variant2(T) | ...`
+- [x] Handle type parameters: `TYPE Name[T, U] = ...`
+- [x] Allow newlines between variants (indentation-based)
+- [x] Variants can have zero or more typed payloads
 
 #### 2.4 Interpreter
 
-- [ ] Process `Stmt::Type` to register in `TypeRegistry`:
+- [x] Process `Stmt::Type` to register in `TypeRegistry`:
   - Intern all names
   - Create `VariantDef` for each variant (auto-assign indices)
   - Register as `TypeDef::Sum`
-- [ ] User-defined types work with existing `Expr::Variant` evaluation
-- [ ] User-defined types work with existing `is` patterns
+- [x] User-defined types work with existing `Expr::Variant` evaluation
+- [x] User-defined types work with existing `is` patterns
 
 #### 2.5 Tests
 
-- [ ] Add lexer tests for `TYPE` and `|`
-- [ ] Add parser tests for sum type declarations
-- [ ] Add interpreter tests for type registration and variant construction
-- [ ] Add integration test script (`XX_user_sum_types.rumps`)
+- [x] Add lexer tests for `TYPE` and `|`
+- [x] Add parser tests for sum type declarations
+- [x] Add interpreter tests for type registration and variant construction
+- [x] Add integration test script (`53_user_sum_types.rumps`)
 
 ---
 

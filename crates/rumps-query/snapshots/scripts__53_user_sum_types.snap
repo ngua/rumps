@@ -1,0 +1,25 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User-defined sum types (TYPE declarations)\n\n; Simple enumeration with no payloads\nTYPE Status = Pending | Active | Completed | Failed\n\n; Create values using the defined type\nLET s1 = Status.Pending\nLET s2 = Status.Active\nLET s3 = Status.Completed\nLET s4 = Status.Failed\n\nOUTPUT s1\nOUTPUT s2\nOUTPUT s3\nOUTPUT s4\n\n; Test with is operator\nIF s1 is Status.Pending {\n  OUTPUT \"s1 is Pending\"\n}\n\nIF s2 is Status.Active {\n  OUTPUT \"s2 is Active\"\n}\n\n; Sum type with payloads\nTYPE Event = Click(Int, Int) | KeyPress(String) | Resize(Int, Int)\n\nLET click = Event.Click(100, 200)\nLET key = Event.KeyPress(\"Enter\")\nLET resize = Event.Resize(1920, 1080)\n\nOUTPUT click\nOUTPUT key\nOUTPUT resize\n\n; Test is with bindings\nIF click is Event.Click(x, y) {\n  OUTPUT \"Click at: \" ++ x ++ \", \" ++ y\n}\n\nIF key is Event.KeyPress(k) {\n  OUTPUT \"Key: \" ++ k\n}\n\n; Parameterized type (generic)\nTYPE Either[L, R] = Left(L) | Right(R)\n\nLET left = Either.Left(\"error message\")\nLET right = Either.Right(42)\n\nOUTPUT left\nOUTPUT right\n\n; Test is with generic variants\nIF left is Either.Left(msg) {\n  OUTPUT \"Got left: \" ++ msg\n}\n\nIF right is Either.Right(val) {\n  OUTPUT \"Got right: \" ++ val\n}\n\n; Multi-line syntax (use Outcome to avoid conflict with builtin Result)\nTYPE Outcome[T, E] =\n  Success(T)\n  | Failure(E)\n\nLET ok = Outcome.Success(100)\nLET err = Outcome.Failure(\"failed\")\n\nOUTPUT ok\nOUTPUT err\n\n; Test wildcard patterns\nIF ok is Outcome.Success(_) {\n  OUTPUT \"ok is Success (wildcard)\"\n}\n\n; Single type parameter\nTYPE Maybe[T] = Just(T) | Nothing\n\nLET just = Maybe.Just(\"hello\")\nLET nothing = Maybe.Nothing\n\nOUTPUT just\nOUTPUT nothing\n\nOUTPUT \"User-defined sum types complete\"\n"
+---
+Status.Pending
+Status.Active
+Status.Completed
+Status.Failed
+s1 is Pending
+s2 is Active
+Event.Click(100, 200)
+Event.KeyPress(Enter)
+Event.Resize(1920, 1080)
+Click at: 100, 200
+Key: Enter
+Either.Left(error message)
+Either.Right(42)
+Got left: error message
+Got right: 42
+Outcome.Success(100)
+Outcome.Failure(failed)
+ok is Success (wildcard)
+Maybe.Just(hello)
+Maybe.Nothing
+User-defined sum types complete

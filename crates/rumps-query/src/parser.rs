@@ -150,6 +150,7 @@ impl Parser {
             let kill_stmt = Self::kill_stmt(stmt.clone());
             let output_stmt = Self::output_stmt(stmt.clone());
             let fun_stmt = Self::fun_stmt(stmt.clone());
+            let type_stmt = Self::type_stmt();
             let expr_stmt = Self::expr_stmt(stmt);
 
             choice((
@@ -158,6 +159,7 @@ impl Parser {
                 kill_stmt,
                 output_stmt,
                 fun_stmt,
+                type_stmt,
                 expr_stmt,
             ))
         })
@@ -459,6 +461,73 @@ impl Parser {
                     )
                 },
             )
+    }
+
+    /// `TYPE Name = Variant1 | Variant2(T) | ...`
+    /// `TYPE Name[T] = Left(T) | Right(T)`
+    ///
+    /// User-defined sum type declaration.
+    fn type_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        // Type parameters: `[T]` or `[T, U]`
+        let type_param_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+        let type_params = just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::ident()
+                    .separated_by(type_param_sep)
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBracket))
+            .or_not()
+            .map(|ps| ps.unwrap_or_default());
+
+        // Variant: `Name` or `Name(Type, Type, ...)`
+        let payload_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        let payloads = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::type_expr().separated_by(payload_sep).allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+            .or_not()
+            .map(|ps| ps.unwrap_or_default());
+
+        let variant = Self::ident()
+            .then(payloads)
+            .map(|(name, payloads)| cst::VariantCst { name, payloads });
+
+        // Variants separated by `|`, allowing newlines
+        let variant_sep = Self::opt_newlines()
+            .ignore_then(just(Token::SinglePipe))
+            .then_ignore(Self::opt_newlines());
+
+        let variants = variant
+            .separated_by(variant_sep)
+            .at_least(1)
+            .allow_leading(); // Allow leading `|` for multi-line formatting
+
+        just(Token::Type)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then(type_params)
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
+            .then(variants)
+            .map_with_span(|((name, type_params), variants), span| {
+                cst::Stmt::new(
+                    cst::StmtKind::Type {
+                        name,
+                        type_params,
+                        def: cst::TypeDefCst::Sum(variants),
+                    },
+                    span,
+                )
+            })
     }
 
     /// Convert a list of statements to a block expression.
@@ -1966,6 +2035,92 @@ mod tests {
                 }
             }
             _ => panic!("expected Pipe"),
+        }
+    }
+
+    #[test]
+    fn parse_type_simple() {
+        // Simple sum type with no payloads
+        let result = parse_ok("TYPE Status = Pending | Active | Completed");
+        let stmt = result.ast.get_stmt(result.stmts[0]);
+        match stmt {
+            Some(Stmt::Type {
+                name,
+                type_params,
+                def,
+            }) => {
+                assert_eq!(name, "Status");
+                assert!(type_params.is_empty());
+                match def {
+                    crate::ast::TypeDefAst::Sum(variants) => {
+                        assert_eq!(variants.len(), 3);
+                        assert_eq!(variants[0].name, "Pending");
+                        assert_eq!(variants[1].name, "Active");
+                        assert_eq!(variants[2].name, "Completed");
+                        assert!(variants.iter().all(|v| v.payloads.is_empty()));
+                    }
+                }
+            }
+            _ => panic!("expected Type"),
+        }
+    }
+
+    #[test]
+    fn parse_type_with_payloads() {
+        // Sum type with variant payloads
+        let result = parse_ok("TYPE Event = Click(Int, Int) | KeyPress(Char)");
+        let stmt = result.ast.get_stmt(result.stmts[0]);
+        match stmt {
+            Some(Stmt::Type { name, def, .. }) => {
+                assert_eq!(name, "Event");
+                match def {
+                    crate::ast::TypeDefAst::Sum(variants) => {
+                        assert_eq!(variants.len(), 2);
+                        assert_eq!(variants[0].name, "Click");
+                        assert_eq!(variants[0].payloads.len(), 2);
+                        assert_eq!(variants[1].name, "KeyPress");
+                        assert_eq!(variants[1].payloads.len(), 1);
+                    }
+                }
+            }
+            _ => panic!("expected Type"),
+        }
+    }
+
+    #[test]
+    fn parse_type_with_type_params() {
+        // Parameterized sum type
+        let result = parse_ok("TYPE Either[L, R] = Left(L) | Right(R)");
+        let stmt = result.ast.get_stmt(result.stmts[0]);
+        match stmt {
+            Some(Stmt::Type {
+                name, type_params, ..
+            }) => {
+                assert_eq!(name, "Either");
+                assert_eq!(type_params.len(), 2);
+                assert_eq!(type_params[0], "L");
+                assert_eq!(type_params[1], "R");
+            }
+            _ => panic!("expected Type"),
+        }
+    }
+
+    #[test]
+    fn parse_type_multiline() {
+        // Multi-line type definition
+        let src = "TYPE Status =\n  Pending\n  | Active\n  | Completed";
+        let result = parse_ok(src);
+        let stmt = result.ast.get_stmt(result.stmts[0]);
+        match stmt {
+            Some(Stmt::Type { name, def, .. }) => {
+                assert_eq!(name, "Status");
+                match def {
+                    crate::ast::TypeDefAst::Sum(variants) => {
+                        assert_eq!(variants.len(), 3);
+                    }
+                }
+            }
+            _ => panic!("expected Type"),
         }
     }
 }

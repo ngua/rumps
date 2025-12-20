@@ -399,6 +399,7 @@ impl Lexer<'_> {
             just('<').to(Token::Lt),
             just('>').to(Token::Gt),
             just('.').to(Token::Dot),
+            just('|').to(Token::SinglePipe),
         ));
 
         let punct = choice((
@@ -582,8 +583,9 @@ mod tests {
 
     #[test]
     fn all_keywords() {
-        let tokens =
-            lex_ok("LET SET KILL OUTPUT IF ELSE AND OR NOT TRUE FALSE");
+        let tokens = lex_ok(
+            "LET SET KILL OUTPUT IF ELSE AND OR NOT TRUE FALSE FUN TYPE",
+        );
         assert_eq!(
             tokens,
             vec![
@@ -598,6 +600,8 @@ mod tests {
                 Token::Not,
                 Token::True,
                 Token::False,
+                Token::Fun,
+                Token::Type,
                 Token::Eof
             ]
         );
@@ -991,9 +995,18 @@ mod tests {
     }
 
     #[test]
-    fn single_pipe_error() {
-        let err = lex_err("a | b");
-        assert!(err.to_string().contains("unexpected"));
+    fn single_pipe_token() {
+        // `|` is a valid token (variant separator in TYPE declarations)
+        let tokens = lex_ok("a | b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::SinglePipe,
+                Token::Ident("b".into()),
+                Token::Eof
+            ]
+        );
     }
 }
 

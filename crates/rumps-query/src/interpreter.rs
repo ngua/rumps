@@ -73,6 +73,23 @@
 //!
 //! - `Bool`, `Int`, `Float`, `String` are valid subscripts
 //! - `Array`, `Object`, `Tagged` cannot be subscripts (returns error)
+//!
+//! # Name Resolution Architecture
+//!
+//! Type-qualified paths (e.g., `Option.None`, `Status.Pending`) are resolved
+//! in two places:
+//!
+//! 1. **Parse-time** (`resolve.rs`): For built-in types (`Option`, `Result`)
+//!    that exist before interpretation begins. Converts `Expr::Field` to
+//!    `Expr::Path` or `Expr::Variant`.
+//!
+//! 2. **Runtime** (`field()`, `call()`): For user-defined types declared via
+//!    `TYPE`. These are registered during interpretation, so they cannot be
+//!    resolved at parse time. The interpreter checks if a field access like
+//!    `Status.Pending` refers to a registered type and handles it as a path.
+//!
+//! This dual approach is necessary because user-defined types are declared
+//! dynamically during script execution, after the parse-time resolution pass.
 
 #![allow(dead_code)]
 
@@ -90,7 +107,7 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
-    Literal, RestPattern, Stmt, StmtId, TypePattern, UnOp,
+    Literal, RestPattern, Stmt, StmtId, TypeDefAst, TypePattern, UnOp,
 };
 use crate::env::Environment;
 use crate::io::IoContext;
@@ -309,6 +326,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ret,
                 body,
             } => self.fun(&name, &params, ret, body, span),
+            Stmt::Type {
+                name,
+                type_params,
+                def,
+            } => self.type_decl(&name, &type_params, &def, span),
         }
     }
 
@@ -363,6 +385,110 @@ impl<I: IoContext> Interpreter<'_, I> {
         );
 
         Ok(())
+    }
+
+    /// Register a user-defined type declaration.
+    ///
+    /// Processes `TYPE Name = Variant1 | Variant2(T) | ...` and registers
+    /// the type in the type registry. Errors if a type with the same name
+    /// already exists or if payload types reference undeclared type parameters.
+    fn type_decl(
+        &mut self,
+        name: &str,
+        type_params: &[String],
+        def: &TypeDefAst,
+        span: Span,
+    ) -> Result<()> {
+        let name_id = self.arena.intern(name);
+
+        // Check for duplicate type name
+        if self.registry.lookup(name_id).is_some() {
+            Err(Error::runtime(
+                span,
+                format!("type `{name}` is already defined"),
+            ))?;
+        }
+
+        match def {
+            TypeDefAst::Sum(variants) => {
+                // Validate payload types reference only declared type params
+                variants.iter().try_for_each(|v| {
+                    v.payloads.iter().try_for_each(|ty_id| {
+                        self.validate_type_params(*ty_id, type_params, span)
+                    })
+                })?;
+
+                // Build VariantDef entries
+                let variant_defs: SmallVec<[crate::value::VariantDef; 4]> =
+                    variants
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, v)| {
+                            let vname_id = self.arena.intern(&v.name);
+                            crate::value::VariantDef {
+                                name: vname_id,
+                                idx: idx as u8,
+                                arity: v.payloads.len() as u8,
+                            }
+                        })
+                        .collect();
+
+                // Intern type parameters
+                let type_param_ids: SmallVec<[StringId; 2]> =
+                    type_params.iter().map(|p| self.arena.intern(p)).collect();
+
+                // Register the type
+                self.registry.register(
+                    crate::value::TypeDef::Sum {
+                        name: name_id,
+                        type_params: type_param_ids,
+                        variants: variant_defs,
+                    },
+                    name_id,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate that a type expression only references declared type parameters.
+    ///
+    /// For `Named` types, checks if the name is either a registered type or
+    /// a declared type parameter. Recursively validates nested types.
+    fn validate_type_params(
+        &mut self,
+        ty_id: AstTypeExprId,
+        declared: &[String],
+        span: Span,
+    ) -> Result<()> {
+        self.ast.get_type_expr(ty_id).map_or(Ok(()), |ty| match ty {
+            AstTypeExpr::Named(n) => {
+                let name_id = self.arena.intern(n);
+                let is_registered = self.registry.lookup(name_id).is_some();
+                let is_declared = declared.iter().any(|p| p == n);
+                if is_registered || is_declared {
+                    Ok(())
+                } else {
+                    Err(Error::runtime(
+                        span,
+                        format!("undeclared type parameter `{n}`"),
+                    ))
+                }
+            }
+            AstTypeExpr::App(_, args) => args.iter().try_for_each(|a| {
+                self.validate_type_params(*a, declared, span)
+            }),
+            AstTypeExpr::Fn(params, ret) => {
+                params.iter().try_for_each(|p| {
+                    self.validate_type_params(*p, declared, span)
+                })?;
+                self.validate_type_params(*ret, declared, span)
+            }
+            AstTypeExpr::Tuple(elems) => elems.iter().try_for_each(|e| {
+                self.validate_type_params(*e, declared, span)
+            }),
+        })
     }
 
     /// Convert an AST literal to a runtime value.
@@ -759,6 +885,33 @@ impl<I: IoContext> Interpreter<'_, I> {
         // For variable callees, use name-based resolution (functions first)
         match callee_expr {
             Expr::Var(ref name) => self.call_by_name(name, args, span).await,
+            // Check if this is a variant constructor for a user-defined type
+            Expr::Field(base_id, ref var_name) => {
+                let maybe_variant =
+                    self.ast.get_expr(base_id).and_then(|e| match e {
+                        Expr::Var(ty_name) => {
+                            let ty_id = self.arena.intern(ty_name);
+                            self.registry.lookup(ty_id).and_then(|type_id| {
+                                let var_id = self.arena.intern(var_name);
+                                self.registry
+                                    .lookup_variant(type_id, var_id)
+                                    .map(|_| {
+                                        (ty_name.clone(), var_name.clone())
+                                    })
+                            })
+                        }
+                        _ => None,
+                    });
+
+                if let Some((ty_name, var_name)) = maybe_variant {
+                    // Handle as variant constructor
+                    self.variant(&ty_name, &var_name, args, span).await
+                } else {
+                    // Evaluate callee expression and call the result
+                    let callee_val = self.eval(callee).await?;
+                    self.call_value(callee_val, args, span).await
+                }
+            }
             _ => {
                 // Evaluate callee expression and call the result
                 let callee_val = self.eval(callee).await?;
@@ -1370,6 +1523,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// After name resolution, this method is purely for runtime field access
     /// on `Value::Object`. Zero-arity variants like `Option.None` are handled
     /// by `Expr::Path` (resolved at parse time).
+    ///
+    /// For user-defined types registered at runtime, this also handles type
+    /// paths that weren't resolved during the parse-time resolution pass.
     #[async_recursion]
     async fn field(
         &mut self,
@@ -1377,27 +1533,48 @@ impl<I: IoContext> Interpreter<'_, I> {
         field: &str,
         span: Span,
     ) -> Result<Value> {
-        let base_val = self.eval(base).await?;
-
-        match &base_val {
-            Value::Object(obj) => {
-                let field_id = self.arena.intern(field);
-                obj.get(&field_id)
-                    .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!("field `{field}` not found"),
-                        )
-                    })
+        // Check if base is a type name (for user-defined types registered at runtime)
+        let maybe_type_path = self.ast.get_expr(base).and_then(|e| match e {
+            Expr::Var(ty_name) => {
+                let ty_id = self.arena.intern(ty_name);
+                self.registry.lookup(ty_id).and_then(|type_id| {
+                    let var_id = self.arena.intern(field);
+                    self.registry.lookup_variant(type_id, var_id).and_then(
+                        |v| {
+                            (v.arity == 0)
+                                .then(|| (ty_name.clone(), field.to_string()))
+                        },
+                    )
+                })
             }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "cannot access field on {}",
-                    base_val.type_name(&self.registry, &self.type_exprs)
-                ),
-            )),
+            _ => None,
+        });
+
+        if let Some((ty_name, var_name)) = maybe_type_path {
+            self.path(&[ty_name, var_name], span)
+        } else {
+            let base_val = self.eval(base).await?;
+
+            match &base_val {
+                Value::Object(obj) => {
+                    let field_id = self.arena.intern(field);
+                    obj.get(&field_id)
+                        .and_then(|id| self.arena.get(*id).cloned())
+                        .ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                format!("field `{field}` not found"),
+                            )
+                        })
+                }
+                _ => Err(Error::type_err(
+                    span,
+                    format!(
+                        "cannot access field on {}",
+                        base_val.type_name(&self.registry, &self.type_exprs)
+                    ),
+                )),
+            }
         }
     }
 

@@ -1,0 +1,5 @@
+; Test: undeclared type parameter error
+; Payload types must reference declared type params
+
+; This should fail: U is not declared
+TYPE Foo[T] = Bar(U)
