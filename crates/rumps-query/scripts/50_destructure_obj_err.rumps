@@ -1,0 +1,2 @@
+; Object missing field
+LET { name, missing } = { name: "Alice" }

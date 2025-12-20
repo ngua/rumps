@@ -215,6 +215,55 @@ pub(crate) enum UnOp {
     Not, // `NOT` or `!`
 }
 
+/// Rest pattern for array destructuring.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum RestPattern {
+    /// `..` ; ignore remaining elements
+    Ignore,
+    /// `...name` ; bind remaining elements to `name`
+    Bind(String),
+}
+
+/// A binding pattern for destructuring in `LET` statements.
+///
+/// Patterns allow extracting values from composite structures (tuples, objects,
+/// arrays) and binding them to multiple variables in a single statement.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BindingPattern {
+    /// Simple variable binding: `x`
+    Var(String),
+
+    /// Tuple destructuring: `(a, b, c)`
+    Tuple(Vec<Self>),
+
+    /// Object destructuring: `{ name, age }` or `{ name: n, age: a }`
+    ///
+    /// Each entry is `(field_name, pattern)`. Shorthand `{ name }` is lowered to
+    /// `{ name: name }` (i.e., `("name", Var("name"))`).
+    Object(Vec<(String, Self)>),
+
+    /// Array destructuring: `[a, b]`, `[a, b, ..]`, or `[head, ...tail]`
+    ///
+    /// - First vec: patterns for fixed-position elements
+    /// - `Option<RestPattern>`: optional rest handling
+    Array(Vec<Self>, Option<RestPattern>),
+
+    /// Wildcard: `_` (ignore this position)
+    Wildcard,
+}
+
+impl From<&str> for BindingPattern {
+    fn from(s: &str) -> Self {
+        Self::Var(s.into())
+    }
+}
+
+impl From<String> for BindingPattern {
+    fn from(s: String) -> Self {
+        Self::Var(s)
+    }
+}
+
 /// A type pattern for the `is` operator.
 ///
 /// Used for runtime type checking and variant matching with optional binding.
@@ -391,11 +440,15 @@ pub(crate) enum Expr {
 /// All recursive references use `ExprId`/`StmtId` indices into the `Ast` arena.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Stmt {
-    /// Lexical binding: `LET x = expr` or `LET x: Type = expr`.
+    /// Lexical binding with destructuring: `LET pattern = expr`.
+    ///
+    /// Supports simple identifiers (`LET x = ...`), tuples (`LET (a, b) = ...`),
+    /// objects (`LET { x, y } = ...`), and arrays (`LET [h, ...t] = ...`).
     ///
     /// The optional `AstTypeExprId` is the type annotation; if present, the
-    /// interpreter validates that the value's type matches.
-    Let(String, Option<AstTypeExprId>, ExprId),
+    /// interpreter validates that the value's type matches (applies to the
+    /// entire RHS value, not individual bindings).
+    Let(BindingPattern, Option<AstTypeExprId>, ExprId),
 
     /// B-tree assignment: `SET x(subs...) = expr` or `SET ^NAME(subs...) = expr`.
     ///
@@ -475,11 +528,12 @@ mod tests {
         // Build: LET x = 10
         let val =
             ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
+        let pat = BindingPattern::Var("x".into());
         let stmt =
-            ast.add_stmt(Stmt::Let("x".into(), None, val), Span::new(0, 10));
+            ast.add_stmt(Stmt::Let(pat.clone(), None, val), Span::new(0, 10));
 
         assert_eq!(ast.stmt_count(), 1);
-        assert_eq!(ast.get_stmt(stmt), Some(&Stmt::Let("x".into(), None, val)));
+        assert_eq!(ast.get_stmt(stmt), Some(&Stmt::Let(pat, None, val)));
         assert_eq!(ast.stmt_span(stmt), Some(Span::new(0, 10)));
     }
 

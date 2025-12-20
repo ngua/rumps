@@ -209,15 +209,19 @@ OUTPUT age   ; 30
 LET { name: n, age: a } = { name: "Bob", age: 25 }
 OUTPUT n  ; "Bob"
 
-; Array destructuring (fixed prefix)
-LET [first, second] = [1, 2, 3, 4]
+; Array destructuring (exact match)
+LET [first, second, third] = [1, 2, 3]
 OUTPUT first   ; 1
 OUTPUT second  ; 2
 
-; Array destructuring with rest
-LET [head, ...tail] = [1, 2, 3, 4]
+; Array destructuring with ignored rest
+LET [head, ..] = [1, 2, 3, 4]
 OUTPUT head  ; 1
-OUTPUT tail  ; [2, 3, 4]
+
+; Array destructuring with bound rest
+LET [first, ...tail] = [1, 2, 3, 4]
+OUTPUT first  ; 1
+OUTPUT tail   ; [2, 3, 4]
 
 ; Combining with functions
 FUN divmod (a: Int, b: Int) -> (Int, Int) { (a / b, a % b) }
@@ -228,49 +232,57 @@ OUTPUT rem   ; 2
 
 #### 2.1 AST
 
-- [ ] Add `BindingPattern` enum:
+- [x] Add `RestPattern` and `BindingPattern` enums:
   ```rust
+  enum RestPattern {
+      Ignore,        // `..`
+      Bind(String),  // `...name`
+  }
+
   enum BindingPattern {
       /// Simple variable: `x`
       Var(String),
       /// Tuple: `(a, b, c)`
-      Tuple(SmallVec<[BindingPattern; 4]>),
+      Tuple(Vec<BindingPattern>),
       /// Object: `{ name, age }` or `{ name: n, age: a }`
-      Object(SmallVec<[(String, BindingPattern); 4]>),
-      /// Array prefix: `[a, b]` or `[head, ...tail]`
-      Array(SmallVec<[BindingPattern; 4]>, Option<String>),  // (patterns, rest_var)
+      Object(Vec<(String, BindingPattern)>),
+      /// Array: `[a, b]` (exact), `[a, ..]` (ignore rest), `[a, ...rest]` (bind rest)
+      Array(Vec<BindingPattern>, Option<RestPattern>),
       /// Wildcard: `_` (ignore this position)
       Wildcard,
   }
   ```
-- [ ] Modify `Stmt::Let` to use `BindingPattern` instead of just `String`
+- [x] Modify `Stmt::Let` to use `BindingPattern` instead of just `String`
 
 #### 2.2 Parser
 
-- [ ] Parse `LET (a, b) = expr` as tuple destructuring
-- [ ] Parse `LET { name, age } = expr` as object destructuring (shorthand)
-- [ ] Parse `LET { name: n } = expr` as object destructuring (with rename)
-- [ ] Parse `LET [a, b] = expr` as array destructuring
-- [ ] Parse `LET [head, ...tail] = expr` as array destructuring with rest
-- [ ] Parse `LET _ = expr` as wildcard (evaluate but discard)
-- [ ] Support nested patterns: `LET ((a, b), c) = ...`
+- [x] Parse `LET (a, b) = expr` as tuple destructuring
+- [x] Parse `LET { name, age } = expr` as object destructuring (shorthand)
+- [x] Parse `LET { name: n } = expr` as object destructuring (with rename)
+- [x] Parse `LET [a, b] = expr` as array destructuring (exact match)
+- [x] Parse `LET [head, ..] = expr` as array destructuring (ignore rest)
+- [x] Parse `LET [head, ...tail] = expr` as array destructuring (bind rest)
+- [x] Parse `LET _ = expr` as wildcard (evaluate but discard)
+- [x] Support nested patterns: `LET ((a, b), c) = ...`
 
 #### 2.3 Interpreter
 
-- [ ] Implement `destructure(pattern, value) -> Vec<(String, Value)>`:
+- [x] Implement `destructure(pattern, value) -> Result<()>`:
   - `Var(name)` -> bind name to entire value
   - `Tuple(pats)` -> match `Value::Tuple`, recursively destructure elements
   - `Object(fields)` -> match `Value::Object`, extract named fields
   - `Array(pats, rest)` -> match `Value::Array`, bind prefix and optional rest
   - `Wildcard` -> return empty bindings (discard)
-- [ ] Error if structure doesn't match (e.g., tuple size mismatch)
-- [ ] Bind all extracted variables in scope
+- [x] Error if structure doesn't match (e.g., tuple size mismatch)
+- [x] Bind all extracted variables in scope
 
 #### 2.4 Tests
 
-- [ ] Add parser tests for destructuring patterns
-- [ ] Add interpreter tests for all pattern types
-- [ ] Add integration test script (`XX_destructuring.rumps`)
+- [x] Add parser tests for destructuring patterns
+- [x] Add interpreter tests for all pattern types
+- [x] Add integration test scripts:
+  - `47_destructuring.rumps` (happy paths)
+  - `48_destructure_errors.rumps` through `52_destructure_rest_err.rumps` (error cases)
 
 ---
 
@@ -850,7 +862,9 @@ LET config = { ...defaults, ...user }  ; { color: "red", size: "large" }
 
 #### 8.1 Lexer
 
-- [ ] Add `Token::DotDotDot` (`...`) for spread operator
+- [x] Add `Token::DotDotDot` (`...`) for spread operator
+
+*Note: Already implemented as part of destructuring bindings (section 2) for array rest patterns.*
 
 #### 8.2 AST
 

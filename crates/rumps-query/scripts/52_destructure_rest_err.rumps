@@ -1,0 +1,2 @@
+; Array too short for rest pattern
+LET [a, b, ...rest] = [1]

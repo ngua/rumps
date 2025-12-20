@@ -380,6 +380,7 @@ impl Lexer<'_> {
             just("&&").to(Token::AmpAmp),
             just("||").to(Token::PipePipe),
             just("|>").to(Token::Pipe),
+            just("...").to(Token::DotDotDot),
             just("..").to(Token::DotDot),
             just("->").to(Token::Arrow),
             just("=>").to(Token::FatArrow),

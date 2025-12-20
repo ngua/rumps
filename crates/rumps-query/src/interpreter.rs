@@ -89,8 +89,8 @@ use rumps_storage::{Database, Transaction};
 use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{
-    Ast, AstTypeExpr, AstTypeExprId, BinOp, Expr, ExprId, Literal, Stmt,
-    StmtId, TypePattern, UnOp,
+    Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
+    Literal, RestPattern, Stmt, StmtId, TypePattern, UnOp,
 };
 use crate::env::Environment;
 use crate::io::IoContext;
@@ -293,8 +293,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             .clone();
 
         match stmt {
-            Stmt::Let(name, ty_ann, expr_id) => {
-                self.r#let(&name, ty_ann, expr_id, span).await
+            Stmt::Let(pat, ty_ann, expr_id) => {
+                self.r#let(&pat, ty_ann, expr_id, span).await
             }
             Stmt::Set(target, expr_id) => self.set(target, expr_id, span).await,
             Stmt::Kill(target) => self.kill(target, span).await,
@@ -2143,20 +2143,21 @@ impl<I: IoContext> Interpreter<'_, I> {
             });
     }
 
-    /// Execute a `LET` binding.
+    /// Execute a `LET` binding with destructuring.
     ///
-    /// If a type annotation is present, validates that the value's type matches.
+    /// If a type annotation is present, validates that the value's type matches
+    /// before destructuring.
     #[async_recursion]
     async fn r#let(
         &mut self,
-        name: &str,
+        pat: &BindingPattern,
         ty_ann: Option<AstTypeExprId>,
         expr_id: ExprId,
         span: Span,
     ) -> Result<()> {
         let val = self.eval(expr_id).await?;
 
-        // Check type annotation if present
+        // Check type annotation if present (applies to the entire value)
         if let Some(ast_ty_id) = ty_ann {
             let expected_ty = self.resolve_type_expr(ast_ty_id, span)?;
             let actual_ty = self.value_type_expr(&val);
@@ -2164,17 +2165,200 @@ impl<I: IoContext> Interpreter<'_, I> {
             if !self.type_exprs.eq(expected_ty, actual_ty) {
                 let expected = self.type_expr_name(expected_ty);
                 let actual = self.type_expr_name(actual_ty);
-                return Err(Error::type_err(
+                Err(Error::type_err(
                     span,
                     format!("type mismatch: expected {expected}, got {actual}"),
-                ));
+                ))?;
             }
         }
 
-        let name_id = self.arena.intern(name);
-        let val_id = self.arena.add(val, span);
-        self.env.scopes.bind(name_id, val_id);
-        Ok(())
+        self.destructure(pat, &val, span)
+    }
+
+    /// Destructure a value according to a binding pattern, creating bindings.
+    fn destructure(
+        &mut self,
+        pat: &BindingPattern,
+        val: &Value,
+        span: Span,
+    ) -> Result<()> {
+        match pat {
+            BindingPattern::Var(name) => {
+                let name_id = self.arena.intern(name);
+                let val_id = self.arena.add(val.clone(), span);
+                self.env.scopes.bind(name_id, val_id);
+                Ok(())
+            }
+            BindingPattern::Wildcard => Ok(()), // discard value
+            BindingPattern::Tuple(pats) => {
+                self.destructure_tuple(pats, val, span)
+            }
+            BindingPattern::Object(fields) => {
+                self.destructure_object(fields, val, span)
+            }
+            BindingPattern::Array(pats, rest) => {
+                self.destructure_array(pats, rest.as_ref(), val, span)
+            }
+        }
+    }
+
+    /// Destructure a tuple value.
+    fn destructure_tuple(
+        &mut self,
+        pats: &[BindingPattern],
+        val: &Value,
+        span: Span,
+    ) -> Result<()> {
+        match val {
+            Value::Tuple(_, elems) => {
+                if elems.len() != pats.len() {
+                    Err(Error::runtime(
+                        span,
+                        format!(
+                            "tuple size mismatch: pattern has {} elements, \
+                             value has {}",
+                            pats.len(),
+                            elems.len()
+                        ),
+                    ))
+                } else {
+                    pats.iter().zip(elems.iter()).try_for_each(
+                        |(p, elem_id)| {
+                            let elem =
+                                self.arena.get(*elem_id).cloned().ok_or_else(
+                                    || {
+                                        Error::runtime(
+                                            span,
+                                            "invalid tuple element",
+                                        )
+                                    },
+                                )?;
+                            self.destructure(p, &elem, span)
+                        },
+                    )
+                }
+            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "cannot destructure {} as tuple",
+                    val.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
+    /// Destructure an object value.
+    fn destructure_object(
+        &mut self,
+        fields: &[(String, BindingPattern)],
+        val: &Value,
+        span: Span,
+    ) -> Result<()> {
+        match val {
+            Value::Object(obj) => fields.iter().try_for_each(|(name, pat)| {
+                let field_name_id = self.arena.intern(name);
+                obj.get(&field_name_id)
+                    .ok_or_else(|| {
+                        Error::runtime(
+                            span,
+                            format!("object missing field `{name}`"),
+                        )
+                    })
+                    .and_then(|val_id| {
+                        let field_val =
+                            self.arena.get(*val_id).cloned().ok_or_else(
+                                || Error::runtime(span, "invalid field value"),
+                            )?;
+                        self.destructure(pat, &field_val, span)
+                    })
+            }),
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "cannot destructure {} as object",
+                    val.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
+    /// Destructure an array value.
+    fn destructure_array(
+        &mut self,
+        pats: &[BindingPattern],
+        rest: Option<&RestPattern>,
+        val: &Value,
+        span: Span,
+    ) -> Result<()> {
+        match val {
+            Value::Array(ty_id, elems) => {
+                // Without rest: require exact length
+                // With rest (Ignore or Bind): require at least `pats.len()` elements
+                if rest.is_none() && elems.len() != pats.len() {
+                    Err(Error::runtime(
+                        span,
+                        format!(
+                            "array size mismatch: pattern has {} elements, \
+                             value has {}",
+                            pats.len(),
+                            elems.len()
+                        ),
+                    ))
+                } else if rest.is_some() && elems.len() < pats.len() {
+                    Err(Error::runtime(
+                        span,
+                        format!(
+                            "array too short: pattern needs at least {} elements, \
+                             value has {}",
+                            pats.len(),
+                            elems.len()
+                        ),
+                    ))
+                } else {
+                    // Bind prefix elements
+                    pats.iter()
+                        .zip(elems.iter().take(pats.len()))
+                        .try_for_each(|(p, elem_id)| {
+                            let elem =
+                                self.arena.get(*elem_id).cloned().ok_or_else(
+                                    || {
+                                        Error::runtime(
+                                            span,
+                                            "invalid array element",
+                                        )
+                                    },
+                                )?;
+                            self.destructure(p, &elem, span)
+                        })?;
+
+                    // Handle rest pattern
+                    match rest {
+                        None => Ok(()), // exact match, already validated
+                        Some(RestPattern::Ignore) => Ok(()), // discard rest
+                        Some(RestPattern::Bind(name)) => {
+                            let rest_elems: SmallVec<_> = elems
+                                .iter()
+                                .skip(pats.len())
+                                .copied()
+                                .collect();
+                            let rest_arr = Value::Array(*ty_id, rest_elems);
+                            let name_id = self.arena.intern(name);
+                            let val_id = self.arena.add(rest_arr, span);
+                            self.env.scopes.bind(name_id, val_id);
+                            Ok(())
+                        }
+                    }
+                }
+            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "cannot destructure {} as array",
+                    val.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
     }
 
     /// Execute an `OUTPUT` statement.

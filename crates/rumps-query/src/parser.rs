@@ -163,7 +163,16 @@ impl Parser {
         })
     }
 
-    /// `LET name = expr` or `LET name: Type = expr`
+    /// `LET pattern = expr` or `LET pattern: Type = expr`
+    ///
+    /// Supports destructuring patterns:
+    /// - `LET x = ...` (simple binding)
+    /// - `LET (a, b) = ...` (tuple)
+    /// - `LET { x, y } = ...` (object shorthand)
+    /// - `LET { x: a, y: b } = ...` (object with rename)
+    /// - `LET [a, b] = ...` (array)
+    /// - `LET [h, ...t] = ...` (array with rest)
+    /// - `LET _ = ...` (wildcard)
     fn let_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
@@ -173,13 +182,143 @@ impl Parser {
             just(Token::Colon).ignore_then(Self::type_expr()).or_not();
 
         just(Token::Let)
-            .ignore_then(Self::ident())
+            .ignore_then(Self::binding_pattern())
             .then(type_ann)
             .then_ignore(just(Token::Assign))
             .then(Self::expr(stmt))
-            .map_with_span(|((name, ty_ann), val), span| {
-                cst::Stmt::new(cst::StmtKind::Let(name, ty_ann, val), span)
+            .map_with_span(|((pat, ty_ann), val), span| {
+                cst::Stmt::new(cst::StmtKind::Let(pat, ty_ann, val), span)
             })
+    }
+
+    /// Parse a binding pattern for destructuring.
+    fn binding_pattern(
+    ) -> impl chumsky::Parser<Token, cst::BindingPattern, Error = ParseErr> + Clone
+    {
+        recursive(|pat| {
+            // Wildcard: `_`
+            let wildcard = select! { Token::Ident(s) if s == "_" => () }
+                .to(cst::BindingPattern::Wildcard);
+
+            // Simple variable: any identifier except `_`
+            let var = select! { Token::Ident(s) if s != "_" => s }
+                .map(cst::BindingPattern::Var);
+
+            // Tuple pattern: `(a, b, c)` or `(a, b,)`
+            let tuple_sep =
+                just(Token::Comma).then_ignore(Self::opt_newlines());
+            let tuple_pat = just(Token::LParen)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(
+                    pat.clone()
+                        .separated_by(tuple_sep)
+                        .allow_trailing()
+                        .at_least(1),
+                )
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RParen))
+                .map(cst::BindingPattern::Tuple);
+
+            // Object field pattern: `name` (shorthand) or `name: pattern`
+            let obj_field = select! { Token::Ident(s) if s != "_" => s }
+                .then(
+                    just(Token::Colon)
+                        .ignore_then(Self::opt_newlines())
+                        .ignore_then(pat.clone())
+                        .or_not(),
+                )
+                .map(|(name, maybe_pat)| {
+                    let p = maybe_pat.unwrap_or_else(|| {
+                        cst::BindingPattern::Var(name.clone())
+                    });
+                    (name, p)
+                });
+
+            // Object pattern: `{ name, age }` or `{ name: n, age: a }`
+            let obj_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+            let obj_pat = just(Token::LBrace)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(
+                    obj_field
+                        .separated_by(obj_sep)
+                        .allow_trailing()
+                        .at_least(1),
+                )
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RBrace))
+                .map(cst::BindingPattern::Object);
+
+            // Rest patterns: `..` (ignore) or `...name` (bind)
+            let rest_bind = just(Token::DotDotDot)
+                .ignore_then(select! { Token::Ident(s) if s != "_" => s })
+                .map(ArrayPatElem::RestBind);
+            let rest_ignore = just(Token::DotDot).to(ArrayPatElem::RestIgnore);
+
+            // Array element: rest-bind, rest-ignore, or regular pattern
+            let arr_elem = rest_bind
+                .or(rest_ignore)
+                .or(pat.clone().map(ArrayPatElem::Pat));
+
+            // Array pattern: `[a, b]` or `[head, ...tail]`
+            let arr_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+            let arr_pat = just(Token::LBracket)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(arr_elem.separated_by(arr_sep).allow_trailing())
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RBracket))
+                .try_map(Self::build_array_pattern);
+
+            choice((wildcard, tuple_pat, obj_pat, arr_pat, var))
+        })
+    }
+
+    /// Build an array pattern from parsed elements.
+    ///
+    /// The rest pattern (`..` or `...name`) must be the last element if present.
+    fn build_array_pattern(
+        elems: Vec<ArrayPatElem>,
+        span: Span,
+    ) -> std::result::Result<cst::BindingPattern, ParseErr> {
+        let mut pats = Vec::new();
+        let mut rest: Option<cst::RestPattern> = None;
+
+        elems.into_iter().try_for_each(|e| match e {
+            ArrayPatElem::Pat(p) => {
+                if rest.is_some() {
+                    Err(Simple::custom(
+                        span,
+                        "rest pattern must be last in array destructuring",
+                    ))
+                } else {
+                    pats.push(p);
+                    Ok(())
+                }
+            }
+            ArrayPatElem::RestIgnore => {
+                if rest.is_some() {
+                    Err(Simple::custom(
+                        span,
+                        "only one rest pattern allowed in array destructuring",
+                    ))
+                } else {
+                    rest = Some(cst::RestPattern::Ignore);
+                    Ok(())
+                }
+            }
+            ArrayPatElem::RestBind(name) => {
+                if rest.is_some() {
+                    Err(Simple::custom(
+                        span,
+                        "only one rest pattern allowed in array destructuring",
+                    ))
+                } else {
+                    rest = Some(cst::RestPattern::Bind(name));
+                    Ok(())
+                }
+            }
+        })?;
+
+        Ok(cst::BindingPattern::Array(pats, rest))
     }
 
     /// `SET name = expr` or `SET name(subs...) = expr`
@@ -941,6 +1080,8 @@ impl Parser {
                 ParenContents::Elements(mut elems, has_comma) => {
                     if elems.len() == 1 && !has_comma {
                         // Single element without comma: parenthesized
+                        // SAFETY: len checked right above, `unwrap` is OK
+                        #[allow(clippy::unwrap_used)]
                         elems.pop().unwrap()
                     } else {
                         // Multiple elements or has comma: tuple
@@ -1256,6 +1397,17 @@ enum PostfixOp {
     Call(Vec<cst::Expr>, Span),
 }
 
+/// Helper enum for array pattern elements during parsing.
+#[derive(Clone)]
+enum ArrayPatElem {
+    /// Regular pattern: `a`, `(x, y)`, etc.
+    Pat(cst::BindingPattern),
+    /// Rest ignore: `..`
+    RestIgnore,
+    /// Rest bind: `...name`
+    RestBind(String),
+}
+
 impl PostfixOp {
     fn end(&self) -> Span {
         match self {
@@ -1274,7 +1426,7 @@ mod tests {
     use smallvec::smallvec;
 
     use super::*;
-    use crate::ast::{Expr, Stmt};
+    use crate::ast::{BindingPattern, Expr, Stmt};
 
     fn parse_ok(src: &str) -> ParseResult {
         Parser::parse(src).expect("should parse")
@@ -1390,8 +1542,10 @@ mod tests {
         let result = parse_ok("LET x = 42");
         let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
-            Some(Stmt::Let(name, None, _)) => assert_eq!(name, "x"),
-            _ => panic!("expected Let"),
+            Some(Stmt::Let(BindingPattern::Var(name), None, _)) => {
+                assert_eq!(name, "x")
+            }
+            _ => panic!("expected Let with Var pattern"),
         }
     }
 

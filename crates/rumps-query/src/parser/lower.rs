@@ -7,7 +7,10 @@
 use smallvec::SmallVec;
 
 use super::cst;
-use crate::ast::{Ast, AstTypeExpr, AstTypeExprId, Expr, ExprId, Stmt, StmtId};
+use crate::ast::{
+    Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId, RestPattern,
+    Stmt, StmtId,
+};
 
 /// Lower a CST program (list of statements) to AST.
 pub(crate) fn program(stmts: Vec<cst::Stmt>) -> (Ast, Vec<StmtId>) {
@@ -20,10 +23,11 @@ pub(crate) fn program(stmts: Vec<cst::Stmt>) -> (Ast, Vec<StmtId>) {
 fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> StmtId {
     let span = stmt.span;
     let s = match stmt.kind {
-        cst::StmtKind::Let(name, ty, expr) => {
+        cst::StmtKind::Let(pat, ty, expr) => {
+            let pat = lower_binding_pattern(pat);
             let ty_id = ty.map(|t| lower_type_expr(ast, t));
             let expr_id = lower_expr(ast, expr);
-            Stmt::Let(name, ty_id, expr_id)
+            Stmt::Let(pat, ty_id, expr_id)
         }
         cst::StmtKind::Set(target, value) => {
             let target_id = lower_expr(ast, target);
@@ -211,4 +215,33 @@ fn lower_type_expr(ast: &mut Ast, ty: cst::TypeExpr) -> AstTypeExprId {
         }
     };
     ast.add_type_expr(te, span)
+}
+
+/// Lower a CST binding pattern to AST.
+fn lower_binding_pattern(pat: cst::BindingPattern) -> BindingPattern {
+    match pat {
+        cst::BindingPattern::Var(name) => BindingPattern::Var(name),
+        cst::BindingPattern::Tuple(pats) => BindingPattern::Tuple(
+            pats.into_iter().map(lower_binding_pattern).collect(),
+        ),
+        cst::BindingPattern::Object(fields) => BindingPattern::Object(
+            fields
+                .into_iter()
+                .map(|(k, p)| (k, lower_binding_pattern(p)))
+                .collect(),
+        ),
+        cst::BindingPattern::Array(pats, rest) => BindingPattern::Array(
+            pats.into_iter().map(lower_binding_pattern).collect(),
+            rest.map(lower_rest_pattern),
+        ),
+        cst::BindingPattern::Wildcard => BindingPattern::Wildcard,
+    }
+}
+
+/// Lower a CST rest pattern to AST.
+fn lower_rest_pattern(pat: cst::RestPattern) -> RestPattern {
+    match pat {
+        cst::RestPattern::Ignore => RestPattern::Ignore,
+        cst::RestPattern::Bind(name) => RestPattern::Bind(name),
+    }
 }

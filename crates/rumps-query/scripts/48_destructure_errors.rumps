@@ -1,0 +1,4 @@
+; Destructuring error cases
+
+; Array size mismatch (too few elements)
+LET [a, b, c] = [1, 2]

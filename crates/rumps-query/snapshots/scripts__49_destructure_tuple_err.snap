@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Tuple size mismatch\nLET (a, b, c) = (1, 2)\n"
+---
+ERROR: runtime error at 22..44: tuple size mismatch: pattern has 3 elements, value has 2

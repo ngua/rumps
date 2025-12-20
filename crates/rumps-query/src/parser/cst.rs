@@ -164,11 +164,39 @@ impl Stmt {
     }
 }
 
+/// Rest pattern for array destructuring (CST form).
+#[derive(Clone, Debug)]
+pub(crate) enum RestPattern {
+    /// `..` ; ignore remaining elements
+    Ignore,
+    /// `...name` ; bind remaining elements to `name`
+    Bind(String),
+}
+
+/// A binding pattern for destructuring in `LET` statements (CST form).
+#[derive(Clone, Debug)]
+pub(crate) enum BindingPattern {
+    /// Simple variable binding: `x`
+    Var(String),
+
+    /// Tuple destructuring: `(a, b, c)`
+    Tuple(Vec<Self>),
+
+    /// Object destructuring: `{ name, age }` or `{ name: n, age: a }`
+    Object(Vec<(String, Self)>),
+
+    /// Array destructuring: `[a, b]`, `[a, b, ..]`, or `[head, ...tail]`
+    Array(Vec<Self>, Option<RestPattern>),
+
+    /// Wildcard: `_`
+    Wildcard,
+}
+
 /// The kind of a CST statement.
 #[derive(Clone, Debug)]
 pub(crate) enum StmtKind {
-    /// Lexical binding.
-    Let(String, Option<TypeExpr>, Expr),
+    /// Lexical binding with destructuring.
+    Let(BindingPattern, Option<TypeExpr>, Expr),
 
     /// B-tree assignment.
     Set(Expr, Expr),

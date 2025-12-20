@@ -1,0 +1,2 @@
+; Wrong type for destructuring
+LET (a, b) = 42

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Object missing field\nLET { name, missing } = { name: \"Alice\" }\n"
+---
+ERROR: runtime error at 23..64: object missing field `missing`
