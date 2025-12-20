@@ -3,13 +3,13 @@
 //! This pass runs after parsing (CST -> AST lowering) and before interpretation.
 //! It separates compile-time namespace resolution from runtime operations:
 //!
-//! - `Option.None` (zero-arity variant) -> `Expr::Path(["Option", "None"])`
+//! - `Option.None` (zero-arity variant) -> `Expr::Variant("Option", "None", [])`
 //! - `Option.Some(x)` (variant with args) -> `Expr::Variant("Option", "Some", [x])`
 //! - `obj.field` (runtime field access) -> remains `Expr::Field`
 //! - `obj.method(args)` (runtime call) -> remains `Expr::Call`
 //!
 //! The parser emits generic `Expr::Field` and `Expr::Call` nodes; this pass
-//! converts type-qualified names to specialized nodes that the interpreter
+//! converts type-qualified names to `Expr::Variant` that the interpreter
 //! handles without runtime type registry lookups.
 //!
 //! # Architecture
@@ -28,9 +28,9 @@ use crate::value::{TypeRegistry, ValueArena};
 /// Run name resolution on the AST.
 ///
 /// Converts:
-/// - `Expr::Field(Var(type), variant)` to `Expr::Path` for zero-arity variants
+/// - `Expr::Field(Var(type), variant)` to `Expr::Variant` for zero-arity variants
 /// - `Expr::Call(Field(Var(type), variant), args)` to `Expr::Variant` for
-///   variant constructors
+///   variant constructors with arguments
 pub(crate) fn resolve(
     ast: &mut Ast,
     arena: &mut ValueArena,
@@ -59,7 +59,7 @@ fn resolve_expr(
     id: ExprId,
 ) -> Option<Expr> {
     ast.get_expr(id).and_then(|expr| match expr {
-        // Zero-arity variants: `Type.Variant` -> `Path([Type, Variant])`
+        // Zero-arity variants: `Type.Variant` -> `Variant(Type, Variant, [])`
         Expr::Field(base_id, field) => {
             ast.get_expr(*base_id).and_then(|base| match base {
                 Expr::Var(ty_name) => {
@@ -68,10 +68,11 @@ fn resolve_expr(
                     registry.lookup(ty_id).and_then(|type_id| {
                         registry.lookup_variant(type_id, var_id).and_then(|v| {
                             (v.arity == 0).then(|| {
-                                Expr::Path(smallvec![
+                                Expr::Variant(
                                     ty_name.clone(),
-                                    field.clone()
-                                ])
+                                    field.clone(),
+                                    smallvec![],
+                                )
                             })
                         })
                     })
@@ -128,13 +129,17 @@ mod tests {
     #[test]
     fn resolve_option_none() {
         let ast = parse_and_resolve("LET x = Option.None");
-        let has_path = ast.expr_ids().any(|id| {
+        let has_variant = ast.expr_ids().any(|id| {
             matches!(
                 ast.get_expr(id),
-                Some(Expr::Path(segs)) if segs.as_slice() == ["Option", "None"]
+                Some(Expr::Variant(ty, var, args))
+                    if ty == "Option" && var == "None" && args.is_empty()
             )
         });
-        assert!(has_path, "expected Expr::Path([\"Option\", \"None\"])");
+        assert!(
+            has_variant,
+            "Option.None should become Variant with no args"
+        );
     }
 
     #[test]
@@ -176,18 +181,26 @@ mod tests {
     #[test]
     fn resolve_field_access_not_converted() {
         let ast = parse_and_resolve("LET obj = { x: 1 }\nLET y = obj.x");
-        let has_path = ast
-            .expr_ids()
-            .any(|id| matches!(ast.get_expr(id), Some(Expr::Path(_))));
-        assert!(!has_path, "obj.x should not become Path");
+        // obj.x should remain as Field, not become Variant
+        let has_variant_obj_x = ast.expr_ids().any(|id| {
+            matches!(
+                ast.get_expr(id),
+                Some(Expr::Variant(ty, var, _)) if ty == "obj" && var == "x"
+            )
+        });
+        assert!(!has_variant_obj_x, "obj.x should not become Variant");
     }
 
     #[test]
     fn resolve_unknown_type_not_converted() {
         let ast = parse_and_resolve("LET x = Unknown.Foo");
-        let has_path = ast
-            .expr_ids()
-            .any(|id| matches!(ast.get_expr(id), Some(Expr::Path(_))));
-        assert!(!has_path, "Unknown.Foo should not become Path");
+        // Unknown.Foo should remain as Field since Unknown is not a registered type
+        let has_variant = ast.expr_ids().any(|id| {
+            matches!(
+                ast.get_expr(id),
+                Some(Expr::Variant(ty, _, _)) if ty == "Unknown"
+            )
+        });
+        assert!(!has_variant, "Unknown.Foo should not become Variant");
     }
 }

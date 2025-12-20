@@ -758,9 +758,13 @@ fn matches(&self, pat: &Pattern, val: &Value) -> Option<Vec<(StringId, ValueId)>
 With function types and closures in place from Phase 2, these are straightforward.
 
 ```rumps
-MAP (x => x * 2) [1, 2, 3]
-FILTER (x => x > 2) [1, 2, 3, 4]
-REDUCE (acc, x => acc + x) 0 [1, 2, 3]
+MAP(x => x * 2, [1, 2, 3])
+FILTER(x => x > 2, [1, 2, 3, 4])
+REDUCE(acc, x => acc + x, 0, [1, 2, 3])
+
+; Case-insensitive (like keywords)
+map(x => x * 2, [1, 2, 3])
+Map(x => x * 2, [1, 2, 3])
 ```
 
 Type signatures:
@@ -770,28 +774,55 @@ Type signatures:
 ; REDUCE: ((A, T) -> A, A, Array[T]) -> A
 ```
 
-#### 6.1 Implementation
+#### 6.1 Design: Primitive Functions, Not Keywords
 
-- [ ] Add `Token::Map`, `Token::Filter`, `Token::Reduce` keywords
-- [ ] Parse as prefix function-like expressions
+These are **primitive functions** registered in the `Environment`, not keywords:
+
+- No special parser handling; they are called like any other function
+- Case-insensitive lookup (like keywords): `MAP`, `Map`, `map` all work
+- Registered via `Environment::register_primitive()` at interpreter startup
+- Use the existing `PrimFn` infrastructure in `env.rs`
+
+This approach:
+- Keeps the parser simple (no new tokens or grammar rules)
+- Allows future extensibility (user can shadow with their own `map` if desired)
+- Maintains consistency with MUMPS-style case-insensitivity
+
+#### 6.2 Implementation
+
+##### Environment Changes
+
+- [x] Make primitive lookup case-insensitive in `get_primitive()`
+- [x] Register primitives at `Environment::new()` (or via `register_builtins()`)
+  - **NOTE** `Environment::new` already calls `register_builtins()`
+
+##### Primitive Implementations
+
 - [ ] Implement `MAP`:
-  - Evaluate function and array
+  - Signature: `(T -> U, Array[T]) -> Array[U]`
+  - Evaluate function and array arguments
   - Apply function to each element
   - Return new array
 - [ ] Implement `FILTER`:
+  - Signature: `(T -> Bool, Array[T]) -> Array[T]`
   - Evaluate predicate and array
   - Keep elements where predicate returns truthy
   - Return filtered array
 - [ ] Implement `REDUCE`:
+  - Signature: `(T -> U, U, Array[T]) -> U`
   - Evaluate reducer, initial value, and array
   - Fold left: `reducer(reducer(init, arr[0]), arr[1])...`
   - Return accumulated value
 
-#### 6.2 Tests
+##### Interpreter Changes
 
-- [ ] Add lexer tests
-- [ ] Add parser tests
-- [ ] Add interpreter tests
+- [ ] In function call handling, check primitives before user-defined functions
+- [ ] Primitives are called with evaluated arguments (like regular functions)
+
+#### 6.3 Tests
+
+- [ ] Add tests for case-insensitive primitive lookup
+- [ ] Add interpreter tests for MAP, FILTER, REDUCE
 - [ ] Add integration test script (`XX_collections.rumps`)
 
 ---
@@ -1078,19 +1109,19 @@ IF email matches /^[^@]+@[^@]+\.[^@]+$/ {
   OUTPUT "Valid email"
 }
 
-; Collection operations
-LET doubled = MAP (x => x * 2) [1, 2, 3]
+; Collection operations (primitive functions, case-insensitive)
+LET doubled = MAP(x => x * 2, [1, 2, 3])
 OUTPUT doubled  ; [2, 4, 6]
 
-LET evens = FILTER (x => x % 2 == 0) [1, 2, 3, 4]
+LET evens = FILTER(x => x % 2 == 0, [1, 2, 3, 4])
 OUTPUT evens  ; [2, 4]
 
-LET sum = REDUCE (acc, x => acc + x) 0 [1, 2, 3, 4]
+LET sum = REDUCE((acc, x) => acc + x, 0, [1, 2, 3, 4])
 OUTPUT sum  ; 10
 
 ; Ranges
 LET r = 1..5  ; [1, 2, 3, 4] (exclusive end)
-LET squares = MAP (x => x * x) (1..=5)  ; [1, 4, 9, 16, 25]
+LET squares = MAP(x => x * x, 1..=5)  ; [1, 4, 9, 16, 25]
 
 ; Spread operators
 LET arr1 = [1, 2, 3]

@@ -105,19 +105,18 @@ pub(crate) type PrimResult<'a> = BoxFuture<'a, Result<ValueId>>;
 /// Context passed to primitive functions during execution.
 ///
 /// Contains references to the value arena for creating/looking up values.
-/// Future phases may add `Database`, `Transaction`, etc.
 pub(crate) struct PrimCtx<'a> {
     pub(crate) arena: &'a mut ValueArena,
 }
 
 /// A built-in primitive function.
 ///
-/// Primitives are async because many operations (like `GET`) require
-/// database access. The function takes a context and arguments, returning
-/// a future that resolves to a `ValueId`.
+/// Primitives are callable built-in functions like `MAP`, `FILTER`, `REDUCE`,
+/// etc. They take a context and arguments, returning a future that resolves
+/// to a `ValueId`.
 ///
-/// Note we use a `SmallVec` here for arguments as functions with more than
-/// four arguments are fairly rare, so `SmallVec` definitely wins in this case.
+/// Note: `GET`/`SET`/`KILL` are keywords with special syntax, so they are
+/// AST constructs (`Expr::Get`, `Stmt::Set`, `Stmt::Kill`), not primitives.
 pub(crate) type PrimFn =
     for<'a> fn(&'a mut PrimCtx<'a>, SmallVec<[ValueId; 4]>) -> PrimResult<'a>;
 
@@ -125,20 +124,16 @@ pub(crate) type PrimFn =
 ///
 /// Tracks:
 /// - Lexical scopes for `LET` bindings (via `Scopes`)
-/// - Built-in primitive functions
-/// - TODO: Many more things later (namespaces, etc...)
+/// - Built-in primitive functions (e.g., `MAP`, `FILTER`, `REDUCE`)
 ///
 /// Note: `SET` variables (both local and global) are stored in the `Database`,
-/// not in the environment. Only sync `LET` bindings live here. You can `GET`
-/// a `SET` (local or global), but not a `LET`; `LET`s can be referenced by name,
-/// but not `SET`s
+/// not in the environment. Only `LET` bindings live here. You can `GET` a `SET`
+/// (local or global), but not a `LET`; `LET`s can be referenced by name directly.
 pub(crate) struct Environment {
     /// Lexical scope stack for `LET` bindings.
     pub(crate) scopes: Scopes,
 
     /// Built-in primitive functions.
-    ///
-    /// Keyed by name (e.g., `"GET"`, `"$ORDER"`).
     primitives: HashMap<String, PrimFn>,
 }
 
@@ -159,26 +154,29 @@ impl Environment {
         env
     }
 
-    /// Look up a primitive function by name.
+    /// Look up a primitive function by name (case-insensitive).
     pub(crate) fn get_primitive(&self, name: &str) -> Option<&PrimFn> {
-        self.primitives.get(name)
+        self.primitives.get(&name.to_ascii_uppercase())
     }
 
-    /// Register a primitive function.
+    /// Register a primitive function (stored uppercase for case-insensitive lookup).
     pub(crate) fn register_primitive(&mut self, name: &str, f: PrimFn) {
-        self.primitives.insert(name.to_owned(), f);
+        self.primitives.insert(name.to_ascii_uppercase(), f);
     }
 
-    /// Register all built-in primitives.
+    /// Register built-in primitive functions.
     ///
-    /// Phase 1 subset: minimal set; most primitives require `Database` integration
-    /// which comes in later phases.
+    /// Primitives are callable built-in functions like `MAP`, `FILTER`, `REDUCE`.
+    /// They are looked up case-insensitively, like keywords.
     fn register_builtins(&mut self) {
-        // Phase 1: No primitives registered yet.
-        // Future phases will add:
-        // - GET (requires Database)
-        // - ORDER, DATA, QUERY (requires Database)
-        // - String functions, Math functions, etc.
+        // TODO: Register collection primitives:
+        // - MAP(fn, array) -> array
+        // - FILTER(predicate, array) -> array
+        // - REDUCE(reducer, init, array) -> value
+        // - FOLD, TAKE, DROP, etc.
+        //
+        // More in the future; any builtin primitive function goes here. NOT
+        // keywords like `GET`/`SET`/`KILL`/`DATA`/...
     }
 }
 
@@ -269,8 +267,8 @@ mod tests {
         let env = Environment::new();
 
         assert_eq!(env.scopes.depth(), 1);
-        // No primitives in Phase 1
-        assert!(env.get_primitive("GET").is_none());
+        // No primitives registered yet
+        assert!(env.get_primitive("MAP").is_none());
     }
 
     #[test]

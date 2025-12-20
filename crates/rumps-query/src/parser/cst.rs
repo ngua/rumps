@@ -121,10 +121,10 @@ pub(crate) enum ExprKind {
 
     /// Variant constructor.
     ///
-    /// NOTE: `Expr::Path` exists in AST but not CST. The name resolution pass
-    /// (after CST->AST lowering) converts `Field(Var(Type), Variant)` to
-    /// `Expr::Path` for zero-arity variants. The parser never produces paths
-    /// directly; it emits generic `Field` and `Call` nodes.
+    /// NOTE: `Expr::Path` exists in AST but not CST. `Path` is reserved for
+    /// future module support. The name resolution pass converts field access
+    /// on registered types (`Type.Variant`) to `Expr::Variant`; the parser
+    /// emits generic `Field` and `Call` nodes.
     Variant(String, String, Vec<Expr>),
 
     /// Type check.

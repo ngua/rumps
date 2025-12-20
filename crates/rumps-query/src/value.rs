@@ -457,6 +457,18 @@ enum TypeExpr {
     Tuple(SmallVec<[TypeExprId; 4]>),
 }
 
+/// A named function definition stored in the function registry.
+///
+/// Created from `Stmt::Fun` during interpretation; the names and type
+/// annotations are resolved to interned IDs.
+#[derive(Clone, Debug)]
+pub(crate) struct FunctionDef {
+    pub(crate) name: StringId,
+    pub(crate) params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
+    pub(crate) ret: Option<TypeExprId>,
+    pub(crate) body: ExprId,
+}
+
 /// Arena for type expressions.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TypeExprArena {

@@ -8,7 +8,64 @@
 
 use smallvec::SmallVec;
 
-use crate::Span;
+use crate::{Error, Result, Span};
+
+/// A collection of items with parallel span storage.
+///
+/// Stores items and their spans in separate vectors for cache efficiency;
+/// spans are only accessed for error reporting.
+#[derive(Clone, Debug)]
+pub(crate) struct WithSpans<T> {
+    items: Vec<T>,
+    spans: Vec<Span>,
+}
+
+impl<T> Default for WithSpans<T> {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            spans: Vec::new(),
+        }
+    }
+}
+
+impl<T> WithSpans<T> {
+    /// Add an item with its span, returning the index as `u32`.
+    ///
+    /// Returns an error if the arena exceeds `u32::MAX` items.
+    fn add(&mut self, item: T, span: Span) -> Result<u32> {
+        let idx = u32::try_from(self.items.len()).map_err(|_| {
+            Error::parse(
+                span,
+                "AST arena overflow: exceeded u32::MAX items",
+                vec![],
+            )
+        })?;
+        self.items.push(item);
+        self.spans.push(span);
+        Ok(idx)
+    }
+
+    /// Get an item by index.
+    fn get(&self, idx: u32) -> Option<&T> {
+        self.items.get(idx as usize)
+    }
+
+    /// Get a mutable reference to an item by index.
+    fn get_mut(&mut self, idx: u32) -> Option<&mut T> {
+        self.items.get_mut(idx as usize)
+    }
+
+    /// Get the span of an item by index.
+    fn span(&self, idx: u32) -> Option<Span> {
+        self.spans.get(idx as usize).copied()
+    }
+
+    /// Number of items.
+    fn len(&self) -> u32 {
+        self.items.len() as u32
+    }
+}
 
 /// Index into the expression arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -47,17 +104,11 @@ impl AstTypeExprId {
 }
 
 /// The AST arena; owns all expressions and statements.
-///
-/// Spans are stored in parallel vectors rather than inline for cache
-/// efficiency; they're only accessed for error reporting.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Ast {
-    exprs: Vec<Expr>,
-    expr_spans: Vec<Span>,
-    stmts: Vec<Stmt>,
-    stmt_spans: Vec<Span>,
-    type_exprs: Vec<AstTypeExpr>,
-    type_expr_spans: Vec<Span>,
+    exprs: WithSpans<Expr>,
+    stmts: WithSpans<Stmt>,
+    type_exprs: WithSpans<AstTypeExpr>,
 }
 
 impl Ast {
@@ -67,49 +118,43 @@ impl Ast {
     }
 
     /// Add an expression to the arena.
-    pub(crate) fn add_expr(&mut self, e: Expr, span: Span) -> ExprId {
-        let id = ExprId(self.exprs.len() as u32);
-        self.exprs.push(e);
-        self.expr_spans.push(span);
-        id
+    pub(crate) fn add_expr(&mut self, e: Expr, span: Span) -> Result<ExprId> {
+        self.exprs.add(e, span).map(ExprId)
     }
 
     /// Add a statement to the arena.
-    pub(crate) fn add_stmt(&mut self, s: Stmt, span: Span) -> StmtId {
-        let id = StmtId(self.stmts.len() as u32);
-        self.stmts.push(s);
-        self.stmt_spans.push(span);
-        id
+    pub(crate) fn add_stmt(&mut self, s: Stmt, span: Span) -> Result<StmtId> {
+        self.stmts.add(s, span).map(StmtId)
     }
 
     /// Get an expression by ID.
     pub(crate) fn get_expr(&self, id: ExprId) -> Option<&Expr> {
-        self.exprs.get(id.idx())
+        self.exprs.get(id.0)
     }
 
     /// Get a statement by ID.
     pub(crate) fn get_stmt(&self, id: StmtId) -> Option<&Stmt> {
-        self.stmts.get(id.idx())
+        self.stmts.get(id.0)
     }
 
     /// Get the span of an expression.
     pub(crate) fn expr_span(&self, id: ExprId) -> Option<Span> {
-        self.expr_spans.get(id.idx()).copied()
+        self.exprs.span(id.0)
     }
 
     /// Get the span of a statement.
     pub(crate) fn stmt_span(&self, id: StmtId) -> Option<Span> {
-        self.stmt_spans.get(id.idx()).copied()
+        self.stmts.span(id.0)
     }
 
     /// Number of expressions in the arena.
     pub(crate) fn expr_count(&self) -> usize {
-        self.exprs.len()
+        self.exprs.len() as usize
     }
 
     /// Number of statements in the arena.
     pub(crate) fn stmt_count(&self) -> usize {
-        self.stmts.len()
+        self.stmts.len() as usize
     }
 
     /// Add a type expression to the arena.
@@ -117,11 +162,8 @@ impl Ast {
         &mut self,
         te: AstTypeExpr,
         span: Span,
-    ) -> AstTypeExprId {
-        let id = AstTypeExprId(self.type_exprs.len() as u32);
-        self.type_exprs.push(te);
-        self.type_expr_spans.push(span);
-        id
+    ) -> Result<AstTypeExprId> {
+        self.type_exprs.add(te, span).map(AstTypeExprId)
     }
 
     /// Get a type expression by ID.
@@ -129,24 +171,24 @@ impl Ast {
         &self,
         id: AstTypeExprId,
     ) -> Option<&AstTypeExpr> {
-        self.type_exprs.get(id.idx())
+        self.type_exprs.get(id.0)
     }
 
     /// Replace an expression in place (for name resolution).
     pub(crate) fn set_expr(&mut self, id: ExprId, e: Expr) {
-        if let Some(slot) = self.exprs.get_mut(id.idx()) {
-            *slot = e;
+        if let Some(slot) = self.exprs.get_mut(id.0) {
+            *slot = e
         }
     }
 
     /// Iterate over all expression IDs.
     pub(crate) fn expr_ids(&self) -> impl Iterator<Item = ExprId> {
-        (0..self.exprs.len()).map(|i| ExprId(i as u32))
+        (0..self.exprs.len()).map(ExprId)
     }
 
     /// Get the span of a type expression.
     pub(crate) fn type_expr_span(&self, id: AstTypeExprId) -> Option<Span> {
-        self.type_expr_spans.get(id.idx()).copied()
+        self.type_exprs.span(id.0)
     }
 }
 
@@ -396,16 +438,18 @@ pub(crate) enum Expr {
     /// the field value in `Option.Some`.
     OptionalField(ExprId, String),
 
-    /// Variant constructor: `Type.Variant(args...)`.
-    ///
-    /// Examples: `Option.Some(1)`, `Result.Ok(42)`
-    Variant(String, String, SmallVec<[ExprId; 4]>),
-
-    /// Resolved namespace path: `Type.Variant` for zero-arity variants.
+    /// Variant constructor: `Type.Variant(args...)` or `Type.Variant`.
     ///
     /// Created by the name resolution pass from `Field(Var(type), variant)`
-    /// when the base is a registered type and the field is a zero-arity variant.
-    /// Examples: `Option.None` -> `Path(["Option", "None"])`
+    /// for zero-arity variants, or from `Call(Field(Var(type), variant), args)`
+    /// for variants with arguments.
+    ///
+    /// Examples: `Option.None` (no args), `Option.Some(1)`, `Result.Ok(42)`
+    Variant(String, String, SmallVec<[ExprId; 4]>),
+
+    /// Namespace path: reserved for future module support.
+    ///
+    /// Examples: `Module.submodule.item`
     Path(SmallVec<[String; 4]>),
 
     /// Type check: `expr is Pattern`.
@@ -531,9 +575,12 @@ mod tests {
     fn arena_basic() {
         let mut ast = Ast::new();
 
-        let lit =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let var = ast.add_expr(Expr::Var("x".into()), Span::new(4, 5));
+        let lit = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let var = ast
+            .add_expr(Expr::Var("x".into()), Span::new(4, 5))
+            .unwrap();
 
         assert_eq!(ast.expr_count(), 2);
         assert_eq!(ast.get_expr(lit), Some(&Expr::Literal(Literal::Int(42))));
@@ -547,10 +594,15 @@ mod tests {
         let mut ast = Ast::new();
 
         // Build: 1 + 2
-        let lhs = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(0, 1));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5));
-        let add =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 5));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(0, 1))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5))
+            .unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 5))
+            .unwrap();
 
         assert_eq!(ast.expr_count(), 3);
         assert_eq!(
@@ -564,11 +616,13 @@ mod tests {
         let mut ast = Ast::new();
 
         // Build: LET x = 10
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10))
+            .unwrap();
         let pat = BindingPattern::Var("x".into());
-        let stmt =
-            ast.add_stmt(Stmt::Let(pat.clone(), None, val), Span::new(0, 10));
+        let stmt = ast
+            .add_stmt(Stmt::Let(pat.clone(), None, val), Span::new(0, 10))
+            .unwrap();
 
         assert_eq!(ast.stmt_count(), 1);
         assert_eq!(ast.get_stmt(stmt), Some(&Stmt::Let(pat, None, val)));
@@ -580,16 +634,21 @@ mod tests {
         let mut ast = Ast::new();
 
         // Build: ^PATIENT(123, "NAME")
-        let sub1 =
-            ast.add_expr(Expr::Literal(Literal::Int(123)), Span::new(9, 12));
-        let sub2 = ast.add_expr(
-            Expr::Literal(Literal::String("NAME".into())),
-            Span::new(14, 20),
-        );
-        let global = ast.add_expr(
-            Expr::Global("PATIENT".into(), smallvec::smallvec![sub1, sub2]),
-            Span::new(0, 21),
-        );
+        let sub1 = ast
+            .add_expr(Expr::Literal(Literal::Int(123)), Span::new(9, 12))
+            .unwrap();
+        let sub2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("NAME".into())),
+                Span::new(14, 20),
+            )
+            .unwrap();
+        let global = ast
+            .add_expr(
+                Expr::Global("PATIENT".into(), smallvec::smallvec![sub1, sub2]),
+                Span::new(0, 21),
+            )
+            .unwrap();
 
         assert_eq!(ast.expr_count(), 3);
         match ast.get_expr(global) {
@@ -606,26 +665,36 @@ mod tests {
         let mut ast = Ast::new();
 
         // Build: IF x > 0 { 1 } ELSE { 0 }
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(3, 4));
-        let zero =
-            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(7, 8));
-        let cond =
-            ast.add_expr(Expr::Binary(x, BinOp::Gt, zero), Span::new(3, 8));
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(3, 4))
+            .unwrap();
+        let zero = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(7, 8))
+            .unwrap();
+        let cond = ast
+            .add_expr(Expr::Binary(x, BinOp::Gt, zero), Span::new(3, 8))
+            .unwrap();
 
-        let one =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
-        let then_blk =
-            ast.add_expr(Expr::Block(vec![], Some(one)), Span::new(10, 15));
+        let one = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13))
+            .unwrap();
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(one)), Span::new(10, 15))
+            .unwrap();
 
-        let zero2 =
-            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(23, 24));
-        let else_blk =
-            ast.add_expr(Expr::Block(vec![], Some(zero2)), Span::new(21, 26));
+        let zero2 = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(23, 24))
+            .unwrap();
+        let else_blk = ast
+            .add_expr(Expr::Block(vec![], Some(zero2)), Span::new(21, 26))
+            .unwrap();
 
-        let if_expr = ast.add_expr(
-            Expr::If(cond, then_blk, Some(else_blk)),
-            Span::new(0, 26),
-        );
+        let if_expr = ast
+            .add_expr(
+                Expr::If(cond, then_blk, Some(else_blk)),
+                Span::new(0, 26),
+            )
+            .unwrap();
 
         assert_eq!(ast.expr_count(), 8);
         match ast.get_expr(if_expr) {
@@ -643,15 +712,22 @@ mod tests {
         let mut ast = Ast::new();
 
         // Build: (1 + 2) * 3
-        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2));
-        let two = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(5, 6));
-        let add =
-            ast.add_expr(Expr::Binary(one, BinOp::Add, two), Span::new(1, 6));
+        let one = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
+            .unwrap();
+        let two = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(5, 6))
+            .unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(one, BinOp::Add, two), Span::new(1, 6))
+            .unwrap();
 
-        let three =
-            ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(10, 11));
+        let three = ast
+            .add_expr(Expr::Literal(Literal::Int(3)), Span::new(10, 11))
+            .unwrap();
         let mul = ast
-            .add_expr(Expr::Binary(add, BinOp::Mul, three), Span::new(0, 11));
+            .add_expr(Expr::Binary(add, BinOp::Mul, three), Span::new(0, 11))
+            .unwrap();
 
         assert_eq!(ast.expr_count(), 5);
 
@@ -676,20 +752,28 @@ mod tests {
         let mut ast = Ast::new();
 
         // Build: SET x(1, "ABC") = 30
-        let sub1 =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(6, 7));
-        let sub2 = ast.add_expr(
-            Expr::Literal(Literal::String("ABC".into())),
-            Span::new(9, 14),
-        );
-        let target = ast.add_expr(
-            Expr::Local("x".into(), smallvec::smallvec![sub1, sub2]),
-            Span::new(4, 15),
-        );
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(30)), Span::new(18, 20));
+        let sub1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(6, 7))
+            .unwrap();
+        let sub2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("ABC".into())),
+                Span::new(9, 14),
+            )
+            .unwrap();
+        let target = ast
+            .add_expr(
+                Expr::Local("x".into(), smallvec::smallvec![sub1, sub2]),
+                Span::new(4, 15),
+            )
+            .unwrap();
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(30)), Span::new(18, 20))
+            .unwrap();
 
-        let stmt = ast.add_stmt(Stmt::Set(target, val), Span::new(0, 20));
+        let stmt = ast
+            .add_stmt(Stmt::Set(target, val), Span::new(0, 20))
+            .unwrap();
 
         match ast.get_stmt(stmt) {
             Some(Stmt::Set(t, v)) => {

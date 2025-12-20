@@ -104,9 +104,9 @@ impl Parser {
                         Error::runtime_no_span("unknown parse error")
                     })
             })
-            .map(|cst_stmts| {
-                let (ast, stmts) = lower::program(cst_stmts);
-                ParseResult { ast, stmts }
+            .and_then(|cst_stmts| {
+                let (ast, stmts) = lower::program(cst_stmts)?;
+                Ok(ParseResult { ast, stmts })
             })
     }
 

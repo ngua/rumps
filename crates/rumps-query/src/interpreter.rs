@@ -81,12 +81,12 @@
 //!
 //! 1. **Parse-time** (`resolve.rs`): For built-in types (`Option`, `Result`)
 //!    that exist before interpretation begins. Converts `Expr::Field` to
-//!    `Expr::Path` or `Expr::Variant`.
+//!    `Expr::Variant` (regardless of arity).
 //!
 //! 2. **Runtime** (`field()`, `call()`): For user-defined types declared via
 //!    `TYPE`. These are registered during interpretation, so they cannot be
 //!    resolved at parse time. The interpreter checks if a field access like
-//!    `Status.Pending` refers to a registered type and handles it as a path.
+//!    `Status.Pending` refers to a registered type and constructs the variant.
 //!
 //! This dual approach is necessary because user-defined types are declared
 //! dynamically during script execution, after the parse-time resolution pass.
@@ -112,19 +112,10 @@ use crate::ast::{
 use crate::env::Environment;
 use crate::io::IoContext;
 use crate::value::{
-    CapturedEnv, StringId, TypeExprArena, TypeExprId, TypeId, TypeRegistry,
-    Value, ValueArena, ValueId,
+    CapturedEnv, FunctionDef, StringId, TypeExprArena, TypeExprId, TypeId,
+    TypeRegistry, Value, ValueArena, ValueId,
 };
 use crate::{Error, Result, Span};
-
-/// A named function definition stored in the function registry.
-#[derive(Clone, Debug)]
-struct FunctionDef {
-    name: StringId,
-    params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
-    ret: Option<TypeExprId>,
-    body: ExprId,
-}
 
 /// The RUMPS interpreter.
 ///
@@ -137,7 +128,7 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// The parsed AST (borrowed; immutable during interpretation).
     ast: &'a Ast,
 
-    /// Variable environment for lexical `LET` bindings and primitives.
+    /// Variable environment for lexical `LET` bindings and built-in functions.
     env: Environment,
 
     /// Database for all `SET`/`GET` operations (owned).
@@ -1481,10 +1472,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate a resolved namespace path: `Type.Variant` for zero-arity variants.
+    /// Evaluate a namespace path.
     ///
-    /// Created by the name resolution pass from `Expr::Field(Var(type), variant)`.
-    /// Currently only handles paths of length 2 (type + variant).
+    /// Reserved for future module support. Currently handles paths of length 2
+    /// as type + variant (for backwards compatibility with runtime type paths).
     fn path(&mut self, segments: &[String], span: Span) -> Result<Value> {
         match segments {
             [ty_name, var_name] => {
@@ -1520,9 +1511,9 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Evaluate field access on an object value.
     ///
-    /// After name resolution, this method is purely for runtime field access
-    /// on `Value::Object`. Zero-arity variants like `Option.None` are handled
-    /// by `Expr::Path` (resolved at parse time).
+    /// After name resolution, this method is primarily for runtime field access
+    /// on `Value::Object`. Zero-arity variants like `Option.None` are resolved
+    /// to `Expr::Variant` at parse time.
     ///
     /// For user-defined types registered at runtime, this also handles type
     /// paths that weren't resolved during the parse-time resolution pass.
@@ -2571,7 +2562,7 @@ mod tests {
     /// Build a simple AST with a single expression.
     fn ast_with_expr(expr: Expr) -> (Ast, ExprId) {
         let mut ast = Ast::new();
-        let id = ast.add_expr(expr, Span::new(0, 10));
+        let id = ast.add_expr(expr, Span::new(0, 10)).unwrap();
         (ast, id)
     }
 
@@ -2616,12 +2607,15 @@ mod tests {
     #[tokio::test]
     async fn eval_add_int() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(5, 7));
-        let add =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 7));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(20)), Span::new(5, 7))
+            .unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 7))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(add).await.unwrap();
@@ -2631,12 +2625,15 @@ mod tests {
     #[tokio::test]
     async fn eval_add_float() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Float(1.5)), Span::new(0, 3));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Float(2.5)), Span::new(6, 9));
-        let add =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 9));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Float(1.5)), Span::new(0, 3))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Float(2.5)), Span::new(6, 9))
+            .unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 9))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(add).await.unwrap();
@@ -2646,12 +2643,15 @@ mod tests {
     #[tokio::test]
     async fn eval_add_mixed_coercion() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Float(2.5)), Span::new(5, 8));
-        let add =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 8));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Float(2.5)), Span::new(5, 8))
+            .unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 8))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(add).await.unwrap();
@@ -2661,12 +2661,15 @@ mod tests {
     #[tokio::test]
     async fn eval_sub() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(50)), Span::new(0, 2));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Int(30)), Span::new(5, 7));
-        let sub =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Sub, rhs), Span::new(0, 7));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(50)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(30)), Span::new(5, 7))
+            .unwrap();
+        let sub = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Sub, rhs), Span::new(0, 7))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(sub).await.unwrap();
@@ -2676,10 +2679,15 @@ mod tests {
     #[tokio::test]
     async fn eval_mul() {
         let mut ast = Ast::new();
-        let lhs = ast.add_expr(Expr::Literal(Literal::Int(6)), Span::new(0, 1));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(7)), Span::new(4, 5));
-        let mul =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Mul, rhs), Span::new(0, 5));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(6)), Span::new(0, 1))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(7)), Span::new(4, 5))
+            .unwrap();
+        let mul = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Mul, rhs), Span::new(0, 5))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(mul).await.unwrap();
@@ -2689,11 +2697,15 @@ mod tests {
     #[tokio::test]
     async fn eval_div() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(4)), Span::new(5, 6));
-        let div =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Div, rhs), Span::new(0, 6));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(4)), Span::new(5, 6))
+            .unwrap();
+        let div = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Div, rhs), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(div).await.unwrap();
@@ -2703,11 +2715,15 @@ mod tests {
     #[tokio::test]
     async fn eval_div_by_zero() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(5, 6));
-        let div =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Div, rhs), Span::new(0, 6));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(5, 6))
+            .unwrap();
+        let div = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Div, rhs), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(div).await;
@@ -2717,11 +2733,15 @@ mod tests {
     #[tokio::test]
     async fn eval_floor_div() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(5, 6));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(3)), Span::new(5, 6))
+            .unwrap();
         let div = ast
-            .add_expr(Expr::Binary(lhs, BinOp::FloorDiv, rhs), Span::new(0, 6));
+            .add_expr(Expr::Binary(lhs, BinOp::FloorDiv, rhs), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(div).await.unwrap();
@@ -2731,11 +2751,15 @@ mod tests {
     #[tokio::test]
     async fn eval_mod() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(5, 6));
-        let m =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Mod, rhs), Span::new(0, 6));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(3)), Span::new(5, 6))
+            .unwrap();
+        let m = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Mod, rhs), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(m).await.unwrap();
@@ -2745,11 +2769,15 @@ mod tests {
     #[tokio::test]
     async fn eval_pow_int() {
         let mut ast = Ast::new();
-        let lhs = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(0, 1));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(5, 7));
-        let pow =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 7));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(0, 1))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(5, 7))
+            .unwrap();
+        let pow = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 7))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(pow).await.unwrap();
@@ -2759,12 +2787,15 @@ mod tests {
     #[tokio::test]
     async fn eval_pow_float() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Float(2.0)), Span::new(0, 3));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Float(0.5)), Span::new(7, 10));
-        let pow =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 10));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Float(2.0)), Span::new(0, 3))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Float(0.5)), Span::new(7, 10))
+            .unwrap();
+        let pow = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 10))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(pow).await.unwrap();
@@ -2778,11 +2809,15 @@ mod tests {
     #[tokio::test]
     async fn eval_pow_negative_exp() {
         let mut ast = Ast::new();
-        let lhs = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(0, 1));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Int(-1)), Span::new(5, 7));
-        let pow =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 7));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(0, 1))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(-1)), Span::new(5, 7))
+            .unwrap();
+        let pow = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 7))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(pow).await.unwrap();
@@ -2793,11 +2828,15 @@ mod tests {
     #[tokio::test]
     async fn eval_pow_mixed() {
         let mut ast = Ast::new();
-        let lhs = ast.add_expr(Expr::Literal(Literal::Int(4)), Span::new(0, 1));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Float(0.5)), Span::new(5, 8));
-        let pow =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 8));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(4)), Span::new(0, 1))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Float(0.5)), Span::new(5, 8))
+            .unwrap();
+        let pow = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Pow, rhs), Span::new(0, 8))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(pow).await.unwrap();
@@ -2808,12 +2847,15 @@ mod tests {
     #[tokio::test]
     async fn eval_eq() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(5, 7));
-        let eq =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Eq, rhs), Span::new(0, 7));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(5, 7))
+            .unwrap();
+        let eq = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Eq, rhs), Span::new(0, 7))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(eq).await.unwrap();
@@ -2823,12 +2865,15 @@ mod tests {
     #[tokio::test]
     async fn eval_eq_mixed_numeric() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Float(42.0)), Span::new(5, 9));
-        let eq =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Eq, rhs), Span::new(0, 9));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Float(42.0)), Span::new(5, 9))
+            .unwrap();
+        let eq = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Eq, rhs), Span::new(0, 9))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(eq).await.unwrap();
@@ -2838,10 +2883,15 @@ mod tests {
     #[tokio::test]
     async fn eval_ne() {
         let mut ast = Ast::new();
-        let lhs = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(0, 1));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(5, 6));
-        let ne =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Ne, rhs), Span::new(0, 6));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(0, 1))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(5, 6))
+            .unwrap();
+        let ne = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Ne, rhs), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(ne).await.unwrap();
@@ -2851,11 +2901,15 @@ mod tests {
     #[tokio::test]
     async fn eval_lt() {
         let mut ast = Ast::new();
-        let lhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(4, 6));
-        let lt =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Lt, rhs), Span::new(0, 6));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(4, 6))
+            .unwrap();
+        let lt = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Lt, rhs), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(lt).await.unwrap();
@@ -2865,11 +2919,15 @@ mod tests {
     #[tokio::test]
     async fn eval_gt() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6));
-        let gt =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Gt, rhs), Span::new(0, 6));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6))
+            .unwrap();
+        let gt = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Gt, rhs), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(gt).await.unwrap();
@@ -2879,10 +2937,15 @@ mod tests {
     #[tokio::test]
     async fn eval_le() {
         let mut ast = Ast::new();
-        let lhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6));
-        let le =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Le, rhs), Span::new(0, 6));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6))
+            .unwrap();
+        let le = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Le, rhs), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(le).await.unwrap();
@@ -2892,11 +2955,15 @@ mod tests {
     #[tokio::test]
     async fn eval_ge() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6));
-        let ge =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Ge, rhs), Span::new(0, 6));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6))
+            .unwrap();
+        let ge = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Ge, rhs), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(ge).await.unwrap();
@@ -2906,12 +2973,15 @@ mod tests {
     #[tokio::test]
     async fn eval_and() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(8, 13));
-        let and =
-            ast.add_expr(Expr::Binary(lhs, BinOp::And, rhs), Span::new(0, 13));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(8, 13))
+            .unwrap();
+        let and = ast
+            .add_expr(Expr::Binary(lhs, BinOp::And, rhs), Span::new(0, 13))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(and).await.unwrap();
@@ -2921,12 +2991,15 @@ mod tests {
     #[tokio::test]
     async fn eval_or() {
         let mut ast = Ast::new();
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(0, 5));
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(9, 13));
-        let or =
-            ast.add_expr(Expr::Binary(lhs, BinOp::Or, rhs), Span::new(0, 13));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(0, 5))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(9, 13))
+            .unwrap();
+        let or = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Or, rhs), Span::new(0, 13))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(or).await.unwrap();
@@ -2936,16 +3009,21 @@ mod tests {
     #[tokio::test]
     async fn eval_concat() {
         let mut ast = Ast::new();
-        let lhs = ast.add_expr(
-            Expr::Literal(Literal::String("Hello".into())),
-            Span::new(0, 7),
-        );
-        let rhs = ast.add_expr(
-            Expr::Literal(Literal::String(" World".into())),
-            Span::new(11, 19),
-        );
+        let lhs = ast
+            .add_expr(
+                Expr::Literal(Literal::String("Hello".into())),
+                Span::new(0, 7),
+            )
+            .unwrap();
+        let rhs = ast
+            .add_expr(
+                Expr::Literal(Literal::String(" World".into())),
+                Span::new(11, 19),
+            )
+            .unwrap();
         let cat = ast
-            .add_expr(Expr::Binary(lhs, BinOp::Concat, rhs), Span::new(0, 19));
+            .add_expr(Expr::Binary(lhs, BinOp::Concat, rhs), Span::new(0, 19))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cat).await.unwrap();
@@ -2960,14 +3038,18 @@ mod tests {
     #[tokio::test]
     async fn eval_concat_coercion() {
         let mut ast = Ast::new();
-        let lhs = ast.add_expr(
-            Expr::Literal(Literal::String("value: ".into())),
-            Span::new(0, 9),
-        );
-        let rhs =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(13, 15));
+        let lhs = ast
+            .add_expr(
+                Expr::Literal(Literal::String("value: ".into())),
+                Span::new(0, 9),
+            )
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(13, 15))
+            .unwrap();
         let cat = ast
-            .add_expr(Expr::Binary(lhs, BinOp::Concat, rhs), Span::new(0, 15));
+            .add_expr(Expr::Binary(lhs, BinOp::Concat, rhs), Span::new(0, 15))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cat).await.unwrap();
@@ -2982,10 +3064,12 @@ mod tests {
     #[tokio::test]
     async fn eval_neg_int() {
         let mut ast = Ast::new();
-        let operand =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(1, 3));
-        let neg =
-            ast.add_expr(Expr::Unary(UnOp::Neg, operand), Span::new(0, 3));
+        let operand = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(1, 3))
+            .unwrap();
+        let neg = ast
+            .add_expr(Expr::Unary(UnOp::Neg, operand), Span::new(0, 3))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(neg).await.unwrap();
@@ -2995,10 +3079,12 @@ mod tests {
     #[tokio::test]
     async fn eval_neg_float() {
         let mut ast = Ast::new();
-        let operand =
-            ast.add_expr(Expr::Literal(Literal::Float(3.14)), Span::new(1, 5));
-        let neg =
-            ast.add_expr(Expr::Unary(UnOp::Neg, operand), Span::new(0, 5));
+        let operand = ast
+            .add_expr(Expr::Literal(Literal::Float(3.14)), Span::new(1, 5))
+            .unwrap();
+        let neg = ast
+            .add_expr(Expr::Unary(UnOp::Neg, operand), Span::new(0, 5))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(neg).await.unwrap();
@@ -3008,10 +3094,12 @@ mod tests {
     #[tokio::test]
     async fn eval_not() {
         let mut ast = Ast::new();
-        let operand =
-            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(1, 5));
-        let not =
-            ast.add_expr(Expr::Unary(UnOp::Not, operand), Span::new(0, 5));
+        let operand = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(1, 5))
+            .unwrap();
+        let not = ast
+            .add_expr(Expr::Unary(UnOp::Not, operand), Span::new(0, 5))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(not).await.unwrap();
@@ -3021,11 +3109,15 @@ mod tests {
     #[tokio::test]
     async fn let_and_lookup() {
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(100)), Span::new(8, 11));
-        let let_stmt =
-            ast.add_stmt(Stmt::Let("x".into(), None, val), Span::new(0, 11));
-        let var = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(100)), Span::new(8, 11))
+            .unwrap();
+        let let_stmt = ast
+            .add_stmt(Stmt::Let("x".into(), None, val), Span::new(0, 11))
+            .unwrap();
+        let var = ast
+            .add_expr(Expr::Var("x".into()), Span::new(0, 1))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(let_stmt).await.unwrap();
@@ -3038,23 +3130,34 @@ mod tests {
         let mut ast = Ast::new();
 
         // LET x = 10
-        let val1 =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
-        let let1 =
-            ast.add_stmt(Stmt::Let("x".into(), None, val1), Span::new(0, 10));
+        let val1 = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10))
+            .unwrap();
+        let let1 = ast
+            .add_stmt(Stmt::Let("x".into(), None, val1), Span::new(0, 10))
+            .unwrap();
 
         // Block expr with LET x = 20, returning x
-        let val2 =
-            ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22));
-        let let2 =
-            ast.add_stmt(Stmt::Let("x".into(), None, val2), Span::new(12, 22));
-        let x_ref = ast.add_expr(Expr::Var("x".into()), Span::new(24, 25));
+        let val2 = ast
+            .add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22))
+            .unwrap();
+        let let2 = ast
+            .add_stmt(Stmt::Let("x".into(), None, val2), Span::new(12, 22))
+            .unwrap();
+        let x_ref = ast
+            .add_expr(Expr::Var("x".into()), Span::new(24, 25))
+            .unwrap();
         let blk_expr = ast
-            .add_expr(Expr::Block(vec![let2], Some(x_ref)), Span::new(10, 26));
-        let blk_stmt = ast.add_stmt(Stmt::Expr(blk_expr), Span::new(10, 26));
+            .add_expr(Expr::Block(vec![let2], Some(x_ref)), Span::new(10, 26))
+            .unwrap();
+        let blk_stmt = ast
+            .add_stmt(Stmt::Expr(blk_expr), Span::new(10, 26))
+            .unwrap();
 
         // Reference outer x
-        let var = ast.add_expr(Expr::Var("x".into()), Span::new(28, 29));
+        let var = ast
+            .add_expr(Expr::Var("x".into()), Span::new(28, 29))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(let1).await.unwrap();
@@ -3067,10 +3170,18 @@ mod tests {
     #[tokio::test]
     async fn array() {
         let mut ast = Ast::new();
-        let e1 = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2));
-        let e2 = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5));
-        let e3 = ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(7, 8));
-        let arr = ast.add_expr(Expr::Array(vec![e1, e2, e3]), Span::new(0, 9));
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
+            .unwrap();
+        let e2 = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5))
+            .unwrap();
+        let e3 = ast
+            .add_expr(Expr::Literal(Literal::Int(3)), Span::new(7, 8))
+            .unwrap();
+        let arr = ast
+            .add_expr(Expr::Array(vec![e1, e2, e3]), Span::new(0, 9))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(arr).await.unwrap();
@@ -3085,15 +3196,21 @@ mod tests {
     #[tokio::test]
     async fn object() {
         let mut ast = Ast::new();
-        let v1 = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
-        let v2 = ast.add_expr(
-            Expr::Literal(Literal::String("John".into())),
-            Span::new(17, 23),
-        );
-        let obj = ast.add_expr(
-            Expr::Object(vec![("id".into(), v1), ("name".into(), v2)]),
-            Span::new(0, 25),
-        );
+        let v1 = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8))
+            .unwrap();
+        let v2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("John".into())),
+                Span::new(17, 23),
+            )
+            .unwrap();
+        let obj = ast
+            .add_expr(
+                Expr::Object(vec![("id".into(), v1), ("name".into(), v2)]),
+                Span::new(0, 25),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(obj).await.unwrap();
@@ -3108,12 +3225,21 @@ mod tests {
     #[tokio::test]
     async fn index_array() {
         let mut ast = Ast::new();
-        let e1 = ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(1, 3));
-        let e2 = ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(5, 7));
-        let arr = ast.add_expr(Expr::Array(vec![e1, e2]), Span::new(0, 8));
-        let idx =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(9, 10));
-        let access = ast.add_expr(Expr::Index(arr, idx), Span::new(0, 11));
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(1, 3))
+            .unwrap();
+        let e2 = ast
+            .add_expr(Expr::Literal(Literal::Int(20)), Span::new(5, 7))
+            .unwrap();
+        let arr = ast
+            .add_expr(Expr::Array(vec![e1, e2]), Span::new(0, 8))
+            .unwrap();
+        let idx = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(9, 10))
+            .unwrap();
+        let access = ast
+            .add_expr(Expr::Index(arr, idx), Span::new(0, 11))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(access).await.unwrap();
@@ -3123,11 +3249,15 @@ mod tests {
     #[tokio::test]
     async fn field_access() {
         let mut ast = Ast::new();
-        let v = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
-        let obj =
-            ast.add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10));
-        let field =
-            ast.add_expr(Expr::Field(obj, "x".into()), Span::new(0, 12));
+        let v = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8))
+            .unwrap();
+        let obj = ast
+            .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10))
+            .unwrap();
+        let field = ast
+            .add_expr(Expr::Field(obj, "x".into()), Span::new(0, 12))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(field).await.unwrap();
@@ -3139,25 +3269,35 @@ mod tests {
         let mut ast = Ast::new();
 
         // LET result = 0
-        let zero =
-            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(13, 14));
+        let zero = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(13, 14))
+            .unwrap();
         let let_result = ast
-            .add_stmt(Stmt::Let("result".into(), None, zero), Span::new(0, 14));
+            .add_stmt(Stmt::Let("result".into(), None, zero), Span::new(0, 14))
+            .unwrap();
 
         // IF true { LET result = 1 }
-        let cond =
-            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7));
-        let one =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(25, 26));
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7))
+            .unwrap();
+        let one = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(25, 26))
+            .unwrap();
         let set_one = ast
-            .add_stmt(Stmt::Let("result".into(), None, one), Span::new(10, 26));
-        let then_blk =
-            ast.add_expr(Expr::Block(vec![set_one], None), Span::new(8, 28));
-        let if_expr =
-            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(0, 28));
-        let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 28));
+            .add_stmt(Stmt::Let("result".into(), None, one), Span::new(10, 26))
+            .unwrap();
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![set_one], None), Span::new(8, 28))
+            .unwrap();
+        let if_expr = ast
+            .add_expr(Expr::If(cond, then_blk, None), Span::new(0, 28))
+            .unwrap();
+        let if_stmt =
+            ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 28)).unwrap();
 
-        let var = ast.add_expr(Expr::Var("result".into()), Span::new(0, 6));
+        let var = ast
+            .add_expr(Expr::Var("result".into()), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(let_result).await.unwrap();
@@ -3172,24 +3312,34 @@ mod tests {
         let mut ast = Ast::new();
 
         // IF false { } ELSE { LET x = 42 }
-        let cond =
-            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8));
-        let then_blk =
-            ast.add_expr(Expr::Block(vec![], None), Span::new(9, 12));
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(30, 32));
-        let let_x =
-            ast.add_stmt(Stmt::Let("x".into(), None, val), Span::new(22, 32));
-        let else_blk =
-            ast.add_expr(Expr::Block(vec![let_x], None), Span::new(18, 35));
-        let if_expr = ast.add_expr(
-            Expr::If(cond, then_blk, Some(else_blk)),
-            Span::new(0, 35),
-        );
-        let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 35));
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8))
+            .unwrap();
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], None), Span::new(9, 12))
+            .unwrap();
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(30, 32))
+            .unwrap();
+        let let_x = ast
+            .add_stmt(Stmt::Let("x".into(), None, val), Span::new(22, 32))
+            .unwrap();
+        let else_blk = ast
+            .add_expr(Expr::Block(vec![let_x], None), Span::new(18, 35))
+            .unwrap();
+        let if_expr = ast
+            .add_expr(
+                Expr::If(cond, then_blk, Some(else_blk)),
+                Span::new(0, 35),
+            )
+            .unwrap();
+        let if_stmt =
+            ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 35)).unwrap();
 
         // After IF, check x
-        let var = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
+        let var = ast
+            .add_expr(Expr::Var("x".into()), Span::new(0, 1))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(if_stmt).await.unwrap();
@@ -3203,27 +3353,39 @@ mod tests {
         let mut ast = Ast::new();
 
         // LET x = 10
-        let v1 =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10));
-        let let_x =
-            ast.add_stmt(Stmt::Let("x".into(), None, v1), Span::new(0, 10));
+        let v1 = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(8, 10))
+            .unwrap();
+        let let_x = ast
+            .add_stmt(Stmt::Let("x".into(), None, v1), Span::new(0, 10))
+            .unwrap();
 
         // LET y = 20
-        let v2 =
-            ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22));
-        let let_y =
-            ast.add_stmt(Stmt::Let("y".into(), None, v2), Span::new(12, 22));
+        let v2 = ast
+            .add_expr(Expr::Literal(Literal::Int(20)), Span::new(20, 22))
+            .unwrap();
+        let let_y = ast
+            .add_stmt(Stmt::Let("y".into(), None, v2), Span::new(12, 22))
+            .unwrap();
 
         // LET sum = x + y
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(34, 35));
-        let y = ast.add_expr(Expr::Var("y".into()), Span::new(38, 39));
-        let add =
-            ast.add_expr(Expr::Binary(x, BinOp::Add, y), Span::new(34, 39));
-        let let_sum =
-            ast.add_stmt(Stmt::Let("sum".into(), None, add), Span::new(24, 39));
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(34, 35))
+            .unwrap();
+        let y = ast
+            .add_expr(Expr::Var("y".into()), Span::new(38, 39))
+            .unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(x, BinOp::Add, y), Span::new(34, 39))
+            .unwrap();
+        let let_sum = ast
+            .add_stmt(Stmt::Let("sum".into(), None, add), Span::new(24, 39))
+            .unwrap();
 
         // Reference to check result (create before interpreter borrows ast)
-        let sum_var = ast.add_expr(Expr::Var("sum".into()), Span::new(0, 3));
+        let sum_var = ast
+            .add_expr(Expr::Var("sum".into()), Span::new(0, 3))
+            .unwrap();
 
         let stmts = vec![let_x, let_y, let_sum];
 
@@ -3239,20 +3401,27 @@ mod tests {
     async fn if_expr_true_branch() {
         // IF true { 42 } ELSE { 0 }
         let mut ast = Ast::new();
-        let cond =
-            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7));
-        let then_val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(10, 12));
-        let then_blk =
-            ast.add_expr(Expr::Block(vec![], Some(then_val)), Span::new(9, 14));
-        let else_val =
-            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(22, 23));
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7))
+            .unwrap();
+        let then_val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(10, 12))
+            .unwrap();
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(9, 14))
+            .unwrap();
+        let else_val = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(22, 23))
+            .unwrap();
         let else_blk = ast
-            .add_expr(Expr::Block(vec![], Some(else_val)), Span::new(21, 25));
-        let if_expr = ast.add_expr(
-            Expr::If(cond, then_blk, Some(else_blk)),
-            Span::new(0, 25),
-        );
+            .add_expr(Expr::Block(vec![], Some(else_val)), Span::new(21, 25))
+            .unwrap();
+        let if_expr = ast
+            .add_expr(
+                Expr::If(cond, then_blk, Some(else_blk)),
+                Span::new(0, 25),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(if_expr).await.unwrap();
@@ -3263,20 +3432,27 @@ mod tests {
     async fn if_expr_false_branch() {
         // IF false { 42 } ELSE { 0 }
         let mut ast = Ast::new();
-        let cond =
-            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8));
-        let then_val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(11, 13));
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8))
+            .unwrap();
+        let then_val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(11, 13))
+            .unwrap();
         let then_blk = ast
-            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(10, 15));
-        let else_val =
-            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(23, 24));
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(10, 15))
+            .unwrap();
+        let else_val = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(23, 24))
+            .unwrap();
         let else_blk = ast
-            .add_expr(Expr::Block(vec![], Some(else_val)), Span::new(22, 26));
-        let if_expr = ast.add_expr(
-            Expr::If(cond, then_blk, Some(else_blk)),
-            Span::new(0, 26),
-        );
+            .add_expr(Expr::Block(vec![], Some(else_val)), Span::new(22, 26))
+            .unwrap();
+        let if_expr = ast
+            .add_expr(
+                Expr::If(cond, then_blk, Some(else_blk)),
+                Span::new(0, 26),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(if_expr).await.unwrap();
@@ -3287,14 +3463,18 @@ mod tests {
     async fn if_expr_no_else_true() {
         // IF true { 42 }  (no else)
         let mut ast = Ast::new();
-        let cond =
-            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7));
-        let then_val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(10, 12));
-        let then_blk =
-            ast.add_expr(Expr::Block(vec![], Some(then_val)), Span::new(9, 14));
-        let if_expr =
-            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(0, 14));
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7))
+            .unwrap();
+        let then_val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(10, 12))
+            .unwrap();
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(9, 14))
+            .unwrap();
+        let if_expr = ast
+            .add_expr(Expr::If(cond, then_blk, None), Span::new(0, 14))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(if_expr).await.unwrap();
@@ -3305,14 +3485,18 @@ mod tests {
     async fn if_expr_no_else_false() {
         // IF false { 42 }  (no else, returns Option.None)
         let mut ast = Ast::new();
-        let cond =
-            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8));
-        let then_val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(11, 13));
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8))
+            .unwrap();
+        let then_val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(11, 13))
+            .unwrap();
         let then_blk = ast
-            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(10, 15));
-        let if_expr =
-            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(0, 15));
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(10, 15))
+            .unwrap();
+        let if_expr = ast
+            .add_expr(Expr::If(cond, then_blk, None), Span::new(0, 15))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(if_expr).await.unwrap();
@@ -3323,24 +3507,34 @@ mod tests {
     async fn if_expr_as_value() {
         // LET x = IF true { 10 } ELSE { 20 }
         let mut ast = Ast::new();
-        let cond =
-            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(12, 16));
-        let then_val =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(19, 21));
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(12, 16))
+            .unwrap();
+        let then_val = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(19, 21))
+            .unwrap();
         let then_blk = ast
-            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(18, 23));
-        let else_val =
-            ast.add_expr(Expr::Literal(Literal::Int(20)), Span::new(31, 33));
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(18, 23))
+            .unwrap();
+        let else_val = ast
+            .add_expr(Expr::Literal(Literal::Int(20)), Span::new(31, 33))
+            .unwrap();
         let else_blk = ast
-            .add_expr(Expr::Block(vec![], Some(else_val)), Span::new(30, 35));
-        let if_expr = ast.add_expr(
-            Expr::If(cond, then_blk, Some(else_blk)),
-            Span::new(8, 35),
-        );
+            .add_expr(Expr::Block(vec![], Some(else_val)), Span::new(30, 35))
+            .unwrap();
+        let if_expr = ast
+            .add_expr(
+                Expr::If(cond, then_blk, Some(else_blk)),
+                Span::new(8, 35),
+            )
+            .unwrap();
 
         let let_x = ast
-            .add_stmt(Stmt::Let("x".into(), None, if_expr), Span::new(0, 35));
-        let x_var = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
+            .add_stmt(Stmt::Let("x".into(), None, if_expr), Span::new(0, 35))
+            .unwrap();
+        let x_var = ast
+            .add_expr(Expr::Var("x".into()), Span::new(0, 1))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(let_x).await.unwrap();
@@ -3352,9 +3546,12 @@ mod tests {
     async fn block_expr_with_tail() {
         // { 42 }
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(2, 4));
-        let blk = ast.add_expr(Expr::Block(vec![], Some(val)), Span::new(0, 6));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(2, 4))
+            .unwrap();
+        let blk = ast
+            .add_expr(Expr::Block(vec![], Some(val)), Span::new(0, 6))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(blk).await.unwrap();
@@ -3365,7 +3562,9 @@ mod tests {
     async fn block_expr_no_tail() {
         // { } (empty block, returns Option.None)
         let mut ast = Ast::new();
-        let blk = ast.add_expr(Expr::Block(vec![], None), Span::new(0, 3));
+        let blk = ast
+            .add_expr(Expr::Block(vec![], None), Span::new(0, 3))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(blk).await.unwrap();
@@ -3376,19 +3575,26 @@ mod tests {
     async fn block_expr_with_stmts() {
         // { LET x = 10; x + 1 }
         let mut ast = Ast::new();
-        let ten =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(10, 12));
-        let let_x =
-            ast.add_stmt(Stmt::Let("x".into(), None, ten), Span::new(2, 12));
+        let ten = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(10, 12))
+            .unwrap();
+        let let_x = ast
+            .add_stmt(Stmt::Let("x".into(), None, ten), Span::new(2, 12))
+            .unwrap();
 
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(14, 15));
-        let one =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(18, 19));
-        let tail =
-            ast.add_expr(Expr::Binary(x, BinOp::Add, one), Span::new(14, 19));
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(14, 15))
+            .unwrap();
+        let one = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(18, 19))
+            .unwrap();
+        let tail = ast
+            .add_expr(Expr::Binary(x, BinOp::Add, one), Span::new(14, 19))
+            .unwrap();
 
         let blk = ast
-            .add_expr(Expr::Block(vec![let_x], Some(tail)), Span::new(0, 21));
+            .add_expr(Expr::Block(vec![let_x], Some(tail)), Span::new(0, 21))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(blk).await.unwrap();
@@ -3401,23 +3607,34 @@ mod tests {
         let mut ast = Ast::new();
 
         // outer LET x = 1
-        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(8, 9));
-        let let_outer =
-            ast.add_stmt(Stmt::Let("x".into(), None, one), Span::new(0, 9));
+        let one = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(8, 9))
+            .unwrap();
+        let let_outer = ast
+            .add_stmt(Stmt::Let("x".into(), None, one), Span::new(0, 9))
+            .unwrap();
 
         // inner block: { LET x = 10; x }
-        let ten =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(22, 24));
-        let let_inner =
-            ast.add_stmt(Stmt::Let("x".into(), None, ten), Span::new(13, 24));
-        let x_inner = ast.add_expr(Expr::Var("x".into()), Span::new(26, 27));
-        let blk = ast.add_expr(
-            Expr::Block(vec![let_inner], Some(x_inner)),
-            Span::new(11, 29),
-        );
+        let ten = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(22, 24))
+            .unwrap();
+        let let_inner = ast
+            .add_stmt(Stmt::Let("x".into(), None, ten), Span::new(13, 24))
+            .unwrap();
+        let x_inner = ast
+            .add_expr(Expr::Var("x".into()), Span::new(26, 27))
+            .unwrap();
+        let blk = ast
+            .add_expr(
+                Expr::Block(vec![let_inner], Some(x_inner)),
+                Span::new(11, 29),
+            )
+            .unwrap();
 
         // outer x reference
-        let x_outer = ast.add_expr(Expr::Var("x".into()), Span::new(31, 32));
+        let x_outer = ast
+            .add_expr(Expr::Var("x".into()), Span::new(31, 32))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(let_outer).await.unwrap();
@@ -3434,21 +3651,28 @@ mod tests {
         // IF false without else returns Option.None
         let mut ast = Ast::new();
 
-        let cond =
-            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9));
-        let then_val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9))
+            .unwrap();
+        let then_val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14))
+            .unwrap();
         let then_blk = ast
-            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(11, 16));
-        let if_expr =
-            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(1, 17));
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(11, 16))
+            .unwrap();
+        let if_expr = ast
+            .add_expr(Expr::If(cond, then_blk, None), Span::new(1, 17))
+            .unwrap();
 
-        let fallback =
-            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(22, 23));
-        let coalesce = ast.add_expr(
-            Expr::Binary(if_expr, BinOp::Coalesce, fallback),
-            Span::new(0, 23),
-        );
+        let fallback = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(22, 23))
+            .unwrap();
+        let coalesce = ast
+            .add_expr(
+                Expr::Binary(if_expr, BinOp::Coalesce, fallback),
+                Span::new(0, 23),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(coalesce).await.unwrap();
@@ -3460,11 +3684,15 @@ mod tests {
         // 42 ?? 0 -> type error (Int is not Option or Result)
         let mut ast = Ast::new();
 
-        let lhs =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let rhs = ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(6, 7));
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(6, 7))
+            .unwrap();
         let coalesce = ast
-            .add_expr(Expr::Binary(lhs, BinOp::Coalesce, rhs), Span::new(0, 7));
+            .add_expr(Expr::Binary(lhs, BinOp::Coalesce, rhs), Span::new(0, 7))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(coalesce).await;
@@ -3478,18 +3706,21 @@ mod tests {
         // "hello" ?? "fallback" -> type error
         let mut ast = Ast::new();
 
-        let lhs = ast.add_expr(
-            Expr::Literal(Literal::String("hello".into())),
-            Span::new(0, 7),
-        );
-        let rhs = ast.add_expr(
-            Expr::Literal(Literal::String("fallback".into())),
-            Span::new(11, 21),
-        );
-        let coalesce = ast.add_expr(
-            Expr::Binary(lhs, BinOp::Coalesce, rhs),
-            Span::new(0, 21),
-        );
+        let lhs = ast
+            .add_expr(
+                Expr::Literal(Literal::String("hello".into())),
+                Span::new(0, 7),
+            )
+            .unwrap();
+        let rhs = ast
+            .add_expr(
+                Expr::Literal(Literal::String("fallback".into())),
+                Span::new(11, 21),
+            )
+            .unwrap();
+        let coalesce = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Coalesce, rhs), Span::new(0, 21))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(coalesce).await;
@@ -3503,21 +3734,28 @@ mod tests {
         // (IF false { 1 }) ?? 99 -> 99
         let mut ast = Ast::new();
 
-        let cond =
-            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9));
-        let then_val =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9))
+            .unwrap();
+        let then_val = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13))
+            .unwrap();
         let then_blk = ast
-            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(11, 15));
-        let if_expr =
-            ast.add_expr(Expr::If(cond, then_blk, None), Span::new(1, 16));
+            .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(11, 15))
+            .unwrap();
+        let if_expr = ast
+            .add_expr(Expr::If(cond, then_blk, None), Span::new(1, 16))
+            .unwrap();
 
-        let fallback =
-            ast.add_expr(Expr::Literal(Literal::Int(99)), Span::new(21, 23));
-        let coalesce = ast.add_expr(
-            Expr::Binary(if_expr, BinOp::Coalesce, fallback),
-            Span::new(0, 23),
-        );
+        let fallback = ast
+            .add_expr(Expr::Literal(Literal::Int(99)), Span::new(21, 23))
+            .unwrap();
+        let coalesce = ast
+            .add_expr(
+                Expr::Binary(if_expr, BinOp::Coalesce, fallback),
+                Span::new(0, 23),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(coalesce).await.unwrap();
@@ -3530,36 +3768,48 @@ mod tests {
         let mut ast = Ast::new();
 
         // First: IF false { 1 } -> None
-        let cond1 =
-            ast.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9));
-        let val1 =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
-        let blk1 =
-            ast.add_expr(Expr::Block(vec![], Some(val1)), Span::new(11, 15));
-        let if1 = ast.add_expr(Expr::If(cond1, blk1, None), Span::new(1, 16));
+        let cond1 = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9))
+            .unwrap();
+        let val1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13))
+            .unwrap();
+        let blk1 = ast
+            .add_expr(Expr::Block(vec![], Some(val1)), Span::new(11, 15))
+            .unwrap();
+        let if1 = ast
+            .add_expr(Expr::If(cond1, blk1, None), Span::new(1, 16))
+            .unwrap();
 
         // Second: IF false { 2 } -> None
         let cond2 = ast
-            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(24, 29));
-        let val2 =
-            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(32, 33));
-        let blk2 =
-            ast.add_expr(Expr::Block(vec![], Some(val2)), Span::new(31, 35));
-        let if2 = ast.add_expr(Expr::If(cond2, blk2, None), Span::new(21, 36));
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(24, 29))
+            .unwrap();
+        let val2 = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(32, 33))
+            .unwrap();
+        let blk2 = ast
+            .add_expr(Expr::Block(vec![], Some(val2)), Span::new(31, 35))
+            .unwrap();
+        let if2 = ast
+            .add_expr(Expr::If(cond2, blk2, None), Span::new(21, 36))
+            .unwrap();
 
         // Third: literal 3
-        let three =
-            ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(41, 42));
+        let three = ast
+            .add_expr(Expr::Literal(Literal::Int(3)), Span::new(41, 42))
+            .unwrap();
 
         // Build: (if1 ?? if2) ?? 3
-        let c1 = ast.add_expr(
-            Expr::Binary(if1, BinOp::Coalesce, if2),
-            Span::new(0, 37),
-        );
-        let c2 = ast.add_expr(
-            Expr::Binary(c1, BinOp::Coalesce, three),
-            Span::new(0, 42),
-        );
+        let c1 = ast
+            .add_expr(Expr::Binary(if1, BinOp::Coalesce, if2), Span::new(0, 37))
+            .unwrap();
+        let c2 = ast
+            .add_expr(
+                Expr::Binary(c1, BinOp::Coalesce, three),
+                Span::new(0, 42),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(c2).await.unwrap();
@@ -3569,16 +3819,19 @@ mod tests {
     #[tokio::test]
     async fn variant_option_some() {
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
-        let variant = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![val],
-            ),
-            Span::new(0, 15),
-        );
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14))
+            .unwrap();
+        let variant = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec![val],
+                ),
+                Span::new(0, 15),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(variant).await.unwrap();
@@ -3594,16 +3847,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn variant_option_none_via_path() {
-        // Option.None is resolved to Expr::Path by the resolution pass
+    async fn variant_option_none() {
+        // Option.None is resolved to Expr::Variant by the resolution pass
         let mut ast = Ast::new();
-        let path = ast.add_expr(
-            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
-            Span::new(0, 11),
-        );
+        let none = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "None".into(), smallvec![]),
+                Span::new(0, 11),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
-        let result = interp.eval(path).await.unwrap();
+        let result = interp.eval(none).await.unwrap();
         match result {
             Value::Tagged(ty_expr, idx, payloads) => {
                 let base = interp.type_exprs.base_type(ty_expr);
@@ -3618,18 +3873,22 @@ mod tests {
     #[tokio::test]
     async fn variant_result_ok() {
         let mut ast = Ast::new();
-        let val = ast.add_expr(
-            Expr::Literal(Literal::String("success".into())),
-            Span::new(10, 19),
-        );
-        let variant = ast.add_expr(
-            Expr::Variant(
-                "Result".into(),
-                "Ok".into(),
-                smallvec::smallvec![val],
-            ),
-            Span::new(0, 20),
-        );
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("success".into())),
+                Span::new(10, 19),
+            )
+            .unwrap();
+        let variant = ast
+            .add_expr(
+                Expr::Variant(
+                    "Result".into(),
+                    "Ok".into(),
+                    smallvec::smallvec![val],
+                ),
+                Span::new(0, 20),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(variant).await.unwrap();
@@ -3647,18 +3906,22 @@ mod tests {
     #[tokio::test]
     async fn variant_result_err() {
         let mut ast = Ast::new();
-        let val = ast.add_expr(
-            Expr::Literal(Literal::String("oops".into())),
-            Span::new(11, 17),
-        );
-        let variant = ast.add_expr(
-            Expr::Variant(
-                "Result".into(),
-                "Err".into(),
-                smallvec::smallvec![val],
-            ),
-            Span::new(0, 18),
-        );
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("oops".into())),
+                Span::new(11, 17),
+            )
+            .unwrap();
+        let variant = ast
+            .add_expr(
+                Expr::Variant(
+                    "Result".into(),
+                    "Err".into(),
+                    smallvec::smallvec![val],
+                ),
+                Span::new(0, 18),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(variant).await.unwrap();
@@ -3676,16 +3939,19 @@ mod tests {
     #[tokio::test]
     async fn variant_unknown_type_error() {
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11));
-        let variant = ast.add_expr(
-            Expr::Variant(
-                "Unknown".into(),
-                "Foo".into(),
-                smallvec::smallvec![val],
-            ),
-            Span::new(0, 12),
-        );
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11))
+            .unwrap();
+        let variant = ast
+            .add_expr(
+                Expr::Variant(
+                    "Unknown".into(),
+                    "Foo".into(),
+                    smallvec::smallvec![val],
+                ),
+                Span::new(0, 12),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(variant).await;
@@ -3695,16 +3961,19 @@ mod tests {
     #[tokio::test]
     async fn variant_unknown_variant_error() {
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11));
-        let variant = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Foo".into(),
-                smallvec::smallvec![val],
-            ),
-            Span::new(0, 12),
-        );
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11))
+            .unwrap();
+        let variant = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Foo".into(),
+                    smallvec::smallvec![val],
+                ),
+                Span::new(0, 12),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(variant).await;
@@ -3715,14 +3984,16 @@ mod tests {
     async fn variant_arity_mismatch_error() {
         // Option.Some expects 1 arg, giving 0
         let mut ast = Ast::new();
-        let variant = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![],
-            ),
-            Span::new(0, 11),
-        );
+        let variant = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec![],
+                ),
+                Span::new(0, 11),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(variant).await;
@@ -3733,9 +4004,12 @@ mod tests {
     async fn variant_some_requires_args() {
         // Accessing Option.Some without args (as field) is an error
         let mut ast = Ast::new();
-        let base = ast.add_expr(Expr::Var("Option".into()), Span::new(0, 6));
-        let field =
-            ast.add_expr(Expr::Field(base, "Some".into()), Span::new(0, 11));
+        let base = ast
+            .add_expr(Expr::Var("Option".into()), Span::new(0, 6))
+            .unwrap();
+        let field = ast
+            .add_expr(Expr::Field(base, "Some".into()), Span::new(0, 11))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(field).await;
@@ -3746,11 +4020,15 @@ mod tests {
     async fn optional_field_on_object() {
         // { x: 42 }?.x -> Option.Some(42)
         let mut ast = Ast::new();
-        let v = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
-        let obj =
-            ast.add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10));
+        let v = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8))
+            .unwrap();
+        let obj = ast
+            .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10))
+            .unwrap();
         let opt_field = ast
-            .add_expr(Expr::OptionalField(obj, "x".into()), Span::new(0, 13));
+            .add_expr(Expr::OptionalField(obj, "x".into()), Span::new(0, 13))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(opt_field).await.unwrap();
@@ -3769,12 +4047,15 @@ mod tests {
     async fn optional_field_on_none() {
         // Option.None?.x -> Option.None
         let mut ast = Ast::new();
-        let none = ast.add_expr(
-            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
-            Span::new(0, 11),
-        );
+        let none = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "None".into(), smallvec![]),
+                Span::new(0, 11),
+            )
+            .unwrap();
         let opt_field = ast
-            .add_expr(Expr::OptionalField(none, "x".into()), Span::new(0, 14));
+            .add_expr(Expr::OptionalField(none, "x".into()), Span::new(0, 14))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(opt_field).await.unwrap();
@@ -3785,20 +4066,25 @@ mod tests {
     async fn optional_field_on_some_with_object() {
         // Option.Some({ x: 99 })?.x -> Option.Some(99)
         let mut ast = Ast::new();
-        let v =
-            ast.add_expr(Expr::Literal(Literal::Int(99)), Span::new(20, 22));
+        let v = ast
+            .add_expr(Expr::Literal(Literal::Int(99)), Span::new(20, 22))
+            .unwrap();
         let obj = ast
-            .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(12, 24));
-        let some = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![obj],
-            ),
-            Span::new(0, 25),
-        );
+            .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(12, 24))
+            .unwrap();
+        let some = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec![obj],
+                ),
+                Span::new(0, 25),
+            )
+            .unwrap();
         let opt_field = ast
-            .add_expr(Expr::OptionalField(some, "x".into()), Span::new(0, 28));
+            .add_expr(Expr::OptionalField(some, "x".into()), Span::new(0, 28))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(opt_field).await.unwrap();
@@ -3816,11 +4102,15 @@ mod tests {
     async fn optional_field_missing_field() {
         // { x: 42 }?.y -> error (field not found)
         let mut ast = Ast::new();
-        let v = ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8));
-        let obj =
-            ast.add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10));
+        let v = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8))
+            .unwrap();
+        let obj = ast
+            .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10))
+            .unwrap();
         let opt_field = ast
-            .add_expr(Expr::OptionalField(obj, "y".into()), Span::new(0, 13));
+            .add_expr(Expr::OptionalField(obj, "y".into()), Span::new(0, 13))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(opt_field).await;
@@ -3831,10 +4121,12 @@ mod tests {
     async fn optional_field_on_non_object() {
         // 42?.x -> type error
         let mut ast = Ast::new();
-        let num =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let opt_field =
-            ast.add_expr(Expr::OptionalField(num, "x".into()), Span::new(0, 5));
+        let num = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let opt_field = ast
+            .add_expr(Expr::OptionalField(num, "x".into()), Span::new(0, 5))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(opt_field).await;
@@ -3847,12 +4139,15 @@ mod tests {
     async fn is_simple_type_int() {
         // 42 is Int -> true
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let is_expr = ast.add_expr(
-            Expr::Is(val, TypePattern::Type("Int".into())),
-            Span::new(0, 8),
-        );
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(val, TypePattern::Type("Int".into())),
+                Span::new(0, 8),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await.unwrap();
@@ -3863,12 +4158,15 @@ mod tests {
     async fn is_simple_type_mismatch() {
         // 42 is String -> false
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let is_expr = ast.add_expr(
-            Expr::Is(val, TypePattern::Type("String".into())),
-            Span::new(0, 11),
-        );
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(val, TypePattern::Type("String".into())),
+                Span::new(0, 11),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await.unwrap();
@@ -3879,17 +4177,21 @@ mod tests {
     async fn is_variant_none() {
         // Option.None is Option.None -> true
         let mut ast = Ast::new();
-        let none = ast.add_expr(
-            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
-            Span::new(0, 11),
-        );
-        let is_expr = ast.add_expr(
-            Expr::Is(
-                none,
-                TypePattern::Variant("Option".into(), "None".into()),
-            ),
-            Span::new(0, 26),
-        );
+        let none = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "None".into(), smallvec![]),
+                Span::new(0, 11),
+            )
+            .unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    none,
+                    TypePattern::Variant("Option".into(), "None".into()),
+                ),
+                Span::new(0, 26),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await.unwrap();
@@ -3900,23 +4202,31 @@ mod tests {
     async fn is_variant_some_wildcard() {
         // Option.Some(42) is Option.Some(_) -> true
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
-        let some = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![val],
-            ),
-            Span::new(0, 15),
-        );
-        let is_expr = ast.add_expr(
-            Expr::Is(
-                some,
-                TypePattern::VariantWildcard("Option".into(), "Some".into()),
-            ),
-            Span::new(0, 30),
-        );
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14))
+            .unwrap();
+        let some = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec![val],
+                ),
+                Span::new(0, 15),
+            )
+            .unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    some,
+                    TypePattern::VariantWildcard(
+                        "Option".into(),
+                        "Some".into(),
+                    ),
+                ),
+                Span::new(0, 30),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await.unwrap();
@@ -3927,17 +4237,24 @@ mod tests {
     async fn is_variant_mismatch() {
         // Option.None is Option.Some(_) -> false
         let mut ast = Ast::new();
-        let none = ast.add_expr(
-            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
-            Span::new(0, 11),
-        );
-        let is_expr = ast.add_expr(
-            Expr::Is(
-                none,
-                TypePattern::VariantWildcard("Option".into(), "Some".into()),
-            ),
-            Span::new(0, 26),
-        );
+        let none = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "None".into(), smallvec![]),
+                Span::new(0, 11),
+            )
+            .unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    none,
+                    TypePattern::VariantWildcard(
+                        "Option".into(),
+                        "Some".into(),
+                    ),
+                ),
+                Span::new(0, 26),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await.unwrap();
@@ -3951,46 +4268,58 @@ mod tests {
         let mut ast = Ast::new();
 
         // Option.Some(42)
-        let forty_two =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
-        let some = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![forty_two],
-            ),
-            Span::new(0, 15),
-        );
-
-        // is Option.Some(val)
-        let is_expr = ast.add_expr(
-            Expr::Is(
-                some,
-                TypePattern::VariantBind(
+        let forty_two = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14))
+            .unwrap();
+        let some = ast
+            .add_expr(
+                Expr::Variant(
                     "Option".into(),
                     "Some".into(),
-                    smallvec::smallvec!["val".into()],
+                    smallvec::smallvec![forty_two],
                 ),
-            ),
-            Span::new(0, 35),
-        );
+                Span::new(0, 15),
+            )
+            .unwrap();
+
+        // is Option.Some(val)
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    some,
+                    TypePattern::VariantBind(
+                        "Option".into(),
+                        "Some".into(),
+                        smallvec::smallvec!["val".into()],
+                    ),
+                ),
+                Span::new(0, 35),
+            )
+            .unwrap();
 
         // then: { val }
-        let val_ref = ast.add_expr(Expr::Var("val".into()), Span::new(38, 41));
-        let then_blk =
-            ast.add_expr(Expr::Block(vec![], Some(val_ref)), Span::new(37, 43));
+        let val_ref = ast
+            .add_expr(Expr::Var("val".into()), Span::new(38, 41))
+            .unwrap();
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(val_ref)), Span::new(37, 43))
+            .unwrap();
 
         // else: { 0 }
-        let zero =
-            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(51, 52));
-        let else_blk =
-            ast.add_expr(Expr::Block(vec![], Some(zero)), Span::new(50, 54));
+        let zero = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(51, 52))
+            .unwrap();
+        let else_blk = ast
+            .add_expr(Expr::Block(vec![], Some(zero)), Span::new(50, 54))
+            .unwrap();
 
         // IF
-        let if_expr = ast.add_expr(
-            Expr::If(is_expr, then_blk, Some(else_blk)),
-            Span::new(0, 54),
-        );
+        let if_expr = ast
+            .add_expr(
+                Expr::If(is_expr, then_blk, Some(else_blk)),
+                Span::new(0, 54),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(if_expr).await.unwrap();
@@ -4003,43 +4332,52 @@ mod tests {
         // -> 99 (bindings not visible in else)
         let mut ast = Ast::new();
 
-        // Option.None (resolved to Path)
-        let none = ast.add_expr(
-            Expr::Path(smallvec::smallvec!["Option".into(), "None".into()]),
-            Span::new(3, 14),
-        );
+        // Option.None (resolved to Variant)
+        let none = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "None".into(), smallvec![]),
+                Span::new(3, 14),
+            )
+            .unwrap();
 
         // is Option.Some(val)
-        let is_expr = ast.add_expr(
-            Expr::Is(
-                none,
-                TypePattern::VariantBind(
-                    "Option".into(),
-                    "Some".into(),
-                    smallvec::smallvec!["val".into()],
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    none,
+                    TypePattern::VariantBind(
+                        "Option".into(),
+                        "Some".into(),
+                        smallvec::smallvec!["val".into()],
+                    ),
                 ),
-            ),
-            Span::new(0, 35),
-        );
+                Span::new(0, 35),
+            )
+            .unwrap();
 
         // then: { val }
-        let val_ref = ast.add_expr(Expr::Var("val".into()), Span::new(38, 41));
-        let then_blk =
-            ast.add_expr(Expr::Block(vec![], Some(val_ref)), Span::new(37, 43));
+        let val_ref = ast
+            .add_expr(Expr::Var("val".into()), Span::new(38, 41))
+            .unwrap();
+        let then_blk = ast
+            .add_expr(Expr::Block(vec![], Some(val_ref)), Span::new(37, 43))
+            .unwrap();
 
         // else: { 99 }
-        let ninety_nine =
-            ast.add_expr(Expr::Literal(Literal::Int(99)), Span::new(51, 53));
-        let else_blk = ast.add_expr(
-            Expr::Block(vec![], Some(ninety_nine)),
-            Span::new(50, 55),
-        );
+        let ninety_nine = ast
+            .add_expr(Expr::Literal(Literal::Int(99)), Span::new(51, 53))
+            .unwrap();
+        let else_blk = ast
+            .add_expr(Expr::Block(vec![], Some(ninety_nine)), Span::new(50, 55))
+            .unwrap();
 
         // IF
-        let if_expr = ast.add_expr(
-            Expr::If(is_expr, then_blk, Some(else_blk)),
-            Span::new(0, 55),
-        );
+        let if_expr = ast
+            .add_expr(
+                Expr::If(is_expr, then_blk, Some(else_blk)),
+                Span::new(0, 55),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(if_expr).await.unwrap();
@@ -4054,50 +4392,65 @@ mod tests {
         let mut ast = Ast::new();
 
         // Option.Some(42)
-        let forty_two =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
-        let some = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![forty_two],
-            ),
-            Span::new(0, 15),
-        );
-
-        // is Option.Some(val)
-        let is_expr = ast.add_expr(
-            Expr::Is(
-                some,
-                TypePattern::VariantBind(
+        let forty_two = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14))
+            .unwrap();
+        let some = ast
+            .add_expr(
+                Expr::Variant(
                     "Option".into(),
                     "Some".into(),
-                    smallvec::smallvec!["val".into()],
+                    smallvec::smallvec![forty_two],
                 ),
-            ),
-            Span::new(0, 35),
-        );
+                Span::new(0, 15),
+            )
+            .unwrap();
+
+        // is Option.Some(val)
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    some,
+                    TypePattern::VariantBind(
+                        "Option".into(),
+                        "Some".into(),
+                        smallvec::smallvec!["val".into()],
+                    ),
+                ),
+                Span::new(0, 35),
+            )
+            .unwrap();
 
         // then: { val }
-        let val_ref1 = ast.add_expr(Expr::Var("val".into()), Span::new(38, 41));
+        let val_ref1 = ast
+            .add_expr(Expr::Var("val".into()), Span::new(38, 41))
+            .unwrap();
         let then_blk = ast
-            .add_expr(Expr::Block(vec![], Some(val_ref1)), Span::new(37, 43));
+            .add_expr(Expr::Block(vec![], Some(val_ref1)), Span::new(37, 43))
+            .unwrap();
 
         // else: { 0 }
-        let zero =
-            ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(51, 52));
-        let else_blk =
-            ast.add_expr(Expr::Block(vec![], Some(zero)), Span::new(50, 54));
+        let zero = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(51, 52))
+            .unwrap();
+        let else_blk = ast
+            .add_expr(Expr::Block(vec![], Some(zero)), Span::new(50, 54))
+            .unwrap();
 
         // IF
-        let if_expr = ast.add_expr(
-            Expr::If(is_expr, then_blk, Some(else_blk)),
-            Span::new(0, 54),
-        );
-        let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 54));
+        let if_expr = ast
+            .add_expr(
+                Expr::If(is_expr, then_blk, Some(else_blk)),
+                Span::new(0, 54),
+            )
+            .unwrap();
+        let if_stmt =
+            ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 54)).unwrap();
 
         // val (after if)
-        let val_ref2 = ast.add_expr(Expr::Var("val".into()), Span::new(56, 59));
+        let val_ref2 = ast
+            .add_expr(Expr::Var("val".into()), Span::new(56, 59))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(if_stmt).await.unwrap();
@@ -4110,12 +4463,15 @@ mod tests {
     async fn is_unknown_type_error() {
         // 42 is Unknown -> error
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let is_expr = ast.add_expr(
-            Expr::Is(val, TypePattern::Type("Unknown".into())),
-            Span::new(0, 12),
-        );
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(val, TypePattern::Type("Unknown".into())),
+                Span::new(0, 12),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await;
@@ -4126,23 +4482,28 @@ mod tests {
     async fn is_result_ok() {
         // Result.Ok(1) is Result.Ok(_) -> true
         let mut ast = Ast::new();
-        let one =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11));
-        let ok = ast.add_expr(
-            Expr::Variant(
-                "Result".into(),
-                "Ok".into(),
-                smallvec::smallvec![one],
-            ),
-            Span::new(0, 12),
-        );
-        let is_expr = ast.add_expr(
-            Expr::Is(
-                ok,
-                TypePattern::VariantWildcard("Result".into(), "Ok".into()),
-            ),
-            Span::new(0, 25),
-        );
+        let one = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11))
+            .unwrap();
+        let ok = ast
+            .add_expr(
+                Expr::Variant(
+                    "Result".into(),
+                    "Ok".into(),
+                    smallvec::smallvec![one],
+                ),
+                Span::new(0, 12),
+            )
+            .unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    ok,
+                    TypePattern::VariantWildcard("Result".into(), "Ok".into()),
+                ),
+                Span::new(0, 25),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await.unwrap();
@@ -4153,25 +4514,31 @@ mod tests {
     async fn is_result_err() {
         // Result.Err("oops") is Result.Ok(_) -> false
         let mut ast = Ast::new();
-        let msg = ast.add_expr(
-            Expr::Literal(Literal::String("oops".into())),
-            Span::new(11, 17),
-        );
-        let err = ast.add_expr(
-            Expr::Variant(
-                "Result".into(),
-                "Err".into(),
-                smallvec::smallvec![msg],
-            ),
-            Span::new(0, 18),
-        );
-        let is_expr = ast.add_expr(
-            Expr::Is(
-                err,
-                TypePattern::VariantWildcard("Result".into(), "Ok".into()),
-            ),
-            Span::new(0, 30),
-        );
+        let msg = ast
+            .add_expr(
+                Expr::Literal(Literal::String("oops".into())),
+                Span::new(11, 17),
+            )
+            .unwrap();
+        let err = ast
+            .add_expr(
+                Expr::Variant(
+                    "Result".into(),
+                    "Err".into(),
+                    smallvec::smallvec![msg],
+                ),
+                Span::new(0, 18),
+            )
+            .unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    err,
+                    TypePattern::VariantWildcard("Result".into(), "Ok".into()),
+                ),
+                Span::new(0, 30),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await.unwrap();
@@ -4182,23 +4549,28 @@ mod tests {
     async fn is_variant_with_payload_requires_parens() {
         // `is Option.Some` without parens is an error (must use `(_)` or `(name)`)
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14));
-        let some = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![val],
-            ),
-            Span::new(0, 15),
-        );
-        let is_expr = ast.add_expr(
-            Expr::Is(
-                some,
-                TypePattern::Variant("Option".into(), "Some".into()),
-            ),
-            Span::new(0, 30),
-        );
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14))
+            .unwrap();
+        let some = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec![val],
+                ),
+                Span::new(0, 15),
+            )
+            .unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    some,
+                    TypePattern::Variant("Option".into(), "Some".into()),
+                ),
+                Span::new(0, 30),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(is_expr).await;
@@ -4212,30 +4584,35 @@ mod tests {
         // Two Option.Some(1) values created separately should be equal,
         // even though they have different TypeExprIds.
         let mut ast = Ast::new();
-        let one_a =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
-        let some_a = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![one_a],
-            ),
-            Span::new(0, 14),
-        );
-        let one_b =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(32, 33));
-        let some_b = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![one_b],
-            ),
-            Span::new(20, 34),
-        );
-        let eq_expr = ast.add_expr(
-            Expr::Binary(some_a, BinOp::Eq, some_b),
-            Span::new(0, 40),
-        );
+        let one_a = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13))
+            .unwrap();
+        let some_a = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec![one_a],
+                ),
+                Span::new(0, 14),
+            )
+            .unwrap();
+        let one_b = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(32, 33))
+            .unwrap();
+        let some_b = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec![one_b],
+                ),
+                Span::new(20, 34),
+            )
+            .unwrap();
+        let eq_expr = ast
+            .add_expr(Expr::Binary(some_a, BinOp::Eq, some_b), Span::new(0, 40))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(eq_expr).await.unwrap();
@@ -4246,30 +4623,38 @@ mod tests {
     async fn tagged_values_different_payloads_not_equal() {
         // Option.Some(1) != Option.Some(2)
         let mut ast = Ast::new();
-        let one =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13));
-        let some_one = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![one],
-            ),
-            Span::new(0, 14),
-        );
-        let two =
-            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(32, 33));
-        let some_two = ast.add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![two],
-            ),
-            Span::new(20, 34),
-        );
-        let eq_expr = ast.add_expr(
-            Expr::Binary(some_one, BinOp::Eq, some_two),
-            Span::new(0, 40),
-        );
+        let one = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13))
+            .unwrap();
+        let some_one = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec![one],
+                ),
+                Span::new(0, 14),
+            )
+            .unwrap();
+        let two = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(32, 33))
+            .unwrap();
+        let some_two = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec::smallvec![two],
+                ),
+                Span::new(20, 34),
+            )
+            .unwrap();
+        let eq_expr = ast
+            .add_expr(
+                Expr::Binary(some_one, BinOp::Eq, some_two),
+                Span::new(0, 40),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(eq_expr).await.unwrap();
@@ -4282,13 +4667,13 @@ mod tests {
     async fn as_int_to_float() {
         // 42 as Float -> 42.0
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let ty = ast.add_type_expr(
-            AstTypeExpr::Named("Float".into()),
-            Span::new(6, 11),
-        );
-        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 11));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let ty = ast
+            .add_type_expr(AstTypeExpr::Named("Float".into()), Span::new(6, 11))
+            .unwrap();
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 11)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cast).await.unwrap();
@@ -4299,11 +4684,13 @@ mod tests {
     async fn as_float_to_int_truncates() {
         // 3.7 as Int -> 3
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Float(3.7)), Span::new(0, 3));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Float(3.7)), Span::new(0, 3))
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(7, 10));
-        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 10));
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(7, 10))
+            .unwrap();
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 10)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cast).await.unwrap();
@@ -4314,11 +4701,13 @@ mod tests {
     async fn as_bool_to_int() {
         // true as Int -> 1
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4))
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(8, 11));
-        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 11));
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(8, 11))
+            .unwrap();
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 11)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cast).await.unwrap();
@@ -4326,11 +4715,15 @@ mod tests {
 
         // false as Int -> 0
         let mut ast2 = Ast::new();
-        let val2 =
-            ast2.add_expr(Expr::Literal(Literal::Bool(false)), Span::new(0, 5));
+        let val2 = ast2
+            .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(0, 5))
+            .unwrap();
         let ty2 = ast2
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(9, 12));
-        let cast2 = ast2.add_expr(Expr::As(val2, ty2), Span::new(0, 12));
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(9, 12))
+            .unwrap();
+        let cast2 = ast2
+            .add_expr(Expr::As(val2, ty2), Span::new(0, 12))
+            .unwrap();
 
         let mut interp2 = test_interp(&ast2);
         let result2 = interp2.eval(cast2).await.unwrap();
@@ -4341,13 +4734,16 @@ mod tests {
     async fn as_int_to_string() {
         // 42 as String -> "42"
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
-        let ty = ast.add_type_expr(
-            AstTypeExpr::Named("String".into()),
-            Span::new(6, 12),
-        );
-        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 12));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let ty = ast
+            .add_type_expr(
+                AstTypeExpr::Named("String".into()),
+                Span::new(6, 12),
+            )
+            .unwrap();
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 12)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cast).await.unwrap();
@@ -4363,13 +4759,16 @@ mod tests {
     async fn as_float_to_string() {
         // 3.14 as String -> "3.14"
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Float(3.14)), Span::new(0, 4));
-        let ty = ast.add_type_expr(
-            AstTypeExpr::Named("String".into()),
-            Span::new(8, 14),
-        );
-        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 14));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Float(3.14)), Span::new(0, 4))
+            .unwrap();
+        let ty = ast
+            .add_type_expr(
+                AstTypeExpr::Named("String".into()),
+                Span::new(8, 14),
+            )
+            .unwrap();
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 14)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cast).await.unwrap();
@@ -4385,13 +4784,16 @@ mod tests {
     async fn as_bool_to_string() {
         // true as String -> "TRUE"
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4));
-        let ty = ast.add_type_expr(
-            AstTypeExpr::Named("String".into()),
-            Span::new(8, 14),
-        );
-        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 14));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4))
+            .unwrap();
+        let ty = ast
+            .add_type_expr(
+                AstTypeExpr::Named("String".into()),
+                Span::new(8, 14),
+            )
+            .unwrap();
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 14)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cast).await.unwrap();
@@ -4407,11 +4809,13 @@ mod tests {
     async fn as_identity_int() {
         // 42 as Int -> 42 (identity)
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(6, 9));
-        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 9));
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(6, 9))
+            .unwrap();
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 9)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cast).await.unwrap();
@@ -4422,13 +4826,16 @@ mod tests {
     async fn as_unsupported_conversion_error() {
         // "hello" as Int -> error (use `read` for fallible conversions)
         let mut ast = Ast::new();
-        let val = ast.add_expr(
-            Expr::Literal(Literal::String("hello".into())),
-            Span::new(0, 7),
-        );
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("hello".into())),
+                Span::new(0, 7),
+            )
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(11, 14));
-        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 14));
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(11, 14))
+            .unwrap();
+        let cast = ast.add_expr(Expr::As(val, ty), Span::new(0, 14)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(cast).await;
@@ -4443,13 +4850,16 @@ mod tests {
     async fn read_string_to_int_ok() {
         // "42" read Int -> Result.Ok(42)
         let mut ast = Ast::new();
-        let val = ast.add_expr(
-            Expr::Literal(Literal::String("42".into())),
-            Span::new(0, 4),
-        );
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("42".into())),
+                Span::new(0, 4),
+            )
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(10, 13));
-        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 13));
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(10, 13))
+            .unwrap();
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 13)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(read).await.unwrap();
@@ -4469,13 +4879,16 @@ mod tests {
     async fn read_string_to_int_err() {
         // "abc" read Int -> Result.Err("invalid integer: abc")
         let mut ast = Ast::new();
-        let val = ast.add_expr(
-            Expr::Literal(Literal::String("abc".into())),
-            Span::new(0, 5),
-        );
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("abc".into())),
+                Span::new(0, 5),
+            )
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(11, 14));
-        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 14));
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(11, 14))
+            .unwrap();
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 14)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(read).await.unwrap();
@@ -4501,15 +4914,19 @@ mod tests {
     async fn read_string_to_float_ok() {
         // "3.14" read Float -> Result.Ok(3.14)
         let mut ast = Ast::new();
-        let val = ast.add_expr(
-            Expr::Literal(Literal::String("3.14".into())),
-            Span::new(0, 6),
-        );
-        let ty = ast.add_type_expr(
-            AstTypeExpr::Named("Float".into()),
-            Span::new(12, 17),
-        );
-        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 17));
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("3.14".into())),
+                Span::new(0, 6),
+            )
+            .unwrap();
+        let ty = ast
+            .add_type_expr(
+                AstTypeExpr::Named("Float".into()),
+                Span::new(12, 17),
+            )
+            .unwrap();
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 17)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(read).await.unwrap();
@@ -4529,15 +4946,19 @@ mod tests {
     async fn read_string_to_float_err() {
         // "xyz" read Float -> Result.Err(...)
         let mut ast = Ast::new();
-        let val = ast.add_expr(
-            Expr::Literal(Literal::String("xyz".into())),
-            Span::new(0, 5),
-        );
-        let ty = ast.add_type_expr(
-            AstTypeExpr::Named("Float".into()),
-            Span::new(11, 16),
-        );
-        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 16));
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("xyz".into())),
+                Span::new(0, 5),
+            )
+            .unwrap();
+        let ty = ast
+            .add_type_expr(
+                AstTypeExpr::Named("Float".into()),
+                Span::new(11, 16),
+            )
+            .unwrap();
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 16)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(read).await.unwrap();
@@ -4550,10 +4971,13 @@ mod tests {
     async fn read_int_to_bool_zero() {
         // 0 read Bool -> Result.Ok(false)
         let mut ast = Ast::new();
-        let val = ast.add_expr(Expr::Literal(Literal::Int(0)), Span::new(0, 1));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(0, 1))
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Bool".into()), Span::new(7, 11));
-        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 11));
+            .add_type_expr(AstTypeExpr::Named("Bool".into()), Span::new(7, 11))
+            .unwrap();
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 11)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(read).await.unwrap();
@@ -4572,10 +4996,13 @@ mod tests {
     async fn read_int_to_bool_one() {
         // 1 read Bool -> Result.Ok(true)
         let mut ast = Ast::new();
-        let val = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(0, 1));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(0, 1))
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Bool".into()), Span::new(7, 11));
-        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 11));
+            .add_type_expr(AstTypeExpr::Named("Bool".into()), Span::new(7, 11))
+            .unwrap();
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 11)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(read).await.unwrap();
@@ -4594,11 +5021,13 @@ mod tests {
     async fn read_int_to_bool_invalid() {
         // 42 read Bool -> Result.Err(...)
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Bool".into()), Span::new(8, 12));
-        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 12));
+            .add_type_expr(AstTypeExpr::Named("Bool".into()), Span::new(8, 12))
+            .unwrap();
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 12)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(read).await.unwrap();
@@ -4624,11 +5053,13 @@ mod tests {
     async fn read_unsupported_conversion_error() {
         // 42 read Int -> runtime error (not a fallible conversion)
         let mut ast = Ast::new();
-        let val =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2));
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
         let ty = ast
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(8, 11));
-        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 11));
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(8, 11))
+            .unwrap();
+        let read = ast.add_expr(Expr::Read(val, ty), Span::new(0, 11)).unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(read).await;
@@ -4643,19 +5074,25 @@ mod tests {
     async fn closure_creation_simple() {
         // x => x * 2
         let mut ast = Ast::new();
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(5, 6));
-        let two =
-            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(9, 10));
-        let body =
-            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(5, 10));
-        let closure = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(0, 10),
-        );
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(5, 6))
+            .unwrap();
+        let two = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(9, 10))
+            .unwrap();
+        let body = ast
+            .add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(5, 10))
+            .unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 10),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(closure).await.unwrap();
@@ -4674,21 +5111,30 @@ mod tests {
         // (x: Int) -> Int => x * x
         let mut ast = Ast::new();
         let int_ty = ast
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(4, 7));
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(4, 7))
+            .unwrap();
         let ret_ty = ast
-            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(12, 15));
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(19, 20));
-        let x2 = ast.add_expr(Expr::Var("x".into()), Span::new(23, 24));
-        let body =
-            ast.add_expr(Expr::Binary(x, BinOp::Mul, x2), Span::new(19, 24));
-        let closure = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![("x".into(), Some(int_ty))],
-                ret: Some(ret_ty),
-                body,
-            },
-            Span::new(0, 24),
-        );
+            .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(12, 15))
+            .unwrap();
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(19, 20))
+            .unwrap();
+        let x2 = ast
+            .add_expr(Expr::Var("x".into()), Span::new(23, 24))
+            .unwrap();
+        let body = ast
+            .add_expr(Expr::Binary(x, BinOp::Mul, x2), Span::new(19, 24))
+            .unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), Some(int_ty))],
+                    ret: Some(ret_ty),
+                    body,
+                },
+                Span::new(0, 24),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(closure).await.unwrap();
@@ -4709,26 +5155,32 @@ mod tests {
         // LET triple = x => x * factor
         // triple is a closure that captures `factor`
         let mut ast = Ast::new();
-        let three =
-            ast.add_expr(Expr::Literal(Literal::Int(3)), Span::new(13, 14));
-        let let_factor = ast.add_stmt(
-            Stmt::Let("factor".into(), None, three),
-            Span::new(0, 14),
-        );
+        let three = ast
+            .add_expr(Expr::Literal(Literal::Int(3)), Span::new(13, 14))
+            .unwrap();
+        let let_factor = ast
+            .add_stmt(Stmt::Let("factor".into(), None, three), Span::new(0, 14))
+            .unwrap();
 
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(25, 26));
-        let factor =
-            ast.add_expr(Expr::Var("factor".into()), Span::new(29, 35));
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(25, 26))
+            .unwrap();
+        let factor = ast
+            .add_expr(Expr::Var("factor".into()), Span::new(29, 35))
+            .unwrap();
         let body = ast
-            .add_expr(Expr::Binary(x, BinOp::Mul, factor), Span::new(25, 35));
-        let closure = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(16, 35),
-        );
+            .add_expr(Expr::Binary(x, BinOp::Mul, factor), Span::new(25, 35))
+            .unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(16, 35),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(let_factor).await.unwrap();
@@ -4748,19 +5200,22 @@ mod tests {
     async fn closure_display() {
         // Closure displays as <closure(n)>
         let mut ast = Ast::new();
-        let body =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(5, 7));
-        let closure = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![
-                    ("x".into(), None),
-                    ("y".into(), None)
-                ],
-                ret: None,
-                body,
-            },
-            Span::new(0, 7),
-        );
+        let body = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(5, 7))
+            .unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![
+                        ("x".into(), None),
+                        ("y".into(), None)
+                    ],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 7),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(closure).await.unwrap();
@@ -4774,22 +5229,29 @@ mod tests {
     async fn fun_definition_simple() {
         // FUN double (x) { x * 2 }
         let mut ast = Ast::new();
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(17, 18));
-        let two =
-            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(21, 22));
-        let body_expr =
-            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(17, 22));
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(17, 18))
+            .unwrap();
+        let two = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(21, 22))
+            .unwrap();
+        let body_expr = ast
+            .add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(17, 22))
+            .unwrap();
         let body = ast
-            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(15, 24));
-        let fun = ast.add_stmt(
-            Stmt::Fun {
-                name: "double".into(),
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(0, 24),
-        );
+            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(15, 24))
+            .unwrap();
+        let fun = ast
+            .add_stmt(
+                Stmt::Fun {
+                    name: "double".into(),
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 24),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(fun).await.unwrap();
@@ -4806,32 +5268,43 @@ mod tests {
         let mut ast = Ast::new();
 
         // Function body: x * 2
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(17, 18));
-        let two =
-            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(21, 22));
-        let body_expr =
-            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(17, 22));
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(17, 18))
+            .unwrap();
+        let two = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(21, 22))
+            .unwrap();
+        let body_expr = ast
+            .add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(17, 22))
+            .unwrap();
         let body = ast
-            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(15, 24));
-        let fun = ast.add_stmt(
-            Stmt::Fun {
-                name: "double".into(),
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(0, 24),
-        );
+            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(15, 24))
+            .unwrap();
+        let fun = ast
+            .add_stmt(
+                Stmt::Fun {
+                    name: "double".into(),
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 24),
+            )
+            .unwrap();
 
         // Call: double(21)
-        let arg =
-            ast.add_expr(Expr::Literal(Literal::Int(21)), Span::new(32, 34));
-        let callee =
-            ast.add_expr(Expr::Var("double".into()), Span::new(26, 32));
-        let call = ast.add_expr(
-            Expr::Call(callee, smallvec::smallvec![arg]),
-            Span::new(26, 35),
-        );
+        let arg = ast
+            .add_expr(Expr::Literal(Literal::Int(21)), Span::new(32, 34))
+            .unwrap();
+        let callee = ast
+            .add_expr(Expr::Var("double".into()), Span::new(26, 32))
+            .unwrap();
+        let call = ast
+            .add_expr(
+                Expr::Call(callee, smallvec::smallvec![arg]),
+                Span::new(26, 35),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(fun).await.unwrap();
@@ -4847,25 +5320,34 @@ mod tests {
         // f should be a Value::Function
         let mut ast = Ast::new();
 
-        let x1 = ast.add_expr(Expr::Var("x".into()), Span::new(17, 18));
-        let x2 = ast.add_expr(Expr::Var("x".into()), Span::new(21, 22));
-        let body_expr =
-            ast.add_expr(Expr::Binary(x1, BinOp::Mul, x2), Span::new(17, 22));
+        let x1 = ast
+            .add_expr(Expr::Var("x".into()), Span::new(17, 18))
+            .unwrap();
+        let x2 = ast
+            .add_expr(Expr::Var("x".into()), Span::new(21, 22))
+            .unwrap();
+        let body_expr = ast
+            .add_expr(Expr::Binary(x1, BinOp::Mul, x2), Span::new(17, 22))
+            .unwrap();
         let body = ast
-            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(15, 24));
-        let fun = ast.add_stmt(
-            Stmt::Fun {
-                name: "square".into(),
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(0, 24),
-        );
+            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(15, 24))
+            .unwrap();
+        let fun = ast
+            .add_stmt(
+                Stmt::Fun {
+                    name: "square".into(),
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 24),
+            )
+            .unwrap();
 
         // Reference: square (no call)
-        let square_ref =
-            ast.add_expr(Expr::Var("square".into()), Span::new(36, 42));
+        let square_ref = ast
+            .add_expr(Expr::Var("square".into()), Span::new(36, 42))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(fun).await.unwrap();
@@ -4884,65 +5366,89 @@ mod tests {
         let mut ast = Ast::new();
 
         // n <= 1
-        let n1 = ast.add_expr(Expr::Var("n".into()), Span::new(0, 1));
-        let one1 =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(5, 6));
-        let cond =
-            ast.add_expr(Expr::Binary(n1, BinOp::Le, one1), Span::new(0, 6));
+        let n1 = ast
+            .add_expr(Expr::Var("n".into()), Span::new(0, 1))
+            .unwrap();
+        let one1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(5, 6))
+            .unwrap();
+        let cond = ast
+            .add_expr(Expr::Binary(n1, BinOp::Le, one1), Span::new(0, 6))
+            .unwrap();
 
         // Then: 1
-        let then_expr =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11));
+        let then_expr = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(10, 11))
+            .unwrap();
         let then_block = ast
-            .add_expr(Expr::Block(vec![], Some(then_expr)), Span::new(8, 12));
+            .add_expr(Expr::Block(vec![], Some(then_expr)), Span::new(8, 12))
+            .unwrap();
 
         // Else: n * factorial(n - 1)
-        let n2 = ast.add_expr(Expr::Var("n".into()), Span::new(20, 21));
-        let n3 = ast.add_expr(Expr::Var("n".into()), Span::new(35, 36));
-        let one2 =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(39, 40));
-        let n_minus_1 =
-            ast.add_expr(Expr::Binary(n3, BinOp::Sub, one2), Span::new(35, 40));
-        let rec_callee =
-            ast.add_expr(Expr::Var("factorial".into()), Span::new(24, 33));
-        let rec_call = ast.add_expr(
-            Expr::Call(rec_callee, smallvec::smallvec![n_minus_1]),
-            Span::new(24, 41),
-        );
-        let else_expr = ast.add_expr(
-            Expr::Binary(n2, BinOp::Mul, rec_call),
-            Span::new(20, 41),
-        );
+        let n2 = ast
+            .add_expr(Expr::Var("n".into()), Span::new(20, 21))
+            .unwrap();
+        let n3 = ast
+            .add_expr(Expr::Var("n".into()), Span::new(35, 36))
+            .unwrap();
+        let one2 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(39, 40))
+            .unwrap();
+        let n_minus_1 = ast
+            .add_expr(Expr::Binary(n3, BinOp::Sub, one2), Span::new(35, 40))
+            .unwrap();
+        let rec_callee = ast
+            .add_expr(Expr::Var("factorial".into()), Span::new(24, 33))
+            .unwrap();
+        let rec_call = ast
+            .add_expr(
+                Expr::Call(rec_callee, smallvec::smallvec![n_minus_1]),
+                Span::new(24, 41),
+            )
+            .unwrap();
+        let else_expr = ast
+            .add_expr(Expr::Binary(n2, BinOp::Mul, rec_call), Span::new(20, 41))
+            .unwrap();
         let else_block = ast
-            .add_expr(Expr::Block(vec![], Some(else_expr)), Span::new(18, 43));
+            .add_expr(Expr::Block(vec![], Some(else_expr)), Span::new(18, 43))
+            .unwrap();
 
         // IF expr
-        let if_expr = ast.add_expr(
-            Expr::If(cond, then_block, Some(else_block)),
-            Span::new(0, 43),
-        );
-        let body =
-            ast.add_expr(Expr::Block(vec![], Some(if_expr)), Span::new(0, 45));
+        let if_expr = ast
+            .add_expr(
+                Expr::If(cond, then_block, Some(else_block)),
+                Span::new(0, 43),
+            )
+            .unwrap();
+        let body = ast
+            .add_expr(Expr::Block(vec![], Some(if_expr)), Span::new(0, 45))
+            .unwrap();
 
-        let fun = ast.add_stmt(
-            Stmt::Fun {
-                name: "factorial".into(),
-                params: smallvec::smallvec![("n".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(0, 50),
-        );
+        let fun = ast
+            .add_stmt(
+                Stmt::Fun {
+                    name: "factorial".into(),
+                    params: smallvec::smallvec![("n".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 50),
+            )
+            .unwrap();
 
         // Call: factorial(5)
-        let five =
-            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(60, 61));
-        let callee =
-            ast.add_expr(Expr::Var("factorial".into()), Span::new(52, 61));
-        let call = ast.add_expr(
-            Expr::Call(callee, smallvec::smallvec![five]),
-            Span::new(52, 62),
-        );
+        let five = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(60, 61))
+            .unwrap();
+        let callee = ast
+            .add_expr(Expr::Var("factorial".into()), Span::new(52, 61))
+            .unwrap();
+        let call = ast
+            .add_expr(
+                Expr::Call(callee, smallvec::smallvec![five]),
+                Span::new(52, 62),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(fun).await.unwrap();
@@ -4955,24 +5461,30 @@ mod tests {
     async fn fun_display() {
         // Function displays as <function name(n)>
         let mut ast = Ast::new();
-        let body =
-            ast.add_expr(Expr::Literal(Literal::Int(42)), Span::new(15, 17));
-        let body_block =
-            ast.add_expr(Expr::Block(vec![], Some(body)), Span::new(13, 19));
-        let fun = ast.add_stmt(
-            Stmt::Fun {
-                name: "test".into(),
-                params: smallvec::smallvec![
-                    ("x".into(), None),
-                    ("y".into(), None)
-                ],
-                ret: None,
-                body: body_block,
-            },
-            Span::new(0, 19),
-        );
+        let body = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(15, 17))
+            .unwrap();
+        let body_block = ast
+            .add_expr(Expr::Block(vec![], Some(body)), Span::new(13, 19))
+            .unwrap();
+        let fun = ast
+            .add_stmt(
+                Stmt::Fun {
+                    name: "test".into(),
+                    params: smallvec::smallvec![
+                        ("x".into(), None),
+                        ("y".into(), None)
+                    ],
+                    ret: None,
+                    body: body_block,
+                },
+                Span::new(0, 19),
+            )
+            .unwrap();
 
-        let fun_ref = ast.add_expr(Expr::Var("test".into()), Span::new(20, 24));
+        let fun_ref = ast
+            .add_expr(Expr::Var("test".into()), Span::new(20, 24))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(fun).await.unwrap();
@@ -4990,41 +5502,57 @@ mod tests {
         let mut ast = Ast::new();
 
         // Closure: x => x + 1
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
-        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(4, 5));
-        let body =
-            ast.add_expr(Expr::Binary(x, BinOp::Add, one), Span::new(0, 5));
-        let closure = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(0, 10),
-        );
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(0, 1))
+            .unwrap();
+        let one = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(4, 5))
+            .unwrap();
+        let body = ast
+            .add_expr(Expr::Binary(x, BinOp::Add, one), Span::new(0, 5))
+            .unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 10),
+            )
+            .unwrap();
 
         // Object: { inc: closure }
-        let obj = ast.add_expr(
-            Expr::Object(vec![("inc".into(), closure)]),
-            Span::new(10, 30),
-        );
+        let obj = ast
+            .add_expr(
+                Expr::Object(vec![("inc".into(), closure)]),
+                Span::new(10, 30),
+            )
+            .unwrap();
 
         // LET ops = obj
-        let let_ops =
-            ast.add_stmt(Stmt::Let("ops".into(), None, obj), Span::new(0, 35));
+        let let_ops = ast
+            .add_stmt(Stmt::Let("ops".into(), None, obj), Span::new(0, 35))
+            .unwrap();
 
         // ops.inc
-        let ops_var = ast.add_expr(Expr::Var("ops".into()), Span::new(40, 43));
-        let field_access =
-            ast.add_expr(Expr::Field(ops_var, "inc".into()), Span::new(40, 47));
+        let ops_var = ast
+            .add_expr(Expr::Var("ops".into()), Span::new(40, 43))
+            .unwrap();
+        let field_access = ast
+            .add_expr(Expr::Field(ops_var, "inc".into()), Span::new(40, 47))
+            .unwrap();
 
         // ops.inc(5)
-        let five =
-            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(48, 49));
-        let call = ast.add_expr(
-            Expr::Call(field_access, smallvec::smallvec![five]),
-            Span::new(40, 50),
-        );
+        let five = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(48, 49))
+            .unwrap();
+        let call = ast
+            .add_expr(
+                Expr::Call(field_access, smallvec::smallvec![five]),
+                Span::new(40, 50),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(let_ops).await.unwrap();
@@ -5040,53 +5568,70 @@ mod tests {
         let mut ast = Ast::new();
 
         // Closure body: x + n
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
-        let n = ast.add_expr(Expr::Var("n".into()), Span::new(4, 5));
-        let add_expr =
-            ast.add_expr(Expr::Binary(x, BinOp::Add, n), Span::new(0, 5));
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(0, 1))
+            .unwrap();
+        let n = ast
+            .add_expr(Expr::Var("n".into()), Span::new(4, 5))
+            .unwrap();
+        let add_expr = ast
+            .add_expr(Expr::Binary(x, BinOp::Add, n), Span::new(0, 5))
+            .unwrap();
 
         // Closure: x => x + n
-        let closure = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body: add_expr,
-            },
-            Span::new(0, 10),
-        );
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body: add_expr,
+                },
+                Span::new(0, 10),
+            )
+            .unwrap();
 
         // Function body block containing closure
-        let body =
-            ast.add_expr(Expr::Block(vec![], Some(closure)), Span::new(0, 15));
+        let body = ast
+            .add_expr(Expr::Block(vec![], Some(closure)), Span::new(0, 15))
+            .unwrap();
 
         // FUN make_adder (n) { ... }
-        let fun = ast.add_stmt(
-            Stmt::Fun {
-                name: "make_adder".into(),
-                params: smallvec::smallvec![("n".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(0, 20),
-        );
+        let fun = ast
+            .add_stmt(
+                Stmt::Fun {
+                    name: "make_adder".into(),
+                    params: smallvec::smallvec![("n".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 20),
+            )
+            .unwrap();
 
         // make_adder(5)
-        let five =
-            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(30, 31));
-        let callee1 =
-            ast.add_expr(Expr::Var("make_adder".into()), Span::new(25, 35));
-        let call1 = ast.add_expr(
-            Expr::Call(callee1, smallvec::smallvec![five]),
-            Span::new(25, 32),
-        );
+        let five = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(30, 31))
+            .unwrap();
+        let callee1 = ast
+            .add_expr(Expr::Var("make_adder".into()), Span::new(25, 35))
+            .unwrap();
+        let call1 = ast
+            .add_expr(
+                Expr::Call(callee1, smallvec::smallvec![five]),
+                Span::new(25, 32),
+            )
+            .unwrap();
 
         // make_adder(5)(10)
-        let ten =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(33, 35));
-        let call2 = ast.add_expr(
-            Expr::Call(call1, smallvec::smallvec![ten]),
-            Span::new(25, 36),
-        );
+        let ten = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(33, 35))
+            .unwrap();
+        let call2 = ast
+            .add_expr(
+                Expr::Call(call1, smallvec::smallvec![ten]),
+                Span::new(25, 36),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(fun).await.unwrap();
@@ -5101,28 +5646,38 @@ mod tests {
         let mut ast = Ast::new();
 
         // Closure body: x * 2
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(0, 1));
-        let two = ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5));
-        let body =
-            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(0, 5));
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(0, 1))
+            .unwrap();
+        let two = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5))
+            .unwrap();
+        let body = ast
+            .add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(0, 5))
+            .unwrap();
 
         // Closure: x => x * 2
-        let closure = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(0, 10),
-        );
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 10),
+            )
+            .unwrap();
 
         // (closure)(21)
-        let arg =
-            ast.add_expr(Expr::Literal(Literal::Int(21)), Span::new(12, 14));
-        let call = ast.add_expr(
-            Expr::Call(closure, smallvec::smallvec![arg]),
-            Span::new(0, 15),
-        );
+        let arg = ast
+            .add_expr(Expr::Literal(Literal::Int(21)), Span::new(12, 14))
+            .unwrap();
+        let call = ast
+            .add_expr(
+                Expr::Call(closure, smallvec::smallvec![arg]),
+                Span::new(0, 15),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(call).await.unwrap();
@@ -5139,44 +5694,61 @@ mod tests {
         let mut ast = Ast::new();
 
         // Type expression for Int
-        let int_ty = ast.add_type_expr(
-            crate::ast::AstTypeExpr::Named("Int".into()),
-            Span::new(0, 3),
-        );
+        let int_ty = ast
+            .add_type_expr(
+                crate::ast::AstTypeExpr::Named("Int".into()),
+                Span::new(0, 3),
+            )
+            .unwrap();
 
         // Function body: a + b
-        let a = ast.add_expr(Expr::Var("a".into()), Span::new(20, 21));
-        let b = ast.add_expr(Expr::Var("b".into()), Span::new(24, 25));
-        let body_expr =
-            ast.add_expr(Expr::Binary(a, BinOp::Add, b), Span::new(20, 25));
+        let a = ast
+            .add_expr(Expr::Var("a".into()), Span::new(20, 21))
+            .unwrap();
+        let b = ast
+            .add_expr(Expr::Var("b".into()), Span::new(24, 25))
+            .unwrap();
+        let body_expr = ast
+            .add_expr(Expr::Binary(a, BinOp::Add, b), Span::new(20, 25))
+            .unwrap();
         let body = ast
-            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(18, 27));
+            .add_expr(Expr::Block(vec![], Some(body_expr)), Span::new(18, 27))
+            .unwrap();
 
-        let fun = ast.add_stmt(
-            Stmt::Fun {
-                name: "add".into(),
-                params: smallvec::smallvec![
-                    ("a".into(), Some(int_ty)),
-                    ("b".into(), Some(int_ty))
-                ],
-                ret: None,
-                body,
-            },
-            Span::new(0, 30),
-        );
+        let fun = ast
+            .add_stmt(
+                Stmt::Fun {
+                    name: "add".into(),
+                    params: smallvec::smallvec![
+                        ("a".into(), Some(int_ty)),
+                        ("b".into(), Some(int_ty))
+                    ],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 30),
+            )
+            .unwrap();
 
         // Call: add("x", 1)
-        let str_arg = ast.add_expr(
-            Expr::Literal(Literal::String("x".into())),
-            Span::new(35, 38),
-        );
-        let int_arg =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(40, 41));
-        let callee = ast.add_expr(Expr::Var("add".into()), Span::new(32, 35));
-        let call = ast.add_expr(
-            Expr::Call(callee, smallvec::smallvec![str_arg, int_arg]),
-            Span::new(32, 42),
-        );
+        let str_arg = ast
+            .add_expr(
+                Expr::Literal(Literal::String("x".into())),
+                Span::new(35, 38),
+            )
+            .unwrap();
+        let int_arg = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(40, 41))
+            .unwrap();
+        let callee = ast
+            .add_expr(Expr::Var("add".into()), Span::new(32, 35))
+            .unwrap();
+        let call = ast
+            .add_expr(
+                Expr::Call(callee, smallvec::smallvec![str_arg, int_arg]),
+                Span::new(32, 42),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(fun).await.unwrap();
@@ -5195,35 +5767,46 @@ mod tests {
         let mut ast = Ast::new();
 
         // Type expression for Int
-        let int_ty = ast.add_type_expr(
-            crate::ast::AstTypeExpr::Named("Int".into()),
-            Span::new(0, 3),
-        );
+        let int_ty = ast
+            .add_type_expr(
+                crate::ast::AstTypeExpr::Named("Int".into()),
+                Span::new(0, 3),
+            )
+            .unwrap();
 
         // Function body: "not an int"
-        let str_lit = ast.add_expr(
-            Expr::Literal(Literal::String("not an int".into())),
-            Span::new(20, 32),
-        );
-        let body =
-            ast.add_expr(Expr::Block(vec![], Some(str_lit)), Span::new(18, 34));
+        let str_lit = ast
+            .add_expr(
+                Expr::Literal(Literal::String("not an int".into())),
+                Span::new(20, 32),
+            )
+            .unwrap();
+        let body = ast
+            .add_expr(Expr::Block(vec![], Some(str_lit)), Span::new(18, 34))
+            .unwrap();
 
-        let fun = ast.add_stmt(
-            Stmt::Fun {
-                name: "bad".into(),
-                params: smallvec::smallvec![],
-                ret: Some(int_ty),
-                body,
-            },
-            Span::new(0, 35),
-        );
+        let fun = ast
+            .add_stmt(
+                Stmt::Fun {
+                    name: "bad".into(),
+                    params: smallvec::smallvec![],
+                    ret: Some(int_ty),
+                    body,
+                },
+                Span::new(0, 35),
+            )
+            .unwrap();
 
         // Call: bad()
-        let callee = ast.add_expr(Expr::Var("bad".into()), Span::new(40, 43));
-        let call = ast.add_expr(
-            Expr::Call(callee, smallvec::smallvec![]),
-            Span::new(40, 45),
-        );
+        let callee = ast
+            .add_expr(Expr::Var("bad".into()), Span::new(40, 43))
+            .unwrap();
+        let call = ast
+            .add_expr(
+                Expr::Call(callee, smallvec::smallvec![]),
+                Span::new(40, 45),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(fun).await.unwrap();
@@ -5241,28 +5824,37 @@ mod tests {
         // 5 |> (x => x * 2) -> 10
         let mut ast = Ast::new();
 
-        let five =
-            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
+        let five = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1))
+            .unwrap();
 
         // Closure: x => x * 2
-        let x = ast.add_expr(Expr::Var("x".into()), Span::new(6, 7));
-        let two =
-            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(12, 13));
-        let mul =
-            ast.add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(6, 13));
-        let closure = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body: mul,
-            },
-            Span::new(4, 14),
-        );
+        let x = ast
+            .add_expr(Expr::Var("x".into()), Span::new(6, 7))
+            .unwrap();
+        let two = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(12, 13))
+            .unwrap();
+        let mul = ast
+            .add_expr(Expr::Binary(x, BinOp::Mul, two), Span::new(6, 13))
+            .unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body: mul,
+                },
+                Span::new(4, 14),
+            )
+            .unwrap();
 
-        let pipe = ast.add_expr(
-            Expr::Binary(five, BinOp::Pipe, closure),
-            Span::new(0, 14),
-        );
+        let pipe = ast
+            .add_expr(
+                Expr::Binary(five, BinOp::Pipe, closure),
+                Span::new(0, 14),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(pipe).await.unwrap();
@@ -5276,33 +5868,44 @@ mod tests {
         let mut ast = Ast::new();
 
         // Function body: x * 2
-        let x_body = ast.add_expr(Expr::Var("x".into()), Span::new(18, 19));
-        let two =
-            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(22, 23));
+        let x_body = ast
+            .add_expr(Expr::Var("x".into()), Span::new(18, 19))
+            .unwrap();
+        let two = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(22, 23))
+            .unwrap();
         let mul = ast
-            .add_expr(Expr::Binary(x_body, BinOp::Mul, two), Span::new(18, 23));
-        let body =
-            ast.add_expr(Expr::Block(vec![], Some(mul)), Span::new(16, 25));
+            .add_expr(Expr::Binary(x_body, BinOp::Mul, two), Span::new(18, 23))
+            .unwrap();
+        let body = ast
+            .add_expr(Expr::Block(vec![], Some(mul)), Span::new(16, 25))
+            .unwrap();
 
-        let fun = ast.add_stmt(
-            Stmt::Fun {
-                name: "double".into(),
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body,
-            },
-            Span::new(0, 26),
-        );
+        let fun = ast
+            .add_stmt(
+                Stmt::Fun {
+                    name: "double".into(),
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body,
+                },
+                Span::new(0, 26),
+            )
+            .unwrap();
 
         // 5 |> double
-        let five =
-            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(30, 31));
-        let func_ref =
-            ast.add_expr(Expr::Var("double".into()), Span::new(35, 41));
-        let pipe = ast.add_expr(
-            Expr::Binary(five, BinOp::Pipe, func_ref),
-            Span::new(30, 41),
-        );
+        let five = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(30, 31))
+            .unwrap();
+        let func_ref = ast
+            .add_expr(Expr::Var("double".into()), Span::new(35, 41))
+            .unwrap();
+        let pipe = ast
+            .add_expr(
+                Expr::Binary(five, BinOp::Pipe, func_ref),
+                Span::new(30, 41),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         interp.exec(fun).await.unwrap();
@@ -5315,44 +5918,59 @@ mod tests {
         // 5 |> (x => x * 2) |> (x => x + 1) -> 11
         let mut ast = Ast::new();
 
-        let five =
-            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
+        let five = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1))
+            .unwrap();
 
         // Closure 1: x => x * 2
-        let x1 = ast.add_expr(Expr::Var("x".into()), Span::new(6, 7));
-        let two =
-            ast.add_expr(Expr::Literal(Literal::Int(2)), Span::new(12, 13));
-        let mul =
-            ast.add_expr(Expr::Binary(x1, BinOp::Mul, two), Span::new(6, 13));
-        let c1 = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body: mul,
-            },
-            Span::new(4, 14),
-        );
+        let x1 = ast
+            .add_expr(Expr::Var("x".into()), Span::new(6, 7))
+            .unwrap();
+        let two = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(12, 13))
+            .unwrap();
+        let mul = ast
+            .add_expr(Expr::Binary(x1, BinOp::Mul, two), Span::new(6, 13))
+            .unwrap();
+        let c1 = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body: mul,
+                },
+                Span::new(4, 14),
+            )
+            .unwrap();
 
         // Closure 2: x => x + 1
-        let x2 = ast.add_expr(Expr::Var("x".into()), Span::new(22, 23));
-        let one =
-            ast.add_expr(Expr::Literal(Literal::Int(1)), Span::new(28, 29));
-        let add =
-            ast.add_expr(Expr::Binary(x2, BinOp::Add, one), Span::new(22, 29));
-        let c2 = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![("x".into(), None)],
-                ret: None,
-                body: add,
-            },
-            Span::new(20, 30),
-        );
+        let x2 = ast
+            .add_expr(Expr::Var("x".into()), Span::new(22, 23))
+            .unwrap();
+        let one = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(28, 29))
+            .unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(x2, BinOp::Add, one), Span::new(22, 29))
+            .unwrap();
+        let c2 = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body: add,
+                },
+                Span::new(20, 30),
+            )
+            .unwrap();
 
         // (5 |> c1) |> c2
-        let p1 =
-            ast.add_expr(Expr::Binary(five, BinOp::Pipe, c1), Span::new(0, 15));
-        let p2 =
-            ast.add_expr(Expr::Binary(p1, BinOp::Pipe, c2), Span::new(0, 31));
+        let p1 = ast
+            .add_expr(Expr::Binary(five, BinOp::Pipe, c1), Span::new(0, 15))
+            .unwrap();
+        let p2 = ast
+            .add_expr(Expr::Binary(p1, BinOp::Pipe, c2), Span::new(0, 31))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(p2).await.unwrap();
@@ -5364,12 +5982,15 @@ mod tests {
         // 5 |> 10 -> error (10 is not a function)
         let mut ast = Ast::new();
 
-        let five =
-            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
-        let ten =
-            ast.add_expr(Expr::Literal(Literal::Int(10)), Span::new(5, 7));
-        let pipe =
-            ast.add_expr(Expr::Binary(five, BinOp::Pipe, ten), Span::new(0, 7));
+        let five = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1))
+            .unwrap();
+        let ten = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(5, 7))
+            .unwrap();
+        let pipe = ast
+            .add_expr(Expr::Binary(five, BinOp::Pipe, ten), Span::new(0, 7))
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(pipe).await;
@@ -5384,30 +6005,40 @@ mod tests {
         // 5 |> ((a, b) => a + b) -> error (arity mismatch)
         let mut ast = Ast::new();
 
-        let five =
-            ast.add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1));
+        let five = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1))
+            .unwrap();
 
         // Closure: (a, b) => a + b (expects 2 args)
-        let a = ast.add_expr(Expr::Var("a".into()), Span::new(12, 13));
-        let b = ast.add_expr(Expr::Var("b".into()), Span::new(16, 17));
-        let add =
-            ast.add_expr(Expr::Binary(a, BinOp::Add, b), Span::new(12, 17));
-        let closure = ast.add_expr(
-            Expr::Closure {
-                params: smallvec::smallvec![
-                    ("a".into(), None),
-                    ("b".into(), None)
-                ],
-                ret: None,
-                body: add,
-            },
-            Span::new(5, 18),
-        );
+        let a = ast
+            .add_expr(Expr::Var("a".into()), Span::new(12, 13))
+            .unwrap();
+        let b = ast
+            .add_expr(Expr::Var("b".into()), Span::new(16, 17))
+            .unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(a, BinOp::Add, b), Span::new(12, 17))
+            .unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![
+                        ("a".into(), None),
+                        ("b".into(), None)
+                    ],
+                    ret: None,
+                    body: add,
+                },
+                Span::new(5, 18),
+            )
+            .unwrap();
 
-        let pipe = ast.add_expr(
-            Expr::Binary(five, BinOp::Pipe, closure),
-            Span::new(0, 18),
-        );
+        let pipe = ast
+            .add_expr(
+                Expr::Binary(five, BinOp::Pipe, closure),
+                Span::new(0, 18),
+            )
+            .unwrap();
 
         let mut interp = test_interp(&ast);
         let result = interp.eval(pipe).await;
