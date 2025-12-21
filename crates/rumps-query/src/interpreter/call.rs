@@ -32,30 +32,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                 body,
                 env,
             } => {
-                self.call_closure_with_vals(
-                    &params,
-                    ret,
-                    body,
-                    &env,
-                    &[arg_id],
-                    span,
-                )
-                .await
+                self.invoke_closure(&params, ret, body, &env, &[arg_id], span)
+                    .await
             }
             Value::Function {
                 params, ret, body, ..
             } => {
-                self.call_function_with_vals(
-                    &params,
-                    ret,
-                    body,
-                    &[arg_id],
-                    span,
-                )
-                .await
+                self.invoke_function(&params, ret, body, &[arg_id], span)
+                    .await
             }
             Value::ModuleFn { path } => {
-                self.call_module_fn_with_vals(&path, &[arg_id], span).await
+                self.invoke_module_fn(&path, &[arg_id], span).await
             }
             _ => Err(Error::type_err(
                 span,
@@ -67,9 +54,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Call a closure with pre-evaluated arguments.
+    /// Invoke a closure with pre-evaluated arguments.
     #[async_recursion]
-    async fn call_closure_with_vals(
+    async fn invoke_closure(
         &mut self,
         params: &[(StringId, Option<TypeExprId>)],
         ret: Option<TypeExprId>,
@@ -107,9 +94,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Call a named function with pre-evaluated arguments.
+    /// Invoke a named function with pre-evaluated arguments.
     #[async_recursion]
-    async fn call_function_with_vals(
+    async fn invoke_function(
         &mut self,
         params: &[(StringId, Option<TypeExprId>)],
         ret: Option<TypeExprId>,
@@ -269,11 +256,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         })
     }
 
-    /// Call a module function with pre-evaluated arguments.
-    ///
-    /// Used by pipeline and other contexts where arguments are already values.
+    /// Invoke a module function with pre-evaluated arguments.
     #[async_recursion]
-    pub(super) async fn call_module_fn_with_vals(
+    pub(super) async fn invoke_module_fn(
         &mut self,
         path: &[StringId],
         args: &[ValueId],
@@ -300,12 +285,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 )
             })?;
 
-        self.call_primitive_with_vals(prim, args, span).await
+        self.invoke_primitive(prim, args, span).await
     }
 
-    /// Call a primitive with pre-evaluated arguments.
+    /// Invoke a primitive with pre-evaluated arguments.
     #[async_recursion]
-    async fn call_primitive_with_vals(
+    async fn invoke_primitive(
         &mut self,
         prim: PrimFn,
         args: &[ValueId],
@@ -347,9 +332,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 params, ret, body, ..
             } => self.call_function(&params, ret, body, args, span).await,
             Value::ModuleFn { path } => {
-                // Evaluate arguments first, then call
-                let arg_vals = self.eval_args(args).await?;
-                self.call_module_fn_with_vals(&path, &arg_vals, span).await
+                let vals = self.eval_args(args).await?;
+                self.invoke_module_fn(&path, &vals, span).await
             }
             _ => Err(Error::runtime(
                 span,
@@ -361,7 +345,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Call a named function (no captured environment).
+    /// Call a named function with expression arguments.
     #[async_recursion]
     pub(super) async fn call_function(
         &mut self,
@@ -371,7 +355,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
-        // Check arity
         if params.len() != args.len() {
             Err(Error::runtime(
                 span,
@@ -382,25 +365,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ),
             ))
         } else {
-            // Evaluate arguments
-            let arg_vals = self.eval_args(args).await?;
-
-            // Push new scope and bind parameters
-            self.env.scopes.push();
-            self.bind_params(params, &arg_vals, span)?;
-
-            // Evaluate body
-            let result = self.eval(body).await;
-
-            // Pop scope
-            self.env.scopes.pop();
-
-            // Validate return type if annotated
-            result.and_then(|val| self.check_return_type(val, ret, span))
+            let vals = self.eval_args(args).await?;
+            self.invoke_function(params, ret, body, &vals, span).await
         }
     }
 
-    /// Call a closure (with captured environment).
+    /// Call a closure with expression arguments.
     #[async_recursion]
     pub(super) async fn call_closure(
         &mut self,
@@ -411,7 +381,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
-        // Check arity
         if params.len() != args.len() {
             Err(Error::runtime(
                 span,
@@ -422,25 +391,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ),
             ))
         } else {
-            // Evaluate arguments in current environment
-            let arg_vals = self.eval_args(args).await?;
-
-            // Save current scope stack and replace with captured environment
-            let saved_scopes = self.env.scopes.save();
-            self.env.scopes.restore_from_captured(env);
-
-            // Push new scope for parameters
-            self.env.scopes.push();
-            self.bind_params(params, &arg_vals, span)?;
-
-            // Evaluate body
-            let result = self.eval(body).await;
-
-            // Restore original scope stack
-            self.env.scopes.restore(saved_scopes);
-
-            // Validate return type if annotated
-            result.and_then(|val| self.check_return_type(val, ret, span))
+            let vals = self.eval_args(args).await?;
+            self.invoke_closure(params, ret, body, env, &vals, span)
+                .await
         }
     }
 

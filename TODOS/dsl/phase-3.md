@@ -876,7 +876,7 @@ OUTPUT keys-fn({ a: 1, b: 2 })  ; Direct call works
 - [x] Add `interpreter/modules.rs` for path evaluation
 - [x] `Expr::Path` evaluates to `Value::ModuleFn` when path refers to a module function
 - [x] `Value::ModuleFn` can be called directly or used in pipelines
-- [x] Add `call_module_fn_with_vals()` to handle module function calls
+- [x] Add `invoke_module_fn()` to handle module function calls
 - [x] Remove old flat primitive lookup from function call handling
 
 ##### 6.2.4 Object Module Functions
