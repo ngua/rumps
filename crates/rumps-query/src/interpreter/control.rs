@@ -1,4 +1,4 @@
-//! Control flow expressions: `IF`, `MATCH`, blocks, coalesce.
+//! Control flow expressions: `IF`, `MATCH`, blocks, coalesce, unwrap.
 
 use async_recursion::async_recursion;
 use smallvec::SmallVec;
@@ -10,6 +10,65 @@ use crate::value::{TypeId, Value};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
+    /// Unwrap operator implementation (`!` postfix).
+    ///
+    /// Extracts the payload from `Option.Some` or `Result.Ok`; produces a
+    /// runtime error for `Option.None` or `Result.Err(e)`.
+    pub(super) fn unwrap(&self, val: Value, span: Span) -> Result<Value> {
+        let is_option = |ty_expr| {
+            self.type_exprs
+                .base_type(ty_expr)
+                .is_some_and(|t| t == TypeId::OPTION)
+        };
+        let is_result = |ty_expr| {
+            self.type_exprs
+                .base_type(ty_expr)
+                .is_some_and(|t| t == TypeId::RESULT)
+        };
+
+        match &val {
+            // Option.Some(v) -> v
+            Value::Tagged(ty_expr, 1, payload) if is_option(*ty_expr) => {
+                payload
+                    .first()
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(span, "Option.Some missing payload")
+                    })
+            }
+            // Option.None -> error
+            Value::Tagged(ty_expr, 0, _) if is_option(*ty_expr) => {
+                Err(Error::runtime(span, "cannot unwrap Option.None"))
+            }
+            // Result.Ok(v) -> v
+            Value::Tagged(ty_expr, 0, payload) if is_result(*ty_expr) => {
+                payload
+                    .first()
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(span, "Result.Ok missing payload")
+                    })
+            }
+            // Result.Err(e) -> error with stringified e
+            Value::Tagged(ty_expr, 1, payload) if is_result(*ty_expr) => {
+                let err_msg = payload
+                    .first()
+                    .and_then(|id| self.arena.get(*id))
+                    .map(|v| self.stringify(v))
+                    .unwrap_or_else(|| "unknown error".into());
+                Err(Error::runtime(span, format!("unwrap failed: {err_msg}")))
+            }
+            // Other types -> type error
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "`!` (unwrap) requires Option or Result; got {}",
+                    val.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
     /// Null-coalescing operator implementation.
     ///
     /// Unwraps `Option` or `Result` values, falling back to rhs on None/Err:

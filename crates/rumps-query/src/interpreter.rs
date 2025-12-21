@@ -280,6 +280,10 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Closure { params, ret, body } => {
                 self.closure(&params, ret, body)
             }
+            Expr::Unwrap(inner) => {
+                let val = self.eval(inner).await?;
+                self.unwrap(val, span)
+            }
         }
     }
 }

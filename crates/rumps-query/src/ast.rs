@@ -615,6 +615,13 @@ pub(crate) enum Expr {
         ret: Option<AstTypeExprId>,
         body: ExprId,
     },
+
+    /// Unwrap: `expr!`
+    ///
+    /// Extracts the payload from `Option.Some` or `Result.Ok`; produces a
+    /// runtime error for `Option.None` or `Result.Err(e)` (where `e` is
+    /// stringified in the error message).
+    Unwrap(ExprId),
 }
 
 /// A statement node.

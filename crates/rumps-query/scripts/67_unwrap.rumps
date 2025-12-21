@@ -1,0 +1,38 @@
+; Test postfix `!` unwrap operator
+
+; Unwrap Option.Some
+LET some-val = Option.Some(42)
+OUTPUT some-val!
+
+; Unwrap Result.Ok
+LET ok-val = Result.Ok("success")
+OUTPUT ok-val!
+
+; Chained with field access
+LET obj = { x: Option.Some(99) }
+OUTPUT obj.x!
+
+; Chained with function call
+FUN make-some (n) { Option.Some(n * 2) }
+OUTPUT make-some(25)!
+
+; Unwrap result from Object.entries (which returns Result)
+LET entries = Object.entries({ a: 1, b: 2 })!
+OUTPUT entries
+
+; Double unwrap (nested Option)
+LET nested = Option.Some(Option.Some("deep"))
+OUTPUT nested!!
+
+; Combining with other postfix ops
+LET arr = [Option.Some(10), Option.Some(20)]
+OUTPUT arr[0]!
+OUTPUT arr[1]!
+
+; In arithmetic expression
+LET num = Option.Some(5)
+OUTPUT num! * 10
+
+; With pipeline
+LET doubled = { val: 3 } |> (o => Option.Some(o.val * 2))
+OUTPUT doubled!

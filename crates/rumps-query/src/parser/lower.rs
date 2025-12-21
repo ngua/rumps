@@ -218,6 +218,10 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
                 .collect::<Result<Vec<_>>>()?;
             Expr::Match(scrutinee_id, arms_lowered)
         }
+        cst::ExprKind::Unwrap(inner) => {
+            let inner_id = lower_expr(ast, *inner)?;
+            Expr::Unwrap(inner_id)
+        }
     };
     ast.add_expr(e, span)
 }

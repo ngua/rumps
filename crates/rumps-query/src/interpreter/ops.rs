@@ -204,21 +204,19 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         let (a, b) = match (left, right) {
-            (Value::Int(a), Value::Int(b)) => (*a as f64, *b as f64),
-            (Value::Float(a), Value::Float(b)) => (a.0, b.0),
-            (Value::Int(a), Value::Float(b)) => (*a as f64, b.0),
-            (Value::Float(a), Value::Int(b)) => (a.0, *b as f64),
-            _ => {
-                return Err(Error::type_err(
-                    span,
-                    format!(
-                        "cannot divide {} by {}",
-                        self.type_name(left),
-                        self.type_name(right)
-                    ),
-                ))
-            }
-        };
+            (Value::Int(a), Value::Int(b)) => Ok((*a as f64, *b as f64)),
+            (Value::Float(a), Value::Float(b)) => Ok((a.0, b.0)),
+            (Value::Int(a), Value::Float(b)) => Ok((*a as f64, b.0)),
+            (Value::Float(a), Value::Int(b)) => Ok((a.0, *b as f64)),
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "cannot divide {} by {}",
+                    self.type_name(left),
+                    self.type_name(right)
+                ),
+            )),
+        }?;
         if b == 0.0 {
             Err(Error::runtime(span, "division by zero"))
         } else {
@@ -385,27 +383,29 @@ impl<I: IoContext> Interpreter<'_, I> {
         F: FnOnce(Ordering) -> bool,
     {
         let ord = match (left, right) {
-            (Value::Int(a), Value::Int(b)) => a.cmp(b),
-            (Value::Float(a), Value::Float(b)) => a.cmp(b),
-            (Value::Int(a), Value::Float(b)) => OrderedFloat(*a as f64).cmp(b),
-            (Value::Float(a), Value::Int(b)) => a.cmp(&OrderedFloat(*b as f64)),
+            (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
+            (Value::Float(a), Value::Float(b)) => Ok(a.cmp(b)),
+            (Value::Int(a), Value::Float(b)) => {
+                Ok(OrderedFloat(*a as f64).cmp(b))
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                Ok(a.cmp(&OrderedFloat(*b as f64)))
+            }
             (Value::String(a), Value::String(b)) => {
                 let sa = self.arena.get_str(*a).unwrap_or("");
                 let sb = self.arena.get_str(*b).unwrap_or("");
-                sa.cmp(sb)
+                Ok(sa.cmp(sb))
             }
-            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-            _ => {
-                return Err(Error::type_err(
-                    span,
-                    format!(
-                        "cannot compare {} and {}",
-                        self.type_name(left),
-                        self.type_name(right)
-                    ),
-                ))
-            }
-        };
+            (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "cannot compare {} and {}",
+                    self.type_name(left),
+                    self.type_name(right)
+                ),
+            )),
+        }?;
         Ok(Value::Bool(pred(ord)))
     }
 

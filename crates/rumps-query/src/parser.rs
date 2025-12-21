@@ -1047,7 +1047,12 @@ impl Parser {
             .then_ignore(just(Token::RParen))
             .map_with_span(PostfixOp::Call);
 
-        let postfix_op = choice((field_or_tuple_idx, opt_field, index, call));
+        // Unwrap: `!` (postfix; extracts from Result/Option or errors)
+        let unwrap =
+            just(Token::Bang).map_with_span(|_, span| PostfixOp::Unwrap(span));
+
+        let postfix_op =
+            choice((field_or_tuple_idx, opt_field, index, call, unwrap));
 
         operand
             .then(postfix_op.repeated())
@@ -1082,6 +1087,10 @@ impl Parser {
                 )),
                 PostfixOp::Call(args, _) => Some(cst::Expr::new(
                     cst::ExprKind::Call(Box::new(acc), args),
+                    span,
+                )),
+                PostfixOp::Unwrap(_) => Some(cst::Expr::new(
+                    cst::ExprKind::Unwrap(Box::new(acc)),
                     span,
                 )),
             }
@@ -1657,6 +1666,7 @@ enum PostfixOp {
     TupleIndex(u32, Span),
     Index(Box<cst::Expr>, Span),
     Call(Vec<cst::Expr>, Span),
+    Unwrap(Span),
 }
 
 /// Helper enum for array pattern elements during parsing.
@@ -1677,7 +1687,8 @@ impl PostfixOp {
             | Self::OptionalField(_, s)
             | Self::TupleIndex(_, s)
             | Self::Index(_, s)
-            | Self::Call(_, s) => *s,
+            | Self::Call(_, s)
+            | Self::Unwrap(s) => *s,
         }
     }
 }

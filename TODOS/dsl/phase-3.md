@@ -1217,3 +1217,30 @@ LET base = { name: "Alice", age: 30 }
 LET updated = { ...base, age: 31 }
 OUTPUT updated.age  ; 31
 ```
+
+---
+
+### Implemented: Postfix `!` Unwrap Operator
+
+Postfix `!` operator for unwrapping `Option` and `Result` values was implemented outside the planned phases. This provides a convenient shorthand for users who prefer runtime errors over explicit error handling.
+
+```rumps
+LET val = Option.Some(42)
+OUTPUT val!              ; 42
+
+LET ok = Result.Ok("success")
+OUTPUT ok!               ; success
+
+LET entries = Object.entries({ a: 1 })!
+OUTPUT entries           ; [ (a, 1) ]
+```
+
+Semantics:
+- `Option.Some(v)!` -> `v`
+- `Option.None!` -> runtime error: "cannot unwrap Option.None"
+- `Result.Ok(v)!` -> `v`
+- `Result.Err(e)!` -> runtime error: "unwrap failed: <stringified e>"
+- Other types -> type error
+
+Integration tests: `67_unwrap.rumps`, `68_unwrap_none_err.rumps`,
+`69_unwrap_err.rumps`, `70_unwrap_type_err.rumps`

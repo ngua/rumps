@@ -151,6 +151,12 @@ pub(crate) enum ExprKind {
 
     /// Match expression: `MATCH expr { pattern => body, ... }`.
     Match(Box<Expr>, Vec<MatchArm>),
+
+    /// Unwrap: `expr!`
+    ///
+    /// Extracts the payload from `Option.Some` or `Result.Ok`; produces a
+    /// runtime error for `Option.None` or `Result.Err`.
+    Unwrap(Box<Expr>),
 }
 
 /// A CST statement node with inline span.
