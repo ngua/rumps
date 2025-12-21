@@ -107,8 +107,8 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
-    Literal, MatchArm, MatchPattern, RestPattern, Stmt, StmtId, TypeDefAst,
-    TypePattern, UnOp,
+    Literal, MatchArm, MatchPattern, MatchPatternId, RestPattern, Stmt, StmtId,
+    TypeDefAst, TypePattern, UnOp,
 };
 use crate::env::Environment;
 use crate::io::IoContext;
@@ -2573,7 +2573,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => Err(Error::runtime(span, "non-exhaustive match")),
             Some((arm, rest)) => {
                 // Try to match the pattern
-                match self.try_match_pattern(&arm.pattern, val, span)? {
+                match self.try_match_pattern(arm.pattern, val, span)? {
                     None => self.try_match_arms(val, rest, span).await,
                     Some(bindings) => {
                         // Pattern matched; check guard if present
@@ -2612,11 +2612,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Returns `None` if the pattern does not match.
     fn try_match_pattern(
         &mut self,
-        pat: &MatchPattern,
+        pat_id: MatchPatternId,
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
-        match pat {
+        let pat = self
+            .ast
+            .get_pattern(pat_id)
+            .ok_or_else(|| Error::runtime(span, "invalid pattern id"))?
+            .clone();
+        match &pat {
             MatchPattern::Wildcard => Ok(Some(vec![])),
             MatchPattern::Var(name) => {
                 let name_id = self.arena.intern(name);
@@ -2642,7 +2647,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         ty_name: &str,
         var_name: &str,
-        sub_pats: &[MatchPattern],
+        sub_pats: &[MatchPatternId],
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
@@ -2685,30 +2690,31 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match an object pattern against a value.
     fn try_match_object(
         &mut self,
-        fields: &[(String, MatchPattern)],
+        fields: &[(String, MatchPatternId)],
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
         match val {
             Value::Object(obj) => {
                 // Collect bindings from all field matches
-                fields.iter().try_fold(Some(vec![]), |acc, (fname, pat)| {
-                    acc.map_or(Ok(None), |mut bindings| {
-                        let fid = self.arena.intern(fname);
-                        obj.get(&fid)
-                            .and_then(|&vid| self.arena.get(vid).cloned())
-                            .map_or(Ok(None), |fval| {
-                                self.try_match_pattern(pat, &fval, span).map(
-                                    |maybe_sub| {
-                                        maybe_sub.map(|sub| {
-                                            bindings.extend(sub);
-                                            bindings
+                fields
+                    .iter()
+                    .try_fold(Some(vec![]), |acc, (fname, pat_id)| {
+                        acc.map_or(Ok(None), |mut bindings| {
+                            let fid = self.arena.intern(fname);
+                            obj.get(&fid)
+                                .and_then(|&vid| self.arena.get(vid).cloned())
+                                .map_or(Ok(None), |fval| {
+                                    self.try_match_pattern(*pat_id, &fval, span)
+                                        .map(|maybe_sub| {
+                                            maybe_sub.map(|sub| {
+                                                bindings.extend(sub);
+                                                bindings
+                                            })
                                         })
-                                    },
-                                )
-                            })
+                                })
+                        })
                     })
-                })
             }
             _ => Ok(None),
         }
@@ -2717,7 +2723,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match a tuple pattern against a value.
     fn try_match_tuple(
         &mut self,
-        pats: &[MatchPattern],
+        pats: &[MatchPatternId],
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
@@ -2738,20 +2744,20 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Returns `Some(bindings)` if all patterns match, `None` if any fails.
     fn try_match_all(
         &mut self,
-        pats: &[MatchPattern],
+        pats: &[MatchPatternId],
         val_ids: &[ValueId],
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
         pats.iter().zip(val_ids.iter()).try_fold(
             Some(vec![]),
-            |acc, (pat, &val_id)| {
+            |acc, (&pat_id, &val_id)| {
                 acc.map_or(Ok(None), |mut bindings| {
                     self.arena
                         .get(val_id)
                         .cloned()
                         .ok_or_else(|| Error::runtime(span, "invalid value id"))
                         .and_then(|val| {
-                            self.try_match_pattern(pat, &val, span).map(
+                            self.try_match_pattern(pat_id, &val, span).map(
                                 |maybe_sub| {
                                     maybe_sub.map(|sub| {
                                         bindings.extend(sub);

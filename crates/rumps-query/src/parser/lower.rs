@@ -9,7 +9,8 @@ use smallvec::SmallVec;
 use super::cst;
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId, MatchArm,
-    MatchPattern, RestPattern, Stmt, StmtId, TypeDefAst, VariantAst,
+    MatchPattern, MatchPatternId, RestPattern, Stmt, StmtId, TypeDefAst,
+    VariantAst,
 };
 use crate::Result;
 
@@ -327,7 +328,7 @@ fn lower_variant(ast: &mut Ast, v: cst::VariantCst) -> Result<VariantAst> {
 
 /// Lower a CST match arm to AST.
 fn lower_match_arm(ast: &mut Ast, arm: cst::MatchArm) -> Result<MatchArm> {
-    let pattern = lower_match_pattern(arm.pattern);
+    let pattern = lower_match_pattern(ast, arm.pattern)?;
     let guard = arm.guard.map(|e| lower_expr(ast, e)).transpose()?;
     let body = lower_expr(ast, arm.body)?;
     Ok(MatchArm {
@@ -337,25 +338,36 @@ fn lower_match_arm(ast: &mut Ast, arm: cst::MatchArm) -> Result<MatchArm> {
     })
 }
 
-/// Lower a CST match pattern to AST.
-fn lower_match_pattern(pat: cst::MatchPattern) -> MatchPattern {
-    match pat {
+/// Lower a CST match pattern to AST, allocating into the pattern arena.
+fn lower_match_pattern(
+    ast: &mut Ast,
+    pat: cst::MatchPattern,
+) -> Result<MatchPatternId> {
+    let p = match pat {
         cst::MatchPattern::Wildcard => MatchPattern::Wildcard,
         cst::MatchPattern::Var(name) => MatchPattern::Var(name),
         cst::MatchPattern::Literal(lit) => MatchPattern::Literal(lit),
-        cst::MatchPattern::Variant(ty, var, pats) => MatchPattern::Variant(
-            ty,
-            var,
-            pats.into_iter().map(lower_match_pattern).collect(),
-        ),
-        cst::MatchPattern::Object(fields) => MatchPattern::Object(
-            fields
+        cst::MatchPattern::Variant(ty, var, pats) => {
+            let sub_ids = pats
                 .into_iter()
-                .map(|(k, p)| (k, lower_match_pattern(p)))
-                .collect(),
-        ),
-        cst::MatchPattern::Tuple(pats) => MatchPattern::Tuple(
-            pats.into_iter().map(lower_match_pattern).collect(),
-        ),
-    }
+                .map(|p| lower_match_pattern(ast, p))
+                .collect::<Result<SmallVec<_>>>()?;
+            MatchPattern::Variant(ty, var, sub_ids)
+        }
+        cst::MatchPattern::Object(fields) => {
+            let field_ids = fields
+                .into_iter()
+                .map(|(k, p)| lower_match_pattern(ast, p).map(|id| (k, id)))
+                .collect::<Result<SmallVec<_>>>()?;
+            MatchPattern::Object(field_ids)
+        }
+        cst::MatchPattern::Tuple(pats) => {
+            let elem_ids = pats
+                .into_iter()
+                .map(|p| lower_match_pattern(ast, p))
+                .collect::<Result<SmallVec<_>>>()?;
+            MatchPattern::Tuple(elem_ids)
+        }
+    };
+    ast.add_pattern(p)
 }

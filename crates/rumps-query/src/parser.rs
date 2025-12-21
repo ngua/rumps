@@ -2378,7 +2378,10 @@ mod tests {
         match ast.get_expr(id) {
             Some(Expr::Match(_, arms)) => {
                 assert_eq!(arms.len(), 1);
-                assert_eq!(arms[0].pattern, crate::ast::MatchPattern::Wildcard);
+                assert_eq!(
+                    ast.get_pattern(arms[0].pattern),
+                    Some(&crate::ast::MatchPattern::Wildcard)
+                );
                 assert!(arms[0].guard.is_none());
             }
             _ => panic!("expected Match"),
@@ -2394,14 +2397,17 @@ mod tests {
             Some(Expr::Match(_, arms)) => {
                 assert_eq!(arms.len(), 3);
                 assert_eq!(
-                    arms[0].pattern,
-                    crate::ast::MatchPattern::Literal(Literal::Int(1))
+                    ast.get_pattern(arms[0].pattern),
+                    Some(&crate::ast::MatchPattern::Literal(Literal::Int(1)))
                 );
                 assert_eq!(
-                    arms[1].pattern,
-                    crate::ast::MatchPattern::Literal(Literal::Int(2))
+                    ast.get_pattern(arms[1].pattern),
+                    Some(&crate::ast::MatchPattern::Literal(Literal::Int(2)))
                 );
-                assert_eq!(arms[2].pattern, crate::ast::MatchPattern::Wildcard);
+                assert_eq!(
+                    ast.get_pattern(arms[2].pattern),
+                    Some(&crate::ast::MatchPattern::Wildcard)
+                );
             }
             _ => panic!("expected Match"),
         }
@@ -2416,16 +2422,16 @@ mod tests {
         match ast.get_expr(id) {
             Some(Expr::Match(_, arms)) => {
                 assert_eq!(arms.len(), 2);
-                match &arms[0].pattern {
-                    crate::ast::MatchPattern::Variant(ty, var, pats) => {
+                match ast.get_pattern(arms[0].pattern) {
+                    Some(crate::ast::MatchPattern::Variant(ty, var, pats)) => {
                         assert_eq!(ty, "Option");
                         assert_eq!(var, "Some");
                         assert_eq!(pats.len(), 1);
                     }
                     _ => panic!("expected Variant pattern"),
                 }
-                match &arms[1].pattern {
-                    crate::ast::MatchPattern::Variant(ty, var, pats) => {
+                match ast.get_pattern(arms[1].pattern) {
+                    Some(crate::ast::MatchPattern::Variant(ty, var, pats)) => {
                         assert_eq!(ty, "Option");
                         assert_eq!(var, "None");
                         assert!(pats.is_empty());
@@ -2445,8 +2451,8 @@ mod tests {
         match ast.get_expr(id) {
             Some(Expr::Match(_, arms)) => {
                 assert_eq!(arms.len(), 1);
-                match &arms[0].pattern {
-                    crate::ast::MatchPattern::Tuple(pats) => {
+                match ast.get_pattern(arms[0].pattern) {
+                    Some(crate::ast::MatchPattern::Tuple(pats)) => {
                         assert_eq!(pats.len(), 2);
                     }
                     _ => panic!("expected Tuple pattern"),
@@ -2464,8 +2470,8 @@ mod tests {
         match ast.get_expr(id) {
             Some(Expr::Match(_, arms)) => {
                 assert_eq!(arms.len(), 1);
-                match &arms[0].pattern {
-                    crate::ast::MatchPattern::Object(fields) => {
+                match ast.get_pattern(arms[0].pattern) {
+                    Some(crate::ast::MatchPattern::Object(fields)) => {
                         assert_eq!(fields.len(), 2);
                         assert_eq!(fields[0].0, "name");
                         assert_eq!(fields[1].0, "age");

@@ -82,6 +82,11 @@ pub(crate) struct StmtId(u32);
 #[repr(transparent)]
 pub(crate) struct AstTypeExprId(u32);
 
+/// Index into the match pattern arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub(crate) struct MatchPatternId(u32);
+
 impl ExprId {
     /// The raw index value.
     pub(crate) const fn idx(self) -> usize {
@@ -103,12 +108,20 @@ impl AstTypeExprId {
     }
 }
 
+impl MatchPatternId {
+    /// The raw index value.
+    pub(crate) const fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// The AST arena; owns all expressions and statements.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Ast {
     exprs: WithSpans<Expr>,
     stmts: WithSpans<Stmt>,
     type_exprs: WithSpans<AstTypeExpr>,
+    patterns: Vec<MatchPattern>,
 }
 
 impl Ast {
@@ -189,6 +202,30 @@ impl Ast {
     /// Get the span of a type expression.
     pub(crate) fn type_expr_span(&self, id: AstTypeExprId) -> Option<Span> {
         self.type_exprs.span(id.0)
+    }
+
+    /// Add a match pattern to the arena.
+    pub(crate) fn add_pattern(
+        &mut self,
+        pat: MatchPattern,
+    ) -> Result<MatchPatternId> {
+        let idx = u32::try_from(self.patterns.len()).map_err(|_| {
+            Error::parse(
+                Span::new(0, 0),
+                "pattern arena overflow: exceeded u32::MAX items",
+                vec![],
+            )
+        })?;
+        self.patterns.push(pat);
+        Ok(MatchPatternId(idx))
+    }
+
+    /// Get a match pattern by ID.
+    pub(crate) fn get_pattern(
+        &self,
+        id: MatchPatternId,
+    ) -> Option<&MatchPattern> {
+        self.patterns.get(id.idx())
     }
 }
 
@@ -332,7 +369,7 @@ pub(crate) enum TypePattern {
 /// `LET`), match patterns can include literals and variant constructors for
 /// exhaustive matching against sum types.
 ///
-/// Uses `Vec` instead of `SmallVec` for recursive fields to avoid infinite size.
+/// Uses `MatchPatternId` for recursive references (arena allocation).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MatchPattern {
     /// Wildcard: `_`
@@ -352,29 +389,29 @@ pub(crate) enum MatchPattern {
     ///
     /// Matches a tagged value if the type and variant match, then recursively
     /// matches the payloads against the sub-patterns.
-    Variant(String, String, Vec<Self>),
+    Variant(String, String, SmallVec<[MatchPatternId; 2]>),
 
     /// Object destructuring: `{ name, age }`, `{ name, role: "admin" }`
     ///
     /// Each entry is `(field_name, pattern)`. Shorthand `{ name }` desugars to
     /// `{ name: name }` (i.e., match field and bind to same-named variable).
     /// Additional fields in the value are allowed (partial matching).
-    Object(Vec<(String, Self)>),
+    Object(SmallVec<[(String, MatchPatternId); 4]>),
 
     /// Tuple pattern: `(a, b, c)`
     ///
     /// Matches a tuple of the same arity and recursively matches elements.
-    Tuple(Vec<Self>),
+    Tuple(SmallVec<[MatchPatternId; 4]>),
 }
 
 /// A match arm in a `MATCH` expression.
 ///
 /// Each arm consists of a pattern, an optional guard condition, and a body
 /// expression. Arms are tried in order; the first matching arm is evaluated.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MatchArm {
     /// The pattern to match against the scrutinee.
-    pub(crate) pattern: MatchPattern,
+    pub(crate) pattern: MatchPatternId,
 
     /// Optional guard condition: `IF cond`.
     ///
