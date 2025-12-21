@@ -8,10 +8,10 @@
 use std::collections::HashMap;
 
 use futures::future::BoxFuture;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
-use crate::value::{StringId, ValueArena, ValueId};
-use crate::Result;
+use crate::value::{StringId, TypeId, Value, ValueArena, ValueId};
+use crate::{Result, Span};
 
 /// Stack of lexical scopes for `LET` bindings.
 ///
@@ -104,11 +104,54 @@ pub(crate) type PrimResult<'a> = BoxFuture<'a, Result<ValueId>>;
 
 /// Context passed to primitive functions during execution.
 ///
-/// Contains references to the value arena for creating/looking up values
-/// and the type expression arena for constructing type annotations.
+/// Contains references to the value arena for creating/looking up values,
+/// the type expression arena for constructing type annotations, and the
+/// call-site span for error reporting.
 pub(crate) struct PrimCtx<'a> {
     pub(crate) arena: &'a mut ValueArena,
     pub(crate) type_exprs: &'a mut crate::value::TypeExprArena,
+    pub(crate) span: Span,
+}
+
+impl PrimCtx<'_> {
+    /// Create a `Result.Ok(v)` value from a `ValueId` already in the arena.
+    pub(crate) fn result_ok(&mut self, v: ValueId) -> ValueId {
+        let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+        let val = self.arena.get(v).cloned().unwrap_or(Value::Int(0));
+        let val_ty = self.type_exprs.named(self.value_base_type(&val));
+        let res_ty = self
+            .type_exprs
+            .app(TypeId::RESULT, smallvec![val_ty, unknown]);
+        let ok = Value::ok(res_ty, v);
+        self.arena.add(ok, self.span)
+    }
+
+    /// Create a `Result.Err(msg)` value from a `ValueId` already in the arena.
+    pub(crate) fn result_err(&mut self, msg: ValueId) -> ValueId {
+        let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+        let str_ty = self.type_exprs.named(TypeId::STRING);
+        let res_ty = self
+            .type_exprs
+            .app(TypeId::RESULT, smallvec![unknown, str_ty]);
+        let err = Value::err(res_ty, msg);
+        self.arena.add(err, self.span)
+    }
+
+    /// Get a simplified base `TypeId` for a value.
+    fn value_base_type(&self, v: &Value) -> TypeId {
+        match v {
+            Value::Bool(_) => TypeId::BOOL,
+            Value::Int(_) => TypeId::INT,
+            Value::Float(_) => TypeId::FLOAT,
+            Value::Char(_) => TypeId::CHAR,
+            Value::String(_) => TypeId::STRING,
+            Value::Array(..) => TypeId::ARRAY,
+            Value::Object(_) => TypeId::OBJECT,
+            Value::Tuple(..) => TypeId::TUPLE,
+            Value::Tagged(_, _, _) => TypeId::UNKNOWN,
+            Value::Closure { .. } | Value::Function { .. } => TypeId::UNKNOWN,
+        }
+    }
 }
 
 /// A built-in primitive function.

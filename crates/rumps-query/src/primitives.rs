@@ -9,8 +9,8 @@ use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
 use crate::env::{PrimCtx, PrimResult};
-use crate::value::{StringId, TypeExprId, TypeId, Value, ValueId};
-use crate::{Error, Span};
+use crate::value::{StringId, TypeId, Value, ValueId};
+use crate::Error;
 
 /// Namespace for built-in primitive functions.
 ///
@@ -59,34 +59,6 @@ fn value_base_type(v: &Value) -> TypeId {
     }
 }
 
-/// Get a type expression for a value.
-fn value_type_expr(ctx: &mut PrimCtx<'_>, v: &Value) -> TypeExprId {
-    ctx.type_exprs.named(value_base_type(v))
-}
-
-/// Create a `Result.Ok(v)` value.
-fn make_result_ok(ctx: &mut PrimCtx<'_>, v: ValueId) -> ValueId {
-    let unknown = ctx.type_exprs.named(TypeId::UNKNOWN);
-    let val = ctx.arena.get(v).cloned().unwrap_or(Value::Int(0));
-    let val_ty = value_type_expr(ctx, &val);
-    let res_ty = ctx
-        .type_exprs
-        .app(TypeId::RESULT, smallvec![val_ty, unknown]);
-    let ok = Value::ok(res_ty, v);
-    ctx.arena.add(ok, Span::default())
-}
-
-/// Create a `Result.Err(msg)` value.
-fn make_result_err(ctx: &mut PrimCtx<'_>, msg: ValueId) -> ValueId {
-    let unknown = ctx.type_exprs.named(TypeId::UNKNOWN);
-    let str_ty = ctx.type_exprs.named(TypeId::STRING);
-    let res_ty = ctx
-        .type_exprs
-        .app(TypeId::RESULT, smallvec![unknown, str_ty]);
-    let err = Value::err(res_ty, msg);
-    ctx.arena.add(err, Span::default())
-}
-
 impl Prim {
     /// `KEYS(obj) -> Array[String]`
     ///
@@ -111,14 +83,12 @@ impl Prim {
                 Value::Object(map) => {
                     let keys: SmallVec<[ValueId; 4]> = map
                         .keys()
-                        .map(|k| {
-                            ctx.arena.add(Value::String(*k), Span::default())
-                        })
+                        .map(|k| ctx.arena.add(Value::String(*k), ctx.span))
                         .collect();
 
                     let str_ty = ctx.type_exprs.named(TypeId::STRING);
                     let arr = Value::Array(str_ty, keys);
-                    Ok(ctx.arena.add(arr, Span::default()))
+                    Ok(ctx.arena.add(arr, ctx.span))
                 }
                 other => Err(Error::runtime_no_span(format!(
                     "KEYS expects Object, got {:?}",
@@ -218,8 +188,8 @@ fn values_from_map(
         None => {
             let unknown = ctx.type_exprs.named(TypeId::UNKNOWN);
             let arr = Value::Array(unknown, SmallVec::new());
-            let arr_id = ctx.arena.add(arr, Span::default());
-            Ok(make_result_ok(ctx, arr_id))
+            let arr_id = ctx.arena.add(arr, ctx.span);
+            Ok(ctx.result_ok(arr_id))
         }
         Some(first_id) => {
             let first_val =
@@ -239,16 +209,15 @@ fn values_from_map(
                 let msg = ctx
                     .arena
                     .intern("VALUES: object contains heterogeneous types");
-                let msg_val =
-                    ctx.arena.add(Value::String(msg), Span::default());
-                Ok(make_result_err(ctx, msg_val))
+                let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
+                Ok(ctx.result_err(msg_val))
             } else {
                 let vals: SmallVec<[ValueId; 4]> =
                     map.values().copied().collect();
-                let elem_ty = value_type_expr(ctx, &first_val);
+                let elem_ty = ctx.type_exprs.named(value_base_type(&first_val));
                 let arr = Value::Array(elem_ty, vals);
-                let arr_id = ctx.arena.add(arr, Span::default());
-                Ok(make_result_ok(ctx, arr_id))
+                let arr_id = ctx.arena.add(arr, ctx.span);
+                Ok(ctx.result_ok(arr_id))
             }
         }
     }
@@ -265,8 +234,8 @@ fn entries_from_map(
         None => {
             let unknown = ctx.type_exprs.named(TypeId::UNKNOWN);
             let arr = Value::Array(unknown, SmallVec::new());
-            let arr_id = ctx.arena.add(arr, Span::default());
-            Ok(make_result_ok(ctx, arr_id))
+            let arr_id = ctx.arena.add(arr, ctx.span);
+            Ok(ctx.result_ok(arr_id))
         }
         Some(first_id) => {
             let first_val =
@@ -286,12 +255,11 @@ fn entries_from_map(
                 let msg = ctx
                     .arena
                     .intern("ENTRIES: object contains heterogeneous types");
-                let msg_val =
-                    ctx.arena.add(Value::String(msg), Span::default());
-                Ok(make_result_err(ctx, msg_val))
+                let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
+                Ok(ctx.result_err(msg_val))
             } else {
                 let str_ty = ctx.type_exprs.named(TypeId::STRING);
-                let val_ty = value_type_expr(ctx, &first_val);
+                let val_ty = ctx.type_exprs.named(value_base_type(&first_val));
                 let tuple_ty = ctx.type_exprs.tuple(smallvec![str_ty, val_ty]);
 
                 let entries: Vec<_> =
@@ -301,16 +269,16 @@ fn entries_from_map(
                     .iter()
                     .map(|(k, v)| {
                         let key_val =
-                            ctx.arena.add(Value::String(*k), Span::default());
+                            ctx.arena.add(Value::String(*k), ctx.span);
                         let tup =
                             Value::Tuple(tuple_ty, smallvec![key_val, *v]);
-                        ctx.arena.add(tup, Span::default())
+                        ctx.arena.add(tup, ctx.span)
                     })
                     .collect();
 
                 let arr = Value::Array(tuple_ty, tuples);
-                let arr_id = ctx.arena.add(arr, Span::default());
-                Ok(make_result_ok(ctx, arr_id))
+                let arr_id = ctx.arena.add(arr, ctx.span);
+                Ok(ctx.result_ok(arr_id))
             }
         }
     }
@@ -358,13 +326,18 @@ fn from_entries_impl(
     })?;
 
     let result = Value::Object(obj);
-    Ok(ctx.arena.add(result, Span::default()))
+    Ok(ctx.arena.add(result, ctx.span))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::value::TypeExprArena;
+    use crate::Span;
+
+    fn span() -> Span {
+        Span::default()
+    }
 
     #[tokio::test]
     async fn keys_empty_object() {
@@ -372,12 +345,13 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
 
         let obj = Value::Object(IndexMap::new());
-        let obj_id = arena.add(obj, Span::default());
+        let obj_id = arena.add(obj, span());
 
         let result = {
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                span: span(),
             };
             Prim::keys(&mut ctx, smallvec![obj_id]).await.unwrap()
         };
@@ -396,20 +370,21 @@ mod tests {
 
         let k1 = arena.intern("a");
         let k2 = arena.intern("b");
-        let v1 = arena.add(Value::Int(1), Span::default());
-        let v2 = arena.add(Value::Int(2), Span::default());
+        let v1 = arena.add(Value::Int(1), span());
+        let v2 = arena.add(Value::Int(2), span());
 
         let mut map = IndexMap::new();
         map.insert(k1, v1);
         map.insert(k2, v2);
 
         let obj = Value::Object(map);
-        let obj_id = arena.add(obj, Span::default());
+        let obj_id = arena.add(obj, span());
 
         let result = {
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                span: span(),
             };
             Prim::keys(&mut ctx, smallvec![obj_id]).await.unwrap()
         };
@@ -438,20 +413,21 @@ mod tests {
 
         let k1 = arena.intern("x");
         let k2 = arena.intern("y");
-        let v1 = arena.add(Value::Int(10), Span::default());
-        let v2 = arena.add(Value::Int(20), Span::default());
+        let v1 = arena.add(Value::Int(10), span());
+        let v2 = arena.add(Value::Int(20), span());
 
         let mut map = IndexMap::new();
         map.insert(k1, v1);
         map.insert(k2, v2);
 
         let obj = Value::Object(map);
-        let obj_id = arena.add(obj, Span::default());
+        let obj_id = arena.add(obj, span());
 
         let result = {
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                span: span(),
             };
             Prim::values(&mut ctx, smallvec![obj_id]).await.unwrap()
         };
@@ -479,21 +455,22 @@ mod tests {
 
         let k1 = arena.intern("x");
         let k2 = arena.intern("y");
-        let v1 = arena.add(Value::Int(10), Span::default());
+        let v1 = arena.add(Value::Int(10), span());
         let s = arena.intern("hello");
-        let v2 = arena.add(Value::String(s), Span::default());
+        let v2 = arena.add(Value::String(s), span());
 
         let mut map = IndexMap::new();
         map.insert(k1, v1);
         map.insert(k2, v2);
 
         let obj = Value::Object(map);
-        let obj_id = arena.add(obj, Span::default());
+        let obj_id = arena.add(obj, span());
 
         let result = {
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                span: span(),
             };
             Prim::values(&mut ctx, smallvec![obj_id]).await.unwrap()
         };
@@ -519,23 +496,24 @@ mod tests {
 
         let k1 = arena.intern("a");
         let k2 = arena.intern("b");
-        let key1 = arena.add(Value::String(k1), Span::default());
-        let key2 = arena.add(Value::String(k2), Span::default());
-        let val1 = arena.add(Value::Int(1), Span::default());
-        let val2 = arena.add(Value::Int(2), Span::default());
+        let key1 = arena.add(Value::String(k1), span());
+        let key2 = arena.add(Value::String(k2), span());
+        let val1 = arena.add(Value::Int(1), span());
+        let val2 = arena.add(Value::Int(2), span());
 
         let tup1 = Value::Tuple(tup_ty, smallvec![key1, val1]);
         let tup2 = Value::Tuple(tup_ty, smallvec![key2, val2]);
-        let t1_id = arena.add(tup1, Span::default());
-        let t2_id = arena.add(tup2, Span::default());
+        let t1_id = arena.add(tup1, span());
+        let t2_id = arena.add(tup2, span());
 
         let arr = Value::Array(tup_ty, smallvec![t1_id, t2_id]);
-        let arr_id = arena.add(arr, Span::default());
+        let arr_id = arena.add(arr, span());
 
         let result = {
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                span: span(),
             };
             Prim::from_entries(&mut ctx, smallvec![arr_id])
                 .await

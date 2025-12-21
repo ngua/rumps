@@ -272,6 +272,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = PrimCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
+            span,
         };
         let result_id = prim(&mut ctx, arg_ids).await?;
 
