@@ -1,3 +1,5 @@
+**NOTE**: When writing `*.rumps` scripts for integration testing, please use `train-case` casing for variables, functions, etc... Avoid other cases.
+
 # Phase 3: User-Defined Types and Pattern Matching
 
 This document tracks the third phase of implementing the RUMPS query language: user-defined sum types, structural object aliases, pattern matching with `MATCH`, regex, and higher-order collection operations.
@@ -781,7 +783,7 @@ These are **primitive functions** registered in the `Environment`, not keywords:
 
 - No special parser handling; they are called like any other function
 - Case-insensitive lookup (like keywords): `MAP`, `Map`, `map` all work
-- Registered via `Environment::register_primitive()` at interpreter startup
+- Registered via `Environment::register_primitive()` at interpreter startup (**NOTE**: already implemented)
 - Use the existing `PrimFn` infrastructure in `env.rs`
 
 This approach:
@@ -797,29 +799,36 @@ This approach:
 - [x] Register primitives at `Environment::new()` (or via `register_builtins()`)
   - **NOTE** `Environment::new` already calls `register_builtins()`
 
-##### Primitive Implementations
+##### 6.2.0 Interpreter Changes
 
-###### Object Conversion Functions
+- [x] In function call handling, check primitives **before** user-defined functions
+- [x] Primitives are called with evaluated arguments (like regular functions)
+
+###### 6.2.1 Object Conversion Functions
 
 These convert objects to arrays for use with collection operations. Like other primitives, lookup is case-insensitive (`KEYS`, `Keys`, `keys` all work).
 
-- [ ] Implement `KEYS`:
+- [x] Implement `KEYS`:
   - Signature: `Object -> Array[String]`
   - Return array of field names (strings) in iteration order
-- [ ] Implement `VALUES`:
+- [x] Implement `VALUES`:
   - Signature: `Object -> Result[Array[T], String]`
   - Return `Result.Ok(array)` of field values if all same type
   - Return `Result.Err(msg)` if fields have heterogeneous types
-- [ ] Implement `ENTRIES`:
+- [x] Implement `ENTRIES`:
   - Signature: `Object -> Result[Array[(String, T)], String]`
   - Return `Result.Ok(array)` of `(key, value)` tuples if all values same type
   - Return `Result.Err(msg)` if fields have heterogeneous types
-- [ ] Implement `FROM-ENTRIES`:
+- [x] Implement `FROM-ENTRIES`:
   - Signature: `Array[(String, T)] -> Object`
   - Construct object from array of `(key, value)` tuples
   - Later entries override earlier ones for duplicate keys
+- [x] Add tests for case-insensitive primitive lookup
+- [x] Add interpreter tests for KEYS, VALUES, ENTRIES, FROM-ENTRIES
+  - Include `Result.Err` cases for heterogeneous object values
+- [ ] Add integration test scripts (`XX_collections.rumps`)
 
-###### Array Collection Operations
+###### 6.2.2 Array Collection Operations
 
 - [ ] Implement `MAP`:
   - Signature: `(T -> U, Array[T]) -> Array[U]`
@@ -836,19 +845,8 @@ These convert objects to arrays for use with collection operations. Like other p
   - Evaluate reducer, initial value, and array
   - Fold left: `reducer(reducer(init, arr[0]), arr[1])...`
   - Return accumulated value
-
-##### Interpreter Changes
-
-- [ ] In function call handling, check primitives **before** user-defined functions
-- [ ] Primitives are called with evaluated arguments (like regular functions)
-
-#### 6.3 Tests
-
-- [ ] Add tests for case-insensitive primitive lookup
-- [ ] Add interpreter tests for KEYS, VALUES, ENTRIES, FROM-ENTRIES
-  - Include `Result.Err` cases for heterogeneous object values
 - [ ] Add interpreter tests for MAP, FILTER, REDUCE
-- [ ] Add integration test script (`XX_collections.rumps`)
+- [ ] Add integration test scripts (`XX_collections.rumps`)
 
 ---
 

@@ -1,9 +1,11 @@
 //! Function and closure calling.
 
 use async_recursion::async_recursion;
+use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
+use crate::env::PrimCtx;
 use crate::io::IoContext;
 use crate::value::{CapturedEnv, StringId, TypeExprId, Value, ValueId};
 use crate::{Error, Result, Span};
@@ -197,10 +199,29 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Call a function by name (for `Var` callees).
     ///
     /// Resolution order:
-    /// 1. Named functions (from FUN definitions)
-    /// 2. Lexical scope (may be a bound closure)
+    /// 1. Built-in primitives (KEYS, VALUES, MAP, etc.; case-insensitive)
+    /// 2. Named functions (from FUN definitions)
+    /// 3. Lexical scope (may be a bound closure)
     #[async_recursion]
     async fn call_by_name(
+        &mut self,
+        name: &str,
+        args: &[ExprId],
+        span: Span,
+    ) -> Result<Value> {
+        // Check primitives first (case-insensitive)
+        let maybe_prim = self.env.get_primitive(name).copied();
+        match maybe_prim {
+            Some(prim) => self.call_primitive(prim, args, span).await,
+            None => self.call_by_name_user(name, args, span).await,
+        }
+    }
+
+    /// Call a user-defined function or closure by name.
+    ///
+    /// Called after primitive lookup fails.
+    #[async_recursion]
+    async fn call_by_name_user(
         &mut self,
         name: &str,
         args: &[ExprId],
@@ -231,6 +252,33 @@ impl<I: IoContext> Interpreter<'_, I> {
                 format!("undefined function `{name}`"),
             )),
         }
+    }
+
+    /// Call a built-in primitive function.
+    ///
+    /// Evaluates arguments first, then invokes the primitive with a `PrimCtx`.
+    #[async_recursion]
+    async fn call_primitive(
+        &mut self,
+        prim: crate::env::PrimFn,
+        args: &[ExprId],
+        span: Span,
+    ) -> Result<Value> {
+        // Evaluate arguments
+        let arg_ids: SmallVec<[ValueId; 4]> =
+            self.eval_args(args).await?.into_iter().collect();
+
+        // Create context and call primitive
+        let mut ctx = PrimCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+        };
+        let result_id = prim(&mut ctx, arg_ids).await?;
+
+        // Look up and clone the result value
+        self.arena.get(result_id).cloned().ok_or_else(|| {
+            Error::runtime(span, "primitive returned invalid value")
+        })
     }
 
     /// Call a function or closure value.

@@ -104,9 +104,11 @@ pub(crate) type PrimResult<'a> = BoxFuture<'a, Result<ValueId>>;
 
 /// Context passed to primitive functions during execution.
 ///
-/// Contains references to the value arena for creating/looking up values.
+/// Contains references to the value arena for creating/looking up values
+/// and the type expression arena for constructing type annotations.
 pub(crate) struct PrimCtx<'a> {
     pub(crate) arena: &'a mut ValueArena,
+    pub(crate) type_exprs: &'a mut crate::value::TypeExprArena,
 }
 
 /// A built-in primitive function.
@@ -169,14 +171,19 @@ impl Environment {
     /// Primitives are callable built-in functions like `MAP`, `FILTER`, `REDUCE`.
     /// They are looked up case-insensitively, like keywords.
     fn register_builtins(&mut self) {
+        use crate::primitives::Prim;
+
+        // Object conversion primitives
+        self.register_primitive("KEYS", Prim::keys);
+        self.register_primitive("VALUES", Prim::values);
+        self.register_primitive("ENTRIES", Prim::entries);
+        self.register_primitive("FROM-ENTRIES", Prim::from_entries);
+
         // TODO: Register collection primitives:
         // - MAP(fn, array) -> array
         // - FILTER(predicate, array) -> array
         // - REDUCE(reducer, init, array) -> value
         // - FOLD, TAKE, DROP, etc.
-        //
-        // More in the future; any builtin primitive function goes here. NOT
-        // keywords like `GET`/`SET`/`KILL`/`DATA`/...
     }
 }
 

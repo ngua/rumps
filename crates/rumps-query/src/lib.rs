@@ -20,6 +20,7 @@ mod interpreter;
 mod io;
 mod lexer;
 mod parser;
+mod primitives;
 mod resolve;
 mod span;
 mod token;
