@@ -18,7 +18,7 @@ This document tracks the third phase of implementing the RUMPS query language: u
 6. Higher-order collection operations (`MAP`, `FILTER`, `REDUCE`)
 7. Range operator (`..`)
 8. Spread operators (`...`)
-9. Regex pattern matching (`matches`, `/pattern/`)
+9. Regex pattern matching (`MATCHES`, `/pattern/`)
 
 ## Existing Infrastructure
 
@@ -799,6 +799,28 @@ This approach:
 
 ##### Primitive Implementations
 
+###### Object Conversion Functions
+
+These convert objects to arrays for use with collection operations. Like other primitives, lookup is case-insensitive (`KEYS`, `Keys`, `keys` all work).
+
+- [ ] Implement `KEYS`:
+  - Signature: `Object -> Array[String]`
+  - Return array of field names (strings) in iteration order
+- [ ] Implement `VALUES`:
+  - Signature: `Object -> Result[Array[T], String]`
+  - Return `Result.Ok(array)` of field values if all same type
+  - Return `Result.Err(msg)` if fields have heterogeneous types
+- [ ] Implement `ENTRIES`:
+  - Signature: `Object -> Result[Array[(String, T)], String]`
+  - Return `Result.Ok(array)` of `(key, value)` tuples if all values same type
+  - Return `Result.Err(msg)` if fields have heterogeneous types
+- [ ] Implement `FROM-ENTRIES`:
+  - Signature: `Array[(String, T)] -> Object`
+  - Construct object from array of `(key, value)` tuples
+  - Later entries override earlier ones for duplicate keys
+
+###### Array Collection Operations
+
 - [ ] Implement `MAP`:
   - Signature: `(T -> U, Array[T]) -> Array[U]`
   - Evaluate function and array arguments
@@ -817,12 +839,14 @@ This approach:
 
 ##### Interpreter Changes
 
-- [ ] In function call handling, check primitives before user-defined functions
+- [ ] In function call handling, check primitives **before** user-defined functions
 - [ ] Primitives are called with evaluated arguments (like regular functions)
 
 #### 6.3 Tests
 
 - [ ] Add tests for case-insensitive primitive lookup
+- [ ] Add interpreter tests for KEYS, VALUES, ENTRIES, FROM-ENTRIES
+  - Include `Result.Err` cases for heterogeneous object values
 - [ ] Add interpreter tests for MAP, FILTER, REDUCE
 - [ ] Add integration test script (`XX_collections.rumps`)
 
@@ -925,21 +949,21 @@ LET config = { ...defaults, ...user }  ; { color: "red", size: "large" }
 
 ---
 
-### 9. Regex Pattern Matching (`matches`)
+### 9. Regex Pattern Matching (`MATCHES`)
 
 Pattern matching with regex literals.
 
 ```rumps
-IF email matches /^[^@]+@[^@]+\.[^@]+$/ {
+IF email MATCHES /^[^@]+@[^@]+\.[^@]+$/ {
   OUTPUT "Valid email"
 }
 
-IF ssn matches /^\d{3}-\d{2}-\d{4}$/ {
+IF ssn MATCHES /^\d{3}-\d{2}-\d{4}$/ {
   OUTPUT "Valid SSN format"
 }
 
 ; Negation via NOT
-IF NOT (input matches /[<>]/) {
+IF NOT (input MATCHES /[<>]/) {
   OUTPUT "No angle brackets"
 }
 ```
@@ -1106,7 +1130,7 @@ MATCH user {
 
 ; Regex matching
 LET email = "user@example.com"
-IF email matches /^[^@]+@[^@]+\.[^@]+$/ {
+IF email MATCHES /^[^@]+@[^@]+\.[^@]+$/ {
   OUTPUT "Valid email"
 }
 
