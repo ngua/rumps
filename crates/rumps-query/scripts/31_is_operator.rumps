@@ -1,80 +1,80 @@
-; Type check operator (is) tests
-; `is` performs runtime type checking and variant matching
+; Type check operator (IS) tests
+; `IS` performs runtime type checking and variant matching
 
 ; === Simple type checks ===
 
 LET n = 42
-OUTPUT n is Int
+OUTPUT n IS Int
 ; Expected: TRUE
 
-OUTPUT n is String
+OUTPUT n IS String
 ; Expected: FALSE
 
 LET s = "hello"
-OUTPUT s is String
+OUTPUT s IS String
 ; Expected: TRUE
 
-OUTPUT s is Int
+OUTPUT s IS Int
 ; Expected: FALSE
 
 LET b = TRUE
-OUTPUT b is Bool
+OUTPUT b IS Bool
 ; Expected: TRUE
 
 LET f = 3.14
-OUTPUT f is Float
+OUTPUT f IS Float
 ; Expected: TRUE
 
 ; === Variant checks ===
 
 ; Option.None (zero-arity: no parens needed)
 LET none = Option.None
-OUTPUT none is Option.None
+OUTPUT none IS Option.None
 ; Expected: TRUE
 
 ; Variants with payloads require (_) or (name)
-OUTPUT none is Option.Some(_)
+OUTPUT none IS Option.Some(_)
 ; Expected: FALSE
 
 ; Option.Some
 LET some = Option.Some(42)
-OUTPUT some is Option.Some(_)
+OUTPUT some IS Option.Some(_)
 ; Expected: TRUE
 
-OUTPUT some is Option.None
+OUTPUT some IS Option.None
 ; Expected: FALSE
 
 ; Result variants
 LET ok = Result.Ok("success")
-OUTPUT ok is Result.Ok(_)
+OUTPUT ok IS Result.Ok(_)
 ; Expected: TRUE
 
-OUTPUT ok is Result.Err(_)
+OUTPUT ok IS Result.Err(_)
 ; Expected: FALSE
 
 LET err = Result.Err("failed")
-OUTPUT err is Result.Err(_)
+OUTPUT err IS Result.Err(_)
 ; Expected: TRUE
 
-OUTPUT err is Result.Ok(_)
+OUTPUT err IS Result.Ok(_)
 ; Expected: FALSE
 
 ; === Wildcard variant checks ===
 
-OUTPUT Option.Some(99) is Option.Some(_)
+OUTPUT Option.Some(99) IS Option.Some(_)
 ; Expected: TRUE
 
-OUTPUT Option.None is Option.Some(_)
+OUTPUT Option.None IS Option.Some(_)
 ; Expected: FALSE
 
-OUTPUT Result.Ok(1) is Result.Ok(_)
+OUTPUT Result.Ok(1) IS Result.Ok(_)
 ; Expected: TRUE
 
 ; === Pattern binding in IF ===
 
 ; Binding extracts the payload
 LET x = Option.Some(123)
-IF x is Option.Some(val) {
+IF x IS Option.Some(val) {
   OUTPUT val
 } ELSE {
   OUTPUT "none"
@@ -83,7 +83,7 @@ IF x is Option.Some(val) {
 
 ; Binding not used when no match
 LET y = Option.None
-IF y is Option.Some(val) {
+IF y IS Option.Some(val) {
   OUTPUT val
 } ELSE {
   OUTPUT "none"
@@ -92,7 +92,7 @@ IF y is Option.Some(val) {
 
 ; Result binding
 LET r = Result.Ok(999)
-IF r is Result.Ok(data) {
+IF r IS Result.Ok(data) {
   OUTPUT data
 } ELSE {
   OUTPUT "error"
@@ -100,7 +100,7 @@ IF r is Result.Ok(data) {
 ; Expected: 999
 
 LET r2 = Result.Err("oops")
-IF r2 is Result.Err(e) {
+IF r2 IS Result.Err(e) {
   OUTPUT e
 } ELSE {
   OUTPUT "ok"
@@ -111,7 +111,7 @@ IF r2 is Result.Err(e) {
 
 ; Binding should not leak to outer scope
 LET outer = Option.Some(50)
-IF outer is Option.Some(inner) {
+IF outer IS Option.Some(inner) {
   OUTPUT inner
 }
 ; Expected: 50
@@ -121,25 +121,25 @@ IF outer is Option.Some(inner) {
 
 ; === Combining with other operators ===
 
-; `is` in boolean expressions (must use wildcard for variants with payload)
+; `IS` in boolean expressions (must use wildcard for variants with payload)
 LET val = Option.Some(10)
-OUTPUT val is Option.Some(_) AND TRUE
+OUTPUT val IS Option.Some(_) AND TRUE
 ; Expected: TRUE
 
-OUTPUT Option.None is Option.Some(_) OR FALSE
+OUTPUT Option.None IS Option.Some(_) OR FALSE
 ; Expected: FALSE
 
 ; Using coalesced value for type check
 LET maybe = Option.Some(42)
 LET unwrapped = maybe ?? 0
-OUTPUT unwrapped is Int
+OUTPUT unwrapped IS Int
 ; Expected: TRUE
 
 ; === Nested IF with bindings ===
 
 LET outer2 = Option.Some(Option.Some(77))
-IF outer2 is Option.Some(inner2) {
-  IF inner2 is Option.Some(deepval) {
+IF outer2 IS Option.Some(inner2) {
+  IF inner2 IS Option.Some(deepval) {
     OUTPUT deepval
   } ELSE {
     OUTPUT "inner none"
@@ -149,4 +149,4 @@ IF outer2 is Option.Some(inner2) {
 }
 ; Expected: 77
 
-OUTPUT "is operator tests complete"
+OUTPUT "IS operator tests complete"

@@ -32,7 +32,7 @@ The following already exists and will be leveraged:
 - `TypeRegistry` with `register()`, `lookup()`, `lookup_variant()`
 - `VariantDef { name, idx, arity }` for variant metadata
 - `Expr::Variant(type_name, variant_name, args)` for constructing variants
-- `TypePattern` enum for `is` operator patterns
+- `TypePattern` enum for `IS` operator patterns
 - Builtin types `Option` and `Result` already registered
 
 ## Phase 3 Tasks
@@ -312,7 +312,7 @@ LET s = Status.Pending
 LET e = Event.Click(100, 200)
 LET val = Either.Left("error")
 
-IF s is Status.Active {
+IF s IS Status.Active {
   OUTPUT "Active!"
 }
 ```
@@ -362,7 +362,7 @@ IF s is Status.Active {
   - Create `VariantDef` for each variant (auto-assign indices)
   - Register as `TypeDef::Sum`
 - [x] User-defined types work with existing `Expr::Variant` evaluation
-- [x] User-defined types work with existing `is` patterns
+- [x] User-defined types work with existing `IS` patterns
 
 #### 2.5 Tests
 
@@ -1005,7 +1005,7 @@ User-defined sum types leverage:
 - `TypeDef::Sum` for registration
 - `Value::Tagged` for runtime representation
 - `Expr::Variant` for construction
-- Existing `is` patterns for simple checks
+- Existing `IS` patterns for simple checks
 
 The `TYPE` statement simply registers a new sum type; variant construction and pattern matching use existing mechanisms.
 
@@ -1033,14 +1033,14 @@ MATCH opt {
 OUTPUT x  ; ERROR: x not in scope
 ```
 
-### MATCH vs is
+### MATCH vs IS
 
-- Use `is` for simple boolean checks, especially with `IF`
+- Use `IS` for simple boolean checks, especially with `IF`
 - Use `MATCH` for multi-way branching and complex destructuring
 
 ```rumps
-; Simple check: use `is`
-IF x is Option.Some(v) {
+; Simple check: use `IS`
+IF x IS Option.Some(v) {
   OUTPUT v
 }
 
@@ -1089,7 +1089,7 @@ TYPE Status =
 
 LET s = Status.InProgress("step 1")
 
-IF s is Status.InProgress(msg) {
+IF s IS Status.InProgress(msg) {
   OUTPUT "Working: " ++ msg
 }
 
