@@ -1,0 +1,261 @@
+//! Control flow expressions: `IF`, `MATCH`, blocks, coalesce.
+
+use async_recursion::async_recursion;
+use smallvec::SmallVec;
+
+use super::Interpreter;
+use crate::ast::{Expr, ExprId, MatchArm, StmtId, TypePattern};
+use crate::io::IoContext;
+use crate::value::{TypeId, Value};
+use crate::{Error, Result, Span};
+
+impl<I: IoContext> Interpreter<'_, I> {
+    /// Null-coalescing operator implementation.
+    ///
+    /// Unwraps `Option` or `Result` values, falling back to rhs on None/Err:
+    /// - `Option.Some(v)` -> `v` (unwrapped)
+    /// - `Option.None` -> evaluate and return rhs
+    /// - `Result.Ok(v)` -> `v` (unwrapped)
+    /// - `Result.Err(_)` -> evaluate and return rhs (error discarded)
+    /// - Other types -> type error
+    #[async_recursion]
+    pub(super) async fn coalesce(
+        &mut self,
+        left: Value,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<Value> {
+        // Helper to check if type expression has a given base type
+        let is_option = |ty_expr| {
+            self.type_exprs
+                .base_type(ty_expr)
+                .is_some_and(|t| t == TypeId::OPTION)
+        };
+        let is_result = |ty_expr| {
+            self.type_exprs
+                .base_type(ty_expr)
+                .is_some_and(|t| t == TypeId::RESULT)
+        };
+
+        match &left {
+            // Option.Some(v) -> unwrap to v
+            Value::Tagged(ty_expr, 1, payload) if is_option(*ty_expr) => {
+                payload
+                    .first()
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(span, "Option.Some missing payload")
+                    })
+            }
+            // Option.None -> evaluate rhs
+            Value::Tagged(ty_expr, 0, _) if is_option(*ty_expr) => {
+                self.eval(rhs).await
+            }
+            // Result.Ok(v) -> unwrap to v
+            Value::Tagged(ty_expr, 0, payload) if is_result(*ty_expr) => {
+                payload
+                    .first()
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(span, "Result.Ok missing payload")
+                    })
+            }
+            // Result.Err(_) -> evaluate rhs (error discarded)
+            Value::Tagged(ty_expr, 1, _) if is_result(*ty_expr) => {
+                self.eval(rhs).await
+            }
+            // Other types -> type error
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "`??` requires Option or Result; got {}",
+                    left.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
+    /// Evaluate a block expression.
+    ///
+    /// Executes statements, then evaluates the trailing expression (if any).
+    /// Returns `Option.None` if no trailing expression.
+    #[async_recursion]
+    pub(super) async fn block(
+        &mut self,
+        stmts: &[StmtId],
+        tail: Option<ExprId>,
+    ) -> Result<Value> {
+        self.env.scopes.push();
+        let result = self.block_inner(stmts, tail).await;
+        self.env.scopes.pop();
+        result
+    }
+
+    /// Inner helper for block expression evaluation.
+    #[async_recursion]
+    async fn block_inner(
+        &mut self,
+        stmts: &[StmtId],
+        tail: Option<ExprId>,
+    ) -> Result<Value> {
+        match stmts.split_first() {
+            None => match tail {
+                Some(e) => self.eval(e).await,
+                None => Ok(self.make_none()),
+            },
+            Some((head, rest)) => {
+                self.exec(*head).await?;
+                self.block_inner(rest, tail).await
+            }
+        }
+    }
+
+    /// Evaluate an `IF` expression.
+    ///
+    /// Returns the value of the taken branch. If no else branch and condition
+    /// is false, returns `Option.None`.
+    ///
+    /// Special handling for `is` conditions with bindings: if the condition is
+    /// `expr is Pattern(bindings)`, the bindings are only visible in the then
+    /// branch, not in the else branch.
+    #[async_recursion]
+    pub(super) async fn r#if(
+        &mut self,
+        cond: ExprId,
+        then_br: ExprId,
+        else_br: Option<ExprId>,
+    ) -> Result<Value> {
+        // Check if condition is `Expr::Is` with bindings
+        let cond_expr = self.ast.get_expr(cond).cloned();
+        match cond_expr {
+            Some(Expr::Is(expr, TypePattern::VariantBind(ty, var, names))) => {
+                self.if_with_bindings(expr, &ty, &var, &names, then_br, else_br)
+                    .await
+            }
+            _ => {
+                let cond_val = self.eval(cond).await?;
+                if cond_val.is_truthy(&self.arena, &self.type_exprs) {
+                    self.eval(then_br).await
+                } else {
+                    match else_br {
+                        Some(e) => self.eval(e).await,
+                        None => Ok(self.make_none()),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle `IF expr is Type.Variant(bindings) { then } ELSE { else }`.
+    ///
+    /// Bindings are only visible in the then branch.
+    #[async_recursion]
+    async fn if_with_bindings(
+        &mut self,
+        expr: ExprId,
+        ty_name: &str,
+        var_name: &str,
+        names: &[String],
+        then_br: ExprId,
+        else_br: Option<ExprId>,
+    ) -> Result<Value> {
+        let span = self.ast.expr_span(expr).unwrap_or_default();
+        let val = self.eval(expr).await?;
+
+        // Check if the value matches the variant
+        let matched = self.check_variant(&val, ty_name, var_name, span)?;
+
+        if matched {
+            // Extract payloads and bind them
+            let payloads = match &val {
+                Value::Tagged(_, _, p) => p.clone(),
+                _ => SmallVec::new(),
+            };
+
+            // Validate arity
+            (payloads.len() == names.len()).then_some(()).ok_or_else(|| {
+                Error::runtime(
+                    span,
+                    format!(
+                        "`{ty_name}.{var_name}` has {} payload(s), but {} binding(s) provided",
+                        payloads.len(),
+                        names.len()
+                    ),
+                )
+            })?;
+
+            // Push scope, bind, evaluate, pop
+            self.env.scopes.push();
+            self.bind_payloads(names, &payloads, span);
+            let result = self.eval(then_br).await;
+            self.env.scopes.pop();
+            result
+        } else {
+            // No match; evaluate else branch (without bindings)
+            match else_br {
+                Some(e) => self.eval(e).await,
+                None => Ok(self.make_none()),
+            }
+        }
+    }
+
+    /// Evaluate a `MATCH` expression.
+    ///
+    /// Evaluates the scrutinee once, then tries each arm in order. The first
+    /// arm whose pattern matches (and whose guard, if any, is truthy) has its
+    /// body evaluated. Returns error if no arm matches.
+    #[async_recursion]
+    pub(super) async fn r#match(
+        &mut self,
+        scrutinee: ExprId,
+        arms: &[MatchArm],
+        span: Span,
+    ) -> Result<Value> {
+        let val = self.eval(scrutinee).await?;
+        self.try_match_arms(&val, arms, span).await
+    }
+
+    /// Try each match arm in order until one matches.
+    #[async_recursion]
+    async fn try_match_arms(
+        &mut self,
+        val: &Value,
+        arms: &[MatchArm],
+        span: Span,
+    ) -> Result<Value> {
+        match arms.split_first() {
+            None => Err(Error::runtime(span, "non-exhaustive match")),
+            Some((arm, rest)) => {
+                // Try to match the pattern
+                match self.try_match_pattern(arm.pattern, val, span)? {
+                    None => self.try_match_arms(val, rest, span).await,
+                    Some(bindings) => {
+                        // Pattern matched; check guard if present
+                        self.env.scopes.push();
+                        self.apply_bindings(&bindings, span);
+
+                        let guard_ok = match arm.guard {
+                            None => true,
+                            Some(guard_expr) => {
+                                let guard_val = self.eval(guard_expr).await?;
+                                guard_val
+                                    .is_truthy(&self.arena, &self.type_exprs)
+                            }
+                        };
+
+                        if guard_ok {
+                            // Guard passed; evaluate body with bindings in scope
+                            let result = self.eval(arm.body).await;
+                            self.env.scopes.pop();
+                            result
+                        } else {
+                            // Guard failed; pop scope and try next arm
+                            self.env.scopes.pop();
+                            self.try_match_arms(val, rest, span).await
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
