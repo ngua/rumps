@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
-use crate::env::PrimCtx;
+use crate::env::{PrimCtx, PrimFn};
 use crate::io::IoContext;
 use crate::value::{CapturedEnv, StringId, TypeExprId, Value, ValueId};
 use crate::{Error, Result, Span};
@@ -53,6 +53,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                 )
                 .await
+            }
+            Value::ModuleFn { path } => {
+                self.call_module_fn_with_vals(&path, &[arg_id], span).await
             }
             _ => Err(Error::type_err(
                 span,
@@ -199,29 +202,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Call a function by name (for `Var` callees).
     ///
     /// Resolution order:
-    /// 1. Built-in primitives (KEYS, VALUES, MAP, etc.; case-insensitive)
-    /// 2. Named functions (from FUN definitions)
-    /// 3. Lexical scope (may be a bound closure)
+    /// 1. Named functions (from FUN definitions)
+    /// 2. Lexical scope (may be a bound closure)
+    ///
+    /// Note: Built-in module functions (e.g., `Object.keys`) are resolved at
+    /// parse time by `resolve.rs` and become `Expr::Path` nodes.
     #[async_recursion]
     async fn call_by_name(
-        &mut self,
-        name: &str,
-        args: &[ExprId],
-        span: Span,
-    ) -> Result<Value> {
-        // Check primitives first (case-insensitive)
-        let maybe_prim = self.env.get_primitive(name).copied();
-        match maybe_prim {
-            Some(prim) => self.call_primitive(prim, args, span).await,
-            None => self.call_by_name_user(name, args, span).await,
-        }
-    }
-
-    /// Call a user-defined function or closure by name.
-    ///
-    /// Called after primitive lookup fails.
-    #[async_recursion]
-    async fn call_by_name_user(
         &mut self,
         name: &str,
         args: &[ExprId],
@@ -260,7 +247,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn call_primitive(
         &mut self,
-        prim: crate::env::PrimFn,
+        prim: PrimFn,
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
@@ -277,6 +264,62 @@ impl<I: IoContext> Interpreter<'_, I> {
         let result_id = prim(&mut ctx, arg_ids).await?;
 
         // Look up and clone the result value
+        self.arena.get(result_id).cloned().ok_or_else(|| {
+            Error::runtime(span, "primitive returned invalid value")
+        })
+    }
+
+    /// Call a module function with pre-evaluated arguments.
+    ///
+    /// Used by pipeline and other contexts where arguments are already values.
+    #[async_recursion]
+    pub(super) async fn call_module_fn_with_vals(
+        &mut self,
+        path: &[StringId],
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        // Convert StringIds to owned Strings first to avoid borrow issues
+        let path_strs: SmallVec<[String; 4]> = path
+            .iter()
+            .filter_map(|id| self.arena.get_str(*id).map(String::from))
+            .collect();
+
+        // Format path for error messages
+        let path_display = path_strs.join(".");
+
+        // Convert to &str for lookup
+        let path_refs: SmallVec<[&str; 4]> =
+            path_strs.iter().map(String::as_str).collect();
+
+        let prim =
+            self.env.get_module_fn(&path_refs).copied().ok_or_else(|| {
+                Error::runtime(
+                    span,
+                    format!("unknown function `{path_display}`"),
+                )
+            })?;
+
+        self.call_primitive_with_vals(prim, args, span).await
+    }
+
+    /// Call a primitive with pre-evaluated arguments.
+    #[async_recursion]
+    async fn call_primitive_with_vals(
+        &mut self,
+        prim: PrimFn,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        let arg_ids: SmallVec<[ValueId; 4]> = args.iter().copied().collect();
+
+        let mut ctx = PrimCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+            span,
+        };
+        let result_id = prim(&mut ctx, arg_ids).await?;
+
         self.arena.get(result_id).cloned().ok_or_else(|| {
             Error::runtime(span, "primitive returned invalid value")
         })
@@ -303,6 +346,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Function {
                 params, ret, body, ..
             } => self.call_function(&params, ret, body, args, span).await,
+            Value::ModuleFn { path } => {
+                // Evaluate arguments first, then call
+                let arg_vals = self.eval_args(args).await?;
+                self.call_module_fn_with_vals(&path, &arg_vals, span).await
+            }
             _ => Err(Error::runtime(
                 span,
                 format!(

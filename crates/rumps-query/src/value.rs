@@ -265,6 +265,16 @@ pub(crate) enum Value {
         ret: Option<TypeExprId>,
         body: ExprId,
     },
+
+    /// A module function reference.
+    ///
+    /// Created when a module path like `Object.keys` is evaluated. Can be
+    /// called directly or used as a first-class value (e.g., in pipelines).
+    ///
+    /// The path includes the full module path plus function name:
+    /// - `Object.keys` → `["Object", "keys"]`
+    /// - `Math.Trig.sin` → `["Math", "Trig", "sin"]`
+    ModuleFn { path: SmallVec<[StringId; 4]> },
 }
 
 impl Value {
@@ -294,8 +304,10 @@ impl Value {
                     _ => true, // Unknown tagged → truthy
                 }
             }
-            // Closures and functions are always truthy (like functions in most languages)
-            Self::Closure { .. } | Self::Function { .. } => true,
+            // Closures, functions, and module functions are always truthy
+            Self::Closure { .. }
+            | Self::Function { .. }
+            | Self::ModuleFn { .. } => true,
         }
     }
 
@@ -325,6 +337,7 @@ impl Value {
                 .unwrap_or("Unknown"),
             Self::Closure { .. } => "Closure",
             Self::Function { .. } => "Function",
+            Self::ModuleFn { .. } => "ModuleFn",
         }
     }
 

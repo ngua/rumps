@@ -219,47 +219,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate a namespace path.
-    ///
-    /// Reserved for future module support. Currently handles paths of length 2
-    /// as type + variant (for backwards compatibility with runtime type paths).
-    pub(super) fn path(
-        &mut self,
-        segments: &[String],
-        span: Span,
-    ) -> Result<Value> {
-        match segments {
-            [ty_name, var_name] => {
-                let ty_id = self.arena.intern(ty_name);
-                let var_id = self.arena.intern(var_name);
-
-                let type_id = self.registry.lookup(ty_id).ok_or_else(|| {
-                    Error::runtime(span, format!("unknown type `{ty_name}`"))
-                })?;
-
-                let v = self
-                    .registry
-                    .lookup_variant(type_id, var_id)
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!(
-                                "type `{ty_name}` has no variant `{var_name}`"
-                            ),
-                        )
-                    })?;
-
-                let idx = v.idx;
-                let ty_expr = self.build_variant_type_expr(type_id, idx, &[]);
-                Ok(Value::Tagged(ty_expr, idx, smallvec::SmallVec::new()))
-            }
-            _ => Err(Error::runtime(
-                span,
-                format!("unsupported path length: {}", segments.len()),
-            )),
-        }
-    }
-
     /// Evaluate field access on an object value.
     ///
     /// After name resolution, this method is primarily for runtime field access

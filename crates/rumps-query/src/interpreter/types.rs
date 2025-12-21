@@ -42,6 +42,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
                 self.type_exprs.fn_type(param_tys, ret_ty)
             }
+            // Module functions don't have a simple type expression
+            Value::ModuleFn { .. } => self.type_exprs.named(TypeId::UNKNOWN),
         }
     }
 
@@ -263,8 +265,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .type_exprs
                 .base_type(*ty_expr)
                 .is_some_and(|t| t == type_id),
-            // Closures and functions don't have a simple TypeId; use function type expressions
-            Value::Closure { .. } | Value::Function { .. } => false,
+            // Closures, functions, and module functions don't have a simple TypeId
+            Value::Closure { .. }
+            | Value::Function { .. }
+            | Value::ModuleFn { .. } => false,
         }
     }
 

@@ -55,7 +55,9 @@ fn value_base_type(v: &Value) -> TypeId {
         Value::Object(_) => TypeId::OBJECT,
         Value::Tuple(..) => TypeId::TUPLE,
         Value::Tagged(_, _, _) => TypeId::UNKNOWN,
-        Value::Closure { .. } | Value::Function { .. } => TypeId::UNKNOWN,
+        Value::Closure { .. }
+        | Value::Function { .. }
+        | Value::ModuleFn { .. } => TypeId::UNKNOWN,
     }
 }
 

@@ -1,0 +1,51 @@
+; Object module functions
+; Tests Object.keys, Object.values, Object.entries, Object.from_entries
+
+; Object.keys returns array of field names
+LET obj = { name: "Alice", age: 30, active: true }
+LET k = Object.keys(obj)
+OUTPUT k  ; ["name", "age", "active"]
+
+; Object.keys on empty object
+LET empty = {}
+OUTPUT Object.keys(empty)  ; []
+
+; Object.values returns Result.Ok for homogeneous values
+LET nums = { a: 1, b: 2, c: 3 }
+LET vals = Object.values(nums)
+OUTPUT vals  ; Result.Ok([1, 2, 3])
+
+; Unwrap with coalesce
+LET arr = Object.values(nums) ?? []
+OUTPUT arr  ; [1, 2, 3]
+
+; Object.values returns Result.Err for heterogeneous values
+LET mixed = { x: 1, y: "two" }
+LET mixed-vals = Object.values(mixed)
+OUTPUT mixed-vals IS Result.Err(_)  ; TRUE
+
+; Object.entries returns array of (key, value) tuples
+LET ent = Object.entries(nums)
+OUTPUT ent  ; Result.Ok([("a", 1), ("b", 2), ("c", 3)])
+
+; Object.from_entries constructs object from tuples
+LET pairs = [("x", 10), ("y", 20)]
+LET constructed = Object.from_entries(pairs)
+OUTPUT constructed  ; { x: 10, y: 20 }
+OUTPUT constructed.x  ; 10
+OUTPUT constructed.y  ; 20
+
+; Roundtrip: entries -> from_entries
+LET orig = { foo: 100, bar: 200 }
+LET ent-arr = Object.entries(orig) ?? []
+LET roundtrip = Object.from_entries(ent-arr)
+OUTPUT roundtrip.foo  ; 100
+OUTPUT roundtrip.bar  ; 200
+
+; Pipeline usage
+LET obj2 = { a: 1, b: 2 }
+OUTPUT obj2 |> Object.keys  ; ["a", "b"]
+
+; Module function as first-class value
+LET keys-fn = Object.keys
+OUTPUT keys-fn(obj2)  ; ["a", "b"]

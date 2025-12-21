@@ -27,14 +27,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| rumps_types::Value::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            // Serialize to JSON for complex values (closures and functions
+            // Serialize to JSON for complex values (closures and module fns
             // will error in jsonify)
             Value::Array(_, _)
             | Value::Object(_)
             | Value::Tuple(_, _)
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
-            | Value::Function { .. } => {
+            | Value::Function { .. }
+            | Value::ModuleFn { .. } => {
                 self.jsonify(v).map(rumps_types::Value::Json)
             }
         }
@@ -139,6 +140,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let fn_name = self.arena.get_str(*name).unwrap_or("?");
                 format!("<function {}({})>", fn_name, params.len())
             }
+            Value::ModuleFn { path } => {
+                let path_str: String = path
+                    .iter()
+                    .filter_map(|id| self.arena.get_str(*id))
+                    .collect::<Vec<_>>()
+                    .join(".");
+                format!("<{path_str}>")
+            }
         }
     }
 
@@ -213,6 +222,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             )),
             Value::Function { .. } => Err(Error::runtime_no_span(
                 "functions cannot be serialized to JSON",
+            )),
+            Value::ModuleFn { .. } => Err(Error::runtime_no_span(
+                "module functions cannot be serialized to JSON",
             )),
         }
     }
@@ -290,7 +302,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Tuple(_, _)
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
-            | Value::Function { .. } => Err(Error::runtime_no_span(
+            | Value::Function { .. }
+            | Value::ModuleFn { .. } => Err(Error::runtime_no_span(
                 "complex values cannot be used as subscripts",
             )),
         }

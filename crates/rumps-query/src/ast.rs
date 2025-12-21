@@ -550,9 +550,15 @@ pub(crate) enum Expr {
     /// Examples: `Option.None` (no args), `Option.Some(1)`, `Result.Ok(42)`
     Variant(String, String, SmallVec<[ExprId; 4]>),
 
-    /// Namespace path: reserved for future module support.
+    /// Namespace path for module functions and constants.
     ///
-    /// Examples: `Module.submodule.item`
+    /// Created by the name resolution pass from `Field(Var(module), name)` when
+    /// `module` is a known built-in module (e.g., `Object`, `Array`, `Math`).
+    ///
+    /// Examples: `Object.keys`, `Array.map`, `Math.PI`
+    ///
+    /// When evaluated, produces a `Value::ModuleFn` that can be called directly
+    /// or used as a first-class value (e.g., in pipelines).
     Path(SmallVec<[String; 4]>),
 
     /// Type check: `expr is Pattern`.

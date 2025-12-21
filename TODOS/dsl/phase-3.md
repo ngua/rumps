@@ -17,7 +17,7 @@ This document tracks the third phase of implementing the RUMPS query language: u
 3. User-defined sum types (`TYPE Status = Pending | Active`)
 4. Structural object type aliases (`TYPE Patient = { name: String, age: Int }`)
 5. Pattern matching (`MATCH`)
-6. Higher-order collection operations (`MAP`, `FILTER`, `REDUCE`)
+6. Built-in modules with collection operations (`Array.map`, `Array.filter`, `Object.keys`)
 7. Range operator (`..`)
 8. Spread operators (`...`)
 9. Regex pattern matching (`MATCHES`, `/pattern/`)
@@ -756,97 +756,154 @@ fn matches(&self, pat: &Pattern, val: &Value) -> Option<Vec<(StringId, ValueId)>
 
 ---
 
-### 6. Higher-Order Collection Operations
+### 6. Built-in Modules and Collection Operations
 
-With function types and closures in place from Phase 2, these are straightforward.
+With function types and closures in place from Phase 2, collection operations are straightforward. However, they belong in **modules**, not as bare case-insensitive primitives.
 
 ```rumps
-MAP(x => x * 2, [1, 2, 3])
-FILTER(x => x > 2, [1, 2, 3, 4])
-REDUCE(acc, x => acc + x, 0, [1, 2, 3])
+; Module-qualified function calls (case-sensitive)
+Array.map(x => x * 2, [1, 2, 3])
+Array.filter(x => x > 2, [1, 2, 3, 4])
+Array.reduce((acc, x) => acc + x, 0, [1, 2, 3])
 
-; Case-insensitive (like keywords)
-map(x => x * 2, [1, 2, 3])
-Map(x => x * 2, [1, 2, 3])
+; Object utilities
+Object.keys({ a: 1, b: 2 })      ; ["a", "b"]
+Object.values({ a: 1, b: 2 })    ; Result.Ok([1, 2])
+Object.entries({ a: 1, b: 2 })   ; Result.Ok([("a", 1), ("b", 2)])
+Object.from_entries([("a", 1)])  ; { a: 1 }
+
+; Future modules
+Math.sqrt(16)    ; 4.0
+String.split("a,b", ",")  ; ["a", "b"]
 ```
 
 Type signatures:
 ```rumps
-; MAP: ((T) -> U, Array[T]) -> Array[U]
-; FILTER: ((T) -> Bool, Array[T]) -> Array[T]
-; REDUCE: ((A, T) -> A, A, Array[T]) -> A
+; Array.map: ((T) -> U, Array[T]) -> Array[U]
+; Array.filter: ((T) -> Bool, Array[T]) -> Array[T]
+; Array.reduce: ((A, T) -> A, A, Array[T]) -> A
+; Object.keys: Object -> Array[String]
+; Object.values: Object -> Result[Array[T], String]
 ```
 
-#### 6.1 Design: Primitive Functions, Not Keywords
+#### 6.1 Design: Module-Qualified Functions
 
-These are **primitive functions** registered in the `Environment`, not keywords:
+**Rationale**: The previous design used case-insensitive bare primitives (`KEYS`, `MAP`, etc.), which created an awkward hybrid:
+- Keywords (`LET`, `MATCH`) are case-insensitive with special syntax
+- Type paths (`Option.Some`) use `.` notation and are case-sensitive
+- Primitives were case-insensitive but called like functions; inconsistent
 
-- No special parser handling; they are called like any other function
-- Case-insensitive lookup (like keywords): `MAP`, `Map`, `map` all work
-- Registered via `Environment::register_primitive()` at interpreter startup (**NOTE**: already implemented)
-- Use the existing `PrimFn` infrastructure in `env.rs`
+The new design uses **module-qualified functions**:
+- Consistent `.` notation: `Object.keys`, `Array.map`, `Math.sqrt`
+- Case-sensitive (matches type paths): `Object.keys` works, `object.KEYS` does not
+- Same resolution mechanism as type paths (extend `resolve.rs`)
+- Clean separation: keywords are special, everything else uses modules
 
-This approach:
-- Keeps the parser simple (no new tokens or grammar rules)
-- Allows future extensibility (user can shadow with their own `map` if desired)
-- Maintains consistency with MUMPS-style case-insensitivity
+**Built-in modules** (provided by the runtime):
+- `Object`: `keys`, `values`, `entries`, `from_entries`
+- `Array`: `map`, `filter`, `reduce`, `fold`, `take`, `drop`, etc.
+- `Math`: `sqrt`, `sin`, `cos`, `abs`, `floor`, `ceil`, etc. (future)
+- `String`: `split`, `trim`, `starts_with`, `ends_with`, etc. (future)
+
+**Future: User-defined modules** (not in Phase 3):
+```rumps
+; Explicit MODULE blocks
+MODULE Utils {
+  FUN double (x: Int) -> Int { x * 2 }
+  FUN triple (x: Int) -> Int { x * 3 }
+}
+
+OUTPUT Utils.double(5)  ; 10
+```
+
+**Nested modules** (infrastructure in place):
+
+The module system supports nested modules via the `Module.submodules` field.
+This enables paths like `Math.Trig.sin(x)` for future built-in or user-defined
+modules. The resolution pass handles paths of arbitrary length.
 
 #### 6.2 Implementation
 
-##### Environment Changes
+##### 6.2.1 Module Infrastructure
 
-- [x] Make primitive lookup case-insensitive in `get_primitive()`
-- [x] Register primitives at `Environment::new()` (or via `register_builtins()`)
-  - **NOTE** `Environment::new` already calls `register_builtins()`
+- [x] Add `Module` struct with nested module support:
+  ```rust
+  struct Module {
+      functions: HashMap<String, PrimFn>,
+      submodules: HashMap<String, Module>,
+  }
+  ```
+- [x] Replace `Environment.primitives: HashMap<String, PrimFn>` with:
+  ```rust
+  modules: HashMap<String, Module>,  // "Object" -> Module { ... }
+  ```
+- [x] Add `Environment::get_module_fn(&self, path: &[&str]) -> Option<&PrimFn>`
+- [x] Add `Environment::module_fn_exists(&self, path: &[&str]) -> bool`
+- [x] Add `BUILTIN_MODULE_NAMES` constant as single source of truth
+- [x] Register built-in modules in `Environment::new()`:
+  - `Object` module with `keys`, `values`, `entries`, `from_entries`
+  - `Array` module (initially empty, populated in 6.2.5)
 
-##### 6.2.0 Interpreter Changes
+##### 6.2.2 Name Resolution for Modules
 
-- [x] In function call handling, check primitives **before** user-defined functions
-- [x] Primitives are called with evaluated arguments (like regular functions)
+Extend `resolve.rs` to handle module paths:
 
-###### 6.2.1 Object Conversion Functions
+- [x] Add `collect_path_segments()` to handle nested field chains
+- [x] Recognize `Expr::Field(Var(module), fn_name)` and nested `Field` chains
+- [x] If path starts with a known module name:
+  - Convert to `Expr::Path([module, fn_name, ...])` (reuses existing Path node)
+- [x] If first segment is a type name, existing variant resolution applies
+- [x] If neither, leave as `Expr::Field` for runtime field access
 
-These convert objects to arrays for use with collection operations. Like other primitives, lookup is case-insensitive (`KEYS`, `Keys`, `keys` all work).
+**Resolution flow**:
+```
+Object.keys      → Expr::Path(["Object", "keys"])
+Math.Trig.sin    → Expr::Path(["Math", "Trig", "sin"])
+Option.None      → Expr::Variant("Option", "None", [])
+obj.field        → Expr::Field (unchanged)
+```
 
-- [x] Implement `KEYS`:
-  - Signature: `Object -> Array[String]`
-  - Return array of field names (strings) in iteration order
-- [x] Implement `VALUES`:
-  - Signature: `Object -> Result[Array[T], String]`
-  - Return `Result.Ok(array)` of field values if all same type
-  - Return `Result.Err(msg)` if fields have heterogeneous types
-- [x] Implement `ENTRIES`:
-  - Signature: `Object -> Result[Array[(String, T)], String]`
-  - Return `Result.Ok(array)` of `(key, value)` tuples if all values same type
-  - Return `Result.Err(msg)` if fields have heterogeneous types
-- [x] Implement `FROM-ENTRIES`:
-  - Signature: `Array[(String, T)] -> Object`
-  - Construct object from array of `(key, value)` tuples
-  - Later entries override earlier ones for duplicate keys
-- [x] Add tests for case-insensitive primitive lookup
-- [x] Add interpreter tests for KEYS, VALUES, ENTRIES, FROM-ENTRIES
-  - Include `Result.Err` cases for heterogeneous object values
-- [ ] Add integration test scripts (`XX_collections.rumps`)
+**First-class module functions**: Module functions can be used as values:
+```rumps
+LET keys-fn = Object.keys       ; Value::ModuleFn { path: ["Object", "keys"] }
+OUTPUT obj |> keys-fn           ; Pipeline works
+OUTPUT keys-fn({ a: 1, b: 2 })  ; Direct call works
+```
 
-###### 6.2.2 Array Collection Operations
+##### 6.2.3 Interpreter Changes
 
-- [ ] Implement `MAP`:
-  - Signature: `(T -> U, Array[T]) -> Array[U]`
-  - Evaluate function and array arguments
-  - Apply function to each element
-  - Return new array
-- [ ] Implement `FILTER`:
-  - Signature: `(T -> Bool, Array[T]) -> Array[T]`
-  - Evaluate predicate and array
+- [x] Add `Value::ModuleFn { path: SmallVec<[StringId; 4]> }` for module function references
+- [x] Add `interpreter/modules.rs` for path evaluation
+- [x] `Expr::Path` evaluates to `Value::ModuleFn` when path refers to a module function
+- [x] `Value::ModuleFn` can be called directly or used in pipelines
+- [x] Add `call_module_fn_with_vals()` to handle module function calls
+- [x] Remove old flat primitive lookup from function call handling
+
+##### 6.2.4 Object Module Functions
+
+Migrate existing primitives to `Object` module:
+
+- [x] `Object.keys`: `Object -> Array[String]`
+  - Return array of field names in iteration order
+- [x] `Object.values`: `Object -> Result[Array[T], String]`
+  - Return `Result.Ok(array)` if homogeneous, `Result.Err(msg)` otherwise
+- [x] `Object.entries`: `Object -> Result[Array[(String, T)], String]`
+  - Return `Result.Ok(array)` of tuples if homogeneous
+- [x] `Object.from_entries`: `Array[(String, T)] -> Object`
+  - Construct object from tuples; later entries override
+- [x] Update tests to use module-qualified syntax
+- [x] Add integration test script (`66_object_module.rumps`)
+
+##### 6.2.5 Array Module Functions
+
+- [ ] `Array.map`: `((T) -> U, Array[T]) -> Array[U]`
+  - Apply function to each element, return new array
+- [ ] `Array.filter`: `((T) -> Bool, Array[T]) -> Array[T]`
   - Keep elements where predicate returns truthy
-  - Return filtered array
-- [ ] Implement `REDUCE`:
-  - Signature: `(T -> U, U, Array[T]) -> U`
-  - Evaluate reducer, initial value, and array
+- [ ] `Array.reduce`: `((A, T) -> A, A, Array[T]) -> A`
   - Fold left: `reducer(reducer(init, arr[0]), arr[1])...`
-  - Return accumulated value
-- [ ] Add interpreter tests for MAP, FILTER, REDUCE
-- [ ] Add integration test scripts (`XX_collections.rumps`)
+- [ ] Add interpreter tests for Array module functions
+- [ ] Add integration test script (`67_array_module.rumps`)
 
 ---
 
@@ -857,7 +914,7 @@ Creates a lazy range of integers.
 ```rumps
 1..10           ; range from 1 to 10 (inclusive? exclusive? TBD)
 0..n            ; range from 0 to n
-1..100 |> MAP x => x * x
+Array.map(x => x * x, 1..100)
 ```
 
 - [ ] Add `Token::DotDot` to lexer
@@ -1126,25 +1183,29 @@ MATCH user {
   { name } => { OUTPUT name ++ " is a regular user" }
 }
 
-; Regex matching
+; Regex matching (MATCHES is a keyword)
 LET email = "user@example.com"
 IF email MATCHES /^[^@]+@[^@]+\.[^@]+$/ {
   OUTPUT "Valid email"
 }
 
-; Collection operations (primitive functions, case-insensitive)
-LET doubled = MAP(x => x * 2, [1, 2, 3])
+; Collection operations (module-qualified functions)
+LET doubled = Array.map(x => x * 2, [1, 2, 3])
 OUTPUT doubled  ; [2, 4, 6]
 
-LET evens = FILTER(x => x % 2 == 0, [1, 2, 3, 4])
+LET evens = Array.filter(x => x % 2 == 0, [1, 2, 3, 4])
 OUTPUT evens  ; [2, 4]
 
-LET sum = REDUCE((acc, x) => acc + x, 0, [1, 2, 3, 4])
+LET sum = Array.reduce((acc, x) => acc + x, 0, [1, 2, 3, 4])
 OUTPUT sum  ; 10
+
+; Object utilities
+OUTPUT Object.keys({ a: 1, b: 2 })  ; ["a", "b"]
+OUTPUT { a: 1 } |> Object.keys      ; Pipeline with module fn
 
 ; Ranges
 LET r = 1..5  ; [1, 2, 3, 4] (exclusive end)
-LET squares = MAP(x => x * x, 1..=5)  ; [1, 4, 9, 16, 25]
+LET squares = Array.map(x => x * x, 1..=5)  ; [1, 4, 9, 16, 25]
 
 ; Spread operators
 LET arr1 = [1, 2, 3]

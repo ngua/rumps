@@ -98,6 +98,7 @@ mod collections;
 mod control;
 mod convert;
 mod db;
+mod modules;
 mod ops;
 mod pattern;
 mod types;

@@ -1,0 +1,17 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Object module functions\n; Tests Object.keys, Object.values, Object.entries, Object.from_entries\n\n; Object.keys returns array of field names\nLET obj = { name: \"Alice\", age: 30, active: true }\nLET k = Object.keys(obj)\nOUTPUT k  ; [\"name\", \"age\", \"active\"]\n\n; Object.keys on empty object\nLET empty = {}\nOUTPUT Object.keys(empty)  ; []\n\n; Object.values returns Result.Ok for homogeneous values\nLET nums = { a: 1, b: 2, c: 3 }\nLET vals = Object.values(nums)\nOUTPUT vals  ; Result.Ok([1, 2, 3])\n\n; Unwrap with coalesce\nLET arr = Object.values(nums) ?? []\nOUTPUT arr  ; [1, 2, 3]\n\n; Object.values returns Result.Err for heterogeneous values\nLET mixed = { x: 1, y: \"two\" }\nLET mixed-vals = Object.values(mixed)\nOUTPUT mixed-vals is Result.Err(_)  ; TRUE\n\n; Object.entries returns array of (key, value) tuples\nLET ent = Object.entries(nums)\nOUTPUT ent  ; Result.Ok([(\"a\", 1), (\"b\", 2), (\"c\", 3)])\n\n; Object.from_entries constructs object from tuples\nLET pairs = [(\"x\", 10), (\"y\", 20)]\nLET constructed = Object.from_entries(pairs)\nOUTPUT constructed  ; { x: 10, y: 20 }\nOUTPUT constructed.x  ; 10\nOUTPUT constructed.y  ; 20\n\n; Roundtrip: entries -> from_entries\nLET orig = { foo: 100, bar: 200 }\nLET ent-arr = Object.entries(orig) ?? []\nLET roundtrip = Object.from_entries(ent-arr)\nOUTPUT roundtrip.foo  ; 100\nOUTPUT roundtrip.bar  ; 200\n\n; Pipeline usage\nLET obj2 = { a: 1, b: 2 }\nOUTPUT obj2 |> Object.keys  ; [\"a\", \"b\"]\n\n; Module function as first-class value\nLET keys_fn = Object.keys\nOUTPUT keys_fn(obj2)  ; [\"a\", \"b\"]\n"
+---
+[ name, age, active ]
+[  ]
+Result.Ok([ 1, 2, 3 ])
+[ 1, 2, 3 ]
+TRUE
+Result.Ok([ (a, 1), (b, 2), (c, 3) ])
+{ x: 10, y: 20 }
+10
+20
+100
+200
+[ a, b ]
+[ a, b ]

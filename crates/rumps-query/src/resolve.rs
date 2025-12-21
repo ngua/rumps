@@ -5,12 +5,16 @@
 //!
 //! - `Option.None` (zero-arity variant) -> `Expr::Variant("Option", "None", [])`
 //! - `Option.Some(x)` (variant with args) -> `Expr::Variant("Option", "Some", [x])`
+//! - `Object.keys` (module function) -> `Expr::Path(["Object", "keys"])`
 //! - `obj.field` (runtime field access) -> remains `Expr::Field`
 //! - `obj.method(args)` (runtime call) -> remains `Expr::Call`
 //!
 //! The parser emits generic `Expr::Field` and `Expr::Call` nodes; this pass
-//! converts type-qualified names to `Expr::Variant` that the interpreter
-//! handles without runtime type registry lookups.
+//! converts type-qualified names to `Expr::Variant` or `Expr::Path` that
+//! the interpreter handles without runtime lookups.
+//!
+//! Module function calls like `Object.keys(obj)` become `Expr::Call(Path(...), args)`,
+//! where the `Path` is evaluated to a `Value::ModuleFn` that can then be called.
 //!
 //! # Architecture
 //!
@@ -20,10 +24,35 @@
 //!                         this pass
 //! ```
 
-use smallvec::smallvec;
+use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{Ast, Expr, ExprId};
+use crate::env::BUILTIN_MODULE_NAMES;
 use crate::value::{TypeRegistry, ValueArena};
+
+/// Check if a name is a built-in module.
+fn is_builtin_module(name: &str) -> bool {
+    BUILTIN_MODULE_NAMES.contains(&name)
+}
+
+/// Collect path segments from a chain of `Field` expressions.
+///
+/// Given `Field(Field(Var("A"), "B"), "C")`, returns `Some(["A", "B", "C"])`.
+/// Returns `None` if the base is not a `Var` or `Field` chain.
+fn collect_path_segments(
+    ast: &Ast,
+    id: ExprId,
+) -> Option<SmallVec<[String; 4]>> {
+    ast.get_expr(id).and_then(|e| match e {
+        Expr::Var(name) => Some(smallvec![name.clone()]),
+        Expr::Field(base_id, field) => collect_path_segments(ast, *base_id)
+            .map(|mut segs: SmallVec<[String; 4]>| {
+                segs.push(field.clone());
+                segs
+            }),
+        _ => None,
+    })
+}
 
 /// Run name resolution on the AST.
 ///
@@ -59,30 +88,55 @@ fn resolve_expr(
     id: ExprId,
 ) -> Option<Expr> {
     ast.get_expr(id).and_then(|expr| match expr {
-        // Zero-arity variants: `Type.Variant` -> `Variant(Type, Variant, [])`
+        // Field access: `Name.field` or `A.B.C` (nested modules)
+        // - If base is `Var(Type)` with zero-arity variant -> `Variant(Type, field, [])`
+        // - If full path starts with a module -> `Path([...])`
+        // - Otherwise -> leave as Field (runtime field access)
         Expr::Field(base_id, field) => {
-            ast.get_expr(*base_id).and_then(|base| match base {
-                Expr::Var(ty_name) => {
-                    let ty_id = arena.intern(ty_name);
-                    let var_id = arena.intern(field);
-                    registry.lookup(ty_id).and_then(|type_id| {
-                        registry.lookup_variant(type_id, var_id).and_then(|v| {
-                            (v.arity == 0).then(|| {
-                                Expr::Variant(
-                                    ty_name.clone(),
-                                    field.clone(),
-                                    smallvec![],
-                                )
-                            })
+            // First, try to collect the full path (for nested module support)
+            let full_path = collect_path_segments(ast, id);
+
+            // Check if this is a module path (first segment is a module)
+            let is_module_path = full_path
+                .as_ref()
+                .and_then(|segs: &SmallVec<[String; 4]>| segs.first())
+                .is_some_and(|first| is_builtin_module(first));
+
+            if is_module_path {
+                full_path.map(Expr::Path)
+            } else {
+                // Check if it's a simple Type.Variant pattern
+                ast.get_expr(*base_id).and_then(|base| match base {
+                    Expr::Var(name) => {
+                        let name_id = arena.intern(name);
+                        let field_id = arena.intern(field);
+
+                        // Check if it's a zero-arity type variant
+                        registry.lookup(name_id).and_then(|type_id| {
+                            registry.lookup_variant(type_id, field_id).and_then(
+                                |v| {
+                                    (v.arity == 0).then(|| {
+                                        Expr::Variant(
+                                            name.clone(),
+                                            field.clone(),
+                                            smallvec![],
+                                        )
+                                    })
+                                },
+                            )
                         })
-                    })
-                }
-                _ => None,
-            })
+                    }
+                    _ => None,
+                })
+            }
         }
 
-        // Variant constructors: `Call(Field(Var(Type), Variant), args)`
-        // -> `Variant(Type, Variant, args)`
+        // Function calls: only resolve variant constructors
+        // `Call(Field(Var(Type), Variant), args)` -> `Variant(Type, Variant, args)`
+        //
+        // Module calls like `Object.keys(x)` don't need special handling:
+        // the Field becomes Path (above), so it becomes `Call(Path(...), args)`
+        // which the interpreter handles normally.
         Expr::Call(callee_id, args) => {
             ast.get_expr(*callee_id).and_then(|callee| match callee {
                 Expr::Field(base_id, var_name) => {
@@ -202,5 +256,55 @@ mod tests {
             )
         });
         assert!(!has_variant, "Unknown.Foo should not become Variant");
+    }
+
+    #[test]
+    fn resolve_object_keys_becomes_path() {
+        let ast = parse_and_resolve("LET k = Object.keys({ a: 1 })");
+        let has_path = ast.expr_ids().any(|id| {
+            matches!(
+                ast.get_expr(id),
+                Some(Expr::Path(segs)) if segs.as_slice() == ["Object", "keys"]
+            )
+        });
+        assert!(has_path, "Object.keys should become Path([Object, keys])");
+    }
+
+    #[test]
+    fn resolve_array_map_becomes_path() {
+        let ast = parse_and_resolve("LET r = Array.map(x => x, [1, 2])");
+        let has_path = ast.expr_ids().any(|id| {
+            matches!(
+                ast.get_expr(id),
+                Some(Expr::Path(segs)) if segs.as_slice() == ["Array", "map"]
+            )
+        });
+        assert!(has_path, "Array.map should become Path([Array, map])");
+    }
+
+    #[test]
+    fn resolve_module_fn_without_call() {
+        // Module function used as value (e.g., for pipeline)
+        let ast = parse_and_resolve("LET f = Object.keys");
+        let has_path = ast.expr_ids().any(|id| {
+            matches!(
+                ast.get_expr(id),
+                Some(Expr::Path(segs)) if segs.as_slice() == ["Object", "keys"]
+            )
+        });
+        assert!(has_path, "Object.keys (no call) should become Path");
+    }
+
+    #[test]
+    fn resolve_unknown_module_not_converted() {
+        let ast = parse_and_resolve("LET x = Foo.bar(1)");
+        // Foo.bar should remain as Field since Foo is not a known module
+        let has_path = ast.expr_ids().any(|id| {
+            matches!(
+                ast.get_expr(id),
+                Some(Expr::Path(segs)) if segs.first() == Some(&"Foo".to_string())
+            )
+        });
+        assert!(!has_path, "Foo.bar should not become Path");
     }
 }

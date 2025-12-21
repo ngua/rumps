@@ -7,6 +7,12 @@
 
 use std::collections::HashMap;
 
+/// Names of built-in modules.
+///
+/// This is the single source of truth for which module names are recognized
+/// during resolution and registered at interpreter startup.
+pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &["Object", "Array"];
+
 use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
 
@@ -149,14 +155,16 @@ impl PrimCtx<'_> {
             Value::Object(_) => TypeId::OBJECT,
             Value::Tuple(..) => TypeId::TUPLE,
             Value::Tagged(_, _, _) => TypeId::UNKNOWN,
-            Value::Closure { .. } | Value::Function { .. } => TypeId::UNKNOWN,
+            Value::Closure { .. }
+            | Value::Function { .. }
+            | Value::ModuleFn { .. } => TypeId::UNKNOWN,
         }
     }
 }
 
 /// A built-in primitive function.
 ///
-/// Primitives are callable built-in functions like `MAP`, `FILTER`, `REDUCE`,
+/// Primitives are callable built-in functions like `Object.keys`, `Array.map`,
 /// etc. They take a context and arguments, returning a future that resolves
 /// to a `ValueId`.
 ///
@@ -165,11 +173,60 @@ impl PrimCtx<'_> {
 pub(crate) type PrimFn =
     for<'a> fn(&'a mut PrimCtx<'a>, SmallVec<[ValueId; 4]>) -> PrimResult<'a>;
 
+/// A built-in module containing primitive functions and submodules.
+///
+/// Modules group related functions under a namespace (e.g., `Object.keys`,
+/// `Array.map`). Supports nested modules for future extensibility
+/// (e.g., `Math.Trig.sin`).
+///
+/// Built-in modules are registered at interpreter startup; user-defined
+/// modules will be supported in a future phase.
+#[derive(Default)]
+pub(crate) struct Module {
+    /// Functions in this module, keyed by function name.
+    functions: HashMap<String, PrimFn>,
+
+    /// Submodules, keyed by submodule name.
+    submodules: HashMap<String, Module>,
+}
+
+impl Module {
+    /// Register a function in this module.
+    fn register(&mut self, name: &str, f: PrimFn) {
+        self.functions.insert(name.to_string(), f);
+    }
+
+    /// Register a submodule.
+    #[allow(dead_code)]
+    fn register_submodule(&mut self, name: &str, m: Module) {
+        self.submodules.insert(name.to_string(), m);
+    }
+
+    /// Look up a function by path within this module.
+    ///
+    /// For a single-segment path, looks up the function directly.
+    /// For multi-segment paths, traverses submodules.
+    pub(crate) fn get_fn(&self, path: &[&str]) -> Option<&PrimFn> {
+        match path {
+            [] => None,
+            [name] => self.functions.get(*name),
+            [first, rest @ ..] => {
+                self.submodules.get(*first).and_then(|m| m.get_fn(rest))
+            }
+        }
+    }
+
+    /// Check if a path resolves to a function within this module.
+    pub(crate) fn contains_path(&self, path: &[&str]) -> bool {
+        self.get_fn(path).is_some()
+    }
+}
+
 /// Variable environment for the interpreter.
 ///
 /// Tracks:
 /// - Lexical scopes for `LET` bindings (via `Scopes`)
-/// - Built-in primitive functions (e.g., `MAP`, `FILTER`, `REDUCE`)
+/// - Built-in modules containing primitive functions (e.g., `Object`, `Array`)
 ///
 /// Note: `SET` variables (both local and global) are stored in the `Database`,
 /// not in the environment. Only `LET` bindings live here. You can `GET` a `SET`
@@ -178,8 +235,8 @@ pub(crate) struct Environment {
     /// Lexical scope stack for `LET` bindings.
     pub(crate) scopes: Scopes,
 
-    /// Built-in primitive functions.
-    primitives: HashMap<String, PrimFn>,
+    /// Built-in modules (e.g., `Object`, `Array`).
+    modules: HashMap<String, Module>,
 }
 
 impl Default for Environment {
@@ -189,44 +246,65 @@ impl Default for Environment {
 }
 
 impl Environment {
-    /// Create a new environment with built-in primitives registered.
+    /// Create a new environment with built-in modules registered.
     pub(crate) fn new() -> Self {
         let mut env = Self {
             scopes: Scopes::new(),
-            primitives: HashMap::new(),
+            modules: HashMap::new(),
         };
         env.register_builtins();
         env
     }
 
-    /// Look up a primitive function by name (case-insensitive).
-    pub(crate) fn get_primitive(&self, name: &str) -> Option<&PrimFn> {
-        self.primitives.get(&name.to_ascii_uppercase())
+    /// Check if a top-level module exists.
+    pub(crate) fn has_module(&self, name: &str) -> bool {
+        self.modules.contains_key(name)
     }
 
-    /// Register a primitive function (stored uppercase for case-insensitive lookup).
-    pub(crate) fn register_primitive(&mut self, name: &str, f: PrimFn) {
-        self.primitives.insert(name.to_ascii_uppercase(), f);
-    }
-
-    /// Register built-in primitive functions.
+    /// Check if a path resolves to a module function.
     ///
-    /// Primitives are callable built-in functions like `MAP`, `FILTER`, `REDUCE`.
-    /// They are looked up case-insensitively, like keywords.
+    /// The path must have at least two segments: the first is the module name,
+    /// and the remaining segments form the path within that module.
+    pub(crate) fn module_fn_exists(&self, path: &[&str]) -> bool {
+        path.split_first().is_some_and(|(module, rest)| {
+            self.modules
+                .get(*module)
+                .is_some_and(|m| m.contains_path(rest))
+        })
+    }
+
+    /// Look up a function by its full path.
+    ///
+    /// The path must have at least two segments: the first is the module name,
+    /// and the remaining segments form the path within that module.
+    ///
+    /// Examples:
+    /// - `["Object", "keys"]` → `Object.keys`
+    /// - `["Math", "Trig", "sin"]` → `Math.Trig.sin`
+    pub(crate) fn get_module_fn(&self, path: &[&str]) -> Option<&PrimFn> {
+        path.split_first().and_then(|(module, rest)| {
+            self.modules.get(*module).and_then(|m| m.get_fn(rest))
+        })
+    }
+
+    /// Register built-in modules.
+    ///
+    /// Built-in modules provide primitive functions grouped by category:
+    /// - `Object`: `keys`, `values`, `entries`, `from_entries`
+    /// - `Array`: `map`, `filter`, `reduce` (future)
     fn register_builtins(&mut self) {
         use crate::primitives::Prim;
 
-        // Object conversion primitives
-        self.register_primitive("KEYS", Prim::keys);
-        self.register_primitive("VALUES", Prim::values);
-        self.register_primitive("ENTRIES", Prim::entries);
-        self.register_primitive("FROM-ENTRIES", Prim::from_entries);
+        // Object module
+        let mut object = Module::default();
+        object.register("keys", Prim::keys);
+        object.register("values", Prim::values);
+        object.register("entries", Prim::entries);
+        object.register("from_entries", Prim::from_entries);
+        self.modules.insert("Object".to_string(), object);
 
-        // TODO: Register collection primitives:
-        // - MAP(fn, array) -> array
-        // - FILTER(predicate, array) -> array
-        // - REDUCE(reducer, init, array) -> value
-        // - FOLD, TAKE, DROP, etc.
+        // Array module (to be populated with map, filter, reduce, etc.)
+        self.modules.insert("Array".to_string(), Module::default());
     }
 }
 
@@ -317,8 +395,14 @@ mod tests {
         let env = Environment::new();
 
         assert_eq!(env.scopes.depth(), 1);
-        // No primitives registered yet
-        assert!(env.get_primitive("MAP").is_none());
+        // Object module is registered with functions
+        assert!(env.has_module("Object"));
+        assert!(env.get_module_fn(&["Object", "keys"]).is_some());
+        assert!(env.module_fn_exists(&["Object", "keys"]));
+        // Array module exists but map not yet implemented
+        assert!(env.has_module("Array"));
+        assert!(env.get_module_fn(&["Array", "map"]).is_none());
+        assert!(!env.module_fn_exists(&["Array", "map"]));
     }
 
     #[test]
@@ -331,5 +415,84 @@ mod tests {
 
         env.scopes.bind(name, val);
         assert_eq!(env.scopes.lookup(name), Some(val));
+    }
+
+    // Dummy primitive for testing
+    fn dummy_prim<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        _args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move { Ok(ctx.arena.add(Value::Int(42), ctx.span)) })
+    }
+
+    #[test]
+    fn module_submodule_lookup() {
+        // Create a module with a submodule: Math.Trig.sin
+        let mut trig = Module::default();
+        trig.register("sin", dummy_prim);
+        trig.register("cos", dummy_prim);
+
+        let mut math = Module::default();
+        math.register("sqrt", dummy_prim);
+        math.register("abs", dummy_prim);
+        math.register_submodule("Trig", trig);
+
+        // Direct function lookup
+        assert!(math.get_fn(&["sqrt"]).is_some());
+        assert!(math.get_fn(&["abs"]).is_some());
+        assert!(math.get_fn(&["unknown"]).is_none());
+
+        // Submodule function lookup
+        assert!(math.get_fn(&["Trig", "sin"]).is_some());
+        assert!(math.get_fn(&["Trig", "cos"]).is_some());
+        assert!(math.get_fn(&["Trig", "tan"]).is_none());
+
+        // contains_path
+        assert!(math.contains_path(&["sqrt"]));
+        assert!(math.contains_path(&["Trig", "sin"]));
+        assert!(!math.contains_path(&["Trig", "tan"]));
+        assert!(!math.contains_path(&["Unknown", "fn"]));
+    }
+
+    #[test]
+    fn module_deeply_nested_lookup() {
+        // Create deeply nested: A.B.C.fn
+        let mut c = Module::default();
+        c.register("fn", dummy_prim);
+
+        let mut b = Module::default();
+        b.register_submodule("C", c);
+
+        let mut a = Module::default();
+        a.register_submodule("B", b);
+
+        // Should find A.B.C.fn
+        assert!(a.get_fn(&["B", "C", "fn"]).is_some());
+        assert!(a.contains_path(&["B", "C", "fn"]));
+
+        // Should not find partial paths
+        assert!(a.get_fn(&["B"]).is_none());
+        assert!(a.get_fn(&["B", "C"]).is_none());
+
+        // Should not find wrong paths
+        assert!(a.get_fn(&["B", "C", "other"]).is_none());
+        assert!(a.get_fn(&["B", "D", "fn"]).is_none());
+    }
+
+    #[test]
+    fn environment_module_fn_exists_with_path() {
+        let env = Environment::new();
+
+        // Valid paths
+        assert!(env.module_fn_exists(&["Object", "keys"]));
+        assert!(env.module_fn_exists(&["Object", "values"]));
+        assert!(env.module_fn_exists(&["Object", "entries"]));
+        assert!(env.module_fn_exists(&["Object", "from_entries"]));
+
+        // Invalid paths
+        assert!(!env.module_fn_exists(&["Object", "unknown"]));
+        assert!(!env.module_fn_exists(&["Unknown", "keys"]));
+        assert!(!env.module_fn_exists(&[]));
+        assert!(!env.module_fn_exists(&["Object"]));
     }
 }
