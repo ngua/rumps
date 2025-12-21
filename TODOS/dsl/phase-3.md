@@ -421,7 +421,7 @@ LET rec: PatientRecord = {
 OUTPUT rec.patient.name  ; "Bob"
 ```
 
-#### 3.1 TypeDef Extension
+#### 4.1 TypeDef Extension
 
 - [x] Add `TypeDef::Struct` variant:
   ```rust
@@ -431,13 +431,13 @@ OUTPUT rec.patient.name  ; "Bob"
   }
   ```
 
-#### 3.2 Parser
+#### 4.2 Parser
 
 - [x] Parse `TYPE Name = { field: Type, ... }`
 - [x] Reuse existing object literal parsing for field definitions
 - [x] Handle newlines inside struct definition
 
-#### 3.3 Interpreter
+#### 4.3 Interpreter
 
 - [x] Register `TypeDef::Struct` in `TypeRegistry`
 - [x] When assigning to typed variable (`LET x: TypeName = ...`):
@@ -445,7 +445,7 @@ OUTPUT rec.patient.name  ; "Bob"
   - Additional fields are OK (i.e. extensible-record style)
 - [x] Field access on objects with struct type works via existing `Expr::Field`
 
-#### 3.4 Type Validation Strategy
+#### 4.4 Type Validation Strategy
 
 Structural typing with optional nominal wrapper:
 
@@ -459,7 +459,7 @@ LET p2 = { id: 1, name: "X", age: 20, active: true }
 
 **Decision**: Struct aliases are purely for documentation and optional validation. At runtime, they are `Value::Object`. The type annotation triggers validation at assignment time.
 
-#### 3.5 Tests
+#### 4.5 Tests
 
 - [x] Add parser tests for struct type declarations
 - [x] Add interpreter tests for struct registration and validation
@@ -512,7 +512,7 @@ LET doubled = MATCH get-value() {
 } + 10
 ```
 
-#### 4.1 Matching Sum Types
+#### 5.1 Matching Sum Types
 
 ```rumps
 LET status = get-status()
@@ -532,7 +532,7 @@ MATCH event {
 }
 ```
 
-#### 4.2 Matching Option and Result
+#### 5.2 Matching Option and Result
 
 ```rumps
 LET name = GET ^PATIENT(id, "NAME")
@@ -551,7 +551,7 @@ MATCH try-parse(input) {
 }
 ```
 
-#### 4.3 Matching Literals and Wildcards
+#### 5.3 Matching Literals and Wildcards
 
 ```rumps
 MATCH count {
@@ -567,7 +567,7 @@ MATCH cmd {
 }
 ```
 
-#### 4.4 Pattern Guards
+#### 5.4 Pattern Guards
 
 ```rumps
 MATCH n {
@@ -578,7 +578,7 @@ MATCH n {
 }
 ```
 
-#### 4.5 Object Patterns
+#### 5.5 Object Patterns
 
 Destructure objects by field name:
 
@@ -608,7 +608,7 @@ MATCH event {
 }
 ```
 
-#### 4.6 Tuple Patterns
+#### 5.6 Tuple Patterns
 
 ```rumps
 MATCH pair {
@@ -629,7 +629,7 @@ MATCH result {
 }
 ```
 
-#### 4.7 Nested Patterns
+#### 5.7 Nested Patterns
 
 ```rumps
 MATCH nested {
@@ -651,16 +651,16 @@ MATCH result {
 }
 ```
 
-#### 4.8 Implementation
+#### 5.8 Implementation
 
 ##### Lexer
 
-- [ ] Add `Token::Match` keyword
-- [ ] `Token::FatArrow` (`=>`) should already exist from Phase 2 closures
+- [x] Add `Token::Match` keyword
+- [x] `Token::FatArrow` (`=>`) should already exist from Phase 2 closures
 
 ##### AST
 
-- [ ] Add `Expr::Match(ExprId, Vec<MatchArm>)`:
+- [x] Add `Expr::Match(ExprId, Vec<MatchArm>)`:
   ```rust
   struct MatchArm {
       pattern: Pattern,
@@ -668,7 +668,7 @@ MATCH result {
       body: ExprId,
   }
   ```
-- [ ] Add `Pattern` enum:
+- [x] Add `Pattern` enum:
   ```rust
   enum Pattern {
       /// Wildcard: `_`
@@ -694,23 +694,23 @@ MATCH result {
 
 ##### Parser
 
-- [ ] Parse `MATCH expr { arm... }`
-- [ ] Parse patterns: wildcards, variables, literals, variants, objects, tuples
-- [ ] Parse object patterns: `{ field }` (shorthand), `{ field: pattern }` (with nested pattern)
-- [ ] Parse tuple patterns: `(pat, pat, ...)`
-- [ ] Parse optional guards: `pattern IF cond => body`
-- [ ] Handle newlines between arms
+- [x] Parse `MATCH expr { arm... }`
+- [x] Parse patterns: wildcards, variables, literals, variants, objects, tuples
+- [x] Parse object patterns: `{ field }` (shorthand), `{ field: pattern }` (with nested pattern)
+- [x] Parse tuple patterns: `(pat, pat, ...)`
+- [x] Parse optional guards: `pattern IF cond => body`
+- [x] Handle newlines between arms
 
 ##### Interpreter
 
-- [ ] Evaluate scrutinee once
-- [ ] Try each arm in order:
+- [x] Evaluate scrutinee once
+- [x] Try each arm in order:
   - Attempt to match pattern against value
   - If pattern matches, bind variables to scope
   - If guard exists, evaluate it; if false, continue to next arm
   - If guard passes (or no guard), evaluate body in scope with bindings
-- [ ] Return first matching arm's body value
-- [ ] Error if no arm matches (non-exhaustive)
+- [x] Return first matching arm's body value
+- [x] Error if no arm matches (non-exhaustive)
 
 ##### Pattern Matching Algorithm
 
@@ -746,10 +746,11 @@ fn matches(&self, pat: &Pattern, val: &Value) -> Option<Vec<(StringId, ValueId)>
 
 ##### Tests
 
-- [ ] Add lexer tests for `MATCH`
-- [ ] Add parser tests for match expressions and patterns
-- [ ] Add interpreter tests for pattern matching
-- [ ] Add integration test script (`XX_match.rumps`)
+- [x] Add lexer tests for `MATCH`
+- [x] Add parser tests for match expressions and patterns
+- [x] Add interpreter tests for pattern matching
+- [x] Add integration test script (`62_match.rumps`)
+  - [x] Make sure to add items that bind the match to a `LET`, i.e. `LET r = MATCH ...`
 
 ---
 

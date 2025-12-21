@@ -1,0 +1,197 @@
+; MATCH expression tests
+
+; === Simple matching ===
+
+; Literal matching
+LET n = 2
+LET result = MATCH n {
+  1 => { "one" }
+  2 => { "two" }
+  3 => { "three" }
+  _ => { "other" }
+}
+OUTPUT result
+
+; Variable binding
+LET x = 42
+LET doubled = MATCH x {
+  n => { n * 2 }
+}
+OUTPUT doubled
+
+; Wildcard
+LET ignored = MATCH "anything" {
+  _ => { "matched wildcard" }
+}
+OUTPUT ignored
+
+; === Sum type matching ===
+
+; Option.Some
+LET opt = Option.Some(10)
+LET unwrapped = MATCH opt {
+  Option.Some(v) => { v }
+  Option.None => { 0 }
+}
+OUTPUT unwrapped
+
+; Option.None
+LET none_opt = Option.None
+LET default = MATCH none_opt {
+  Option.Some(v) => { v }
+  Option.None => { -1 }
+}
+OUTPUT default
+
+; Nested Option
+LET nested_opt = Option.Some(Option.Some(5))
+LET deep = MATCH nested_opt {
+  Option.Some(Option.Some(v)) => { v }
+  Option.Some(Option.None) => { -1 }
+  Option.None => { -2 }
+}
+OUTPUT deep
+
+; Result type
+LET ok = Result.Ok(100)
+LET ok_val = MATCH ok {
+  Result.Ok(v) => { v }
+  Result.Err(e) => { 0 }
+}
+OUTPUT ok_val
+
+LET err = Result.Err("oops")
+LET err_val = MATCH err {
+  Result.Ok(v) => { v }
+  Result.Err(e) => { -1 }
+}
+OUTPUT err_val
+
+; === User-defined sum types ===
+
+TYPE Status = Pending | Active(String) | Completed
+
+LET s1 = Status.Pending
+LET s1_label = MATCH s1 {
+  Status.Pending => { "waiting" }
+  Status.Active(msg) => { "active: " ++ msg }
+  Status.Completed => { "done" }
+}
+OUTPUT s1_label
+
+LET s2 = Status.Active("step 1")
+LET s2_label = MATCH s2 {
+  Status.Pending => { "waiting" }
+  Status.Active(msg) => { "active: " ++ msg }
+  Status.Completed => { "done" }
+}
+OUTPUT s2_label
+
+LET s3 = Status.Completed
+LET s3_label = MATCH s3 {
+  Status.Pending => { "waiting" }
+  Status.Active(msg) => { "active: " ++ msg }
+  Status.Completed => { "done" }
+}
+OUTPUT s3_label
+
+; === Tuple matching ===
+
+LET pair = (1, 2)
+LET pair_sum = MATCH pair {
+  (a, b) => { a + b }
+}
+OUTPUT pair_sum
+
+; With literal in tuple
+LET point = (0, 5)
+LET axis = MATCH point {
+  (0, y) => { "on y-axis at " ++ (y as String) }
+  (x, 0) => { "on x-axis at " ++ (x as String) }
+  (x, y) => { "at (" ++ (x as String) ++ ", " ++ (y as String) ++ ")" }
+}
+OUTPUT axis
+
+LET point2 = (3, 0)
+LET axis2 = MATCH point2 {
+  (0, y) => { "on y-axis" }
+  (x, 0) => { "on x-axis" }
+  _ => { "elsewhere" }
+}
+OUTPUT axis2
+
+LET point3 = (3, 4)
+LET axis3 = MATCH point3 {
+  (0, _) => { "on y-axis" }
+  (_, 0) => { "on x-axis" }
+  _ => { "elsewhere" }
+}
+OUTPUT axis3
+
+; === Object matching ===
+
+LET user = { name: "Alice", age: 30, role: "admin" }
+LET greeting = MATCH user {
+  { name, role: "admin" } => { name ++ " is an admin" }
+  { name } => { name ++ " is a user" }
+}
+OUTPUT greeting
+
+LET user2 = { name: "Bob", age: 25, role: "user" }
+LET greeting2 = MATCH user2 {
+  { name, role: "admin" } => { name ++ " is an admin" }
+  { name } => { name ++ " is a user" }
+}
+OUTPUT greeting2
+
+; === Pattern guards ===
+
+LET val = 50
+LET size = MATCH val {
+  x IF x > 100 => { "large" }
+  x IF x > 10 => { "medium" }
+  x IF x > 0 => { "small" }
+  0 => { "zero" }
+  _ => { "negative" }
+}
+OUTPUT size
+
+LET val2 = 150
+LET size2 = MATCH val2 {
+  x IF x > 100 => { "large" }
+  x IF x > 10 => { "medium" }
+  _ => { "other" }
+}
+OUTPUT size2
+
+; Guard with Option
+LET maybe_num = Option.Some(42)
+LET check = MATCH maybe_num {
+  Option.Some(n) IF n > 50 => { "large some" }
+  Option.Some(n) IF n > 0 => { "small some" }
+  Option.Some(_) => { "non-positive some" }
+  Option.None => { "none" }
+}
+OUTPUT check
+
+; === MATCH as expression ===
+
+; Bind to variable (already tested above)
+
+; Use in larger expression
+LET base = 10
+LET computed = base + MATCH Option.Some(5) {
+  Option.Some(n) => { n * 2 }
+  Option.None => { 0 }
+}
+OUTPUT computed
+
+; Return from function
+FUN describe(opt: Option[Int]) -> String {
+  MATCH opt {
+    Option.Some(n) => { "got " ++ (n as String) }
+    Option.None => { "nothing" }
+  }
+}
+OUTPUT describe(Option.Some(7))
+OUTPUT describe(Option.None)

@@ -27,6 +27,7 @@ pub(crate) enum Token {
     False,
     Fun,
     Type,
+    Match,
 
     // Literals
     Int(i64),
@@ -117,6 +118,7 @@ impl Token {
             "FALSE" => Some(Self::False),
             "FUN" => Some(Self::Fun),
             "TYPE" => Some(Self::Type),
+            "MATCH" => Some(Self::Match),
             _ => None,
         }
     }
@@ -142,6 +144,7 @@ impl fmt::Display for Token {
             Self::False => write!(f, "FALSE"),
             Self::Fun => write!(f, "FUN"),
             Self::Type => write!(f, "TYPE"),
+            Self::Match => write!(f, "MATCH"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::String(s) => write!(f, "\"{s}\""),
@@ -226,6 +229,7 @@ mod tests {
         assert_eq!(Token::keyword("TRUE"), Some(Token::True));
         assert_eq!(Token::keyword("FALSE"), Some(Token::False));
         assert_eq!(Token::keyword("FUN"), Some(Token::Fun));
+        assert_eq!(Token::keyword("MATCH"), Some(Token::Match));
     }
 
     #[test]

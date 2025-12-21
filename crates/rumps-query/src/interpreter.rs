@@ -107,7 +107,8 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
-    Literal, RestPattern, Stmt, StmtId, TypeDefAst, TypePattern, UnOp,
+    Literal, MatchArm, MatchPattern, RestPattern, Stmt, StmtId, TypeDefAst,
+    TypePattern, UnOp,
 };
 use crate::env::Environment;
 use crate::io::IoContext;
@@ -266,6 +267,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Block(stmts, tail) => self.block(&stmts, tail).await,
             Expr::If(cond, then_br, else_br) => {
                 self.r#if(cond, then_br, else_br).await
+            }
+            Expr::Match(scrutinee, arms) => {
+                self.r#match(scrutinee, &arms, span).await
             }
             Expr::Closure { params, ret, body } => {
                 self.closure(&params, ret, body)
@@ -2539,6 +2543,249 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let new_val_id = self.arena.add(val, span);
                 self.env.scopes.bind(name_id, new_val_id);
             });
+    }
+
+    /// Evaluate a `MATCH` expression.
+    ///
+    /// Evaluates the scrutinee once, then tries each arm in order. The first
+    /// arm whose pattern matches (and whose guard, if any, is truthy) has its
+    /// body evaluated. Returns error if no arm matches.
+    #[async_recursion]
+    async fn r#match(
+        &mut self,
+        scrutinee: ExprId,
+        arms: &[MatchArm],
+        span: Span,
+    ) -> Result<Value> {
+        let val = self.eval(scrutinee).await?;
+        self.try_match_arms(&val, arms, span).await
+    }
+
+    /// Try each match arm in order until one matches.
+    #[async_recursion]
+    async fn try_match_arms(
+        &mut self,
+        val: &Value,
+        arms: &[MatchArm],
+        span: Span,
+    ) -> Result<Value> {
+        match arms.split_first() {
+            None => Err(Error::runtime(span, "non-exhaustive match")),
+            Some((arm, rest)) => {
+                // Try to match the pattern
+                match self.try_match_pattern(&arm.pattern, val, span)? {
+                    None => self.try_match_arms(val, rest, span).await,
+                    Some(bindings) => {
+                        // Pattern matched; check guard if present
+                        self.env.scopes.push();
+                        self.apply_bindings(&bindings, span);
+
+                        let guard_ok = match arm.guard {
+                            None => true,
+                            Some(guard_expr) => {
+                                let guard_val = self.eval(guard_expr).await?;
+                                guard_val
+                                    .is_truthy(&self.arena, &self.type_exprs)
+                            }
+                        };
+
+                        if guard_ok {
+                            // Guard passed; evaluate body with bindings in scope
+                            let result = self.eval(arm.body).await;
+                            self.env.scopes.pop();
+                            result
+                        } else {
+                            // Guard failed; pop scope and try next arm
+                            self.env.scopes.pop();
+                            self.try_match_arms(val, rest, span).await
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Try to match a pattern against a value.
+    ///
+    /// Returns `Some(bindings)` if the pattern matches, where bindings is a
+    /// list of `(name_id, value_id)` pairs to bind in scope.
+    /// Returns `None` if the pattern does not match.
+    fn try_match_pattern(
+        &mut self,
+        pat: &MatchPattern,
+        val: &Value,
+        span: Span,
+    ) -> Result<Option<Vec<(StringId, ValueId)>>> {
+        match pat {
+            MatchPattern::Wildcard => Ok(Some(vec![])),
+            MatchPattern::Var(name) => {
+                let name_id = self.arena.intern(name);
+                let val_id = self.arena.add(val.clone(), span);
+                Ok(Some(vec![(name_id, val_id)]))
+            }
+            MatchPattern::Literal(lit) => {
+                let lit_val = self.literal(lit);
+                Ok(self.values_eq(val, &lit_val).then_some(vec![]))
+            }
+            MatchPattern::Variant(ty_name, var_name, sub_pats) => {
+                self.try_match_variant(ty_name, var_name, sub_pats, val, span)
+            }
+            MatchPattern::Object(fields) => {
+                self.try_match_object(fields, val, span)
+            }
+            MatchPattern::Tuple(pats) => self.try_match_tuple(pats, val, span),
+        }
+    }
+
+    /// Try to match a variant pattern against a value.
+    fn try_match_variant(
+        &mut self,
+        ty_name: &str,
+        var_name: &str,
+        sub_pats: &[MatchPattern],
+        val: &Value,
+        span: Span,
+    ) -> Result<Option<Vec<(StringId, ValueId)>>> {
+        // Look up the type and variant
+        let (type_id, var_def) =
+            self.lookup_variant(ty_name, var_name, span)?;
+
+        match val {
+            Value::Tagged(ty_expr, idx, payloads) => {
+                // Check type and variant match
+                let type_matches = self
+                    .type_exprs
+                    .base_type(*ty_expr)
+                    .is_some_and(|t| t == type_id);
+                let variant_matches = *idx == var_def.idx;
+
+                if type_matches && variant_matches {
+                    // Check arity
+                    if payloads.len() != sub_pats.len() {
+                        Err(Error::runtime(
+                            span,
+                            format!(
+                                "`{ty_name}.{var_name}` has {} payload(s), but {} pattern(s) provided",
+                                payloads.len(),
+                                sub_pats.len()
+                            ),
+                        ))
+                    } else {
+                        // Recursively match sub-patterns against payloads
+                        self.try_match_all(sub_pats, payloads, span)
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Try to match an object pattern against a value.
+    fn try_match_object(
+        &mut self,
+        fields: &[(String, MatchPattern)],
+        val: &Value,
+        span: Span,
+    ) -> Result<Option<Vec<(StringId, ValueId)>>> {
+        match val {
+            Value::Object(obj) => {
+                // Collect bindings from all field matches
+                fields.iter().try_fold(Some(vec![]), |acc, (fname, pat)| {
+                    acc.map_or(Ok(None), |mut bindings| {
+                        let fid = self.arena.intern(fname);
+                        obj.get(&fid)
+                            .and_then(|&vid| self.arena.get(vid).cloned())
+                            .map_or(Ok(None), |fval| {
+                                self.try_match_pattern(pat, &fval, span).map(
+                                    |maybe_sub| {
+                                        maybe_sub.map(|sub| {
+                                            bindings.extend(sub);
+                                            bindings
+                                        })
+                                    },
+                                )
+                            })
+                    })
+                })
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Try to match a tuple pattern against a value.
+    fn try_match_tuple(
+        &mut self,
+        pats: &[MatchPattern],
+        val: &Value,
+        span: Span,
+    ) -> Result<Option<Vec<(StringId, ValueId)>>> {
+        match val {
+            Value::Tuple(_, elems) => {
+                if elems.len() != pats.len() {
+                    Ok(None)
+                } else {
+                    self.try_match_all(pats, elems, span)
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Try to match multiple patterns against corresponding values.
+    ///
+    /// Returns `Some(bindings)` if all patterns match, `None` if any fails.
+    fn try_match_all(
+        &mut self,
+        pats: &[MatchPattern],
+        val_ids: &[ValueId],
+        span: Span,
+    ) -> Result<Option<Vec<(StringId, ValueId)>>> {
+        pats.iter().zip(val_ids.iter()).try_fold(
+            Some(vec![]),
+            |acc, (pat, &val_id)| {
+                acc.map_or(Ok(None), |mut bindings| {
+                    self.arena
+                        .get(val_id)
+                        .cloned()
+                        .ok_or_else(|| Error::runtime(span, "invalid value id"))
+                        .and_then(|val| {
+                            self.try_match_pattern(pat, &val, span).map(
+                                |maybe_sub| {
+                                    maybe_sub.map(|sub| {
+                                        bindings.extend(sub);
+                                        bindings
+                                    })
+                                },
+                            )
+                        })
+                })
+            },
+        )
+    }
+
+    /// Apply bindings to the current scope.
+    fn apply_bindings(
+        &mut self,
+        bindings: &[(StringId, ValueId)],
+        _span: Span,
+    ) {
+        bindings.iter().for_each(|&(name_id, val_id)| {
+            self.env.scopes.bind(name_id, val_id);
+        });
+    }
+
+    /// Check if two values are equal (for pattern matching literals).
+    fn values_eq(&self, a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Bool(x), Value::Bool(y)) => x == y,
+            (Value::Int(x), Value::Int(y)) => x == y,
+            (Value::Float(x), Value::Float(y)) => x == y,
+            (Value::String(x), Value::String(y)) => x == y,
+            (Value::Char(x), Value::Char(y)) => x == y,
+            _ => false,
+        }
     }
 
     /// Execute a `LET` binding with destructuring.

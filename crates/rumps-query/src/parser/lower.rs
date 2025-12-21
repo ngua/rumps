@@ -8,8 +8,8 @@ use smallvec::SmallVec;
 
 use super::cst;
 use crate::ast::{
-    Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId, RestPattern,
-    Stmt, StmtId, TypeDefAst, VariantAst,
+    Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId, MatchArm,
+    MatchPattern, RestPattern, Stmt, StmtId, TypeDefAst, VariantAst,
 };
 use crate::Result;
 
@@ -209,6 +209,14 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
                 body: body_id,
             }
         }
+        cst::ExprKind::Match(scrutinee, arms) => {
+            let scrutinee_id = lower_expr(ast, *scrutinee)?;
+            let arms_lowered = arms
+                .into_iter()
+                .map(|arm| lower_match_arm(ast, arm))
+                .collect::<Result<Vec<_>>>()?;
+            Expr::Match(scrutinee_id, arms_lowered)
+        }
     };
     ast.add_expr(e, span)
 }
@@ -315,4 +323,39 @@ fn lower_variant(ast: &mut Ast, v: cst::VariantCst) -> Result<VariantAst> {
         name: v.name,
         payloads,
     })
+}
+
+/// Lower a CST match arm to AST.
+fn lower_match_arm(ast: &mut Ast, arm: cst::MatchArm) -> Result<MatchArm> {
+    let pattern = lower_match_pattern(arm.pattern);
+    let guard = arm.guard.map(|e| lower_expr(ast, e)).transpose()?;
+    let body = lower_expr(ast, arm.body)?;
+    Ok(MatchArm {
+        pattern,
+        guard,
+        body,
+    })
+}
+
+/// Lower a CST match pattern to AST.
+fn lower_match_pattern(pat: cst::MatchPattern) -> MatchPattern {
+    match pat {
+        cst::MatchPattern::Wildcard => MatchPattern::Wildcard,
+        cst::MatchPattern::Var(name) => MatchPattern::Var(name),
+        cst::MatchPattern::Literal(lit) => MatchPattern::Literal(lit),
+        cst::MatchPattern::Variant(ty, var, pats) => MatchPattern::Variant(
+            ty,
+            var,
+            pats.into_iter().map(lower_match_pattern).collect(),
+        ),
+        cst::MatchPattern::Object(fields) => MatchPattern::Object(
+            fields
+                .into_iter()
+                .map(|(k, p)| (k, lower_match_pattern(p)))
+                .collect(),
+        ),
+        cst::MatchPattern::Tuple(pats) => MatchPattern::Tuple(
+            pats.into_iter().map(lower_match_pattern).collect(),
+        ),
+    }
 }

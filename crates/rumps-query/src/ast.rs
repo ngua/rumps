@@ -326,6 +326,69 @@ pub(crate) enum TypePattern {
     VariantBind(String, String, SmallVec<[String; 2]>),
 }
 
+/// A match pattern for the `MATCH` expression.
+///
+/// Patterns destructure values and bind variables. Unlike `BindingPattern` (for
+/// `LET`), match patterns can include literals and variant constructors for
+/// exhaustive matching against sum types.
+///
+/// Uses `Vec` instead of `SmallVec` for recursive fields to avoid infinite size.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum MatchPattern {
+    /// Wildcard: `_`
+    Wildcard,
+
+    /// Variable binding: `x`, `name`
+    ///
+    /// Matches any value and binds it to the given name.
+    Var(String),
+
+    /// Literal: `0`, `"hello"`, `true`
+    ///
+    /// Matches only if the value equals the literal.
+    Literal(Literal),
+
+    /// Variant with sub-patterns: `Option.Some(x)`, `Result.Err(e)`
+    ///
+    /// Matches a tagged value if the type and variant match, then recursively
+    /// matches the payloads against the sub-patterns.
+    Variant(String, String, Vec<Self>),
+
+    /// Object destructuring: `{ name, age }`, `{ name, role: "admin" }`
+    ///
+    /// Each entry is `(field_name, pattern)`. Shorthand `{ name }` desugars to
+    /// `{ name: name }` (i.e., match field and bind to same-named variable).
+    /// Additional fields in the value are allowed (partial matching).
+    Object(Vec<(String, Self)>),
+
+    /// Tuple pattern: `(a, b, c)`
+    ///
+    /// Matches a tuple of the same arity and recursively matches elements.
+    Tuple(Vec<Self>),
+}
+
+/// A match arm in a `MATCH` expression.
+///
+/// Each arm consists of a pattern, an optional guard condition, and a body
+/// expression. Arms are tried in order; the first matching arm is evaluated.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MatchArm {
+    /// The pattern to match against the scrutinee.
+    pub(crate) pattern: MatchPattern,
+
+    /// Optional guard condition: `IF cond`.
+    ///
+    /// If present, the arm only matches if the pattern matches AND the guard
+    /// evaluates to truthy. Variables bound by the pattern are visible in the
+    /// guard.
+    pub(crate) guard: Option<ExprId>,
+
+    /// The body expression to evaluate if this arm matches.
+    ///
+    /// Variables bound by the pattern are visible in the body.
+    pub(crate) body: ExprId,
+}
+
 /// A variant definition in a user-defined sum type.
 ///
 /// Each variant has a name and zero or more payload types.
@@ -489,6 +552,13 @@ pub(crate) enum Expr {
     /// Evaluates to the value of the taken branch. If no else branch and
     /// condition is false, evaluates to `Option.None`.
     If(ExprId, ExprId, Option<ExprId>),
+
+    /// Match expression: `MATCH expr { pattern => body, ... }`.
+    ///
+    /// Evaluates the scrutinee once, then tries each arm in order. The first
+    /// arm whose pattern matches (and whose guard, if any, is truthy) has its
+    /// body evaluated. Errors if no arm matches.
+    Match(ExprId, Vec<MatchArm>),
 
     /// Closure (anonymous function): `x => expr` or `(a, b) => expr`.
     ///

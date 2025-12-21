@@ -148,6 +148,9 @@ pub(crate) enum ExprKind {
         ret: Option<TypeExpr>,
         body: Box<Expr>,
     },
+
+    /// Match expression: `MATCH expr { pattern => body, ... }`.
+    Match(Box<Expr>, Vec<MatchArm>),
 }
 
 /// A CST statement node with inline span.
@@ -271,4 +274,34 @@ pub(crate) enum TypeDefCst {
 
     /// Structural object type alias: `{ field1: Type1, field2: Type2, ... }`
     Struct(Vec<(String, TypeExpr)>),
+}
+
+/// A match pattern (CST form).
+#[derive(Clone, Debug)]
+pub(crate) enum MatchPattern {
+    /// Wildcard: `_`
+    Wildcard,
+
+    /// Variable binding: `x`, `name`
+    Var(String),
+
+    /// Literal: `0`, `"hello"`, `true`
+    Literal(crate::ast::Literal),
+
+    /// Variant with sub-patterns: `Option.Some(x)`, `Result.Err(e)`
+    Variant(String, String, Vec<Self>),
+
+    /// Object destructuring: `{ name, age }`
+    Object(Vec<(String, Self)>),
+
+    /// Tuple pattern: `(a, b, c)`
+    Tuple(Vec<Self>),
+}
+
+/// A match arm (CST form).
+#[derive(Clone, Debug)]
+pub(crate) struct MatchArm {
+    pub(crate) pattern: MatchPattern,
+    pub(crate) guard: Option<Expr>,
+    pub(crate) body: Expr,
 }

@@ -1,0 +1,12 @@
+; Non-exhaustive match error
+
+LET x = 5
+
+; This should fail because no arm matches
+LET result = MATCH x {
+  1 => { "one" }
+  2 => { "two" }
+  3 => { "three" }
+}
+
+OUTPUT result

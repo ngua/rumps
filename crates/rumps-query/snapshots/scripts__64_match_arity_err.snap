@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Pattern arity mismatch error\n\nLET opt = Option.Some(42)\n\n; This should fail because Option.Some has 1 payload, not 2\nLET result = MATCH opt {\n  Option.Some(a, b) => { a + b }\n  Option.None => { 0 }\n}\n\nOUTPUT result\n"
+---
+ERROR: runtime error at 132..201: `Option.Some` has 1 payload(s), but 2 pattern(s) provided

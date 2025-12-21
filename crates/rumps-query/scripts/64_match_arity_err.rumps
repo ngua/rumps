@@ -1,0 +1,11 @@
+; Pattern arity mismatch error
+
+LET opt = Option.Some(42)
+
+; This should fail because Option.Some has 1 payload, not 2
+LET result = MATCH opt {
+  Option.Some(a, b) => { a + b }
+  Option.None => { 0 }
+}
+
+OUTPUT result

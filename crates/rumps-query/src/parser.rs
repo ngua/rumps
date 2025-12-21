@@ -1300,7 +1300,7 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::FatArrow))
             .then_ignore(Self::opt_newlines())
-            .then(expr)
+            .then(expr.clone())
             .map_with_span(|((params_vec, ret), body), span| {
                 let params = SmallVec::from_vec(params_vec);
                 cst::Expr::new(
@@ -1312,6 +1312,9 @@ impl Parser {
                     span,
                 )
             });
+
+        // Match expression
+        let match_expr = Self::match_expr(expr);
 
         // Order matters (see original parser for rationale)
         choice((
@@ -1325,7 +1328,168 @@ impl Parser {
             object,
             block_expr,
             if_expr,
+            match_expr,
         ))
+    }
+
+    /// Parse a match pattern.
+    ///
+    /// Patterns include wildcards, variables, literals, variants, objects, and
+    /// tuples. This is recursive to handle nested patterns.
+    fn match_pattern(
+    ) -> impl chumsky::Parser<Token, cst::MatchPattern, Error = ParseErr> + Clone
+    {
+        recursive(|pat| {
+            // Wildcard: `_`
+            let wildcard = select! { Token::Ident(s) if s == "_" => () }
+                .to(cst::MatchPattern::Wildcard);
+
+            // Literals
+            let int_lit = select! { Token::Int(n) => cst::MatchPattern::Literal(Literal::Int(n)) };
+            let float_lit = select! {
+                Token::Float(OrderedFloat(n)) => cst::MatchPattern::Literal(Literal::Float(n))
+            };
+            let str_lit = select! {
+                Token::String(s) => cst::MatchPattern::Literal(Literal::String(s))
+            };
+            let bool_lit = choice((
+                just(Token::True)
+                    .to(cst::MatchPattern::Literal(Literal::Bool(true))),
+                just(Token::False)
+                    .to(cst::MatchPattern::Literal(Literal::Bool(false))),
+            ));
+            let literal = choice((int_lit, float_lit, str_lit, bool_lit));
+
+            // Variant pattern: `Type.Variant` or `Type.Variant(pat, pat, ...)`
+            let variant_args_sep =
+                just(Token::Comma).then_ignore(Self::opt_newlines());
+            let variant_args = just(Token::LParen)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(
+                    pat.clone().separated_by(variant_args_sep).allow_trailing(),
+                )
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RParen));
+
+            let variant_pat = Self::ident()
+                .then_ignore(just(Token::Dot))
+                .then(Self::ident())
+                .then(variant_args.or_not())
+                .map(|((ty, var), args)| {
+                    cst::MatchPattern::Variant(
+                        ty,
+                        var,
+                        args.unwrap_or_default(),
+                    )
+                });
+
+            // Tuple pattern: `(pat, pat, ...)`
+            let tuple_sep =
+                just(Token::Comma).then_ignore(Self::opt_newlines());
+            let tuple_pat = just(Token::LParen)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(
+                    pat.clone().separated_by(tuple_sep).allow_trailing(),
+                )
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RParen))
+                .map(cst::MatchPattern::Tuple);
+
+            // Object pattern field: `name` (shorthand) or `name: pattern`
+            let obj_field = Self::ident()
+                .then(
+                    just(Token::Colon)
+                        .ignore_then(Self::opt_newlines())
+                        .ignore_then(pat.clone())
+                        .or_not(),
+                )
+                .map(|(name, maybe_pat)| {
+                    let p = maybe_pat.unwrap_or_else(|| {
+                        cst::MatchPattern::Var(name.clone())
+                    });
+                    (name, p)
+                });
+
+            // Object pattern: `{ name, age }` or `{ name: n, age: a }`
+            let obj_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+            let obj_pat = just(Token::LBrace)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(obj_field.separated_by(obj_sep).allow_trailing())
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RBrace))
+                .map(cst::MatchPattern::Object);
+
+            // Variable: any identifier except `_`
+            let var_pat = select! { Token::Ident(s) if s != "_" => s }
+                .map(cst::MatchPattern::Var);
+
+            // Order: variant before var (so `Type.Variant` is parsed correctly)
+            choice((
+                wildcard,
+                literal,
+                variant_pat,
+                tuple_pat,
+                obj_pat,
+                var_pat,
+            ))
+        })
+    }
+
+    /// Parse a match arm: `pattern => body` or `pattern IF guard => body`.
+    fn match_arm(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::MatchArm, Error = ParseErr> + Clone
+    {
+        Self::match_pattern()
+            .then(
+                Self::opt_newlines()
+                    .ignore_then(just(Token::If))
+                    .ignore_then(Self::opt_newlines())
+                    .ignore_then(expr.clone())
+                    .or_not(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::FatArrow))
+            .then_ignore(Self::opt_newlines())
+            .then(expr)
+            .map(|((pattern, guard), body)| cst::MatchArm {
+                pattern,
+                guard,
+                body,
+            })
+    }
+
+    /// Parse a match expression: `MATCH expr { arm... }`.
+    fn match_expr(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let arm_sep = Self::newlines();
+        let arms = just(Token::LBrace)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::match_arm(expr.clone())
+                    .separated_by(arm_sep)
+                    .allow_leading()
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBrace));
+
+        just(Token::Match)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(expr)
+            .then_ignore(Self::opt_newlines())
+            .then(arms)
+            .map_with_span(|(scrutinee, arms), span| {
+                cst::Expr::new(
+                    cst::ExprKind::Match(Box::new(scrutinee), arms),
+                    span,
+                )
+            })
     }
 
     /// Parse an identifier token.
@@ -2203,6 +2367,145 @@ mod tests {
                 }
             }
             _ => panic!("expected Type"),
+        }
+    }
+
+    #[test]
+    fn parse_match_simple() {
+        // Simple match with wildcard
+        let src = "MATCH x { _ => { 1 } }";
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Match(_, arms)) => {
+                assert_eq!(arms.len(), 1);
+                assert_eq!(arms[0].pattern, crate::ast::MatchPattern::Wildcard);
+                assert!(arms[0].guard.is_none());
+            }
+            _ => panic!("expected Match"),
+        }
+    }
+
+    #[test]
+    fn parse_match_literals() {
+        // Match with literal patterns
+        let src = "MATCH n {\n  1 => { \"one\" }\n  2 => { \"two\" }\n  _ => { \"other\" }\n}";
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Match(_, arms)) => {
+                assert_eq!(arms.len(), 3);
+                assert_eq!(
+                    arms[0].pattern,
+                    crate::ast::MatchPattern::Literal(Literal::Int(1))
+                );
+                assert_eq!(
+                    arms[1].pattern,
+                    crate::ast::MatchPattern::Literal(Literal::Int(2))
+                );
+                assert_eq!(arms[2].pattern, crate::ast::MatchPattern::Wildcard);
+            }
+            _ => panic!("expected Match"),
+        }
+    }
+
+    #[test]
+    fn parse_match_variant() {
+        // Match with variant patterns
+        let src =
+            "MATCH opt {\n  Option.Some(v) => { v }\n  Option.None => { 0 }\n}";
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Match(_, arms)) => {
+                assert_eq!(arms.len(), 2);
+                match &arms[0].pattern {
+                    crate::ast::MatchPattern::Variant(ty, var, pats) => {
+                        assert_eq!(ty, "Option");
+                        assert_eq!(var, "Some");
+                        assert_eq!(pats.len(), 1);
+                    }
+                    _ => panic!("expected Variant pattern"),
+                }
+                match &arms[1].pattern {
+                    crate::ast::MatchPattern::Variant(ty, var, pats) => {
+                        assert_eq!(ty, "Option");
+                        assert_eq!(var, "None");
+                        assert!(pats.is_empty());
+                    }
+                    _ => panic!("expected Variant pattern"),
+                }
+            }
+            _ => panic!("expected Match"),
+        }
+    }
+
+    #[test]
+    fn parse_match_tuple() {
+        // Match with tuple pattern
+        let src = "MATCH pair { (a, b) => { a + b } }";
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Match(_, arms)) => {
+                assert_eq!(arms.len(), 1);
+                match &arms[0].pattern {
+                    crate::ast::MatchPattern::Tuple(pats) => {
+                        assert_eq!(pats.len(), 2);
+                    }
+                    _ => panic!("expected Tuple pattern"),
+                }
+            }
+            _ => panic!("expected Match"),
+        }
+    }
+
+    #[test]
+    fn parse_match_object() {
+        // Match with object pattern
+        let src = "MATCH user { { name, age } => { name } }";
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Match(_, arms)) => {
+                assert_eq!(arms.len(), 1);
+                match &arms[0].pattern {
+                    crate::ast::MatchPattern::Object(fields) => {
+                        assert_eq!(fields.len(), 2);
+                        assert_eq!(fields[0].0, "name");
+                        assert_eq!(fields[1].0, "age");
+                    }
+                    _ => panic!("expected Object pattern"),
+                }
+            }
+            _ => panic!("expected Match"),
+        }
+    }
+
+    #[test]
+    fn parse_match_guard() {
+        // Match with pattern guard
+        let src = "MATCH n {\n  x IF x > 10 => { \"large\" }\n  _ => { \"small\" }\n}";
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Match(_, arms)) => {
+                assert_eq!(arms.len(), 2);
+                assert!(arms[0].guard.is_some());
+                assert!(arms[1].guard.is_none());
+            }
+            _ => panic!("expected Match"),
+        }
+    }
+
+    #[test]
+    fn parse_match_multiline() {
+        // Multi-line match
+        let src = r#"MATCH status {
+  Status.Pending => { "waiting" }
+  Status.Active(msg) => { msg }
+  Status.Completed => { "done" }
+}"#;
+        let (ast, id) = parse_expr_ok(src);
+        match ast.get_expr(id) {
+            Some(Expr::Match(_, arms)) => {
+                assert_eq!(arms.len(), 3);
+            }
+            _ => panic!("expected Match"),
         }
     }
 }
