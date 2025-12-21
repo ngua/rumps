@@ -53,10 +53,10 @@ FUN greet (p: Person) -> String {
 OUTPUT greet({ name: "Diana", age: 28 })
 
 ; Function returning struct-compatible object
-FUN make_person (name: String, age: Int) -> Object {
+FUN make-person (name: String, age: Int) -> Object {
   { name: name, age: age }
 }
 
-LET p3 = make_person("Eve", 35)
+LET p3 = make-person("Eve", 35)
 OUTPUT p3.name
 OUTPUT p3.age

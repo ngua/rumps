@@ -3,22 +3,22 @@
 
 ; === Chained calls (currying pattern) ===
 
-FUN make_adder (n) {
+FUN make-adder (n) {
   x => x + n
 }
 
-LET add5 = make_adder(5)
+LET add5 = make-adder(5)
 OUTPUT add5(10)
 ; Expected: 15
 
-OUTPUT make_adder(100)(42)
+OUTPUT make-adder(100)(42)
 ; Expected: 142
 
-FUN make_multiplier (n) {
+FUN make-multiplier (n) {
   x => x * n
 }
 
-OUTPUT make_multiplier(2)(7)
+OUTPUT make-multiplier(2)(7)
 ; Expected: 14
 
 ; === IIFE (Immediately Invoked Function Expression) ===
@@ -59,21 +59,21 @@ FUN compose (f, g) {
 FUN double (x) { x * 2 }
 FUN inc (x) { x + 1 }
 
-LET double_then_inc = compose(inc, double)
-OUTPUT double_then_inc(20)
+LET double-then-inc = compose(inc, double)
+OUTPUT double-then-inc(20)
 ; Expected: 41 (double(20)=40, inc(40)=41)
 
-LET inc_then_double = compose(double, inc)
-OUTPUT inc_then_double(20)
+LET inc-then-double = compose(double, inc)
+OUTPUT inc-then-double(20)
 ; Expected: 42 (inc(20)=21, double(21)=42)
 
 ; === Typed functions with valid calls ===
 
-FUN add_typed (a: Int, b: Int) -> Int {
+FUN add-typed (a: Int, b: Int) -> Int {
   a + b
 }
 
-OUTPUT add_typed(10, 32)
+OUTPUT add-typed(10, 32)
 ; Expected: 42
 
 FUN greet (name: String) -> String {
@@ -85,39 +85,39 @@ OUTPUT greet("World")
 
 ; === Higher-order with typed parameters ===
 
-FUN apply_twice (f: (Int) -> Int, x: Int) -> Int {
+FUN apply-twice (f: (Int) -> Int, x: Int) -> Int {
   f(f(x))
 }
 
-OUTPUT apply_twice(x => x + 1, 40)
+OUTPUT apply-twice(x => x + 1, 40)
 ; Expected: 42
 
-OUTPUT apply_twice(x => x * 2, 5)
+OUTPUT apply-twice(x => x * 2, 5)
 ; Expected: 20
 
 ; === Functions returning functions with types ===
 
-FUN make_scaler (n: Int) -> (Int) -> Int {
+FUN make-scaler (n: Int) -> (Int) -> Int {
   x => x * n
 }
 
-LET triple = make_scaler(3)
+LET triple = make-scaler(3)
 OUTPUT triple(14)
 ; Expected: 42
 
-OUTPUT make_scaler(7)(6)
+OUTPUT make-scaler(7)(6)
 ; Expected: 42
 
 ; === Complex nested calls ===
 
-OUTPUT make_multiplier(2)(make_adder(3)(4))
+OUTPUT make-multiplier(2)(make-adder(3)(4))
 ; Expected: 14 (add3(4)=7, mult2(7)=14)
 
-FUN chain_a (x) { x + 1 }
-FUN chain_b (x) { x * 2 }
-FUN chain_c (x) { x - 3 }
+FUN chain-a (x) { x + 1 }
+FUN chain-b (x) { x * 2 }
+FUN chain-c (x) { x - 3 }
 
-OUTPUT chain_c(chain_b(chain_a(10)))
+OUTPUT chain-c(chain-b(chain-a(10)))
 ; Expected: 19 ((10+1)*2-3 = 22-3 = 19)
 
 ; === Passing named functions to higher-order functions ===
@@ -128,30 +128,30 @@ OUTPUT apply(double, 21)
 OUTPUT apply(inc, 41)
 ; Expected: 42
 
-OUTPUT apply_twice(double, 3)
+OUTPUT apply-twice(double, 3)
 ; Expected: 12 (double(3)=6, double(6)=12)
 
-OUTPUT apply_twice(inc, 40)
+OUTPUT apply-twice(inc, 40)
 ; Expected: 42
 
 ; === Closure capturing multiple variables ===
 
 LET a = 10
 LET b = 20
-LET sum_with_ab = x => x + a + b
-OUTPUT sum_with_ab(12)
+LET sum-with-ab = x => x + a + b
+OUTPUT sum-with-ab(12)
 ; Expected: 42
 
 ; === Factorial via currying ===
 
-FUN make_factorial () {
+FUN make-factorial () {
   FUN fact (n) {
     IF n <= 1 { 1 } ELSE { n * fact(n - 1) }
   }
   fact
 }
 
-LET factorial = make_factorial()
+LET factorial = make-factorial()
 OUTPUT factorial(5)
 ; Expected: 120
 

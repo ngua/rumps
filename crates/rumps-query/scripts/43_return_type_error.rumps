@@ -1,8 +1,8 @@
 ; Test: Return Type Error
 ; Function returns wrong type.
 
-FUN get_number () -> Int {
+FUN get-number () -> Int {
   "not a number"
 }
 
-OUTPUT get_number()
+OUTPUT get-number()

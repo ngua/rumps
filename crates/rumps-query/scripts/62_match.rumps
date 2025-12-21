@@ -36,16 +36,16 @@ LET unwrapped = MATCH opt {
 OUTPUT unwrapped
 
 ; Option.None
-LET none_opt = Option.None
-LET default = MATCH none_opt {
+LET none-opt = Option.None
+LET default = MATCH none-opt {
   Option.Some(v) => { v }
   Option.None => { -1 }
 }
 OUTPUT default
 
 ; Nested Option
-LET nested_opt = Option.Some(Option.Some(5))
-LET deep = MATCH nested_opt {
+LET nested-opt = Option.Some(Option.Some(5))
+LET deep = MATCH nested-opt {
   Option.Some(Option.Some(v)) => { v }
   Option.Some(Option.None) => { -1 }
   Option.None => { -2 }
@@ -54,54 +54,54 @@ OUTPUT deep
 
 ; Result type
 LET ok = Result.Ok(100)
-LET ok_val = MATCH ok {
+LET ok-val = MATCH ok {
   Result.Ok(v) => { v }
   Result.Err(e) => { 0 }
 }
-OUTPUT ok_val
+OUTPUT ok-val
 
 LET err = Result.Err("oops")
-LET err_val = MATCH err {
+LET err-val = MATCH err {
   Result.Ok(v) => { v }
   Result.Err(e) => { -1 }
 }
-OUTPUT err_val
+OUTPUT err-val
 
 ; === User-defined sum types ===
 
 TYPE Status = Pending | Active(String) | Completed
 
 LET s1 = Status.Pending
-LET s1_label = MATCH s1 {
+LET s1-label = MATCH s1 {
   Status.Pending => { "waiting" }
   Status.Active(msg) => { "active: " ++ msg }
   Status.Completed => { "done" }
 }
-OUTPUT s1_label
+OUTPUT s1-label
 
 LET s2 = Status.Active("step 1")
-LET s2_label = MATCH s2 {
+LET s2-label = MATCH s2 {
   Status.Pending => { "waiting" }
   Status.Active(msg) => { "active: " ++ msg }
   Status.Completed => { "done" }
 }
-OUTPUT s2_label
+OUTPUT s2-label
 
 LET s3 = Status.Completed
-LET s3_label = MATCH s3 {
+LET s3-label = MATCH s3 {
   Status.Pending => { "waiting" }
   Status.Active(msg) => { "active: " ++ msg }
   Status.Completed => { "done" }
 }
-OUTPUT s3_label
+OUTPUT s3-label
 
 ; === Tuple matching ===
 
 LET pair = (1, 2)
-LET pair_sum = MATCH pair {
+LET pair-sum = MATCH pair {
   (a, b) => { a + b }
 }
-OUTPUT pair_sum
+OUTPUT pair-sum
 
 ; With literal in tuple
 LET point = (0, 5)
@@ -165,8 +165,8 @@ LET size2 = MATCH val2 {
 OUTPUT size2
 
 ; Guard with Option
-LET maybe_num = Option.Some(42)
-LET check = MATCH maybe_num {
+LET maybe-num = Option.Some(42)
+LET check = MATCH maybe-num {
   Option.Some(n) IF n > 50 => { "large some" }
   Option.Some(n) IF n > 0 => { "small some" }
   Option.Some(_) => { "non-positive some" }
