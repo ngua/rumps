@@ -770,7 +770,7 @@ Array.reduce((acc, x) => acc + x, 0, [1, 2, 3])
 Object.keys({ a: 1, b: 2 })      ; ["a", "b"]
 Object.values({ a: 1, b: 2 })    ; Result.Ok([1, 2])
 Object.entries({ a: 1, b: 2 })   ; Result.Ok([("a", 1), ("b", 2)])
-Object.from_entries([("a", 1)])  ; { a: 1 }
+Object.from-entries([("a", 1)])  ; { a: 1 }
 
 ; Future modules
 Math.sqrt(16)    ; 4.0
@@ -800,7 +800,7 @@ The new design uses **module-qualified functions**:
 - Clean separation: keywords are special, everything else uses modules
 
 **Built-in modules** (provided by the runtime):
-- `Object`: `keys`, `values`, `entries`, `from_entries`
+- `Object`: `keys`, `values`, `entries`, `from-entries`
 - `Array`: `map`, `filter`, `reduce`, `fold`, `take`, `drop`, etc.
 - `Math`: `sqrt`, `sin`, `cos`, `abs`, `floor`, `ceil`, etc. (future)
 - `String`: `split`, `trim`, `starts_with`, `ends_with`, etc. (future)
@@ -841,7 +841,7 @@ modules. The resolution pass handles paths of arbitrary length.
 - [x] Add `Environment::module_fn_exists(&self, path: &[&str]) -> bool`
 - [x] Add `BUILTIN_MODULE_NAMES` constant as single source of truth
 - [x] Register built-in modules in `Environment::new()`:
-  - `Object` module with `keys`, `values`, `entries`, `from_entries`
+  - `Object` module with `keys`, `values`, `entries`, `from-entries`
   - `Array` module (initially empty, populated in 6.2.5)
 
 ##### 6.2.2 Name Resolution for Modules
@@ -889,7 +889,7 @@ Migrate existing primitives to `Object` module:
   - Return `Result.Ok(array)` if homogeneous, `Result.Err(msg)` otherwise
 - [x] `Object.entries`: `Object -> Result[Array[(String, T)], String]`
   - Return `Result.Ok(array)` of tuples if homogeneous
-- [x] `Object.from_entries`: `Array[(String, T)] -> Object`
+- [x] `Object.from-entries`: `Array[(String, T)] -> Object`
   - Construct object from tuples; later entries override
 - [x] Update tests to use module-qualified syntax
 - [x] Add integration test script (`66_object_module.rumps`)

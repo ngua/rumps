@@ -290,7 +290,7 @@ impl Environment {
     /// Register built-in modules.
     ///
     /// Built-in modules provide primitive functions grouped by category:
-    /// - `Object`: `keys`, `values`, `entries`, `from_entries`
+    /// - `Object`: `keys`, `values`, `entries`, `from-entries`
     /// - `Array`: `map`, `filter`, `reduce` (future)
     fn register_builtins(&mut self) {
         use crate::primitives::Prim;
@@ -300,7 +300,7 @@ impl Environment {
         object.register("keys", Prim::keys);
         object.register("values", Prim::values);
         object.register("entries", Prim::entries);
-        object.register("from_entries", Prim::from_entries);
+        object.register("from-entries", Prim::from_entries);
         self.modules.insert("Object".to_string(), object);
 
         // Array module (to be populated with map, filter, reduce, etc.)
@@ -487,7 +487,7 @@ mod tests {
         assert!(env.module_fn_exists(&["Object", "keys"]));
         assert!(env.module_fn_exists(&["Object", "values"]));
         assert!(env.module_fn_exists(&["Object", "entries"]));
-        assert!(env.module_fn_exists(&["Object", "from_entries"]));
+        assert!(env.module_fn_exists(&["Object", "from-entries"]));
 
         // Invalid paths
         assert!(!env.module_fn_exists(&["Object", "unknown"]));
