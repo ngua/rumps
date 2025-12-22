@@ -122,9 +122,12 @@ pub(crate) struct PrimCtx<'a> {
 impl PrimCtx<'_> {
     /// Create a `Result.Ok(v)` value from a `ValueId` already in the arena.
     pub(crate) fn result_ok(&mut self, v: ValueId) -> ValueId {
+        let base_ty = self
+            .arena
+            .base_type_of(v, self.type_exprs)
+            .unwrap_or(TypeId::INT);
         let unknown = self.type_exprs.named(TypeId::UNKNOWN);
-        let val = self.arena.get(v).cloned().unwrap_or(Value::Int(0));
-        let val_ty = self.type_exprs.named(val.base_type());
+        let val_ty = self.type_exprs.named(base_ty);
         let res_ty = self
             .type_exprs
             .app(TypeId::RESULT, smallvec![val_ty, unknown]);

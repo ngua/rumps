@@ -78,3 +78,8 @@ OUTPUT filtered  ; [3, 4, 5]
 ; Array.map with Option results (homogeneous tagged values)
 LET with-opts = Array.map(x => Option.Some(x), [1, 2, 3])
 OUTPUT with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
+
+; Nested Array.map (callback uses Array function)
+LET nested = [[1, 2], [3, 4]]
+LET doubled-nested = Array.map(arr => Array.map(x => x * 2, arr), nested)
+OUTPUT doubled-nested  ; [[2, 4], [6, 8]]

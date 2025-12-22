@@ -81,14 +81,14 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            check_arity("KEYS", &args, 1)?;
+            check_arity("Object.keys", &args, 1)?;
 
             let obj_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("KEYS: missing argument")
+                Error::runtime_no_span("Object.keys: missing argument")
             })?;
 
             let obj = ctx.arena.get(obj_id).cloned().ok_or_else(|| {
-                Error::runtime_no_span("KEYS: invalid argument")
+                Error::runtime_no_span("Object.keys: invalid argument")
             })?;
 
             match obj {
@@ -103,7 +103,7 @@ impl Prim {
                     Ok(ctx.arena.add(arr, ctx.span))
                 }
                 other => Err(Error::runtime_no_span(format!(
-                    "KEYS expects Object, got {:?}",
+                    "Object.keys expects Object, got {:?}",
                     std::mem::discriminant(&other)
                 ))),
             }
@@ -119,19 +119,21 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            check_arity("VALUES", &args, 1)?;
+            check_arity("Object.values", &args, 1)?;
 
             let obj_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("VALUES: missing argument")
+                Error::runtime_no_span("Object.values: missing argument")
             })?;
 
             let obj = ctx.arena.get(obj_id).cloned().ok_or_else(|| {
-                Error::runtime_no_span("VALUES: invalid argument")
+                Error::runtime_no_span("Object.values: invalid argument")
             })?;
 
             match obj {
                 Value::Object(map) => values_from_map(ctx, &map),
-                _ => Err(Error::runtime_no_span("VALUES expects Object")),
+                _ => {
+                    Err(Error::runtime_no_span("Object.values expects Object"))
+                }
             }
         })
     }
@@ -145,19 +147,21 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            check_arity("ENTRIES", &args, 1)?;
+            check_arity("Object.entries", &args, 1)?;
 
             let obj_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("ENTRIES: missing argument")
+                Error::runtime_no_span("Object.entries: missing argument")
             })?;
 
             let obj = ctx.arena.get(obj_id).cloned().ok_or_else(|| {
-                Error::runtime_no_span("ENTRIES: invalid argument")
+                Error::runtime_no_span("Object.entries: invalid argument")
             })?;
 
             match obj {
                 Value::Object(map) => entries_from_map(ctx, &map),
-                _ => Err(Error::runtime_no_span("ENTRIES expects Object")),
+                _ => {
+                    Err(Error::runtime_no_span("Object.entries expects Object"))
+                }
             }
         })
     }
@@ -171,19 +175,21 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            check_arity("FROM-ENTRIES", &args, 1)?;
+            check_arity("Object.from-entries", &args, 1)?;
 
             let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("FROM-ENTRIES: missing argument")
+                Error::runtime_no_span("Object.from-entries: missing argument")
             })?;
 
             let arr = ctx.arena.get(arr_id).cloned().ok_or_else(|| {
-                Error::runtime_no_span("FROM-ENTRIES: invalid argument")
+                Error::runtime_no_span("Object.from-entries: invalid argument")
             })?;
 
             match arr {
                 Value::Array(_, elems) => from_entries_impl(ctx, &elems),
-                _ => Err(Error::runtime_no_span("FROM-ENTRIES expects Array")),
+                _ => Err(Error::runtime_no_span(
+                    "Object.from-entries expects Array",
+                )),
             }
         })
     }
@@ -220,30 +226,30 @@ fn values_from_map(
             Ok(ctx.result_ok(arr_id))
         }
         Some(first_id) => {
-            let first_val =
-                ctx.arena.get(first_id).cloned().ok_or_else(|| {
-                    Error::runtime_no_span("VALUES: invalid value in object")
+            let first_ty = ctx
+                .arena
+                .base_type_of(first_id, ctx.type_exprs)
+                .ok_or_else(|| {
+                    Error::runtime_no_span("Object.values: invalid value")
                 })?;
-            let first_ty = Value::base_type(&first_val);
 
             let heterogeneous = map.values().skip(1).any(|vid| {
                 ctx.arena
-                    .get(*vid)
-                    .map(|v| Value::base_type(v) != first_ty)
+                    .base_type_of(*vid, ctx.type_exprs)
+                    .map(|ty| ty != first_ty)
                     .unwrap_or(true)
             });
 
             if heterogeneous {
-                let msg = ctx
-                    .arena
-                    .intern("VALUES: object contains heterogeneous types");
+                let msg = ctx.arena.intern(
+                    "Object.values: object contains heterogeneous types",
+                );
                 let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
                 Ok(ctx.result_err(msg_val))
             } else {
                 let vals: SmallVec<[ValueId; 4]> =
                     map.values().copied().collect();
-                let elem_ty =
-                    ctx.type_exprs.named(Value::base_type(&first_val));
+                let elem_ty = ctx.type_exprs.named(first_ty);
                 let arr = Value::Array(elem_ty, vals);
                 let arr_id = ctx.arena.add(arr, ctx.span);
                 Ok(ctx.result_ok(arr_id))
@@ -267,28 +273,29 @@ fn entries_from_map(
             Ok(ctx.result_ok(arr_id))
         }
         Some(first_id) => {
-            let first_val =
-                ctx.arena.get(first_id).cloned().ok_or_else(|| {
-                    Error::runtime_no_span("ENTRIES: invalid value")
+            let first_ty = ctx
+                .arena
+                .base_type_of(first_id, ctx.type_exprs)
+                .ok_or_else(|| {
+                    Error::runtime_no_span("Object.entries: invalid value")
                 })?;
-            let first_ty = Value::base_type(&first_val);
 
             let heterogeneous = map.values().skip(1).any(|vid| {
                 ctx.arena
-                    .get(*vid)
-                    .map(|v| Value::base_type(v) != first_ty)
+                    .base_type_of(*vid, ctx.type_exprs)
+                    .map(|ty| ty != first_ty)
                     .unwrap_or(true)
             });
 
             if heterogeneous {
-                let msg = ctx
-                    .arena
-                    .intern("ENTRIES: object contains heterogeneous types");
+                let msg = ctx.arena.intern(
+                    "Object.entries: object contains heterogeneous types",
+                );
                 let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
                 Ok(ctx.result_err(msg_val))
             } else {
                 let str_ty = ctx.type_exprs.named(TypeId::STRING);
-                let val_ty = ctx.type_exprs.named(Value::base_type(&first_val));
+                let val_ty = ctx.type_exprs.named(first_ty);
                 let tuple_ty = ctx.type_exprs.tuple(smallvec![str_ty, val_ty]);
 
                 let entries: Vec<_> =
@@ -322,20 +329,20 @@ fn from_entries_impl(
 
     elems.iter().try_for_each(|elem_id| {
         let elem = ctx.arena.get(*elem_id).ok_or_else(|| {
-            Error::runtime_no_span("FROM-ENTRIES: invalid element")
+            Error::runtime_no_span("Object.from-entries: invalid element")
         })?;
 
         match elem {
             Value::Tuple(_, parts) if parts.len() == 2 => {
                 let key_id = *parts.first().ok_or_else(|| {
-                    Error::runtime_no_span("FROM-ENTRIES: missing key")
+                    Error::runtime_no_span("Object.from-entries: missing key")
                 })?;
                 let val_id = *parts.get(1).ok_or_else(|| {
-                    Error::runtime_no_span("FROM-ENTRIES: missing value")
+                    Error::runtime_no_span("Object.from-entries: missing value")
                 })?;
 
                 let key_val = ctx.arena.get(key_id).ok_or_else(|| {
-                    Error::runtime_no_span("FROM-ENTRIES: invalid key")
+                    Error::runtime_no_span("Object.from-entries: invalid key")
                 })?;
 
                 match key_val {
@@ -344,12 +351,12 @@ fn from_entries_impl(
                         Ok(())
                     }
                     _ => Err(Error::runtime_no_span(
-                        "FROM-ENTRIES: tuple key must be String",
+                        "Object.from-entries: tuple key must be String",
                     )),
                 }
             }
             _ => Err(Error::runtime_no_span(
-                "FROM-ENTRIES: array must contain (String, T) tuples",
+                "Object.from-entries: array must contain (String, T) tuples",
             )),
         }
     })?;

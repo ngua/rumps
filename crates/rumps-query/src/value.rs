@@ -118,6 +118,15 @@ impl ValueArena {
         self.values.get(id.idx())
     }
 
+    /// Get the base type of a value by ID without cloning.
+    pub(crate) fn base_type_of(
+        &self,
+        id: ValueId,
+        type_exprs: &TypeExprArena,
+    ) -> Option<TypeId> {
+        self.get(id).map(|v| v.base_type(type_exprs))
+    }
+
     /// Get the span of a value.
     pub(crate) fn span(&self, id: ValueId) -> Option<Span> {
         self.value_spans.get(id.idx()).copied()
@@ -403,9 +412,10 @@ impl Value {
 
     /// Get the simplified base `TypeId` for this value.
     ///
-    /// Returns the primitive type id for scalars, or `UNKNOWN` for compound
-    /// types that don't have a single base (closures, functions, tagged).
-    pub(crate) fn base_type(&self) -> TypeId {
+    /// Returns the primitive type id for scalars. For tagged values, resolves
+    /// the base type from the type expression (e.g., `Option` or `Result`).
+    /// Returns `UNKNOWN` for closures and functions.
+    pub(crate) fn base_type(&self, type_exprs: &TypeExprArena) -> TypeId {
         match self {
             Self::Bool(_) => TypeId::BOOL,
             Self::Int(_) => TypeId::INT,
@@ -415,7 +425,9 @@ impl Value {
             Self::Array(..) => TypeId::ARRAY,
             Self::Object(_) => TypeId::OBJECT,
             Self::Tuple(..) => TypeId::TUPLE,
-            Self::Tagged(..) => TypeId::UNKNOWN,
+            Self::Tagged(ty_expr, _, _) => {
+                type_exprs.base_type(*ty_expr).unwrap_or(TypeId::UNKNOWN)
+            }
             Self::Closure { .. }
             | Self::Function { .. }
             | Self::ModuleFn { .. } => TypeId::UNKNOWN,

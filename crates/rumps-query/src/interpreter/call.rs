@@ -370,12 +370,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some((head, tail)) => {
                 let result =
                     self.invoke_callable(fn_id, &[*head], span).await?;
-                let result_val =
-                    self.arena.get(result).cloned().ok_or_else(|| {
+                let result_ty = self
+                    .arena
+                    .base_type_of(result, &self.type_exprs)
+                    .ok_or_else(|| {
                         Error::runtime(span, "Array.map: invalid result")
                     })?;
-
-                let result_ty = result_val.base_type();
 
                 // Check homogeneity
                 let checked_ty = first_ty.map_or_else(
