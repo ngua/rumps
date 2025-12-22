@@ -82,6 +82,10 @@ impl Prim {
     }
 
     /// Arity check helper; returns `Err` if wrong number of arguments.
+    ///
+    /// After this check passes, direct indexing `args[i]` for `i < expected`
+    /// is safe. This is an intentional exception to my general "no indexing"
+    /// rule since arity is statically validated.
     fn check_arity(
         name: &str,
         args: &SmallVec<[ValueId; 4]>,
@@ -110,11 +114,7 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Object.keys", &args, 1)?;
 
-            let obj_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Object.keys: missing argument")
-            })?;
-
-            let map = ctx.arena.get_object(obj_id).ok_or_else(|| {
+            let map = ctx.arena.get_object(args[0]).ok_or_else(|| {
                 Error::runtime_no_span("Object.keys expects Object")
             })?;
 
@@ -140,11 +140,7 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Object.values", &args, 1)?;
 
-            let obj_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Object.values: missing argument")
-            })?;
-
-            let map = ctx.arena.get_object(obj_id).ok_or_else(|| {
+            let map = ctx.arena.get_object(args[0]).ok_or_else(|| {
                 Error::runtime_no_span("Object.values expects Object")
             })?;
 
@@ -163,11 +159,7 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Object.entries", &args, 1)?;
 
-            let obj_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Object.entries: missing argument")
-            })?;
-
-            let map = ctx.arena.get_object(obj_id).ok_or_else(|| {
+            let map = ctx.arena.get_object(args[0]).ok_or_else(|| {
                 Error::runtime_no_span("Object.entries expects Object")
             })?;
 
@@ -186,11 +178,7 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Object.from-entries", &args, 1)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Object.from-entries: missing argument")
-            })?;
-
-            let (_, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
                 Error::runtime_no_span("Object.from-entries expects Array")
             })?;
 
@@ -372,11 +360,7 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.length", &args, 1)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.length: missing argument")
-            })?;
-
-            let (_, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
                 Error::runtime_no_span("Array.length expects Array")
             })?;
 
@@ -394,22 +378,14 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.push", &args, 2)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.push: missing array argument")
-            })?;
-
-            let val_id = *args.get(1).ok_or_else(|| {
-                Error::runtime_no_span("Array.push: missing value argument")
-            })?;
-
             let (ty, mut elems) =
-                ctx.arena.get_array(arr_id).ok_or_else(|| {
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
                     Error::runtime_no_span(
                         "Array.push expects Array as first argument",
                     )
                 })?;
 
-            elems.push(val_id);
+            elems.push(args[1]);
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
         })
     }
@@ -425,12 +401,8 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.pop", &args, 1)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.pop: missing argument")
-            })?;
-
             let (ty, mut elems) =
-                ctx.arena.get_array(arr_id).ok_or_else(|| {
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
                     Error::runtime_no_span("Array.pop expects Array")
                 })?;
 
@@ -450,11 +422,7 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.head", &args, 1)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.head: missing argument")
-            })?;
-
-            let (_, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
                 Error::runtime_no_span("Array.head expects Array")
             })?;
 
@@ -476,13 +444,10 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.tail", &args, 1)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.tail: missing argument")
-            })?;
-
-            let (ty, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
-                Error::runtime_no_span("Array.tail expects Array")
-            })?;
+            let (ty, elems) =
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
+                    Error::runtime_no_span("Array.tail expects Array")
+                })?;
 
             let tail: SmallVec<[ValueId; 4]> =
                 elems.get(1..).map(SmallVec::from_slice).unwrap_or_default();
@@ -500,13 +465,10 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.reverse", &args, 1)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.reverse: missing argument")
-            })?;
-
-            let (ty, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
-                Error::runtime_no_span("Array.reverse expects Array")
-            })?;
+            let (ty, elems) =
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
+                    Error::runtime_no_span("Array.reverse expects Array")
+                })?;
 
             let reversed: SmallVec<[ValueId; 4]> =
                 elems.iter().rev().copied().collect();
@@ -551,13 +513,10 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.sort", &args, 1)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.sort: missing argument")
-            })?;
-
-            let (ty, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
-                Error::runtime_no_span("Array.sort expects Array")
-            })?;
+            let (ty, elems) =
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
+                    Error::runtime_no_span("Array.sort expects Array")
+                })?;
 
             // Collect (ValueId, sortable key) pairs
             let mut pairs: Vec<(ValueId, SortKey)> = elems
@@ -601,27 +560,16 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.slice", &args, 3)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.slice: missing array argument")
-            })?;
-
-            let start_id = *args.get(1).ok_or_else(|| {
-                Error::runtime_no_span("Array.slice: missing start argument")
-            })?;
-
-            let end_id = *args.get(2).ok_or_else(|| {
-                Error::runtime_no_span("Array.slice: missing end argument")
-            })?;
-
-            let (ty, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
-                Error::runtime_no_span(
-                    "Array.slice expects Array as first argument",
-                )
-            })?;
+            let (ty, elems) =
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
+                    Error::runtime_no_span(
+                        "Array.slice expects Array as first argument",
+                    )
+                })?;
 
             let start = ctx
                 .arena
-                .get(start_id)
+                .get(args[1])
                 .and_then(|v| match v {
                     Value::Int(n) => Some(*n),
                     _ => None,
@@ -632,7 +580,7 @@ impl Prim {
 
             let end = ctx
                 .arena
-                .get(end_id)
+                .get(args[2])
                 .and_then(|v| match v {
                     Value::Int(n) => Some(*n),
                     _ => None,
@@ -664,21 +612,13 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.contains", &args, 2)?;
 
-            let arr_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.contains: missing array argument")
-            })?;
-
-            let val_id = *args.get(1).ok_or_else(|| {
-                Error::runtime_no_span("Array.contains: missing value argument")
-            })?;
-
-            let (_, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
                 Error::runtime_no_span(
                     "Array.contains expects Array as first argument",
                 )
             })?;
 
-            let needle = ctx.arena.get(val_id).ok_or_else(|| {
+            let needle = ctx.arena.get(args[1]).ok_or_else(|| {
                 Error::runtime_no_span("Array.contains: invalid value")
             })?;
 
@@ -701,23 +641,15 @@ impl Prim {
         Box::pin(async move {
             Self::check_arity("Array.concat", &args, 2)?;
 
-            let arr_a_id = *args.first().ok_or_else(|| {
-                Error::runtime_no_span("Array.concat: missing first array")
-            })?;
-
-            let arr_b_id = *args.get(1).ok_or_else(|| {
-                Error::runtime_no_span("Array.concat: missing second array")
-            })?;
-
             let (ty_a, elems_a) =
-                ctx.arena.get_array(arr_a_id).ok_or_else(|| {
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
                     Error::runtime_no_span(
                         "Array.concat expects Array as first argument",
                     )
                 })?;
 
             let (ty_b, elems_b) =
-                ctx.arena.get_array(arr_b_id).ok_or_else(|| {
+                ctx.arena.get_array(args[1]).ok_or_else(|| {
                     Error::runtime_no_span(
                         "Array.concat expects Array as second argument",
                     )
