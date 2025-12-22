@@ -11,7 +11,7 @@ use std::collections::HashMap;
 ///
 /// This is the single source of truth for which module names are recognized
 /// during resolution and registered at interpreter startup.
-pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &["Object", "Array"];
+pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &["Object", "Array", "String"];
 
 use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
@@ -167,8 +167,33 @@ impl PrimCtx<'_> {
     }
 
     /// Create a runtime error with span information.
-    pub(crate) fn error(&self, msg: impl Into<String>) -> crate::Error {
+    pub(crate) fn runtime_error(&self, msg: impl Into<String>) -> crate::Error {
         crate::Error::runtime(self.span, msg)
+    }
+
+    /// Create a type error with span information.
+    ///
+    /// Formats as `"{fn_name}: expected {expected}"`.
+    pub(crate) fn type_error(
+        &self,
+        fn_name: &str,
+        expected: &str,
+    ) -> crate::Error {
+        crate::Error::type_err(
+            self.span,
+            format!("{fn_name}: expected {expected}"),
+        )
+    }
+
+    /// Create a type error with a custom message suffix.
+    ///
+    /// Formats as `"{fn_name}: {msg}"`.
+    pub(crate) fn type_error_msg(
+        &self,
+        fn_name: &str,
+        msg: &str,
+    ) -> crate::Error {
+        crate::Error::type_err(self.span, format!("{fn_name}: {msg}"))
     }
 }
 
@@ -310,12 +335,14 @@ impl Environment {
     /// - `Object`: `keys`, `values`, `entries`, `from-entries`
     /// - `Array`: `length`, `push`, `pop`, `head`, `tail`, `reverse`, `sort`,
     ///   `slice`, `contains`, `concat`, plus HoF placeholders
+    /// - `String`: `length`, `upper`, `lower`, `trim`, `split`, `join`,
+    ///   `slice`, `contains`, `replace`
     ///
     /// Note: Array higher-order functions (`map`, `filter`, `reduce`) are
     /// handled specially by the interpreter. We register placeholders here
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
-        use crate::primitives::{Array, Object, Prim};
+        use crate::primitives::{Array, Object, Prim, Str};
 
         self.modules.insert(
             "Object".to_string(),
@@ -345,6 +372,21 @@ impl Environment {
                 ("slice", Array::slice),
                 ("contains", Array::contains),
                 ("concat", Array::concat),
+            ]),
+        );
+
+        self.modules.insert(
+            "String".to_string(),
+            Module::from_fns(&[
+                ("length", Str::length),
+                ("upper", Str::upper),
+                ("lower", Str::lower),
+                ("trim", Str::trim),
+                ("split", Str::split),
+                ("join", Str::join),
+                ("slice", Str::slice),
+                ("contains", Str::contains),
+                ("replace", Str::replace),
             ]),
         );
     }
@@ -447,6 +489,12 @@ mod tests {
         assert!(env.module_fn_exists(&["Array", "map"]));
         assert!(env.module_fn_exists(&["Array", "filter"]));
         assert!(env.module_fn_exists(&["Array", "reduce"]));
+        // String module is registered with functions
+        assert!(env.has_module("String"));
+        assert!(env.get_module_fn(&["String", "length"]).is_some());
+        assert!(env.module_fn_exists(&["String", "upper"]));
+        assert!(env.module_fn_exists(&["String", "split"]));
+        assert!(env.module_fn_exists(&["String", "join"]));
     }
 
     #[test]

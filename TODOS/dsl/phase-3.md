@@ -934,7 +934,7 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
   **NOTE**: `concat` MUST check that both arrays have the same element type! Use `base_type_of` to avoid cloning entire arrays
   **Integration test**: `72_array_primitives.rumps`
 
-- [ ] `String` — String operations
+- [x] `String` — String operations
   | Function                      | Description        | Example                                     |
   |-------------------------------|--------------------|---------------------------------------------|
   | `String.length(s)`            | Get length         | `String.length("hello")` → `5`              |
@@ -946,6 +946,7 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
   | `String.slice(s, i, j)`       | Substring          | `String.slice("hello", 1, 3)` → `"el"`      |
   | `String.contains(s, sub)`     | Check substring    | `String.contains("hello", "ell")` → `true`  |
   | `String.replace(s, old, new)` | Replace occurs     | `String.replace("foo", "o", "a")` → `"faa"` |
+  **Integration test**: `74_string_module.rumps`
 
 - [ ] `Math` — Mathematical operations
   | Function        | Description    | Example                    |
@@ -957,15 +958,17 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
   | `Math.ceil(x)`  | Ceiling        | `Math.ceil(3.2)` → `4`     |
   | `Math.round(x)` | Round          | `Math.round(3.5)` → `4`    |
   | `Math.sqrt(x)`  | Square root    | `Math.sqrt(16)` → `4.0`    |
-  | `Math.pow(x,y)` | Power          | `Math.pow(2, 3)` → `8`     |
   | `Math.log(x)`   | Natural log    | `Math.log(2.718)` → `~1.0` |
   | `Math.sin(x)`   | Sine           | `Math.sin(0)` → `0.0`      |
   | `Math.cos(x)`   | Cosine         | `Math.cos(0)` → `1.0`      |
+  **NOTE**: `Math.*` functions should work on _any_ numeric value. Follow RUMPS numeric coercion rules with 2-arity functions
+  **NOTE**: `Math.pow(x,y)` not necessary, as we have `**` operator
 
 - [ ] `Random` — Generating random values
-  | Function          | Description           | Example                     |
-  |-------------------|-----------------------|-----------------------------|
-  | `Random.random()` | Random 0-1 (as float) | `Random.random()` → `0.xxx` |
+  | Function             | Description                       | Example                                 |
+  |----------------------|-----------------------------------|-----------------------------------------|
+  | `Random.random()`    | Random 0-1 (as float)             | `Random.random()` → `0.xxx`             |
+  | `Random.range(x, y)` | Random between x and y (as float) | `Random.random(10.0, 100.0)` → `53.xxx` |
 
 - [ ] `Option` — Option operations
   | Function                 | Description          | Example                                   |

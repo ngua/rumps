@@ -40,8 +40,10 @@
 //! [`Interpreter::invoke_module_fn`]: crate::interpreter::Interpreter::invoke_module_fn
 
 use indexmap::IndexMap;
+use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::env::{PrimCtx, PrimResult};
 use crate::value::{StringId, TypeId, Value, ValueArena, ValueId};
@@ -122,7 +124,7 @@ impl Object {
             let map = ctx
                 .arena
                 .get_object(args[0])
-                .ok_or_else(|| ctx.error("Object.keys expects Object"))?;
+                .ok_or_else(|| ctx.type_error("Object.keys", "Object"))?;
 
             let keys: SmallVec<[ValueId; 4]> = map
                 .keys()
@@ -149,7 +151,7 @@ impl Object {
             let map = ctx
                 .arena
                 .get_object(args[0])
-                .ok_or_else(|| ctx.error("Object.values expects Object"))?;
+                .ok_or_else(|| ctx.type_error("Object.values", "Object"))?;
 
             Self::values_from_map(ctx, &map)
         })
@@ -169,7 +171,7 @@ impl Object {
             let map = ctx
                 .arena
                 .get_object(args[0])
-                .ok_or_else(|| ctx.error("Object.entries expects Object"))?;
+                .ok_or_else(|| ctx.type_error("Object.entries", "Object"))?;
 
             Self::entries_from_map(ctx, &map)
         })
@@ -187,7 +189,7 @@ impl Object {
             Self::check_arity("Object.from-entries", &args, 1, ctx.span)?;
 
             let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                ctx.error("Object.from-entries expects Array")
+                ctx.type_error("Object.from-entries", "Array")
             })?;
 
             Self::from_entries_impl(ctx, &elems)
@@ -212,7 +214,9 @@ impl Object {
                 let first_ty = ctx
                     .arena
                     .base_type_of(first_id, ctx.type_exprs)
-                    .ok_or_else(|| ctx.error("Object.values: invalid value"))?;
+                    .ok_or_else(|| {
+                        ctx.runtime_error("Object.values: invalid value")
+                    })?;
 
                 let heterogeneous = map.values().skip(1).any(|vid| {
                     ctx.arena
@@ -258,7 +262,7 @@ impl Object {
                     .arena
                     .base_type_of(first_id, ctx.type_exprs)
                     .ok_or_else(|| {
-                        ctx.error("Object.entries: invalid value")
+                        ctx.runtime_error("Object.entries: invalid value")
                     })?;
 
                 let heterogeneous = map.values().skip(1).any(|vid| {
@@ -310,10 +314,9 @@ impl Object {
         let mut obj: IndexMap<StringId, ValueId> = IndexMap::new();
 
         elems.iter().try_for_each(|elem_id| {
-            let elem = ctx
-                .arena
-                .get(*elem_id)
-                .ok_or_else(|| ctx.error("Object.from-entries: invalid element"))?;
+            let elem = ctx.arena.get(*elem_id).ok_or_else(|| {
+                ctx.runtime_error("Object.from-entries: invalid element")
+            })?;
 
             match elem {
                 Value::Tuple(_, parts) if parts.len() == 2 => {
@@ -321,24 +324,24 @@ impl Object {
                     let key_id = parts[0];
                     let val_id = parts[1];
 
-                    let key_val = ctx
-                        .arena
-                        .get(key_id)
-                        .ok_or_else(|| ctx.error("Object.from-entries: invalid key"))?;
+                    let key_val = ctx.arena.get(key_id).ok_or_else(|| {
+                        ctx.runtime_error("Object.from-entries: invalid key")
+                    })?;
 
                     match key_val {
                         Value::String(s) => {
                             obj.insert(*s, val_id);
                             Ok(())
                         }
-                        _ => Err(ctx.error(
-                            "Object.from-entries: tuple key must be String",
+                        _ => Err(ctx.type_error_msg(
+                            "Object.from-entries",
+                            "key must be String",
                         )),
                     }
                 }
-                _ => Err(ctx.error(
-                    "Object.from-entries: array must contain (String, T) tuples",
-                )),
+                _ => Err(
+                    ctx.type_error("Object.from-entries", "(String, T) tuples")
+                ),
             }
         })?;
 
@@ -366,7 +369,7 @@ impl Array {
             let (_, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.error("Array.length expects Array"))?;
+                .ok_or_else(|| ctx.type_error("Array.length", "Array"))?;
 
             Ok(ctx.arena.add(Value::Int(elems.len() as i64), ctx.span))
         })
@@ -382,10 +385,10 @@ impl Array {
         Box::pin(async move {
             Self::check_arity("Array.push", &args, 2, ctx.span)?;
 
-            let (ty, mut elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    ctx.error("Array.push expects Array as first argument")
-                })?;
+            let (ty, mut elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.type_error("Array.push", "Array"))?;
 
             elems.push(args[1]);
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
@@ -406,7 +409,7 @@ impl Array {
             let (ty, mut elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.error("Array.pop expects Array"))?;
+                .ok_or_else(|| ctx.type_error("Array.pop", "Array"))?;
 
             elems.pop();
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
@@ -427,7 +430,7 @@ impl Array {
             let (_, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.error("Array.head expects Array"))?;
+                .ok_or_else(|| ctx.type_error("Array.head", "Array"))?;
 
             Ok(match elems.first() {
                 Some(first) => ctx.option_some(*first),
@@ -450,7 +453,7 @@ impl Array {
             let (ty, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.error("Array.tail expects Array"))?;
+                .ok_or_else(|| ctx.type_error("Array.tail", "Array"))?;
 
             let tail: SmallVec<[ValueId; 4]> =
                 elems.get(1..).map(SmallVec::from_slice).unwrap_or_default();
@@ -471,7 +474,7 @@ impl Array {
             let (ty, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.error("Array.reverse expects Array"))?;
+                .ok_or_else(|| ctx.type_error("Array.reverse", "Array"))?;
 
             let reversed: SmallVec<[ValueId; 4]> =
                 elems.iter().rev().copied().collect();
@@ -511,11 +514,8 @@ impl Array {
             String(&'a str),
             /// Tagged value: (sort_priority, recursive payloads)
             ///
-            /// sort_priority handles semantic ordering:
-            /// - Option: None=0, Some=1 (ascending → Some > None)
-            /// - Result: Err=0, Ok=1 (ascending → Ok > Err)
-            /// - Others: variant index (declaration order)
-            Tagged(i16, Vec<Self>),
+            /// Priority from `sort_priority`, then recursive payload keys.
+            Tagged(u8, Vec<Self>),
             Tuple(Vec<Self>),
             Array(Vec<Self>),
             Object(Vec<(&'a str, Self)>),
@@ -596,18 +596,18 @@ impl Array {
 
             /// Compute sort priority for tagged values.
             ///
-            /// - Option: None=0, Some=1 (Some > None)
-            /// - Result: Err=0, Ok=1 (Ok > Err; note: idx 0=Ok, idx 1=Err)
-            /// - Others: variant index (declaration order)
+            /// For Option and Result, we want `Some > None` and `Ok > Err`
+            /// semantically. Declaration order is `None, Some` and `Ok, Err`,
+            /// so Option already sorts correctly but Result needs inversion.
             fn sort_priority(
                 ty_expr: &crate::value::TypeExprId,
                 idx: u8,
                 type_exprs: &TypeExprArena,
-            ) -> i16 {
+            ) -> u8 {
                 match type_exprs.base_type(*ty_expr) {
-                    Some(TypeId::OPTION) => idx as i16, // None=0, Some=1
-                    Some(TypeId::RESULT) => 1 - idx as i16, // Ok(0)→1, Err(1)→0
-                    _ => idx as i16,
+                    Some(TypeId::OPTION) => idx,
+                    Some(TypeId::RESULT) => 1 - idx,
+                    _ => idx,
                 }
             }
         }
@@ -618,7 +618,7 @@ impl Array {
             let (ty, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.error("Array.sort expects Array"))?;
+                .ok_or_else(|| ctx.type_error("Array.sort", "Array"))?;
 
             // Collect (ValueId, sortable key) pairs
             let mut pairs: Vec<(ValueId, SortKey)> = elems
@@ -626,12 +626,15 @@ impl Array {
                 .map(|vid| {
                     ctx.arena
                         .get(*vid)
-                        .ok_or_else(|| ctx.error("Array.sort: invalid element"))
+                        .ok_or_else(|| {
+                            ctx.runtime_error("Array.sort: invalid element")
+                        })
                         .and_then(|v| {
                             SortKey::from_value(v, ctx.arena, ctx.type_exprs)
                                 .ok_or_else(|| {
-                                    ctx.error(
-                                        "Array.sort: element is not comparable",
+                                    ctx.type_error_msg(
+                                        "Array.sort",
+                                        "element not comparable",
                                     )
                                 })
                                 .map(|k| (*vid, k))
@@ -658,10 +661,10 @@ impl Array {
         Box::pin(async move {
             Self::check_arity("Array.slice", &args, 3, ctx.span)?;
 
-            let (ty, elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    ctx.error("Array.slice expects Array as first argument")
-                })?;
+            let (ty, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.type_error("Array.slice", "Array"))?;
 
             let start = ctx
                 .arena
@@ -670,7 +673,9 @@ impl Array {
                     Value::Int(n) => Some(*n),
                     _ => None,
                 })
-                .ok_or_else(|| ctx.error("Array.slice: start must be Int"))?;
+                .ok_or_else(|| {
+                    ctx.type_error_msg("Array.slice", "start must be Int")
+                })?;
 
             let end = ctx
                 .arena
@@ -679,7 +684,9 @@ impl Array {
                     Value::Int(n) => Some(*n),
                     _ => None,
                 })
-                .ok_or_else(|| ctx.error("Array.slice: end must be Int"))?;
+                .ok_or_else(|| {
+                    ctx.type_error_msg("Array.slice", "end must be Int")
+                })?;
 
             let len = elems.len() as i64;
             let start_idx = start.max(0).min(len) as usize;
@@ -704,14 +711,14 @@ impl Array {
         Box::pin(async move {
             Self::check_arity("Array.contains", &args, 2, ctx.span)?;
 
-            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                ctx.error("Array.contains expects Array as first argument")
-            })?;
-
-            let needle = ctx
+            let (_, elems) = ctx
                 .arena
-                .get(args[1])
-                .ok_or_else(|| ctx.error("Array.contains: invalid value"))?;
+                .get_array(args[0])
+                .ok_or_else(|| ctx.type_error("Array.contains", "Array"))?;
+
+            let needle = ctx.arena.get(args[1]).ok_or_else(|| {
+                ctx.runtime_error("Array.contains: invalid value")
+            })?;
 
             let found = elems.iter().any(|elem_id| {
                 ctx.arena.get(*elem_id).is_some_and(|v| v == needle)
@@ -732,15 +739,15 @@ impl Array {
         Box::pin(async move {
             Self::check_arity("Array.concat", &args, 2, ctx.span)?;
 
-            let (ty_a, elems_a) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    ctx.error("Array.concat expects Array as first argument")
-                })?;
+            let (ty_a, elems_a) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.type_error("Array.concat", "Array"))?;
 
-            let (ty_b, elems_b) =
-                ctx.arena.get_array(args[1]).ok_or_else(|| {
-                    ctx.error("Array.concat expects Array as second argument")
-                })?;
+            let (ty_b, elems_b) = ctx
+                .arena
+                .get_array(args[1])
+                .ok_or_else(|| ctx.type_error("Array.concat", "Array"))?;
 
             // Check element types match using the stored TypeExprId
             if ctx.type_exprs.eq(ty_a, ty_b) {
@@ -748,8 +755,7 @@ impl Array {
                 combined.extend(elems_b);
                 Ok(ctx.arena.add(Value::Array(ty_a, combined), ctx.span))
             } else {
-                Err(ctx
-                    .error("Array.concat: arrays have different element types"))
+                Err(ctx.type_error_msg("Array.concat", "element types differ"))
             }
         })
     }
@@ -761,6 +767,352 @@ impl Array {
 //
 // The placeholders ensure `Environment::module_fn_exists` returns true during
 // name resolution. The actual dispatch is intercepted in `invoke_module_fn`.
+
+/// Primitives for the `String` module.
+///
+/// Named `Str` to avoid collision with Rust's `String`.
+pub(crate) struct Str;
+
+impl Prim for Str {}
+
+impl Str {
+    /// `String.length(s) -> Int`
+    ///
+    /// Returns the number of grapheme clusters in the string.
+    pub(crate) fn length<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("String.length", &args, 1, ctx.span)?;
+
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .ok_or_else(|| ctx.type_error("String.length", "String"))?;
+
+            let s = ctx.arena.get_str(sid).ok_or_else(|| {
+                ctx.runtime_error("String.length: invalid string")
+            })?;
+
+            let len = s.graphemes(true).count() as i64;
+            Ok(ctx.arena.add(Value::Int(len), ctx.span))
+        })
+    }
+
+    /// `String.upper(s) -> String`
+    ///
+    /// Returns the string in uppercase.
+    pub(crate) fn upper<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("String.upper", &args, 1, ctx.span)?;
+
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .ok_or_else(|| ctx.type_error("String.upper", "String"))?;
+
+            let s = ctx.arena.get_str(sid).ok_or_else(|| {
+                ctx.runtime_error("String.upper: invalid string")
+            })?;
+
+            let upper = s.to_uppercase();
+            let new_sid = ctx.arena.intern(&upper);
+            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+        })
+    }
+
+    /// `String.lower(s) -> String`
+    ///
+    /// Returns the string in lowercase.
+    pub(crate) fn lower<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("String.lower", &args, 1, ctx.span)?;
+
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .ok_or_else(|| ctx.type_error("String.lower", "String"))?;
+
+            let s = ctx.arena.get_str(sid).ok_or_else(|| {
+                ctx.runtime_error("String.lower: invalid string")
+            })?;
+
+            let lower = s.to_lowercase();
+            let new_sid = ctx.arena.intern(&lower);
+            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+        })
+    }
+
+    /// `String.trim(s) -> String`
+    ///
+    /// Returns the string with leading and trailing whitespace removed.
+    pub(crate) fn trim<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("String.trim", &args, 1, ctx.span)?;
+
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .ok_or_else(|| ctx.type_error("String.trim", "String"))?;
+
+            // Copy to owned String to release borrow before interning
+            let trimmed = ctx
+                .arena
+                .get_str(sid)
+                .ok_or_else(|| {
+                    ctx.runtime_error("String.trim: invalid string")
+                })?
+                .trim()
+                .to_owned();
+
+            let new_sid = ctx.arena.intern(&trimmed);
+            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+        })
+    }
+
+    /// `String.split(s, delim) -> Array[String]`
+    ///
+    /// Splits the string by the delimiter, returning an array of substrings.
+    pub(crate) fn split<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("String.split", &args, 2, ctx.span)?;
+
+            let s_sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .ok_or_else(|| ctx.type_error("String.split", "String"))?;
+
+            let d_sid = ctx.arena.get_string_id(args[1]).ok_or_else(|| {
+                ctx.type_error_msg("String.split", "delimiter must be String")
+            })?;
+
+            // Copy strings to owned values to release borrow before iteration
+            let s = ctx
+                .arena
+                .get_str(s_sid)
+                .ok_or_else(|| {
+                    ctx.runtime_error("String.split: invalid string")
+                })?
+                .to_owned();
+
+            let d = ctx
+                .arena
+                .get_str(d_sid)
+                .ok_or_else(|| {
+                    ctx.runtime_error("String.split: invalid delimiter")
+                })?
+                .to_owned();
+
+            // Split and collect parts; intern each part
+            let parts: SmallVec<[ValueId; 4]> = s
+                .split(&d)
+                .map(|part| {
+                    let part_sid = ctx.arena.intern(part);
+                    ctx.arena.add(Value::String(part_sid), ctx.span)
+                })
+                .collect();
+
+            let str_ty = ctx.type_exprs.named(TypeId::STRING);
+            Ok(ctx.arena.add(Value::Array(str_ty, parts), ctx.span))
+        })
+    }
+
+    /// `String.join(arr, delim) -> String`
+    ///
+    /// Joins an array of strings with the delimiter.
+    pub(crate) fn join<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("String.join", &args, 2, ctx.span)?;
+
+            let (_, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.type_error("String.join", "Array"))?;
+            let elems = elems.clone();
+
+            let d_sid = ctx.arena.get_string_id(args[1]).ok_or_else(|| {
+                ctx.type_error_msg("String.join", "delimiter must be String")
+            })?;
+
+            // Collect string slices from array elements
+            let parts: crate::Result<Vec<&str>> = elems
+                .iter()
+                .map(|id| {
+                    ctx.arena
+                        .get_string_id(*id)
+                        .and_then(|sid| ctx.arena.get_str(sid))
+                        .ok_or_else(|| {
+                            ctx.type_error("String.join", "Array[String]")
+                        })
+                })
+                .collect();
+
+            let d = ctx.arena.get_str(d_sid).ok_or_else(|| {
+                ctx.runtime_error("String.join: invalid delimiter")
+            })?;
+
+            let joined = parts?.into_iter().join(d);
+            let new_sid = ctx.arena.intern(&joined);
+            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+        })
+    }
+
+    /// `String.slice(s, start, end) -> String`
+    ///
+    /// Returns a substring from index `start` (inclusive) to `end` (exclusive).
+    /// Indices are grapheme-based and clamped to valid bounds.
+    pub(crate) fn slice<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("String.slice", &args, 3, ctx.span)?;
+
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .ok_or_else(|| ctx.type_error("String.slice", "String"))?;
+
+            let start = ctx
+                .arena
+                .get(args[1])
+                .and_then(|v| match v {
+                    Value::Int(n) => Some(*n),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    ctx.type_error_msg("String.slice", "start must be Int")
+                })?;
+
+            let end = ctx
+                .arena
+                .get(args[2])
+                .and_then(|v| match v {
+                    Value::Int(n) => Some(*n),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    ctx.type_error_msg("String.slice", "end must be Int")
+                })?;
+
+            let s = ctx.arena.get_str(sid).ok_or_else(|| {
+                ctx.runtime_error("String.slice: invalid string")
+            })?;
+
+            // Single-pass: skip, take, join graphemes
+            let start_idx = start.max(0) as usize;
+            let end_idx = end.max(0) as usize;
+            let sliced: String = s
+                .graphemes(true)
+                .skip(start_idx)
+                .take(end_idx.saturating_sub(start_idx))
+                .collect();
+
+            let new_sid = ctx.arena.intern(&sliced);
+            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+        })
+    }
+
+    /// `String.contains(s, sub) -> Bool`
+    ///
+    /// Returns `true` if the string contains the substring.
+    pub(crate) fn contains<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("String.contains", &args, 2, ctx.span)?;
+
+            let s_sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .ok_or_else(|| ctx.type_error("String.contains", "String"))?;
+
+            let sub_sid =
+                ctx.arena.get_string_id(args[1]).ok_or_else(|| {
+                    ctx.type_error_msg(
+                        "String.contains",
+                        "substring must be String",
+                    )
+                })?;
+
+            let s = ctx.arena.get_str(s_sid).ok_or_else(|| {
+                ctx.runtime_error("String.contains: invalid string")
+            })?;
+
+            let sub = ctx.arena.get_str(sub_sid).ok_or_else(|| {
+                ctx.runtime_error("String.contains: invalid substring")
+            })?;
+
+            Ok(ctx.arena.add(Value::Bool(s.contains(sub)), ctx.span))
+        })
+    }
+
+    /// `String.replace(s, old, new) -> String`
+    ///
+    /// Replaces all occurrences of `old` with `new`.
+    pub(crate) fn replace<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("String.replace", &args, 3, ctx.span)?;
+
+            let s_sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .ok_or_else(|| ctx.type_error("String.replace", "String"))?;
+
+            let old_sid =
+                ctx.arena.get_string_id(args[1]).ok_or_else(|| {
+                    ctx.type_error_msg(
+                        "String.replace",
+                        "pattern must be String",
+                    )
+                })?;
+
+            let new_sid =
+                ctx.arena.get_string_id(args[2]).ok_or_else(|| {
+                    ctx.type_error_msg(
+                        "String.replace",
+                        "replacement must be String",
+                    )
+                })?;
+
+            let s = ctx.arena.get_str(s_sid).ok_or_else(|| {
+                ctx.runtime_error("String.replace: invalid string")
+            })?;
+
+            let old = ctx.arena.get_str(old_sid).ok_or_else(|| {
+                ctx.runtime_error("String.replace: invalid pattern")
+            })?;
+
+            let new = ctx.arena.get_str(new_sid).ok_or_else(|| {
+                ctx.runtime_error("String.replace: invalid replacement")
+            })?;
+
+            let replaced = s.replace(old, new);
+            let result_sid = ctx.arena.intern(&replaced);
+            Ok(ctx.arena.add(Value::String(result_sid), ctx.span))
+        })
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1298,5 +1650,298 @@ mod tests {
         };
 
         assert!(result.is_err());
+    }
+
+    // ============ String module tests ============
+
+    fn make_string(arena: &mut crate::value::ValueArena, s: &str) -> ValueId {
+        let sid = arena.intern(s);
+        arena.add(Value::String(sid), span())
+    }
+
+    #[tokio::test]
+    async fn string_length() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "hello");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::length(&mut ctx, smallvec![s]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Int(5)));
+    }
+
+    #[tokio::test]
+    async fn string_length_unicode() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        // `café` with combining accent: 4 grapheme clusters
+        let s = make_string(&mut arena, "cafe\u{0301}");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::length(&mut ctx, smallvec![s]).await.unwrap()
+        };
+
+        // 4 graphemes: c, a, f, é (e + combining acute)
+        assert_eq!(arena.get(result), Some(&Value::Int(4)));
+    }
+
+    #[tokio::test]
+    async fn string_upper() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "hello");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::upper(&mut ctx, smallvec![s]).await.unwrap()
+        };
+
+        let sid = arena.get_string_id(result).unwrap();
+        assert_eq!(arena.get_str(sid), Some("HELLO"));
+    }
+
+    #[tokio::test]
+    async fn string_lower() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "HELLO");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::lower(&mut ctx, smallvec![s]).await.unwrap()
+        };
+
+        let sid = arena.get_string_id(result).unwrap();
+        assert_eq!(arena.get_str(sid), Some("hello"));
+    }
+
+    #[tokio::test]
+    async fn string_trim() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "  hello  ");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::trim(&mut ctx, smallvec![s]).await.unwrap()
+        };
+
+        let sid = arena.get_string_id(result).unwrap();
+        assert_eq!(arena.get_str(sid), Some("hello"));
+    }
+
+    #[tokio::test]
+    async fn string_split() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "a,b,c");
+        let d = make_string(&mut arena, ",");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::split(&mut ctx, smallvec![s, d]).await.unwrap()
+        };
+
+        let (_, elems) = arena.get_array(result).unwrap();
+        assert_eq!(elems.len(), 3);
+
+        let first_sid = arena.get_string_id(elems[0]).unwrap();
+        assert_eq!(arena.get_str(first_sid), Some("a"));
+    }
+
+    #[tokio::test]
+    async fn string_join() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let a = make_string(&mut arena, "a");
+        let b = make_string(&mut arena, "b");
+        let c = make_string(&mut arena, "c");
+        let d = make_string(&mut arena, ",");
+
+        let str_ty = type_exprs.named(TypeId::STRING);
+        let arr = arena.add(Value::Array(str_ty, smallvec![a, b, c]), span());
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::join(&mut ctx, smallvec![arr, d]).await.unwrap()
+        };
+
+        let sid = arena.get_string_id(result).unwrap();
+        assert_eq!(arena.get_str(sid), Some("a,b,c"));
+    }
+
+    #[tokio::test]
+    async fn string_slice() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "hello");
+        let start = arena.add(Value::Int(1), span());
+        let end = arena.add(Value::Int(4), span());
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::slice(&mut ctx, smallvec![s, start, end])
+                .await
+                .unwrap()
+        };
+
+        let sid = arena.get_string_id(result).unwrap();
+        assert_eq!(arena.get_str(sid), Some("ell"));
+    }
+
+    #[tokio::test]
+    async fn string_slice_clamps() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "hello");
+        let start = arena.add(Value::Int(-5), span());
+        let end = arena.add(Value::Int(100), span());
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::slice(&mut ctx, smallvec![s, start, end])
+                .await
+                .unwrap()
+        };
+
+        let sid = arena.get_string_id(result).unwrap();
+        assert_eq!(arena.get_str(sid), Some("hello"));
+    }
+
+    #[tokio::test]
+    async fn string_contains_found() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "hello world");
+        let sub = make_string(&mut arena, "wor");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::contains(&mut ctx, smallvec![s, sub]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Bool(true)));
+    }
+
+    #[tokio::test]
+    async fn string_contains_not_found() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "hello");
+        let sub = make_string(&mut arena, "xyz");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::contains(&mut ctx, smallvec![s, sub]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Bool(false)));
+    }
+
+    #[tokio::test]
+    async fn string_replace() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "foo");
+        let old = make_string(&mut arena, "o");
+        let new = make_string(&mut arena, "a");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::replace(&mut ctx, smallvec![s, old, new])
+                .await
+                .unwrap()
+        };
+
+        let sid = arena.get_string_id(result).unwrap();
+        assert_eq!(arena.get_str(sid), Some("faa"));
+    }
+
+    #[tokio::test]
+    async fn string_replace_all() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let s = make_string(&mut arena, "banana");
+        let old = make_string(&mut arena, "a");
+        let new = make_string(&mut arena, "o");
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Str::replace(&mut ctx, smallvec![s, old, new])
+                .await
+                .unwrap()
+        };
+
+        let sid = arena.get_string_id(result).unwrap();
+        assert_eq!(arena.get_str(sid), Some("bonono"));
     }
 }

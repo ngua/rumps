@@ -196,6 +196,16 @@ impl ValueArena {
         }
     }
 
+    /// Get string ID from a value, returning the interned `StringId`.
+    ///
+    /// Returns `None` if the value doesn't exist or isn't a string.
+    pub(crate) fn get_string_id(&self, id: ValueId) -> Option<StringId> {
+        match self.get(id)? {
+            Value::String(sid) => Some(*sid),
+            _ => None,
+        }
+    }
+
     fn len(&self) -> usize {
         self.values.len()
     }

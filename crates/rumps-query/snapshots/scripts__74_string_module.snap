@@ -1,0 +1,61 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; String module primitives\n; Tests String.length, String.upper, String.lower, String.trim,\n; String.split, String.join, String.slice, String.contains, String.replace\n\n; ============ String.length ============\n\nOUTPUT String.length(\"hello\")  ; 5\n\nLET empty-str = \"\"\nOUTPUT String.length(empty-str)  ; 0\n\nLET single-char = \"x\"\nOUTPUT String.length(single-char)  ; 1\n\nLET with-spaces = \"hello world\"\nOUTPUT String.length(with-spaces)  ; 11\n\n; ============ String.upper ============\n\nOUTPUT String.upper(\"hello\")  ; \"HELLO\"\n\nLET mixed-case = \"Hello World\"\nOUTPUT String.upper(mixed-case)  ; \"HELLO WORLD\"\n\nOUTPUT String.upper(\"ALREADY UPPER\")  ; \"ALREADY UPPER\"\n\nOUTPUT String.upper(\"\")  ; \"\"\n\nLET with-nums = \"abc123\"\nOUTPUT String.upper(with-nums)  ; \"ABC123\"\n\n; ============ String.lower ============\n\nOUTPUT String.lower(\"HELLO\")  ; \"hello\"\n\nLET upper-mixed = \"Hello World\"\nOUTPUT String.lower(upper-mixed)  ; \"hello world\"\n\nOUTPUT String.lower(\"already lower\")  ; \"already lower\"\n\nOUTPUT String.lower(\"\")  ; \"\"\n\nLET lower-nums = \"ABC123\"\nOUTPUT String.lower(lower-nums)  ; \"abc123\"\n\n; ============ String.trim ============\n\nOUTPUT String.trim(\"  hello  \")  ; \"hello\"\n\nLET leading-space = \"   world\"\nOUTPUT String.trim(leading-space)  ; \"world\"\n\nLET trailing-space = \"hello   \"\nOUTPUT String.trim(trailing-space)  ; \"hello\"\n\nOUTPUT String.trim(\"no spaces\")  ; \"no spaces\"\n\nOUTPUT String.trim(\"\")  ; \"\"\n\nLET only-spaces = \"     \"\nOUTPUT String.trim(only-spaces)  ; \"\"\n\n; ============ String.split ============\n\nLET csv = \"a,b,c\"\nLET parts = String.split(csv, \",\")\nOUTPUT parts  ; [\"a\", \"b\", \"c\"]\n\n; Split on space\nLET sentence = \"hello world foo\"\nLET words = String.split(sentence, \" \")\nOUTPUT words  ; [\"hello\", \"world\", \"foo\"]\n\n; Split on multi-char delimiter\nLET multi-delim = \"foo::bar::baz\"\nLET multi-parts = String.split(multi-delim, \"::\")\nOUTPUT multi-parts  ; [\"foo\", \"bar\", \"baz\"]\n\n; Split with no delimiter found\nLET no-match = String.split(\"hello\", \",\")\nOUTPUT no-match  ; [\"hello\"]\n\n; Split empty string\nLET split-empty = String.split(\"\", \",\")\nOUTPUT split-empty  ; [\"\"]\n\n; Split on empty delimiter (splits every char)\nLET split-chars = String.split(\"abc\", \"\")\nOUTPUT split-chars  ; [\"\", \"a\", \"b\", \"c\", \"\"]\n\n; ============ String.join ============\n\nLET join-arr = [\"a\", \"b\", \"c\"]\nLET joined = String.join(join-arr, \",\")\nOUTPUT joined  ; \"a,b,c\"\n\n; Join with space\nLET join-words = [\"hello\", \"world\"]\nLET joined-words = String.join(join-words, \" \")\nOUTPUT joined-words  ; \"hello world\"\n\n; Join with empty delimiter\nLET join-no-sep = String.join([\"a\", \"b\", \"c\"], \"\")\nOUTPUT join-no-sep  ; \"abc\"\n\n; Join single element\nLET join-single = String.join([\"alone\"], \",\")\nOUTPUT join-single  ; \"alone\"\n\n; Join empty array\nLET join-empty = String.join([], \",\")\nOUTPUT join-empty  ; \"\"\n\n; ============ String.slice ============\n\nLET slice-str = \"hello world\"\nOUTPUT String.slice(slice-str, 0, 5)  ; \"hello\"\nOUTPUT String.slice(slice-str, 6, 11)  ; \"world\"\n\n; Slice middle\nOUTPUT String.slice(slice-str, 3, 8)  ; \"lo wo\"\n\n; Slice empty range\nOUTPUT String.slice(slice-str, 5, 5)  ; \"\"\n\n; Slice with clamped bounds\nOUTPUT String.slice(\"abc\", 0, 100)  ; \"abc\"\nOUTPUT String.slice(\"abc\", -5, 2)  ; \"ab\"\n\n; Slice from start\nOUTPUT String.slice(\"hello\", 0, 3)  ; \"hel\"\n\n; ============ String.contains ============\n\nLET haystack = \"hello world\"\nOUTPUT String.contains(haystack, \"wor\")  ; true\nOUTPUT String.contains(haystack, \"xyz\")  ; false\nOUTPUT String.contains(haystack, \"hello\")  ; true\nOUTPUT String.contains(haystack, \"world\")  ; true\n\n; Contains empty string (always true)\nOUTPUT String.contains(\"hello\", \"\")  ; true\n\n; Contains itself\nOUTPUT String.contains(\"abc\", \"abc\")  ; true\n\n; Contains in empty string\nOUTPUT String.contains(\"\", \"x\")  ; false\nOUTPUT String.contains(\"\", \"\")  ; true\n\n; ============ String.replace ============\n\nOUTPUT String.replace(\"foo\", \"o\", \"a\")  ; \"faa\"\n\nLET banana = \"banana\"\nOUTPUT String.replace(banana, \"a\", \"o\")  ; \"bonono\"\n\n; Replace substring\nLET greeting = \"hello world\"\nOUTPUT String.replace(greeting, \"world\", \"there\")  ; \"hello there\"\n\n; Replace not found\nOUTPUT String.replace(\"hello\", \"x\", \"y\")  ; \"hello\"\n\n; Replace with empty\nOUTPUT String.replace(\"hello\", \"l\", \"\")  ; \"heo\"\n\n; Replace empty pattern (inserts between chars)\nOUTPUT String.replace(\"ab\", \"\", \"-\")  ; \"-a-b-\"\n\n; ============ Chaining operations ============\n\n; Upper then slice\nLET chain-str = \"hello world\"\nLET chain-upper = String.slice(String.upper(chain-str), 0, 5)\nOUTPUT chain-upper  ; \"HELLO\"\n\n; Trim then split\nLET messy = \"  a,b,c  \"\nLET clean-parts = String.split(String.trim(messy), \",\")\nOUTPUT clean-parts  ; [\"a\", \"b\", \"c\"]\n\n; Split then join with different separator\nLET csv-to-tabs = String.join(String.split(\"a,b,c\", \",\"), \"\\t\")\nOUTPUT csv-to-tabs  ; \"a\tb\tc\"\n\n; ============ Pipeline usage ============\n\nLET pipeline-str = \"  HELLO WORLD  \"\nLET pipeline-result = pipeline-str\n  |> String.trim\n  |> String.lower\nOUTPUT pipeline-result  ; \"hello world\"\n\nLET pipeline-words = \"apple,banana,cherry\"\n  |> (s => String.split(s, \",\"))\n  |> (arr => String.join(arr, \" - \"))\nOUTPUT pipeline-words  ; \"apple - banana - cherry\"\n"
+---
+5
+0
+1
+11
+HELLO
+HELLO WORLD
+ALREADY UPPER
+
+ABC123
+hello
+hello world
+already lower
+
+abc123
+hello
+world
+hello
+no spaces
+
+
+[ a, b, c ]
+[ hello, world, foo ]
+[ foo, bar, baz ]
+[ hello ]
+[  ]
+[ , a, b, c,  ]
+a,b,c
+hello world
+abc
+alone
+
+hello
+world
+lo wo
+
+abc
+ab
+hel
+TRUE
+FALSE
+TRUE
+TRUE
+TRUE
+TRUE
+FALSE
+TRUE
+faa
+bonono
+hello there
+hello
+heo
+-a-b-
+HELLO
+[ a, b, c ]
+a	b	c
+hello world
+apple - banana - cherry
