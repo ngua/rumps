@@ -26,6 +26,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Value::Object(_) => self.type_exprs.named(TypeId::OBJECT),
             Value::Tuple(ty, _) => *ty,
+            Value::Map(k_ty, v_ty, _) => {
+                // Map[k_ty, v_ty]
+                self.type_exprs
+                    .app(TypeId::MAP, smallvec::smallvec![*k_ty, *v_ty])
+            }
+            Value::Time(_) => self.type_exprs.named(TypeId::TIME),
             Value::Tagged(ty_expr, _, _) => *ty_expr,
             Value::Closure { params, ret, .. }
             | Value::Function { params, ret, .. } => {
@@ -261,6 +267,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             }
             Value::Tuple(_, _) => type_id == TypeId::TUPLE,
+            Value::Map(_, _, _) => type_id == TypeId::MAP,
+            Value::Time(_) => type_id == TypeId::TIME,
             Value::Tagged(ty_expr, _, _) => self
                 .type_exprs
                 .base_type(*ty_expr)

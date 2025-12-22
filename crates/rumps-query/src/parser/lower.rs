@@ -143,6 +143,17 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
                 .collect::<Result<SmallVec<_>>>()?;
             Expr::Tuple(elem_ids)
         }
+        cst::ExprKind::MapLit(entries) => {
+            let entry_ids = entries
+                .into_iter()
+                .map(|(k, v)| {
+                    let k_id = lower_expr(ast, k)?;
+                    let v_id = lower_expr(ast, v)?;
+                    Ok((k_id, v_id))
+                })
+                .collect::<Result<SmallVec<_>>>()?;
+            Expr::MapLit(entry_ids)
+        }
         cst::ExprKind::TupleIndex(base, idx) => {
             let base_id = lower_expr(ast, *base)?;
             Expr::TupleIndex(base_id, idx)

@@ -1,0 +1,138 @@
+; Map module primitives
+; Tests Map.empty, Map.length, Map.keys, Map.values, Map.entries,
+; Map.has, Map.lookup, Map.insert, Map.remove, Map.merge, Map.from-entries
+;
+; Note: `{}` is ambiguous and parsed as an empty object. Use Map.empty() for empty maps.
+
+; ============ Map literals ============
+
+LET m = { 1 => "one", 2 => "two", 3 => "three" }
+OUTPUT m
+
+LET str-keys = { "a" => 1, "b" => 2 }
+OUTPUT str-keys
+
+; ============ Map.empty ============
+
+LET e = Map.empty()
+OUTPUT e
+OUTPUT Map.length(e)  ; 0
+
+; ============ Map.length ============
+
+OUTPUT Map.length(m)  ; 3
+OUTPUT Map.length(str-keys)  ; 2
+
+; ============ Map.keys ============
+
+LET keys1 = Map.keys(m)
+OUTPUT keys1  ; [1, 2, 3]
+
+LET keys2 = Map.keys(str-keys)
+OUTPUT keys2  ; ["a", "b"]
+
+LET keys3 = Map.keys(e)
+OUTPUT keys3  ; []
+
+; ============ Map.values ============
+
+LET vals1 = Map.values(m)
+OUTPUT vals1  ; ["one", "two", "three"]
+
+LET vals2 = Map.values(str-keys)
+OUTPUT vals2  ; [1, 2]
+
+LET vals3 = Map.values(e)
+OUTPUT vals3  ; []
+
+; ============ Map.entries ============
+
+LET ent1 = Map.entries(m)
+OUTPUT ent1  ; [(1, "one"), (2, "two"), (3, "three")]
+
+LET ent2 = Map.entries(str-keys)
+OUTPUT ent2  ; [("a", 1), ("b", 2)]
+
+; ============ Map.has ============
+
+OUTPUT Map.has(m, 1)  ; true
+OUTPUT Map.has(m, 2)  ; true
+OUTPUT Map.has(m, 4)  ; false
+OUTPUT Map.has(e, 1)  ; false
+
+OUTPUT Map.has(str-keys, "a")  ; true
+OUTPUT Map.has(str-keys, "c")  ; false
+
+; ============ Map.lookup ============
+
+OUTPUT Map.lookup(m, 1)  ; Some("one")
+OUTPUT Map.lookup(m, 2)  ; Some("two")
+OUTPUT Map.lookup(m, 4)  ; None
+OUTPUT Map.lookup(e, 1)  ; None
+
+OUTPUT Map.lookup(str-keys, "a")  ; Some(1)
+OUTPUT Map.lookup(str-keys, "z")  ; None
+
+; ============ Map.insert ============
+
+LET m2 = Map.insert(m, 4, "four")
+OUTPUT Map.length(m2)  ; 4
+OUTPUT Map.lookup(m2, 4)  ; Some("four")
+
+; Original unchanged
+OUTPUT Map.length(m)  ; 3
+
+; Overwrite existing key
+LET m3 = Map.insert(m, 1, "ONE")
+OUTPUT Map.lookup(m3, 1)  ; Some("ONE")
+
+; ============ Map.remove ============
+
+LET m4 = Map.remove(m, 2)
+OUTPUT Map.length(m4)  ; 2
+OUTPUT Map.has(m4, 2)  ; false
+OUTPUT Map.has(m4, 1)  ; true
+OUTPUT Map.has(m4, 3)  ; true
+
+; Remove non-existent key (no-op)
+LET m5 = Map.remove(m, 999)
+OUTPUT Map.length(m5)  ; 3
+
+; ============ Map.merge ============
+
+LET ma = { 1 => "a", 2 => "b" }
+LET mb = { 2 => "B", 3 => "c" }
+LET merged = Map.merge(ma, mb)
+OUTPUT Map.length(merged)  ; 3
+OUTPUT Map.lookup(merged, 1)  ; Some("a")
+OUTPUT Map.lookup(merged, 2)  ; Some("B") (second overwrites)
+OUTPUT Map.lookup(merged, 3)  ; Some("c")
+
+; ============ Map.from-entries ============
+
+LET arr = [(1, "x"), (2, "y"), (3, "z")]
+LET from-arr = Map.from-entries(arr)
+OUTPUT Map.length(from-arr)  ; 3
+OUTPUT Map.lookup(from-arr, 1)  ; Some("x")
+OUTPUT Map.lookup(from-arr, 2)  ; Some("y")
+OUTPUT Map.lookup(from-arr, 3)  ; Some("z")
+
+; ============ Chaining operations ============
+
+LET chain = { 1 => 10, 2 => 20, 3 => 30 }
+LET chain2 = Map.insert(chain, 4, 40)
+LET chain3 = Map.remove(chain2, 1)
+OUTPUT Map.length(chain3)  ; 3
+OUTPUT Map.keys(chain3)  ; [2, 3, 4]
+
+; ============ Float keys ============
+
+LET float-map = { 1.5 => "half", 2.5 => "two-half" }
+OUTPUT Map.has(float-map, 1.5)  ; true
+OUTPUT Map.lookup(float-map, 2.5)  ; Some("two-half")
+
+; ============ Boolean keys ============
+
+LET bool-map = { true => "yes", false => "no" }
+OUTPUT Map.lookup(bool-map, true)  ; Some("yes")
+OUTPUT Map.lookup(bool-map, false)  ; Some("no")

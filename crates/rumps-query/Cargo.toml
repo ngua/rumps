@@ -7,6 +7,7 @@ edition = "2021"
 rumps-types = { path = "../rumps-types" }
 rumps-storage = { path = "../rumps-storage" }
 async-recursion = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 chumsky = "0.9"
 miette = { workspace = true }
 nonempty = { workspace = true }

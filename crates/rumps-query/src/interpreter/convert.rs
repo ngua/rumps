@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::io::IoContext;
-use crate::value::{TypeExprArena, TypeExprId, TypeId, Value};
+use crate::value::{MapKey, TypeExprArena, TypeExprId, TypeId, Value};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -32,11 +32,16 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Array(_, _)
             | Value::Object(_)
             | Value::Tuple(_, _)
+            | Value::Map(_, _, _)
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
             | Value::Function { .. }
             | Value::ModuleFn { .. } => {
                 self.jsonify(v).map(rumps_types::Value::Json)
+            }
+            Value::Time(t) => {
+                // Store time as ISO 8601 string
+                Ok(rumps_types::Value::String(t.to_rfc3339()))
             }
         }
     }
@@ -108,6 +113,23 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .join(", ");
                 format!("{{ {fields} }}")
             }
+            Value::Map(_, _, entries) => {
+                let items = entries
+                    .iter()
+                    .map(|(k, vid)| {
+                        let key = self.stringify_map_key(k);
+                        let val = self
+                            .arena
+                            .get(*vid)
+                            .map(|v| self.stringify(v))
+                            .unwrap_or_else(|| "?".to_owned());
+                        format!("{key} => {val}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {items} }}")
+            }
+            Value::Time(t) => t.to_rfc3339(),
             Value::Tagged(ty_expr, idx, payloads) => {
                 let base_ty = self.type_exprs.base_type(*ty_expr);
                 let ty_name = base_ty
@@ -217,6 +239,24 @@ impl<I: IoContext> Interpreter<'_, I> {
                     "_payload": payload_json?
                 }))
             }
+            Value::Map(_, _, entries) => {
+                // Maps serialize as JSON objects with stringified keys
+                let map: Result<serde_json::Map<_, _>> = entries
+                    .iter()
+                    .map(|(k, vid)| {
+                        let key = self.stringify_map_key(k);
+                        let val = self.arena.get(*vid).ok_or_else(|| {
+                            Error::runtime_no_span("invalid value id")
+                        })?;
+                        self.jsonify(val).map(|jv| (key, jv))
+                    })
+                    .collect();
+                Ok(serde_json::Value::Object(map?))
+            }
+            Value::Time(t) => {
+                // Times serialize as ISO 8601 strings
+                Ok(serde_json::Value::String(t.to_rfc3339()))
+            }
             Value::Closure { .. } => Err(Error::runtime_no_span(
                 "closures cannot be serialized to JSON",
             )),
@@ -300,12 +340,29 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Array(_, _)
             | Value::Object(_)
             | Value::Tuple(_, _)
+            | Value::Map(_, _, _)
+            | Value::Time(_)
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
             | Value::Function { .. }
             | Value::ModuleFn { .. } => Err(Error::runtime_no_span(
                 "complex values cannot be used as subscripts",
             )),
+        }
+    }
+
+    /// Stringify a map key for display.
+    fn stringify_map_key(&self, k: &MapKey) -> String {
+        match k {
+            MapKey::Bool(b) => b.to_string().to_uppercase(),
+            MapKey::Int(n) => n.to_string(),
+            MapKey::Float(f) => f.to_string(),
+            MapKey::Char(c) => format!("'{c}'"),
+            MapKey::String(id) => self
+                .arena
+                .get_str(*id)
+                .map(|s| format!("\"{s}\""))
+                .unwrap_or_else(|| "\"?\"".to_owned()),
         }
     }
 }

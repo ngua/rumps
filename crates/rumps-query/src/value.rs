@@ -13,12 +13,26 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use indexmap::{IndexMap, IndexSet};
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
 use crate::ast::ExprId;
 use crate::{Result, Span};
+
+/// A hashable key for `Map` values.
+///
+/// Map keys are restricted to scalar types for hashability. This enum wraps
+/// scalar values with proper `Hash` and `Eq` implementations.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MapKey {
+    Bool(bool),
+    Int(i64),
+    Float(OrderedFloat<f64>),
+    Char(char),
+    String(StringId),
+}
 
 /// Index into the value arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -66,12 +80,17 @@ impl TypeId {
     pub(crate) const RESULT: Self = Self(7);
     /// Builtin type: `Char`.
     pub(crate) const CHAR: Self = Self(8);
+    /// Builtin type: `Tuple`.
+    pub(crate) const TUPLE: Self = Self(9);
+    /// Builtin type: `Map`.
+    pub(crate) const MAP: Self = Self(10);
+    /// Builtin type: `Time`.
+    pub(crate) const TIME: Self = Self(11);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
-    pub(crate) const UNKNOWN: Self = Self(9);
-    /// Builtin type: `Tuple`.
-    pub(crate) const TUPLE: Self = Self(10);
+    /// Note: This is NOT a registered type; it's a marker used in type expressions.
+    pub(crate) const UNKNOWN: Self = Self(u32::MAX);
 
     const fn idx(self) -> usize {
         self.0 as usize
@@ -206,6 +225,21 @@ impl ValueArena {
         }
     }
 
+    /// Get map contents by ID, cloning the key-value map.
+    ///
+    /// Returns `None` if the value doesn't exist or isn't a map.
+    pub(crate) fn get_map(
+        &self,
+        id: ValueId,
+    ) -> Option<(TypeExprId, TypeExprId, IndexMap<MapKey, ValueId>)> {
+        match self.get(id)? {
+            Value::Map(k_ty, v_ty, entries) => {
+                Some((*k_ty, *v_ty, entries.clone()))
+            }
+            _ => None,
+        }
+    }
+
     fn len(&self) -> usize {
         self.values.len()
     }
@@ -293,6 +327,18 @@ pub(crate) enum Value {
     /// access (`.0`, `.1`, etc.). The `TypeExprId` encodes the element types.
     Tuple(TypeExprId, SmallVec<[ValueId; 4]>),
 
+    /// A homogeneous map with typed keys and values.
+    ///
+    /// - First `TypeExprId`: key type (K)
+    /// - Second `TypeExprId`: value type (V)
+    /// - `IndexMap<MapKey, ValueId>`: key-value pairs (insertion order preserved)
+    ///
+    /// Keys are restricted to scalar types (Bool, Int, Float, Char, String).
+    Map(TypeExprId, TypeExprId, IndexMap<MapKey, ValueId>),
+
+    /// A point in time (UTC).
+    Time(DateTime<Utc>),
+
     /// A tagged value (sum type variant).
     ///
     /// - `TypeExprId`: the full parameterized type (e.g., `Option[Int]`, `Result[Int, String]`)
@@ -354,6 +400,8 @@ impl Value {
             }
             Self::Array(_, elems) | Self::Tuple(_, elems) => !elems.is_empty(),
             Self::Object(obj) => !obj.is_empty(),
+            Self::Map(_, _, entries) => !entries.is_empty(),
+            Self::Time(_) => true, // Time values are always truthy
             Self::Tagged(ty_expr, idx, _) => {
                 // Option.None and Result.Err are falsy; other variants are truthy
                 match type_exprs.base_type(*ty_expr) {
@@ -384,6 +432,8 @@ impl Value {
             Self::Array(..) => "Array",
             Self::Object(_) => "Object",
             Self::Tuple(..) => "Tuple",
+            Self::Map(..) => "Map",
+            Self::Time(_) => "Time",
             Self::Tagged(ty_expr, _, _) => type_exprs
                 .base_type(*ty_expr)
                 .and_then(|ty| reg.get_def(ty))
@@ -474,6 +524,8 @@ impl Value {
             Self::Array(..) => TypeId::ARRAY,
             Self::Object(_) => TypeId::OBJECT,
             Self::Tuple(..) => TypeId::TUPLE,
+            Self::Map(..) => TypeId::MAP,
+            Self::Time(_) => TypeId::TIME,
             Self::Tagged(ty_expr, _, _) => {
                 type_exprs.base_type(*ty_expr).unwrap_or(TypeId::UNKNOWN)
             }
@@ -494,6 +546,9 @@ pub(crate) enum BuiltinType {
     String,
     Array,
     Object,
+    Tuple,
+    Map,
+    Time,
 }
 
 impl BuiltinType {
@@ -506,6 +561,9 @@ impl BuiltinType {
             Self::String => "String",
             Self::Array => "Array",
             Self::Object => "Object",
+            Self::Tuple => "Tuple",
+            Self::Map => "Map",
+            Self::Time => "Time",
         }
     }
 }
@@ -941,6 +999,42 @@ impl TypeRegistry {
             ))
         })?;
 
+        // Tuple at index 9 (registered for type lookup, though Tuple types use
+        // TypeExpr::Tuple rather than TypeExpr::App)
+        let tuple_name = arena.intern("Tuple");
+        let tup =
+            self.register(TypeDef::Builtin(BuiltinType::Tuple), tuple_name);
+        (tup == TypeId::TUPLE).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Tuple at index {}, expected {}",
+                tup.0,
+                TypeId::TUPLE.0
+            ))
+        })?;
+
+        // Map[K, V] at index 10
+        let map_name = arena.intern("Map");
+        let map = self.register(TypeDef::Builtin(BuiltinType::Map), map_name);
+        (map == TypeId::MAP).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Map at index {}, expected {}",
+                map.0,
+                TypeId::MAP.0
+            ))
+        })?;
+
+        // Time at index 11
+        let time_name = arena.intern("Time");
+        let time =
+            self.register(TypeDef::Builtin(BuiltinType::Time), time_name);
+        (time == TypeId::TIME).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Time at index {}, expected {}",
+                time.0,
+                TypeId::TIME.0
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -1011,7 +1105,7 @@ mod tests {
         let mut arena = ValueArena::new();
         let reg = TypeRegistry::new(&mut arena).unwrap();
 
-        assert_eq!(reg.len(), 9); // 7 primitives + Option + Result
+        assert_eq!(reg.len(), 12); // 8 primitives + Option + Result + Tuple
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

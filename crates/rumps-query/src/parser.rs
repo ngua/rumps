@@ -1209,7 +1209,7 @@ impl Parser {
                 cst::Expr::new(cst::ExprKind::Array(elems), span)
             });
 
-        // Object literal
+        // Object literal: { field: expr, ... }
         let obj_field = Self::ident()
             .then_ignore(just(Token::Colon))
             .then(expr.clone());
@@ -1223,6 +1223,29 @@ impl Parser {
             .map_with_span(|fields, span| {
                 cst::Expr::new(cst::ExprKind::Object(fields), span)
             });
+
+        // Map literal: { key => value, ... }
+        let map_entry = expr
+            .clone()
+            .then_ignore(just(Token::FatArrow))
+            .then(expr.clone());
+
+        let map_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        let map_lit = just(Token::LBrace)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(map_entry.separated_by(map_sep).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBrace))
+            .map_with_span(|entries, span| {
+                cst::Expr::new(cst::ExprKind::MapLit(entries), span)
+            });
+
+        // Try object first (identifier key + `:`), then fall back to map (expr key + `=>`).
+        // Object is more specific so it should be tried first.
+        //
+        // NOTE: `{}` is ambiguous and parses as an empty object, not an empty map.
+        // Use `Map.empty()` for empty maps.
+        let object_or_map = object.or(map_lit);
 
         // Block expression
         let block_parser = Self::block(stmt);
@@ -1334,7 +1357,7 @@ impl Parser {
             var,
             paren,
             array,
-            object,
+            object_or_map,
             block_expr,
             if_expr,
             match_expr,

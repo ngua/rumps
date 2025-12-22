@@ -39,6 +39,7 @@
 //! [`Interpreter::invoke_callable`]: crate::interpreter::Interpreter::invoke_callable
 //! [`Interpreter::invoke_module_fn`]: crate::interpreter::Interpreter::invoke_module_fn
 
+use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
@@ -48,7 +49,7 @@ use smallvec::{smallvec, SmallVec};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::env::{PrimCtx, PrimResult};
-use crate::value::{StringId, TypeId, Value, ValueArena, ValueId};
+use crate::value::{MapKey, StringId, TypeId, Value, ValueArena, ValueId};
 use crate::Error;
 
 /// Shared utilities for primitive function implementations.
@@ -630,6 +631,9 @@ impl Array {
                             .collect();
                         sub_keys.map(Self::Object)
                     }
+
+                    // Maps and times are not directly comparable for sorting
+                    Value::Map(_, _, _) | Value::Time(_) => None,
 
                     // Closures, functions, and module functions are not comparable
                     Value::Closure { .. }
@@ -1510,6 +1514,618 @@ impl Random {
             let sid = ctx.arena.intern(&id);
             Ok(ctx.arena.add(Value::String(sid), ctx.span))
         })
+    }
+}
+
+/// Primitives for the `Map` module.
+pub(crate) struct Map;
+
+impl Prim for Map {}
+
+impl Map {
+    /// `Map.empty() -> Map[Unknown, Unknown]`
+    ///
+    /// Creates an empty map.
+    pub(crate) fn empty<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.empty", &args, 0, ctx.span)?;
+
+            let k_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
+            let v_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
+            let map = Value::Map(k_ty, v_ty, IndexMap::new());
+            Ok(ctx.arena.add(map, ctx.span))
+        })
+    }
+
+    /// `Map.length(m) -> Int`
+    ///
+    /// Returns the number of entries in the map.
+    pub(crate) fn length<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.length", &args, 1, ctx.span)?;
+
+            let (_, _, entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.length", "Map"))?;
+
+            Ok(ctx.arena.add(Value::Int(entries.len() as i64), ctx.span))
+        })
+    }
+
+    /// `Map.keys(m) -> Array[K]`
+    ///
+    /// Returns an array of all keys in iteration order.
+    pub(crate) fn keys<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.keys", &args, 1, ctx.span)?;
+
+            let (k_ty, _, entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.keys", "Map"))?;
+
+            let keys: SmallVec<[ValueId; 4]> = entries
+                .keys()
+                .map(|k| {
+                    let v = Self::map_key_to_value(k, ctx.arena);
+                    ctx.arena.add(v, ctx.span)
+                })
+                .collect();
+
+            Ok(ctx.arena.add(Value::Array(k_ty, keys), ctx.span))
+        })
+    }
+
+    /// `Map.values(m) -> Array[V]`
+    ///
+    /// Returns an array of all values in iteration order.
+    pub(crate) fn values<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.values", &args, 1, ctx.span)?;
+
+            let (_, v_ty, entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.values", "Map"))?;
+
+            let vals: SmallVec<[ValueId; 4]> =
+                entries.values().copied().collect();
+            Ok(ctx.arena.add(Value::Array(v_ty, vals), ctx.span))
+        })
+    }
+
+    /// `Map.entries(m) -> Array[(K, V)]`
+    ///
+    /// Returns an array of `(key, value)` tuples in iteration order.
+    pub(crate) fn entries<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.entries", &args, 1, ctx.span)?;
+
+            let (k_ty, v_ty, entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.entries", "Map"))?;
+
+            let tuple_ty = ctx.type_exprs.tuple(smallvec![k_ty, v_ty]);
+
+            let tuples: SmallVec<[ValueId; 4]> = entries
+                .iter()
+                .map(|(k, v_id)| {
+                    let k_val = Self::map_key_to_value(k, ctx.arena);
+                    let k_id = ctx.arena.add(k_val, ctx.span);
+                    let tuple = Value::Tuple(tuple_ty, smallvec![k_id, *v_id]);
+                    ctx.arena.add(tuple, ctx.span)
+                })
+                .collect();
+
+            let arr_ty = ctx.type_exprs.app(TypeId::ARRAY, smallvec![tuple_ty]);
+            Ok(ctx.arena.add(Value::Array(arr_ty, tuples), ctx.span))
+        })
+    }
+
+    /// `Map.has(m, k) -> Bool`
+    ///
+    /// Returns `true` if the key exists in the map.
+    pub(crate) fn has<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.has", &args, 2, ctx.span)?;
+
+            let (_, _, entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.has", "Map"))?;
+
+            let key = ctx
+                .arena
+                .get(args[1])
+                .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
+
+            let map_key = Self::value_to_map_key(key, ctx)?;
+            let exists = entries.contains_key(&map_key);
+
+            Ok(ctx.arena.add(Value::Bool(exists), ctx.span))
+        })
+    }
+
+    /// `Map.lookup(m, k) -> Option[V]`
+    ///
+    /// Returns `Option.Some(value)` if the key exists, `Option.None` otherwise.
+    pub(crate) fn get<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.lookup", &args, 2, ctx.span)?;
+
+            let (_, _, entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.lookup", "Map"))?;
+
+            let key = ctx
+                .arena
+                .get(args[1])
+                .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
+
+            let map_key = Self::value_to_map_key(key, ctx)?;
+
+            match entries.get(&map_key) {
+                Some(v_id) => Ok(ctx.option_some(*v_id)),
+                None => Ok(ctx.option_none()),
+            }
+        })
+    }
+
+    /// `Map.insert(m, k, v) -> Map[K, V]`
+    ///
+    /// Returns a new map with the key-value pair inserted/updated.
+    pub(crate) fn set<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.insert", &args, 3, ctx.span)?;
+
+            let (k_ty, v_ty, mut entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.insert", "Map"))?;
+
+            let key = ctx
+                .arena
+                .get(args[1])
+                .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
+
+            let map_key = Self::value_to_map_key(key, ctx)?;
+            entries.insert(map_key, args[2]);
+
+            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
+        })
+    }
+
+    /// `Map.remove(m, k) -> Map[K, V]`
+    ///
+    /// Returns a new map with the key removed (if it existed).
+    pub(crate) fn remove<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.remove", &args, 2, ctx.span)?;
+
+            let (k_ty, v_ty, mut entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.remove", "Map"))?;
+
+            let key = ctx
+                .arena
+                .get(args[1])
+                .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
+
+            let map_key = Self::value_to_map_key(key, ctx)?;
+            entries.shift_remove(&map_key);
+
+            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
+        })
+    }
+
+    /// `Map.merge(a, b) -> Map[K, V]`
+    ///
+    /// Returns a new map with entries from both maps (b overrides a).
+    pub(crate) fn merge<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.merge", &args, 2, ctx.span)?;
+
+            let (k_ty, v_ty, mut entries_a) =
+                ctx.arena.get_map(args[0]).ok_or_else(|| {
+                    ctx.type_error("Map.merge", "Map (first arg)")
+                })?;
+
+            let (_, _, entries_b) =
+                ctx.arena.get_map(args[1]).ok_or_else(|| {
+                    ctx.type_error("Map.merge", "Map (second arg)")
+                })?;
+
+            entries_a.extend(entries_b);
+
+            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries_a), ctx.span))
+        })
+    }
+
+    /// `Map.from-entries(arr) -> Map[K, V]`
+    ///
+    /// Constructs a map from an array of `(key, value)` tuples.
+    pub(crate) fn from_entries<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Map.from-entries", &args, 1, ctx.span)?;
+
+            let (_, arr) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.type_error("Map.from-entries", "Array"))?;
+
+            // Infer types from first entry
+            let first_entry = arr.first().and_then(|id| ctx.arena.get(*id));
+            let (k_ty, v_ty) = match first_entry {
+                Some(Value::Tuple(_, elems)) if elems.len() == 2 => {
+                    let k_ty = elems
+                        .first()
+                        .and_then(|id| {
+                            ctx.arena.base_type_of(*id, ctx.type_exprs)
+                        })
+                        .map(|ty| ctx.type_exprs.named(ty))
+                        .unwrap_or_else(|| {
+                            ctx.type_exprs.named(TypeId::UNKNOWN)
+                        });
+                    let v_ty = elems
+                        .get(1)
+                        .and_then(|id| {
+                            ctx.arena.base_type_of(*id, ctx.type_exprs)
+                        })
+                        .map(|ty| ctx.type_exprs.named(ty))
+                        .unwrap_or_else(|| {
+                            ctx.type_exprs.named(TypeId::UNKNOWN)
+                        });
+                    (k_ty, v_ty)
+                }
+                _ => {
+                    let k_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
+                    let v_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
+                    (k_ty, v_ty)
+                }
+            };
+
+            let mut entries = IndexMap::new();
+
+            arr.iter().try_for_each(|id| {
+                let val = ctx
+                    .arena
+                    .get(*id)
+                    .ok_or_else(|| ctx.runtime_error("invalid entry id"))?;
+
+                match val {
+                    Value::Tuple(_, elems) if elems.len() == 2 => {
+                        let k_val =
+                            ctx.arena.get(elems[0]).ok_or_else(|| {
+                                ctx.runtime_error("invalid key id")
+                            })?;
+                        let map_key = Self::value_to_map_key(k_val, ctx)?;
+                        entries.insert(map_key, elems[1]);
+                        Ok(())
+                    }
+                    _ => Err(ctx.type_error_msg(
+                        "Map.from-entries",
+                        "array elements must be 2-tuples",
+                    )),
+                }
+            })?;
+
+            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
+        })
+    }
+
+    /// Convert a `MapKey` back to a `Value`.
+    fn map_key_to_value(k: &MapKey, _arena: &mut ValueArena) -> Value {
+        match k {
+            MapKey::Bool(b) => Value::Bool(*b),
+            MapKey::Int(n) => Value::Int(*n),
+            MapKey::Float(f) => Value::Float(*f),
+            MapKey::Char(c) => Value::Char(*c),
+            MapKey::String(sid) => Value::String(*sid),
+        }
+    }
+
+    /// Convert a `Value` to a `MapKey`, or return an error.
+    fn value_to_map_key(v: &Value, ctx: &PrimCtx<'_>) -> crate::Result<MapKey> {
+        match v {
+            Value::Bool(b) => Ok(MapKey::Bool(*b)),
+            Value::Int(n) => Ok(MapKey::Int(*n)),
+            Value::Float(f) => Ok(MapKey::Float(*f)),
+            Value::Char(c) => Ok(MapKey::Char(*c)),
+            Value::String(sid) => Ok(MapKey::String(*sid)),
+            _ => Err(ctx.type_error_msg(
+                "Map",
+                "keys must be scalar (Bool, Int, Float, Char, String)",
+            )),
+        }
+    }
+}
+
+/// Primitives for the `Time` module.
+pub(crate) struct Time;
+
+impl Prim for Time {}
+
+impl Time {
+    /// `Time.now() -> Time`
+    ///
+    /// Returns the current UTC time.
+    pub(crate) fn now<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.now", &args, 0, ctx.span)?;
+
+            let now = Utc::now();
+            Ok(ctx.arena.add(Value::Time(now), ctx.span))
+        })
+    }
+
+    /// `Time.epoch() -> Time`
+    ///
+    /// Returns the Unix epoch (1970-01-01 00:00:00 UTC).
+    pub(crate) fn epoch<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.epoch", &args, 0, ctx.span)?;
+
+            let epoch = Utc
+                .with_ymd_and_hms(1970, 1, 1, 0, 0, 0)
+                .single()
+                .ok_or_else(|| ctx.runtime_error("failed to create epoch"))?;
+            Ok(ctx.arena.add(Value::Time(epoch), ctx.span))
+        })
+    }
+
+    /// `Time.parse(fmt, s) -> Result[Time, String]`
+    ///
+    /// Parses a string into a time using strftime format.
+    pub(crate) fn parse<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.parse", &args, 2, ctx.span)?;
+
+            let fmt_sid =
+                ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                    ctx.type_error("Time.parse", "String (format)")
+                })?;
+            let fmt = ctx
+                .arena
+                .get_str(fmt_sid)
+                .ok_or_else(|| ctx.runtime_error("invalid format string"))?;
+
+            let s_sid = ctx.arena.get_string_id(args[1]).ok_or_else(|| {
+                ctx.type_error("Time.parse", "String (input)")
+            })?;
+            let s = ctx
+                .arena
+                .get_str(s_sid)
+                .ok_or_else(|| ctx.runtime_error("invalid input string"))?;
+
+            match DateTime::parse_from_str(&s, &fmt) {
+                Ok(dt) => {
+                    let utc = dt.with_timezone(&Utc);
+                    let time_id = ctx.arena.add(Value::Time(utc), ctx.span);
+                    Ok(ctx.result_ok(time_id))
+                }
+                Err(e) => {
+                    let msg = format!("parse error: {e}");
+                    let msg_id = ctx.arena.intern(&msg);
+                    let err_id = ctx.arena.add(Value::String(msg_id), ctx.span);
+                    Ok(ctx.result_err(err_id))
+                }
+            }
+        })
+    }
+
+    /// `Time.format(fmt, t) -> String`
+    ///
+    /// Formats a time using strftime format.
+    pub(crate) fn format<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.format", &args, 2, ctx.span)?;
+
+            let fmt_sid =
+                ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                    ctx.type_error("Time.format", "String (format)")
+                })?;
+            let fmt = ctx
+                .arena
+                .get_str(fmt_sid)
+                .ok_or_else(|| ctx.runtime_error("invalid format string"))?;
+
+            let t = Self::get_time(ctx, args[1], "Time.format")?;
+
+            let formatted = t.format(&fmt).to_string();
+            let sid = ctx.arena.intern(&formatted);
+            Ok(ctx.arena.add(Value::String(sid), ctx.span))
+        })
+    }
+
+    /// `Time.add-seconds(t, n) -> Time`
+    ///
+    /// Returns a new time with `n` seconds added (negative to subtract).
+    pub(crate) fn add_seconds<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.add-seconds", &args, 2, ctx.span)?;
+
+            let t = Self::get_time(ctx, args[0], "Time.add-seconds")?;
+            let secs = Self::get_float(ctx, args[1], "Time.add-seconds")?;
+
+            let duration =
+                chrono::Duration::milliseconds((secs * 1000.0) as i64);
+            let new_time = t + duration;
+
+            Ok(ctx.arena.add(Value::Time(new_time), ctx.span))
+        })
+    }
+
+    /// `Time.diff-seconds(a, b) -> Float`
+    ///
+    /// Returns the difference in seconds (`a - b`).
+    pub(crate) fn diff_seconds<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.diff-seconds", &args, 2, ctx.span)?;
+
+            let a = Self::get_time(ctx, args[0], "Time.diff-seconds (first)")?;
+            let b = Self::get_time(ctx, args[1], "Time.diff-seconds (second)")?;
+
+            let diff = (a - b).num_milliseconds() as f64 / 1000.0;
+            Ok(ctx.arena.add(Value::Float(OrderedFloat(diff)), ctx.span))
+        })
+    }
+
+    /// `Time.year(t) -> Int`
+    pub(crate) fn year<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.year", &args, 1, ctx.span)?;
+            let t = Self::get_time(ctx, args[0], "Time.year")?;
+            Ok(ctx.arena.add(Value::Int(t.year() as i64), ctx.span))
+        })
+    }
+
+    /// `Time.month(t) -> Int` (1-12)
+    pub(crate) fn month<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.month", &args, 1, ctx.span)?;
+            let t = Self::get_time(ctx, args[0], "Time.month")?;
+            Ok(ctx.arena.add(Value::Int(t.month() as i64), ctx.span))
+        })
+    }
+
+    /// `Time.day(t) -> Int` (1-31)
+    pub(crate) fn day<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.day", &args, 1, ctx.span)?;
+            let t = Self::get_time(ctx, args[0], "Time.day")?;
+            Ok(ctx.arena.add(Value::Int(t.day() as i64), ctx.span))
+        })
+    }
+
+    /// `Time.hour(t) -> Int` (0-23)
+    pub(crate) fn hour<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.hour", &args, 1, ctx.span)?;
+            let t = Self::get_time(ctx, args[0], "Time.hour")?;
+            Ok(ctx.arena.add(Value::Int(t.hour() as i64), ctx.span))
+        })
+    }
+
+    /// `Time.minute(t) -> Int` (0-59)
+    pub(crate) fn minute<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.minute", &args, 1, ctx.span)?;
+            let t = Self::get_time(ctx, args[0], "Time.minute")?;
+            Ok(ctx.arena.add(Value::Int(t.minute() as i64), ctx.span))
+        })
+    }
+
+    /// `Time.second(t) -> Int` (0-59)
+    pub(crate) fn second<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Time.second", &args, 1, ctx.span)?;
+            let t = Self::get_time(ctx, args[0], "Time.second")?;
+            Ok(ctx.arena.add(Value::Int(t.second() as i64), ctx.span))
+        })
+    }
+
+    /// Helper to extract a `Time` value from an argument.
+    fn get_time(
+        ctx: &PrimCtx<'_>,
+        id: ValueId,
+        fn_name: &str,
+    ) -> crate::Result<DateTime<Utc>> {
+        ctx.arena
+            .get(id)
+            .and_then(|v| match v {
+                Value::Time(t) => Some(*t),
+                _ => None,
+            })
+            .ok_or_else(|| ctx.type_error(fn_name, "Time"))
+    }
+
+    /// Helper to extract a `Float` value from an argument (accepts Int too).
+    fn get_float(
+        ctx: &PrimCtx<'_>,
+        id: ValueId,
+        fn_name: &str,
+    ) -> crate::Result<f64> {
+        ctx.arena
+            .get(id)
+            .and_then(|v| match v {
+                Value::Float(f) => Some(f.0),
+                Value::Int(n) => Some(*n as f64),
+                _ => None,
+            })
+            .ok_or_else(|| ctx.type_error(fn_name, "Float or Int"))
     }
 }
 

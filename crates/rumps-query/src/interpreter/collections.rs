@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
 use crate::io::IoContext;
-use crate::value::{StringId, TypeExprId, TypeId, Value, ValueId};
+use crate::value::{MapKey, StringId, TypeExprId, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -136,6 +136,123 @@ impl<I: IoContext> Interpreter<'_, I> {
                 tys.push(ty);
                 self.tuple_elems(tail, vals, tys, span).await
             }
+        }
+    }
+
+    /// Evaluate a map literal: `{ k1 => v1, k2 => v2, ... }`.
+    ///
+    /// Keys must be scalar types (Bool, Int, Float, Char, String).
+    /// Both keys and values are checked for homogeneity.
+    #[async_recursion]
+    pub(super) async fn map_lit(
+        &mut self,
+        entries: &[(ExprId, ExprId)],
+        span: Span,
+    ) -> Result<Value> {
+        match entries.split_first() {
+            None => {
+                // Empty map has unknown key/value types
+                let k_ty = self.type_exprs.named(TypeId::UNKNOWN);
+                let v_ty = self.type_exprs.named(TypeId::UNKNOWN);
+                Ok(Value::Map(k_ty, v_ty, IndexMap::new()))
+            }
+            Some(((k_expr, v_expr), rest)) => {
+                let k_span = self.ast.expr_span(*k_expr).unwrap_or(span);
+                let v_span = self.ast.expr_span(*v_expr).unwrap_or(span);
+
+                let k_val = self.eval(*k_expr).await?;
+                let v_val = self.eval(*v_expr).await?;
+
+                let k_ty = self.value_type_expr(&k_val);
+                let v_ty = self.value_type_expr(&v_val);
+
+                let map_key = self.value_to_map_key(&k_val, k_span)?;
+                let v_id = self.arena.add(v_val, v_span);
+
+                let mut acc = IndexMap::new();
+                acc.insert(map_key, v_id);
+
+                self.map_lit_entries(rest, k_ty, v_ty, acc, k_span, span)
+                    .await
+            }
+        }
+    }
+
+    /// Recursively evaluate and type-check map entries.
+    #[async_recursion]
+    async fn map_lit_entries(
+        &mut self,
+        entries: &[(ExprId, ExprId)],
+        k_ty: TypeExprId,
+        v_ty: TypeExprId,
+        mut acc: IndexMap<MapKey, ValueId>,
+        first_k_span: Span,
+        span: Span,
+    ) -> Result<Value> {
+        match entries.split_first() {
+            None => Ok(Value::Map(k_ty, v_ty, acc)),
+            Some(((k_expr, v_expr), tail)) => {
+                let k_span = self.ast.expr_span(*k_expr).unwrap_or(span);
+                let v_span = self.ast.expr_span(*v_expr).unwrap_or(span);
+
+                let k_val = self.eval(*k_expr).await?;
+                let v_val = self.eval(*v_expr).await?;
+
+                let this_k_ty = self.value_type_expr(&k_val);
+                let this_v_ty = self.value_type_expr(&v_val);
+
+                // Check key type homogeneity
+                if !self.type_exprs.eq(k_ty, this_k_ty) {
+                    let expected = self.type_expr_name(k_ty);
+                    let got = self.type_expr_name(this_k_ty);
+                    Err(Error::type_err(
+                        k_span,
+                        format!(
+                            "map key type mismatch: expected {expected} \
+                             (from {}..{}), got {got}",
+                            first_k_span.start, first_k_span.end
+                        ),
+                    ))?;
+                }
+
+                // Check value type homogeneity
+                if !self.type_exprs.eq(v_ty, this_v_ty) {
+                    let expected = self.type_expr_name(v_ty);
+                    let got = self.type_expr_name(this_v_ty);
+                    Err(Error::type_err(
+                        v_span,
+                        format!(
+                            "map value type mismatch: expected {expected}, got {got}"
+                        ),
+                    ))?;
+                }
+
+                let map_key = self.value_to_map_key(&k_val, k_span)?;
+                let v_id = self.arena.add(v_val, v_span);
+                acc.insert(map_key, v_id);
+
+                self.map_lit_entries(tail, k_ty, v_ty, acc, first_k_span, span)
+                    .await
+            }
+        }
+    }
+
+    /// Convert a value to a `MapKey`, or error if not a scalar.
+    fn value_to_map_key(&self, v: &Value, span: Span) -> Result<MapKey> {
+        match v {
+            Value::Bool(b) => Ok(MapKey::Bool(*b)),
+            Value::Int(n) => Ok(MapKey::Int(*n)),
+            Value::Float(f) => Ok(MapKey::Float(*f)),
+            Value::Char(c) => Ok(MapKey::Char(*c)),
+            Value::String(sid) => Ok(MapKey::String(*sid)),
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "map keys must be scalar (Bool, Int, Float, Char, String); \
+                     got {}",
+                    v.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
         }
     }
 

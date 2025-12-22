@@ -998,7 +998,189 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
 
 ---
 
-### 7. Range Operator (`..`)
+### 7. Map and Time Types
+
+Add two new native types: `Map[K, V]` for homogeneous key-value collections, and `Time` for temporal values.
+
+#### 7.1 Map Type
+
+A homogeneous key-value collection with typed keys and values. Keys are restricted to scalar types (Bool, Int, Float, Char, String) for hashability.
+
+```rumps
+; Map literal syntax uses `=>` to distinguish from Object
+LET ages = { "Alice" => 30, "Bob" => 25 }
+LET num-lookup = { 1 => "one", 2 => "two", 3 => "three" }
+
+; Empty map via constructor
+LET empty = Map.empty()
+
+; Or with type annotation
+LET typed: Map[Int, String] = {}
+
+; Operations
+OUTPUT Map.lookup(ages, "Alice")     ; Option.Some(30)
+OUTPUT Map.has(num-lookup, 2)        ; true
+LET updated = Map.insert(ages, "Carol", 28)
+```
+
+**Literal syntax disambiguation:**
+- `{ field: value }` → Object (identifier key with `:`)
+- `{ expr => value }` → Map (any expression key with `=>`)
+- `{}` → empty Object (use `Map.empty()` or type annotation for empty Map)
+
+##### 7.1.1 Value Representation
+
+- [x] Add `MapKey` enum for hashable scalar keys:
+  ```rust
+  #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+  pub(crate) enum MapKey {
+      Bool(bool),
+      Int(i64),
+      Float(OrderedFloat<f64>),
+      Char(char),
+      String(StringId),
+  }
+  ```
+- [x] Add `Value::Map(TypeExprId, TypeExprId, IndexMap<MapKey, ValueId>)`:
+  - First `TypeExprId`: key type (K)
+  - Second `TypeExprId`: value type (V)
+  - `IndexMap`: preserves insertion order
+
+##### 7.1.2 Type System
+
+- [x] Add `TypeId::MAP` constant (index 10)
+- [x] Add `BuiltinType::Map` variant
+- [x] Register `Map` in `TypeRegistry::register_builtins`
+- [x] `Map[K, V]` parses as `TypeExpr::App(MAP, [K, V])`
+
+##### 7.1.3 AST
+
+- [x] Add `Expr::MapLit(Vec<(ExprId, ExprId)>)` for map literals
+
+##### 7.1.4 Parser
+
+- [x] Modify `{...}` parsing to detect `:` vs `=>`
+- [x] After first expression in braces:
+  - `:` → Object literal (first expr must be identifier)
+  - `=>` → Map literal
+- [x] Parse `{ k1 => v1, k2 => v2, ... }` as `Expr::MapLit`
+
+##### 7.1.5 Interpreter
+
+- [x] Add `ValueArena::get_map()` helper
+- [x] Implement `eval_map_lit()`:
+  - Evaluate first k-v pair, infer K and V types
+  - For remaining pairs:
+    - Convert key to `MapKey` (error if not scalar)
+    - Validate key type matches K
+    - Validate value type matches V
+  - Build `Value::Map(k_ty, v_ty, entries)`
+- [x] Add display formatting for `Value::Map`
+
+##### 7.1.6 Map Module
+
+Register `Map` module in `Environment::register_builtins`:
+
+- [x] `Map.empty()`: `() -> Map[Unknown, Unknown]`
+- [x] `Map.length(m)`: `Map[K, V] -> Int`
+- [x] `Map.keys(m)`: `Map[K, V] -> Array[K]`
+- [x] `Map.values(m)`: `Map[K, V] -> Array[V]`
+- [x] `Map.entries(m)`: `Map[K, V] -> Array[(K, V)]`
+- [x] `Map.has(m, k)`: `(Map[K, V], K) -> Bool`
+- [x] `Map.lookup(m, k)`: `(Map[K, V], K) -> Option[V]`
+- [x] `Map.insert(m, k, v)`: `(Map[K, V], K, V) -> Map[K, V]` (returns new map)
+- [x] `Map.remove(m, k)`: `(Map[K, V], K) -> Map[K, V]` (returns new map)
+- [x] `Map.merge(a, b)`: `(Map[K, V], Map[K, V]) -> Map[K, V]` (b overrides a)
+- [x] `Map.from-entries(arr)`: `Array[(K, V)] -> Map[K, V]`
+
+##### 7.1.7 Tests
+
+- [x] Add unit tests for `MapKey` hashing and equality
+- [x] Add parser tests for map literal syntax
+- [x] Add interpreter tests for map operations
+- [x] Add integration test script (`77_map_module.rumps`)
+
+---
+
+#### 7.2 Time Type
+
+A point in time (UTC). Uses `chrono::DateTime<Utc>` internally.
+
+```rumps
+; Current time
+LET now = Time.now()
+
+; Parsing and formatting (strftime format)
+LET t = Time.parse("%Y-%m-%d", "2024-01-15")!
+OUTPUT Time.format("%Y-%m-%d %H:%M:%S", t)
+
+; Arithmetic
+LET later = Time.add-seconds(now, 3600.0)  ; 1 hour later
+LET diff = Time.diff-seconds(later, now)   ; 3600.0
+
+; Components
+OUTPUT Time.year(now)    ; e.g., 2024
+OUTPUT Time.month(now)   ; e.g., 1 (January)
+OUTPUT Time.day(now)     ; e.g., 15
+```
+
+**Format strings** use strftime syntax (like Haskell's `time` package):
+- `%Y` - 4-digit year
+- `%m` - 2-digit month (01-12)
+- `%d` - 2-digit day (01-31)
+- `%H` - 24-hour hour (00-23)
+- `%M` - 2-digit minute (00-59)
+- `%S` - 2-digit second (00-60)
+- `%Y-%m-%dT%H:%M:%SZ` - ISO 8601
+
+##### 7.2.1 Dependencies
+
+- [x] Add `chrono` to `Cargo.toml`:
+  ```toml
+  chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+  ```
+
+##### 7.2.2 Value Representation
+
+- [x] Add `Value::Time(chrono::DateTime<chrono::Utc>)`
+
+##### 7.2.3 Type System
+
+- [x] Add `TypeId::TIME` constant (index 11)
+- [x] Add `BuiltinType::Time` variant
+- [x] Register `Time` in `TypeRegistry::register_builtins`
+
+##### 7.2.4 Interpreter
+
+- [x] Add display formatting for `Value::Time` (ISO 8601 format)
+- [x] Add equality comparison for `Value::Time`
+
+##### 7.2.5 Time Module
+
+Register `Time` module in `Environment::register_builtins`:
+
+- [x] `Time.now()`: `() -> Time` (current UTC time)
+- [x] `Time.epoch()`: `() -> Time` (Unix epoch: 1970-01-01 00:00:00 UTC)
+- [x] `Time.parse(fmt, s)`: `(String, String) -> Result[Time, String]`
+- [x] `Time.format(fmt, t)`: `(String, Time) -> String`
+- [x] `Time.add-seconds(t, n)`: `(Time, Float) -> Time`
+- [x] `Time.diff-seconds(a, b)`: `(Time, Time) -> Float` (a - b)
+- [x] `Time.year(t)`: `(Time) -> Int`
+- [x] `Time.month(t)`: `(Time) -> Int` (1-12)
+- [x] `Time.day(t)`: `(Time) -> Int` (1-31)
+- [x] `Time.hour(t)`: `(Time) -> Int` (0-23)
+- [x] `Time.minute(t)`: `(Time) -> Int` (0-59)
+- [x] `Time.second(t)`: `(Time) -> Int` (0-59)
+
+##### 7.2.6 Tests
+
+- [x] Add unit tests for Time value operations
+- [x] Add interpreter tests for Time module functions
+- [x] Add integration test script (`78_time_module.rumps`)
+
+---
+
+### 8. Range Operator (`..`)
 
 Creates a lazy range of integers.
 
@@ -1018,7 +1200,7 @@ Array.map(x => x * x, 1..100)
 - [ ] Add unit tests
 - [ ] Add integration test script
 
-#### 7.1 Range Semantics
+#### 8.1 Range Semantics
 
 Ranges use Rust-style exclusive end by default:
 
@@ -1038,7 +1220,7 @@ Range precedence is higher than comparison but lower than additive:
 
 ---
 
-### 8. Spread Operators (`...`)
+### 9. Spread Operators (`...`)
 
 Spread syntax for arrays and objects.
 
@@ -1062,31 +1244,31 @@ LET user = { size: "large" }
 LET config = { ...defaults, ...user }  ; { color: "red", size: "large" }
 ```
 
-#### 8.1 Lexer
+#### 9.1 Lexer
 
 - [x] Add `Token::DotDotDot` (`...`) for spread operator
 
 *Note: Already implemented as part of destructuring bindings (section 2) for array rest patterns.*
 
-#### 8.2 AST
+#### 9.2 AST
 
 - [ ] Add `Expr::Spread(ExprId)` for spread expressions
 - [ ] Modify `Expr::Array` to allow spread elements
 - [ ] Modify `Expr::Object` to allow spread entries
 
-#### 8.3 Parser
+#### 9.3 Parser
 
 - [ ] Parse `...expr` inside array literals
 - [ ] Parse `...expr` inside object literals
 - [ ] Spread only valid inside array/object literals (not standalone)
 
-#### 8.4 Interpreter
+#### 9.4 Interpreter
 
 - [ ] Array spread: iterate source array, append elements to result
 - [ ] Object spread: iterate source object entries, insert into result
 - [ ] Later entries override earlier ones for objects
 
-#### 8.5 Tests
+#### 9.5 Tests
 
 - [ ] Add lexer tests for `...`
 - [ ] Add parser tests for spread in arrays and objects
@@ -1095,7 +1277,7 @@ LET config = { ...defaults, ...user }  ; { color: "red", size: "large" }
 
 ---
 
-### 9. Regex Pattern Matching (`MATCHES`)
+### 10. Regex Pattern Matching (`MATCHES`)
 
 Pattern matching with regex literals.
 
@@ -1114,7 +1296,7 @@ IF NOT (input MATCHES /[<>]/) {
 }
 ```
 
-#### 9.1 Lexer
+#### 10.1 Lexer
 
 - [ ] Add regex literal support (`/pattern/`)
   - Handle escape sequences (`\/`, `\\`)
@@ -1122,17 +1304,17 @@ IF NOT (input MATCHES /[<>]/) {
 - [ ] Add `Token::Regex(String)` for regex literals
 - [ ] Add `Token::Matches` keyword
 
-#### 9.2 AST
+#### 10.2 AST
 
 - [ ] Add `Expr::Matches(ExprId, String)` (value, pattern)
 
-#### 9.3 Interpreter
+#### 10.3 Interpreter
 
 - [ ] Add `regex` crate dependency
 - [ ] Compile regex on first use (cache compiled patterns)
 - [ ] Evaluate: coerce left to string, test against regex, return `Bool`
 
-#### 9.4 Tests
+#### 10.4 Tests
 
 - [ ] Add lexer tests for regex literals
 - [ ] Add parser tests

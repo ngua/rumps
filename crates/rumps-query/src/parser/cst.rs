@@ -107,6 +107,9 @@ pub(crate) enum ExprKind {
     /// A tuple literal.
     Tuple(Vec<Expr>),
 
+    /// A map literal: `{ k => v, ... }`.
+    MapLit(Vec<(Expr, Expr)>),
+
     /// Tuple index access: `tuple.0`, `tuple.1`.
     TupleIndex(Box<Expr>, u32),
 

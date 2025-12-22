@@ -524,6 +524,13 @@ pub(crate) enum Expr {
     /// (`.0`, `.1`, etc.) is handled by `TupleIndex`.
     Tuple(SmallVec<[ExprId; 4]>),
 
+    /// A map literal: `{ key => value, ... }`.
+    ///
+    /// Keys can be any expression that evaluates to a scalar (Bool, Int, Float,
+    /// Char, String). The `=>` separator distinguishes map literals from object
+    /// literals (which use `:`).
+    MapLit(SmallVec<[(ExprId, ExprId); 8]>),
+
     /// Tuple index access: `tuple.0`, `tuple.1`.
     ///
     /// The index is a compile-time constant; runtime indexing uses `Index`.

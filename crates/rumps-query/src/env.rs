@@ -12,7 +12,7 @@ use std::collections::HashMap;
 /// This is the single source of truth for which module names are recognized
 /// during resolution and registered at interpreter startup.
 pub(crate) const BUILTIN_MODULE_NAMES: &[&str] =
-    &["Object", "Array", "String", "Math", "Random"];
+    &["Object", "Array", "String", "Math", "Random", "Map", "Time"];
 
 use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
@@ -347,7 +347,9 @@ impl Environment {
     /// handled specially by the interpreter. We register placeholders here
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
-        use crate::primitives::{Array, Math, Object, Prim, Random, Str};
+        use crate::primitives::{
+            Array, Map, Math, Object, Prim, Random, Str, Time,
+        };
 
         self.modules.insert(
             "Object".to_string(),
@@ -422,6 +424,41 @@ impl Environment {
                 ("shuffle", Random::shuffle),
                 ("sample", Random::sample),
                 ("uuid", Random::uuid),
+            ]),
+        );
+
+        self.modules.insert(
+            "Map".to_string(),
+            Module::from_fns(&[
+                ("empty", Map::empty),
+                ("length", Map::length),
+                ("keys", Map::keys),
+                ("values", Map::values),
+                ("entries", Map::entries),
+                ("has", Map::has),
+                ("lookup", Map::get),
+                ("insert", Map::set),
+                ("remove", Map::remove),
+                ("merge", Map::merge),
+                ("from-entries", Map::from_entries),
+            ]),
+        );
+
+        self.modules.insert(
+            "Time".to_string(),
+            Module::from_fns(&[
+                ("now", Time::now),
+                ("epoch", Time::epoch),
+                ("parse", Time::parse),
+                ("format", Time::format),
+                ("add-seconds", Time::add_seconds),
+                ("diff-seconds", Time::diff_seconds),
+                ("year", Time::year),
+                ("month", Time::month),
+                ("day", Time::day),
+                ("hour", Time::hour),
+                ("minute", Time::minute),
+                ("second", Time::second),
             ]),
         );
     }
