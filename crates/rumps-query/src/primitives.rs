@@ -49,7 +49,9 @@ use smallvec::{smallvec, SmallVec};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::env::{PrimCtx, PrimResult};
-use crate::value::{MapKey, StringId, TypeId, Value, ValueArena, ValueId};
+use crate::value::{
+    MapKey, StringId, TypeExprArena, TypeId, Value, ValueArena, ValueId,
+};
 use crate::Error;
 
 /// Shared utilities for primitive function implementations.
@@ -543,8 +545,6 @@ impl Array {
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
-        use crate::value::TypeExprArena;
-
         /// Sort key for `Array.sort`; supports all value types recursively.
         ///
         /// Variant order determines comparison precedence for heterogeneous
@@ -1552,7 +1552,7 @@ impl Map {
 
             let (_, _, entries) = ctx
                 .arena
-                .get_map(args[0])
+                .get_map_ref(args[0])
                 .ok_or_else(|| ctx.type_error("Map.length", "Map"))?;
 
             Ok(ctx.arena.add(Value::Int(entries.len() as i64), ctx.span))
@@ -1571,15 +1571,16 @@ impl Map {
 
             let (k_ty, _, entries) = ctx
                 .arena
-                .get_map(args[0])
+                .get_map_ref(args[0])
                 .ok_or_else(|| ctx.type_error("Map.keys", "Map"))?;
 
-            let keys: SmallVec<[ValueId; 4]> = entries
-                .keys()
-                .map(|k| {
-                    let v = Self::map_key_to_value(k, ctx.arena);
-                    ctx.arena.add(v, ctx.span)
-                })
+            // Collect keys before mutating arena
+            let key_vals: SmallVec<[MapKey; 8]> =
+                entries.keys().cloned().collect();
+
+            let keys: SmallVec<[ValueId; 4]> = key_vals
+                .iter()
+                .map(|k| ctx.arena.add(k.to_value(), ctx.span))
                 .collect();
 
             Ok(ctx.arena.add(Value::Array(k_ty, keys), ctx.span))
@@ -1598,7 +1599,7 @@ impl Map {
 
             let (_, v_ty, entries) = ctx
                 .arena
-                .get_map(args[0])
+                .get_map_ref(args[0])
                 .ok_or_else(|| ctx.type_error("Map.values", "Map"))?;
 
             let vals: SmallVec<[ValueId; 4]> =
@@ -1619,16 +1620,18 @@ impl Map {
 
             let (k_ty, v_ty, entries) = ctx
                 .arena
-                .get_map(args[0])
+                .get_map_ref(args[0])
                 .ok_or_else(|| ctx.type_error("Map.entries", "Map"))?;
 
+            // Collect entries before mutating arena
+            let entry_pairs: SmallVec<[(MapKey, ValueId); 8]> =
+                entries.iter().map(|(k, v)| (k.clone(), *v)).collect();
             let tuple_ty = ctx.type_exprs.tuple(smallvec![k_ty, v_ty]);
 
-            let tuples: SmallVec<[ValueId; 4]> = entries
+            let tuples: SmallVec<[ValueId; 4]> = entry_pairs
                 .iter()
                 .map(|(k, v_id)| {
-                    let k_val = Self::map_key_to_value(k, ctx.arena);
-                    let k_id = ctx.arena.add(k_val, ctx.span);
+                    let k_id = ctx.arena.add(k.to_value(), ctx.span);
                     let tuple = Value::Tuple(tuple_ty, smallvec![k_id, *v_id]);
                     ctx.arena.add(tuple, ctx.span)
                 })
@@ -1649,19 +1652,24 @@ impl Map {
         Box::pin(async move {
             Self::check_arity("Map.has", &args, 2, ctx.span)?;
 
-            let (_, _, entries) = ctx
-                .arena
-                .get_map(args[0])
-                .ok_or_else(|| ctx.type_error("Map.has", "Map"))?;
-
             let key = ctx
                 .arena
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = Self::value_to_map_key(key, ctx)?;
-            let exists = entries.contains_key(&map_key);
+            let map_key = MapKey::from_value(key).ok_or_else(|| {
+                ctx.type_error_msg(
+                    "Map.has",
+                    "key must be scalar (Bool, Int, Float, Char, String)",
+                )
+            })?;
 
+            let (_, _, entries) = ctx
+                .arena
+                .get_map_ref(args[0])
+                .ok_or_else(|| ctx.type_error("Map.has", "Map"))?;
+
+            let exists = entries.contains_key(&map_key);
             Ok(ctx.arena.add(Value::Bool(exists), ctx.span))
         })
     }
@@ -1676,17 +1684,22 @@ impl Map {
         Box::pin(async move {
             Self::check_arity("Map.lookup", &args, 2, ctx.span)?;
 
-            let (_, _, entries) = ctx
-                .arena
-                .get_map(args[0])
-                .ok_or_else(|| ctx.type_error("Map.lookup", "Map"))?;
-
             let key = ctx
                 .arena
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = Self::value_to_map_key(key, ctx)?;
+            let map_key = MapKey::from_value(key).ok_or_else(|| {
+                ctx.type_error_msg(
+                    "Map.lookup",
+                    "key must be scalar (Bool, Int, Float, Char, String)",
+                )
+            })?;
+
+            let (_, _, entries) = ctx
+                .arena
+                .get_map_ref(args[0])
+                .ok_or_else(|| ctx.type_error("Map.lookup", "Map"))?;
 
             match entries.get(&map_key) {
                 Some(v_id) => Ok(ctx.option_some(*v_id)),
@@ -1698,6 +1711,7 @@ impl Map {
     /// `Map.insert(m, k, v) -> Map[K, V]`
     ///
     /// Returns a new map with the key-value pair inserted/updated.
+    /// Validates that the key and value types match the map's types.
     pub(crate) fn set<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1705,20 +1719,77 @@ impl Map {
         Box::pin(async move {
             Self::check_arity("Map.insert", &args, 3, ctx.span)?;
 
-            let (k_ty, v_ty, mut entries) = ctx
-                .arena
-                .get_map(args[0])
-                .ok_or_else(|| ctx.type_error("Map.insert", "Map"))?;
-
+            // Get key value and convert to MapKey first
             let key = ctx
                 .arena
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = Self::value_to_map_key(key, ctx)?;
+            let map_key = MapKey::from_value(key).ok_or_else(|| {
+                ctx.type_error_msg(
+                    "Map.insert",
+                    "key must be scalar (Bool, Int, Float, Char, String)",
+                )
+            })?;
+
+            // Get value type for checking
+            let new_v_ty = ctx
+                .arena
+                .base_type_of(args[2], ctx.type_exprs)
+                .unwrap_or(TypeId::UNKNOWN);
+
+            // Now get the map (cloning for mutation)
+            let (k_ty, v_ty, mut entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.insert", "Map"))?;
+
+            // Type check key (if map has known key type)
+            let expected_k_ty = ctx.type_exprs.base_type(k_ty);
+            let new_k_ty = map_key.type_id();
+            if expected_k_ty != Some(TypeId::UNKNOWN)
+                && expected_k_ty != Some(new_k_ty)
+            {
+                Err(ctx.type_error_msg(
+                    "Map.insert",
+                    &format!(
+                        "key type mismatch: map has {:?}, got {:?}",
+                        expected_k_ty, new_k_ty
+                    ),
+                ))?;
+            }
+
+            // Type check value (if map has known value type)
+            let expected_v_ty = ctx.type_exprs.base_type(v_ty);
+            if expected_v_ty != Some(TypeId::UNKNOWN)
+                && expected_v_ty != Some(new_v_ty)
+            {
+                Err(ctx.type_error_msg(
+                    "Map.insert",
+                    &format!(
+                        "value type mismatch: map has {:?}, got {:?}",
+                        expected_v_ty, new_v_ty
+                    ),
+                ))?;
+            }
+
             entries.insert(map_key, args[2]);
 
-            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
+            // Update types if map was empty (UNKNOWN)
+            let final_k_ty = if expected_k_ty == Some(TypeId::UNKNOWN) {
+                ctx.type_exprs.named(new_k_ty)
+            } else {
+                k_ty
+            };
+            let final_v_ty = if expected_v_ty == Some(TypeId::UNKNOWN) {
+                ctx.type_exprs.named(new_v_ty)
+            } else {
+                v_ty
+            };
+
+            Ok(ctx
+                .arena
+                .add(Value::Map(final_k_ty, final_v_ty, entries), ctx.span))
         })
     }
 
@@ -1732,17 +1803,23 @@ impl Map {
         Box::pin(async move {
             Self::check_arity("Map.remove", &args, 2, ctx.span)?;
 
-            let (k_ty, v_ty, mut entries) = ctx
-                .arena
-                .get_map(args[0])
-                .ok_or_else(|| ctx.type_error("Map.remove", "Map"))?;
-
             let key = ctx
                 .arena
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = Self::value_to_map_key(key, ctx)?;
+            let map_key = MapKey::from_value(key).ok_or_else(|| {
+                ctx.type_error_msg(
+                    "Map.remove",
+                    "key must be scalar (Bool, Int, Float, Char, String)",
+                )
+            })?;
+
+            let (k_ty, v_ty, mut entries) = ctx
+                .arena
+                .get_map(args[0])
+                .ok_or_else(|| ctx.type_error("Map.remove", "Map"))?;
+
             entries.shift_remove(&map_key);
 
             Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
@@ -1752,6 +1829,7 @@ impl Map {
     /// `Map.merge(a, b) -> Map[K, V]`
     ///
     /// Returns a new map with entries from both maps (b overrides a).
+    /// Validates that both maps have compatible key and value types.
     pub(crate) fn merge<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1759,19 +1837,67 @@ impl Map {
         Box::pin(async move {
             Self::check_arity("Map.merge", &args, 2, ctx.span)?;
 
-            let (k_ty, v_ty, mut entries_a) =
+            let (k_ty_a, v_ty_a, mut entries_a) =
                 ctx.arena.get_map(args[0]).ok_or_else(|| {
                     ctx.type_error("Map.merge", "Map (first arg)")
                 })?;
 
-            let (_, _, entries_b) =
+            let (k_ty_b, v_ty_b, entries_b) =
                 ctx.arena.get_map(args[1]).ok_or_else(|| {
                     ctx.type_error("Map.merge", "Map (second arg)")
                 })?;
 
+            // Type check: both maps must have compatible types
+            let base_k_a = ctx.type_exprs.base_type(k_ty_a);
+            let base_k_b = ctx.type_exprs.base_type(k_ty_b);
+            let base_v_a = ctx.type_exprs.base_type(v_ty_a);
+            let base_v_b = ctx.type_exprs.base_type(v_ty_b);
+
+            // Check key types (allow UNKNOWN to match anything)
+            if base_k_a != Some(TypeId::UNKNOWN)
+                && base_k_b != Some(TypeId::UNKNOWN)
+                && base_k_a != base_k_b
+            {
+                Err(ctx.type_error_msg(
+                    "Map.merge",
+                    &format!(
+                        "key type mismatch: first map has {:?}, second has {:?}",
+                        base_k_a, base_k_b
+                    ),
+                ))?;
+            }
+
+            // Check value types
+            if base_v_a != Some(TypeId::UNKNOWN)
+                && base_v_b != Some(TypeId::UNKNOWN)
+                && base_v_a != base_v_b
+            {
+                Err(ctx.type_error_msg(
+                    "Map.merge",
+                    &format!(
+                        "value type mismatch: first map has {:?}, second has {:?}",
+                        base_v_a, base_v_b
+                    ),
+                ))?;
+            }
+
             entries_a.extend(entries_b);
 
-            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries_a), ctx.span))
+            // Use the more specific type (prefer non-UNKNOWN)
+            let final_k_ty = if base_k_a == Some(TypeId::UNKNOWN) {
+                k_ty_b
+            } else {
+                k_ty_a
+            };
+            let final_v_ty = if base_v_a == Some(TypeId::UNKNOWN) {
+                v_ty_b
+            } else {
+                v_ty_a
+            };
+
+            Ok(ctx
+                .arena
+                .add(Value::Map(final_k_ty, final_v_ty, entries_a), ctx.span))
         })
     }
 
@@ -1835,7 +1961,13 @@ impl Map {
                             ctx.arena.get(elems[0]).ok_or_else(|| {
                                 ctx.runtime_error("invalid key id")
                             })?;
-                        let map_key = Self::value_to_map_key(k_val, ctx)?;
+                        let map_key =
+                            MapKey::from_value(k_val).ok_or_else(|| {
+                                ctx.type_error_msg(
+                                    "Map.from-entries",
+                                    "key must be scalar",
+                                )
+                            })?;
                         entries.insert(map_key, elems[1]);
                         Ok(())
                     }
@@ -1848,32 +1980,6 @@ impl Map {
 
             Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
         })
-    }
-
-    /// Convert a `MapKey` back to a `Value`.
-    fn map_key_to_value(k: &MapKey, _arena: &mut ValueArena) -> Value {
-        match k {
-            MapKey::Bool(b) => Value::Bool(*b),
-            MapKey::Int(n) => Value::Int(*n),
-            MapKey::Float(f) => Value::Float(*f),
-            MapKey::Char(c) => Value::Char(*c),
-            MapKey::String(sid) => Value::String(*sid),
-        }
-    }
-
-    /// Convert a `Value` to a `MapKey`, or return an error.
-    fn value_to_map_key(v: &Value, ctx: &PrimCtx<'_>) -> crate::Result<MapKey> {
-        match v {
-            Value::Bool(b) => Ok(MapKey::Bool(*b)),
-            Value::Int(n) => Ok(MapKey::Int(*n)),
-            Value::Float(f) => Ok(MapKey::Float(*f)),
-            Value::Char(c) => Ok(MapKey::Char(*c)),
-            Value::String(sid) => Ok(MapKey::String(*sid)),
-            _ => Err(ctx.type_error_msg(
-                "Map",
-                "keys must be scalar (Bool, Int, Float, Char, String)",
-            )),
-        }
     }
 }
 
@@ -1943,7 +2049,7 @@ impl Time {
                 .get_str(s_sid)
                 .ok_or_else(|| ctx.runtime_error("invalid input string"))?;
 
-            match DateTime::parse_from_str(&s, &fmt) {
+            match DateTime::parse_from_str(s, fmt) {
                 Ok(dt) => {
                     let utc = dt.with_timezone(&Utc);
                     let time_id = ctx.arena.add(Value::Time(utc), ctx.span);
@@ -1980,7 +2086,7 @@ impl Time {
 
             let t = Self::get_time(ctx, args[1], "Time.format")?;
 
-            let formatted = t.format(&fmt).to_string();
+            let formatted = t.format(fmt).to_string();
             let sid = ctx.arena.intern(&formatted);
             Ok(ctx.arena.add(Value::String(sid), ctx.span))
         })

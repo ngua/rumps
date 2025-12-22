@@ -34,6 +34,42 @@ pub(crate) enum MapKey {
     String(StringId),
 }
 
+impl MapKey {
+    /// Convert a `Value` to a `MapKey`, or `None` if not a scalar type.
+    pub(crate) fn from_value(v: &Value) -> Option<Self> {
+        match v {
+            Value::Bool(b) => Some(Self::Bool(*b)),
+            Value::Int(n) => Some(Self::Int(*n)),
+            Value::Float(f) => Some(Self::Float(*f)),
+            Value::Char(c) => Some(Self::Char(*c)),
+            Value::String(sid) => Some(Self::String(*sid)),
+            _ => None,
+        }
+    }
+
+    /// Convert a `MapKey` back to a `Value`.
+    pub(crate) fn to_value(&self) -> Value {
+        match self {
+            Self::Bool(b) => Value::Bool(*b),
+            Self::Int(n) => Value::Int(*n),
+            Self::Float(f) => Value::Float(*f),
+            Self::Char(c) => Value::Char(*c),
+            Self::String(sid) => Value::String(*sid),
+        }
+    }
+
+    /// Get the `TypeId` for this key.
+    pub(crate) fn type_id(&self) -> TypeId {
+        match self {
+            Self::Bool(_) => TypeId::BOOL,
+            Self::Int(_) => TypeId::INT,
+            Self::Float(_) => TypeId::FLOAT,
+            Self::Char(_) => TypeId::CHAR,
+            Self::String(_) => TypeId::STRING,
+        }
+    }
+}
+
 /// Index into the value arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
@@ -225,7 +261,22 @@ impl ValueArena {
         }
     }
 
+    /// Get a reference to map contents by ID (no cloning).
+    ///
+    /// Returns `None` if the value doesn't exist or isn't a map.
+    pub(crate) fn get_map_ref(
+        &self,
+        id: ValueId,
+    ) -> Option<(TypeExprId, TypeExprId, &IndexMap<MapKey, ValueId>)> {
+        match self.get(id)? {
+            Value::Map(k_ty, v_ty, entries) => Some((*k_ty, *v_ty, entries)),
+            _ => None,
+        }
+    }
+
     /// Get map contents by ID, cloning the key-value map.
+    ///
+    /// Use `get_map_ref` for read-only access to avoid cloning.
     ///
     /// Returns `None` if the value doesn't exist or isn't a map.
     pub(crate) fn get_map(
@@ -294,8 +345,6 @@ impl CapturedEnv {
 ///
 /// Uses `StringId` for interned strings and `ValueId` for nested values,
 /// avoiding allocation and enabling O(1) string comparison.
-///
-/// Note: `Ord` and `Hash` are not derived because `Object` contains `HashMap`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Value {
     /// A boolean value.

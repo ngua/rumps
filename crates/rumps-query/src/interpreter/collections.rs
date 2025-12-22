@@ -239,21 +239,16 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a value to a `MapKey`, or error if not a scalar.
     fn value_to_map_key(&self, v: &Value, span: Span) -> Result<MapKey> {
-        match v {
-            Value::Bool(b) => Ok(MapKey::Bool(*b)),
-            Value::Int(n) => Ok(MapKey::Int(*n)),
-            Value::Float(f) => Ok(MapKey::Float(*f)),
-            Value::Char(c) => Ok(MapKey::Char(*c)),
-            Value::String(sid) => Ok(MapKey::String(*sid)),
-            _ => Err(Error::type_err(
+        MapKey::from_value(v).ok_or_else(|| {
+            Error::type_err(
                 span,
                 format!(
                     "map keys must be scalar (Bool, Int, Float, Char, String); \
                      got {}",
                     v.type_name(&self.registry, &self.type_exprs)
                 ),
-            )),
-        }
+            )
+        })
     }
 
     /// Evaluate tuple index access: `tuple.0`, `tuple.1`, etc.
