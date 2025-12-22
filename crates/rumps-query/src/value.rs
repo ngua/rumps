@@ -400,6 +400,27 @@ impl Value {
             _ => false,
         }
     }
+
+    /// Get the simplified base `TypeId` for this value.
+    ///
+    /// Returns the primitive type id for scalars, or `UNKNOWN` for compound
+    /// types that don't have a single base (closures, functions, tagged).
+    pub(crate) fn base_type(&self) -> TypeId {
+        match self {
+            Self::Bool(_) => TypeId::BOOL,
+            Self::Int(_) => TypeId::INT,
+            Self::Float(_) => TypeId::FLOAT,
+            Self::Char(_) => TypeId::CHAR,
+            Self::String(_) => TypeId::STRING,
+            Self::Array(..) => TypeId::ARRAY,
+            Self::Object(_) => TypeId::OBJECT,
+            Self::Tuple(..) => TypeId::TUPLE,
+            Self::Tagged(..) => TypeId::UNKNOWN,
+            Self::Closure { .. }
+            | Self::Function { .. }
+            | Self::ModuleFn { .. } => TypeId::UNKNOWN,
+        }
+    }
 }
 
 /// Built-in primitive types.

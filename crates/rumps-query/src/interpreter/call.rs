@@ -7,7 +7,7 @@ use super::Interpreter;
 use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
 use crate::io::IoContext;
-use crate::value::{CapturedEnv, StringId, TypeExprId, Value, ValueId};
+use crate::value::{CapturedEnv, StringId, TypeExprId, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -257,6 +257,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Invoke a module function with pre-evaluated arguments.
+    ///
+    /// Array functions (`Array.map`, `Array.filter`, `Array.reduce`) are
+    /// higher-order and need special handling since they invoke closures.
     #[async_recursion]
     pub(super) async fn invoke_module_fn(
         &mut self,
@@ -277,15 +280,322 @@ impl<I: IoContext> Interpreter<'_, I> {
         let path_refs: SmallVec<[&str; 4]> =
             path_strs.iter().map(String::as_str).collect();
 
-        let prim =
-            self.env.get_module_fn(&path_refs).copied().ok_or_else(|| {
-                Error::runtime(
-                    span,
-                    format!("unknown function `{path_display}`"),
-                )
+        // Higher-order functions (those that invoke closures/functions passed as
+        // arguments) MUST be handled here, not in `primitives.rs`. The `PrimFn`
+        // signature only receives values; it has no access to the interpreter's
+        // closure invocation machinery (`invoke_callable`). See `primitives.rs`
+        // module docs for details.
+        match path_refs.as_slice() {
+            ["Array", "map"] => self.array_map(args, span).await,
+            ["Array", "filter"] => self.array_filter(args, span).await,
+            ["Array", "reduce"] => self.array_reduce(args, span).await,
+            _ => {
+                // Regular module function
+                let prim =
+                    self.env.get_module_fn(&path_refs).copied().ok_or_else(
+                        || {
+                            Error::runtime(
+                                span,
+                                format!("unknown function `{path_display}`"),
+                            )
+                        },
+                    )?;
+
+                self.invoke_primitive(prim, args, span).await
+            }
+        }
+    }
+
+    /// `Array.map(fn, arr) -> Array`
+    ///
+    /// Applies `fn` to each element of `arr`, returning a new array.
+    /// Validates that all results have the same type (homogeneous array).
+    #[async_recursion]
+    async fn array_map(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        (args.len() == 2).then_some(()).ok_or_else(|| {
+            Error::runtime(
+                span,
+                format!("Array.map expects 2 arguments, got {}", args.len()),
+            )
+        })?;
+
+        let fn_id = *args.first().ok_or_else(|| {
+            Error::runtime(span, "Array.map: missing function")
+        })?;
+        let arr_id = *args
+            .get(1)
+            .ok_or_else(|| Error::runtime(span, "Array.map: missing array"))?;
+
+        let arr =
+            self.arena.get(arr_id).cloned().ok_or_else(|| {
+                Error::runtime(span, "Array.map: invalid array")
             })?;
 
-        self.invoke_primitive(prim, args, span).await
+        match arr {
+            Value::Array(_, elems) => {
+                self.array_map_rec(fn_id, &elems, SmallVec::new(), None, span)
+                    .await
+            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "Array.map expects Array, got {}",
+                    arr.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
+    /// Recursive helper for `Array.map`.
+    #[async_recursion]
+    async fn array_map_rec(
+        &mut self,
+        fn_id: ValueId,
+        elems: &[ValueId],
+        acc: SmallVec<[ValueId; 4]>,
+        first_ty: Option<TypeId>,
+        span: Span,
+    ) -> Result<Value> {
+        match elems.split_first() {
+            None => {
+                let elem_ty = first_ty
+                    .map(|ty| self.type_exprs.named(ty))
+                    .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
+                Ok(Value::Array(elem_ty, acc))
+            }
+            Some((head, tail)) => {
+                let result =
+                    self.invoke_callable(fn_id, &[*head], span).await?;
+                let result_val =
+                    self.arena.get(result).cloned().ok_or_else(|| {
+                        Error::runtime(span, "Array.map: invalid result")
+                    })?;
+
+                let result_ty = result_val.base_type();
+
+                // Check homogeneity
+                let checked_ty = first_ty.map_or_else(
+                    || Ok(result_ty),
+                    |fty| {
+                        if fty == result_ty {
+                            Ok(fty)
+                        } else {
+                            Err(Error::runtime(
+                                span,
+                                "Array.map: function produces heterogeneous \
+                                 results; all elements must have the same type",
+                            ))
+                        }
+                    },
+                )?;
+
+                let mut new_acc = acc;
+                new_acc.push(result);
+                self.array_map_rec(fn_id, tail, new_acc, Some(checked_ty), span)
+                    .await
+            }
+        }
+    }
+
+    /// `Array.filter(predicate, arr) -> Array`
+    ///
+    /// Returns a new array containing only elements for which `predicate`
+    /// returns a truthy value.
+    #[async_recursion]
+    async fn array_filter(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        (args.len() == 2).then_some(()).ok_or_else(|| {
+            Error::runtime(
+                span,
+                format!("Array.filter expects 2 arguments, got {}", args.len()),
+            )
+        })?;
+
+        let pred_id = *args.first().ok_or_else(|| {
+            Error::runtime(span, "Array.filter: missing predicate")
+        })?;
+        let arr_id = *args.get(1).ok_or_else(|| {
+            Error::runtime(span, "Array.filter: missing array")
+        })?;
+
+        let arr = self.arena.get(arr_id).cloned().ok_or_else(|| {
+            Error::runtime(span, "Array.filter: invalid array")
+        })?;
+
+        match arr {
+            Value::Array(elem_ty, elems) => {
+                self.array_filter_rec(
+                    pred_id,
+                    elem_ty,
+                    &elems,
+                    SmallVec::new(),
+                    span,
+                )
+                .await
+            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "Array.filter expects Array, got {}",
+                    arr.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
+    /// Recursive helper for `Array.filter`.
+    #[async_recursion]
+    async fn array_filter_rec(
+        &mut self,
+        pred_id: ValueId,
+        elem_ty: TypeExprId,
+        elems: &[ValueId],
+        acc: SmallVec<[ValueId; 4]>,
+        span: Span,
+    ) -> Result<Value> {
+        match elems.split_first() {
+            None => Ok(Value::Array(elem_ty, acc)),
+            Some((head, tail)) => {
+                let result =
+                    self.invoke_callable(pred_id, &[*head], span).await?;
+                let result_val =
+                    self.arena.get(result).cloned().ok_or_else(|| {
+                        Error::runtime(span, "Array.filter: invalid result")
+                    })?;
+
+                let keep = result_val.is_truthy(&self.arena, &self.type_exprs);
+                let mut new_acc = acc;
+                if keep {
+                    new_acc.push(*head);
+                }
+                self.array_filter_rec(pred_id, elem_ty, tail, new_acc, span)
+                    .await
+            }
+        }
+    }
+
+    /// `Array.reduce(reducer, init, arr) -> T`
+    ///
+    /// Folds left: `reducer(reducer(init, arr[0]), arr[1])...`
+    #[async_recursion]
+    async fn array_reduce(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        (args.len() == 3).then_some(()).ok_or_else(|| {
+            Error::runtime(
+                span,
+                format!("Array.reduce expects 3 arguments, got {}", args.len()),
+            )
+        })?;
+
+        let reducer_id = *args.first().ok_or_else(|| {
+            Error::runtime(span, "Array.reduce: missing reducer")
+        })?;
+        let init_id = *args.get(1).ok_or_else(|| {
+            Error::runtime(span, "Array.reduce: missing initial value")
+        })?;
+        let arr_id = *args.get(2).ok_or_else(|| {
+            Error::runtime(span, "Array.reduce: missing array")
+        })?;
+
+        let arr = self.arena.get(arr_id).cloned().ok_or_else(|| {
+            Error::runtime(span, "Array.reduce: invalid array")
+        })?;
+
+        match arr {
+            Value::Array(_, elems) => {
+                self.array_reduce_rec(reducer_id, init_id, &elems, span)
+                    .await
+            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "Array.reduce expects Array, got {}",
+                    arr.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
+    }
+
+    /// Recursive helper for `Array.reduce`.
+    #[async_recursion]
+    async fn array_reduce_rec(
+        &mut self,
+        reducer_id: ValueId,
+        acc_id: ValueId,
+        elems: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        match elems.split_first() {
+            None => self.arena.get(acc_id).cloned().ok_or_else(|| {
+                Error::runtime(span, "Array.reduce: invalid accumulator")
+            }),
+            Some((head, tail)) => {
+                let new_acc = self
+                    .invoke_callable(reducer_id, &[acc_id, *head], span)
+                    .await?;
+                self.array_reduce_rec(reducer_id, new_acc, tail, span).await
+            }
+        }
+    }
+
+    /// Invoke a callable value (closure/function) with arguments.
+    ///
+    /// Used by higher-order primitives to call user-provided functions.
+    #[async_recursion]
+    async fn invoke_callable(
+        &mut self,
+        callee_id: ValueId,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<ValueId> {
+        let callee = self
+            .arena
+            .get(callee_id)
+            .cloned()
+            .ok_or_else(|| Error::runtime(span, "invalid callable"))?;
+
+        match callee {
+            Value::Closure {
+                params,
+                ret,
+                body,
+                env,
+            } => {
+                let result = self
+                    .invoke_closure(&params, ret, body, &env, args, span)
+                    .await?;
+                Ok(self.arena.add(result, span))
+            }
+            Value::Function {
+                params, ret, body, ..
+            } => {
+                let result = self
+                    .invoke_function(&params, ret, body, args, span)
+                    .await?;
+                Ok(self.arena.add(result, span))
+            }
+            Value::ModuleFn { path } => {
+                let result = self.invoke_module_fn(&path, args, span).await?;
+                Ok(self.arena.add(result, span))
+            }
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "expected function, got {}",
+                    callee.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+        }
     }
 
     /// Invoke a primitive with pre-evaluated arguments.

@@ -1,0 +1,80 @@
+; Array module functions
+; Tests Array.map, Array.filter, Array.reduce
+
+; Array.map with closure
+LET nums = [1, 2, 3, 4, 5]
+LET doubled = Array.map(x => x * 2, nums)
+OUTPUT doubled  ; [2, 4, 6, 8, 10]
+
+; Array.map on empty array
+LET empty = []
+LET mapped-empty = Array.map(x => x + 1, empty)
+OUTPUT mapped-empty  ; []
+
+; Array.map with named function
+FUN square (n: Int) -> Int { n * n }
+LET squares = Array.map(square, [1, 2, 3])
+OUTPUT squares  ; [1, 4, 9]
+
+; Array.filter with closure
+LET evens = Array.filter(x => x % 2 == 0, nums)
+OUTPUT evens  ; [2, 4]
+
+; Array.filter on empty array
+LET filtered-empty = Array.filter(x => x > 0, empty)
+OUTPUT filtered-empty  ; []
+
+; Array.filter with named function
+FUN is-positive (n: Int) -> Bool { n > 0 }
+LET positives = Array.filter(is-positive, [-1, 0, 1, 2])
+OUTPUT positives  ; [1, 2]
+
+; Array.filter keeping all
+LET all-kept = Array.filter(x => TRUE, [1, 2, 3])
+OUTPUT all-kept  ; [1, 2, 3]
+
+; Array.filter keeping none
+LET none-kept = Array.filter(x => FALSE, [1, 2, 3])
+OUTPUT none-kept  ; []
+
+; Array.reduce with sum
+LET sum = Array.reduce((acc, x) => acc + x, 0, nums)
+OUTPUT sum  ; 15
+
+; Array.reduce on empty array returns initial value
+LET empty-sum = Array.reduce((acc, x) => acc + x, 100, empty)
+OUTPUT empty-sum  ; 100
+
+; Array.reduce with string concatenation
+LET words = ["hello", " ", "world"]
+LET combined = Array.reduce((acc, s) => acc ++ s, "", words)
+OUTPUT combined  ; "hello world"
+
+; Array.reduce with named function
+FUN add (a: Int, b: Int) -> Int { a + b }
+LET total = Array.reduce(add, 0, [1, 2, 3, 4])
+OUTPUT total  ; 10
+
+; Combining Array functions
+LET result = Array.reduce(
+  (acc, x) => acc + x,
+  0,
+  Array.map(x => x * x, Array.filter(x => x % 2 == 1, [1, 2, 3, 4, 5]))
+)
+OUTPUT result  ; 1 + 9 + 25 = 35
+
+; Pipeline usage with Array functions (using wrapper closures)
+LET piped = [1, 2, 3, 4, 5]
+  |> (arr => Array.filter(x => x > 2, arr))
+  |> (arr => Array.map(x => x * 10, arr))
+OUTPUT piped  ; [30, 40, 50]
+
+; Module functions can be passed as first-class values
+LET filter-fn = Array.filter
+LET data = [1, 2, 3, 4, 5]
+LET filtered = filter-fn(x => x > 2, data)
+OUTPUT filtered  ; [3, 4, 5]
+
+; Array.map with Option results (homogeneous tagged values)
+LET with-opts = Array.map(x => Option.Some(x), [1, 2, 3])
+OUTPUT with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]

@@ -896,14 +896,21 @@ Migrate existing primitives to `Object` module:
 
 ##### 6.2.5 Array Module Functions
 
-- [ ] `Array.map`: `((T) -> U, Array[T]) -> Array[U]`
+- [x] `Array.map`: `((T) -> U, Array[T]) -> Array[U]`
   - Apply function to each element, return new array
-- [ ] `Array.filter`: `((T) -> Bool, Array[T]) -> Array[T]`
+  - Validates homogeneity during evaluation (not post-traversal)
+- [x] `Array.filter`: `((T) -> Bool, Array[T]) -> Array[T]`
   - Keep elements where predicate returns truthy
-- [ ] `Array.reduce`: `((A, T) -> A, A, Array[T]) -> A`
+- [x] `Array.reduce`: `((A, T) -> A, A, Array[T]) -> A`
   - Fold left: `reducer(reducer(init, arr[0]), arr[1])...`
-- [ ] Add interpreter tests for Array module functions
-- [ ] Add integration test script (`67_array_module.rumps`)
+- [x] Add interpreter tests for Array module functions
+- [x] Add integration test script (`71_array_module.rumps`)
+
+**Implementation note**: Array functions are higher-order (they invoke closures)
+and are implemented directly on `Interpreter` in `call.rs` rather than as
+`PrimFn` functions. Placeholder functions are registered in the environment so
+`module_fn_exists` returns true for name resolution; the placeholders are
+intercepted in `invoke_module_fn` and dispatch to the interpreter methods.
 
 ---
 

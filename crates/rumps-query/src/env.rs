@@ -124,7 +124,7 @@ impl PrimCtx<'_> {
     pub(crate) fn result_ok(&mut self, v: ValueId) -> ValueId {
         let unknown = self.type_exprs.named(TypeId::UNKNOWN);
         let val = self.arena.get(v).cloned().unwrap_or(Value::Int(0));
-        let val_ty = self.type_exprs.named(self.value_base_type(&val));
+        let val_ty = self.type_exprs.named(val.base_type());
         let res_ty = self
             .type_exprs
             .app(TypeId::RESULT, smallvec![val_ty, unknown]);
@@ -141,24 +141,6 @@ impl PrimCtx<'_> {
             .app(TypeId::RESULT, smallvec![unknown, str_ty]);
         let err = Value::err(res_ty, msg);
         self.arena.add(err, self.span)
-    }
-
-    /// Get a simplified base `TypeId` for a value.
-    fn value_base_type(&self, v: &Value) -> TypeId {
-        match v {
-            Value::Bool(_) => TypeId::BOOL,
-            Value::Int(_) => TypeId::INT,
-            Value::Float(_) => TypeId::FLOAT,
-            Value::Char(_) => TypeId::CHAR,
-            Value::String(_) => TypeId::STRING,
-            Value::Array(..) => TypeId::ARRAY,
-            Value::Object(_) => TypeId::OBJECT,
-            Value::Tuple(..) => TypeId::TUPLE,
-            Value::Tagged(_, _, _) => TypeId::UNKNOWN,
-            Value::Closure { .. }
-            | Value::Function { .. }
-            | Value::ModuleFn { .. } => TypeId::UNKNOWN,
-        }
     }
 }
 
@@ -187,7 +169,7 @@ pub(crate) struct Module {
     functions: HashMap<String, PrimFn>,
 
     /// Submodules, keyed by submodule name.
-    submodules: HashMap<String, Module>,
+    submodules: HashMap<String, Self>,
 }
 
 impl Module {
@@ -198,7 +180,7 @@ impl Module {
 
     /// Register a submodule.
     #[allow(dead_code)]
-    fn register_submodule(&mut self, name: &str, m: Module) {
+    fn register_submodule(&mut self, name: &str, m: Self) {
         self.submodules.insert(name.to_string(), m);
     }
 
@@ -291,7 +273,11 @@ impl Environment {
     ///
     /// Built-in modules provide primitive functions grouped by category:
     /// - `Object`: `keys`, `values`, `entries`, `from-entries`
-    /// - `Array`: `map`, `filter`, `reduce` (future)
+    /// - `Array`: `map`, `filter`, `reduce`
+    ///
+    /// Note: Array functions are higher-order (they invoke closures) and are
+    /// handled specially by the interpreter. We register placeholders here so
+    /// that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
         use crate::primitives::Prim;
 
@@ -303,8 +289,13 @@ impl Environment {
         object.register("from-entries", Prim::from_entries);
         self.modules.insert("Object".to_string(), object);
 
-        // Array module (to be populated with map, filter, reduce, etc.)
-        self.modules.insert("Array".to_string(), Module::default());
+        // Array module: placeholder functions for higher-order primitives.
+        // These are intercepted in `invoke_module_fn` and handled specially.
+        let mut array = Module::default();
+        array.register("map", Prim::placeholder);
+        array.register("filter", Prim::placeholder);
+        array.register("reduce", Prim::placeholder);
+        self.modules.insert("Array".to_string(), array);
     }
 }
 
@@ -399,10 +390,12 @@ mod tests {
         assert!(env.has_module("Object"));
         assert!(env.get_module_fn(&["Object", "keys"]).is_some());
         assert!(env.module_fn_exists(&["Object", "keys"]));
-        // Array module exists but map not yet implemented
+        // Array module is registered with placeholder functions
         assert!(env.has_module("Array"));
-        assert!(env.get_module_fn(&["Array", "map"]).is_none());
-        assert!(!env.module_fn_exists(&["Array", "map"]));
+        assert!(env.get_module_fn(&["Array", "map"]).is_some());
+        assert!(env.module_fn_exists(&["Array", "map"]));
+        assert!(env.module_fn_exists(&["Array", "filter"]));
+        assert!(env.module_fn_exists(&["Array", "reduce"]));
     }
 
     #[test]

@@ -1,9 +1,36 @@
 //! Built-in primitive functions (KEYS, VALUES, ENTRIES, FROM-ENTRIES, etc.).
 //!
 //! Primitives are callable built-in functions registered in the environment.
-//! They are implemented as associated functions on `Prim`, returning a future
+//! They are implemented as associated functions on [`Prim`], returning a future
 //! that resolves to a `ValueId`. Unlike keywords (GET, SET, KILL), primitives
 //! use standard function call syntax and are case-insensitive.
+//!
+//! # Higher-Order Functions Cannot Go Here
+//!
+//! **Important**: Any function that needs to invoke closures or user-defined
+//! functions (i.e., higher-order functions) MUST be implemented directly on
+//! [`Interpreter`] in `call.rs`, NOT here.
+//!
+//! **Why?** The [`PrimFn`] type signature only receives [`ValueId`]s; it has
+//! no access to the interpreter's closure invocation machinery. Calling a
+//! closure requires [`Interpreter::invoke_callable`], which isn't available
+//! from [`PrimCtx`].
+//!
+//! **Examples of HoFs that live in `call.rs`:**
+//! - `Array.map` / `Array.filter` / `Array.reduce`
+//!
+//! **Placeholders**: For each HoF, a placeholder function (e.g.,
+//! [`Prim::placeholder`]) is registered here so that
+//! [`Environment::module_fn_exists`] returns `true` during name resolution.
+//! The placeholders are intercepted in [`Interpreter::invoke_module_fn`]
+//! before dispatch and never actually called.
+//!
+//! [`Interpreter`]: crate::interpreter::Interpreter
+//! [`PrimFn`]: crate::env::PrimFn
+//! [`PrimCtx`]: crate::env::PrimCtx
+//! [`Environment::module_fn_exists`]: crate::env::Environment::module_fn_exists
+//! [`Interpreter::invoke_callable`]: crate::interpreter::Interpreter::invoke_callable
+//! [`Interpreter::invoke_module_fn`]: crate::interpreter::Interpreter::invoke_module_fn
 
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
@@ -27,41 +54,24 @@ use crate::Error;
 /// this by not binding the lifetime in the impl block.
 pub(crate) struct Prim;
 
-/// Arity check helper; returns `Err` if wrong number of arguments.
-fn check_arity(
-    name: &str,
-    args: &SmallVec<[ValueId; 4]>,
-    expected: usize,
-) -> crate::Result<()> {
-    if args.len() == expected {
-        Ok(())
-    } else {
-        Err(Error::runtime_no_span(format!(
-            "`{name}` expects {expected} argument(s), got {}",
-            args.len()
-        )))
-    }
-}
-
-/// Get a simplified base type for homogeneity checking.
-fn value_base_type(v: &Value) -> TypeId {
-    match v {
-        Value::Bool(_) => TypeId::BOOL,
-        Value::Int(_) => TypeId::INT,
-        Value::Float(_) => TypeId::FLOAT,
-        Value::Char(_) => TypeId::CHAR,
-        Value::String(_) => TypeId::STRING,
-        Value::Array(..) => TypeId::ARRAY,
-        Value::Object(_) => TypeId::OBJECT,
-        Value::Tuple(..) => TypeId::TUPLE,
-        Value::Tagged(_, _, _) => TypeId::UNKNOWN,
-        Value::Closure { .. }
-        | Value::Function { .. }
-        | Value::ModuleFn { .. } => TypeId::UNKNOWN,
-    }
-}
-
 impl Prim {
+    /// Placeholder for higher-order Array functions.
+    ///
+    /// This should never be called directly; `invoke_module_fn` intercepts
+    /// Array function calls and handles them specially. If this is called,
+    /// it indicates a bug in the dispatch logic.
+    pub(crate) fn placeholder<'a>(
+        _ctx: &'a mut PrimCtx<'a>,
+        _args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Err(Error::runtime_no_span(
+                "internal error: function placeholder requiring higher-order function \
+                 called directly; this should be intercepted by invoke_module_fn",
+            ))
+        })
+    }
+
     /// `KEYS(obj) -> Array[String]`
     ///
     /// Returns an array of the object's field names (strings) in iteration
@@ -73,7 +83,7 @@ impl Prim {
         Box::pin(async move {
             check_arity("KEYS", &args, 1)?;
 
-            let obj_id = *args.get(0).ok_or_else(|| {
+            let obj_id = *args.first().ok_or_else(|| {
                 Error::runtime_no_span("KEYS: missing argument")
             })?;
 
@@ -111,7 +121,7 @@ impl Prim {
         Box::pin(async move {
             check_arity("VALUES", &args, 1)?;
 
-            let obj_id = *args.get(0).ok_or_else(|| {
+            let obj_id = *args.first().ok_or_else(|| {
                 Error::runtime_no_span("VALUES: missing argument")
             })?;
 
@@ -137,7 +147,7 @@ impl Prim {
         Box::pin(async move {
             check_arity("ENTRIES", &args, 1)?;
 
-            let obj_id = *args.get(0).ok_or_else(|| {
+            let obj_id = *args.first().ok_or_else(|| {
                 Error::runtime_no_span("ENTRIES: missing argument")
             })?;
 
@@ -163,7 +173,7 @@ impl Prim {
         Box::pin(async move {
             check_arity("FROM-ENTRIES", &args, 1)?;
 
-            let arr_id = *args.get(0).ok_or_else(|| {
+            let arr_id = *args.first().ok_or_else(|| {
                 Error::runtime_no_span("FROM-ENTRIES: missing argument")
             })?;
 
@@ -176,6 +186,22 @@ impl Prim {
                 _ => Err(Error::runtime_no_span("FROM-ENTRIES expects Array")),
             }
         })
+    }
+}
+
+/// Arity check helper; returns `Err` if wrong number of arguments.
+fn check_arity(
+    name: &str,
+    args: &SmallVec<[ValueId; 4]>,
+    expected: usize,
+) -> crate::Result<()> {
+    if args.len() == expected {
+        Ok(())
+    } else {
+        Err(Error::runtime_no_span(format!(
+            "`{name}` expects {expected} argument(s), got {}",
+            args.len()
+        )))
     }
 }
 
@@ -198,12 +224,12 @@ fn values_from_map(
                 ctx.arena.get(first_id).cloned().ok_or_else(|| {
                     Error::runtime_no_span("VALUES: invalid value in object")
                 })?;
-            let first_ty = value_base_type(&first_val);
+            let first_ty = Value::base_type(&first_val);
 
             let heterogeneous = map.values().skip(1).any(|vid| {
                 ctx.arena
                     .get(*vid)
-                    .map(|v| value_base_type(v) != first_ty)
+                    .map(|v| Value::base_type(v) != first_ty)
                     .unwrap_or(true)
             });
 
@@ -216,7 +242,8 @@ fn values_from_map(
             } else {
                 let vals: SmallVec<[ValueId; 4]> =
                     map.values().copied().collect();
-                let elem_ty = ctx.type_exprs.named(value_base_type(&first_val));
+                let elem_ty =
+                    ctx.type_exprs.named(Value::base_type(&first_val));
                 let arr = Value::Array(elem_ty, vals);
                 let arr_id = ctx.arena.add(arr, ctx.span);
                 Ok(ctx.result_ok(arr_id))
@@ -244,12 +271,12 @@ fn entries_from_map(
                 ctx.arena.get(first_id).cloned().ok_or_else(|| {
                     Error::runtime_no_span("ENTRIES: invalid value")
                 })?;
-            let first_ty = value_base_type(&first_val);
+            let first_ty = Value::base_type(&first_val);
 
             let heterogeneous = map.values().skip(1).any(|vid| {
                 ctx.arena
                     .get(*vid)
-                    .map(|v| value_base_type(v) != first_ty)
+                    .map(|v| Value::base_type(v) != first_ty)
                     .unwrap_or(true)
             });
 
@@ -261,7 +288,7 @@ fn entries_from_map(
                 Ok(ctx.result_err(msg_val))
             } else {
                 let str_ty = ctx.type_exprs.named(TypeId::STRING);
-                let val_ty = ctx.type_exprs.named(value_base_type(&first_val));
+                let val_ty = ctx.type_exprs.named(Value::base_type(&first_val));
                 let tuple_ty = ctx.type_exprs.tuple(smallvec![str_ty, val_ty]);
 
                 let entries: Vec<_> =
@@ -300,7 +327,7 @@ fn from_entries_impl(
 
         match elem {
             Value::Tuple(_, parts) if parts.len() == 2 => {
-                let key_id = *parts.get(0).ok_or_else(|| {
+                let key_id = *parts.first().ok_or_else(|| {
                     Error::runtime_no_span("FROM-ENTRIES: missing key")
                 })?;
                 let val_id = *parts.get(1).ok_or_else(|| {
