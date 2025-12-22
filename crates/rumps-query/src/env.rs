@@ -201,9 +201,16 @@ pub(crate) struct Module {
 }
 
 impl Module {
-    /// Register a function in this module.
-    fn register(&mut self, name: &str, f: PrimFn) {
-        self.functions.insert(name.to_string(), f);
+    /// Create a module from a list of `(name, function)` pairs.
+    pub(crate) fn from_fns(fns: &[(&str, PrimFn)]) -> Self {
+        let functions = fns
+            .iter()
+            .map(|(name, f)| ((*name).to_string(), *f))
+            .collect();
+        Self {
+            functions,
+            submodules: HashMap::new(),
+        }
     }
 
     /// Register a submodule.
@@ -301,39 +308,45 @@ impl Environment {
     ///
     /// Built-in modules provide primitive functions grouped by category:
     /// - `Object`: `keys`, `values`, `entries`, `from-entries`
-    /// - `Array`: `map`, `filter`, `reduce`
+    /// - `Array`: `length`, `push`, `pop`, `head`, `tail`, `reverse`, `sort`,
+    ///   `slice`, `contains`, `concat`, plus HoF placeholders
     ///
-    /// Note: Array functions are higher-order (they invoke closures) and are
-    /// handled specially by the interpreter. We register placeholders here so
-    /// that `module_fn_exists` returns true for name resolution.
+    /// Note: Array higher-order functions (`map`, `filter`, `reduce`) are
+    /// handled specially by the interpreter. We register placeholders here
+    /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
-        use crate::primitives::Prim;
+        use crate::primitives::{Array, Object, Prim};
 
-        // Object module
-        let mut object = Module::default();
-        object.register("keys", Prim::keys);
-        object.register("values", Prim::values);
-        object.register("entries", Prim::entries);
-        object.register("from-entries", Prim::from_entries);
-        self.modules.insert("Object".to_string(), object);
+        self.modules.insert(
+            "Object".to_string(),
+            Module::from_fns(&[
+                ("keys", Object::keys),
+                ("values", Object::values),
+                ("entries", Object::entries),
+                ("from-entries", Object::from_entries),
+            ]),
+        );
 
-        // Array module: placeholder functions for higher-order primitives
-        // (map, filter, reduce), and regular primitives for other operations.
-        let mut array = Module::default();
-        array.register("map", Prim::placeholder);
-        array.register("filter", Prim::placeholder);
-        array.register("reduce", Prim::placeholder);
-        array.register("length", Prim::length);
-        array.register("push", Prim::push);
-        array.register("pop", Prim::pop);
-        array.register("head", Prim::head);
-        array.register("tail", Prim::tail);
-        array.register("reverse", Prim::reverse);
-        array.register("sort", Prim::sort);
-        array.register("slice", Prim::slice);
-        array.register("contains", Prim::contains);
-        array.register("concat", Prim::concat);
-        self.modules.insert("Array".to_string(), array);
+        self.modules.insert(
+            "Array".to_string(),
+            Module::from_fns(&[
+                // Higher-order function placeholders
+                ("map", Array::placeholder),
+                ("filter", Array::placeholder),
+                ("reduce", Array::placeholder),
+                // Regular primitives
+                ("length", Array::length),
+                ("push", Array::push),
+                ("pop", Array::pop),
+                ("head", Array::head),
+                ("tail", Array::tail),
+                ("reverse", Array::reverse),
+                ("sort", Array::sort),
+                ("slice", Array::slice),
+                ("contains", Array::contains),
+                ("concat", Array::concat),
+            ]),
+        );
     }
 }
 
@@ -459,13 +472,11 @@ mod tests {
     #[test]
     fn module_submodule_lookup() {
         // Create a module with a submodule: Math.Trig.sin
-        let mut trig = Module::default();
-        trig.register("sin", dummy_prim);
-        trig.register("cos", dummy_prim);
+        let trig =
+            Module::from_fns(&[("sin", dummy_prim), ("cos", dummy_prim)]);
 
-        let mut math = Module::default();
-        math.register("sqrt", dummy_prim);
-        math.register("abs", dummy_prim);
+        let mut math =
+            Module::from_fns(&[("sqrt", dummy_prim), ("abs", dummy_prim)]);
         math.register_submodule("Trig", trig);
 
         // Direct function lookup
@@ -488,8 +499,7 @@ mod tests {
     #[test]
     fn module_deeply_nested_lookup() {
         // Create deeply nested: A.B.C.fn
-        let mut c = Module::default();
-        c.register("fn", dummy_prim);
+        let c = Module::from_fns(&[("fn", dummy_prim)]);
 
         let mut b = Module::default();
         b.register_submodule("C", c);

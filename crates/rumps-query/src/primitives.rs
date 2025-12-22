@@ -1,18 +1,20 @@
 //! Built-in primitive functions organized by module.
 //!
 //! Primitives are callable built-in functions registered in the environment.
-//! They are implemented as associated functions on [`Prim`], returning a future
-//! that resolves to a `ValueId`. Unlike keywords (GET, SET, KILL), primitives
-//! use standard function call syntax and are case-insensitive.
+//! They are implemented as associated functions on module types ([`Object`],
+//! [`Array`], etc.), returning a future that resolves to a `ValueId`. Unlike
+//! keywords (GET, SET, KILL), primitives use standard function call syntax
+//! and are case-insensitive.
 //!
 //! # Module Organization
 //!
-//! Functions are grouped by their RUMPS module:
-//! - `Object`: `keys`, `values`, `entries`, `from-entries`
-//! - `Array`: `map`, `filter`, `reduce` (higher-order; see below)
+//! Each RUMPS module is a separate type implementing the [`Prim`] trait:
+//! - [`Object`]: `keys`, `values`, `entries`, `from-entries`
+//! - [`Array`]: `length`, `push`, `pop`, `head`, `tail`, `reverse`, `sort`,
+//!   `slice`, `contains`, `concat`, plus higher-order functions (see below)
 //!
-//! When adding a new RUMPS module, add a new `impl Prim` block that contains
-//! any public associated functions and private helpers for that module
+//! When adding a new RUMPS module, create a new type implementing [`Prim`]
+//! and add its functions as associated functions.
 //!
 //! # Primitives with Higher-Order Functions Cannot Go Here
 //!
@@ -45,31 +47,26 @@ use crate::env::{PrimCtx, PrimResult};
 use crate::value::{StringId, TypeId, Value, ValueArena, ValueId};
 use crate::Error;
 
-/// Namespace for built-in primitive functions.
+/// Shared utilities for primitive function implementations.
 ///
-/// Each associated function has signature matching `PrimFn`:
-/// `for<'a> fn(&'a mut PrimCtx<'a>, SmallVec<[ValueId; 4]>) -> PrimResult<'a>`
+/// Module types ([`Object`], [`Array`], etc.) implement this trait to gain
+/// access to common helpers like arity checking and the HoF placeholder.
 ///
-/// Functions are organized into `impl` blocks by module (Object, Array, etc.).
-///
-/// # Why associated functions instead of methods on `PrimCtx`?
+/// # Why a trait with associated functions?
 ///
 /// `PrimFn` uses a higher-ranked trait bound (HRTB) so it can be stored in a
 /// `HashMap` without lifetime parameters, yet work with any `PrimCtx<'a>`
 /// lifetime when called. Methods on `impl<'a> PrimCtx<'a>` bind the lifetime
 /// parameter to the struct's lifetime, which doesn't satisfy the HRTB
-/// `for<'a>` requirement. Associated functions on a separate type sidestep
+/// `for<'a>` requirement. Associated functions on separate types sidestep
 /// this by not binding the lifetime in the impl block.
-pub(crate) struct Prim;
-
-// Shared utilities
-impl Prim {
+pub(crate) trait Prim {
     /// Placeholder for higher-order functions (`Array.map`, `Array.filter`, etc.).
     ///
     /// This should never be called directly; `invoke_module_fn` intercepts
     /// these calls and handles them specially. If this is called, it indicates
     /// a bug in the dispatch logic.
-    pub(crate) fn placeholder<'a>(
+    fn placeholder<'a>(
         _ctx: &'a mut PrimCtx<'a>,
         _args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
@@ -84,7 +81,7 @@ impl Prim {
     /// Arity check helper; returns `Err` if wrong number of arguments.
     ///
     /// After this check passes, direct indexing `args[i]` for `i < expected`
-    /// is safe. This is an intentional exception to my general "no indexing"
+    /// is safe. This is an intentional exception to the general "no indexing"
     /// rule since arity is statically validated.
     fn check_arity(
         name: &str,
@@ -106,8 +103,12 @@ impl Prim {
     }
 }
 
-// `Object` module
-impl Prim {
+/// Primitives for the `Object` module.
+pub(crate) struct Object;
+
+impl Prim for Object {}
+
+impl Object {
     /// `Object.keys(obj) -> Array[String]`
     ///
     /// Returns an array of the object's field names in iteration order.
@@ -346,8 +347,12 @@ impl Prim {
     }
 }
 
-// `Array` module
-impl Prim {
+/// Primitives for the `Array` module.
+pub(crate) struct Array;
+
+impl Prim for Array {}
+
+impl Array {
     /// `Array.length(arr) -> Int`
     ///
     /// Returns the number of elements in the array.
@@ -510,10 +515,10 @@ impl Prim {
             /// - Option: None=0, Some=1 (ascending → Some > None)
             /// - Result: Err=0, Ok=1 (ascending → Ok > Err)
             /// - Others: variant index (declaration order)
-            Tagged(i16, Vec<SortKey<'a>>),
-            Tuple(Vec<SortKey<'a>>),
-            Array(Vec<SortKey<'a>>),
-            Object(Vec<(&'a str, SortKey<'a>)>),
+            Tagged(i16, Vec<Self>),
+            Tuple(Vec<Self>),
+            Array(Vec<Self>),
+            Object(Vec<(&'a str, Self)>),
         }
 
         impl<'a> SortKey<'a> {
@@ -756,8 +761,6 @@ impl Prim {
 //
 // The placeholders ensure `Environment::module_fn_exists` returns true during
 // name resolution. The actual dispatch is intercepted in `invoke_module_fn`.
-
-// (No additional impl block needed; Array functions use `Prim::placeholder`)
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -782,7 +785,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::keys(&mut ctx, smallvec![obj_id]).await.unwrap()
+            Object::keys(&mut ctx, smallvec![obj_id]).await.unwrap()
         };
 
         let val = arena.get(result).unwrap();
@@ -815,7 +818,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::keys(&mut ctx, smallvec![obj_id]).await.unwrap()
+            Object::keys(&mut ctx, smallvec![obj_id]).await.unwrap()
         };
 
         let val = arena.get(result).unwrap();
@@ -858,7 +861,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::values(&mut ctx, smallvec![obj_id]).await.unwrap()
+            Object::values(&mut ctx, smallvec![obj_id]).await.unwrap()
         };
 
         let val = arena.get(result).unwrap().clone();
@@ -901,7 +904,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::values(&mut ctx, smallvec![obj_id]).await.unwrap()
+            Object::values(&mut ctx, smallvec![obj_id]).await.unwrap()
         };
 
         let val = arena.get(result).unwrap();
@@ -944,7 +947,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::from_entries(&mut ctx, smallvec![arr_id])
+            Object::from_entries(&mut ctx, smallvec![arr_id])
                 .await
                 .unwrap()
         };
@@ -992,7 +995,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::length(&mut ctx, smallvec![arr_id]).await.unwrap()
+            Array::length(&mut ctx, smallvec![arr_id]).await.unwrap()
         };
 
         assert_eq!(arena.get(result), Some(&Value::Int(5)));
@@ -1011,7 +1014,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::length(&mut ctx, smallvec![arr_id]).await.unwrap()
+            Array::length(&mut ctx, smallvec![arr_id]).await.unwrap()
         };
 
         assert_eq!(arena.get(result), Some(&Value::Int(0)));
@@ -1031,7 +1034,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::push(&mut ctx, smallvec![arr_id, val_id])
+            Array::push(&mut ctx, smallvec![arr_id, val_id])
                 .await
                 .unwrap()
         };
@@ -1053,7 +1056,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::pop(&mut ctx, smallvec![arr_id]).await.unwrap()
+            Array::pop(&mut ctx, smallvec![arr_id]).await.unwrap()
         };
 
         let (_, elems) = arena.get_array(result).unwrap();
@@ -1073,7 +1076,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::head(&mut ctx, smallvec![arr_id]).await.unwrap()
+            Array::head(&mut ctx, smallvec![arr_id]).await.unwrap()
         };
 
         let val = arena.get(result).unwrap();
@@ -1093,7 +1096,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::head(&mut ctx, smallvec![arr_id]).await.unwrap()
+            Array::head(&mut ctx, smallvec![arr_id]).await.unwrap()
         };
 
         let val = arena.get(result).unwrap();
@@ -1113,7 +1116,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::tail(&mut ctx, smallvec![arr_id]).await.unwrap()
+            Array::tail(&mut ctx, smallvec![arr_id]).await.unwrap()
         };
 
         let (_, elems) = arena.get_array(result).unwrap();
@@ -1133,7 +1136,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::reverse(&mut ctx, smallvec![arr_id]).await.unwrap()
+            Array::reverse(&mut ctx, smallvec![arr_id]).await.unwrap()
         };
 
         let (_, elems) = arena.get_array(result).unwrap();
@@ -1162,7 +1165,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::sort(&mut ctx, smallvec![arr_id]).await.unwrap()
+            Array::sort(&mut ctx, smallvec![arr_id]).await.unwrap()
         };
 
         let (_, elems) = arena.get_array(result).unwrap();
@@ -1193,7 +1196,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::slice(&mut ctx, smallvec![arr_id, start, end])
+            Array::slice(&mut ctx, smallvec![arr_id, start, end])
                 .await
                 .unwrap()
         };
@@ -1217,7 +1220,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::contains(&mut ctx, smallvec![arr_id, needle])
+            Array::contains(&mut ctx, smallvec![arr_id, needle])
                 .await
                 .unwrap()
         };
@@ -1240,7 +1243,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::contains(&mut ctx, smallvec![arr_id, needle])
+            Array::contains(&mut ctx, smallvec![arr_id, needle])
                 .await
                 .unwrap()
         };
@@ -1262,7 +1265,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::concat(&mut ctx, smallvec![arr_a, arr_b])
+            Array::concat(&mut ctx, smallvec![arr_a, arr_b])
                 .await
                 .unwrap()
         };
@@ -1291,7 +1294,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Prim::concat(&mut ctx, smallvec![arr_a, arr_b]).await
+            Array::concat(&mut ctx, smallvec![arr_a, arr_b]).await
         };
 
         assert!(result.is_err());
