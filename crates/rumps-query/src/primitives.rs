@@ -360,6 +360,7 @@ impl Prim {
 }
 
 // `Array` module
+impl Prim {}
 
 // NOTE: Array functions (map, filter, reduce) are higher-order and require
 // access to the interpreter's closure invocation machinery. They are
@@ -369,11 +370,6 @@ impl Prim {
 // name resolution. The actual dispatch is intercepted in `invoke_module_fn`.
 
 // (No additional impl block needed; Array functions use `Prim::placeholder`)
-
-// ============================================================================
-// Tests
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;

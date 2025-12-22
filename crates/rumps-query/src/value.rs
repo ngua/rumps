@@ -127,6 +127,36 @@ impl ValueArena {
         self.get(id).map(|v| v.base_type(type_exprs))
     }
 
+    /// Get the span of a value.
+    pub(crate) fn span(&self, id: ValueId) -> Option<Span> {
+        self.value_spans.get(id.idx()).copied()
+    }
+
+    /// Intern a string, returning its ID.
+    ///
+    /// If the string is already interned, returns the existing ID.
+    pub(crate) fn intern(&mut self, s: &str) -> StringId {
+        self.strings.get_index_of(s).map_or_else(
+            || {
+                let (idx, _) = self.strings.insert_full(s.to_owned());
+                StringId(idx as u32)
+            },
+            |idx| StringId(idx as u32),
+        )
+    }
+
+    /// Get a string by its interned ID.
+    pub(crate) fn get_str(&self, id: StringId) -> Option<&str> {
+        self.strings.get_index(id.idx()).map(String::as_str)
+    }
+
+    /// Look up a string's ID without interning it.
+    ///
+    /// Returns `None` if the string has not been interned.
+    pub(crate) fn lookup_string(&self, s: &str) -> Option<StringId> {
+        self.strings.get_index_of(s).map(|idx| StringId(idx as u32))
+    }
+
     /// Get array elements by ID, cloning only the element vector.
     ///
     /// Returns `None` if the value doesn't exist or isn't an array.
@@ -164,36 +194,6 @@ impl ValueArena {
             Value::Tuple(ty, elems) => Some((*ty, elems.clone())),
             _ => None,
         }
-    }
-
-    /// Get the span of a value.
-    pub(crate) fn span(&self, id: ValueId) -> Option<Span> {
-        self.value_spans.get(id.idx()).copied()
-    }
-
-    /// Intern a string, returning its ID.
-    ///
-    /// If the string is already interned, returns the existing ID.
-    pub(crate) fn intern(&mut self, s: &str) -> StringId {
-        self.strings.get_index_of(s).map_or_else(
-            || {
-                let (idx, _) = self.strings.insert_full(s.to_owned());
-                StringId(idx as u32)
-            },
-            |idx| StringId(idx as u32),
-        )
-    }
-
-    /// Get a string by its interned ID.
-    pub(crate) fn get_str(&self, id: StringId) -> Option<&str> {
-        self.strings.get_index(id.idx()).map(String::as_str)
-    }
-
-    /// Look up a string's ID without interning it.
-    ///
-    /// Returns `None` if the string has not been interned.
-    pub(crate) fn lookup_string(&self, s: &str) -> Option<StringId> {
-        self.strings.get_index_of(s).map(|idx| StringId(idx as u32))
     }
 
     fn len(&self) -> usize {

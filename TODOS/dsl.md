@@ -1669,30 +1669,32 @@ SET result = MyUtils.double(21)  ; 42
 | `Math.cos(x)`   | Cosine         | `Math.cos(0)` → `1.0`      |
 | `Math.random()` | Random 0-1     | `Math.random()` → `0.xxx`  |
 
+#### `Random` — Generating random values
+
+| Function          | Description           | Example                     |
+|-------------------|-----------------------|-----------------------------|
+| `Random.random()` | Random 0-1 (as float) | `Random.random()` → `0.xxx` |
+
 #### `Option` — Option operations
 
 | Function                 | Description          | Example                                   |
 |--------------------------|----------------------|-------------------------------------------|
-| `Option.Some(v)`         | Wrap value           | `Option.Some(42)` → `Some(42)`            |
-| `Option.None`            | Empty option         | `Option.None` → `None`                    |
-| `Option.is-some(o)`      | Check if Some        | `Option.is-some(Some(1))` → `true`        |
-| `Option.is-none(o)`      | Check if None        | `Option.is-none(None)` → `true`           |
-| `Option.unwrap(o)`       | Get value or panic   | `Option.unwrap(Some(1))` → `1`            |
 | `Option.unwrap-or(o, d)` | Get value or default | `Option.unwrap-or(None, 0)` → `0`         |
 | `Option.map(o, f)`       | Transform if Some    | `Option.map(Some(1), double)` → `Some(2)` |
+
+**NOTE**: `Option.unwrap` is not needed; use the `!` postfix operator (already implemented)
+**NOTE**: `Option.{is-none, is-some}` is not needed; use the `IS` primitive
 
 #### `Result` — Result operations
 
 | Function                 | Description          | Example                                   |
 |--------------------------|----------------------|-------------------------------------------|
-| `Result.Ok(v)`           | Success value        | `Result.Ok(42)` → `Ok(42)`                |
-| `Result.Err(e)`          | Error value          | `Result.Err("fail")` → `Err("fail")`      |
-| `Result.is-ok(r)`        | Check if Ok          | `Result.is-ok(Ok(1))` → `true`            |
-| `Result.is-err(r)`       | Check if Err         | `Result.is-err(Err("x"))` → `true`        |
-| `Result.unwrap(r)`       | Get value or panic   | `Result.unwrap(Ok(1))` → `1`              |
 | `Result.unwrap-or(r, d)` | Get value or default | `Result.unwrap-or(Err("x"), 0)` → `0`     |
 | `Result.map(r, f)`       | Transform if Ok      | `Result.map(Ok(1), double)` → `Ok(2)`     |
 | `Result.map-err(r, f)`   | Transform if Err     | `Result.map-err(Err("x"), upper)` → `...` |
+
+**NOTE**: `Result.unwrap` is not needed; use the `!` postfix operator (already implemented)
+**NOTE**: `Result.{is-none, is-some}` is not needed; use the `IS` primitive
 
 #### `Io` — Input/Output (Future)
 

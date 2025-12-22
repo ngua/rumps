@@ -894,7 +894,7 @@ Migrate existing primitives to `Object` module:
 - [x] Update tests to use module-qualified syntax
 - [x] Add integration test script (`66_object_module.rumps`)
 
-##### 6.2.5 Array Module Functions
+##### 6.2.5 Array Module Functions with HoFs
 
 - [x] `Array.map`: `((T) -> U, Array[T]) -> Array[U]`
   - Apply function to each element, return new array
@@ -906,11 +906,82 @@ Migrate existing primitives to `Object` module:
 - [x] Add interpreter tests for Array module functions
 - [x] Add integration test script (`71_array_module.rumps`)
 
-**Implementation note**: Array functions are higher-order (they invoke closures)
-and are implemented directly on `Interpreter` in `call.rs` rather than as
-`PrimFn` functions. Placeholder functions are registered in the environment so
-`module_fn_exists` returns true for name resolution; the placeholders are
-intercepted in `invoke_module_fn` and dispatch to the interpreter methods.
+**Implementation note**: Array functions are higher-order (they invoke closures) and are implemented directly on `Interpreter` in `call.rs` rather than as `PrimFn` functions. Placeholder functions are registered in the environment so `module_fn_exists` returns true for name resolution; the placeholders are intercepted in `invoke_module_fn` and dispatch to the interpreter methods.
+
+##### 6.3 Other builtins for std lib
+
+Implement the following in primitives.rs; **NOTE**: make sure these are registered in `Environment::register_builtins` under the correct module!:
+
+For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnecessary cloning. Similar `ValueArena::get_*` functions may be needed e.g. for `String.*` primitives
+
+**NOTE**: For each new module implementation, add a corresponding `.rumps` script and snapshot testing **all** primitives implemented.
+
+- [ ] `Array` — More array operations
+  | Function                 | Description                  | Example                                  |
+  |--------------------------|------------------------------|------------------------------------------|
+  | `Array.length(arr)`      | Get length                   | `Array.length([1,2,3])` → `3`            |
+  | `Array.push(arr, val)`   | Append element               | `Array.push([1,2], 3)` → `[1,2,3]`       |
+  | `Array.pop(arr)`         | Remove last                  | `Array.pop([1,2,3])` → `[1,2]`           |
+  | `Array.head(arr)`        | First element (if it exists) | `Array.head([1,2,3])` → `Option.Some(1)` |
+  |                          |                              | `Array.head([])` → `Option.None`         |
+  | `Array.tail(arr)`        | All but first                | `Array.tail([1,2,3])` → `[2,3]`          |
+  | `Array.reverse(arr)`     | Reverse order                | `Array.reverse([1,2,3])` → `[3,2,1]`     |
+  | `Array.sort(arr)`        | Sort ascending               | `Array.sort([3,1,2])` → `[1,2,3]`        |
+  | `Array.slice(arr, i, j)` | Subarray                     | `Array.slice([1,2,3,4], 1, 3)` → `[2,3]` |
+  | `Array.contains(arr, v)` | Check membership             | `Array.contains([1,2,3], 2)` → `true`    |
+  | `Array.concat(a, b)`     | Concatenate                  | `Array.concat([1], [2])` → `[1,2]`       |
+  **NOTE**: Some existing `Array` module primitives are _not_ implemented in primitives.rs as they need access to HoF evaluation (e.g. `Array.map`, `Array.filter`, etc...). The primitives above can be directly implemented on `Prim`, however.
+  **NOTE**: `concat` MUST check that both arrays have the same element type! Use `base_type_of` to avoid cloning entire arrays
+
+- [ ] `String` — String operations
+  | Function                      | Description        | Example                                     |
+  |-------------------------------|--------------------|---------------------------------------------|
+  | `String.length(s)`            | Get length         | `String.length("hello")` → `5`              |
+  | `String.upper(s)`             | Uppercase          | `String.upper("hi")` → `"HI"`               |
+  | `String.lower(s)`             | Lowercase          | `String.lower("HI")` → `"hi"`               |
+  | `String.trim(s)`              | Trim whitespace    | `String.trim("  x  ")` → `"x"`              |
+  | `String.split(s, d)`          | Split by delimiter | `String.split("a,b", ",")` → `["a", "b"]`   |
+  | `String.join(arr, d)`         | Join with delim    | `String.join(["a", "b"], ",")` → `"a,b"`    |
+  | `String.slice(s, i, j)`       | Substring          | `String.slice("hello", 1, 3)` → `"el"`      |
+  | `String.contains(s, sub)`     | Check substring    | `String.contains("hello", "ell")` → `true`  |
+  | `String.replace(s, old, new)` | Replace occurs     | `String.replace("foo", "o", "a")` → `"faa"` |
+
+- [ ] `Math` — Mathematical operations
+  | Function        | Description    | Example                    |
+  |-----------------|----------------|----------------------------|
+  | `Math.abs(x)`   | Absolute value | `Math.abs(-5)` → `5`       |
+  | `Math.min(a,b)` | Minimum        | `Math.min(3, 7)` → `3`     |
+  | `Math.max(a,b)` | Maximum        | `Math.max(3, 7)` → `7`     |
+  | `Math.floor(x)` | Floor          | `Math.floor(3.7)` → `3`    |
+  | `Math.ceil(x)`  | Ceiling        | `Math.ceil(3.2)` → `4`     |
+  | `Math.round(x)` | Round          | `Math.round(3.5)` → `4`    |
+  | `Math.sqrt(x)`  | Square root    | `Math.sqrt(16)` → `4.0`    |
+  | `Math.pow(x,y)` | Power          | `Math.pow(2, 3)` → `8`     |
+  | `Math.log(x)`   | Natural log    | `Math.log(2.718)` → `~1.0` |
+  | `Math.sin(x)`   | Sine           | `Math.sin(0)` → `0.0`      |
+  | `Math.cos(x)`   | Cosine         | `Math.cos(0)` → `1.0`      |
+
+- [ ] `Random` — Generating random values
+  | Function          | Description           | Example                     |
+  |-------------------|-----------------------|-----------------------------|
+  | `Random.random()` | Random 0-1 (as float) | `Random.random()` → `0.xxx` |
+
+- [ ] `Option` — Option operations
+  | Function                 | Description          | Example                                   |
+  |--------------------------|----------------------|-------------------------------------------|
+  | `Option.unwrap-or(o, d)` | Get value or default | `Option.unwrap-or(None, 0)` → `0`         |
+  | `Option.map(o, f)`       | Transform if Some    | `Option.map(Some(1), double)` → `Some(2)` |
+  **NOTE**: `Option.unwrap` is not needed; use the `!` postfix operator (already implemented)
+  **NOTE**: `Option.{is-none, is-some}` is not needed; use the `IS` primitive
+
+- [ ] `Result` — Result operations
+  | Function                 | Description          | Example                                   |
+  |--------------------------|----------------------|-------------------------------------------|
+  | `Result.unwrap-or(r, d)` | Get value or default | `Result.unwrap-or(Err("x"), 0)` → `0`     |
+  | `Result.map(r, f)`       | Transform if Ok      | `Result.map(Ok(1), double)` → `Ok(2)`     |
+  | `Result.map-err(r, f)`   | Transform if Err     | `Result.map-err(Err("x"), upper)` → `...` |
+  **NOTE**: `Result.unwrap` is not needed; use the `!` postfix operator (already implemented)
+  **NOTE**: `Result.{is-none, is-some}` is not needed; use the `IS` primitive
 
 ---
 
