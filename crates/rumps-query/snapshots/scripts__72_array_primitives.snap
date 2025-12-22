@@ -1,0 +1,50 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Array module primitives\n; Tests Array.length, Array.push, Array.pop, Array.head, Array.tail,\n; Array.reverse, Array.sort, Array.slice, Array.contains, Array.concat\n\n; ============ Array.length ============\n\nLET nums = [1, 2, 3, 4, 5]\nOUTPUT Array.length(nums)  ; 5\n\nLET empty = []\nOUTPUT Array.length(empty)  ; 0\n\nLET single = [42]\nOUTPUT Array.length(single)  ; 1\n\n; ============ Array.push ============\n\nLET base-arr = [1, 2, 3]\nLET pushed = Array.push(base-arr, 4)\nOUTPUT pushed  ; [1, 2, 3, 4]\n\n; Original unchanged (immutable)\nOUTPUT base-arr  ; [1, 2, 3]\n\n; Push to empty array\nLET pushed-empty = Array.push([], 1)\nOUTPUT pushed-empty  ; [1]\n\n; ============ Array.pop ============\n\nLET to-pop = [1, 2, 3]\nLET popped = Array.pop(to-pop)\nOUTPUT popped  ; [1, 2]\n\n; Pop from single element\nLET pop-single = Array.pop([42])\nOUTPUT pop-single  ; []\n\n; Pop from empty (returns empty)\nLET pop-empty = Array.pop([])\nOUTPUT pop-empty  ; []\n\n; ============ Array.head ============\n\nLET head-arr = [10, 20, 30]\nLET first = Array.head(head-arr)\nOUTPUT first  ; Option.Some(10)\n\n; Head of empty array\nLET head-empty = Array.head([])\nOUTPUT head-empty  ; Option.None\n\n; Head with unwrap\nLET head-val = Array.head([100, 200])!\nOUTPUT head-val  ; 100\n\n; ============ Array.tail ============\n\nLET tail-arr = [1, 2, 3, 4]\nLET rest = Array.tail(tail-arr)\nOUTPUT rest  ; [2, 3, 4]\n\n; Tail of single element\nLET tail-single = Array.tail([42])\nOUTPUT tail-single  ; []\n\n; Tail of empty array\nLET tail-empty = Array.tail([])\nOUTPUT tail-empty  ; []\n\n; ============ Array.reverse ============\n\nLET to-reverse = [1, 2, 3, 4, 5]\nLET reversed = Array.reverse(to-reverse)\nOUTPUT reversed  ; [5, 4, 3, 2, 1]\n\n; Reverse single element\nLET rev-single = Array.reverse([42])\nOUTPUT rev-single  ; [42]\n\n; Reverse empty\nLET rev-empty = Array.reverse([])\nOUTPUT rev-empty  ; []\n\n; ============ Array.sort ============\n\nLET unsorted = [3, 1, 4, 1, 5, 9, 2, 6]\nLET sorted = Array.sort(unsorted)\nOUTPUT sorted  ; [1, 1, 2, 3, 4, 5, 6, 9]\n\n; Sort already sorted\nLET already-sorted = Array.sort([1, 2, 3])\nOUTPUT already-sorted  ; [1, 2, 3]\n\n; Sort reverse order\nLET sort-reverse = Array.sort([3, 2, 1])\nOUTPUT sort-reverse  ; [1, 2, 3]\n\n; Sort strings\nLET unsorted-strs = [\"banana\", \"apple\", \"cherry\"]\nLET sorted-strs = Array.sort(unsorted-strs)\nOUTPUT sorted-strs  ; [\"apple\", \"banana\", \"cherry\"]\n\n; Sort booleans\nLET unsorted-bools = [TRUE, FALSE, TRUE, FALSE]\nLET sorted-bools = Array.sort(unsorted-bools)\nOUTPUT sorted-bools  ; [false, false, true, true]\n\n; Sort empty\nLET sort-empty = Array.sort([])\nOUTPUT sort-empty  ; []\n\n; ============ Array.slice ============\n\nLET slice-arr = [0, 1, 2, 3, 4, 5]\nLET sliced = Array.slice(slice-arr, 1, 4)\nOUTPUT sliced  ; [1, 2, 3]\n\n; Slice from start\nLET slice-start = Array.slice(slice-arr, 0, 3)\nOUTPUT slice-start  ; [0, 1, 2]\n\n; Slice to end\nLET slice-end = Array.slice(slice-arr, 3, 6)\nOUTPUT slice-end  ; [3, 4, 5]\n\n; Slice full array\nLET slice-full = Array.slice(slice-arr, 0, 6)\nOUTPUT slice-full  ; [0, 1, 2, 3, 4, 5]\n\n; Slice empty range\nLET slice-none = Array.slice(slice-arr, 2, 2)\nOUTPUT slice-none  ; []\n\n; Slice with clamped bounds\nLET slice-clamp = Array.slice([1, 2, 3], 0, 100)\nOUTPUT slice-clamp  ; [1, 2, 3]\n\n; Slice with negative start (clamped to 0)\nLET slice-neg = Array.slice([1, 2, 3], -5, 2)\nOUTPUT slice-neg  ; [1, 2]\n\n; ============ Array.contains ============\n\nLET contains-arr = [1, 2, 3, 4, 5]\nOUTPUT Array.contains(contains-arr, 3)  ; true\nOUTPUT Array.contains(contains-arr, 10)  ; false\n\n; Contains in empty array\nOUTPUT Array.contains([], 1)  ; false\n\n; Contains with strings\nLET str-arr = [\"hello\", \"world\"]\nOUTPUT Array.contains(str-arr, \"hello\")  ; true\nOUTPUT Array.contains(str-arr, \"foo\")  ; false\n\n; Contains with booleans\nLET bool-arr = [TRUE, FALSE]\nOUTPUT Array.contains(bool-arr, TRUE)  ; true\n\n; ============ Array.concat ============\n\nLET arr-a = [1, 2, 3]\nLET arr-b = [4, 5, 6]\nLET combined = Array.concat(arr-a, arr-b)\nOUTPUT combined  ; [1, 2, 3, 4, 5, 6]\n\n; Concat with empty first\nLET concat-empty-a = Array.concat([], [1, 2, 3])\nOUTPUT concat-empty-a  ; [1, 2, 3]\n\n; Concat with empty second\nLET concat-empty-b = Array.concat([1, 2, 3], [])\nOUTPUT concat-empty-b  ; [1, 2, 3]\n\n; Concat two empty\nLET concat-both-empty = Array.concat([], [])\nOUTPUT concat-both-empty  ; []\n\n; Concat strings\nLET concat-strs = Array.concat([\"a\", \"b\"], [\"c\", \"d\"])\nOUTPUT concat-strs  ; [\"a\", \"b\", \"c\", \"d\"]\n\n; ============ Chaining operations ============\n\n; Get first element of sorted reversed array\nLET chain-arr = [3, 1, 4, 1, 5]\nLET chain-result = Array.head(Array.reverse(Array.sort(chain-arr)))!\nOUTPUT chain-result  ; 5\n\n; Slice then reverse\nLET slice-rev = Array.reverse(Array.slice([0, 1, 2, 3, 4], 1, 4))\nOUTPUT slice-rev  ; [3, 2, 1]\n\n; Push then length\nLET push-len = Array.length(Array.push([1, 2], 3))\nOUTPUT push-len  ; 3\n\n; ============ Pipeline usage ============\n\nLET pipeline-arr = [5, 3, 8, 1, 9]\nLET pipeline-result = pipeline-arr\n  |> Array.sort\n  |> Array.reverse\n  |> (arr => Array.slice(arr, 0, 3))\nOUTPUT pipeline-result  ; [9, 8, 5]\n"
+---
+5
+0
+1
+[ 1, 2, 3, 4 ]
+[ 1, 2, 3 ]
+[ 1 ]
+[ 1, 2 ]
+[  ]
+[  ]
+Option.Some(10)
+Option.None
+100
+[ 2, 3, 4 ]
+[  ]
+[  ]
+[ 5, 4, 3, 2, 1 ]
+[ 42 ]
+[  ]
+[ 1, 1, 2, 3, 4, 5, 6, 9 ]
+[ 1, 2, 3 ]
+[ 1, 2, 3 ]
+[ apple, banana, cherry ]
+[ FALSE, FALSE, TRUE, TRUE ]
+[  ]
+[ 1, 2, 3 ]
+[ 0, 1, 2 ]
+[ 3, 4, 5 ]
+[ 0, 1, 2, 3, 4, 5 ]
+[  ]
+[ 1, 2, 3 ]
+[ 1, 2 ]
+TRUE
+FALSE
+FALSE
+TRUE
+FALSE
+TRUE
+[ 1, 2, 3, 4, 5, 6 ]
+[ 1, 2, 3 ]
+[ 1, 2, 3 ]
+[  ]
+[ a, b, c, d ]
+5
+[ 3, 2, 1 ]
+3
+[ 9, 8, 5 ]

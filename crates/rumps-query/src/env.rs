@@ -145,6 +145,26 @@ impl PrimCtx<'_> {
         let err = Value::err(res_ty, msg);
         self.arena.add(err, self.span)
     }
+
+    /// Create an `Option.Some(v)` value from a `ValueId` already in the arena.
+    pub(crate) fn option_some(&mut self, v: ValueId) -> ValueId {
+        let base_ty = self
+            .arena
+            .base_type_of(v, self.type_exprs)
+            .unwrap_or(TypeId::UNKNOWN);
+        let val_ty = self.type_exprs.named(base_ty);
+        let opt_ty = self.type_exprs.app(TypeId::OPTION, smallvec![val_ty]);
+        let some = Value::some(opt_ty, v);
+        self.arena.add(some, self.span)
+    }
+
+    /// Create an `Option.None` value.
+    pub(crate) fn option_none(&mut self) -> ValueId {
+        let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+        let opt_ty = self.type_exprs.app(TypeId::OPTION, smallvec![unknown]);
+        let none = Value::none(opt_ty);
+        self.arena.add(none, self.span)
+    }
 }
 
 /// A built-in primitive function.
@@ -292,12 +312,22 @@ impl Environment {
         object.register("from-entries", Prim::from_entries);
         self.modules.insert("Object".to_string(), object);
 
-        // Array module: placeholder functions for higher-order primitives.
-        // These are intercepted in `invoke_module_fn` and handled specially.
+        // Array module: placeholder functions for higher-order primitives
+        // (map, filter, reduce), and regular primitives for other operations.
         let mut array = Module::default();
         array.register("map", Prim::placeholder);
         array.register("filter", Prim::placeholder);
         array.register("reduce", Prim::placeholder);
+        array.register("length", Prim::length);
+        array.register("push", Prim::push);
+        array.register("pop", Prim::pop);
+        array.register("head", Prim::head);
+        array.register("tail", Prim::tail);
+        array.register("reverse", Prim::reverse);
+        array.register("sort", Prim::sort);
+        array.register("slice", Prim::slice);
+        array.register("contains", Prim::contains);
+        array.register("concat", Prim::concat);
         self.modules.insert("Array".to_string(), array);
     }
 }

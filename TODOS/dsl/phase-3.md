@@ -916,7 +916,7 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
 
 **NOTE**: For each new module implementation, add a corresponding `.rumps` script and snapshot testing **all** primitives implemented.
 
-- [ ] `Array` — More array operations
+- [x] `Array` — More array operations
   | Function                 | Description                  | Example                                  |
   |--------------------------|------------------------------|------------------------------------------|
   | `Array.length(arr)`      | Get length                   | `Array.length([1,2,3])` → `3`            |
@@ -932,6 +932,7 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
   | `Array.concat(a, b)`     | Concatenate                  | `Array.concat([1], [2])` → `[1,2]`       |
   **NOTE**: Some existing `Array` module primitives are _not_ implemented in primitives.rs as they need access to HoF evaluation (e.g. `Array.map`, `Array.filter`, etc...). The primitives above can be directly implemented on `Prim`, however.
   **NOTE**: `concat` MUST check that both arrays have the same element type! Use `base_type_of` to avoid cloning entire arrays
+  **Integration test**: `72_array_primitives.rumps`
 
 - [ ] `String` — String operations
   | Function                      | Description        | Example                                     |

@@ -38,10 +38,11 @@
 //! [`Interpreter::invoke_module_fn`]: crate::interpreter::Interpreter::invoke_module_fn
 
 use indexmap::IndexMap;
+use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
 use crate::env::{PrimCtx, PrimResult};
-use crate::value::{StringId, TypeId, Value, ValueId};
+use crate::value::{StringId, TypeId, Value, ValueArena, ValueId};
 use crate::Error;
 
 /// Namespace for built-in primitive functions.
@@ -360,7 +361,383 @@ impl Prim {
 }
 
 // `Array` module
-impl Prim {}
+impl Prim {
+    /// `Array.length(arr) -> Int`
+    ///
+    /// Returns the number of elements in the array.
+    pub(crate) fn length<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Array.length", &args, 1)?;
+
+            let arr_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.length: missing argument")
+            })?;
+
+            let (_, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+                Error::runtime_no_span("Array.length expects Array")
+            })?;
+
+            Ok(ctx.arena.add(Value::Int(elems.len() as i64), ctx.span))
+        })
+    }
+
+    /// `Array.push(arr, val) -> Array[T]`
+    ///
+    /// Returns a new array with `val` appended to the end.
+    pub(crate) fn push<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Array.push", &args, 2)?;
+
+            let arr_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.push: missing array argument")
+            })?;
+
+            let val_id = *args.get(1).ok_or_else(|| {
+                Error::runtime_no_span("Array.push: missing value argument")
+            })?;
+
+            let (ty, mut elems) =
+                ctx.arena.get_array(arr_id).ok_or_else(|| {
+                    Error::runtime_no_span(
+                        "Array.push expects Array as first argument",
+                    )
+                })?;
+
+            elems.push(val_id);
+            Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
+        })
+    }
+
+    /// `Array.pop(arr) -> Array[T]`
+    ///
+    /// Returns a new array with the last element removed.
+    /// Returns an empty array if the input is empty.
+    pub(crate) fn pop<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Array.pop", &args, 1)?;
+
+            let arr_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.pop: missing argument")
+            })?;
+
+            let (ty, mut elems) =
+                ctx.arena.get_array(arr_id).ok_or_else(|| {
+                    Error::runtime_no_span("Array.pop expects Array")
+                })?;
+
+            elems.pop();
+            Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
+        })
+    }
+
+    /// `Array.head(arr) -> Option[T]`
+    ///
+    /// Returns `Option.Some(first)` if the array is non-empty,
+    /// `Option.None` if empty.
+    pub(crate) fn head<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Array.head", &args, 1)?;
+
+            let arr_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.head: missing argument")
+            })?;
+
+            let (_, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+                Error::runtime_no_span("Array.head expects Array")
+            })?;
+
+            Ok(match elems.first() {
+                Some(first) => ctx.option_some(*first),
+                None => ctx.option_none(),
+            })
+        })
+    }
+
+    /// `Array.tail(arr) -> Array[T]`
+    ///
+    /// Returns a new array with all elements except the first.
+    /// Returns an empty array if the input is empty or has one element.
+    pub(crate) fn tail<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Array.tail", &args, 1)?;
+
+            let arr_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.tail: missing argument")
+            })?;
+
+            let (ty, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+                Error::runtime_no_span("Array.tail expects Array")
+            })?;
+
+            let tail: SmallVec<[ValueId; 4]> =
+                elems.get(1..).map(SmallVec::from_slice).unwrap_or_default();
+            Ok(ctx.arena.add(Value::Array(ty, tail), ctx.span))
+        })
+    }
+
+    /// `Array.reverse(arr) -> Array[T]`
+    ///
+    /// Returns a new array with elements in reverse order.
+    pub(crate) fn reverse<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Array.reverse", &args, 1)?;
+
+            let arr_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.reverse: missing argument")
+            })?;
+
+            let (ty, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+                Error::runtime_no_span("Array.reverse expects Array")
+            })?;
+
+            let reversed: SmallVec<[ValueId; 4]> =
+                elems.iter().rev().copied().collect();
+            Ok(ctx.arena.add(Value::Array(ty, reversed), ctx.span))
+        })
+    }
+
+    /// `Array.sort(arr) -> Array[T]`
+    ///
+    /// Returns a new array with elements sorted in ascending order.
+    /// Elements must be comparable (Int, Float, String, Bool).
+    pub(crate) fn sort<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        /// Sort key for `Array.sort`; wraps comparable value types.
+        ///
+        /// Note that the actual sorting compares homogeneously typed array
+        /// elements, but we need to support sorting any type
+        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+        enum SortKey<'a> {
+            Bool(bool),
+            Int(i64),
+            Float(OrderedFloat<f64>),
+            String(&'a str),
+            Char(char),
+        }
+
+        impl<'a> SortKey<'a> {
+            fn from_value(v: &Value, arena: &'a ValueArena) -> Option<Self> {
+                match v {
+                    Value::Bool(b) => Some(Self::Bool(*b)),
+                    Value::Int(n) => Some(Self::Int(*n)),
+                    Value::Float(f) => Some(Self::Float(*f)),
+                    Value::String(sid) => arena.get_str(*sid).map(Self::String),
+                    Value::Char(c) => Some(Self::Char(*c)),
+                    _ => None,
+                }
+            }
+        }
+
+        Box::pin(async move {
+            Self::check_arity("Array.sort", &args, 1)?;
+
+            let arr_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.sort: missing argument")
+            })?;
+
+            let (ty, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+                Error::runtime_no_span("Array.sort expects Array")
+            })?;
+
+            // Collect (ValueId, sortable key) pairs
+            let mut pairs: Vec<(ValueId, SortKey)> = elems
+                .iter()
+                .map(|vid| {
+                    ctx.arena
+                        .get(*vid)
+                        .ok_or_else(|| {
+                            Error::runtime_no_span(
+                                "Array.sort: invalid element",
+                            )
+                        })
+                        .and_then(|v| {
+                            SortKey::from_value(v, ctx.arena)
+                                .ok_or_else(|| {
+                                    Error::runtime_no_span(
+                                        "Array.sort: element is not comparable",
+                                    )
+                                })
+                                .map(|k| (*vid, k))
+                        })
+                })
+                .collect::<crate::Result<Vec<_>>>()?;
+
+            pairs.sort_by(|(_, a), (_, b)| a.cmp(b));
+
+            let sorted: SmallVec<[ValueId; 4]> =
+                pairs.into_iter().map(|(vid, _)| vid).collect();
+            Ok(ctx.arena.add(Value::Array(ty, sorted), ctx.span))
+        })
+    }
+
+    /// `Array.slice(arr, start, end) -> Array[T]`
+    ///
+    /// Returns a new array containing elements from index `start` (inclusive)
+    /// to index `end` (exclusive). Indices are clamped to valid bounds.
+    pub(crate) fn slice<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Array.slice", &args, 3)?;
+
+            let arr_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.slice: missing array argument")
+            })?;
+
+            let start_id = *args.get(1).ok_or_else(|| {
+                Error::runtime_no_span("Array.slice: missing start argument")
+            })?;
+
+            let end_id = *args.get(2).ok_or_else(|| {
+                Error::runtime_no_span("Array.slice: missing end argument")
+            })?;
+
+            let (ty, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+                Error::runtime_no_span(
+                    "Array.slice expects Array as first argument",
+                )
+            })?;
+
+            let start = ctx
+                .arena
+                .get(start_id)
+                .and_then(|v| match v {
+                    Value::Int(n) => Some(*n),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    Error::runtime_no_span("Array.slice: start must be Int")
+                })?;
+
+            let end = ctx
+                .arena
+                .get(end_id)
+                .and_then(|v| match v {
+                    Value::Int(n) => Some(*n),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    Error::runtime_no_span("Array.slice: end must be Int")
+                })?;
+
+            let len = elems.len() as i64;
+            let start_idx = start.max(0).min(len) as usize;
+            let end_idx = end.max(0).min(len) as usize;
+
+            let sliced: SmallVec<[ValueId; 4]> = elems
+                .get(start_idx..end_idx)
+                .map(SmallVec::from_slice)
+                .unwrap_or_default();
+
+            Ok(ctx.arena.add(Value::Array(ty, sliced), ctx.span))
+        })
+    }
+
+    /// `Array.contains(arr, val) -> Bool`
+    ///
+    /// Returns `true` if the array contains the given value.
+    pub(crate) fn contains<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Array.contains", &args, 2)?;
+
+            let arr_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.contains: missing array argument")
+            })?;
+
+            let val_id = *args.get(1).ok_or_else(|| {
+                Error::runtime_no_span("Array.contains: missing value argument")
+            })?;
+
+            let (_, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+                Error::runtime_no_span(
+                    "Array.contains expects Array as first argument",
+                )
+            })?;
+
+            let needle = ctx.arena.get(val_id).ok_or_else(|| {
+                Error::runtime_no_span("Array.contains: invalid value")
+            })?;
+
+            let found = elems.iter().any(|elem_id| {
+                ctx.arena.get(*elem_id).is_some_and(|v| v == needle)
+            });
+
+            Ok(ctx.arena.add(Value::Bool(found), ctx.span))
+        })
+    }
+
+    /// `Array.concat(a, b) -> Array[T]`
+    ///
+    /// Returns a new array with elements of `b` appended to `a`.
+    /// Both arrays must have the same element type.
+    pub(crate) fn concat<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Array.concat", &args, 2)?;
+
+            let arr_a_id = *args.first().ok_or_else(|| {
+                Error::runtime_no_span("Array.concat: missing first array")
+            })?;
+
+            let arr_b_id = *args.get(1).ok_or_else(|| {
+                Error::runtime_no_span("Array.concat: missing second array")
+            })?;
+
+            let (ty_a, elems_a) =
+                ctx.arena.get_array(arr_a_id).ok_or_else(|| {
+                    Error::runtime_no_span(
+                        "Array.concat expects Array as first argument",
+                    )
+                })?;
+
+            let (ty_b, elems_b) =
+                ctx.arena.get_array(arr_b_id).ok_or_else(|| {
+                    Error::runtime_no_span(
+                        "Array.concat expects Array as second argument",
+                    )
+                })?;
+
+            // Check element types match using the stored TypeExprId
+            let types_compatible = ctx.type_exprs.eq(ty_a, ty_b);
+
+            if types_compatible {
+                let mut combined = elems_a;
+                combined.extend(elems_b);
+                Ok(ctx.arena.add(Value::Array(ty_a, combined), ctx.span))
+            } else {
+                Err(Error::runtime_no_span(
+                    "Array.concat: arrays have different element types",
+                ))
+            }
+        })
+    }
+}
 
 // NOTE: Array functions (map, filter, reduce) are higher-order and require
 // access to the interpreter's closure invocation machinery. They are
@@ -573,5 +950,339 @@ mod tests {
             }
             _ => panic!("expected Object"),
         }
+    }
+
+    // ============ Array module tests ============
+
+    fn make_int_array(
+        arena: &mut crate::value::ValueArena,
+        type_exprs: &mut TypeExprArena,
+        vals: &[i64],
+    ) -> ValueId {
+        let int_ty = type_exprs.named(TypeId::INT);
+        let elems: SmallVec<[ValueId; 4]> = vals
+            .iter()
+            .map(|n| arena.add(Value::Int(*n), span()))
+            .collect();
+        arena.add(Value::Array(int_ty, elems), span())
+    }
+
+    #[tokio::test]
+    async fn array_length() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id =
+            make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3, 4, 5]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::length(&mut ctx, smallvec![arr_id]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Int(5)));
+    }
+
+    #[tokio::test]
+    async fn array_length_empty() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id = make_int_array(&mut arena, &mut type_exprs, &[]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::length(&mut ctx, smallvec![arr_id]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Int(0)));
+    }
+
+    #[tokio::test]
+    async fn array_push() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3]);
+        let val_id = arena.add(Value::Int(4), span());
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::push(&mut ctx, smallvec![arr_id, val_id])
+                .await
+                .unwrap()
+        };
+
+        let (_, elems) = arena.get_array(result).unwrap();
+        assert_eq!(elems.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn array_pop() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::pop(&mut ctx, smallvec![arr_id]).await.unwrap()
+        };
+
+        let (_, elems) = arena.get_array(result).unwrap();
+        assert_eq!(elems.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn array_head_some() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id = make_int_array(&mut arena, &mut type_exprs, &[42, 2, 3]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::head(&mut ctx, smallvec![arr_id]).await.unwrap()
+        };
+
+        let val = arena.get(result).unwrap();
+        assert!(val.is_some(&type_exprs));
+    }
+
+    #[tokio::test]
+    async fn array_head_none() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id = make_int_array(&mut arena, &mut type_exprs, &[]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::head(&mut ctx, smallvec![arr_id]).await.unwrap()
+        };
+
+        let val = arena.get(result).unwrap();
+        assert!(val.is_none(&type_exprs));
+    }
+
+    #[tokio::test]
+    async fn array_tail() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3, 4]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::tail(&mut ctx, smallvec![arr_id]).await.unwrap()
+        };
+
+        let (_, elems) = arena.get_array(result).unwrap();
+        assert_eq!(elems.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn array_reverse() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::reverse(&mut ctx, smallvec![arr_id]).await.unwrap()
+        };
+
+        let (_, elems) = arena.get_array(result).unwrap();
+        let vals: Vec<_> = elems
+            .iter()
+            .filter_map(|id| arena.get(*id))
+            .filter_map(|v| match v {
+                Value::Int(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(vals, vec![3, 2, 1]);
+    }
+
+    #[tokio::test]
+    async fn array_sort() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id =
+            make_int_array(&mut arena, &mut type_exprs, &[3, 1, 4, 1, 5]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::sort(&mut ctx, smallvec![arr_id]).await.unwrap()
+        };
+
+        let (_, elems) = arena.get_array(result).unwrap();
+        let vals: Vec<_> = elems
+            .iter()
+            .filter_map(|id| arena.get(*id))
+            .filter_map(|v| match v {
+                Value::Int(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(vals, vec![1, 1, 3, 4, 5]);
+    }
+
+    #[tokio::test]
+    async fn array_slice() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id =
+            make_int_array(&mut arena, &mut type_exprs, &[0, 1, 2, 3, 4, 5]);
+        let start = arena.add(Value::Int(1), span());
+        let end = arena.add(Value::Int(4), span());
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::slice(&mut ctx, smallvec![arr_id, start, end])
+                .await
+                .unwrap()
+        };
+
+        let (_, elems) = arena.get_array(result).unwrap();
+        assert_eq!(elems.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn array_contains_found() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id =
+            make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3, 4, 5]);
+        let needle = arena.add(Value::Int(3), span());
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::contains(&mut ctx, smallvec![arr_id, needle])
+                .await
+                .unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Bool(true)));
+    }
+
+    #[tokio::test]
+    async fn array_contains_not_found() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_id =
+            make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3, 4, 5]);
+        let needle = arena.add(Value::Int(10), span());
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::contains(&mut ctx, smallvec![arr_id, needle])
+                .await
+                .unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Bool(false)));
+    }
+
+    #[tokio::test]
+    async fn array_concat() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr_a = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3]);
+        let arr_b = make_int_array(&mut arena, &mut type_exprs, &[4, 5, 6]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::concat(&mut ctx, smallvec![arr_a, arr_b])
+                .await
+                .unwrap()
+        };
+
+        let (_, elems) = arena.get_array(result).unwrap();
+        assert_eq!(elems.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn array_concat_type_mismatch() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        // Array of ints
+        let arr_a = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3]);
+
+        // Array of strings
+        let str_ty = type_exprs.named(TypeId::STRING);
+        let s = arena.intern("hello");
+        let str_val = arena.add(Value::String(s), span());
+        let arr_b = arena.add(Value::Array(str_ty, smallvec![str_val]), span());
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Prim::concat(&mut ctx, smallvec![arr_a, arr_b]).await
+        };
+
+        assert!(result.is_err());
     }
 }
