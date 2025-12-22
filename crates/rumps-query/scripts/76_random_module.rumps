@@ -1,0 +1,128 @@
+; Random module primitives
+; Tests Random.random, Random.range, Random.int, Random.bool,
+; Random.choice, Random.shuffle, Random.sample, Random.uuid
+;
+; NOTE: Random values are non-deterministic, so we test types and constraints
+
+; ============ Random.random ============
+
+LET rand-val = Random.random()
+; Result is a Float in [0, 1)
+OUTPUT rand-val >= 0.0  ; true
+OUTPUT rand-val < 1.0   ; true
+
+; ============ Random.range ============
+
+LET range-val = Random.range(10.0, 20.0)
+OUTPUT range-val >= 10.0  ; true
+OUTPUT range-val < 20.0   ; true
+
+LET range-neg = Random.range(-5.0, 5.0)
+OUTPUT range-neg >= -5.0  ; true
+OUTPUT range-neg < 5.0    ; true
+
+; ============ Random.int ============
+
+LET int-val = Random.int(1, 10)
+OUTPUT int-val >= 1   ; true
+OUTPUT int-val <= 10  ; true
+
+LET int-single = Random.int(5, 5)
+OUTPUT int-single  ; 5 (only possible value)
+
+LET int-neg = Random.int(-10, -5)
+OUTPUT int-neg >= -10  ; true
+OUTPUT int-neg <= -5   ; true
+
+; ============ Random.bool ============
+
+LET bool-val = Random.bool()
+; Result is a Bool
+OUTPUT bool-val OR NOT bool-val  ; true (tautology to verify it's a bool)
+
+; ============ Random.choice ============
+
+LET choice-arr = [10, 20, 30]
+LET choice-result = Random.choice(choice-arr)
+; Returns Option.Some(element)
+OUTPUT choice-result IS Option.Some(_)  ; true
+
+LET choice-inner = choice-result!
+OUTPUT choice-inner == 10 OR choice-inner == 20 OR choice-inner == 30  ; true
+
+; Empty array returns Option.None
+LET choice-empty = Random.choice([])
+OUTPUT choice-empty IS Option.None  ; true
+
+; ============ Random.shuffle ============
+
+LET shuffle-arr = [1, 2, 3, 4, 5]
+LET shuffled = Random.shuffle(shuffle-arr)
+OUTPUT Array.length(shuffled)  ; 5
+
+; All elements preserved (check contains)
+OUTPUT Array.contains(shuffled, 1)  ; true
+OUTPUT Array.contains(shuffled, 2)  ; true
+OUTPUT Array.contains(shuffled, 3)  ; true
+OUTPUT Array.contains(shuffled, 4)  ; true
+OUTPUT Array.contains(shuffled, 5)  ; true
+
+; Empty shuffle
+LET shuffle-empty = Random.shuffle([])
+OUTPUT Array.length(shuffle-empty)  ; 0
+
+; Single element shuffle
+LET shuffle-single = Random.shuffle([42])
+OUTPUT shuffle-single  ; [42]
+
+; ============ Random.sample ============
+
+LET sample-arr = [1, 2, 3, 4, 5]
+
+; Sample fewer than array length
+LET sample-result = Random.sample(sample-arr, 3)
+OUTPUT sample-result IS Result.Ok(_)  ; true
+
+LET sample-inner = sample-result!
+OUTPUT Array.length(sample-inner)  ; 3
+
+; Sample zero elements
+LET sample-zero = Random.sample(sample-arr, 0)
+OUTPUT sample-zero IS Result.Ok(_)  ; true
+OUTPUT Array.length(sample-zero!)  ; 0
+
+; Sample all elements
+LET sample-all = Random.sample(sample-arr, 5)
+OUTPUT sample-all IS Result.Ok(_)  ; true
+OUTPUT Array.length(sample-all!)  ; 5
+
+; Sample more than array length returns Result.Err
+LET sample-too-many = Random.sample(sample-arr, 10)
+OUTPUT sample-too-many IS Result.Err(_)  ; true
+
+; ============ Random.uuid ============
+
+LET uuid-val = Random.uuid()
+; UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+OUTPUT String.length(uuid-val)  ; 36
+
+; Check for hyphens at correct positions
+LET uuid-parts = String.split(uuid-val, "-")
+OUTPUT Array.length(uuid-parts)  ; 5
+
+; Check segment lengths: 8-4-4-4-12
+LET uuid-p1 = Array.head(uuid-parts)!
+OUTPUT String.length(uuid-p1)  ; 8
+
+; Two UUIDs should be different
+LET uuid-a = Random.uuid()
+LET uuid-b = Random.uuid()
+OUTPUT uuid-a != uuid-b  ; true (extremely likely)
+
+; ============ Pipeline usage ============
+
+LET pipe-arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+LET pipe-result = pipe-arr
+  |> Random.shuffle
+  |> Array.length
+OUTPUT pipe-result  ; 10

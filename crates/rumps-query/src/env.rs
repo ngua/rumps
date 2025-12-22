@@ -11,7 +11,8 @@ use std::collections::HashMap;
 ///
 /// This is the single source of truth for which module names are recognized
 /// during resolution and registered at interpreter startup.
-pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &["Object", "Array", "String"];
+pub(crate) const BUILTIN_MODULE_NAMES: &[&str] =
+    &["Object", "Array", "String", "Math", "Random"];
 
 use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
@@ -337,12 +338,16 @@ impl Environment {
     ///   `slice`, `contains`, `concat`, plus HoF placeholders
     /// - `String`: `length`, `upper`, `lower`, `trim`, `split`, `join`,
     ///   `slice`, `contains`, `replace`
+    /// - `Math`: `abs`, `min`, `max`, `floor`, `ceil`, `round`, `sqrt`, `log`,
+    ///   `sin`, `cos`
+    /// - `Random`: `random`, `range`, `int`, `bool`, `choice`, `shuffle`,
+    ///   `sample`, `uuid`
     ///
     /// Note: Array higher-order functions (`map`, `filter`, `reduce`) are
     /// handled specially by the interpreter. We register placeholders here
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
-        use crate::primitives::{Array, Object, Prim, Str};
+        use crate::primitives::{Array, Math, Object, Prim, Random, Str};
 
         self.modules.insert(
             "Object".to_string(),
@@ -387,6 +392,36 @@ impl Environment {
                 ("slice", Str::slice),
                 ("contains", Str::contains),
                 ("replace", Str::replace),
+            ]),
+        );
+
+        self.modules.insert(
+            "Math".to_string(),
+            Module::from_fns(&[
+                ("abs", Math::abs),
+                ("min", Math::min),
+                ("max", Math::max),
+                ("floor", Math::floor),
+                ("ceil", Math::ceil),
+                ("round", Math::round),
+                ("sqrt", Math::sqrt),
+                ("log", Math::log),
+                ("sin", Math::sin),
+                ("cos", Math::cos),
+            ]),
+        );
+
+        self.modules.insert(
+            "Random".to_string(),
+            Module::from_fns(&[
+                ("random", Random::random),
+                ("range", Random::range),
+                ("int", Random::int),
+                ("bool", Random::bool),
+                ("choice", Random::choice),
+                ("shuffle", Random::shuffle),
+                ("sample", Random::sample),
+                ("uuid", Random::uuid),
             ]),
         );
     }
@@ -495,6 +530,18 @@ mod tests {
         assert!(env.module_fn_exists(&["String", "upper"]));
         assert!(env.module_fn_exists(&["String", "split"]));
         assert!(env.module_fn_exists(&["String", "join"]));
+        // Math module is registered with functions
+        assert!(env.has_module("Math"));
+        assert!(env.module_fn_exists(&["Math", "abs"]));
+        assert!(env.module_fn_exists(&["Math", "min"]));
+        assert!(env.module_fn_exists(&["Math", "sqrt"]));
+        assert!(env.module_fn_exists(&["Math", "sin"]));
+        // Random module is registered with functions
+        assert!(env.has_module("Random"));
+        assert!(env.module_fn_exists(&["Random", "random"]));
+        assert!(env.module_fn_exists(&["Random", "int"]));
+        assert!(env.module_fn_exists(&["Random", "choice"]));
+        assert!(env.module_fn_exists(&["Random", "uuid"]));
     }
 
     #[test]

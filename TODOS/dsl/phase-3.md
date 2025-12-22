@@ -948,7 +948,7 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
   | `String.replace(s, old, new)` | Replace occurs     | `String.replace("foo", "o", "a")` → `"faa"` |
   **Integration test**: `74_string_module.rumps`
 
-- [ ] `Math` — Mathematical operations
+- [x] `Math` — Mathematical operations
   | Function        | Description    | Example                    |
   |-----------------|----------------|----------------------------|
   | `Math.abs(x)`   | Absolute value | `Math.abs(-5)` → `5`       |
@@ -963,12 +963,21 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
   | `Math.cos(x)`   | Cosine         | `Math.cos(0)` → `1.0`      |
   **NOTE**: `Math.*` functions should work on _any_ numeric value. Follow RUMPS numeric coercion rules with 2-arity functions
   **NOTE**: `Math.pow(x,y)` not necessary, as we have `**` operator
+  **Integration test**: `75_math_module.rumps`
 
-- [ ] `Random` — Generating random values
-  | Function             | Description                       | Example                                 |
-  |----------------------|-----------------------------------|-----------------------------------------|
-  | `Random.random()`    | Random 0-1 (as float)             | `Random.random()` → `0.xxx`             |
-  | `Random.range(x, y)` | Random between x and y (as float) | `Random.random(10.0, 100.0)` → `53.xxx` |
+- [x] `Random` — Generating random values
+  | Function                    | Description                               | Example                                      |
+  |-----------------------------|-------------------------------------------|----------------------------------------------|
+  | `Random.random()`           | Random 0-1 (as float)                     | `Random.random()` → `0.xxx`                  |
+  | `Random.range(x, y)`        | Random float between x and y              | `Random.range(10.0, 100.0)` → `53.xxx`       |
+  | `Random.int(min, max)`      | Random integer in range (inclusive)       | `Random.int(1, 10)` → `7`                    |
+  | `Random.bool()`             | Random boolean                            | `Random.bool()` → `true`                     |
+  | `Random.choice(arr)`        | Pick random element                       | `Random.choice([1,2,3])` → `Option.Some(2)`  |
+  | `Random.shuffle(arr)`       | Return array in random order              | `Random.shuffle([1,2,3])` → `[3,1,2]`        |
+  | `Random.sample(arr, n)`     | Pick n elements (no replacement)          | `Random.sample([1,2,3,4], 2)` → `[3,1]`      |
+  | `Random.uuid()`             | Generate UUID v4 string                   | `Random.uuid()` → `"550e8400-e29b-..."`      |
+  **NOTE**: `Random.choice` returns `Option` to handle empty arrays; `Random.sample` returns `Result` if `n > length`
+  **Integration test**: `76_random_module.rumps`
 
 - [ ] `Option` — Option operations
   | Function                 | Description          | Example                                   |

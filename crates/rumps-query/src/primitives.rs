@@ -42,6 +42,8 @@
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
+use rand::seq::SliceRandom;
+use rand::Rng;
 use smallvec::{smallvec, SmallVec};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -102,6 +104,41 @@ pub(crate) trait Prim {
                 ),
             ))
         }
+    }
+
+    /// Convert a value to `f64`, accepting `Int` or `Float`.
+    fn to_float(
+        ctx: &PrimCtx<'_>,
+        id: ValueId,
+        fn_name: &str,
+    ) -> crate::Result<f64> {
+        ctx.arena
+            .get(id)
+            .ok_or_else(|| {
+                ctx.runtime_error(format!("{fn_name}: invalid value"))
+            })
+            .and_then(|v| match v {
+                Value::Int(n) => Ok(*n as f64),
+                Value::Float(f) => Ok(f.0),
+                _ => Err(ctx.type_error(fn_name, "Int or Float")),
+            })
+    }
+
+    /// Convert a value to `i64`, accepting `Int` only.
+    fn to_int(
+        ctx: &PrimCtx<'_>,
+        id: ValueId,
+        fn_name: &str,
+    ) -> crate::Result<i64> {
+        ctx.arena
+            .get(id)
+            .ok_or_else(|| {
+                ctx.runtime_error(format!("{fn_name}: invalid value"))
+            })
+            .and_then(|v| match v {
+                Value::Int(n) => Ok(*n),
+                _ => Err(ctx.type_error(fn_name, "Int")),
+            })
     }
 }
 
@@ -351,6 +388,13 @@ impl Object {
 }
 
 /// Primitives for the `Array` module.
+///
+// NOTE: Array functions (map, filter, reduce) are higher-order and require
+// access to the interpreter's closure invocation machinery. They are
+// implemented in `interpreter/call.rs` and registered here as placeholders.
+//
+// The placeholders ensure `Environment::module_fn_exists` returns true during
+// name resolution. The actual dispatch is intercepted in `invoke_module_fn`.
 pub(crate) struct Array;
 
 impl Prim for Array {}
@@ -761,13 +805,6 @@ impl Array {
     }
 }
 
-// NOTE: Array functions (map, filter, reduce) are higher-order and require
-// access to the interpreter's closure invocation machinery. They are
-// implemented in `interpreter/call.rs` and registered here as placeholders.
-//
-// The placeholders ensure `Environment::module_fn_exists` returns true during
-// name resolution. The actual dispatch is intercepted in `invoke_module_fn`.
-
 /// Primitives for the `String` module.
 ///
 /// Named `Str` to avoid collision with Rust's `String`.
@@ -1113,6 +1150,369 @@ impl Str {
         })
     }
 }
+
+/// Primitives for the `Math` module.
+pub(crate) struct Math;
+
+impl Prim for Math {}
+
+impl Math {
+    /// `Math.abs(x) -> Number`
+    ///
+    /// Returns the absolute value. Works on Int or Float.
+    pub(crate) fn abs<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.abs", &args, 1, ctx.span)?;
+
+            let v = ctx
+                .arena
+                .get(args[0])
+                .ok_or_else(|| ctx.runtime_error("Math.abs: invalid value"))?;
+
+            let result = match v {
+                Value::Int(n) => Value::Int(n.abs()),
+                Value::Float(f) => Value::Float(OrderedFloat(f.0.abs())),
+                _ => Err(ctx.type_error("Math.abs", "Int or Float"))?,
+            };
+
+            Ok(ctx.arena.add(result, ctx.span))
+        })
+    }
+
+    /// `Math.min(a, b) -> Number`
+    ///
+    /// Returns the minimum of two numbers. Coerces to Float if mixed types.
+    pub(crate) fn min<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.min", &args, 2, ctx.span)?;
+
+            let result = match (ctx.arena.get(args[0]), ctx.arena.get(args[1]))
+            {
+                (Some(Value::Int(x)), Some(Value::Int(y))) => {
+                    Value::Int((*x).min(*y))
+                }
+                _ => {
+                    let x = Self::to_float(ctx, args[0], "Math.min")?;
+                    let y = Self::to_float(ctx, args[1], "Math.min")?;
+                    Value::Float(OrderedFloat(x.min(y)))
+                }
+            };
+
+            Ok(ctx.arena.add(result, ctx.span))
+        })
+    }
+
+    /// `Math.max(a, b) -> Number`
+    ///
+    /// Returns the maximum of two numbers. Coerces to Float if mixed types.
+    pub(crate) fn max<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.max", &args, 2, ctx.span)?;
+
+            let result = match (ctx.arena.get(args[0]), ctx.arena.get(args[1]))
+            {
+                (Some(Value::Int(x)), Some(Value::Int(y))) => {
+                    Value::Int((*x).max(*y))
+                }
+                _ => {
+                    let x = Self::to_float(ctx, args[0], "Math.max")?;
+                    let y = Self::to_float(ctx, args[1], "Math.max")?;
+                    Value::Float(OrderedFloat(x.max(y)))
+                }
+            };
+
+            Ok(ctx.arena.add(result, ctx.span))
+        })
+    }
+
+    /// `Math.floor(x) -> Int`
+    ///
+    /// Returns the largest integer less than or equal to x.
+    pub(crate) fn floor<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.floor", &args, 1, ctx.span)?;
+
+            let n = Self::to_float(ctx, args[0], "Math.floor")?;
+            Ok(ctx.arena.add(Value::Int(n.floor() as i64), ctx.span))
+        })
+    }
+
+    /// `Math.ceil(x) -> Int`
+    ///
+    /// Returns the smallest integer greater than or equal to x.
+    pub(crate) fn ceil<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.ceil", &args, 1, ctx.span)?;
+
+            let n = Self::to_float(ctx, args[0], "Math.ceil")?;
+            Ok(ctx.arena.add(Value::Int(n.ceil() as i64), ctx.span))
+        })
+    }
+
+    /// `Math.round(x) -> Int`
+    ///
+    /// Rounds to the nearest integer (ties round away from zero).
+    pub(crate) fn round<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.round", &args, 1, ctx.span)?;
+
+            let n = Self::to_float(ctx, args[0], "Math.round")?;
+            Ok(ctx.arena.add(Value::Int(n.round() as i64), ctx.span))
+        })
+    }
+
+    /// `Math.sqrt(x) -> Float`
+    ///
+    /// Returns the square root. Returns NaN for negative inputs.
+    pub(crate) fn sqrt<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.sqrt", &args, 1, ctx.span)?;
+
+            let n = Self::to_float(ctx, args[0], "Math.sqrt")?;
+            Ok(ctx
+                .arena
+                .add(Value::Float(OrderedFloat(n.sqrt())), ctx.span))
+        })
+    }
+
+    /// `Math.log(x) -> Float`
+    ///
+    /// Returns the natural logarithm. Returns NaN for non-positive inputs.
+    pub(crate) fn log<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.log", &args, 1, ctx.span)?;
+
+            let n = Self::to_float(ctx, args[0], "Math.log")?;
+            Ok(ctx.arena.add(Value::Float(OrderedFloat(n.ln())), ctx.span))
+        })
+    }
+
+    /// `Math.sin(x) -> Float`
+    ///
+    /// Returns the sine of x (x in radians).
+    pub(crate) fn sin<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.sin", &args, 1, ctx.span)?;
+
+            let n = Self::to_float(ctx, args[0], "Math.sin")?;
+            Ok(ctx.arena.add(Value::Float(OrderedFloat(n.sin())), ctx.span))
+        })
+    }
+
+    /// `Math.cos(x) -> Float`
+    ///
+    /// Returns the cosine of x (x in radians).
+    pub(crate) fn cos<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.cos", &args, 1, ctx.span)?;
+
+            let n = Self::to_float(ctx, args[0], "Math.cos")?;
+            Ok(ctx.arena.add(Value::Float(OrderedFloat(n.cos())), ctx.span))
+        })
+    }
+}
+
+/// Primitives for the `Random` module.
+pub(crate) struct Random;
+
+impl Prim for Random {}
+
+impl Random {
+    /// `Random.random() -> Float`
+    ///
+    /// Returns a random float in the range `[0, 1)`.
+    pub(crate) fn random<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Random.random", &args, 0, ctx.span)?;
+
+            let n: f64 = rand::thread_rng().gen();
+            Ok(ctx.arena.add(Value::Float(OrderedFloat(n)), ctx.span))
+        })
+    }
+
+    /// `Random.range(min, max) -> Float`
+    ///
+    /// Returns a random float in the range `[min, max)`.
+    pub(crate) fn range<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Random.range", &args, 2, ctx.span)?;
+
+            let min = Self::to_float(ctx, args[0], "Random.range")?;
+            let max = Self::to_float(ctx, args[1], "Random.range")?;
+
+            let n: f64 = rand::thread_rng().gen_range(min..max);
+            Ok(ctx.arena.add(Value::Float(OrderedFloat(n)), ctx.span))
+        })
+    }
+
+    /// `Random.int(min, max) -> Int`
+    ///
+    /// Returns a random integer in the range `[min, max]` (inclusive).
+    pub(crate) fn int<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Random.int", &args, 2, ctx.span)?;
+
+            let min = Self::to_int(ctx, args[0], "Random.int")?;
+            let max = Self::to_int(ctx, args[1], "Random.int")?;
+
+            let n: i64 = rand::thread_rng().gen_range(min..=max);
+            Ok(ctx.arena.add(Value::Int(n), ctx.span))
+        })
+    }
+
+    /// `Random.bool() -> Bool`
+    ///
+    /// Returns a random boolean.
+    pub(crate) fn bool<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Random.bool", &args, 0, ctx.span)?;
+
+            let b: bool = rand::thread_rng().gen();
+            Ok(ctx.arena.add(Value::Bool(b), ctx.span))
+        })
+    }
+
+    /// `Random.choice(arr) -> Option[T]`
+    ///
+    /// Picks a random element from the array. Returns `Option.None` if empty.
+    pub(crate) fn choice<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Random.choice", &args, 1, ctx.span)?;
+
+            let (_, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.type_error("Random.choice", "Array"))?;
+
+            let result = elems
+                .choose(&mut rand::thread_rng())
+                .copied()
+                .map(|v| ctx.option_some(v))
+                .unwrap_or_else(|| ctx.option_none());
+
+            Ok(result)
+        })
+    }
+
+    /// `Random.shuffle(arr) -> Array[T]`
+    ///
+    /// Returns a new array with elements in random order.
+    pub(crate) fn shuffle<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Random.shuffle", &args, 1, ctx.span)?;
+
+            let (ty, mut elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.type_error("Random.shuffle", "Array"))?;
+
+            elems.shuffle(&mut rand::thread_rng());
+            Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
+        })
+    }
+
+    /// `Random.sample(arr, n) -> Result[Array[T], String]`
+    ///
+    /// Picks `n` random elements without replacement.
+    /// Returns `Result.Err` if `n > Array.length(arr)`.
+    pub(crate) fn sample<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Random.sample", &args, 2, ctx.span)?;
+
+            let (ty, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.type_error("Random.sample", "Array"))?;
+
+            let n = Self::to_int(ctx, args[1], "Random.sample")? as usize;
+
+            if n > elems.len() {
+                let msg_str = format!(
+                    "Random.sample: n ({n}) exceeds array length ({})",
+                    elems.len()
+                );
+                let msg = ctx.arena.intern(&msg_str);
+                let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
+                Ok(ctx.result_err(msg_val))
+            } else {
+                let sampled: SmallVec<[ValueId; 4]> = elems
+                    .choose_multiple(&mut rand::thread_rng(), n)
+                    .copied()
+                    .collect();
+                let arr = ctx.arena.add(Value::Array(ty, sampled), ctx.span);
+                Ok(ctx.result_ok(arr))
+            }
+        })
+    }
+
+    /// `Random.uuid() -> String`
+    ///
+    /// Generates a random UUID v4 string.
+    pub(crate) fn uuid<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Random.uuid", &args, 0, ctx.span)?;
+
+            let id = uuid::Uuid::new_v4().to_string();
+            let sid = ctx.arena.intern(&id);
+            Ok(ctx.arena.add(Value::String(sid), ctx.span))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1943,5 +2343,359 @@ mod tests {
 
         let sid = arena.get_string_id(result).unwrap();
         assert_eq!(arena.get_str(sid), Some("bonono"));
+    }
+
+    // Math module tests
+
+    #[tokio::test]
+    async fn math_abs_int() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let n = arena.add(Value::Int(-42), span());
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::abs(&mut ctx, smallvec![n]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Int(42)));
+    }
+
+    #[tokio::test]
+    async fn math_abs_float() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let n = arena.add(Value::Float(OrderedFloat(-3.5)), span());
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::abs(&mut ctx, smallvec![n]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Float(OrderedFloat(3.5))));
+    }
+
+    #[tokio::test]
+    async fn math_min_int() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let a = arena.add(Value::Int(5), span());
+        let b = arena.add(Value::Int(3), span());
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::min(&mut ctx, smallvec![a, b]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Int(3)));
+    }
+
+    #[tokio::test]
+    async fn math_max_float() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let a = arena.add(Value::Float(OrderedFloat(2.5)), span());
+        let b = arena.add(Value::Float(OrderedFloat(7.3)), span());
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::max(&mut ctx, smallvec![a, b]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Float(OrderedFloat(7.3))));
+    }
+
+    #[tokio::test]
+    async fn math_floor() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let n = arena.add(Value::Float(OrderedFloat(3.7)), span());
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::floor(&mut ctx, smallvec![n]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Int(3)));
+    }
+
+    #[tokio::test]
+    async fn math_ceil() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let n = arena.add(Value::Float(OrderedFloat(3.2)), span());
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::ceil(&mut ctx, smallvec![n]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Int(4)));
+    }
+
+    #[tokio::test]
+    async fn math_round() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let n = arena.add(Value::Float(OrderedFloat(3.5)), span());
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::round(&mut ctx, smallvec![n]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Int(4)));
+    }
+
+    #[tokio::test]
+    async fn math_sqrt() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let n = arena.add(Value::Int(16), span());
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::sqrt(&mut ctx, smallvec![n]).await.unwrap()
+        };
+
+        assert_eq!(arena.get(result), Some(&Value::Float(OrderedFloat(4.0))));
+    }
+
+    #[tokio::test]
+    async fn math_sin_cos() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let n = arena.add(Value::Int(0), span());
+
+        let sin_result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::sin(&mut ctx, smallvec![n]).await.unwrap()
+        };
+
+        let cos_result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Math::cos(&mut ctx, smallvec![n]).await.unwrap()
+        };
+
+        assert_eq!(
+            arena.get(sin_result),
+            Some(&Value::Float(OrderedFloat(0.0)))
+        );
+        assert_eq!(
+            arena.get(cos_result),
+            Some(&Value::Float(OrderedFloat(1.0)))
+        );
+    }
+
+    // Random module tests
+
+    #[tokio::test]
+    async fn random_random_in_range() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Random::random(&mut ctx, smallvec![]).await.unwrap()
+        };
+
+        match arena.get(result) {
+            Some(Value::Float(f)) => {
+                assert!(f.0 >= 0.0 && f.0 < 1.0);
+            }
+            _ => panic!("expected Float"),
+        }
+    }
+
+    #[tokio::test]
+    async fn random_int_in_range() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let min = arena.add(Value::Int(1), span());
+        let max = arena.add(Value::Int(10), span());
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Random::int(&mut ctx, smallvec![min, max]).await.unwrap()
+        };
+
+        match arena.get(result) {
+            Some(Value::Int(n)) => {
+                assert!(*n >= 1 && *n <= 10);
+            }
+            _ => panic!("expected Int"),
+        }
+    }
+
+    #[tokio::test]
+    async fn random_bool_returns_bool() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Random::bool(&mut ctx, smallvec![]).await.unwrap()
+        };
+
+        match arena.get(result) {
+            Some(Value::Bool(_)) => {}
+            _ => panic!("expected Bool"),
+        }
+    }
+
+    #[tokio::test]
+    async fn random_choice_some() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr = make_int_array(&mut arena, &mut type_exprs, &[10, 20, 30]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Random::choice(&mut ctx, smallvec![arr]).await.unwrap()
+        };
+
+        // Should be Option.Some(value)
+        match arena.get(result) {
+            Some(Value::Tagged(_, 1, payloads)) => {
+                let inner = arena.get(payloads[0]);
+                match inner {
+                    Some(Value::Int(n)) => {
+                        assert!(*n == 10 || *n == 20 || *n == 30);
+                    }
+                    _ => panic!("expected Int in Some payload"),
+                }
+            }
+            _ => panic!("expected Tagged (Some)"),
+        }
+    }
+
+    #[tokio::test]
+    async fn random_choice_none() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr = make_int_array(&mut arena, &mut type_exprs, &[]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Random::choice(&mut ctx, smallvec![arr]).await.unwrap()
+        };
+
+        // Should be Option.None
+        match arena.get(result) {
+            Some(Value::Tagged(_, 0, payloads)) => {
+                assert!(payloads.is_empty());
+            }
+            _ => panic!("expected Tagged (None)"),
+        }
+    }
+
+    #[tokio::test]
+    async fn random_shuffle() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let arr = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3, 4, 5]);
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Random::shuffle(&mut ctx, smallvec![arr]).await.unwrap()
+        };
+
+        let (_, elems) = arena.get_array(result).expect("expected array");
+        assert_eq!(elems.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn random_uuid() {
+        let mut arena = crate::value::ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+
+        let result = {
+            let mut ctx = PrimCtx {
+                arena: &mut arena,
+                type_exprs: &mut type_exprs,
+                span: span(),
+            };
+            Random::uuid(&mut ctx, smallvec![]).await.unwrap()
+        };
+
+        match arena.get(result) {
+            Some(Value::String(sid)) => {
+                let s = arena.get_str(*sid).expect("string");
+                // UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+                assert_eq!(s.len(), 36);
+                assert_eq!(s.chars().nth(8), Some('-'));
+                assert_eq!(s.chars().nth(14), Some('4'));
+            }
+            _ => panic!("expected String"),
+        }
     }
 }

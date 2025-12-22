@@ -1,0 +1,39 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Random module primitives\n; Tests Random.random, Random.range, Random.int, Random.bool,\n; Random.choice, Random.shuffle, Random.sample, Random.uuid\n;\n; NOTE: Random values are non-deterministic, so we test types and constraints\n\n; ============ Random.random ============\n\nLET rand-val = Random.random()\n; Result is a Float in [0, 1)\nOUTPUT rand-val >= 0.0  ; true\nOUTPUT rand-val < 1.0   ; true\n\n; ============ Random.range ============\n\nLET range-val = Random.range(10.0, 20.0)\nOUTPUT range-val >= 10.0  ; true\nOUTPUT range-val < 20.0   ; true\n\nLET range-neg = Random.range(-5.0, 5.0)\nOUTPUT range-neg >= -5.0  ; true\nOUTPUT range-neg < 5.0    ; true\n\n; ============ Random.int ============\n\nLET int-val = Random.int(1, 10)\nOUTPUT int-val >= 1   ; true\nOUTPUT int-val <= 10  ; true\n\nLET int-single = Random.int(5, 5)\nOUTPUT int-single  ; 5 (only possible value)\n\nLET int-neg = Random.int(-10, -5)\nOUTPUT int-neg >= -10  ; true\nOUTPUT int-neg <= -5   ; true\n\n; ============ Random.bool ============\n\nLET bool-val = Random.bool()\n; Result is a Bool\nOUTPUT bool-val OR NOT bool-val  ; true (tautology to verify it's a bool)\n\n; ============ Random.choice ============\n\nLET choice-arr = [10, 20, 30]\nLET choice-result = Random.choice(choice-arr)\n; Returns Option.Some(element)\nOUTPUT choice-result IS Option.Some(_)  ; true\n\nLET choice-inner = choice-result!\nOUTPUT choice-inner == 10 OR choice-inner == 20 OR choice-inner == 30  ; true\n\n; Empty array returns Option.None\nLET choice-empty = Random.choice([])\nOUTPUT choice-empty IS Option.None  ; true\n\n; ============ Random.shuffle ============\n\nLET shuffle-arr = [1, 2, 3, 4, 5]\nLET shuffled = Random.shuffle(shuffle-arr)\nOUTPUT Array.length(shuffled)  ; 5\n\n; All elements preserved (check contains)\nOUTPUT Array.contains(shuffled, 1)  ; true\nOUTPUT Array.contains(shuffled, 2)  ; true\nOUTPUT Array.contains(shuffled, 3)  ; true\nOUTPUT Array.contains(shuffled, 4)  ; true\nOUTPUT Array.contains(shuffled, 5)  ; true\n\n; Empty shuffle\nLET shuffle-empty = Random.shuffle([])\nOUTPUT Array.length(shuffle-empty)  ; 0\n\n; Single element shuffle\nLET shuffle-single = Random.shuffle([42])\nOUTPUT shuffle-single  ; [42]\n\n; ============ Random.sample ============\n\nLET sample-arr = [1, 2, 3, 4, 5]\n\n; Sample fewer than array length\nLET sample-result = Random.sample(sample-arr, 3)\nOUTPUT sample-result IS Result.Ok(_)  ; true\n\nLET sample-inner = sample-result!\nOUTPUT Array.length(sample-inner)  ; 3\n\n; Sample zero elements\nLET sample-zero = Random.sample(sample-arr, 0)\nOUTPUT sample-zero IS Result.Ok(_)  ; true\nOUTPUT Array.length(sample-zero!)  ; 0\n\n; Sample all elements\nLET sample-all = Random.sample(sample-arr, 5)\nOUTPUT sample-all IS Result.Ok(_)  ; true\nOUTPUT Array.length(sample-all!)  ; 5\n\n; Sample more than array length returns Result.Err\nLET sample-too-many = Random.sample(sample-arr, 10)\nOUTPUT sample-too-many IS Result.Err(_)  ; true\n\n; ============ Random.uuid ============\n\nLET uuid-val = Random.uuid()\n; UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx\nOUTPUT String.length(uuid-val)  ; 36\n\n; Check for hyphens at correct positions\nLET uuid-parts = String.split(uuid-val, \"-\")\nOUTPUT Array.length(uuid-parts)  ; 5\n\n; Check segment lengths: 8-4-4-4-12\nLET uuid-p1 = Array.head(uuid-parts)!\nOUTPUT String.length(uuid-p1)  ; 8\n\n; Two UUIDs should be different\nLET uuid-a = Random.uuid()\nLET uuid-b = Random.uuid()\nOUTPUT uuid-a != uuid-b  ; true (extremely likely)\n\n; ============ Pipeline usage ============\n\nLET pipe-arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\nLET pipe-result = pipe-arr\n  |> Random.shuffle\n  |> Array.length\nOUTPUT pipe-result  ; 10\n"
+---
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+5
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+5
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+0
+[ 42 ]
+TRUE
+3
+TRUE
+0
+TRUE
+5
+TRUE
+36
+5
+8
+TRUE
+10

@@ -1,0 +1,164 @@
+; Math module primitives
+; Tests Math.abs, Math.min, Math.max, Math.floor, Math.ceil,
+; Math.round, Math.sqrt, Math.log, Math.sin, Math.cos
+
+; ============ Math.abs ============
+
+OUTPUT Math.abs(-5)   ; 5
+OUTPUT Math.abs(5)    ; 5
+OUTPUT Math.abs(0)    ; 0
+
+LET neg-int = -42
+OUTPUT Math.abs(neg-int)  ; 42
+
+OUTPUT Math.abs(-3.5)  ; 3.5
+OUTPUT Math.abs(3.5)   ; 3.5
+
+LET neg-float = -2.718
+OUTPUT Math.abs(neg-float)  ; 2.718
+
+; ============ Math.min ============
+
+OUTPUT Math.min(3, 7)   ; 3
+OUTPUT Math.min(7, 3)   ; 3
+OUTPUT Math.min(5, 5)   ; 5
+
+LET min-a = 10
+LET min-b = 20
+OUTPUT Math.min(min-a, min-b)  ; 10
+
+OUTPUT Math.min(-5, -3)  ; -5
+OUTPUT Math.min(-5, 3)   ; -5
+
+; Float min
+OUTPUT Math.min(2.5, 7.3)  ; 2.5
+OUTPUT Math.min(7.3, 2.5)  ; 2.5
+
+; Mixed types coerce to float
+OUTPUT Math.min(3, 2.5)  ; 2.5
+OUTPUT Math.min(2.5, 3)  ; 2.5
+
+; ============ Math.max ============
+
+OUTPUT Math.max(3, 7)   ; 7
+OUTPUT Math.max(7, 3)   ; 7
+OUTPUT Math.max(5, 5)   ; 5
+
+LET max-a = 10
+LET max-b = 20
+OUTPUT Math.max(max-a, max-b)  ; 20
+
+OUTPUT Math.max(-5, -3)  ; -3
+OUTPUT Math.max(-5, 3)   ; 3
+
+; Float max
+OUTPUT Math.max(2.5, 7.3)  ; 7.3
+OUTPUT Math.max(7.3, 2.5)  ; 7.3
+
+; Mixed types coerce to float
+OUTPUT Math.max(3, 7.5)  ; 7.5
+OUTPUT Math.max(7.5, 3)  ; 7.5
+
+; ============ Math.floor ============
+
+OUTPUT Math.floor(3.7)   ; 3
+OUTPUT Math.floor(3.2)   ; 3
+OUTPUT Math.floor(3.0)   ; 3
+OUTPUT Math.floor(-3.2)  ; -4
+OUTPUT Math.floor(-3.7)  ; -4
+
+LET floor-val = 5.9
+OUTPUT Math.floor(floor-val)  ; 5
+
+; Int passes through
+OUTPUT Math.floor(7)  ; 7
+
+; ============ Math.ceil ============
+
+OUTPUT Math.ceil(3.2)   ; 4
+OUTPUT Math.ceil(3.7)   ; 4
+OUTPUT Math.ceil(3.0)   ; 3
+OUTPUT Math.ceil(-3.2)  ; -3
+OUTPUT Math.ceil(-3.7)  ; -3
+
+LET ceil-val = 5.1
+OUTPUT Math.ceil(ceil-val)  ; 6
+
+; Int passes through
+OUTPUT Math.ceil(7)  ; 7
+
+; ============ Math.round ============
+
+OUTPUT Math.round(3.4)   ; 3
+OUTPUT Math.round(3.5)   ; 4
+OUTPUT Math.round(3.6)   ; 4
+OUTPUT Math.round(-3.4)  ; -3
+OUTPUT Math.round(-3.5)  ; -4
+
+LET round-val = 2.7
+OUTPUT Math.round(round-val)  ; 3
+
+; Int passes through
+OUTPUT Math.round(7)  ; 7
+
+; ============ Math.sqrt ============
+
+OUTPUT Math.sqrt(16)   ; 4.0
+OUTPUT Math.sqrt(25)   ; 5.0
+OUTPUT Math.sqrt(2)    ; ~1.414...
+OUTPUT Math.sqrt(0)    ; 0.0
+OUTPUT Math.sqrt(1)    ; 1.0
+
+LET sqrt-val = 9
+OUTPUT Math.sqrt(sqrt-val)  ; 3.0
+
+OUTPUT Math.sqrt(2.25)  ; 1.5
+
+; ============ Math.log ============
+
+OUTPUT Math.log(1)      ; 0.0
+OUTPUT Math.log(2.718281828)  ; ~1.0
+
+LET log-e = 2.718281828
+LET log-result = Math.log(log-e)
+OUTPUT Math.round(log-result)  ; 1 (close to 1.0)
+
+; ============ Math.sin ============
+
+OUTPUT Math.sin(0)  ; 0.0
+
+LET sin-zero = 0
+OUTPUT Math.sin(sin-zero)  ; 0.0
+
+; ============ Math.cos ============
+
+OUTPUT Math.cos(0)  ; 1.0
+
+LET cos-zero = 0
+OUTPUT Math.cos(cos-zero)  ; 1.0
+
+; ============ Chaining operations ============
+
+; abs of min
+LET chain-a = -5
+LET chain-b = -3
+OUTPUT Math.abs(Math.min(chain-a, chain-b))  ; 5
+
+; floor of sqrt
+OUTPUT Math.floor(Math.sqrt(10))  ; 3
+
+; ceil of log
+OUTPUT Math.ceil(Math.log(10))  ; 3
+
+; ============ Pipeline usage ============
+
+LET pipe-val = -16
+LET pipe-result = pipe-val
+  |> Math.abs
+  |> Math.sqrt
+OUTPUT pipe-result  ; 4.0
+
+LET pipe-float = 7.8
+LET pipe-rounded = pipe-float
+  |> Math.round
+OUTPUT pipe-rounded  ; 8
