@@ -87,26 +87,18 @@ impl Prim {
                 Error::runtime_no_span("Object.keys: missing argument")
             })?;
 
-            let obj = ctx.arena.get(obj_id).cloned().ok_or_else(|| {
-                Error::runtime_no_span("Object.keys: invalid argument")
+            let map = ctx.arena.get_object(obj_id).ok_or_else(|| {
+                Error::runtime_no_span("Object.keys expects Object")
             })?;
 
-            match obj {
-                Value::Object(map) => {
-                    let keys: SmallVec<[ValueId; 4]> = map
-                        .keys()
-                        .map(|k| ctx.arena.add(Value::String(*k), ctx.span))
-                        .collect();
+            let keys: SmallVec<[ValueId; 4]> = map
+                .keys()
+                .map(|k| ctx.arena.add(Value::String(*k), ctx.span))
+                .collect();
 
-                    let str_ty = ctx.type_exprs.named(TypeId::STRING);
-                    let arr = Value::Array(str_ty, keys);
-                    Ok(ctx.arena.add(arr, ctx.span))
-                }
-                other => Err(Error::runtime_no_span(format!(
-                    "Object.keys expects Object, got {:?}",
-                    std::mem::discriminant(&other)
-                ))),
-            }
+            let str_ty = ctx.type_exprs.named(TypeId::STRING);
+            let arr = Value::Array(str_ty, keys);
+            Ok(ctx.arena.add(arr, ctx.span))
         })
     }
 
@@ -125,16 +117,11 @@ impl Prim {
                 Error::runtime_no_span("Object.values: missing argument")
             })?;
 
-            let obj = ctx.arena.get(obj_id).cloned().ok_or_else(|| {
-                Error::runtime_no_span("Object.values: invalid argument")
+            let map = ctx.arena.get_object(obj_id).ok_or_else(|| {
+                Error::runtime_no_span("Object.values expects Object")
             })?;
 
-            match obj {
-                Value::Object(map) => values_from_map(ctx, &map),
-                _ => {
-                    Err(Error::runtime_no_span("Object.values expects Object"))
-                }
-            }
+            values_from_map(ctx, &map)
         })
     }
 
@@ -153,16 +140,11 @@ impl Prim {
                 Error::runtime_no_span("Object.entries: missing argument")
             })?;
 
-            let obj = ctx.arena.get(obj_id).cloned().ok_or_else(|| {
-                Error::runtime_no_span("Object.entries: invalid argument")
+            let map = ctx.arena.get_object(obj_id).ok_or_else(|| {
+                Error::runtime_no_span("Object.entries expects Object")
             })?;
 
-            match obj {
-                Value::Object(map) => entries_from_map(ctx, &map),
-                _ => {
-                    Err(Error::runtime_no_span("Object.entries expects Object"))
-                }
-            }
+            entries_from_map(ctx, &map)
         })
     }
 
@@ -181,16 +163,11 @@ impl Prim {
                 Error::runtime_no_span("Object.from-entries: missing argument")
             })?;
 
-            let arr = ctx.arena.get(arr_id).cloned().ok_or_else(|| {
-                Error::runtime_no_span("Object.from-entries: invalid argument")
+            let (_, elems) = ctx.arena.get_array(arr_id).ok_or_else(|| {
+                Error::runtime_no_span("Object.from-entries expects Array")
             })?;
 
-            match arr {
-                Value::Array(_, elems) => from_entries_impl(ctx, &elems),
-                _ => Err(Error::runtime_no_span(
-                    "Object.from-entries expects Array",
-                )),
-            }
+            from_entries_impl(ctx, &elems)
         })
     }
 }

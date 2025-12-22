@@ -330,24 +330,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             .get(1)
             .ok_or_else(|| Error::runtime(span, "Array.map: missing array"))?;
 
-        let arr =
-            self.arena.get(arr_id).cloned().ok_or_else(|| {
-                Error::runtime(span, "Array.map: invalid array")
-            })?;
+        let (_, elems) = self
+            .arena
+            .get_array(arr_id)
+            .ok_or_else(|| Error::type_err(span, "Array.map expects Array"))?;
 
-        match arr {
-            Value::Array(_, elems) => {
-                self.array_map_rec(fn_id, &elems, SmallVec::new(), None, span)
-                    .await
-            }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "Array.map expects Array, got {}",
-                    arr.type_name(&self.registry, &self.type_exprs)
-                ),
-            )),
-        }
+        self.array_map_rec(fn_id, &elems, SmallVec::new(), None, span)
+            .await
     }
 
     /// Recursive helper for `Array.map`.
@@ -425,29 +414,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             Error::runtime(span, "Array.filter: missing array")
         })?;
 
-        let arr = self.arena.get(arr_id).cloned().ok_or_else(|| {
-            Error::runtime(span, "Array.filter: invalid array")
-        })?;
+        let (elem_ty, elems) =
+            self.arena.get_array(arr_id).ok_or_else(|| {
+                Error::type_err(span, "Array.filter expects Array")
+            })?;
 
-        match arr {
-            Value::Array(elem_ty, elems) => {
-                self.array_filter_rec(
-                    pred_id,
-                    elem_ty,
-                    &elems,
-                    SmallVec::new(),
-                    span,
-                )
-                .await
-            }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "Array.filter expects Array, got {}",
-                    arr.type_name(&self.registry, &self.type_exprs)
-                ),
-            )),
-        }
+        self.array_filter_rec(pred_id, elem_ty, &elems, SmallVec::new(), span)
+            .await
     }
 
     /// Recursive helper for `Array.filter`.
@@ -507,23 +480,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             Error::runtime(span, "Array.reduce: missing array")
         })?;
 
-        let arr = self.arena.get(arr_id).cloned().ok_or_else(|| {
-            Error::runtime(span, "Array.reduce: invalid array")
+        let (_, elems) = self.arena.get_array(arr_id).ok_or_else(|| {
+            Error::type_err(span, "Array.reduce expects Array")
         })?;
 
-        match arr {
-            Value::Array(_, elems) => {
-                self.array_reduce_rec(reducer_id, init_id, &elems, span)
-                    .await
-            }
-            _ => Err(Error::type_err(
-                span,
-                format!(
-                    "Array.reduce expects Array, got {}",
-                    arr.type_name(&self.registry, &self.type_exprs)
-                ),
-            )),
-        }
+        self.array_reduce_rec(reducer_id, init_id, &elems, span)
+            .await
     }
 
     /// Recursive helper for `Array.reduce`.

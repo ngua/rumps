@@ -127,6 +127,45 @@ impl ValueArena {
         self.get(id).map(|v| v.base_type(type_exprs))
     }
 
+    /// Get array elements by ID, cloning only the element vector.
+    ///
+    /// Returns `None` if the value doesn't exist or isn't an array.
+    pub(crate) fn get_array(
+        &self,
+        id: ValueId,
+    ) -> Option<(TypeExprId, SmallVec<[ValueId; 4]>)> {
+        match self.get(id)? {
+            Value::Array(ty, elems) => Some((*ty, elems.clone())),
+            _ => None,
+        }
+    }
+
+    /// Get object fields by ID, cloning only the field map.
+    ///
+    /// Returns `None` if the value doesn't exist or isn't an object.
+    pub(crate) fn get_object(
+        &self,
+        id: ValueId,
+    ) -> Option<IndexMap<StringId, ValueId>> {
+        match self.get(id)? {
+            Value::Object(map) => Some(map.clone()),
+            _ => None,
+        }
+    }
+
+    /// Get tuple elements by ID, cloning only the element vector.
+    ///
+    /// Returns `None` if the value doesn't exist or isn't a tuple.
+    pub(crate) fn get_tuple(
+        &self,
+        id: ValueId,
+    ) -> Option<(TypeExprId, SmallVec<[ValueId; 4]>)> {
+        match self.get(id)? {
+            Value::Tuple(ty, elems) => Some((*ty, elems.clone())),
+            _ => None,
+        }
+    }
+
     /// Get the span of a value.
     pub(crate) fn span(&self, id: ValueId) -> Option<Span> {
         self.value_spans.get(id.idx()).copied()
