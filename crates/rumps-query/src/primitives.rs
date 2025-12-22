@@ -1,11 +1,20 @@
-//! Built-in primitive functions (KEYS, VALUES, ENTRIES, FROM-ENTRIES, etc.).
+//! Built-in primitive functions organized by module.
 //!
 //! Primitives are callable built-in functions registered in the environment.
 //! They are implemented as associated functions on [`Prim`], returning a future
 //! that resolves to a `ValueId`. Unlike keywords (GET, SET, KILL), primitives
 //! use standard function call syntax and are case-insensitive.
 //!
-//! # Higher-Order Functions Cannot Go Here
+//! # Module Organization
+//!
+//! Functions are grouped by their RUMPS module:
+//! - `Object`: `keys`, `values`, `entries`, `from-entries`
+//! - `Array`: `map`, `filter`, `reduce` (higher-order; see below)
+//!
+//! When adding a new RUMPS module, add a new `impl Prim` block that contains
+//! any public associated functions and private helpers for that module
+//!
+//! # Primitives with Higher-Order Functions Cannot Go Here
 //!
 //! **Important**: Any function that needs to invoke closures or user-defined
 //! functions (i.e., higher-order functions) MUST be implemented directly on
@@ -16,14 +25,10 @@
 //! closure requires [`Interpreter::invoke_callable`], which isn't available
 //! from [`PrimCtx`].
 //!
-//! **Examples of HoFs that live in `call.rs`:**
-//! - `Array.map` / `Array.filter` / `Array.reduce`
-//!
-//! **Placeholders**: For each HoF, a placeholder function (e.g.,
-//! [`Prim::placeholder`]) is registered here so that
-//! [`Environment::module_fn_exists`] returns `true` during name resolution.
-//! The placeholders are intercepted in [`Interpreter::invoke_module_fn`]
-//! before dispatch and never actually called.
+//! **Placeholders**: For each HoF, a placeholder function is registered here
+//! so that [`Environment::module_fn_exists`] returns `true` during name
+//! resolution. The placeholders are intercepted in
+//! [`Interpreter::invoke_module_fn`] before dispatch and never actually called.
 //!
 //! [`Interpreter`]: crate::interpreter::Interpreter
 //! [`PrimFn`]: crate::env::PrimFn
@@ -44,6 +49,8 @@ use crate::Error;
 /// Each associated function has signature matching `PrimFn`:
 /// `for<'a> fn(&'a mut PrimCtx<'a>, SmallVec<[ValueId; 4]>) -> PrimResult<'a>`
 ///
+/// Functions are organized into `impl` blocks by module (Object, Array, etc.).
+///
 /// # Why associated functions instead of methods on `PrimCtx`?
 ///
 /// `PrimFn` uses a higher-ranked trait bound (HRTB) so it can be stored in a
@@ -54,34 +61,53 @@ use crate::Error;
 /// this by not binding the lifetime in the impl block.
 pub(crate) struct Prim;
 
+// Shared utilities
 impl Prim {
-    /// Placeholder for higher-order Array functions.
+    /// Placeholder for higher-order functions (`Array.map`, `Array.filter`, etc.).
     ///
     /// This should never be called directly; `invoke_module_fn` intercepts
-    /// Array function calls and handles them specially. If this is called,
-    /// it indicates a bug in the dispatch logic.
+    /// these calls and handles them specially. If this is called, it indicates
+    /// a bug in the dispatch logic.
     pub(crate) fn placeholder<'a>(
         _ctx: &'a mut PrimCtx<'a>,
         _args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
             Err(Error::runtime_no_span(
-                "internal error: function placeholder requiring higher-order function \
-                 called directly; this should be intercepted by invoke_module_fn",
+                "internal error: HoF placeholder called directly; \
+                 this should be intercepted by invoke_module_fn",
             ))
         })
     }
 
-    /// `KEYS(obj) -> Array[String]`
+    /// Arity check helper; returns `Err` if wrong number of arguments.
+    fn check_arity(
+        name: &str,
+        args: &SmallVec<[ValueId; 4]>,
+        expected: usize,
+    ) -> crate::Result<()> {
+        if args.len() == expected {
+            Ok(())
+        } else {
+            Err(Error::runtime_no_span(format!(
+                "`{name}` expects {expected} argument(s), got {}",
+                args.len()
+            )))
+        }
+    }
+}
+
+// `Object` module
+impl Prim {
+    /// `Object.keys(obj) -> Array[String]`
     ///
-    /// Returns an array of the object's field names (strings) in iteration
-    /// order.
+    /// Returns an array of the object's field names in iteration order.
     pub(crate) fn keys<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            check_arity("Object.keys", &args, 1)?;
+            Self::check_arity("Object.keys", &args, 1)?;
 
             let obj_id = *args.first().ok_or_else(|| {
                 Error::runtime_no_span("Object.keys: missing argument")
@@ -102,7 +128,7 @@ impl Prim {
         })
     }
 
-    /// `VALUES(obj) -> Result[Array[T], String]`
+    /// `Object.values(obj) -> Result[Array[T], String]`
     ///
     /// Returns `Result.Ok(array)` if all values have the same type,
     /// or `Result.Err(msg)` if values are heterogeneous.
@@ -111,7 +137,7 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            check_arity("Object.values", &args, 1)?;
+            Self::check_arity("Object.values", &args, 1)?;
 
             let obj_id = *args.first().ok_or_else(|| {
                 Error::runtime_no_span("Object.values: missing argument")
@@ -121,11 +147,11 @@ impl Prim {
                 Error::runtime_no_span("Object.values expects Object")
             })?;
 
-            values_from_map(ctx, &map)
+            Self::values_from_map(ctx, &map)
         })
     }
 
-    /// `ENTRIES(obj) -> Result[Array[(String, T)], String]`
+    /// `Object.entries(obj) -> Result[Array[(String, T)], String]`
     ///
     /// Returns `Result.Ok(array)` of `(key, value)` tuples if all values have
     /// the same type, or `Result.Err(msg)` if values are heterogeneous.
@@ -134,7 +160,7 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            check_arity("Object.entries", &args, 1)?;
+            Self::check_arity("Object.entries", &args, 1)?;
 
             let obj_id = *args.first().ok_or_else(|| {
                 Error::runtime_no_span("Object.entries: missing argument")
@@ -144,11 +170,11 @@ impl Prim {
                 Error::runtime_no_span("Object.entries expects Object")
             })?;
 
-            entries_from_map(ctx, &map)
+            Self::entries_from_map(ctx, &map)
         })
     }
 
-    /// `FROM-ENTRIES(arr) -> Object`
+    /// `Object.from-entries(arr) -> Object`
     ///
     /// Constructs an object from an array of `(key, value)` tuples.
     /// Later entries override earlier ones for duplicate keys.
@@ -157,7 +183,7 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            check_arity("Object.from-entries", &args, 1)?;
+            Self::check_arity("Object.from-entries", &args, 1)?;
 
             let arr_id = *args.first().ok_or_else(|| {
                 Error::runtime_no_span("Object.from-entries: missing argument")
@@ -167,180 +193,186 @@ impl Prim {
                 Error::runtime_no_span("Object.from-entries expects Array")
             })?;
 
-            from_entries_impl(ctx, &elems)
+            Self::from_entries_impl(ctx, &elems)
         })
     }
-}
 
-/// Arity check helper; returns `Err` if wrong number of arguments.
-fn check_arity(
-    name: &str,
-    args: &SmallVec<[ValueId; 4]>,
-    expected: usize,
-) -> crate::Result<()> {
-    if args.len() == expected {
-        Ok(())
-    } else {
-        Err(Error::runtime_no_span(format!(
-            "`{name}` expects {expected} argument(s), got {}",
-            args.len()
-        )))
-    }
-}
+    /// Helper: extract values from object map, checking homogeneity.
+    fn values_from_map(
+        ctx: &mut PrimCtx<'_>,
+        map: &IndexMap<StringId, ValueId>,
+    ) -> crate::Result<ValueId> {
+        let maybe_first = map.values().next().copied();
 
-/// Helper: extract values from object map, checking homogeneity.
-fn values_from_map(
-    ctx: &mut PrimCtx<'_>,
-    map: &IndexMap<StringId, ValueId>,
-) -> crate::Result<ValueId> {
-    let maybe_first = map.values().next().copied();
-
-    match maybe_first {
-        None => {
-            let unknown = ctx.type_exprs.named(TypeId::UNKNOWN);
-            let arr = Value::Array(unknown, SmallVec::new());
-            let arr_id = ctx.arena.add(arr, ctx.span);
-            Ok(ctx.result_ok(arr_id))
-        }
-        Some(first_id) => {
-            let first_ty = ctx
-                .arena
-                .base_type_of(first_id, ctx.type_exprs)
-                .ok_or_else(|| {
-                    Error::runtime_no_span("Object.values: invalid value")
-                })?;
-
-            let heterogeneous = map.values().skip(1).any(|vid| {
-                ctx.arena
-                    .base_type_of(*vid, ctx.type_exprs)
-                    .map(|ty| ty != first_ty)
-                    .unwrap_or(true)
-            });
-
-            if heterogeneous {
-                let msg = ctx.arena.intern(
-                    "Object.values: object contains heterogeneous types",
-                );
-                let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
-                Ok(ctx.result_err(msg_val))
-            } else {
-                let vals: SmallVec<[ValueId; 4]> =
-                    map.values().copied().collect();
-                let elem_ty = ctx.type_exprs.named(first_ty);
-                let arr = Value::Array(elem_ty, vals);
+        match maybe_first {
+            None => {
+                let unknown = ctx.type_exprs.named(TypeId::UNKNOWN);
+                let arr = Value::Array(unknown, SmallVec::new());
                 let arr_id = ctx.arena.add(arr, ctx.span);
                 Ok(ctx.result_ok(arr_id))
             }
-        }
-    }
-}
+            Some(first_id) => {
+                let first_ty = ctx
+                    .arena
+                    .base_type_of(first_id, ctx.type_exprs)
+                    .ok_or_else(|| {
+                        Error::runtime_no_span("Object.values: invalid value")
+                    })?;
 
-/// Helper: extract entries from object map as `(key, value)` tuples.
-fn entries_from_map(
-    ctx: &mut PrimCtx<'_>,
-    map: &IndexMap<StringId, ValueId>,
-) -> crate::Result<ValueId> {
-    let maybe_first = map.values().next().copied();
+                let heterogeneous = map.values().skip(1).any(|vid| {
+                    ctx.arena
+                        .base_type_of(*vid, ctx.type_exprs)
+                        .map(|ty| ty != first_ty)
+                        .unwrap_or(true)
+                });
 
-    match maybe_first {
-        None => {
-            let unknown = ctx.type_exprs.named(TypeId::UNKNOWN);
-            let arr = Value::Array(unknown, SmallVec::new());
-            let arr_id = ctx.arena.add(arr, ctx.span);
-            Ok(ctx.result_ok(arr_id))
-        }
-        Some(first_id) => {
-            let first_ty = ctx
-                .arena
-                .base_type_of(first_id, ctx.type_exprs)
-                .ok_or_else(|| {
-                    Error::runtime_no_span("Object.entries: invalid value")
-                })?;
-
-            let heterogeneous = map.values().skip(1).any(|vid| {
-                ctx.arena
-                    .base_type_of(*vid, ctx.type_exprs)
-                    .map(|ty| ty != first_ty)
-                    .unwrap_or(true)
-            });
-
-            if heterogeneous {
-                let msg = ctx.arena.intern(
-                    "Object.entries: object contains heterogeneous types",
-                );
-                let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
-                Ok(ctx.result_err(msg_val))
-            } else {
-                let str_ty = ctx.type_exprs.named(TypeId::STRING);
-                let val_ty = ctx.type_exprs.named(first_ty);
-                let tuple_ty = ctx.type_exprs.tuple(smallvec![str_ty, val_ty]);
-
-                let entries: Vec<_> =
-                    map.iter().map(|(k, v)| (*k, *v)).collect();
-
-                let tuples: SmallVec<[ValueId; 4]> = entries
-                    .iter()
-                    .map(|(k, v)| {
-                        let key_val =
-                            ctx.arena.add(Value::String(*k), ctx.span);
-                        let tup =
-                            Value::Tuple(tuple_ty, smallvec![key_val, *v]);
-                        ctx.arena.add(tup, ctx.span)
-                    })
-                    .collect();
-
-                let arr = Value::Array(tuple_ty, tuples);
-                let arr_id = ctx.arena.add(arr, ctx.span);
-                Ok(ctx.result_ok(arr_id))
-            }
-        }
-    }
-}
-
-/// Helper: build object from array of tuples.
-fn from_entries_impl(
-    ctx: &mut PrimCtx<'_>,
-    elems: &SmallVec<[ValueId; 4]>,
-) -> crate::Result<ValueId> {
-    let mut obj: IndexMap<StringId, ValueId> = IndexMap::new();
-
-    elems.iter().try_for_each(|elem_id| {
-        let elem = ctx.arena.get(*elem_id).ok_or_else(|| {
-            Error::runtime_no_span("Object.from-entries: invalid element")
-        })?;
-
-        match elem {
-            Value::Tuple(_, parts) if parts.len() == 2 => {
-                let key_id = *parts.first().ok_or_else(|| {
-                    Error::runtime_no_span("Object.from-entries: missing key")
-                })?;
-                let val_id = *parts.get(1).ok_or_else(|| {
-                    Error::runtime_no_span("Object.from-entries: missing value")
-                })?;
-
-                let key_val = ctx.arena.get(key_id).ok_or_else(|| {
-                    Error::runtime_no_span("Object.from-entries: invalid key")
-                })?;
-
-                match key_val {
-                    Value::String(s) => {
-                        obj.insert(*s, val_id);
-                        Ok(())
-                    }
-                    _ => Err(Error::runtime_no_span(
-                        "Object.from-entries: tuple key must be String",
-                    )),
+                if heterogeneous {
+                    let msg = ctx.arena.intern(
+                        "Object.values: object contains heterogeneous types",
+                    );
+                    let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
+                    Ok(ctx.result_err(msg_val))
+                } else {
+                    let vals: SmallVec<[ValueId; 4]> =
+                        map.values().copied().collect();
+                    let elem_ty = ctx.type_exprs.named(first_ty);
+                    let arr = Value::Array(elem_ty, vals);
+                    let arr_id = ctx.arena.add(arr, ctx.span);
+                    Ok(ctx.result_ok(arr_id))
                 }
             }
-            _ => Err(Error::runtime_no_span(
-                "Object.from-entries: array must contain (String, T) tuples",
-            )),
         }
-    })?;
+    }
 
-    let result = Value::Object(obj);
-    Ok(ctx.arena.add(result, ctx.span))
+    /// Helper: extract entries from object map as `(key, value)` tuples.
+    fn entries_from_map(
+        ctx: &mut PrimCtx<'_>,
+        map: &IndexMap<StringId, ValueId>,
+    ) -> crate::Result<ValueId> {
+        let maybe_first = map.values().next().copied();
+
+        match maybe_first {
+            None => {
+                let unknown = ctx.type_exprs.named(TypeId::UNKNOWN);
+                let arr = Value::Array(unknown, SmallVec::new());
+                let arr_id = ctx.arena.add(arr, ctx.span);
+                Ok(ctx.result_ok(arr_id))
+            }
+            Some(first_id) => {
+                let first_ty = ctx
+                    .arena
+                    .base_type_of(first_id, ctx.type_exprs)
+                    .ok_or_else(|| {
+                        Error::runtime_no_span("Object.entries: invalid value")
+                    })?;
+
+                let heterogeneous = map.values().skip(1).any(|vid| {
+                    ctx.arena
+                        .base_type_of(*vid, ctx.type_exprs)
+                        .map(|ty| ty != first_ty)
+                        .unwrap_or(true)
+                });
+
+                if heterogeneous {
+                    let msg = ctx.arena.intern(
+                        "Object.entries: object contains heterogeneous types",
+                    );
+                    let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
+                    Ok(ctx.result_err(msg_val))
+                } else {
+                    let str_ty = ctx.type_exprs.named(TypeId::STRING);
+                    let val_ty = ctx.type_exprs.named(first_ty);
+                    let tuple_ty =
+                        ctx.type_exprs.tuple(smallvec![str_ty, val_ty]);
+
+                    let entries: Vec<_> =
+                        map.iter().map(|(k, v)| (*k, *v)).collect();
+
+                    let tuples: SmallVec<[ValueId; 4]> = entries
+                        .iter()
+                        .map(|(k, v)| {
+                            let key_val =
+                                ctx.arena.add(Value::String(*k), ctx.span);
+                            let tup =
+                                Value::Tuple(tuple_ty, smallvec![key_val, *v]);
+                            ctx.arena.add(tup, ctx.span)
+                        })
+                        .collect();
+
+                    let arr = Value::Array(tuple_ty, tuples);
+                    let arr_id = ctx.arena.add(arr, ctx.span);
+                    Ok(ctx.result_ok(arr_id))
+                }
+            }
+        }
+    }
+
+    /// Helper: build object from array of tuples.
+    fn from_entries_impl(
+        ctx: &mut PrimCtx<'_>,
+        elems: &SmallVec<[ValueId; 4]>,
+    ) -> crate::Result<ValueId> {
+        let mut obj: IndexMap<StringId, ValueId> = IndexMap::new();
+
+        elems.iter().try_for_each(|elem_id| {
+            let elem = ctx.arena.get(*elem_id).ok_or_else(|| {
+                Error::runtime_no_span("Object.from-entries: invalid element")
+            })?;
+
+            match elem {
+                Value::Tuple(_, parts) if parts.len() == 2 => {
+                    let key_id = *parts.first().ok_or_else(|| {
+                        Error::runtime_no_span(
+                            "Object.from-entries: missing key",
+                        )
+                    })?;
+                    let val_id = *parts.get(1).ok_or_else(|| {
+                        Error::runtime_no_span(
+                            "Object.from-entries: missing value",
+                        )
+                    })?;
+
+                    let key_val = ctx.arena.get(key_id).ok_or_else(|| {
+                        Error::runtime_no_span(
+                            "Object.from-entries: invalid key",
+                        )
+                    })?;
+
+                    match key_val {
+                        Value::String(s) => {
+                            obj.insert(*s, val_id);
+                            Ok(())
+                        }
+                        _ => Err(Error::runtime_no_span(
+                            "Object.from-entries: tuple key must be String",
+                        )),
+                    }
+                }
+                _ => Err(Error::runtime_no_span(
+                    "Object.from-entries: array must contain (String, T) tuples",
+                )),
+            }
+        })?;
+
+        let result = Value::Object(obj);
+        Ok(ctx.arena.add(result, ctx.span))
+    }
 }
+
+// `Array` module
+
+// NOTE: Array functions (map, filter, reduce) are higher-order and require
+// access to the interpreter's closure invocation machinery. They are
+// implemented in `interpreter/call.rs` and registered here as placeholders.
+//
+// The placeholders ensure `Environment::module_fn_exists` returns true during
+// name resolution. The actual dispatch is intercepted in `invoke_module_fn`.
+
+// (No additional impl block needed; Array functions use `Prim::placeholder`)
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -406,7 +438,7 @@ mod tests {
         match val {
             Value::Array(_, elems) => {
                 assert_eq!(elems.len(), 2);
-                let first_id = elems.get(0).copied().unwrap();
+                let first_id = elems.first().copied().unwrap();
                 let first = arena.get(first_id).unwrap();
                 match first {
                     Value::String(s) => {
@@ -450,7 +482,7 @@ mod tests {
         // Should be Result.Ok(array)
         match val {
             Value::Tagged(_, 0, payload) => {
-                let arr_id = payload.get(0).copied().unwrap();
+                let arr_id = payload.first().copied().unwrap();
                 let arr = arena.get(arr_id).unwrap();
                 match arr {
                     Value::Array(_, elems) => assert_eq!(elems.len(), 2),
