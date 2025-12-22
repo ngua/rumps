@@ -90,14 +90,18 @@ impl Prim {
         name: &str,
         args: &SmallVec<[ValueId; 4]>,
         expected: usize,
+        span: crate::Span,
     ) -> crate::Result<()> {
         if args.len() == expected {
             Ok(())
         } else {
-            Err(Error::runtime_no_span(format!(
-                "`{name}` expects {expected} argument(s), got {}",
-                args.len()
-            )))
+            Err(Error::runtime(
+                span,
+                format!(
+                    "`{name}` expects {expected} argument(s), got {}",
+                    args.len()
+                ),
+            ))
         }
     }
 }
@@ -112,11 +116,12 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Object.keys", &args, 1)?;
+            Self::check_arity("Object.keys", &args, 1, ctx.span)?;
 
-            let map = ctx.arena.get_object(args[0]).ok_or_else(|| {
-                Error::runtime_no_span("Object.keys expects Object")
-            })?;
+            let map = ctx
+                .arena
+                .get_object(args[0])
+                .ok_or_else(|| ctx.error("Object.keys expects Object"))?;
 
             let keys: SmallVec<[ValueId; 4]> = map
                 .keys()
@@ -138,11 +143,12 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Object.values", &args, 1)?;
+            Self::check_arity("Object.values", &args, 1, ctx.span)?;
 
-            let map = ctx.arena.get_object(args[0]).ok_or_else(|| {
-                Error::runtime_no_span("Object.values expects Object")
-            })?;
+            let map = ctx
+                .arena
+                .get_object(args[0])
+                .ok_or_else(|| ctx.error("Object.values expects Object"))?;
 
             Self::values_from_map(ctx, &map)
         })
@@ -157,11 +163,12 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Object.entries", &args, 1)?;
+            Self::check_arity("Object.entries", &args, 1, ctx.span)?;
 
-            let map = ctx.arena.get_object(args[0]).ok_or_else(|| {
-                Error::runtime_no_span("Object.entries expects Object")
-            })?;
+            let map = ctx
+                .arena
+                .get_object(args[0])
+                .ok_or_else(|| ctx.error("Object.entries expects Object"))?;
 
             Self::entries_from_map(ctx, &map)
         })
@@ -176,10 +183,10 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Object.from-entries", &args, 1)?;
+            Self::check_arity("Object.from-entries", &args, 1, ctx.span)?;
 
             let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                Error::runtime_no_span("Object.from-entries expects Array")
+                ctx.error("Object.from-entries expects Array")
             })?;
 
             Self::from_entries_impl(ctx, &elems)
@@ -204,9 +211,7 @@ impl Prim {
                 let first_ty = ctx
                     .arena
                     .base_type_of(first_id, ctx.type_exprs)
-                    .ok_or_else(|| {
-                        Error::runtime_no_span("Object.values: invalid value")
-                    })?;
+                    .ok_or_else(|| ctx.error("Object.values: invalid value"))?;
 
                 let heterogeneous = map.values().skip(1).any(|vid| {
                     ctx.arena
@@ -252,7 +257,7 @@ impl Prim {
                     .arena
                     .base_type_of(first_id, ctx.type_exprs)
                     .ok_or_else(|| {
-                        Error::runtime_no_span("Object.entries: invalid value")
+                        ctx.error("Object.entries: invalid value")
                     })?;
 
                 let heterogeneous = map.values().skip(1).any(|vid| {
@@ -304,40 +309,33 @@ impl Prim {
         let mut obj: IndexMap<StringId, ValueId> = IndexMap::new();
 
         elems.iter().try_for_each(|elem_id| {
-            let elem = ctx.arena.get(*elem_id).ok_or_else(|| {
-                Error::runtime_no_span("Object.from-entries: invalid element")
-            })?;
+            let elem = ctx
+                .arena
+                .get(*elem_id)
+                .ok_or_else(|| ctx.error("Object.from-entries: invalid element"))?;
 
             match elem {
                 Value::Tuple(_, parts) if parts.len() == 2 => {
-                    let key_id = *parts.first().ok_or_else(|| {
-                        Error::runtime_no_span(
-                            "Object.from-entries: missing key",
-                        )
-                    })?;
-                    let val_id = *parts.get(1).ok_or_else(|| {
-                        Error::runtime_no_span(
-                            "Object.from-entries: missing value",
-                        )
-                    })?;
+                    // Safe: we checked len() == 2 above
+                    let key_id = parts[0];
+                    let val_id = parts[1];
 
-                    let key_val = ctx.arena.get(key_id).ok_or_else(|| {
-                        Error::runtime_no_span(
-                            "Object.from-entries: invalid key",
-                        )
-                    })?;
+                    let key_val = ctx
+                        .arena
+                        .get(key_id)
+                        .ok_or_else(|| ctx.error("Object.from-entries: invalid key"))?;
 
                     match key_val {
                         Value::String(s) => {
                             obj.insert(*s, val_id);
                             Ok(())
                         }
-                        _ => Err(Error::runtime_no_span(
+                        _ => Err(ctx.error(
                             "Object.from-entries: tuple key must be String",
                         )),
                     }
                 }
-                _ => Err(Error::runtime_no_span(
+                _ => Err(ctx.error(
                     "Object.from-entries: array must contain (String, T) tuples",
                 )),
             }
@@ -358,11 +356,12 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.length", &args, 1)?;
+            Self::check_arity("Array.length", &args, 1, ctx.span)?;
 
-            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                Error::runtime_no_span("Array.length expects Array")
-            })?;
+            let (_, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.error("Array.length expects Array"))?;
 
             Ok(ctx.arena.add(Value::Int(elems.len() as i64), ctx.span))
         })
@@ -376,13 +375,11 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.push", &args, 2)?;
+            Self::check_arity("Array.push", &args, 2, ctx.span)?;
 
             let (ty, mut elems) =
                 ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    Error::runtime_no_span(
-                        "Array.push expects Array as first argument",
-                    )
+                    ctx.error("Array.push expects Array as first argument")
                 })?;
 
             elems.push(args[1]);
@@ -399,12 +396,12 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.pop", &args, 1)?;
+            Self::check_arity("Array.pop", &args, 1, ctx.span)?;
 
-            let (ty, mut elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    Error::runtime_no_span("Array.pop expects Array")
-                })?;
+            let (ty, mut elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.error("Array.pop expects Array"))?;
 
             elems.pop();
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
@@ -420,11 +417,12 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.head", &args, 1)?;
+            Self::check_arity("Array.head", &args, 1, ctx.span)?;
 
-            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                Error::runtime_no_span("Array.head expects Array")
-            })?;
+            let (_, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.error("Array.head expects Array"))?;
 
             Ok(match elems.first() {
                 Some(first) => ctx.option_some(*first),
@@ -442,12 +440,12 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.tail", &args, 1)?;
+            Self::check_arity("Array.tail", &args, 1, ctx.span)?;
 
-            let (ty, elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    Error::runtime_no_span("Array.tail expects Array")
-                })?;
+            let (ty, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.error("Array.tail expects Array"))?;
 
             let tail: SmallVec<[ValueId; 4]> =
                 elems.get(1..).map(SmallVec::from_slice).unwrap_or_default();
@@ -463,12 +461,12 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.reverse", &args, 1)?;
+            Self::check_arity("Array.reverse", &args, 1, ctx.span)?;
 
-            let (ty, elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    Error::runtime_no_span("Array.reverse expects Array")
-                })?;
+            let (ty, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.error("Array.reverse expects Array"))?;
 
             let reversed: SmallVec<[ValueId; 4]> =
                 elems.iter().rev().copied().collect();
@@ -479,44 +477,143 @@ impl Prim {
     /// `Array.sort(arr) -> Array[T]`
     ///
     /// Returns a new array with elements sorted in ascending order.
-    /// Elements must be comparable (Int, Float, String, Bool).
+    /// Supports all comparable types including sum types, tuples, and arrays.
+    ///
+    /// Ordering semantics:
+    /// - Scalars: natural ordering (`false < true`, numeric, lexicographic)
+    /// - `Option`: `None < Some`
+    /// - `Result`: `Err < Ok` (success sorts after failure)
+    /// - User-defined sum types: declaration order (variant index)
+    /// - Tuples/Arrays: lexicographic
+    /// - Objects: lexicographic by (key, value) pairs
     pub(crate) fn sort<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
-        /// Sort key for `Array.sort`; wraps comparable value types.
+        use crate::value::TypeExprArena;
+
+        /// Sort key for `Array.sort`; supports all value types recursively.
         ///
-        /// Note that the actual sorting compares homogeneously typed array
-        /// elements, but we need to support sorting any type
+        /// Variant order determines comparison precedence for heterogeneous
+        /// arrays (if they were allowed). For homogeneous arrays, only one
+        /// variant is used.
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
         enum SortKey<'a> {
             Bool(bool),
             Int(i64),
             Float(OrderedFloat<f64>),
-            String(&'a str),
             Char(char),
+            String(&'a str),
+            /// Tagged value: (sort_priority, recursive payloads)
+            ///
+            /// sort_priority handles semantic ordering:
+            /// - Option: None=0, Some=1 (ascending → Some > None)
+            /// - Result: Err=0, Ok=1 (ascending → Ok > Err)
+            /// - Others: variant index (declaration order)
+            Tagged(i16, Vec<SortKey<'a>>),
+            Tuple(Vec<SortKey<'a>>),
+            Array(Vec<SortKey<'a>>),
+            Object(Vec<(&'a str, SortKey<'a>)>),
         }
 
         impl<'a> SortKey<'a> {
-            fn from_value(v: &Value, arena: &'a ValueArena) -> Option<Self> {
+            fn from_value(
+                v: &Value,
+                arena: &'a ValueArena,
+                type_exprs: &TypeExprArena,
+            ) -> Option<Self> {
                 match v {
                     Value::Bool(b) => Some(Self::Bool(*b)),
                     Value::Int(n) => Some(Self::Int(*n)),
                     Value::Float(f) => Some(Self::Float(*f)),
-                    Value::String(sid) => arena.get_str(*sid).map(Self::String),
                     Value::Char(c) => Some(Self::Char(*c)),
-                    _ => None,
+                    Value::String(sid) => arena.get_str(*sid).map(Self::String),
+
+                    Value::Tagged(ty_expr, idx, payloads) => {
+                        let priority =
+                            Self::sort_priority(ty_expr, *idx, type_exprs);
+                        let sub_keys: Option<Vec<SortKey<'a>>> = payloads
+                            .iter()
+                            .map(|vid| {
+                                arena.get(*vid).and_then(|pv| {
+                                    Self::from_value(pv, arena, type_exprs)
+                                })
+                            })
+                            .collect();
+                        sub_keys.map(|keys| Self::Tagged(priority, keys))
+                    }
+
+                    Value::Tuple(_, elems) => {
+                        let sub_keys: Option<Vec<SortKey<'a>>> = elems
+                            .iter()
+                            .map(|vid| {
+                                arena.get(*vid).and_then(|ev| {
+                                    Self::from_value(ev, arena, type_exprs)
+                                })
+                            })
+                            .collect();
+                        sub_keys.map(Self::Tuple)
+                    }
+
+                    Value::Array(_, elems) => {
+                        let sub_keys: Option<Vec<SortKey<'a>>> = elems
+                            .iter()
+                            .map(|vid| {
+                                arena.get(*vid).and_then(|ev| {
+                                    Self::from_value(ev, arena, type_exprs)
+                                })
+                            })
+                            .collect();
+                        sub_keys.map(Self::Array)
+                    }
+
+                    Value::Object(map) => {
+                        let sub_keys: Option<Vec<(&'a str, SortKey<'a>)>> = map
+                            .iter()
+                            .map(|(k, vid)| {
+                                arena.get_str(*k).and_then(|key_str| {
+                                    arena.get(*vid).and_then(|val| {
+                                        Self::from_value(val, arena, type_exprs)
+                                            .map(|sk| (key_str, sk))
+                                    })
+                                })
+                            })
+                            .collect();
+                        sub_keys.map(Self::Object)
+                    }
+
+                    // Closures, functions, and module functions are not comparable
+                    Value::Closure { .. }
+                    | Value::Function { .. }
+                    | Value::ModuleFn { .. } => None,
+                }
+            }
+
+            /// Compute sort priority for tagged values.
+            ///
+            /// - Option: None=0, Some=1 (Some > None)
+            /// - Result: Err=0, Ok=1 (Ok > Err; note: idx 0=Ok, idx 1=Err)
+            /// - Others: variant index (declaration order)
+            fn sort_priority(
+                ty_expr: &crate::value::TypeExprId,
+                idx: u8,
+                type_exprs: &TypeExprArena,
+            ) -> i16 {
+                match type_exprs.base_type(*ty_expr) {
+                    Some(TypeId::OPTION) => idx as i16, // None=0, Some=1
+                    Some(TypeId::RESULT) => 1 - idx as i16, // Ok(0)→1, Err(1)→0
+                    _ => idx as i16,
                 }
             }
         }
 
         Box::pin(async move {
-            Self::check_arity("Array.sort", &args, 1)?;
+            Self::check_arity("Array.sort", &args, 1, ctx.span)?;
 
-            let (ty, elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    Error::runtime_no_span("Array.sort expects Array")
-                })?;
+            let (ty, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .ok_or_else(|| ctx.error("Array.sort expects Array"))?;
 
             // Collect (ValueId, sortable key) pairs
             let mut pairs: Vec<(ValueId, SortKey)> = elems
@@ -524,15 +621,11 @@ impl Prim {
                 .map(|vid| {
                     ctx.arena
                         .get(*vid)
-                        .ok_or_else(|| {
-                            Error::runtime_no_span(
-                                "Array.sort: invalid element",
-                            )
-                        })
+                        .ok_or_else(|| ctx.error("Array.sort: invalid element"))
                         .and_then(|v| {
-                            SortKey::from_value(v, ctx.arena)
+                            SortKey::from_value(v, ctx.arena, ctx.type_exprs)
                                 .ok_or_else(|| {
-                                    Error::runtime_no_span(
+                                    ctx.error(
                                         "Array.sort: element is not comparable",
                                     )
                                 })
@@ -558,13 +651,11 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.slice", &args, 3)?;
+            Self::check_arity("Array.slice", &args, 3, ctx.span)?;
 
             let (ty, elems) =
                 ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    Error::runtime_no_span(
-                        "Array.slice expects Array as first argument",
-                    )
+                    ctx.error("Array.slice expects Array as first argument")
                 })?;
 
             let start = ctx
@@ -574,9 +665,7 @@ impl Prim {
                     Value::Int(n) => Some(*n),
                     _ => None,
                 })
-                .ok_or_else(|| {
-                    Error::runtime_no_span("Array.slice: start must be Int")
-                })?;
+                .ok_or_else(|| ctx.error("Array.slice: start must be Int"))?;
 
             let end = ctx
                 .arena
@@ -585,9 +674,7 @@ impl Prim {
                     Value::Int(n) => Some(*n),
                     _ => None,
                 })
-                .ok_or_else(|| {
-                    Error::runtime_no_span("Array.slice: end must be Int")
-                })?;
+                .ok_or_else(|| ctx.error("Array.slice: end must be Int"))?;
 
             let len = elems.len() as i64;
             let start_idx = start.max(0).min(len) as usize;
@@ -610,17 +697,16 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.contains", &args, 2)?;
+            Self::check_arity("Array.contains", &args, 2, ctx.span)?;
 
             let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                Error::runtime_no_span(
-                    "Array.contains expects Array as first argument",
-                )
+                ctx.error("Array.contains expects Array as first argument")
             })?;
 
-            let needle = ctx.arena.get(args[1]).ok_or_else(|| {
-                Error::runtime_no_span("Array.contains: invalid value")
-            })?;
+            let needle = ctx
+                .arena
+                .get(args[1])
+                .ok_or_else(|| ctx.error("Array.contains: invalid value"))?;
 
             let found = elems.iter().any(|elem_id| {
                 ctx.arena.get(*elem_id).is_some_and(|v| v == needle)
@@ -639,33 +725,26 @@ impl Prim {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.concat", &args, 2)?;
+            Self::check_arity("Array.concat", &args, 2, ctx.span)?;
 
             let (ty_a, elems_a) =
                 ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    Error::runtime_no_span(
-                        "Array.concat expects Array as first argument",
-                    )
+                    ctx.error("Array.concat expects Array as first argument")
                 })?;
 
             let (ty_b, elems_b) =
                 ctx.arena.get_array(args[1]).ok_or_else(|| {
-                    Error::runtime_no_span(
-                        "Array.concat expects Array as second argument",
-                    )
+                    ctx.error("Array.concat expects Array as second argument")
                 })?;
 
             // Check element types match using the stored TypeExprId
-            let types_compatible = ctx.type_exprs.eq(ty_a, ty_b);
-
-            if types_compatible {
+            if ctx.type_exprs.eq(ty_a, ty_b) {
                 let mut combined = elems_a;
                 combined.extend(elems_b);
                 Ok(ctx.arena.add(Value::Array(ty_a, combined), ctx.span))
             } else {
-                Err(Error::runtime_no_span(
-                    "Array.concat: arrays have different element types",
-                ))
+                Err(ctx
+                    .error("Array.concat: arrays have different element types"))
             }
         })
     }

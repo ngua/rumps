@@ -165,6 +165,11 @@ impl PrimCtx<'_> {
         let none = Value::none(opt_ty);
         self.arena.add(none, self.span)
     }
+
+    /// Create a runtime error with span information.
+    pub(crate) fn error(&self, msg: impl Into<String>) -> crate::Error {
+        crate::Error::runtime(self.span, msg)
+    }
 }
 
 /// A built-in primitive function.
