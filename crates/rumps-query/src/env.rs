@@ -11,8 +11,10 @@ use std::collections::HashMap;
 ///
 /// This is the single source of truth for which module names are recognized
 /// during resolution and registered at interpreter startup.
-pub(crate) const BUILTIN_MODULE_NAMES: &[&str] =
-    &["Object", "Array", "String", "Math", "Random", "Map", "Time"];
+pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
+    "Object", "Array", "String", "Math", "Random", "Map", "Time", "Option",
+    "Result",
+];
 
 use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
@@ -348,7 +350,7 @@ impl Environment {
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
         use crate::primitives::{
-            Array, Map, Math, Object, Prim, Random, Str, Time,
+            Array, Map, Math, Object, Opt, Prim, Random, Res, Str, Time,
         };
 
         self.modules.insert(
@@ -459,6 +461,27 @@ impl Environment {
                 ("hour", Time::hour),
                 ("minute", Time::minute),
                 ("second", Time::second),
+            ]),
+        );
+
+        self.modules.insert(
+            "Option".to_string(),
+            Module::from_fns(&[
+                // Higher-order function placeholder
+                ("map", Opt::placeholder),
+                // Regular primitives
+                ("unwrap-or", Opt::unwrap_or),
+            ]),
+        );
+
+        self.modules.insert(
+            "Result".to_string(),
+            Module::from_fns(&[
+                // Higher-order function placeholders
+                ("map", Res::placeholder),
+                ("map-err", Res::placeholder),
+                // Regular primitives
+                ("unwrap-or", Res::unwrap_or),
             ]),
         );
     }

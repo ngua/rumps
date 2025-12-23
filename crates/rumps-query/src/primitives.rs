@@ -2235,6 +2235,110 @@ impl Time {
     }
 }
 
+/// Primitives for the `Option` module.
+///
+/// Higher-order function `Option.map` is intercepted in `invoke_module_fn`
+/// (see `call.rs`); only a placeholder is registered here.
+pub(crate) struct Opt;
+
+impl Prim for Opt {}
+
+impl Opt {
+    /// `Option.unwrap-or(o, default) -> T`
+    ///
+    /// Returns the inner value if `Some`, otherwise returns `default`.
+    pub(crate) fn unwrap_or<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Option.unwrap-or", &args, 2, ctx.span)?;
+
+            let opt = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
+                ctx.runtime_error("Option.unwrap-or: invalid value")
+            })?;
+
+            let is_some = opt.is_some(ctx.type_exprs);
+            let is_none = opt.is_none(ctx.type_exprs);
+
+            match (is_some, is_none) {
+                (true, false) => {
+                    // Option.Some(v) - return the inner value
+                    match opt {
+                        Value::Tagged(_, _, ref payloads) => {
+                            payloads.first().copied().ok_or_else(|| {
+                                ctx.runtime_error(
+                                    "Option.unwrap-or: Some has no payload",
+                                )
+                            })
+                        }
+                        _ => Err(ctx.runtime_error(
+                            "Option.unwrap-or: expected Tagged value",
+                        )),
+                    }
+                }
+                (false, true) => {
+                    // Option.None - return the default
+                    Ok(args[1])
+                }
+                _ => Err(ctx.type_error("Option.unwrap-or", "Option")),
+            }
+        })
+    }
+}
+
+/// Primitives for the `Result` module.
+///
+/// Higher-order functions `Result.map` and `Result.map-err` are intercepted
+/// in `invoke_module_fn` (see `call.rs`); only placeholders are registered here.
+pub(crate) struct Res;
+
+impl Prim for Res {}
+
+impl Res {
+    /// `Result.unwrap-or(r, default) -> T`
+    ///
+    /// Returns the inner value if `Ok`, otherwise returns `default`.
+    pub(crate) fn unwrap_or<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Result.unwrap-or", &args, 2, ctx.span)?;
+
+            let res = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
+                ctx.runtime_error("Result.unwrap-or: invalid value")
+            })?;
+
+            let is_ok = res.is_ok(ctx.type_exprs);
+            let is_err = res.is_err(ctx.type_exprs);
+
+            match (is_ok, is_err) {
+                (true, false) => {
+                    // Result.Ok(v) - return the inner value
+                    match res {
+                        Value::Tagged(_, _, ref payloads) => {
+                            payloads.first().copied().ok_or_else(|| {
+                                ctx.runtime_error(
+                                    "Result.unwrap-or: Ok has no payload",
+                                )
+                            })
+                        }
+                        _ => Err(ctx.runtime_error(
+                            "Result.unwrap-or: expected Tagged value",
+                        )),
+                    }
+                }
+                (false, true) => {
+                    // Result.Err - return the default
+                    Ok(args[1])
+                }
+                _ => Err(ctx.type_error("Result.unwrap-or", "Result")),
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

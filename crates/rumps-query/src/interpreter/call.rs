@@ -1,7 +1,7 @@
 //! Function and closure calling.
 
 use async_recursion::async_recursion;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
@@ -289,6 +289,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             ["Array", "map"] => self.array_map(args, span).await,
             ["Array", "filter"] => self.array_filter(args, span).await,
             ["Array", "reduce"] => self.array_reduce(args, span).await,
+            ["Option", "map"] => self.option_map(args, span).await,
+            ["Result", "map"] => self.result_map(args, span).await,
+            ["Result", "map-err"] => self.result_map_err(args, span).await,
             _ => {
                 // Regular module function
                 let prim =
@@ -507,6 +510,237 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .await?;
                 self.array_reduce_rec(reducer_id, new_acc, tail, span).await
             }
+        }
+    }
+
+    /// `Option.map(opt, fn) -> Option`
+    ///
+    /// If `opt` is `Some(v)`, applies `fn` to `v` and wraps result in `Some`.
+    /// If `opt` is `None`, returns `None`.
+    #[async_recursion]
+    async fn option_map(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        (args.len() == 2).then_some(()).ok_or_else(|| {
+            Error::runtime(
+                span,
+                format!("Option.map expects 2 arguments, got {}", args.len()),
+            )
+        })?;
+
+        let opt_id = *args.first().ok_or_else(|| {
+            Error::runtime(span, "Option.map: missing option")
+        })?;
+        let fn_id = *args.get(1).ok_or_else(|| {
+            Error::runtime(span, "Option.map: missing function")
+        })?;
+
+        let opt = self
+            .arena
+            .get(opt_id)
+            .ok_or_else(|| Error::runtime(span, "Option.map: invalid value"))?;
+
+        let is_some = opt.is_some(&self.type_exprs);
+        let is_none = opt.is_none(&self.type_exprs);
+
+        match (is_some, is_none) {
+            (true, false) => {
+                // Option.Some(v) - apply fn and wrap in Some
+                let inner = match opt {
+                    Value::Tagged(_, _, payloads) => {
+                        payloads.first().copied().ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                "Option.map: Some has no payload",
+                            )
+                        })?
+                    }
+                    _ => Err(Error::runtime(
+                        span,
+                        "Option.map: expected Tagged value",
+                    ))?,
+                };
+
+                let result_id =
+                    self.invoke_callable(fn_id, &[inner], span).await?;
+                self.arena.get(result_id).ok_or_else(|| {
+                    Error::runtime(span, "Option.map: invalid result")
+                })?;
+
+                // Wrap in Some with appropriate type
+                let result_ty = self
+                    .arena
+                    .base_type_of(result_id, &self.type_exprs)
+                    .unwrap_or(TypeId::UNKNOWN);
+                let val_ty = self.type_exprs.named(result_ty);
+                let opt_ty =
+                    self.type_exprs.app(TypeId::OPTION, smallvec![val_ty]);
+                Ok(Value::some(opt_ty, result_id))
+            }
+            (false, true) => {
+                // Option.None - return None
+                let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+                let opt_ty =
+                    self.type_exprs.app(TypeId::OPTION, smallvec![unknown]);
+                Ok(Value::none(opt_ty))
+            }
+            _ => Err(Error::type_err(span, "Option.map: expected Option")),
+        }
+    }
+
+    /// `Result.map(res, fn) -> Result`
+    ///
+    /// If `res` is `Ok(v)`, applies `fn` to `v` and wraps result in `Ok`.
+    /// If `res` is `Err(e)`, returns `Err(e)` unchanged.
+    #[async_recursion]
+    async fn result_map(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        (args.len() == 2).then_some(()).ok_or_else(|| {
+            Error::runtime(
+                span,
+                format!("Result.map expects 2 arguments, got {}", args.len()),
+            )
+        })?;
+
+        let res_id = *args.first().ok_or_else(|| {
+            Error::runtime(span, "Result.map: missing result")
+        })?;
+        let fn_id = *args.get(1).ok_or_else(|| {
+            Error::runtime(span, "Result.map: missing function")
+        })?;
+
+        let res = self
+            .arena
+            .get(res_id)
+            .ok_or_else(|| Error::runtime(span, "Result.map: invalid value"))?;
+
+        let is_ok = res.is_ok(&self.type_exprs);
+        let is_err = res.is_err(&self.type_exprs);
+
+        match (is_ok, is_err) {
+            (true, false) => {
+                // Result.Ok(v) - apply fn and wrap in Ok
+                let inner = match res {
+                    Value::Tagged(_, _, payloads) => {
+                        payloads.first().copied().ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                "Result.map: Ok has no payload",
+                            )
+                        })?
+                    }
+                    _ => Err(Error::runtime(
+                        span,
+                        "Result.map: expected Tagged value",
+                    ))?,
+                };
+
+                let result_id =
+                    self.invoke_callable(fn_id, &[inner], span).await?;
+                self.arena.get(result_id).ok_or_else(|| {
+                    Error::runtime(span, "Result.map: invalid result")
+                })?;
+
+                // Wrap in Ok with appropriate type
+                let result_ty = self
+                    .arena
+                    .base_type_of(result_id, &self.type_exprs)
+                    .unwrap_or(TypeId::UNKNOWN);
+                let val_ty = self.type_exprs.named(result_ty);
+                let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+                let res_ty = self
+                    .type_exprs
+                    .app(TypeId::RESULT, smallvec![val_ty, unknown]);
+                Ok(Value::ok(res_ty, result_id))
+            }
+            (false, true) => {
+                // Result.Err(e) - return unchanged (clone needed for passthrough)
+                Ok(res.clone())
+            }
+            _ => Err(Error::type_err(span, "Result.map: expected Result")),
+        }
+    }
+
+    /// `Result.map-err(res, fn) -> Result`
+    ///
+    /// If `res` is `Err(e)`, applies `fn` to `e` and wraps result in `Err`.
+    /// If `res` is `Ok(v)`, returns `Ok(v)` unchanged.
+    #[async_recursion]
+    async fn result_map_err(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        (args.len() == 2).then_some(()).ok_or_else(|| {
+            Error::runtime(
+                span,
+                format!(
+                    "Result.map-err expects 2 arguments, got {}",
+                    args.len()
+                ),
+            )
+        })?;
+
+        let res_id = *args.first().ok_or_else(|| {
+            Error::runtime(span, "Result.map-err: missing result")
+        })?;
+        let fn_id = *args.get(1).ok_or_else(|| {
+            Error::runtime(span, "Result.map-err: missing function")
+        })?;
+
+        let res = self.arena.get(res_id).ok_or_else(|| {
+            Error::runtime(span, "Result.map-err: invalid value")
+        })?;
+
+        let is_ok = res.is_ok(&self.type_exprs);
+        let is_err = res.is_err(&self.type_exprs);
+
+        match (is_ok, is_err) {
+            (true, false) => {
+                // Result.Ok(v) - return unchanged (clone needed for passthrough)
+                Ok(res.clone())
+            }
+            (false, true) => {
+                // Result.Err(e) - apply fn and wrap in Err
+                let inner = match res {
+                    Value::Tagged(_, _, payloads) => {
+                        payloads.first().copied().ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                "Result.map-err: Err has no payload",
+                            )
+                        })?
+                    }
+                    _ => Err(Error::runtime(
+                        span,
+                        "Result.map-err: expected Tagged value",
+                    ))?,
+                };
+
+                let result_id =
+                    self.invoke_callable(fn_id, &[inner], span).await?;
+                self.arena.get(result_id).ok_or_else(|| {
+                    Error::runtime(span, "Result.map-err: invalid result")
+                })?;
+
+                // Wrap in Err with appropriate type
+                let result_ty = self
+                    .arena
+                    .base_type_of(result_id, &self.type_exprs)
+                    .unwrap_or(TypeId::UNKNOWN);
+                let err_ty = self.type_exprs.named(result_ty);
+                let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+                let res_ty = self
+                    .type_exprs
+                    .app(TypeId::RESULT, smallvec![unknown, err_ty]);
+                Ok(Value::err(res_ty, result_id))
+            }
+            _ => Err(Error::type_err(span, "Result.map-err: expected Result")),
         }
     }
 

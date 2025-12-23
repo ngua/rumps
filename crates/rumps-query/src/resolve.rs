@@ -92,20 +92,13 @@ fn resolve_expr(
         // - If base is `Var(Type)` with zero-arity variant -> `Variant(Type, field, [])`
         // - If full path starts with a module -> `Path([...])`
         // - Otherwise -> leave as Field (runtime field access)
+        //
+        // Important: Type variants take priority over module paths. This allows
+        // `Option.None` and `Result.Err` to work even though `Option` and `Result`
+        // are also module names (for `Option.map`, `Result.map`, etc.).
         Expr::Field(base_id, field) => {
-            // First, try to collect the full path (for nested module support)
-            let full_path = collect_path_segments(ast, id);
-
-            // Check if this is a module path (first segment is a module)
-            let is_module_path = full_path
-                .as_ref()
-                .and_then(|segs: &SmallVec<[String; 4]>| segs.first())
-                .is_some_and(|first| is_builtin_module(first));
-
-            if is_module_path {
-                full_path.map(Expr::Path)
-            } else {
-                // Check if it's a simple Type.Variant pattern
+            // First check if it's a simple Type.Variant pattern (takes priority)
+            let variant_expr =
                 ast.get_expr(*base_id).and_then(|base| match base {
                     Expr::Var(name) => {
                         let name_id = arena.intern(name);
@@ -127,8 +120,20 @@ fn resolve_expr(
                         })
                     }
                     _ => None,
-                })
-            }
+                });
+
+            // If it's a type variant, use that
+            variant_expr.or_else(|| {
+                // Otherwise, check if this is a module path
+                let full_path = collect_path_segments(ast, id);
+
+                let is_module_path = full_path
+                    .as_ref()
+                    .and_then(|segs: &SmallVec<[String; 4]>| segs.first())
+                    .is_some_and(|first| is_builtin_module(first));
+
+                is_module_path.then(|| full_path.map(Expr::Path)).flatten()
+            })
         }
 
         // Function calls: only resolve variant constructors

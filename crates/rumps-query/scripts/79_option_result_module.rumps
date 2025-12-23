@@ -1,0 +1,93 @@
+; Option and Result module primitives
+; Tests Option.unwrap-or, Option.map, Result.unwrap-or, Result.map, Result.map-err
+
+; ============ Option.unwrap-or ============
+
+LET some-val = Option.Some(42)
+LET none-val = Option.None
+
+OUTPUT Option.unwrap-or(some-val, 0)  ; 42
+OUTPUT Option.unwrap-or(none-val, 0)  ; 0
+OUTPUT Option.unwrap-or(Option.Some("hello"), "default")  ; "hello"
+OUTPUT Option.unwrap-or(Option.None, "default")  ; "default"
+
+; ============ Option.map ============
+
+LET double = x => x * 2
+LET to-upper = s => String.upper(s)
+
+OUTPUT Option.map(Option.Some(21), double)  ; Some(42)
+OUTPUT Option.map(Option.None, double)  ; None
+OUTPUT Option.map(Option.Some("hello"), to-upper)  ; Some("HELLO")
+OUTPUT Option.map(Option.None, to-upper)  ; None
+
+; Inline closure
+OUTPUT Option.map(Option.Some(5), x => x + 1)  ; Some(6)
+
+; Chaining map
+LET opt = Option.Some(10)
+LET mapped = Option.map(opt, x => x * 2)
+OUTPUT mapped  ; Some(20)
+OUTPUT Option.map(mapped, x => x + 5)  ; Some(25)
+
+; ============ Result.unwrap-or ============
+
+LET ok-val = Result.Ok(100)
+LET err-val = Result.Err("something went wrong")
+
+OUTPUT Result.unwrap-or(ok-val, 0)  ; 100
+OUTPUT Result.unwrap-or(err-val, 0)  ; 0
+OUTPUT Result.unwrap-or(Result.Ok("success"), "fallback")  ; "success"
+OUTPUT Result.unwrap-or(Result.Err("fail"), "fallback")  ; "fallback"
+
+; ============ Result.map ============
+
+OUTPUT Result.map(Result.Ok(21), double)  ; Ok(42)
+OUTPUT Result.map(Result.Err("err"), double)  ; Err("err")
+OUTPUT Result.map(Result.Ok("hello"), to-upper)  ; Ok("HELLO")
+OUTPUT Result.map(Result.Err("err"), to-upper)  ; Err("err")
+
+; Inline closure
+OUTPUT Result.map(Result.Ok(5), x => x + 1)  ; Ok(6)
+
+; ============ Result.map-err ============
+
+LET add-prefix = e => "Error: " ++ e
+
+OUTPUT Result.map-err(Result.Err("failed"), add-prefix)  ; Err("Error: failed")
+OUTPUT Result.map-err(Result.Ok(42), add-prefix)  ; Ok(42)
+OUTPUT Result.map-err(Result.Err("oops"), e => String.upper(e))  ; Err("OOPS")
+OUTPUT Result.map-err(Result.Ok("ok"), e => String.upper(e))  ; Ok("ok")
+
+; ============ Combining operations ============
+
+; Option.map then unwrap-or
+LET maybe-num = Option.Some(10)
+LET doubled-or-zero = Option.unwrap-or(Option.map(maybe-num, x => x * 2), 0)
+OUTPUT doubled-or-zero  ; 20
+
+LET no-num = Option.None
+LET doubled-or-zero-none = Option.unwrap-or(Option.map(no-num, x => x * 2), 0)
+OUTPUT doubled-or-zero-none  ; 0
+
+; Result.map then unwrap-or
+LET res-ok = Result.Ok(5)
+LET res-mapped = Result.unwrap-or(Result.map(res-ok, x => x * 3), 0)
+OUTPUT res-mapped  ; 15
+
+LET res-err = Result.Err("bad")
+LET res-err-mapped = Result.unwrap-or(Result.map(res-err, x => x * 3), 0)
+OUTPUT res-err-mapped  ; 0
+
+; ============ Type variants still work ============
+
+; Ensure Option.None and Result.Ok etc. still work as type constructors
+LET opt-none = Option.None
+LET opt-some = Option.Some(1)
+OUTPUT opt-none IS Option.None  ; true
+OUTPUT opt-some IS Option.Some(_)  ; true
+
+LET res-ok-check = Result.Ok(1)
+LET res-err-check = Result.Err("x")
+OUTPUT res-ok-check IS Result.Ok(_)  ; true
+OUTPUT res-err-check IS Result.Err(_)  ; true

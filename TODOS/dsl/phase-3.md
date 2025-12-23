@@ -979,7 +979,7 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
   **NOTE**: `Random.choice` returns `Option` to handle empty arrays; `Random.sample` returns `Result` if `n > length`
   **Integration test**: `76_random_module.rumps`
 
-- [ ] `Option` — Option operations
+- [x] `Option` — Option operations
   | Function                 | Description          | Example                                   |
   |--------------------------|----------------------|-------------------------------------------|
   | `Option.unwrap-or(o, d)` | Get value or default | `Option.unwrap-or(None, 0)` → `0`         |
@@ -987,7 +987,7 @@ For e.g. getting `Array` values, use e.g. `ValueArena::get_array` to avoid unnec
   **NOTE**: `Option.unwrap` is not needed; use the `!` postfix operator (already implemented)
   **NOTE**: `Option.{is-none, is-some}` is not needed; use the `IS` primitive
 
-- [ ] `Result` — Result operations
+- [x] `Result` — Result operations
   | Function                 | Description          | Example                                   |
   |--------------------------|----------------------|-------------------------------------------|
   | `Result.unwrap-or(r, d)` | Get value or default | `Result.unwrap-or(Err("x"), 0)` → `0`     |
