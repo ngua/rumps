@@ -122,6 +122,8 @@ impl TypeId {
     pub(crate) const MAP: Self = Self(10);
     /// Builtin type: `Time`.
     pub(crate) const TIME: Self = Self(11);
+    /// Builtin type: `Range`.
+    pub(crate) const RANGE: Self = Self(12);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -428,6 +430,20 @@ pub(crate) enum Value {
     /// - `Object.keys` → `["Object", "keys"]`
     /// - `Math.Trig.sin` → `["Math", "Trig", "sin"]`
     ModuleFn { path: SmallVec<[StringId; 4]> },
+
+    /// A lazy integer range.
+    ///
+    /// Created by `start..end` (exclusive) or `start..=end` (inclusive).
+    /// Does not allocate; used with collection operations like `Array.map`.
+    ///
+    /// - `start`: the first value in the range
+    /// - `end`: the bound (exclusive or inclusive depending on `inclusive`)
+    /// - `inclusive`: `true` for `..=`, `false` for `..`
+    Range {
+        start: i64,
+        end: i64,
+        inclusive: bool,
+    },
 }
 
 impl Value {
@@ -463,6 +479,18 @@ impl Value {
             Self::Closure { .. }
             | Self::Function { .. }
             | Self::ModuleFn { .. } => true,
+            // Ranges are truthy if non-empty
+            Self::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                if *inclusive {
+                    start <= end
+                } else {
+                    start < end
+                }
+            }
         }
     }
 
@@ -495,6 +523,7 @@ impl Value {
             Self::Closure { .. } => "Closure",
             Self::Function { .. } => "Function",
             Self::ModuleFn { .. } => "ModuleFn",
+            Self::Range { .. } => "Range",
         }
     }
 
@@ -581,6 +610,7 @@ impl Value {
             Self::Closure { .. }
             | Self::Function { .. }
             | Self::ModuleFn { .. } => TypeId::UNKNOWN,
+            Self::Range { .. } => TypeId::RANGE,
         }
     }
 }
@@ -598,6 +628,7 @@ pub(crate) enum BuiltinType {
     Tuple,
     Map,
     Time,
+    Range,
 }
 
 impl BuiltinType {
@@ -613,6 +644,7 @@ impl BuiltinType {
             Self::Tuple => "Tuple",
             Self::Map => "Map",
             Self::Time => "Time",
+            Self::Range => "Range",
         }
     }
 }
@@ -1084,6 +1116,18 @@ impl TypeRegistry {
             ))
         })?;
 
+        // Range at index 12
+        let range_name = arena.intern("Range");
+        let range =
+            self.register(TypeDef::Builtin(BuiltinType::Range), range_name);
+        (range == TypeId::RANGE).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Range at index {}, expected {}",
+                range.0,
+                TypeId::RANGE.0
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -1154,7 +1198,7 @@ mod tests {
         let mut arena = ValueArena::new();
         let reg = TypeRegistry::new(&mut arena).unwrap();
 
-        assert_eq!(reg.len(), 12); // 8 primitives + Option + Result + Tuple
+        assert_eq!(reg.len(), 13); // 8 primitives + Option + Result + Tuple + Range
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

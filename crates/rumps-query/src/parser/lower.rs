@@ -233,6 +233,11 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let inner_id = lower_expr(ast, *inner)?;
             Expr::Unwrap(inner_id)
         }
+        cst::ExprKind::Range(start, end, inclusive) => {
+            let start_id = lower_expr(ast, *start)?;
+            let end_id = lower_expr(ast, *end)?;
+            Expr::Range(start_id, end_id, inclusive)
+        }
     };
     ast.add_expr(e, span)
 }

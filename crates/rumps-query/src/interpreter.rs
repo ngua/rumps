@@ -285,6 +285,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 let val = self.eval(inner).await?;
                 self.unwrap(val, span)
             }
+            Expr::Range(start_id, end_id, inclusive) => {
+                self.range(start_id, end_id, inclusive, span).await
+            }
         }
     }
 }

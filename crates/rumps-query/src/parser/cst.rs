@@ -160,6 +160,13 @@ pub(crate) enum ExprKind {
     /// Extracts the payload from `Option.Some` or `Result.Ok`; produces a
     /// runtime error for `Option.None` or `Result.Err`.
     Unwrap(Box<Expr>),
+
+    /// Range: `start..end` (exclusive) or `start..=end` (inclusive).
+    ///
+    /// - First `Box<Expr>`: start expression
+    /// - Second `Box<Expr>`: end expression
+    /// - `bool`: `true` for inclusive (`..=`), `false` for exclusive (`..`)
+    Range(Box<Expr>, Box<Expr>, bool),
 }
 
 /// A CST statement node with inline span.

@@ -27,8 +27,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| rumps_types::Value::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            // Serialize to JSON for complex values (closures and module fns
-            // will error in jsonify)
+            // Serialize to JSON for complex values (closures, module fns,
+            // and ranges will error in jsonify)
             Value::Array(_, _)
             | Value::Object(_)
             | Value::Tuple(_, _)
@@ -36,7 +36,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
             | Value::Function { .. }
-            | Value::ModuleFn { .. } => {
+            | Value::ModuleFn { .. }
+            | Value::Range { .. } => {
                 self.jsonify(v).map(rumps_types::Value::Json)
             }
             Value::Time(t) => {
@@ -170,6 +171,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .join(".");
                 format!("<{path_str}>")
             }
+            Value::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                if *inclusive {
+                    format!("{start}..={end}")
+                } else {
+                    format!("{start}..{end}")
+                }
+            }
         }
     }
 
@@ -266,6 +278,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ModuleFn { .. } => Err(Error::runtime_no_span(
                 "module functions cannot be serialized to JSON",
             )),
+            Value::Range { .. } => Err(Error::runtime_no_span(
+                "ranges cannot be serialized to JSON",
+            )),
         }
     }
 
@@ -345,7 +360,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
             | Value::Function { .. }
-            | Value::ModuleFn { .. } => Err(Error::runtime_no_span(
+            | Value::ModuleFn { .. }
+            | Value::Range { .. } => Err(Error::runtime_no_span(
                 "complex values cannot be used as subscripts",
             )),
         }

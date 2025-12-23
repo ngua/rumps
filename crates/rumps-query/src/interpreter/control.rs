@@ -317,4 +317,48 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
         }
     }
+
+    /// Evaluate a range expression.
+    ///
+    /// Creates a lazy `Value::Range` from start and end expressions.
+    /// Both must evaluate to integers.
+    #[async_recursion]
+    pub(super) async fn range(
+        &mut self,
+        start_id: ExprId,
+        end_id: ExprId,
+        inclusive: bool,
+        span: Span,
+    ) -> Result<Value> {
+        let start_val = self.eval(start_id).await?;
+        let end_val = self.eval(end_id).await?;
+
+        let start = match &start_val {
+            Value::Int(n) => *n,
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "range start must be Int; got {}",
+                    start_val.type_name(&self.registry, &self.type_exprs)
+                ),
+            ))?,
+        };
+
+        let end = match &end_val {
+            Value::Int(n) => *n,
+            _ => Err(Error::type_err(
+                span,
+                format!(
+                    "range end must be Int; got {}",
+                    end_val.type_name(&self.registry, &self.type_exprs)
+                ),
+            ))?,
+        };
+
+        Ok(Value::Range {
+            start,
+            end,
+            inclusive,
+        })
+    }
 }

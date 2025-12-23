@@ -626,7 +626,8 @@ impl Parser {
             let pow = Self::pow_expr(unary);
             let mul = Self::mul_expr(pow);
             let add = Self::add_expr(mul);
-            let cmp = Self::cmp_expr(add);
+            let range = Self::range_expr(add);
+            let cmp = Self::cmp_expr(range);
             let is = Self::is_expr(cmp);
             let as_cast = Self::as_expr(is);
             let read = Self::read_expr(as_cast);
@@ -856,6 +857,44 @@ impl Parser {
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
             |(first, rest), span| Self::fold_binary(first, rest, span),
+        )
+    }
+
+    /// Range: `start..end` (exclusive) or `start..=end` (inclusive)
+    ///
+    /// Creates a lazy range iterator. Binds looser than additive operators
+    /// but tighter than comparison: `1..n + 1` parses as `1..(n + 1)`.
+    fn range_expr(
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        // Parse the range operator and whether it's inclusive
+        let range_op = choice((
+            just(Token::DotDotEquals).to(true), // ..= inclusive
+            just(Token::DotDot).to(false),      // .. exclusive
+        ));
+
+        let range_rhs = Self::opt_newlines()
+            .ignore_then(range_op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+
+        operand.clone().then(range_rhs.or_not()).map_with_span(
+            |(start, suffix), span| match suffix {
+                Some((inclusive, end)) => {
+                    let range_span = Span::new(start.span.start, end.span.end);
+                    cst::Expr::new(
+                        cst::ExprKind::Range(
+                            Box::new(start),
+                            Box::new(end),
+                            inclusive,
+                        ),
+                        range_span,
+                    )
+                }
+                None => start.with_span(span),
+            },
         )
     }
 
@@ -2546,6 +2585,78 @@ mod tests {
                 assert_eq!(arms.len(), 3);
             }
             _ => panic!("expected Match"),
+        }
+    }
+
+    #[test]
+    fn parse_range_exclusive() {
+        let (ast, id) = parse_expr_ok("1..10");
+        match ast.get_expr(id) {
+            Some(Expr::Range(start, end, inclusive)) => {
+                assert!(!inclusive);
+                assert_eq!(
+                    ast.get_expr(*start),
+                    Some(&Expr::Literal(Literal::Int(1)))
+                );
+                assert_eq!(
+                    ast.get_expr(*end),
+                    Some(&Expr::Literal(Literal::Int(10)))
+                );
+            }
+            _ => panic!("expected Range"),
+        }
+    }
+
+    #[test]
+    fn parse_range_inclusive() {
+        let (ast, id) = parse_expr_ok("1..=10");
+        match ast.get_expr(id) {
+            Some(Expr::Range(start, end, inclusive)) => {
+                assert!(inclusive);
+                assert_eq!(
+                    ast.get_expr(*start),
+                    Some(&Expr::Literal(Literal::Int(1)))
+                );
+                assert_eq!(
+                    ast.get_expr(*end),
+                    Some(&Expr::Literal(Literal::Int(10)))
+                );
+            }
+            _ => panic!("expected Range"),
+        }
+    }
+
+    #[test]
+    fn parse_range_precedence() {
+        // `1..n + 1` should parse as `1..(n + 1)` (range binds looser than additive)
+        let (ast, id) = parse_expr_ok("1..n + 1");
+        match ast.get_expr(id) {
+            Some(Expr::Range(start, end, inclusive)) => {
+                assert!(!inclusive);
+                assert_eq!(
+                    ast.get_expr(*start),
+                    Some(&Expr::Literal(Literal::Int(1)))
+                );
+                // end should be Binary(n, Add, 1)
+                match ast.get_expr(*end) {
+                    Some(Expr::Binary(_, BinOp::Add, _)) => (),
+                    _ => panic!("expected Binary Add in range end"),
+                }
+            }
+            _ => panic!("expected Range"),
+        }
+    }
+
+    #[test]
+    fn parse_range_with_vars() {
+        let (ast, id) = parse_expr_ok("start..end");
+        match ast.get_expr(id) {
+            Some(Expr::Range(s, e, inclusive)) => {
+                assert!(!inclusive);
+                assert_eq!(ast.get_expr(*s), Some(&Expr::Var("start".into())));
+                assert_eq!(ast.get_expr(*e), Some(&Expr::Var("end".into())));
+            }
+            _ => panic!("expected Range"),
         }
     }
 }

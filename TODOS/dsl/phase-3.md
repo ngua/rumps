@@ -1184,23 +1184,7 @@ Register `Time` module in `Environment::register_builtins`:
 
 Creates a lazy range of integers.
 
-```rumps
-1..10           ; range from 1 to 10 (inclusive? exclusive? TBD)
-0..n            ; range from 0 to n
-Array.map(x => x * x, 1..100)
-```
-
-- [ ] Add `Token::DotDot` to lexer
-- [ ] Add `Expr::Range(ExprId, ExprId)` to AST (start, end)
-- [ ] Add `Value::Range { start: i64, end: i64 }` variant
-- [ ] Decide: inclusive (`1..=10`) vs exclusive (`1..10`) end
-  - Recommend: `..` is exclusive (like Rust), `..=` is inclusive
-- [ ] Implement range creation in interpreter
-- [ ] Implement iteration protocol for ranges (for use with pipeline/closures)
-- [ ] Add unit tests
-- [ ] Add integration test script
-
-#### 8.1 Range Semantics
+#### Range Semantics
 
 Ranges use Rust-style exclusive end by default:
 
@@ -1211,12 +1195,30 @@ Ranges use Rust-style exclusive end by default:
 
 Ranges are lazy; they don't allocate an array. They're iterable values that work with `|>` and collection operations.
 
+#### Range Examples and Precedence
+
 Range precedence is higher than comparison but lower than additive:
 
 ```rumps
 1..n + 1       ; 1..(n + 1), not (1..n) + 1
 0..len - 1     ; 0..(len - 1)
 ```
+
+```rumps
+1..10           ; range from 1 to 10 (exclusive)
+0..n            ; range from 0 to n (exclusive)
+0..=n           ; range from 0 to n (inclusive)
+Array.map(x => x * x, 1..100)
+```
+
+- [x] Add `Token::DotDot` to lexer (exclusive `1..10`)
+- [x] Add `Token::DotDotEquals` to lexer (inclusive `1..=10`)
+- [x] Add `ExprKind::Range` to CST and `Expr::Range(ExprId, ExprId, bool)` to AST
+- [x] Add `Value::Range { start: i64, end: i64, inclusive: bool }` variant
+- [x] Implement range creation in interpreter
+- [x] Implement iteration protocol for ranges (works with `Array.map`, `Array.filter`, `Array.reduce`)
+- [x] Add unit tests
+- [x] Add integration test script (`81_range.rumps`)
 
 ---
 

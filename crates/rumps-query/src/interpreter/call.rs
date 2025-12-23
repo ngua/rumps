@@ -311,7 +311,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// `Array.map(fn, arr) -> Array`
     ///
-    /// Applies `fn` to each element of `arr`, returning a new array.
+    /// Applies `fn` to each element of `arr` (or range), returning a new array.
     /// Validates that all results have the same type (homogeneous array).
     #[async_recursion]
     async fn array_map(
@@ -329,17 +329,111 @@ impl<I: IoContext> Interpreter<'_, I> {
         let fn_id = *args.first().ok_or_else(|| {
             Error::runtime(span, "Array.map: missing function")
         })?;
-        let arr_id = *args
+        let iterable_id = *args
             .get(1)
             .ok_or_else(|| Error::runtime(span, "Array.map: missing array"))?;
 
-        let (_, elems) = self
-            .arena
-            .get_array(arr_id)
-            .ok_or_else(|| Error::type_err(span, "Array.map expects Array"))?;
+        // Match on reference; only clone the `SmallVec`, not the whole `Value`
+        match self.arena.get(iterable_id) {
+            Some(Value::Array(_, elems)) => {
+                let elems = elems.clone();
+                self.array_map_rec(fn_id, &elems, SmallVec::new(), None, span)
+                    .await
+            }
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => self.range_map(fn_id, *start, *end, *inclusive, span).await,
+            Some(other) => Err(Error::type_err(
+                span,
+                format!(
+                    "Array.map expects Array or Range; got {}",
+                    other.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+            None => Err(Error::runtime(span, "Array.map: invalid iterable")),
+        }
+    }
 
-        self.array_map_rec(fn_id, &elems, SmallVec::new(), None, span)
+    /// Map over a range without allocating the entire range.
+    #[async_recursion]
+    async fn range_map(
+        &mut self,
+        fn_id: ValueId,
+        start: i64,
+        end: i64,
+        inclusive: bool,
+        span: Span,
+    ) -> Result<Value> {
+        let actual_end = if inclusive { end + 1 } else { end };
+        self.range_map_rec(
+            fn_id,
+            start,
+            actual_end,
+            SmallVec::new(),
+            None,
+            span,
+        )
+        .await
+    }
+
+    #[async_recursion]
+    async fn range_map_rec(
+        &mut self,
+        fn_id: ValueId,
+        current: i64,
+        end: i64,
+        acc: SmallVec<[ValueId; 4]>,
+        first_ty: Option<TypeId>,
+        span: Span,
+    ) -> Result<Value> {
+        if current >= end {
+            let elem_ty = first_ty
+                .map(|ty| self.type_exprs.named(ty))
+                .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
+            Ok(Value::Array(elem_ty, acc))
+        } else {
+            // Create the integer value for this iteration
+            let int_val = Value::Int(current);
+            let int_id = self.arena.add(int_val, span);
+
+            let result = self.invoke_callable(fn_id, &[int_id], span).await?;
+            let result_ty = self
+                .arena
+                .base_type_of(result, &self.type_exprs)
+                .ok_or_else(|| {
+                Error::runtime(span, "Array.map: invalid result")
+            })?;
+
+            // Check homogeneity
+            let checked_ty = first_ty.map_or_else(
+                || Ok(result_ty),
+                |fty| {
+                    if fty == result_ty {
+                        Ok(fty)
+                    } else {
+                        Err(Error::runtime(
+                            span,
+                            "Array.map: function produces heterogeneous \
+                             results; all elements must have the same type",
+                        ))
+                    }
+                },
+            )?;
+
+            let mut new_acc = acc;
+            new_acc.push(result);
+            self.range_map_rec(
+                fn_id,
+                current + 1,
+                end,
+                new_acc,
+                Some(checked_ty),
+                span,
+            )
             .await
+        }
     }
 
     /// Recursive helper for `Array.map`.
@@ -396,7 +490,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// `Array.filter(predicate, arr) -> Array`
     ///
     /// Returns a new array containing only elements for which `predicate`
-    /// returns a truthy value.
+    /// returns a truthy value. Also works with Range values.
     #[async_recursion]
     async fn array_filter(
         &mut self,
@@ -413,17 +507,102 @@ impl<I: IoContext> Interpreter<'_, I> {
         let pred_id = *args.first().ok_or_else(|| {
             Error::runtime(span, "Array.filter: missing predicate")
         })?;
-        let arr_id = *args.get(1).ok_or_else(|| {
+        let iterable_id = *args.get(1).ok_or_else(|| {
             Error::runtime(span, "Array.filter: missing array")
         })?;
 
-        let (elem_ty, elems) =
-            self.arena.get_array(arr_id).ok_or_else(|| {
-                Error::type_err(span, "Array.filter expects Array")
-            })?;
+        // Match on reference; only clone the `SmallVec`, not the whole `Value`
+        match self.arena.get(iterable_id) {
+            Some(Value::Array(elem_ty, elems)) => {
+                let (elem_ty, elems) = (*elem_ty, elems.clone());
+                self.array_filter_rec(
+                    pred_id,
+                    elem_ty,
+                    &elems,
+                    SmallVec::new(),
+                    span,
+                )
+                .await
+            }
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                self.range_filter(pred_id, *start, *end, *inclusive, span)
+                    .await
+            }
+            Some(other) => Err(Error::type_err(
+                span,
+                format!(
+                    "Array.filter expects Array or Range; got {}",
+                    other.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+            None => Err(Error::runtime(span, "Array.filter: invalid iterable")),
+        }
+    }
 
-        self.array_filter_rec(pred_id, elem_ty, &elems, SmallVec::new(), span)
+    /// Filter a range without allocating the entire range.
+    #[async_recursion]
+    async fn range_filter(
+        &mut self,
+        pred_id: ValueId,
+        start: i64,
+        end: i64,
+        inclusive: bool,
+        span: Span,
+    ) -> Result<Value> {
+        let actual_end = if inclusive { end + 1 } else { end };
+        let int_ty = self.type_exprs.named(TypeId::INT);
+        self.range_filter_rec(
+            pred_id,
+            start,
+            actual_end,
+            int_ty,
+            SmallVec::new(),
+            span,
+        )
+        .await
+    }
+
+    #[async_recursion]
+    async fn range_filter_rec(
+        &mut self,
+        pred_id: ValueId,
+        current: i64,
+        end: i64,
+        elem_ty: TypeExprId,
+        acc: SmallVec<[ValueId; 4]>,
+        span: Span,
+    ) -> Result<Value> {
+        if current >= end {
+            Ok(Value::Array(elem_ty, acc))
+        } else {
+            let int_val = Value::Int(current);
+            let int_id = self.arena.add(int_val, span);
+
+            let result = self.invoke_callable(pred_id, &[int_id], span).await?;
+            let result_val =
+                self.arena.get(result).cloned().ok_or_else(|| {
+                    Error::runtime(span, "Array.filter: invalid result")
+                })?;
+
+            let keep = result_val.is_truthy(&self.arena, &self.type_exprs);
+            let mut new_acc = acc;
+            if keep {
+                new_acc.push(int_id);
+            }
+            self.range_filter_rec(
+                pred_id,
+                current + 1,
+                end,
+                elem_ty,
+                new_acc,
+                span,
+            )
             .await
+        }
     }
 
     /// Recursive helper for `Array.filter`.
@@ -460,6 +639,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// `Array.reduce(reducer, init, arr) -> T`
     ///
     /// Folds left: `reducer(reducer(init, arr[0]), arr[1])...`
+    /// Also works with Range values.
     #[async_recursion]
     async fn array_reduce(
         &mut self,
@@ -479,16 +659,77 @@ impl<I: IoContext> Interpreter<'_, I> {
         let init_id = *args.get(1).ok_or_else(|| {
             Error::runtime(span, "Array.reduce: missing initial value")
         })?;
-        let arr_id = *args.get(2).ok_or_else(|| {
+        let iterable_id = *args.get(2).ok_or_else(|| {
             Error::runtime(span, "Array.reduce: missing array")
         })?;
 
-        let (_, elems) = self.arena.get_array(arr_id).ok_or_else(|| {
-            Error::type_err(span, "Array.reduce expects Array")
-        })?;
+        // Match on reference; only clone the `SmallVec`, not the whole `Value`
+        match self.arena.get(iterable_id) {
+            Some(Value::Array(_, elems)) => {
+                let elems = elems.clone();
+                self.array_reduce_rec(reducer_id, init_id, &elems, span)
+                    .await
+            }
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                self.range_reduce(
+                    reducer_id, init_id, *start, *end, *inclusive, span,
+                )
+                .await
+            }
+            Some(other) => Err(Error::type_err(
+                span,
+                format!(
+                    "Array.reduce expects Array or Range; got {}",
+                    other.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+            None => Err(Error::runtime(span, "Array.reduce: invalid iterable")),
+        }
+    }
 
-        self.array_reduce_rec(reducer_id, init_id, &elems, span)
+    /// Reduce over a range without allocating the entire range.
+    #[async_recursion]
+    async fn range_reduce(
+        &mut self,
+        reducer_id: ValueId,
+        init_id: ValueId,
+        start: i64,
+        end: i64,
+        inclusive: bool,
+        span: Span,
+    ) -> Result<Value> {
+        let actual_end = if inclusive { end + 1 } else { end };
+        self.range_reduce_rec(reducer_id, init_id, start, actual_end, span)
             .await
+    }
+
+    #[async_recursion]
+    async fn range_reduce_rec(
+        &mut self,
+        reducer_id: ValueId,
+        acc_id: ValueId,
+        current: i64,
+        end: i64,
+        span: Span,
+    ) -> Result<Value> {
+        if current >= end {
+            self.arena.get(acc_id).cloned().ok_or_else(|| {
+                Error::runtime(span, "Array.reduce: invalid accumulator")
+            })
+        } else {
+            let int_val = Value::Int(current);
+            let int_id = self.arena.add(int_val, span);
+
+            let new_acc = self
+                .invoke_callable(reducer_id, &[acc_id, int_id], span)
+                .await?;
+            self.range_reduce_rec(reducer_id, new_acc, current + 1, end, span)
+                .await
+        }
     }
 
     /// Recursive helper for `Array.reduce`.

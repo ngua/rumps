@@ -50,6 +50,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Module functions don't have a simple type expression
             Value::ModuleFn { .. } => self.type_exprs.named(TypeId::UNKNOWN),
+            Value::Range { .. } => self.type_exprs.named(TypeId::RANGE),
         }
     }
 
@@ -277,6 +278,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Closure { .. }
             | Value::Function { .. }
             | Value::ModuleFn { .. } => false,
+            Value::Range { .. } => type_id == TypeId::RANGE,
         }
     }
 

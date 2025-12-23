@@ -381,6 +381,7 @@ impl Lexer<'_> {
             just("||").to(Token::PipePipe),
             just("|>").to(Token::Pipe),
             just("...").to(Token::DotDotDot),
+            just("..=").to(Token::DotDotEquals),
             just("..").to(Token::DotDot),
             just("->").to(Token::Arrow),
             just("=>").to(Token::FatArrow),
@@ -1006,6 +1007,53 @@ mod tests {
                 Token::Ident("b".into()),
                 Token::Eof
             ]
+        );
+    }
+
+    #[test]
+    fn range_exclusive() {
+        let tokens = lex_ok("1..10");
+        assert_eq!(
+            tokens,
+            vec![Token::Int(1), Token::DotDot, Token::Int(10), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn range_inclusive() {
+        let tokens = lex_ok("1..=10");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Int(1),
+                Token::DotDotEquals,
+                Token::Int(10),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn range_with_identifiers() {
+        let tokens = lex_ok("start..end");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("start".into()),
+                Token::DotDot,
+                Token::Ident("end".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn range_vs_spread() {
+        // `...` should be spread, not `..` + `.`
+        let tokens = lex_ok("...x");
+        assert_eq!(
+            tokens,
+            vec![Token::DotDotDot, Token::Ident("x".into()), Token::Eof]
         );
     }
 }

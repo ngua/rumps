@@ -629,6 +629,16 @@ pub(crate) enum Expr {
     /// runtime error for `Option.None` or `Result.Err(e)` (where `e` is
     /// stringified in the error message).
     Unwrap(ExprId),
+
+    /// Range: `start..end` (exclusive) or `start..=end` (inclusive).
+    ///
+    /// Creates a lazy iterator of integers from `start` to `end`.
+    /// Does not allocate an array; used with collection operations.
+    ///
+    /// - First `ExprId`: start expression
+    /// - Second `ExprId`: end expression
+    /// - `bool`: `true` for inclusive (`..=`), `false` for exclusive (`..`)
+    Range(ExprId, ExprId, bool),
 }
 
 /// A statement node.
