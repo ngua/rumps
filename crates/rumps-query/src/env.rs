@@ -20,7 +20,7 @@ use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
 
 use crate::value::{StringId, TypeId, Value, ValueArena, ValueId};
-use crate::{Result, Span};
+use crate::{Error, Result, Span};
 
 /// Stack of lexical scopes for `LET` bindings.
 ///
@@ -170,33 +170,22 @@ impl PrimCtx<'_> {
     }
 
     /// Create a runtime error with span information.
-    pub(crate) fn runtime_error(&self, msg: impl Into<String>) -> crate::Error {
-        crate::Error::runtime(self.span, msg)
+    pub(crate) fn runtime_error(&self, msg: impl Into<String>) -> Error {
+        Error::runtime(self.span, msg)
     }
 
     /// Create a type error with span information.
     ///
     /// Formats as `"{fn_name}: expected {expected}"`.
-    pub(crate) fn type_error(
-        &self,
-        fn_name: &str,
-        expected: &str,
-    ) -> crate::Error {
-        crate::Error::type_err(
-            self.span,
-            format!("{fn_name}: expected {expected}"),
-        )
+    pub(crate) fn type_error(&self, fn_name: &str, expected: &str) -> Error {
+        Error::type_err(self.span, format!("{fn_name}: expected {expected}"))
     }
 
     /// Create a type error with a custom message suffix.
     ///
     /// Formats as `"{fn_name}: {msg}"`.
-    pub(crate) fn type_error_msg(
-        &self,
-        fn_name: &str,
-        msg: &str,
-    ) -> crate::Error {
-        crate::Error::type_err(self.span, format!("{fn_name}: {msg}"))
+    pub(crate) fn type_error_msg(&self, fn_name: &str, msg: &str) -> Error {
+        Error::type_err(self.span, format!("{fn_name}: {msg}"))
     }
 }
 
@@ -241,10 +230,10 @@ impl Module {
         }
     }
 
-    /// Register a submodule.
-    #[allow(dead_code)]
-    fn register_submodule(&mut self, name: &str, m: Self) {
+    /// Builder method to add a submodule.
+    pub(crate) fn with_submodule(mut self, name: &str, m: Self) -> Self {
         self.submodules.insert(name.to_string(), m);
+        self
     }
 
     /// Look up a function by path within this module.
@@ -350,7 +339,7 @@ impl Environment {
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
         use crate::primitives::{
-            Array, Map, Math, Object, Opt, Prim, Random, Res, Str, Time,
+            Array, Map, Math, Object, Opt, Prim, Random, Res, Str, Time, Trig,
         };
 
         self.modules.insert(
@@ -410,9 +399,19 @@ impl Environment {
                 ("round", Math::round),
                 ("sqrt", Math::sqrt),
                 ("log", Math::log),
-                ("sin", Math::sin),
-                ("cos", Math::cos),
-            ]),
+            ])
+            .with_submodule(
+                "Trig",
+                Module::from_fns(&[
+                    ("sin", Trig::sin),
+                    ("cos", Trig::cos),
+                    ("tan", Trig::tan),
+                    ("asin", Trig::asin),
+                    ("acos", Trig::acos),
+                    ("atan", Trig::atan),
+                    ("atan2", Trig::atan2),
+                ]),
+            ),
         );
 
         self.modules.insert(
@@ -595,7 +594,10 @@ mod tests {
         assert!(env.module_fn_exists(&["Math", "abs"]));
         assert!(env.module_fn_exists(&["Math", "min"]));
         assert!(env.module_fn_exists(&["Math", "sqrt"]));
-        assert!(env.module_fn_exists(&["Math", "sin"]));
+        // Trig functions are in the Trig submodule
+        assert!(env.module_fn_exists(&["Math", "Trig", "sin"]));
+        assert!(env.module_fn_exists(&["Math", "Trig", "cos"]));
+        assert!(env.module_fn_exists(&["Math", "Trig", "tan"]));
         // Random module is registered with functions
         assert!(env.has_module("Random"));
         assert!(env.module_fn_exists(&["Random", "random"]));
@@ -630,9 +632,9 @@ mod tests {
         let trig =
             Module::from_fns(&[("sin", dummy_prim), ("cos", dummy_prim)]);
 
-        let mut math =
-            Module::from_fns(&[("sqrt", dummy_prim), ("abs", dummy_prim)]);
-        math.register_submodule("Trig", trig);
+        let math =
+            Module::from_fns(&[("sqrt", dummy_prim), ("abs", dummy_prim)])
+                .with_submodule("Trig", trig);
 
         // Direct function lookup
         assert!(math.get_fn(&["sqrt"]).is_some());
@@ -655,12 +657,8 @@ mod tests {
     fn module_deeply_nested_lookup() {
         // Create deeply nested: A.B.C.fn
         let c = Module::from_fns(&[("fn", dummy_prim)]);
-
-        let mut b = Module::default();
-        b.register_submodule("C", c);
-
-        let mut a = Module::default();
-        a.register_submodule("B", b);
+        let b = Module::default().with_submodule("C", c);
+        let a = Module::default().with_submodule("B", b);
 
         // Should find A.B.C.fn
         assert!(a.get_fn(&["B", "C", "fn"]).is_some());

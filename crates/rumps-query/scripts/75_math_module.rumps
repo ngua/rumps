@@ -1,6 +1,7 @@
 ; Math module primitives
 ; Tests Math.abs, Math.min, Math.max, Math.floor, Math.ceil,
-; Math.round, Math.sqrt, Math.log, Math.sin, Math.cos
+; Math.round, Math.sqrt, Math.log
+; Also tests Math.Trig submodule: sin, cos, tan, asin, acos, atan, atan2
 
 ; ============ Math.abs ============
 
@@ -123,19 +124,44 @@ LET log-e = 2.718281828
 LET log-result = Math.log(log-e)
 OUTPUT Math.round(log-result)  ; 1 (close to 1.0)
 
-; ============ Math.sin ============
+; ============ Math.Trig.sin ============
 
-OUTPUT Math.sin(0)  ; 0.0
+OUTPUT Math.Trig.sin(0)  ; 0.0
 
 LET sin-zero = 0
-OUTPUT Math.sin(sin-zero)  ; 0.0
+OUTPUT Math.Trig.sin(sin-zero)  ; 0.0
 
-; ============ Math.cos ============
+; ============ Math.Trig.cos ============
 
-OUTPUT Math.cos(0)  ; 1.0
+OUTPUT Math.Trig.cos(0)  ; 1.0
 
 LET cos-zero = 0
-OUTPUT Math.cos(cos-zero)  ; 1.0
+OUTPUT Math.Trig.cos(cos-zero)  ; 1.0
+
+; ============ Math.Trig.tan ============
+
+OUTPUT Math.Trig.tan(0)  ; 0.0
+
+; ============ Math.Trig.asin ============
+
+OUTPUT Math.Trig.asin(0)  ; 0.0
+OUTPUT Math.Trig.asin(1)  ; ~1.5707... (pi/2)
+
+; ============ Math.Trig.acos ============
+
+OUTPUT Math.Trig.acos(1)  ; 0.0
+OUTPUT Math.Trig.acos(0)  ; ~1.5707... (pi/2)
+
+; ============ Math.Trig.atan ============
+
+OUTPUT Math.Trig.atan(0)  ; 0.0
+OUTPUT Math.Trig.atan(1)  ; ~0.7853... (pi/4)
+
+; ============ Math.Trig.atan2 ============
+
+OUTPUT Math.Trig.atan2(0, 1)  ; 0.0
+OUTPUT Math.Trig.atan2(1, 1)  ; ~0.7853... (pi/4)
+OUTPUT Math.Trig.atan2(1, 0)  ; ~1.5707... (pi/2)
 
 ; ============ Chaining operations ============
 

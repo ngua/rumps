@@ -1314,8 +1314,15 @@ impl Math {
             Ok(ctx.arena.add(Value::Float(OrderedFloat(n.ln())), ctx.span))
         })
     }
+}
 
-    /// `Math.sin(x) -> Float`
+/// Primitives for the `Math.Trig` submodule.
+pub(crate) struct Trig;
+
+impl Prim for Trig {}
+
+impl Trig {
+    /// `Math.Trig.sin(x) -> Float`
     ///
     /// Returns the sine of x (x in radians).
     pub(crate) fn sin<'a>(
@@ -1323,14 +1330,13 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.sin", &args, 1, ctx.span)?;
-
-            let n = Self::to_float(ctx, args[0], "Math.sin")?;
+            Self::check_arity("Math.Trig.sin", &args, 1, ctx.span)?;
+            let n = Math::to_float(ctx, args[0], "Math.Trig.sin")?;
             Ok(ctx.arena.add(Value::Float(OrderedFloat(n.sin())), ctx.span))
         })
     }
 
-    /// `Math.cos(x) -> Float`
+    /// `Math.Trig.cos(x) -> Float`
     ///
     /// Returns the cosine of x (x in radians).
     pub(crate) fn cos<'a>(
@@ -1338,10 +1344,89 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.cos", &args, 1, ctx.span)?;
-
-            let n = Self::to_float(ctx, args[0], "Math.cos")?;
+            Self::check_arity("Math.Trig.cos", &args, 1, ctx.span)?;
+            let n = Math::to_float(ctx, args[0], "Math.Trig.cos")?;
             Ok(ctx.arena.add(Value::Float(OrderedFloat(n.cos())), ctx.span))
+        })
+    }
+
+    /// `Math.Trig.tan(x) -> Float`
+    ///
+    /// Returns the tangent of x (x in radians).
+    pub(crate) fn tan<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.Trig.tan", &args, 1, ctx.span)?;
+            let n = Math::to_float(ctx, args[0], "Math.Trig.tan")?;
+            Ok(ctx.arena.add(Value::Float(OrderedFloat(n.tan())), ctx.span))
+        })
+    }
+
+    /// `Math.Trig.asin(x) -> Float`
+    ///
+    /// Returns the arcsine of x (result in radians).
+    pub(crate) fn asin<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.Trig.asin", &args, 1, ctx.span)?;
+            let n = Math::to_float(ctx, args[0], "Math.Trig.asin")?;
+            Ok(ctx
+                .arena
+                .add(Value::Float(OrderedFloat(n.asin())), ctx.span))
+        })
+    }
+
+    /// `Math.Trig.acos(x) -> Float`
+    ///
+    /// Returns the arccosine of x (result in radians).
+    pub(crate) fn acos<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.Trig.acos", &args, 1, ctx.span)?;
+            let n = Math::to_float(ctx, args[0], "Math.Trig.acos")?;
+            Ok(ctx
+                .arena
+                .add(Value::Float(OrderedFloat(n.acos())), ctx.span))
+        })
+    }
+
+    /// `Math.Trig.atan(x) -> Float`
+    ///
+    /// Returns the arctangent of x (result in radians).
+    pub(crate) fn atan<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.Trig.atan", &args, 1, ctx.span)?;
+            let n = Math::to_float(ctx, args[0], "Math.Trig.atan")?;
+            Ok(ctx
+                .arena
+                .add(Value::Float(OrderedFloat(n.atan())), ctx.span))
+        })
+    }
+
+    /// `Math.Trig.atan2(y, x) -> Float`
+    ///
+    /// Returns the arctangent of `y/x` (result in radians), using signs to
+    /// determine the correct quadrant.
+    pub(crate) fn atan2<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            Self::check_arity("Math.Trig.atan2", &args, 2, ctx.span)?;
+            let y = Math::to_float(ctx, args[0], "Math.Trig.atan2")?;
+            let x = Math::to_float(ctx, args[1], "Math.Trig.atan2")?;
+            Ok(ctx
+                .arena
+                .add(Value::Float(OrderedFloat(y.atan2(x))), ctx.span))
         })
     }
 }
@@ -3320,7 +3405,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn math_sin_cos() {
+    async fn trig_sin_cos() {
         let mut arena = crate::value::ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
 
@@ -3332,7 +3417,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Math::sin(&mut ctx, smallvec![n]).await.unwrap()
+            Trig::sin(&mut ctx, smallvec![n]).await.unwrap()
         };
 
         let cos_result = {
@@ -3341,7 +3426,7 @@ mod tests {
                 type_exprs: &mut type_exprs,
                 span: span(),
             };
-            Math::cos(&mut ctx, smallvec![n]).await.unwrap()
+            Trig::cos(&mut ctx, smallvec![n]).await.unwrap()
         };
 
         assert_eq!(
