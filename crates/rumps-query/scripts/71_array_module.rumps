@@ -1,5 +1,5 @@
 ; Array module functions
-; Tests Array.map, Array.filter, Array.reduce
+; Tests Array.map, Array.filter, Array.reduce, Array.foreach
 
 ; Array.map with closure
 LET nums = [1, 2, 3, 4, 5]
@@ -83,3 +83,19 @@ OUTPUT with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
 LET nested = [[1, 2], [3, 4]]
 LET doubled-nested = Array.map(arr => Array.map(x => x * 2, arr), nested)
 OUTPUT doubled-nested  ; [[2, 4], [6, 8]]
+
+; === Array.foreach ===
+
+; Array.foreach for side effects (outputs each element)
+OUTPUT "foreach:"
+LET fe-result = Array.foreach(x => { OUTPUT x }, [10, 20, 30])
+OUTPUT fe-result  ; Unit
+
+; Array.foreach on empty array (no side effects)
+LET fe-empty = Array.foreach(x => { OUTPUT x }, [])
+OUTPUT fe-empty  ; Unit
+
+; Array.foreach with range
+OUTPUT "range foreach:"
+LET fe-range = Array.foreach(n => { OUTPUT n }, 1..4)
+OUTPUT fe-range  ; Unit

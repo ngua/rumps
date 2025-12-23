@@ -289,6 +289,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             ["Array", "map"] => self.array_map(args, span).await,
             ["Array", "filter"] => self.array_filter(args, span).await,
             ["Array", "reduce"] => self.array_reduce(args, span).await,
+            ["Array", "foreach"] => self.array_foreach(args, span).await,
             ["Option", "map"] => self.option_map(args, span).await,
             ["Result", "map"] => self.result_map(args, span).await,
             ["Result", "map-err"] => self.result_map_err(args, span).await,
@@ -750,6 +751,108 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .invoke_callable(reducer_id, &[acc_id, *head], span)
                     .await?;
                 self.array_reduce_rec(reducer_id, new_acc, tail, span).await
+            }
+        }
+    }
+
+    /// `Array.foreach(fn, arr) -> Unit`
+    ///
+    /// Invokes `fn` on each element of `arr` (or range) for side effects.
+    /// The callback must return `Unit`. Returns `Unit`.
+    #[async_recursion]
+    async fn array_foreach(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        (args.len() == 2).then_some(()).ok_or_else(|| {
+            Error::runtime(
+                span,
+                format!(
+                    "Array.foreach expects 2 arguments, got {}",
+                    args.len()
+                ),
+            )
+        })?;
+
+        let fn_id = *args.first().ok_or_else(|| {
+            Error::runtime(span, "Array.foreach: missing function")
+        })?;
+        let iterable_id = *args.get(1).ok_or_else(|| {
+            Error::runtime(span, "Array.foreach: missing array")
+        })?;
+
+        match self.arena.get(iterable_id) {
+            Some(Value::Array(_, elems)) => {
+                let elems = elems.clone();
+                self.array_foreach_rec(fn_id, &elems, span).await
+            }
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                self.range_foreach(fn_id, *start, *end, *inclusive, span)
+                    .await
+            }
+            Some(other) => Err(Error::type_err(
+                span,
+                format!(
+                    "Array.foreach expects Array or Range; got {}",
+                    other.type_name(&self.registry, &self.type_exprs)
+                ),
+            )),
+            None => {
+                Err(Error::runtime(span, "Array.foreach: invalid iterable"))
+            }
+        }
+    }
+
+    /// Foreach over a range without allocating the entire range.
+    #[async_recursion]
+    async fn range_foreach(
+        &mut self,
+        fn_id: ValueId,
+        start: i64,
+        end: i64,
+        inclusive: bool,
+        span: Span,
+    ) -> Result<Value> {
+        let actual_end = if inclusive { end + 1 } else { end };
+        self.range_foreach_rec(fn_id, start, actual_end, span).await
+    }
+
+    #[async_recursion]
+    async fn range_foreach_rec(
+        &mut self,
+        fn_id: ValueId,
+        current: i64,
+        end: i64,
+        span: Span,
+    ) -> Result<Value> {
+        if current >= end {
+            Ok(Value::Unit)
+        } else {
+            let int_val = Value::Int(current);
+            let int_id = self.arena.add(int_val, span);
+            self.invoke_callable(fn_id, &[int_id], span).await?;
+            self.range_foreach_rec(fn_id, current + 1, end, span).await
+        }
+    }
+
+    /// Recursive helper for `Array.foreach`.
+    #[async_recursion]
+    async fn array_foreach_rec(
+        &mut self,
+        fn_id: ValueId,
+        elems: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        match elems.split_first() {
+            None => Ok(Value::Unit),
+            Some((head, tail)) => {
+                self.invoke_callable(fn_id, &[*head], span).await?;
+                self.array_foreach_rec(fn_id, tail, span).await
             }
         }
     }

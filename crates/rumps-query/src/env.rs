@@ -392,8 +392,8 @@ impl Environment {
     /// - `Random`: `random`, `range`, `int`, `bool`, `choice`, `shuffle`,
     ///   `sample`, `uuid`
     ///
-    /// Note: Array higher-order functions (`map`, `filter`, `reduce`) are
-    /// handled specially by the interpreter. We register placeholders here
+    /// Note: Array higher-order functions (`map`, `filter`, `reduce`, `foreach`)
+    /// are handled specially by the interpreter. We register placeholders here
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
         use crate::primitives::{
@@ -417,6 +417,7 @@ impl Environment {
                 ("map", Array::placeholder),
                 ("filter", Array::placeholder),
                 ("reduce", Array::placeholder),
+                ("foreach", Array::placeholder),
                 // Regular primitives
                 ("length", Array::length),
                 ("push", Array::push),
@@ -660,6 +661,7 @@ mod tests {
         assert!(env.module_fn_exists(&["Array", "map"]));
         assert!(env.module_fn_exists(&["Array", "filter"]));
         assert!(env.module_fn_exists(&["Array", "reduce"]));
+        assert!(env.module_fn_exists(&["Array", "foreach"]));
         // String module is registered with functions
         assert!(env.has_module("String"));
         assert!(env.get_module_fn(&["String", "length"]).is_some());
