@@ -1,0 +1,27 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Module constants\n; Tests Math.pi, Math.e, Math.tau, Math.inf, Math.neg-inf\n\n; ============ Math.pi ============\n\nOUTPUT Math.pi  ; ~3.14159...\n\nLET pi-val = Math.pi\nOUTPUT pi-val > 3.14  ; true\nOUTPUT pi-val < 3.15  ; true\n\n; Use in calculations\nLET area = Math.pi * 4  ; area of circle with r=2\nOUTPUT area > 12  ; true\n\n; ============ Math.e ============\n\nOUTPUT Math.e  ; ~2.71828...\n\nLET e-val = Math.e\nOUTPUT e-val > 2.71  ; true\nOUTPUT e-val < 2.72  ; true\n\n; Use with log\nLET log-e = Math.log(Math.e)\nOUTPUT Math.round(log-e)  ; 1\n\n; ============ Math.tau ============\n\nOUTPUT Math.tau  ; ~6.28318... (2*pi)\n\nLET tau-val = Math.tau\nOUTPUT tau-val > 6.28  ; true\nOUTPUT tau-val < 6.29  ; true\n\n; tau = 2*pi\nLET two-pi = Math.pi * 2\nLET diff = Math.abs(Math.tau - two-pi)\nOUTPUT diff < 0.0001  ; true (essentially equal)\n\n; ============ Math.inf ============\n\nOUTPUT Math.inf  ; inf\n\nLET inf-val = Math.inf\nOUTPUT inf-val > 1000000  ; true\nOUTPUT inf-val > 0  ; true\n\n; ============ Math.neg-inf ============\n\nOUTPUT Math.neg-inf  ; -inf\n\nLET neg-inf-val = Math.neg-inf\nOUTPUT neg-inf-val < -1000000  ; true\nOUTPUT neg-inf-val < 0  ; true\n\n; ============ Constants in expressions ============\n\n; Circle circumference: 2 * pi * r\nLET radius = 5\nLET circ = Math.tau * radius\nOUTPUT circ > 31  ; true\n\n; Constants work with pipeline\nLET doubled-pi = Math.pi\n  |> (x => x * 2)\nOUTPUT Math.abs(doubled-pi - Math.tau) < 0.0001  ; true\n\n; Constants in array\nLET consts = [Math.pi, Math.e, Math.tau]\nOUTPUT Array.length(consts)  ; 3\n\n; Constants in object\nLET math-consts = {\n  pi: Math.pi,\n  e: Math.e,\n  tau: Math.tau\n}\nOUTPUT math-consts.pi > 3  ; true\nOUTPUT math-consts.e > 2  ; true\n"
+---
+3.141592653589793
+TRUE
+TRUE
+TRUE
+2.718281828459045
+TRUE
+TRUE
+1
+6.283185307179586
+TRUE
+TRUE
+TRUE
+inf
+TRUE
+TRUE
+-inf
+TRUE
+TRUE
+TRUE
+TRUE
+3
+TRUE
+TRUE

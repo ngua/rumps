@@ -200,11 +200,14 @@ impl PrimCtx<'_> {
 pub(crate) type PrimFn =
     for<'a> fn(&'a mut PrimCtx<'a>, SmallVec<[ValueId; 4]>) -> PrimResult<'a>;
 
-/// A built-in module containing primitive functions and submodules.
+/// A built-in module containing primitive functions, constants, and submodules.
 ///
 /// Modules group related functions under a namespace (e.g., `Object.keys`,
 /// `Array.map`). Supports nested modules for future extensibility
 /// (e.g., `Math.Trig.sin`).
+///
+/// Constants are module-level values (e.g., `Math.pi`, `Math.e`) that are
+/// evaluated to their stored `ValueId` when accessed.
 ///
 /// Built-in modules are registered at interpreter startup; user-defined
 /// modules will be supported in a future phase.
@@ -212,6 +215,10 @@ pub(crate) type PrimFn =
 pub(crate) struct Module {
     /// Functions in this module, keyed by function name.
     functions: HashMap<String, PrimFn>,
+
+    /// Constants in this module, keyed by constant name.
+    /// `ValueId`s index into `Environment::consts`.
+    constants: HashMap<String, ValueId>,
 
     /// Submodules, keyed by submodule name.
     submodules: HashMap<String, Self>,
@@ -226,6 +233,7 @@ impl Module {
             .collect();
         Self {
             functions,
+            constants: HashMap::new(),
             submodules: HashMap::new(),
         }
     }
@@ -234,6 +242,17 @@ impl Module {
     pub(crate) fn with_submodule(mut self, name: &str, m: Self) -> Self {
         self.submodules.insert(name.to_string(), m);
         self
+    }
+
+    /// Builder method to add a constant.
+    pub(crate) fn with_const(mut self, name: &str, id: ValueId) -> Self {
+        self.constants.insert(name.to_string(), id);
+        self
+    }
+
+    /// Mutably add a constant.
+    pub(crate) fn add_const(&mut self, name: &str, id: ValueId) {
+        self.constants.insert(name.to_string(), id);
     }
 
     /// Look up a function by path within this module.
@@ -250,9 +269,25 @@ impl Module {
         }
     }
 
+    /// Look up a constant by path within this module.
+    pub(crate) fn get_const(&self, path: &[&str]) -> Option<ValueId> {
+        match path {
+            [] => None,
+            [name] => self.constants.get(*name).copied(),
+            [first, rest @ ..] => {
+                self.submodules.get(*first).and_then(|m| m.get_const(rest))
+            }
+        }
+    }
+
     /// Check if a path resolves to a function within this module.
-    pub(crate) fn contains_path(&self, path: &[&str]) -> bool {
+    pub(crate) fn contains_fn(&self, path: &[&str]) -> bool {
         self.get_fn(path).is_some()
+    }
+
+    /// Check if a path resolves to a constant within this module.
+    pub(crate) fn contains_const(&self, path: &[&str]) -> bool {
+        self.get_const(path).is_some()
     }
 }
 
@@ -261,6 +296,7 @@ impl Module {
 /// Tracks:
 /// - Lexical scopes for `LET` bindings (via `Scopes`)
 /// - Built-in modules containing primitive functions (e.g., `Object`, `Array`)
+/// - Module constants (e.g., `Math.pi`, `Math.e`)
 ///
 /// Note: `SET` variables (both local and global) are stored in the `Database`,
 /// not in the environment. Only `LET` bindings live here. You can `GET` a `SET`
@@ -271,6 +307,9 @@ pub(crate) struct Environment {
 
     /// Built-in modules (e.g., `Object`, `Array`).
     modules: HashMap<String, Module>,
+
+    /// Arena backing module constant `ValueId`s.
+    pub(crate) consts: ValueArena,
 }
 
 impl Default for Environment {
@@ -285,6 +324,7 @@ impl Environment {
         let mut env = Self {
             scopes: Scopes::new(),
             modules: HashMap::new(),
+            consts: ValueArena::new(),
         };
         env.register_builtins();
         env
@@ -303,7 +343,16 @@ impl Environment {
         path.split_first().is_some_and(|(module, rest)| {
             self.modules
                 .get(*module)
-                .is_some_and(|m| m.contains_path(rest))
+                .is_some_and(|m| m.contains_fn(rest))
+        })
+    }
+
+    /// Check if a path resolves to a module constant.
+    pub(crate) fn module_const_exists(&self, path: &[&str]) -> bool {
+        path.split_first().is_some_and(|(module, rest)| {
+            self.modules
+                .get(*module)
+                .is_some_and(|m| m.contains_const(rest))
         })
     }
 
@@ -318,6 +367,15 @@ impl Environment {
     pub(crate) fn get_module_fn(&self, path: &[&str]) -> Option<&PrimFn> {
         path.split_first().and_then(|(module, rest)| {
             self.modules.get(*module).and_then(|m| m.get_fn(rest))
+        })
+    }
+
+    /// Look up a constant by its full path.
+    ///
+    /// Returns the `ValueId` indexing into `self.consts`.
+    pub(crate) fn get_module_const(&self, path: &[&str]) -> Option<ValueId> {
+        path.split_first().and_then(|(module, rest)| {
+            self.modules.get(*module).and_then(|m| m.get_const(rest))
         })
     }
 
@@ -388,19 +446,38 @@ impl Environment {
             ]),
         );
 
+        // Math module
+        let mut math = Module::from_fns(&[
+            ("abs", Math::abs),
+            ("min", Math::min),
+            ("max", Math::max),
+            ("floor", Math::floor),
+            ("ceil", Math::ceil),
+            ("round", Math::round),
+            ("sqrt", Math::sqrt),
+            ("log", Math::log),
+        ]);
+
+        // Math constants (intern into `consts` arena)
+        use ordered_float::OrderedFloat;
+        [
+            ("pi", std::f64::consts::PI),
+            ("e", std::f64::consts::E),
+            ("tau", std::f64::consts::TAU),
+            ("inf", f64::INFINITY),
+            ("neg-inf", f64::NEG_INFINITY),
+        ]
+        .iter()
+        .for_each(|&(name, val)| {
+            let id = self
+                .consts
+                .add(Value::Float(OrderedFloat(val)), Span::MODULE_CONST);
+            math.add_const(name, id);
+        });
+
         self.modules.insert(
             "Math".to_string(),
-            Module::from_fns(&[
-                ("abs", Math::abs),
-                ("min", Math::min),
-                ("max", Math::max),
-                ("floor", Math::floor),
-                ("ceil", Math::ceil),
-                ("round", Math::round),
-                ("sqrt", Math::sqrt),
-                ("log", Math::log),
-            ])
-            .with_submodule(
+            math.with_submodule(
                 "Trig",
                 Module::from_fns(&[
                     ("sin", Trig::sin),
@@ -646,11 +723,11 @@ mod tests {
         assert!(math.get_fn(&["Trig", "cos"]).is_some());
         assert!(math.get_fn(&["Trig", "tan"]).is_none());
 
-        // contains_path
-        assert!(math.contains_path(&["sqrt"]));
-        assert!(math.contains_path(&["Trig", "sin"]));
-        assert!(!math.contains_path(&["Trig", "tan"]));
-        assert!(!math.contains_path(&["Unknown", "fn"]));
+        // contains_fn
+        assert!(math.contains_fn(&["sqrt"]));
+        assert!(math.contains_fn(&["Trig", "sin"]));
+        assert!(!math.contains_fn(&["Trig", "tan"]));
+        assert!(!math.contains_fn(&["Unknown", "fn"]));
     }
 
     #[test]
@@ -662,7 +739,7 @@ mod tests {
 
         // Should find A.B.C.fn
         assert!(a.get_fn(&["B", "C", "fn"]).is_some());
-        assert!(a.contains_path(&["B", "C", "fn"]));
+        assert!(a.contains_fn(&["B", "C", "fn"]));
 
         // Should not find partial paths
         assert!(a.get_fn(&["B"]).is_none());
@@ -688,5 +765,56 @@ mod tests {
         assert!(!env.module_fn_exists(&["Unknown", "keys"]));
         assert!(!env.module_fn_exists(&[]));
         assert!(!env.module_fn_exists(&["Object"]));
+    }
+
+    #[test]
+    fn module_constants() {
+        let mut arena = ValueArena::new();
+        let span = Span::new(0, 0);
+
+        // Create a module with constants
+        let pi = arena.add(Value::Int(314), span);
+        let e = arena.add(Value::Int(271), span);
+
+        let math = Module::from_fns(&[("sqrt", dummy_prim)])
+            .with_const("pi", pi)
+            .with_const("e", e);
+
+        // Lookup constants
+        assert_eq!(math.get_const(&["pi"]), Some(pi));
+        assert_eq!(math.get_const(&["e"]), Some(e));
+        assert_eq!(math.get_const(&["tau"]), None);
+
+        // contains_const
+        assert!(math.contains_const(&["pi"]));
+        assert!(math.contains_const(&["e"]));
+        assert!(!math.contains_const(&["tau"]));
+
+        // Functions are NOT constants
+        assert!(!math.contains_const(&["sqrt"]));
+        // Constants are NOT functions
+        assert!(!math.contains_fn(&["pi"]));
+    }
+
+    #[test]
+    fn environment_module_const_exists() {
+        let env = Environment::new();
+
+        // Math module has constants
+        assert!(env.module_const_exists(&["Math", "pi"]));
+        assert!(env.module_const_exists(&["Math", "e"]));
+        assert!(env.module_const_exists(&["Math", "tau"]));
+        assert!(env.module_const_exists(&["Math", "inf"]));
+        assert!(env.module_const_exists(&["Math", "neg-inf"]));
+
+        // Math.sqrt is a function, not a constant
+        assert!(!env.module_const_exists(&["Math", "sqrt"]));
+
+        // Can retrieve constant values
+        let pi_id = env.get_module_const(&["Math", "pi"]).unwrap();
+        let pi_val = env.consts.get(pi_id).unwrap();
+        assert!(
+            matches!(pi_val, Value::Float(f) if (*f - std::f64::consts::PI).abs() < 1e-10)
+        );
     }
 }

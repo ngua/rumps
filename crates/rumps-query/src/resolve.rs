@@ -6,6 +6,7 @@
 //! - `Option.None` (zero-arity variant) -> `Expr::Variant("Option", "None", [])`
 //! - `Option.Some(x)` (variant with args) -> `Expr::Variant("Option", "Some", [x])`
 //! - `Object.keys` (module function) -> `Expr::Path(["Object", "keys"])`
+//! - `Math.pi` (module constant) -> `Expr::Path(["Math", "pi"])`
 //! - `obj.field` (runtime field access) -> remains `Expr::Field`
 //! - `obj.method(args)` (runtime call) -> remains `Expr::Call`
 //!
@@ -15,6 +16,8 @@
 //!
 //! Module function calls like `Object.keys(obj)` become `Expr::Call(Path(...), args)`,
 //! where the `Path` is evaluated to a `Value::ModuleFn` that can then be called.
+//! Module constants like `Math.pi` become `Expr::Path(["Math", "pi"])`, evaluated
+//! to the constant value at runtime.
 //!
 //! # Architecture
 //!

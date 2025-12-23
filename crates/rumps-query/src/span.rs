@@ -28,6 +28,15 @@ pub struct Span<M = ()> {
 
 /// Constructors for `Span<()>` (no metadata).
 impl Span {
+    /// Sentinel span for built-in module constants (e.g., `Math.pi`).
+    ///
+    /// Uses `u32::MAX` offsets to distinguish from real source positions.
+    pub(crate) const MODULE_CONST: Self = Self {
+        start: u32::MAX,
+        end: u32::MAX,
+        meta: (),
+    };
+
     /// Create a new span from start and end byte offsets.
     pub(crate) const fn new(start: u32, end: u32) -> Self {
         Self {

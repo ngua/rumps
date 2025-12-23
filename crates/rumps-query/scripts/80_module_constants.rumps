@@ -1,0 +1,80 @@
+; Module constants
+; Tests Math.pi, Math.e, Math.tau, Math.inf, Math.neg-inf
+
+; ============ Math.pi ============
+
+OUTPUT Math.pi  ; ~3.14159...
+
+LET pi-val = Math.pi
+OUTPUT pi-val > 3.14  ; true
+OUTPUT pi-val < 3.15  ; true
+
+; Use in calculations
+LET area = Math.pi * 4  ; area of circle with r=2
+OUTPUT area > 12  ; true
+
+; ============ Math.e ============
+
+OUTPUT Math.e  ; ~2.71828...
+
+LET e-val = Math.e
+OUTPUT e-val > 2.71  ; true
+OUTPUT e-val < 2.72  ; true
+
+; Use with log
+LET log-e = Math.log(Math.e)
+OUTPUT Math.round(log-e)  ; 1
+
+; ============ Math.tau ============
+
+OUTPUT Math.tau  ; ~6.28318... (2*pi)
+
+LET tau-val = Math.tau
+OUTPUT tau-val > 6.28  ; true
+OUTPUT tau-val < 6.29  ; true
+
+; tau = 2*pi
+LET two-pi = Math.pi * 2
+LET diff = Math.abs(Math.tau - two-pi)
+OUTPUT diff < 0.0001  ; true (essentially equal)
+
+; ============ Math.inf ============
+
+OUTPUT Math.inf  ; inf
+
+LET inf-val = Math.inf
+OUTPUT inf-val > 1000000  ; true
+OUTPUT inf-val > 0  ; true
+
+; ============ Math.neg-inf ============
+
+OUTPUT Math.neg-inf  ; -inf
+
+LET neg-inf-val = Math.neg-inf
+OUTPUT neg-inf-val < -1000000  ; true
+OUTPUT neg-inf-val < 0  ; true
+
+; ============ Constants in expressions ============
+
+; Circle circumference: 2 * pi * r
+LET radius = 5
+LET circ = Math.tau * radius
+OUTPUT circ > 31  ; true
+
+; Constants work with pipeline
+LET doubled-pi = Math.pi
+  |> (x => x * 2)
+OUTPUT Math.abs(doubled-pi - Math.tau) < 0.0001  ; true
+
+; Constants in array
+LET consts = [Math.pi, Math.e, Math.tau]
+OUTPUT Array.length(consts)  ; 3
+
+; Constants in object
+LET math-consts = {
+  pi: Math.pi,
+  e: Math.e,
+  tau: Math.tau
+}
+OUTPUT math-consts.pi > 3  ; true
+OUTPUT math-consts.e > 2  ; true

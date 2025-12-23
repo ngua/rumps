@@ -1,8 +1,9 @@
-//! Module function evaluation and lookup.
+//! Module function and constant evaluation.
 //!
 //! Handles `Expr::Path` nodes that refer to module-qualified functions
-//! (e.g., `Object.keys`, `Array.map`). Paths are resolved during the
-//! parse-time resolution pass and evaluated here at runtime.
+//! (e.g., `Object.keys`, `Array.map`) or constants (e.g., `Math.pi`).
+//! Paths are resolved during the parse-time resolution pass and evaluated
+//! here at runtime.
 //!
 //! # Nested Modules
 //!
@@ -13,6 +14,8 @@
 //! Math
 //! ├── sqrt
 //! ├── abs
+//! ├── pi      (constant)
+//! ├── e       (constant)
 //! └── Trig
 //!     ├── sin
 //!     └── cos
@@ -58,29 +61,36 @@ impl<I: IoContext> Interpreter<'_, I> {
         )
     }
 
-    /// Resolve a path as a module function.
+    /// Resolve a path as a module function or constant.
     ///
     /// The path must have at least two segments. The last segment is the
-    /// function name; all preceding segments form the module path.
+    /// function/constant name; all preceding segments form the module path.
     fn module_path(
         &mut self,
         segments: &[String],
         span: Span,
     ) -> Result<Value> {
-        // Verify the path resolves to a function
         let path_strs: SmallVec<[&str; 4]> =
             segments.iter().map(String::as_str).collect();
 
+        // Check for module function first
         if self.env.module_fn_exists(&path_strs) {
             let path: SmallVec<[StringId; 4]> =
                 segments.iter().map(|s| self.arena.intern(s)).collect();
             Ok(Value::ModuleFn { path })
+        }
+        // Check for module constant
+        else if let Some(const_id) = self.env.get_module_const(&path_strs) {
+            // Clone value from env's consts arena
+            self.env.consts.get(const_id).cloned().ok_or_else(|| {
+                Error::runtime(span, "internal: missing constant")
+            })
         } else {
-            // Path starts with a module but doesn't resolve to a function
+            // Path starts with a module but doesn't resolve to function or constant
             let path_str = segments.join(".");
             Err(Error::runtime(
                 span,
-                format!("unknown module function `{path_str}`"),
+                format!("unknown module member `{path_str}`"),
             ))
         }
     }
