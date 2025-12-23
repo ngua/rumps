@@ -14,6 +14,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Get the type expression for a runtime value.
     pub(super) fn value_type_expr(&mut self, v: &Value) -> TypeExprId {
         match v {
+            Value::Unit => self.type_exprs.named(TypeId::UNIT),
             Value::Bool(_) => self.type_exprs.named(TypeId::BOOL),
             Value::Int(_) => self.type_exprs.named(TypeId::INT),
             Value::Float(_) => self.type_exprs.named(TypeId::FLOAT),
@@ -245,6 +246,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         type_id: TypeId,
     ) -> bool {
         match val {
+            Value::Unit => type_id == TypeId::UNIT,
             Value::Bool(_) => type_id == TypeId::BOOL,
             Value::Int(_) => type_id == TypeId::INT,
             Value::Float(_) => type_id == TypeId::FLOAT,

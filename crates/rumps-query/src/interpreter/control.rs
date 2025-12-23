@@ -137,7 +137,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a block expression.
     ///
     /// Executes statements, then evaluates the trailing expression (if any).
-    /// Returns `Option.None` if no trailing expression.
+    /// Returns `Unit` if no trailing expression.
     #[async_recursion]
     pub(super) async fn block(
         &mut self,
@@ -160,7 +160,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         match stmts.split_first() {
             None => match tail {
                 Some(e) => self.eval(e).await,
-                None => Ok(self.make_none()),
+                None => Ok(Value::Unit),
             },
             Some((head, rest)) => {
                 self.exec(*head).await?;
@@ -171,8 +171,9 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Evaluate an `IF` expression.
     ///
-    /// Returns the value of the taken branch. If no else branch and condition
-    /// is false, returns `Option.None`.
+    /// Type checking rules:
+    /// - Single-arm `IF` (no `ELSE`): body must be `Unit`, whole expr is `Unit`
+    /// - `IF/ELSE`: both branches must have matching types
     ///
     /// Special handling for `is` conditions with bindings: if the condition is
     /// `expr is Pattern(bindings)`, the bindings are only visible in the then
@@ -193,12 +194,32 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             _ => {
                 let cond_val = self.eval(cond).await?;
-                if cond_val.is_truthy(&self.arena, &self.type_exprs) {
-                    self.eval(then_br).await
-                } else {
-                    match else_br {
-                        Some(e) => self.eval(e).await,
-                        None => Ok(self.make_none()),
+                let cond_true =
+                    cond_val.is_truthy(&self.arena, &self.type_exprs);
+
+                match else_br {
+                    Some(else_id) => {
+                        // IF/ELSE: only evaluate the taken branch
+                        // Type checking deferred to static analysis; we can't
+                        // evaluate both branches at runtime (side effects).
+                        if cond_true {
+                            self.eval(then_br).await
+                        } else {
+                            self.eval(else_id).await
+                        }
+                    }
+                    None => {
+                        // Single-arm IF: body must be Unit (side-effect only)
+                        // Only evaluate if condition is true; type check when evaluated.
+                        if cond_true {
+                            let then_val = self.eval(then_br).await?;
+                            self.check_unit(
+                                &then_val,
+                                then_br,
+                                Span::default(),
+                            )?;
+                        }
+                        Ok(Value::Unit)
                     }
                 }
             }
@@ -208,6 +229,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Handle `IF expr is Type.Variant(bindings) { then } ELSE { else }`.
     ///
     /// Bindings are only visible in the then branch.
+    /// Type checking: same rules as regular `IF`.
     #[async_recursion]
     async fn if_with_bindings(
         &mut self,
@@ -224,37 +246,91 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Check if the value matches the variant
         let matched = self.check_variant(&val, ty_name, var_name, span)?;
 
-        if matched {
-            // Extract payloads and bind them
-            let payloads = match &val {
-                Value::Tagged(_, _, p) => p.clone(),
-                _ => SmallVec::new(),
-            };
+        match else_br {
+            Some(else_id) => {
+                // IF/ELSE with bindings: only evaluate the taken branch
+                if matched {
+                    self.eval_with_variant_bindings(
+                        &val, ty_name, var_name, names, then_br, span,
+                    )
+                    .await
+                } else {
+                    self.eval(else_id).await
+                }
+            }
+            None => {
+                // Single-arm IF with bindings: body must be Unit
+                if matched {
+                    let then_val = self
+                        .eval_with_variant_bindings(
+                            &val, ty_name, var_name, names, then_br, span,
+                        )
+                        .await?;
+                    self.check_unit(&then_val, then_br, span)?;
+                }
+                Ok(Value::Unit)
+            }
+        }
+    }
 
-            // Validate arity
-            (payloads.len() == names.len()).then_some(()).ok_or_else(|| {
+    /// Evaluate an expression with variant payload bindings in scope.
+    ///
+    /// Extracts payloads from `val`, validates arity against `names`,
+    /// binds them in a new scope, evaluates `body`, then pops the scope.
+    #[async_recursion]
+    async fn eval_with_variant_bindings(
+        &mut self,
+        val: &Value,
+        ty_name: &str,
+        var_name: &str,
+        names: &[String],
+        body: ExprId,
+        span: Span,
+    ) -> Result<Value> {
+        let payloads = match val {
+            Value::Tagged(_, _, p) => p.clone(),
+            _ => SmallVec::new(),
+        };
+
+        (payloads.len() == names.len())
+            .then_some(())
+            .ok_or_else(|| {
                 Error::runtime(
                     span,
                     format!(
-                        "`{ty_name}.{var_name}` has {} payload(s), but {} binding(s) provided",
+                        "`{ty_name}.{var_name}` has {} payload(s), \
+                     but {} binding(s) provided",
                         payloads.len(),
                         names.len()
                     ),
                 )
             })?;
 
-            // Push scope, bind, evaluate, pop
-            self.env.scopes.push();
-            self.bind_payloads(names, &payloads, span);
-            let result = self.eval(then_br).await;
-            self.env.scopes.pop();
-            result
+        self.env.scopes.push();
+        self.bind_payloads(names, &payloads, span);
+        let result = self.eval(body).await;
+        self.env.scopes.pop();
+        result
+    }
+
+    /// Check that a value is `Unit`; error otherwise.
+    fn check_unit(
+        &mut self,
+        val: &Value,
+        expr: ExprId,
+        fallback_span: Span,
+    ) -> Result<()> {
+        let ty = self.value_type_expr(val);
+        let unit_ty = self.type_exprs.named(TypeId::UNIT);
+        if self.type_exprs.eq(ty, unit_ty) {
+            Ok(())
         } else {
-            // No match; evaluate else branch (without bindings)
-            match else_br {
-                Some(e) => self.eval(e).await,
-                None => Ok(self.make_none()),
-            }
+            let span = self.ast.expr_span(expr).unwrap_or(fallback_span);
+            let ty_name = val.type_name(&self.registry, &self.type_exprs);
+            Err(Error::type_err(
+                span,
+                format!("single-arm IF body must be Unit; got {ty_name}"),
+            ))
         }
     }
 

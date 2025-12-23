@@ -18,6 +18,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Scalars convert directly; complex values serialize to JSON.
     pub(crate) fn store(&self, v: &Value) -> Result<rumps_types::Value> {
         match v {
+            Value::Unit => Err(Error::runtime_no_span("Unit cannot be stored")),
             Value::Bool(b) => Ok(rumps_types::Value::Boolean(*b)),
             Value::Int(i) => Ok(rumps_types::Value::Integer(*i)),
             Value::Float(f) => Ok(rumps_types::Value::Double(*f)),
@@ -71,6 +72,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Recursive stringify helper.
     pub(crate) fn stringify(&self, v: &Value) -> String {
         match v {
+            Value::Unit => "Unit".into(),
             // Usually keywords are represented as uppercase, so this will
             // produce `TRUE`/`FALSE`, even though they are not really keywords
             Value::Bool(b) => b.to_string().to_uppercase(),
@@ -191,6 +193,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Returns an error for values that cannot be serialized (e.g., closures).
     pub(crate) fn jsonify(&self, v: &Value) -> Result<serde_json::Value> {
         match v {
+            Value::Unit => Ok(serde_json::Value::Null),
             Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
             Value::Int(n) => Ok(serde_json::json!(*n)),
             Value::Float(f) => Ok(serde_json::json!(f.0)),
@@ -352,7 +355,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| Subscript::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            Value::Array(_, _)
+            Value::Unit
+            | Value::Array(_, _)
             | Value::Object(_)
             | Value::Tuple(_, _)
             | Value::Map(_, _, _)

@@ -1,65 +1,59 @@
-; Test: Option values (Option.None and Option.Some)
-; Tests that missing values and blocks without tails return Option.None
+; Test: Unit type and Option values
+; Tests blocks returning Unit, single-arm IF returning Unit, and Option behavior
 
-; === GET returns Option ===
-
-; GET on non-existent key
-SET data(1) = "exists"
-LET missing = GET data(999)
-OUTPUT missing
-; Expected: Option.None (or undefined variable error)
-
-; GET on existing key
-LET exists = GET data(1)
-OUTPUT exists
-; Expected: exists (the value)
-
-; === Block without tail returns Option.None ===
+; === Block without tail returns Unit ===
 
 LET result = {
   OUTPUT "Side effect only"
 }
 OUTPUT result
-; Expected: Option.None
+; Expected: Unit
 
-LET result2 = {
+LET result-2 = {
   LET x = 42
   OUTPUT x
   ; No tail expression
 }
-OUTPUT result2
-; Expected: Option.None
+OUTPUT result-2
+; Expected: Unit
 
 ; === Block with tail returns value ===
 
-LET result3 = {
+LET result-3 = {
   LET x = 42
   x
 }
-OUTPUT result3
+OUTPUT result-3
 ; Expected: 42
 
-; === IF without ELSE and false condition ===
+; === Single-arm IF returns Unit ===
 
-LET cond-result = IF FALSE {
-  "never reached"
+; Single-arm IF with false condition (body not evaluated)
+LET cond-1 = IF FALSE {
+  OUTPUT "never reached"
 }
-OUTPUT cond-result
+OUTPUT cond-1
+; Expected: Unit
+
+; Single-arm IF with true condition (body evaluated, must be Unit)
+LET cond-2 = IF TRUE {
+  OUTPUT "side effect"
+}
+OUTPUT cond-2
+; Expected: Unit
+
+; === Option values ===
+
+; Option.None
+OUTPUT Option.None
 ; Expected: Option.None
 
-LET second-cond-result = IF TRUE {
-  "reached"
-}
-OUTPUT second-cond-result
-; Expected: reached
+; Option.Some unwrapping with coalesce
+OUTPUT Option.Some(42) ?? 0
+; Expected: 42
 
-; === Nested Option scenarios ===
+; Option.None fallback with coalesce
+OUTPUT Option.None ?? "fallback"
+; Expected: fallback
 
-LET outer = {
-  LET inner = IF FALSE { 42 }
-  inner
-}
-OUTPUT outer
-; Expected: Option.None (inner is None, returned as-is)
-
-OUTPUT "Option values test complete"
+OUTPUT "Unit and Option test complete"

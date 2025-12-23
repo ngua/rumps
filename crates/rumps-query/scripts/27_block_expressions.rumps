@@ -1,21 +1,20 @@
 ; Test: Block and IF expressions in expression contexts
 ; Tests that blocks and IF can appear anywhere an expression is expected
 
-; IF expression in LET binding
-LET x = IF TRUE { 42 }
-OUTPUT x
+; === Single-arm IF returns Unit ===
+; Single-arm IF always evaluates to Unit (for side effects only)
+LET res = IF TRUE { OUTPUT "side effect" }
+OUTPUT res
+; Expected: Unit
 
-LET y = IF FALSE { 99 }
-OUTPUT y
-
-; IF/ELSE expression in LET binding
+; === IF/ELSE expression in LET binding ===
 LET a = IF TRUE { "yes" } ELSE { "no" }
 OUTPUT a
 
 LET b = IF FALSE { "yes" } ELSE { "no" }
 OUTPUT b
 
-; Nested IF expressions
+; Nested IF/ELSE expressions
 LET nested = IF TRUE {
   IF FALSE { 1 } ELSE { 2 }
 } ELSE {
@@ -23,12 +22,14 @@ LET nested = IF TRUE {
 }
 OUTPUT nested
 
-; IF expression in arithmetic
+; IF/ELSE in arithmetic
 LET sum = 10 + IF TRUE { 5 } ELSE { 0 }
 OUTPUT sum
 
-; IF expression as argument
+; IF/ELSE as argument
 OUTPUT IF TRUE { "direct if" } ELSE { "nope" }
+
+; === Block expressions ===
 
 ; Block expression in LET binding
 LET blk = { 1 + 2 }
@@ -45,7 +46,7 @@ OUTPUT computed
 LET expr = { 5 } + { 3 }
 OUTPUT expr
 
-; IF with block that has statements
+; IF/ELSE with block that has statements
 LET complex = IF TRUE {
   LET inner = 100
   inner + 1
@@ -54,7 +55,7 @@ LET complex = IF TRUE {
 }
 OUTPUT complex
 
-; Chained conditionals
+; Chained conditionals (all IF/ELSE)
 LET grade = 85
 LET letter = IF grade >= 90 { "A" } ELSE {
   IF grade >= 80 { "B" } ELSE {
@@ -62,5 +63,13 @@ LET letter = IF grade >= 90 { "A" } ELSE {
   }
 }
 OUTPUT letter
+
+; === Blocks without tail return Unit ===
+LET no-tail = {
+  LET tmp = 42
+  OUTPUT tmp
+}
+OUTPUT no-tail
+; Expected: Unit
 
 OUTPUT "Block expressions test complete"

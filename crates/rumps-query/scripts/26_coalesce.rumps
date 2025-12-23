@@ -3,58 +3,51 @@
 
 ; === Option.None coalesces to fallback ===
 
-; IF without ELSE and false condition returns Option.None
-LET none1 = IF FALSE { "unreachable" }
-OUTPUT none1 ?? "fallback1"
+; Option.None falls back to right operand
+OUTPUT Option.None ?? "fallback1"
 ; Expected: fallback1
 
-; Block without trailing expression returns Option.None
-; (using OUTPUT statement which has no return value)
-LET none2 = {
-  OUTPUT "side effect only"
-}
-OUTPUT none2 ?? "fallback2"
-; Expected: fallback2
-
-; Another block without tail
-LET none3 = {
-  LET temp = 42
-  OUTPUT temp
-}
-OUTPUT none3 ?? "fallback3"
-; Expected: fallback3
+; Option.Some unwraps to its value
+OUTPUT Option.Some(42) ?? 0
+; Expected: 42
 
 ; === Chained coalesce ===
 
 ; Chain of None values falls through to final fallback
-LET result = (IF FALSE { 1 }) ?? (IF FALSE { 2 }) ?? 3
+LET result = Option.None ?? Option.None ?? 3
 OUTPUT result
 ; Expected: 3
 
-; First non-None wins (but with None on left)
-LET chain2 = (IF FALSE { "a" }) ?? "b"
-OUTPUT chain2
-; Expected: b
+; First non-None wins
+LET chain-2 = Option.None ?? Option.Some("found") ?? "default"
+OUTPUT chain-2
+; Expected: found
 
-; === Coalesce with nested IF ===
+; === Result coalesce ===
 
-; Nested IF returning None (outer false, inner never evaluated)
-LET nested = IF FALSE {
-  IF TRUE { "inner" }
-}
-OUTPUT nested ?? "outer-fallback"
-; Expected: outer-fallback
+; Result.Ok unwraps to its value
+OUTPUT Result.Ok(100) ?? 0
+; Expected: 100
+
+; Result.Err falls back to right operand
+OUTPUT Result.Err("oops") ?? 999
+; Expected: 999
 
 ; === Coalesce in expressions ===
 
 ; Coalesce result can be used in further expressions
-LET val = ((IF FALSE { 10 }) ?? 5) + 1
+LET val = (Option.None ?? 5) + 1
 OUTPUT val
 ; Expected: 6
 
 ; Coalesce with string concatenation
-LET greeting = (IF FALSE { "Hi" }) ?? "Hello"
+LET greeting = Option.None ?? "Hello"
 OUTPUT greeting ++ " World"
 ; Expected: Hello World
+
+; Coalesce with Option.Some in expression
+LET num = (Option.Some(10) ?? 0) * 2
+OUTPUT num
+; Expected: 20
 
 OUTPUT "Coalesce tests complete"

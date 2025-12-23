@@ -914,7 +914,27 @@ async fn if_expr_false_branch() {
 
 #[tokio::test]
 async fn if_expr_no_else_true() {
-    // IF true { 42 }  (no else)
+    // IF true { } (no else, body is Unit block, returns Unit)
+    let mut ast = Ast::new();
+    let cond = ast
+        .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7))
+        .unwrap();
+    // Block without tail expression evaluates to Unit
+    let then_blk = ast
+        .add_expr(Expr::Block(vec![], None), Span::new(9, 11))
+        .unwrap();
+    let if_expr = ast
+        .add_expr(Expr::If(cond, then_blk, None), Span::new(0, 11))
+        .unwrap();
+
+    let mut interp = test_interp(&ast);
+    let result = interp.eval(if_expr).await.unwrap();
+    assert_eq!(result, Value::Unit);
+}
+
+#[tokio::test]
+async fn if_expr_no_else_non_unit_error() {
+    // IF true { 42 } (no else, body is Int) -> type error
     let mut ast = Ast::new();
     let cond = ast
         .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7))
@@ -930,30 +950,30 @@ async fn if_expr_no_else_true() {
         .unwrap();
 
     let mut interp = test_interp(&ast);
-    let result = interp.eval(if_expr).await.unwrap();
-    assert_eq!(result, Value::Int(42));
+    let result = interp.eval(if_expr).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("must be Unit"));
 }
 
 #[tokio::test]
 async fn if_expr_no_else_false() {
-    // IF false { 42 }  (no else, returns Option.None)
+    // IF false { } (no else, condition false, returns Unit)
     let mut ast = Ast::new();
     let cond = ast
         .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(3, 8))
         .unwrap();
-    let then_val = ast
-        .add_expr(Expr::Literal(Literal::Int(42)), Span::new(11, 13))
-        .unwrap();
+    // Block without tail expression evaluates to Unit
     let then_blk = ast
-        .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(10, 15))
+        .add_expr(Expr::Block(vec![], None), Span::new(10, 12))
         .unwrap();
     let if_expr = ast
-        .add_expr(Expr::If(cond, then_blk, None), Span::new(0, 15))
+        .add_expr(Expr::If(cond, then_blk, None), Span::new(0, 12))
         .unwrap();
 
     let mut interp = test_interp(&ast);
     let result = interp.eval(if_expr).await.unwrap();
-    assert!(result.is_none(&interp.type_exprs));
+    assert_eq!(result, Value::Unit);
 }
 
 #[tokio::test]
@@ -1010,7 +1030,7 @@ async fn block_expr_with_tail() {
 
 #[tokio::test]
 async fn block_expr_no_tail() {
-    // { } (empty block, returns Option.None)
+    // { } (empty block, returns Unit)
     let mut ast = Ast::new();
     let blk = ast
         .add_expr(Expr::Block(vec![], None), Span::new(0, 3))
@@ -1018,7 +1038,7 @@ async fn block_expr_no_tail() {
 
     let mut interp = test_interp(&ast);
     let result = interp.eval(blk).await.unwrap();
-    assert!(result.is_none(&interp.type_exprs));
+    assert_eq!(result, Value::Unit);
 }
 
 #[tokio::test]
@@ -1097,30 +1117,22 @@ async fn block_expr_scope_isolated() {
 
 #[tokio::test]
 async fn coalesce_option_none() {
-    // (IF false { 42 }) ?? 0 -> 0
-    // IF false without else returns Option.None
+    // Option.None ?? 0 -> 0
     let mut ast = Ast::new();
 
-    let cond = ast
-        .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9))
+    let none = ast
+        .add_expr(
+            Expr::Variant("Option".into(), "None".into(), smallvec![]),
+            Span::new(0, 11),
+        )
         .unwrap();
-    let then_val = ast
-        .add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14))
-        .unwrap();
-    let then_blk = ast
-        .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(11, 16))
-        .unwrap();
-    let if_expr = ast
-        .add_expr(Expr::If(cond, then_blk, None), Span::new(1, 17))
-        .unwrap();
-
     let fallback = ast
-        .add_expr(Expr::Literal(Literal::Int(0)), Span::new(22, 23))
+        .add_expr(Expr::Literal(Literal::Int(0)), Span::new(15, 16))
         .unwrap();
     let coalesce = ast
         .add_expr(
-            Expr::Binary(if_expr, BinOp::Coalesce, fallback),
-            Span::new(0, 23),
+            Expr::Binary(none, BinOp::Coalesce, fallback),
+            Span::new(0, 16),
         )
         .unwrap();
 
@@ -1179,31 +1191,22 @@ async fn coalesce_string_error() {
 
 #[tokio::test]
 async fn coalesce_short_circuit() {
-    // Option.None ?? (side effect not visible, but rhs is evaluated)
-    // We test that rhs IS evaluated when lhs is None
-    // (IF false { 1 }) ?? 99 -> 99
+    // Option.None ?? 99 -> 99 (rhs evaluated when lhs is None)
     let mut ast = Ast::new();
 
-    let cond = ast
-        .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9))
+    let none = ast
+        .add_expr(
+            Expr::Variant("Option".into(), "None".into(), smallvec![]),
+            Span::new(0, 11),
+        )
         .unwrap();
-    let then_val = ast
-        .add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13))
-        .unwrap();
-    let then_blk = ast
-        .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(11, 15))
-        .unwrap();
-    let if_expr = ast
-        .add_expr(Expr::If(cond, then_blk, None), Span::new(1, 16))
-        .unwrap();
-
     let fallback = ast
-        .add_expr(Expr::Literal(Literal::Int(99)), Span::new(21, 23))
+        .add_expr(Expr::Literal(Literal::Int(99)), Span::new(15, 17))
         .unwrap();
     let coalesce = ast
         .add_expr(
-            Expr::Binary(if_expr, BinOp::Coalesce, fallback),
-            Span::new(0, 23),
+            Expr::Binary(none, BinOp::Coalesce, fallback),
+            Span::new(0, 17),
         )
         .unwrap();
 
@@ -1214,48 +1217,34 @@ async fn coalesce_short_circuit() {
 
 #[tokio::test]
 async fn coalesce_chain() {
-    // (IF false { 1 }) ?? (IF false { 2 }) ?? 3 -> 3
+    // Option.None ?? Option.None ?? 3 -> 3
     let mut ast = Ast::new();
 
-    // First: IF false { 1 } -> None
-    let cond1 = ast
-        .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(4, 9))
+    let none1 = ast
+        .add_expr(
+            Expr::Variant("Option".into(), "None".into(), smallvec![]),
+            Span::new(0, 11),
+        )
         .unwrap();
-    let val1 = ast
-        .add_expr(Expr::Literal(Literal::Int(1)), Span::new(12, 13))
+    let none2 = ast
+        .add_expr(
+            Expr::Variant("Option".into(), "None".into(), smallvec![]),
+            Span::new(15, 26),
+        )
         .unwrap();
-    let blk1 = ast
-        .add_expr(Expr::Block(vec![], Some(val1)), Span::new(11, 15))
-        .unwrap();
-    let if1 = ast
-        .add_expr(Expr::If(cond1, blk1, None), Span::new(1, 16))
-        .unwrap();
-
-    // Second: IF false { 2 } -> None
-    let cond2 = ast
-        .add_expr(Expr::Literal(Literal::Bool(false)), Span::new(24, 29))
-        .unwrap();
-    let val2 = ast
-        .add_expr(Expr::Literal(Literal::Int(2)), Span::new(32, 33))
-        .unwrap();
-    let blk2 = ast
-        .add_expr(Expr::Block(vec![], Some(val2)), Span::new(31, 35))
-        .unwrap();
-    let if2 = ast
-        .add_expr(Expr::If(cond2, blk2, None), Span::new(21, 36))
-        .unwrap();
-
-    // Third: literal 3
     let three = ast
-        .add_expr(Expr::Literal(Literal::Int(3)), Span::new(41, 42))
+        .add_expr(Expr::Literal(Literal::Int(3)), Span::new(30, 31))
         .unwrap();
 
-    // Build: (if1 ?? if2) ?? 3
+    // Build: (none1 ?? none2) ?? 3
     let c1 = ast
-        .add_expr(Expr::Binary(if1, BinOp::Coalesce, if2), Span::new(0, 37))
+        .add_expr(
+            Expr::Binary(none1, BinOp::Coalesce, none2),
+            Span::new(0, 26),
+        )
         .unwrap();
     let c2 = ast
-        .add_expr(Expr::Binary(c1, BinOp::Coalesce, three), Span::new(0, 42))
+        .add_expr(Expr::Binary(c1, BinOp::Coalesce, three), Span::new(0, 31))
         .unwrap();
 
     let mut interp = test_interp(&ast);

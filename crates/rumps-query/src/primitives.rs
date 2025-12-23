@@ -635,8 +635,9 @@ impl Array {
                     // Maps and times are not directly comparable for sorting
                     Value::Map(_, _, _) | Value::Time(_) => None,
 
-                    // Closures, functions, module functions, and ranges are not comparable
-                    Value::Closure { .. }
+                    // Unit, closures, functions, module functions, and ranges are not comparable
+                    Value::Unit
+                    | Value::Closure { .. }
                     | Value::Function { .. }
                     | Value::ModuleFn { .. }
                     | Value::Range { .. } => None,

@@ -417,6 +417,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<bool> {
         match (left, right) {
+            (Value::Unit, Value::Unit) => Ok(true),
             (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
             (Value::Int(a), Value::Int(b)) => Ok(a == b),
             (Value::Float(a), Value::Float(b)) => Ok(a == b),

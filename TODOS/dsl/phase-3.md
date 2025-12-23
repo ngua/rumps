@@ -1222,7 +1222,100 @@ Array.map(x => x * x, 1..100)
 
 ---
 
-### 9. Spread Operators (`...`)
+### 9. Unit Type
+
+The type system previously conflated "optional value" (`Option.None`) with "no value" (void/unit):
+- Statements and blocks without tail expressions evaluated to `Option.None`
+- Single-arm `IF` (no `ELSE`) returned `Option.None`
+
+We fixed this by introducing a `Unit` type for expressions that produce no meaningful value.
+
+**Note**: Runtime type checking for `IF/ELSE` and `MATCH` branch consistency was considered but deferred to a future static type checker, since we cannot evaluate multiple branches just to check types (side effects, performance).
+
+#### 9.1 Add `Unit` Type
+
+##### 9.1.1 Value Representation (`value.rs`)
+
+- [x] Add `Value::Unit` variant
+- [x] Add `TypeId::UNIT` constant (index 13, after `RANGE`)
+- [x] Add `BuiltinType::Unit` variant
+- [x] Register `Unit` in `TypeRegistry::register_builtins`
+- [x] Implement `Value::Unit` in `base_type()` → `TypeId::UNIT`
+- [x] Implement `Value::Unit` in `type_name()` → `"Unit"`
+- [x] Implement `Value::Unit` truthiness in `is_truthy()` → `true`
+
+##### 9.1.2 Display/Stringify (`convert.rs`)
+
+- [x] Add `Value::Unit` case in `stringify()` → `"Unit"`
+- [x] Add `Value::Unit` case in `jsonify()` → `null`
+- [x] Add `Value::Unit` case in `store()` → error (cannot be stored)
+
+##### 9.1.3 Equality (`ops.rs`)
+
+- [x] Add `Value::Unit` case in equality comparison → `Unit == Unit` is `true`
+
+##### 9.1.4 Type Matching (`types.rs`)
+
+- [x] Add `Value::Unit` case in `value_type_expr()` → `TypeId::UNIT`
+- [x] Add `Value::Unit` case in `value_matches_type()` → matches `TypeId::UNIT`
+
+##### 9.1.5 Sorting (`primitives.rs`)
+
+- [x] Add `Value::Unit` to `SortKey::from_value()` → not sortable (returns `None`)
+
+#### 9.2 Update Block Semantics
+
+Blocks with a trailing expression evaluate to that expression's value (unchanged).
+Blocks *without* a trailing expression now evaluate to `Unit` instead of `Option.None`.
+
+##### 9.2.1 Interpreter Changes (`control.rs`)
+
+- [x] In `block_inner()`: return `Value::Unit` instead of `make_none()` when no tail
+
+#### 9.3 Single-Arm `IF` Semantics
+
+Single-arm `IF` (no `ELSE`) always evaluates to `Unit`. The body is evaluated for side effects only.
+
+```rumps
+; Single-arm IF always returns Unit
+LET x = IF TRUE { OUTPUT "hello" }
+OUTPUT x  ; Unit
+
+; Use IF/ELSE to get a value
+LET y = IF cond { 42 } ELSE { 0 }
+```
+
+##### 9.3.1 Interpreter Changes (`control.rs`)
+
+- [x] In `r#if()`: when `else_br` is `None`:
+  - Only evaluate `then_br` if condition is true
+  - Always return `Value::Unit`
+- [x] In `if_with_bindings()`: same logic when `else_br` is `None`
+
+#### 9.4 Update Test Scripts
+
+Scripts that relied on old behavior were updated:
+
+##### 9.4.1 Scripts Fixed
+
+- [x] `26_coalesce.rumps`: Rewrote to use `Option.None` directly instead of single-arm `IF`
+- [x] `27_block_expressions.rumps`: Updated to reflect new semantics (single-arm IF returns `Unit`)
+
+##### 9.4.2 Unit Tests Updated
+
+- [x] `block_expr_no_tail`: Now expects `Value::Unit` instead of `is_none()`
+- [x] `if_expr_no_else_true`: Now expects `Value::Unit`
+- [x] `if_expr_no_else_false`: Now expects `Value::Unit`
+- [x] `coalesce_*` tests: Rewrote to use `Option.None` directly
+- [x] `builtin_types`: Updated count from 13 to 14
+
+##### 9.4.3 Update Snapshots
+
+- [x] Run `cargo insta test --accept` to update affected snapshots
+
+---
+
+### 10. Spread Operators (`...`)
 
 Spread syntax for arrays and objects.
 
@@ -1246,31 +1339,31 @@ LET user = { size: "large" }
 LET config = { ...defaults, ...user }  ; { color: "red", size: "large" }
 ```
 
-#### 9.1 Lexer
+#### 10.1 Lexer
 
 - [x] Add `Token::DotDotDot` (`...`) for spread operator
 
 *Note: Already implemented as part of destructuring bindings (section 2) for array rest patterns.*
 
-#### 9.2 AST
+#### 10.2 AST
 
 - [ ] Add `Expr::Spread(ExprId)` for spread expressions
 - [ ] Modify `Expr::Array` to allow spread elements
 - [ ] Modify `Expr::Object` to allow spread entries
 
-#### 9.3 Parser
+#### 10.3 Parser
 
 - [ ] Parse `...expr` inside array literals
 - [ ] Parse `...expr` inside object literals
 - [ ] Spread only valid inside array/object literals (not standalone)
 
-#### 9.4 Interpreter
+#### 10.4 Interpreter
 
 - [ ] Array spread: iterate source array, append elements to result
 - [ ] Object spread: iterate source object entries, insert into result
 - [ ] Later entries override earlier ones for objects
 
-#### 9.5 Tests
+#### 10.5 Tests
 
 - [ ] Add lexer tests for `...`
 - [ ] Add parser tests for spread in arrays and objects
@@ -1279,7 +1372,7 @@ LET config = { ...defaults, ...user }  ; { color: "red", size: "large" }
 
 ---
 
-### 10. Regex Pattern Matching (`MATCHES`)
+### 11. Regex Pattern Matching (`MATCHES`)
 
 Pattern matching with regex literals.
 
@@ -1298,7 +1391,7 @@ IF NOT (input MATCHES /[<>]/) {
 }
 ```
 
-#### 10.1 Lexer
+#### 11.1 Lexer
 
 - [ ] Add regex literal support (`/pattern/`)
   - Handle escape sequences (`\/`, `\\`)
@@ -1306,17 +1399,17 @@ IF NOT (input MATCHES /[<>]/) {
 - [ ] Add `Token::Regex(String)` for regex literals
 - [ ] Add `Token::Matches` keyword
 
-#### 10.2 AST
+#### 11.2 AST
 
 - [ ] Add `Expr::Matches(ExprId, String)` (value, pattern)
 
-#### 10.3 Interpreter
+#### 11.3 Interpreter
 
 - [ ] Add `regex` crate dependency
 - [ ] Compile regex on first use (cache compiled patterns)
 - [ ] Evaluate: coerce left to string, test against regex, return `Bool`
 
-#### 10.4 Tests
+#### 11.4 Tests
 
 - [ ] Add lexer tests for regex literals
 - [ ] Add parser tests

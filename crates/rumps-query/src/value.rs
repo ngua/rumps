@@ -124,6 +124,8 @@ impl TypeId {
     pub(crate) const TIME: Self = Self(11);
     /// Builtin type: `Range`.
     pub(crate) const RANGE: Self = Self(12);
+    /// Builtin type: `Unit`.
+    pub(crate) const UNIT: Self = Self(13);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -349,6 +351,12 @@ impl CapturedEnv {
 /// avoiding allocation and enabling O(1) string comparison.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Value {
+    /// The unit value; represents "no meaningful value".
+    ///
+    /// Used for statements, blocks without trailing expressions, and
+    /// single-arm `IF` (side-effect only).
+    Unit,
+
     /// A boolean value.
     Bool(bool),
 
@@ -456,6 +464,7 @@ impl Value {
         type_exprs: &TypeExprArena,
     ) -> bool {
         match self {
+            Self::Unit => true, // Unit is truthy (like a non-empty tuple)
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Float(f) => f.0 != 0.0,
@@ -501,6 +510,7 @@ impl Value {
         type_exprs: &TypeExprArena,
     ) -> &'static str {
         match self {
+            Self::Unit => "Unit",
             Self::Bool(_) => "Bool",
             Self::Int(_) => "Int",
             Self::Float(_) => "Float",
@@ -594,6 +604,7 @@ impl Value {
     /// Returns `UNKNOWN` for closures and functions.
     pub(crate) fn base_type(&self, type_exprs: &TypeExprArena) -> TypeId {
         match self {
+            Self::Unit => TypeId::UNIT,
             Self::Bool(_) => TypeId::BOOL,
             Self::Int(_) => TypeId::INT,
             Self::Float(_) => TypeId::FLOAT,
@@ -629,6 +640,7 @@ pub(crate) enum BuiltinType {
     Map,
     Time,
     Range,
+    Unit,
 }
 
 impl BuiltinType {
@@ -645,6 +657,7 @@ impl BuiltinType {
             Self::Map => "Map",
             Self::Time => "Time",
             Self::Range => "Range",
+            Self::Unit => "Unit",
         }
     }
 }
@@ -1128,6 +1141,18 @@ impl TypeRegistry {
             ))
         })?;
 
+        // Unit at index 13
+        let unit_name = arena.intern("Unit");
+        let unit =
+            self.register(TypeDef::Builtin(BuiltinType::Unit), unit_name);
+        (unit == TypeId::UNIT).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Unit at index {}, expected {}",
+                unit.0,
+                TypeId::UNIT.0
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -1198,7 +1223,7 @@ mod tests {
         let mut arena = ValueArena::new();
         let reg = TypeRegistry::new(&mut arena).unwrap();
 
-        assert_eq!(reg.len(), 13); // 8 primitives + Option + Result + Tuple + Range
+        assert_eq!(reg.len(), 14); // 9 primitives (incl. Unit) + Option + Result + Tuple + Range
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");
