@@ -104,7 +104,7 @@ The type checker will add `Error::StaticType(TypeError)` for compile-time errors
 - [ ] Rename `Error::Type` to `Error::RuntimeType` in `error.rs`
 - [ ] Rename `Error::type_err()` to `Error::runtime_type()`
 - [ ] Update all call sites (grep for `type_err`, `Error::Type`)
-- [ ] Update `Diagnostic` impl: keep code as `"rumps::type"` or change to `"rumps::runtime_type"`
+- [ ] Update `Diagnostic` impl: change to `"rumps::runtime_type"`
 - [ ] Verify tests still pass
 
 ---
@@ -259,7 +259,7 @@ This is the return type of `GET` and element type of `COLLECT` (pre-`SELECT`).
 - [ ] Parser/CST: Parse `UNION Name = Type | Type | ...` declarations
 - [ ] Parser/CST: Parse union types in annotations (`x: Int | String`)
 - [ ] AST: Add `Stmt::Union` for declarations
-- [ ] AST: Add `AstTypeExpr::Union(Vec<AstTypeExpr>)` for union type expressions
+- [ ] AST: Add `AstTypeExpr::Union(SmallVec<[AstTypeExprId; 4]>)` for union type expressions
 - [ ] TypeRegistry: Register union types
 - [ ] Value: No change needed (unions are type-level, not value-level)
 - [ ] Interpreter: `IS` checks against union members
@@ -982,10 +982,80 @@ impl InferCtx<'_> {
 }
 ```
 
+### Mapping Static Types to Runtime Types
+
+The type checker uses `Ty` (with type variables, inference constructs). The interpreter uses `TypeExprId` (runtime type tags). We need a mapping function to bridge these:
+
+```rust
+impl TypeExprArena {
+    /// Convert a resolved static type to a runtime type expression.
+    ///
+    /// Panics if `ty` contains unresolved type variables (`Var`, `Unknown`, `Error`).
+    pub(crate) fn from_ty(&mut self, ty: &Ty, registry: &TypeRegistry) -> TypeExprId {
+        match ty {
+            Ty::Bool => self.named(TypeId::BOOL),
+            Ty::Int => self.named(TypeId::INT),
+            Ty::Float => self.named(TypeId::FLOAT),
+            Ty::Char => self.named(TypeId::CHAR),
+            Ty::String => self.named(TypeId::STRING),
+            Ty::Unit => self.named(TypeId::UNIT),
+            Ty::Time => self.named(TypeId::TIME),
+            Ty::Range => self.named(TypeId::RANGE),
+            Ty::Array(elem) => {
+                let elem_id = self.from_ty(elem, registry);
+                self.app(TypeId::ARRAY, smallvec![elem_id])
+            }
+            Ty::Option(inner) => {
+                let inner_id = self.from_ty(inner, registry);
+                self.app(TypeId::OPTION, smallvec![inner_id])
+            }
+            Ty::Result(ok, err) => {
+                let ok_id = self.from_ty(ok, registry);
+                let err_id = self.from_ty(err, registry);
+                self.app(TypeId::RESULT, smallvec![ok_id, err_id])
+            }
+            Ty::Map(k, v) => {
+                let k_id = self.from_ty(k, registry);
+                let v_id = self.from_ty(v, registry);
+                self.app(TypeId::MAP, smallvec![k_id, v_id])
+            }
+            Ty::Tuple(elems) => {
+                let elem_ids: SmallVec<[_; 4]> = elems
+                    .iter()
+                    .map(|e| self.from_ty(e, registry))
+                    .collect();
+                self.app(TypeId::TUPLE, elem_ids)
+            }
+            Ty::Named(type_id, params) => {
+                let param_ids: SmallVec<[_; 4]> = params
+                    .iter()
+                    .map(|p| self.from_ty(p, registry))
+                    .collect();
+                self.app(*type_id, param_ids)
+            }
+            Ty::Fn(_, _) | Ty::Object(_) => {
+                // Functions and objects don't have TypeId representations;
+                // use UNKNOWN or handle specially
+                self.named(TypeId::UNKNOWN)
+            }
+            Ty::Var(_) | Ty::Unknown | Ty::Error => {
+                unreachable!("from_ty called on unresolved type: {:?}", ty)
+            }
+        }
+    }
+}
+```
+
+This is used for:
+- Runtime `IS` checks (compare value's type tag against user's annotation)
+- Runtime `AS` casts (verify cast is valid)
+- Error messages with concrete types
+
 ### Checklist
 
 - [ ] Add `pub(crate) fn check(ast, registry) -> crate::Result<()>` to `typecheck.rs`
 - [ ] `impl InferCtx`: `fn into_result(self) -> crate::Result<()>`
+- [ ] `impl TypeExprArena`: `fn from_ty(&mut self, ty: &Ty, registry: &TypeRegistry) -> TypeExprId`
 - [ ] Modify `crates/rumps-query/src/lib.rs`:
   - [ ] Add `mod typecheck;`
 - [ ] Modify `crates/rumps-query/src/interpreter.rs`:
