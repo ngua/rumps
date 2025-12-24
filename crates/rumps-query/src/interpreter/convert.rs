@@ -272,6 +272,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Times serialize as ISO 8601 strings
                 Ok(serde_json::Value::String(t.to_rfc3339()))
             }
+            Value::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let end = if *inclusive { *end + 1 } else { *end };
+                let arr: Vec<_> = (*start..end)
+                    .map(|n| serde_json::Value::Number(n.into()))
+                    .collect();
+                Ok(serde_json::Value::Array(arr))
+            }
             Value::Closure { .. } => Err(Error::runtime_no_span(
                 "closures cannot be serialized to JSON",
             )),
@@ -280,9 +291,6 @@ impl<I: IoContext> Interpreter<'_, I> {
             )),
             Value::ModuleFn { .. } => Err(Error::runtime_no_span(
                 "module functions cannot be serialized to JSON",
-            )),
-            Value::Range { .. } => Err(Error::runtime_no_span(
-                "ranges cannot be serialized to JSON",
             )),
         }
     }
