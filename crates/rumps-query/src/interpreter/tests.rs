@@ -11,7 +11,7 @@ use crate::ast::{
     Ast, AstTypeExpr, BinOp, Expr, ExprId, Literal, Stmt, TypePattern, UnOp,
 };
 use crate::io::TestIo;
-use crate::value::{TypeRegistry, Value, ValueArena};
+use crate::value::{TypeExprArena, TypeRegistry, Value, ValueArena};
 use crate::Span;
 
 /// Create a test interpreter with an in-memory database.
@@ -20,8 +20,10 @@ use crate::Span;
 fn test_interp(ast: &Ast) -> Interpreter<'_, TestIo> {
     let db = Database::in_memory().expect("in-memory db");
     let mut arena = ValueArena::new();
-    let registry = TypeRegistry::new(&mut arena).expect("registry");
-    Interpreter::with_arena(ast, db, TestIo::new(), arena, registry)
+    let mut type_exprs = TypeExprArena::new();
+    let registry =
+        TypeRegistry::new(&mut arena, &mut type_exprs).expect("registry");
+    Interpreter::with_arena(ast, db, TestIo::new(), arena, registry, type_exprs)
 }
 
 /// Build a simple AST with a single expression.

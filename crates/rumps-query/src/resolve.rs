@@ -31,6 +31,8 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{Ast, Expr, ExprId};
 use crate::env::BUILTIN_MODULE_NAMES;
+#[cfg(test)]
+use crate::value::TypeExprArena;
 use crate::value::{TypeRegistry, ValueArena};
 
 /// Check if a name is a built-in module.
@@ -183,7 +185,9 @@ mod tests {
     fn parse_and_resolve(src: &str) -> Ast {
         let mut result = Parser::parse(src).expect("parse failed");
         let mut arena = ValueArena::new();
-        let registry = TypeRegistry::new(&mut arena).expect("registry failed");
+        let mut type_exprs = TypeExprArena::new();
+        let registry = TypeRegistry::new(&mut arena, &mut type_exprs)
+            .expect("registry failed");
         resolve(&mut result.ast, &mut arena, &registry);
         result.ast
     }

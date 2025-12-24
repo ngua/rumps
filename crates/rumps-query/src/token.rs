@@ -28,6 +28,7 @@ pub(crate) enum Token {
     Fun,
     Type,
     Match,
+    Union,
 
     // Literals
     Int(i64),
@@ -129,6 +130,7 @@ impl Token {
                 "FUN" => Some(Self::Fun),
                 "TYPE" => Some(Self::Type),
                 "MATCH" => Some(Self::Match),
+                "UNION" => Some(Self::Union),
                 // `null` is case-sensitive (JSON requires lowercase);
                 // `NULL`, `Null`, etc. are identifiers, not keywords
                 "NULL" => None,
@@ -159,6 +161,7 @@ impl fmt::Display for Token {
             Self::Fun => write!(f, "FUN"),
             Self::Type => write!(f, "TYPE"),
             Self::Match => write!(f, "MATCH"),
+            Self::Union => write!(f, "UNION"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),
@@ -249,6 +252,7 @@ mod tests {
         assert_eq!(Token::keyword("FALSE"), Some(Token::False));
         assert_eq!(Token::keyword("FUN"), Some(Token::Fun));
         assert_eq!(Token::keyword("MATCH"), Some(Token::Match));
+        assert_eq!(Token::keyword("UNION"), Some(Token::Union));
     }
 
     #[test]

@@ -128,6 +128,15 @@ impl TypeId {
     pub(crate) const UNIT: Self = Self(13);
     /// Builtin type: `Json`.
     pub(crate) const JSON: Self = Self(14);
+    /// Builtin union: `Storable = Bool | Int | Float | Char | String | Json`.
+    ///
+    /// The set of types that can be stored in B-tree globals/locals.
+    /// `AS Storable` is infallible; `AS` to other unions requires `READ`.
+    pub(crate) const STORABLE: Self = Self(15);
+    /// Builtin union: `Scalar = Bool | Int | Float | String`.
+    ///
+    /// Used as return type for `->>`  JSON scalar extraction.
+    pub(crate) const SCALAR: Self = Self(16);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -542,6 +551,7 @@ impl Value {
                     TypeDef::Builtin(b) => b.name(),
                     TypeDef::Sum { .. } => "Tagged",
                     TypeDef::Struct { .. } => "Struct",
+                    TypeDef::Union { .. } => "Union",
                 })
                 .unwrap_or("Unknown"),
             Self::Closure { .. } => "Closure",
@@ -705,6 +715,18 @@ pub(crate) enum TypeDef {
         name: StringId,
         fields: IndexMap<StringId, TypeExprId>,
     },
+    /// Named union type definition.
+    ///
+    /// Union types represent a value that can be one of several types.
+    /// Used for `UNION Storable = Bool | Int | ...` declarations.
+    /// At runtime, `IS` checks test against each member; `AS` casts are
+    /// infallible only for `Storable` (special-cased).
+    Union {
+        name: StringId,
+        type_params: SmallVec<[StringId; 2]>,
+        /// Member type expressions (stored in `TypeExprArena`).
+        members: SmallVec<[TypeExprId; 8]>,
+    },
 }
 
 /// Index into the type expression arena.
@@ -729,6 +751,10 @@ enum TypeExpr {
     Fn(SmallVec<[TypeExprId; 4]>, TypeExprId),
     /// Tuple type: `(Int, String, Bool)`
     Tuple(SmallVec<[TypeExprId; 4]>),
+    /// Union type: `Int | String | Bool`
+    ///
+    /// A value matches a union if it matches ANY member type.
+    Union(SmallVec<[TypeExprId; 4]>),
 }
 
 /// A named function definition stored in the function registry.
@@ -767,11 +793,13 @@ impl TypeExprArena {
     /// Get the base `TypeId` from a type expression.
     ///
     /// For `Named(T)` returns `T`; for `App(T, params)` returns `T`.
-    /// For `Fn` and `Tuple` returns `None` (compound types have no single base).
+    /// For `Fn`, `Tuple`, and `Union` returns `None` (compound types have no single base).
     pub(crate) fn base_type(&self, id: TypeExprId) -> Option<TypeId> {
         self.get(id).and_then(|expr| match expr {
             TypeExpr::Named(ty) | TypeExpr::App(ty, _) => Some(*ty),
-            TypeExpr::Fn(..) | TypeExpr::Tuple(..) => None,
+            TypeExpr::Fn(..) | TypeExpr::Tuple(..) | TypeExpr::Union(..) => {
+                None
+            }
         })
     }
 
@@ -837,6 +865,10 @@ impl TypeExprArena {
                 ea.len() == eb.len()
                     && ea.iter().zip(eb.iter()).all(|(a, b)| self.eq(*a, *b))
             }
+            (TypeExpr::Union(ma), TypeExpr::Union(mb)) => {
+                ma.len() == mb.len()
+                    && ma.iter().zip(mb.iter()).all(|(a, b)| self.eq(*a, *b))
+            }
             _ => false,
         }
     }
@@ -885,6 +917,14 @@ impl TypeExprArena {
                     .join(", ");
                 format!("({parts})")
             }
+            TypeExpr::Union(members) => {
+                let parts = members
+                    .iter()
+                    .filter_map(|p| self.format(*p, name_fn))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                parts
+            }
         }
     }
 
@@ -921,6 +961,31 @@ impl TypeExprArena {
         self.get(id)
             .is_some_and(|e| matches!(e, TypeExpr::Tuple(..)))
     }
+
+    /// Add a union type expression (e.g., `Int | String | Bool`).
+    pub(crate) fn union(
+        &mut self,
+        members: SmallVec<[TypeExprId; 4]>,
+    ) -> TypeExprId {
+        self.add(TypeExpr::Union(members))
+    }
+
+    /// Get union member types if this is a union type.
+    pub(crate) fn union_members(
+        &self,
+        id: TypeExprId,
+    ) -> Option<&SmallVec<[TypeExprId; 4]>> {
+        self.get(id).and_then(|expr| match expr {
+            TypeExpr::Union(members) => Some(members),
+            _ => None,
+        })
+    }
+
+    /// Check if a type expression is a union type.
+    pub(crate) fn is_union(&self, id: TypeExprId) -> bool {
+        self.get(id)
+            .is_some_and(|e| matches!(e, TypeExpr::Union(..)))
+    }
 }
 
 /// Registry of all type definitions.
@@ -936,12 +1001,15 @@ pub(crate) struct TypeRegistry {
 
 impl TypeRegistry {
     /// Create a type registry with all builtins registered.
-    pub(crate) fn new(arena: &mut ValueArena) -> Result<Self> {
+    pub(crate) fn new(
+        arena: &mut ValueArena,
+        type_exprs: &mut TypeExprArena,
+    ) -> Result<Self> {
         let mut reg = Self {
             defs: Vec::new(),
             by_name: HashMap::new(),
         };
-        reg.register_builtins(arena)?;
+        reg.register_builtins(arena, type_exprs)?;
         Ok(reg)
     }
 
@@ -973,9 +1041,9 @@ impl TypeRegistry {
     ) -> Option<&'a str> {
         self.get_def(id).and_then(|def| match def {
             TypeDef::Builtin(b) => Some(b.name()),
-            TypeDef::Sum { name, .. } | TypeDef::Struct { name, .. } => {
-                arena.get_str(*name)
-            }
+            TypeDef::Sum { name, .. }
+            | TypeDef::Struct { name, .. }
+            | TypeDef::Union { name, .. } => arena.get_str(*name),
         })
     }
 
@@ -987,7 +1055,9 @@ impl TypeRegistry {
         arena: &'a ValueArena,
     ) -> Option<&'a str> {
         self.get_def(ty).and_then(|def| match def {
-            TypeDef::Builtin(_) | TypeDef::Struct { .. } => None,
+            TypeDef::Builtin(_)
+            | TypeDef::Struct { .. }
+            | TypeDef::Union { .. } => None,
             TypeDef::Sum { variants, .. } => variants
                 .iter()
                 .find(|v| v.idx == idx)
@@ -1002,7 +1072,9 @@ impl TypeRegistry {
         name: StringId,
     ) -> Option<&VariantDef> {
         self.get_def(ty).and_then(|def| match def {
-            TypeDef::Builtin(_) | TypeDef::Struct { .. } => None,
+            TypeDef::Builtin(_)
+            | TypeDef::Struct { .. }
+            | TypeDef::Union { .. } => None,
             TypeDef::Sum { variants, .. } => {
                 variants.iter().find(|v| v.name == name)
             }
@@ -1011,9 +1083,13 @@ impl TypeRegistry {
 
     /// Register all built-in types (called from `new`).
     ///
-    /// Registers in order: Bool, Int, Float, String, Array, Object, Option, Result, Char.
-    /// Option and Result are at indices 6 and 7 respectively; Char is at index 8.
-    fn register_builtins(&mut self, arena: &mut ValueArena) -> Result<()> {
+    /// Registers in order: Bool, Int, Float, String, Array, Object, Option, Result, Char,
+    /// Tuple, Map, Time, Range, Unit, Json, Storable, Scalar.
+    fn register_builtins(
+        &mut self,
+        arena: &mut ValueArena,
+        type_exprs: &mut TypeExprArena,
+    ) -> Result<()> {
         // Primitives (indices 0-5)
         let bool_name = arena.intern("Bool");
         self.register(TypeDef::Builtin(BuiltinType::Bool), bool_name);
@@ -1182,6 +1258,58 @@ impl TypeRegistry {
             ))
         })?;
 
+        // Storable union at index 15: Bool | Int | Float | Char | String | Json
+        let storable_name = arena.intern("Storable");
+        let storable_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
+            type_exprs.named(TypeId::BOOL),
+            type_exprs.named(TypeId::INT),
+            type_exprs.named(TypeId::FLOAT),
+            type_exprs.named(TypeId::CHAR),
+            type_exprs.named(TypeId::STRING),
+            type_exprs.named(TypeId::JSON),
+        ];
+        let storable = self.register(
+            TypeDef::Union {
+                name: storable_name,
+                type_params: SmallVec::new(),
+                members: storable_members,
+            },
+            storable_name,
+        );
+        (storable == TypeId::STORABLE)
+            .then_some(())
+            .ok_or_else(|| {
+                crate::Error::runtime_no_span(format!(
+                    "Storable at index {}, expected {}",
+                    storable.0,
+                    TypeId::STORABLE.0
+                ))
+            })?;
+
+        // Scalar union at index 16: Bool | Int | Float | String
+        let scalar_name = arena.intern("Scalar");
+        let scalar_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
+            type_exprs.named(TypeId::BOOL),
+            type_exprs.named(TypeId::INT),
+            type_exprs.named(TypeId::FLOAT),
+            type_exprs.named(TypeId::STRING),
+        ];
+        let scalar = self.register(
+            TypeDef::Union {
+                name: scalar_name,
+                type_params: SmallVec::new(),
+                members: scalar_members,
+            },
+            scalar_name,
+        );
+        (scalar == TypeId::SCALAR).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Scalar at index {}, expected {}",
+                scalar.0,
+                TypeId::SCALAR.0
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -1250,24 +1378,30 @@ mod tests {
     #[test]
     fn builtin_types() {
         let mut arena = ValueArena::new();
-        let reg = TypeRegistry::new(&mut arena).unwrap();
+        let mut type_exprs = TypeExprArena::new();
+        let reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
 
-        assert_eq!(reg.len(), 15); // 10 primitives (incl. Unit, Json) + Option + Result + Tuple + Range
+        // 13 primitives + Option + Result + Storable + Scalar = 17
+        assert_eq!(reg.len(), 17);
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");
         let result_name = arena.intern("Result");
+        let storable_name = arena.intern("Storable");
+        let scalar_name = arena.intern("Scalar");
 
         assert!(reg.lookup(bool_name).is_some());
         assert_eq!(reg.lookup(option_name), Some(TypeId::OPTION));
         assert_eq!(reg.lookup(result_name), Some(TypeId::RESULT));
+        assert_eq!(reg.lookup(storable_name), Some(TypeId::STORABLE));
+        assert_eq!(reg.lookup(scalar_name), Some(TypeId::SCALAR));
     }
 
     #[test]
     fn option_values() {
         let mut arena = ValueArena::new();
-        let _reg = TypeRegistry::new(&mut arena).unwrap();
         let mut type_exprs = TypeExprArena::new();
+        let _reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
 
         // Option[Unknown] for None
         let unknown = type_exprs.named(TypeId::UNKNOWN);
@@ -1293,8 +1427,8 @@ mod tests {
     #[test]
     fn result_values() {
         let mut arena = ValueArena::new();
-        let _reg = TypeRegistry::new(&mut arena).unwrap();
         let mut type_exprs = TypeExprArena::new();
+        let _reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
 
         // Result[Int, Unknown] for Ok(42)
         let int_ty = type_exprs.named(TypeId::INT);
@@ -1324,8 +1458,8 @@ mod tests {
     #[test]
     fn truthy_falsy() {
         let mut arena = ValueArena::new();
-        let _reg = TypeRegistry::new(&mut arena).unwrap();
         let mut type_exprs = TypeExprArena::new();
+        let _reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
         let int_ty = type_exprs.named(TypeId::INT);
         let unknown = type_exprs.named(TypeId::UNKNOWN);
 
@@ -1374,7 +1508,8 @@ mod tests {
     #[test]
     fn variant_name_lookup() {
         let mut arena = ValueArena::new();
-        let reg = TypeRegistry::new(&mut arena).unwrap();
+        let mut type_exprs = TypeExprArena::new();
+        let reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
 
         assert_eq!(reg.variant_name(TypeId::OPTION, 0, &arena), Some("None"));
         assert_eq!(reg.variant_name(TypeId::OPTION, 1, &arena), Some("Some"));

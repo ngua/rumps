@@ -191,6 +191,27 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.try_match_object(fields, val, span)
             }
             MatchPattern::Tuple(pats) => self.try_match_tuple(pats, val, span),
+            MatchPattern::Is(name, ty_id) => {
+                self.try_match_is(name, *ty_id, val, span)
+            }
+        }
+    }
+
+    /// Try to match a type-narrowing pattern: `x IS Type`
+    fn try_match_is(
+        &mut self,
+        name: &str,
+        ast_ty_id: crate::ast::AstTypeExprId,
+        val: &Value,
+        span: Span,
+    ) -> Result<Option<Vec<(StringId, ValueId)>>> {
+        let ty_expr = self.resolve_type_expr(ast_ty_id, span)?;
+        if self.value_matches_type_expr(val, ty_expr) {
+            let name_id = self.arena.intern(name);
+            let val_id = self.arena.add(val.clone(), span);
+            Ok(Some(vec![(name_id, val_id)]))
+        } else {
+            Ok(None)
         }
     }
 

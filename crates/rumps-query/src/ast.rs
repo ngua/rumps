@@ -251,6 +251,12 @@ pub(crate) enum AstTypeExpr {
     /// Tuple types have two or more element types (single-element tuples require
     /// a trailing comma: `(Int,)`).
     Tuple(SmallVec<[AstTypeExprId; 4]>),
+
+    /// Union type: `Int | String | Bool`.
+    ///
+    /// Anonymous unions for type annotations. Named union declarations use
+    /// `Stmt::Union`.
+    Union(SmallVec<[AstTypeExprId; 4]>),
 }
 
 /// Binary operators.
@@ -402,6 +408,11 @@ pub(crate) enum MatchPattern {
     ///
     /// Matches a tuple of the same arity and recursively matches elements.
     Tuple(SmallVec<[MatchPatternId; 4]>),
+
+    /// Type-narrowing pattern: `x IS Int`, `val IS String`
+    ///
+    /// Matches if the value is of the specified type and binds it to the name.
+    Is(String, AstTypeExprId),
 }
 
 /// A match arm in a `MATCH` expression.
@@ -748,6 +759,21 @@ pub(crate) enum Stmt {
         name: String,
         type_params: SmallVec<[String; 2]>,
         def: TypeDefAst,
+    },
+
+    /// Union type declaration: `UNION Name = Type1 | Type2 | ...`.
+    ///
+    /// Named unions define a type that can be any of the member types.
+    /// Unlike sum types (`TYPE`), union members are existing types, not variants.
+    ///
+    /// Examples:
+    /// - `UNION Storable = Bool | Int | Float | Char | String | Json`
+    /// - `UNION Numeric = Int | Float`
+    /// - `UNION F[T] = Int | Option[T]`
+    Union {
+        name: String,
+        type_params: SmallVec<[String; 2]>,
+        members: SmallVec<[AstTypeExprId; 4]>,
     },
 }
 

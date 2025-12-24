@@ -119,6 +119,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect();
                 Ok(self.type_exprs.tuple(resolved?))
             }
+            AstTypeExpr::Union(members) => {
+                // Recursively resolve member types
+                let resolved: Result<SmallVec<[TypeExprId; 4]>> = members
+                    .iter()
+                    .map(|&m| self.resolve_type_expr(m, span))
+                    .collect();
+                Ok(self.type_exprs.union(resolved?))
+            }
         }
     }
 
@@ -344,11 +352,27 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Check if a value matches a simple type (non-variant).
+    ///
+    /// For union types, the value matches if it matches ANY member type.
     pub(super) fn value_matches_type(
         &self,
         val: &Value,
         type_id: TypeId,
     ) -> bool {
+        // Check if target is a union type; if so, test each member
+        if let Some(crate::value::TypeDef::Union { members, .. }) =
+            self.registry.get_def(type_id)
+        {
+            members
+                .iter()
+                .any(|m| self.value_matches_type_expr(val, *m))
+        } else {
+            self.value_matches_type_direct(val, type_id)
+        }
+    }
+
+    /// Direct type match (non-union types).
+    fn value_matches_type_direct(&self, val: &Value, type_id: TypeId) -> bool {
         match val {
             Value::Unit => type_id == TypeId::UNIT,
             Value::Bool(_) => type_id == TypeId::BOOL,
@@ -425,21 +449,45 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// For simple types, delegates to `value_matches_type`.
     /// For function types, checks arity and param/return type compatibility.
+    /// For union types, checks if value matches ANY member.
+    /// For tuple types, checks element-wise matching.
     pub(super) fn value_matches_type_expr(
         &self,
         val: &Value,
         ty: TypeExprId,
     ) -> bool {
-        // Try simple type first
-        self.type_exprs.base_type(ty).map_or_else(
-            || {
-                // Function type: check if value is a function/closure with matching signature
-                self.type_exprs.fn_parts(ty).is_some_and(|(params, ret)| {
-                    self.fn_value_matches(val, params, ret)
-                })
-            },
-            |type_id| self.value_matches_type(val, type_id),
-        )
+        // Check for union type expression first
+        if let Some(members) = self.type_exprs.union_members(ty) {
+            members
+                .iter()
+                .any(|m| self.value_matches_type_expr(val, *m))
+        } else if let Some(expected_elems) = self.type_exprs.tuple_elems(ty) {
+            // Tuple type: check element-wise matching
+            match val {
+                Value::Tuple(_, actual_elems) => {
+                    expected_elems.len() == actual_elems.len()
+                        && expected_elems.iter().zip(actual_elems.iter()).all(
+                            |(&exp_ty, &val_id)| {
+                                self.arena.get(val_id).is_some_and(|v| {
+                                    self.value_matches_type_expr(v, exp_ty)
+                                })
+                            },
+                        )
+                }
+                _ => false,
+            }
+        } else {
+            // Try simple type
+            self.type_exprs.base_type(ty).map_or_else(
+                || {
+                    // Function type: check if value is a function/closure
+                    self.type_exprs.fn_parts(ty).is_some_and(|(params, ret)| {
+                        self.fn_value_matches(val, params, ret)
+                    })
+                },
+                |type_id| self.value_matches_type(val, type_id),
+            )
+        }
     }
 
     /// Check if a function/closure value matches a function type.
@@ -629,13 +677,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             }
         } else {
-            // Non-struct type: use exact type matching
-            let actual_ty = self.value_type_expr(val);
-            if self.type_exprs.eq(expected_ty, actual_ty) {
+            // Non-struct type: use semantic type matching (handles unions)
+            if self.value_matches_type_expr(val, expected_ty) {
                 Ok(())
             } else {
                 let expected = self.type_expr_name(expected_ty);
-                let actual = self.type_expr_name(actual_ty);
+                let actual = val.type_name(&self.registry, &self.type_exprs);
                 Err(Error::runtime_type(
                     span,
                     format!("type mismatch: expected {expected}, got {actual}"),

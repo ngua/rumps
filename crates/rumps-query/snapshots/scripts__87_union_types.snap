@@ -1,0 +1,40 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Union type tests\n\n; === Builtin unions: Storable and Scalar ===\n\n; Storable contains: Bool | Int | Float | Char | String | Json\n; Scalar contains: Bool | Int | Float | String\n\n; IS checks against Storable\nLET b: Bool = true\nLET i: Int = 42\nLET f: Float = 3.14\nLET c: Char = 'x'\nLET s: String = \"hello\"\n\nOUTPUT b IS Storable\nOUTPUT i IS Storable\nOUTPUT f IS Storable\nOUTPUT c IS Storable\nOUTPUT s IS Storable\n\n; Non-storables\nLET arr = [1, 2, 3]\nLET obj = { x: 1 }\nLET tup = (1, 2)\nOUTPUT arr IS Storable\nOUTPUT obj IS Storable\nOUTPUT tup IS Storable\n\n; IS checks against Scalar\nOUTPUT b IS Scalar\nOUTPUT i IS Scalar\nOUTPUT f IS Scalar\nOUTPUT s IS Scalar\nOUTPUT c IS Scalar  ; Char is NOT Scalar\n\n; === AS cast for Storable (infallible) ===\n\nLET int-val: Int = 100\nLET storable-int = int-val AS Storable\nOUTPUT storable-int IS Storable\nOUTPUT storable-int IS Int\n\nLET str-val: String = \"test\"\nLET storable-str = str-val AS Storable\nOUTPUT storable-str IS Storable\nOUTPUT storable-str IS String\n\n; === User-defined unions ===\n\nUNION NumericId = Int | String\n\nLET id1: Int = 123\nLET id2: String = \"abc-456\"\n\nOUTPUT id1 IS NumericId\nOUTPUT id2 IS NumericId\n\n; Non-member\nLET not-id: Float = 1.5\nOUTPUT not-id IS NumericId\n\n; === Union type in function signatures ===\n\nFUN format-id(id: NumericId) -> String {\n  MATCH id {\n    n IS Int => { \"ID#\" ++ (n AS String) }\n    s IS String => { \"ID:\" ++ s }\n    _ => { \"unknown\" }\n  }\n}\n\nOUTPUT format-id(123)\nOUTPUT format-id(\"xyz\")\n\n; === MATCH with IS patterns ===\n\nLET val1 = 42\nLET result1 = MATCH val1 {\n  n IS Int => { \"int: \" ++ (n AS String) }\n  s IS String => { \"str: \" ++ s }\n  b IS Bool => { \"bool\" }\n  _ => { \"other\" }\n}\nOUTPUT result1\n\nLET val2 = \"hello\"\nLET result2 = MATCH val2 {\n  n IS Int => { \"int: \" ++ (n AS String) }\n  s IS String => { \"str: \" ++ s }\n  b IS Bool => { \"bool\" }\n  _ => { \"other\" }\n}\nOUTPUT result2\n\nLET val3 = true\nLET result3 = MATCH val3 {\n  n IS Int => { \"int\" }\n  s IS String => { \"str\" }\n  b IS Bool => { \"bool: \" ++ (b AS String) }\n  _ => { \"other\" }\n}\nOUTPUT result3\n\n; === Inline union types ===\n\nLET mixed: Int | String = 99\nOUTPUT mixed IS Int\nOUTPUT mixed IS String\n\nLET mixed2: Int | String = \"foo\"\nOUTPUT mixed2 IS Int\nOUTPUT mixed2 IS String\n\n; === Complex match with guards ===\n\nFUN classify(v: Storable) -> String {\n  MATCH v {\n    n IS Int IF n > 100 => { \"large int\" }\n    n IS Int IF n > 0 => { \"positive int\" }\n    n IS Int => { \"non-positive int\" }\n    s IS String IF String.length(s) > 10 => { \"long string\" }\n    s IS String => { \"short string\" }\n    b IS Bool => { \"boolean\" }\n    _ => { \"other storable\" }\n  }\n}\n\nOUTPUT classify(500)\nOUTPUT classify(50)\nOUTPUT classify(0)\nOUTPUT classify(\"hello world!!!\")\nOUTPUT classify(\"hi\")\nOUTPUT classify(true)\nOUTPUT classify(3.14)\n"
+---
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+FALSE
+FALSE
+FALSE
+TRUE
+TRUE
+TRUE
+TRUE
+FALSE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+FALSE
+ID#123
+ID:xyz
+int: 42
+str: hello
+bool: TRUE
+TRUE
+FALSE
+FALSE
+TRUE
+large int
+positive int
+non-positive int
+long string
+short string
+boolean
+other storable

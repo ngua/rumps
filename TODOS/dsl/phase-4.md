@@ -264,6 +264,8 @@ true as Json              ; Value::Json (bool literal)
 
 Add genuine union types to the language. This enables typed database operations where `GET` returns `UNION Storable = Bool | Int | Float | Char | String | Json`.
 
+**NOTE**: `UNION`s must support _all_ RUMPS types, including user-defined `TYPE` declarations. They should also be able to take type parameters, e.g. `UNION F[T] = Int | Option[T]`
+
 ### Syntax
 
 ```rumps
@@ -281,6 +283,7 @@ IF x IS String {
 }
 
 ; Cast with AS (runtime, may fail)
+; NOTE: This is a special case for `Storable`
 LET s: String = x AS String
 ```
 
@@ -350,28 +353,31 @@ Define a built-in union for JSON scalar extraction (used by `->>` operator):
 UNION Scalar = Bool | Int | Float | String
 ```
 
-The `->>` operator returns `Option[Scalar]`; the inner type is one of the scalar types that can be extracted from a JSON value. Note that `Char` is intentionally excluded since JSON has no char type.
+The `->>` operator returns `Option[Scalar]`; the inner type is one of the scalar types that can be extracted from a JSON value. Notes:
+- `Char` is intentionally excluded since JSON has no char type
+- `Null` is intentionally excluded; the `Option` wrapper handles null (and missing) cases as `Option.None`
 
 ### Checklist
 
-- [ ] Lexer: Add `UNION` keyword
-- [ ] Parser/CST: Parse `UNION Name = Type | Type | ...` declarations
-- [ ] Parser/CST: Parse union types in annotations (`x: Int | String`)
-- [ ] AST: Add `Stmt::Union` for declarations
-- [ ] AST: Add `AstTypeExpr::Union(SmallVec<[AstTypeExprId; 4]>)` for union type expressions
-- [ ] TypeRegistry: Register union types
-- [ ] Value: No change needed (unions are type-level, not value-level)
-- [ ] Interpreter: `IS` checks against union members
-- [ ] Interpreter: `AS` casts within union (runtime check)
-- [ ] Parser/CST: Parse `x IS Type` patterns in MATCH arms
-- [ ] AST: Add `Pattern::Is { binding, ty }` variant for type-narrowing patterns
-- [ ] Interpreter: Evaluate `IS` patterns in `MATCH` (runtime type check + binding)
-- [ ] Builtins: Define `Storable` union
-  - [ ] **NOTE**: Treat `AS` as infallible _only_ for `Storable` to concrete member types
+- [x] Lexer: Add `UNION` keyword
+- [x] Parser/CST: Parse `UNION Name = Type | Type | ...` declarations
+  - [x] Handle any parametric polymorphism, e.g. `UNION F[T] = ...`
+- [x] Parser/CST: Parse union types in annotations (`x: Int | String`)
+- [x] AST: Add `Stmt::Union` for declarations
+- [x] AST: Add `AstTypeExpr::Union(SmallVec<[AstTypeExprId; 4]>)` for union type expressions
+- [x] TypeRegistry: Register union types
+- [x] Value: No change needed (unions are type-level, not value-level)
+- [x] Interpreter: `IS` checks against union members
+- [x] Interpreter: `AS` casts within union (runtime check)
+- [x] Parser/CST: Parse `x IS Type` patterns in MATCH arms
+- [x] AST: Add `Pattern::Is { binding, ty }` variant for type-narrowing patterns
+- [x] Interpreter: Evaluate `IS` patterns in `MATCH` (runtime type check + binding)
+- [x] Builtins: Define `Storable` union
+  - [x] **NOTE**: Treat `AS` as infallible _only_ for `Storable` to concrete member types
     - I.e. users can _always_ narrow from `Storable` to concrete type; rumtime type error if not successful
     - This is ergonomic choice for making DB access easier
 - [ ] Update `GET` return type to `Storable`
-- [ ] Tests: Union declaration, IS checks, AS casts
+- [x] Tests: Union declaration, IS checks, AS casts
 
 ---
 
@@ -764,22 +770,22 @@ LET x = IF cond { 42 }
 ```rumps
 ; OK: all arms return Int
 LET x = MATCH opt {
-    Option.Some(n) => n
-    Option.None => 0
+  Option.Some(n) => n
+  Option.None => 0
 }
 
 ; ERROR: arm type mismatch (Int vs String)
 LET y = MATCH opt {
-    Option.Some(n) => n          ; Int
-    Option.None => "default"     ; String — cannot unify
+  Option.Some(n) => n          ; Int
+  Option.None => "default"     ; String — cannot unify
 }
 
 ; OK: all arms return same type after narrowing
 LET desc: String = MATCH val {
-    v IS Int    => "integer: " ++ v
-    v IS String => "string: " ++ v
-    v IS Bool   => "bool: " ++ v
-    _           => "other"
+  v IS Int    => "integer: " ++ v
+  v IS String => "string: " ++ v
+  v IS Bool   => "bool: " ++ v
+  _           => "other"
 }
 ```
 
@@ -920,13 +926,13 @@ Infer types for all statement types.
 
 ### Statement Rules
 
-| Statement          | Effect                                 |
-|--------------------|----------------------------------------|
-| `LET x = e`        | bind `x` to `typeof(e)` in env         |
-| `LET x: T = e`     | unify `typeof(e) ~ T`, bind `x` to `T` |
-| `SET local(k) = e` | no env binding (db write)              |
-| `OUTPUT e`         | infer `e`, no constraint on type       |
-| `TYPE T = ...`     | register in type registry              |
+| Statement          | Effect                                                                        |
+|--------------------|-------------------------------------------------------------------------------|
+| `LET x = e`        | bind `x` to `typeof(e)` in env                                                |
+| `LET x: T = e`     | unify `typeof(e) ~ T`, bind `x` to `T`                                        |
+| `SET local(k) = e` | no env binding (db write)                                                     |
+| `OUTPUT e`         | infer `e`, no constraint on type (all types satisfy `Constraint::Stringable`) |
+| `TYPE T = ...`     | register in type registry                                                     |
 
 ### Checklist
 

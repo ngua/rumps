@@ -86,6 +86,21 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 def: def_lowered,
             }
         }
+        cst::StmtKind::Union {
+            name,
+            type_params,
+            members,
+        } => {
+            let member_ids = members
+                .into_iter()
+                .map(|t| lower_type_expr(ast, t))
+                .collect::<Result<SmallVec<_>>>()?;
+            Stmt::Union {
+                name,
+                type_params: SmallVec::from_vec(type_params),
+                members: member_ids,
+            }
+        }
     };
     ast.add_stmt(s, span)
 }
@@ -306,6 +321,13 @@ fn lower_type_expr(ast: &mut Ast, ty: cst::TypeExpr) -> Result<AstTypeExprId> {
                 .collect::<Result<SmallVec<_>>>()?;
             AstTypeExpr::Tuple(elem_ids)
         }
+        cst::TypeExprKind::Union(members) => {
+            let member_ids = members
+                .into_iter()
+                .map(|t| lower_type_expr(ast, t))
+                .collect::<Result<SmallVec<_>>>()?;
+            AstTypeExpr::Union(member_ids)
+        }
     };
     ast.add_type_expr(te, span)
 }
@@ -413,6 +435,10 @@ fn lower_match_pattern(
                 .map(|p| lower_match_pattern(ast, p))
                 .collect::<Result<SmallVec<_>>>()?;
             MatchPattern::Tuple(elem_ids)
+        }
+        cst::MatchPattern::Is(name, ty) => {
+            let ty_id = lower_type_expr(ast, ty)?;
+            MatchPattern::Is(name, ty_id)
         }
     };
     ast.add_pattern(p)

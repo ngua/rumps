@@ -120,7 +120,7 @@ use crate::ast::{
 use crate::env::Environment;
 use crate::io::IoContext;
 use crate::value::{
-    CapturedEnv, FunctionDef, StringId, TypeExprArena, TypeExprId,
+    CapturedEnv, FunctionDef, StringId, TypeExprArena, TypeExprId, TypeId,
     TypeRegistry, Value, ValueArena,
 };
 use crate::{Error, Result, Span};
@@ -176,7 +176,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// since interpretation only reads.
     pub(crate) fn new(ast: &'a mut Ast, db: Database, io: I) -> Result<Self> {
         let mut arena = ValueArena::new();
-        let registry = TypeRegistry::new(&mut arena)?;
+        let mut type_exprs = TypeExprArena::new();
+        let registry = TypeRegistry::new(&mut arena, &mut type_exprs)?;
         crate::resolve::resolve(ast, &mut arena, &registry);
 
         Ok(Self {
@@ -186,7 +187,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             txn: None,
             arena,
             registry,
-            type_exprs: TypeExprArena::new(),
+            type_exprs,
             functions: HashMap::new(),
             io,
         })
@@ -216,6 +217,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         io: I,
         arena: ValueArena,
         registry: TypeRegistry,
+        type_exprs: TypeExprArena,
     ) -> Self {
         Self {
             ast,
@@ -224,7 +226,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             txn: None,
             arena,
             registry,
-            type_exprs: TypeExprArena::new(),
+            type_exprs,
             functions: HashMap::new(),
             io,
         }
@@ -346,6 +348,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 type_params,
                 def,
             } => self.type_decl(&name, &type_params, &def, span),
+            Stmt::Union {
+                name,
+                type_params,
+                members,
+            } => self.union_decl(&name, &type_params, &members, span),
         }
     }
 
@@ -497,6 +504,55 @@ impl<I: IoContext> Interpreter<'_, I> {
         Ok(())
     }
 
+    /// Register a union type declaration.
+    ///
+    /// Union types define a set of types that a value can be.
+    /// Example: `UNION Storable = Bool | Int | Float | Char | String | Json`
+    fn union_decl(
+        &mut self,
+        name: &str,
+        type_params: &[String],
+        members: &[AstTypeExprId],
+        span: Span,
+    ) -> Result<()> {
+        let name_id = self.arena.intern(name);
+
+        // Check for duplicate type name
+        if self.registry.lookup(name_id).is_some() {
+            Err(Error::runtime(
+                span,
+                format!("type `{name}` is already defined"),
+            ))?;
+        }
+
+        // Validate member types reference only declared type params
+        members.iter().try_for_each(|m| {
+            self.validate_type_params(*m, type_params, span)
+        })?;
+
+        // Resolve member types to TypeExprIds
+        let member_exprs: Result<SmallVec<[TypeExprId; 8]>> = members
+            .iter()
+            .map(|&m| self.resolve_type_expr(m, span))
+            .collect();
+
+        // Intern type parameters
+        let type_param_ids: SmallVec<[StringId; 2]> =
+            type_params.iter().map(|p| self.arena.intern(p)).collect();
+
+        // Register the union type
+        self.registry.register(
+            crate::value::TypeDef::Union {
+                name: name_id,
+                type_params: type_param_ids,
+                members: member_exprs?,
+            },
+            name_id,
+        );
+
+        Ok(())
+    }
+
     /// Validate that a type expression only references declared type parameters.
     ///
     /// For `Named` types, checks if the name is either a registered type or
@@ -532,6 +588,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             AstTypeExpr::Tuple(elems) => elems.iter().try_for_each(|e| {
                 self.validate_type_params(*e, declared, span)
+            }),
+            AstTypeExpr::Union(members) => members.iter().try_for_each(|m| {
+                self.validate_type_params(*m, declared, span)
             }),
         })
     }
@@ -742,6 +801,10 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// - `Float -> Int` (truncate)
     /// - `T -> String` (stringify)
     /// - `Bool -> Int` (`false` -> `0`, `true` -> `1`)
+    /// - `T -> Storable` (identity if T is a Storable member type)
+    ///
+    /// Note: `AS Storable` is the only infallible union cast. Other unions
+    /// require `READ` for fallible conversion or `MATCH` for type narrowing.
     #[async_recursion]
     async fn r#as(
         &mut self,
@@ -751,12 +814,25 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         let val = self.eval(expr).await?;
         let target_ty = self.resolve_type_expr(ast_ty, span)?;
-        let target_base =
-            self.type_exprs.base_type(target_ty).ok_or_else(|| {
-                Error::runtime(span, "invalid target type in cast")
-            })?;
 
-        self.coerce(&val, target_base, span)
+        // Check for named union types (like Storable)
+        if let Some(target_base) = self.type_exprs.base_type(target_ty) {
+            // Special case: `AS Storable` is infallible if value is already Storable
+            if target_base == TypeId::STORABLE
+                && self.value_matches_type(&val, TypeId::STORABLE)
+            {
+                Ok(val)
+            } else {
+                self.coerce(&val, target_base, span)
+            }
+        } else {
+            // For non-named types (function types, tuple types, inline unions),
+            // AS is not supported; use READ instead
+            Err(Error::runtime(
+                span,
+                "cannot use AS with compound types; use READ for fallible conversion",
+            ))
+        }
     }
 
     /// Evaluate a fallible conversion: `expr read Type`.

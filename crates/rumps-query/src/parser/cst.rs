@@ -276,6 +276,16 @@ pub(crate) enum StmtKind {
         type_params: Vec<String>,
         def: TypeDefCst,
     },
+
+    /// Union type declaration: `UNION Name = Type1 | Type2 | ...`.
+    ///
+    /// Anonymous unions for function parameters etc. use inline syntax
+    /// (`x: Int | String`). Named unions are registered in the type registry.
+    Union {
+        name: String,
+        type_params: Vec<String>,
+        members: Vec<TypeExpr>,
+    },
 }
 
 /// A CST type expression with inline span.
@@ -306,6 +316,12 @@ pub(crate) enum TypeExprKind {
 
     /// Tuple type: `(Int, String)`, `(Bool, Int, Float)`.
     Tuple(Vec<TypeExpr>),
+
+    /// Union type: `Int | String | Bool`.
+    ///
+    /// Anonymous unions for type annotations. For named union declarations,
+    /// see `StmtKind::Union`.
+    Union(Vec<TypeExpr>),
 }
 
 /// A variant definition in a user-defined sum type (CST form).
@@ -345,6 +361,11 @@ pub(crate) enum MatchPattern {
 
     /// Tuple pattern: `(a, b, c)`
     Tuple(Vec<Self>),
+
+    /// Type-narrowing pattern: `x IS Int`, `val IS String`
+    ///
+    /// Matches if the value is of the specified type and binds it to the name.
+    Is(String, TypeExpr),
 }
 
 /// A match arm (CST form).

@@ -151,6 +151,7 @@ impl Parser {
             let output_stmt = Self::output_stmt(stmt.clone());
             let fun_stmt = Self::fun_stmt(stmt.clone());
             let type_stmt = Self::type_stmt();
+            let union_stmt = Self::union_stmt();
             let expr_stmt = Self::expr_stmt(stmt);
 
             choice((
@@ -160,6 +161,7 @@ impl Parser {
                 output_stmt,
                 fun_stmt,
                 type_stmt,
+                union_stmt,
                 expr_stmt,
             ))
         })
@@ -553,6 +555,58 @@ impl Parser {
                         name,
                         type_params,
                         def,
+                    },
+                    span,
+                )
+            })
+    }
+
+    /// `UNION Name = Type1 | Type2 | ...`
+    /// `UNION Name[T] = Type1 | Type2[T] | ...`
+    ///
+    /// Named union type declaration.
+    fn union_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+    {
+        // Type parameters: `[T]` or `[T, U]`
+        let type_param_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+        let type_params = just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::ident()
+                    .separated_by(type_param_sep)
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBracket))
+            .or_not()
+            .map(|ps| ps.unwrap_or_default());
+
+        // Type members separated by `|`
+        let member_sep = Self::opt_newlines()
+            .ignore_then(just(Token::SinglePipe))
+            .then_ignore(Self::opt_newlines());
+
+        let members = Self::type_expr_atom()
+            .separated_by(member_sep)
+            .at_least(2)
+            .allow_leading();
+
+        just(Token::Union)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then(type_params)
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
+            .then(members)
+            .map_with_span(|((name, type_params), members), span| {
+                cst::Stmt::new(
+                    cst::StmtKind::Union {
+                        name,
+                        type_params,
+                        members,
                     },
                     span,
                 )
@@ -1624,13 +1678,23 @@ impl Parser {
             let var_pat = select! { Token::Ident(s) if s != "_" => s }
                 .map(cst::MatchPattern::Var);
 
-            // Order: variant before var (so `Type.Variant` is parsed correctly)
+            // Type-narrowing pattern: `name IS Type`
+            let is_pat = select! { Token::Ident(s) if s != "_" => s }
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::Is))
+                .then_ignore(Self::opt_newlines())
+                .then(Self::type_expr())
+                .map(|(name, ty)| cst::MatchPattern::Is(name, ty));
+
+            // Order: is_pat before var (so `x IS Type` is parsed correctly)
+            // variant before var (so `Type.Variant` is parsed correctly)
             choice((
                 wildcard,
                 literal,
                 variant_pat,
                 tuple_pat,
                 obj_pat,
+                is_pat,
                 var_pat,
             ))
         })
@@ -1764,7 +1828,7 @@ impl Parser {
             let atom_or_params = paren.or(atom);
 
             // Function type with `->`
-            atom_or_params
+            let fn_or_single = atom_or_params
                 .then(
                     Self::opt_newlines()
                         .ignore_then(just(Token::Arrow))
@@ -1774,8 +1838,55 @@ impl Parser {
                 )
                 .try_map(|(left, arrow_ret), span| {
                     Self::build_fn_type(left, arrow_ret, span)
+                });
+
+            // Union type: `T | U | ...`
+            // Unions bind looser than function types, so `A | B -> C` = `A | (B -> C)`
+            fn_or_single
+                .clone()
+                .then(
+                    Self::opt_newlines()
+                        .ignore_then(just(Token::SinglePipe))
+                        .ignore_then(Self::opt_newlines())
+                        .ignore_then(fn_or_single)
+                        .repeated(),
+                )
+                .map_with_span(|(first, rest), span| {
+                    if rest.is_empty() {
+                        first
+                    } else {
+                        let mut members = vec![first];
+                        members.extend(rest);
+                        cst::TypeExpr::new(
+                            cst::TypeExprKind::Union(members),
+                            span,
+                        )
+                    }
                 })
         })
+    }
+
+    /// Parse a type expression atom (named type with optional params).
+    ///
+    /// Does not parse unions or function types; used for simple contexts.
+    fn type_expr_atom(
+    ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
+    {
+        // Type parameters: `[T]` or `[T, E]`
+        let type_params = Self::type_expr()
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .delimited_by(just(Token::LBracket), just(Token::RBracket));
+
+        Self::ident().then(type_params.or_not()).map_with_span(
+            |(name, params), span| {
+                let kind = match params {
+                    None => cst::TypeExprKind::Named(name),
+                    Some(ps) => cst::TypeExprKind::App(name, ps),
+                };
+                cst::TypeExpr::new(kind, span)
+            },
+        )
     }
 
     /// Build a function type, tuple type, or standalone type from parsed components.
@@ -2159,8 +2270,9 @@ mod tests {
         // Parser produces Call(Field(...)); resolve converts to Variant
         let (mut ast, id) = parse_expr_ok("Option.Some(42)");
         let mut arena = crate::ValueArena::new();
-        let registry =
-            crate::TypeRegistry::new(&mut arena).expect("registry failed");
+        let mut type_exprs = crate::TypeExprArena::new();
+        let registry = crate::TypeRegistry::new(&mut arena, &mut type_exprs)
+            .expect("registry failed");
         crate::resolve::resolve(&mut ast, &mut arena, &registry);
         match ast.get_expr(id) {
             Some(Expr::Variant(ty, var, args)) => {
