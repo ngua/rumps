@@ -32,7 +32,10 @@ pub(crate) enum Token {
     // Literals
     Int(i64),
     Float(OrderedFloat<f64>),
+    Char(char),
     String(String),
+    /// JSON null; only valid in JSON contexts (quoted-key objects, arrays).
+    Null,
 
     // Identifiers
     Ident(String),
@@ -97,32 +100,40 @@ pub(crate) enum Token {
 }
 
 impl Token {
-    /// Returns the keyword token for a given identifier, if it matches
-    /// (case-insensitive).
+    /// Returns the keyword token for a given identifier, if it matches.
+    ///
+    /// Most keywords are case-insensitive (e.g., `SET`, `set`, `SeT`).
+    /// Exception: `null` is case-sensitive (JSON compatibility).
     pub(crate) fn keyword(s: &str) -> Option<Self> {
-        // NOTE All keywords are case-insensitive
-        //
-        // E.g. `SET`, `set`, `SeT`, `sET` are all equivalent
-        match s.to_ascii_uppercase().as_str() {
-            "LET" => Some(Self::Let),
-            "SET" => Some(Self::Set),
-            "GET" => Some(Self::Get),
-            "KILL" => Some(Self::Kill),
-            "OUTPUT" => Some(Self::Output),
-            "IF" => Some(Self::If),
-            "ELSE" => Some(Self::Else),
-            "IS" => Some(Self::Is),
-            "AS" => Some(Self::As),
-            "READ" => Some(Self::Read),
-            "AND" => Some(Self::And),
-            "OR" => Some(Self::Or),
-            "NOT" => Some(Self::Not),
-            "TRUE" => Some(Self::True),
-            "FALSE" => Some(Self::False),
-            "FUN" => Some(Self::Fun),
-            "TYPE" => Some(Self::Type),
-            "MATCH" => Some(Self::Match),
-            _ => None,
+        // `null` is case-sensitive (JSON requires lowercase)
+        if s == "null" {
+            Some(Self::Null)
+        } else {
+            // All other keywords are case-insensitive
+            match s.to_ascii_uppercase().as_str() {
+                "LET" => Some(Self::Let),
+                "SET" => Some(Self::Set),
+                "GET" => Some(Self::Get),
+                "KILL" => Some(Self::Kill),
+                "OUTPUT" => Some(Self::Output),
+                "IF" => Some(Self::If),
+                "ELSE" => Some(Self::Else),
+                "IS" => Some(Self::Is),
+                "AS" => Some(Self::As),
+                "READ" => Some(Self::Read),
+                "AND" => Some(Self::And),
+                "OR" => Some(Self::Or),
+                "NOT" => Some(Self::Not),
+                "TRUE" => Some(Self::True),
+                "FALSE" => Some(Self::False),
+                "FUN" => Some(Self::Fun),
+                "TYPE" => Some(Self::Type),
+                "MATCH" => Some(Self::Match),
+                // `null` is case-sensitive (JSON requires lowercase);
+                // `NULL`, `Null`, etc. are identifiers, not keywords
+                "NULL" => None,
+                _ => None,
+            }
         }
     }
 }
@@ -150,7 +161,9 @@ impl fmt::Display for Token {
             Self::Match => write!(f, "MATCH"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
+            Self::Char(c) => write!(f, "'{c}'"),
             Self::String(s) => write!(f, "\"{s}\""),
+            Self::Null => write!(f, "null"),
             Self::Ident(s) => write!(f, "{s}"),
             Self::Global(s) => write!(f, "^{s}"),
             Self::Plus => write!(f, "+"),

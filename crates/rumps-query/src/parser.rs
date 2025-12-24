@@ -1206,16 +1206,19 @@ impl Parser {
         let int_lit = select! { Token::Int(n) => Literal::Int(n) };
         let float_lit =
             select! { Token::Float(OrderedFloat(n)) => Literal::Float(n) };
+        let char_lit = select! { Token::Char(c) => Literal::Char(c) };
         let str_lit = select! { Token::String(s) => Literal::String(s) };
         let bool_lit = choice((
             just(Token::True).to(Literal::Bool(true)),
             just(Token::False).to(Literal::Bool(false)),
         ));
+        let null_lit = just(Token::Null).to(Literal::Null);
 
-        let literal = choice((int_lit, float_lit, str_lit, bool_lit))
-            .map_with_span(|lit, span| {
-                cst::Expr::new(cst::ExprKind::Literal(lit), span)
-            });
+        let literal =
+            choice((int_lit, float_lit, char_lit, str_lit, bool_lit, null_lit))
+                .map_with_span(|lit, span| {
+                    cst::Expr::new(cst::ExprKind::Literal(lit), span)
+                });
 
         // Lexical variable
         let var = Self::ident().map_with_span(|name, span| {
@@ -1540,6 +1543,9 @@ impl Parser {
             let float_lit = select! {
                 Token::Float(OrderedFloat(n)) => cst::MatchPattern::Literal(Literal::Float(n))
             };
+            let char_lit = select! {
+                Token::Char(c) => cst::MatchPattern::Literal(Literal::Char(c))
+            };
             let str_lit = select! {
                 Token::String(s) => cst::MatchPattern::Literal(Literal::String(s))
             };
@@ -1549,7 +1555,11 @@ impl Parser {
                 just(Token::False)
                     .to(cst::MatchPattern::Literal(Literal::Bool(false))),
             ));
-            let literal = choice((int_lit, float_lit, str_lit, bool_lit));
+            let null_lit =
+                just(Token::Null).to(cst::MatchPattern::Literal(Literal::Null));
+            let literal = choice((
+                int_lit, float_lit, char_lit, str_lit, bool_lit, null_lit,
+            ));
 
             // Variant pattern: `Type.Variant` or `Type.Variant(pat, pat, ...)`
             let variant_args_sep =

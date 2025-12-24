@@ -236,28 +236,44 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect();
                 Ok(serde_json::Value::Object(map?))
             }
-            // Sum type encoding: tagged object
+            // Sum type encoding: tagged object (with special handling for Option)
             Value::Tagged(ty_expr, idx, payloads) => {
                 let base_ty = self.type_exprs.base_type(*ty_expr);
-                let ty_name = base_ty
-                    .and_then(|ty| self.registry.type_name(ty, &self.arena))
-                    .unwrap_or("?");
-                let var_name = base_ty
-                    .and_then(|ty| {
-                        self.registry.variant_name(ty, *idx, &self.arena)
-                    })
-                    .unwrap_or("?");
-                let payload_json: Result<Vec<_>> = payloads
-                    .iter()
-                    .filter_map(|id| self.arena.get(*id))
-                    .map(|v| self.jsonify(v))
-                    .collect();
 
-                Ok(serde_json::json!({
-                    "_type": ty_name,
-                    "_variant": var_name,
-                    "_payload": payload_json?
-                }))
+                // Option encodes as null/value rather than tagged object
+                if base_ty.is_some_and(|ty| ty == TypeId::OPTION) {
+                    if *idx == 0 {
+                        // Option.None -> null
+                        Ok(serde_json::Value::Null)
+                    } else {
+                        // Option.Some(v) -> jsonify(v)
+                        payloads
+                            .first()
+                            .and_then(|id| self.arena.get(*id))
+                            .map(|v| self.jsonify(v))
+                            .unwrap_or(Ok(serde_json::Value::Null))
+                    }
+                } else {
+                    let ty_name = base_ty
+                        .and_then(|ty| self.registry.type_name(ty, &self.arena))
+                        .unwrap_or("?");
+                    let var_name = base_ty
+                        .and_then(|ty| {
+                            self.registry.variant_name(ty, *idx, &self.arena)
+                        })
+                        .unwrap_or("?");
+                    let payload_json: Result<Vec<_>> = payloads
+                        .iter()
+                        .filter_map(|id| self.arena.get(*id))
+                        .map(|v| self.jsonify(v))
+                        .collect();
+
+                    Ok(serde_json::json!({
+                        "_type": ty_name,
+                        "_variant": var_name,
+                        "_payload": payload_json?
+                    }))
+                }
             }
             Value::Map(_, _, entries) => {
                 // Maps serialize as JSON objects with stringified keys

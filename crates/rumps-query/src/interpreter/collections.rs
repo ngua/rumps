@@ -42,6 +42,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Evaluate an array literal, enforcing homogeneous element types.
+    ///
+    /// Arrays containing `Json` values (including `null`) immediately become
+    /// JSON arrays, since `Json` is not a native RUMPS type.
     #[async_recursion]
     pub(super) async fn array(&mut self, elems: &[ExprId]) -> Result<Value> {
         match elems.split_first() {
@@ -53,13 +56,19 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some((first, rest)) => {
                 let first_span = self.ast.expr_span(*first).unwrap_or_default();
                 let first_val = self.eval(*first).await?;
-                let elem_ty = self.value_type_expr(&first_val);
-                let first_id = self.arena.add(first_val, first_span);
 
-                let mut acc = SmallVec::new();
-                acc.push(first_id);
+                // If first element is Json, entire array becomes Json
+                if matches!(&first_val, Value::Json(_)) {
+                    self.array_elems_json_start(rest, first_val).await
+                } else {
+                    let elem_ty = self.value_type_expr(&first_val);
+                    let first_id = self.arena.add(first_val, first_span);
 
-                self.array_elems(rest, elem_ty, acc, first_span).await
+                    let mut acc = SmallVec::new();
+                    acc.push(first_id);
+
+                    self.array_elems(rest, elem_ty, acc, first_span).await
+                }
             }
         }
     }
@@ -67,7 +76,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Recursively evaluate and type-check array elements.
     ///
     /// If all elements have the same type, returns `Value::Array`.
-    /// If types are heterogeneous, converts to `Value::Json` (JSON array).
+    /// If types are heterogeneous or any element is `Json`, converts to JSON.
     #[async_recursion]
     async fn array_elems(
         &mut self,
@@ -81,15 +90,21 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some((expr_id, tail)) => {
                 let span = self.ast.expr_span(*expr_id).unwrap_or_default();
                 let val = self.eval(*expr_id).await?;
-                let val_ty = self.value_type_expr(&val);
 
-                if self.type_exprs.eq(elem_ty, val_ty) {
-                    let val_id = self.arena.add(val, span);
-                    acc.push(val_id);
-                    self.array_elems(tail, elem_ty, acc, _first_span).await
-                } else {
-                    // Heterogeneous: convert accumulated + current + rest to JSON
+                // Any Json value (including null) triggers JSON array mode
+                if matches!(&val, Value::Json(_)) {
                     self.array_elems_json(tail, acc, val).await
+                } else {
+                    let val_ty = self.value_type_expr(&val);
+
+                    if self.type_exprs.eq(elem_ty, val_ty) {
+                        let val_id = self.arena.add(val, span);
+                        acc.push(val_id);
+                        self.array_elems(tail, elem_ty, acc, _first_span).await
+                    } else {
+                        // Heterogeneous: convert accumulated + current + rest to JSON
+                        self.array_elems_json(tail, acc, val).await
+                    }
                 }
             }
         }
@@ -135,6 +150,19 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.array_elems_json_tail(tail, acc).await
             }
         }
+    }
+
+    /// Start collecting array elements as JSON from the first element.
+    ///
+    /// Called when the first element is already a `Json` value.
+    #[async_recursion]
+    async fn array_elems_json_start(
+        &mut self,
+        elems: &[ExprId],
+        first: Value,
+    ) -> Result<Value> {
+        let acc = vec![self.jsonify(&first)?];
+        self.array_elems_json_tail(elems, acc).await
     }
 
     /// Evaluate a tuple literal.

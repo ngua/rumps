@@ -461,7 +461,10 @@ pub(crate) enum Literal {
     Bool(bool),
     Int(i64),
     Float(f64),
+    Char(char),
     String(String),
+    /// JSON `null`; only valid in JSON contexts (arrays, quoted-key objects).
+    Null,
 }
 
 /// An expression node.

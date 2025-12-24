@@ -542,7 +542,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             Literal::Bool(b) => Value::Bool(*b),
             Literal::Int(n) => Value::Int(*n),
             Literal::Float(f) => Value::Float(OrderedFloat(*f)),
+            Literal::Char(c) => Value::Char(*c),
             Literal::String(s) => Value::String(self.arena.intern(s)),
+            Literal::Null => Value::Json(serde_json::Value::Null),
         }
     }
 

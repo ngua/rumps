@@ -215,4 +215,55 @@ LET hom-str = ["a", "b", "c"]
 OUTPUT hom-str IS Array
 ; Expected: TRUE
 
+; ============================================================
+; NULL LITERAL IN JSON CONTEXTS
+; ============================================================
+
+; null in JSON object
+LET with-null = { "name": "Alice", "middle": null }
+OUTPUT with-null IS Json
+; Expected: TRUE
+
+; null in heterogeneous array
+LET arr-null = [1, null, "three"]
+OUTPUT arr-null IS Json
+; Expected: TRUE
+
+; Array with only null becomes Json
+LET null-only = [null, null]
+OUTPUT null-only IS Json
+; Expected: TRUE
+
+; Option.None -> null
+LET none-json = Option.None AS Json
+OUTPUT none-json IS Json
+; Expected: TRUE
+
+; Option.Some(v) -> v
+LET some-json = Option.Some(42) AS Json
+OUTPUT some-json IS Json
+; Expected: TRUE
+
+; Verify Option.Some unwraps to inner value (not tagged object)
+LET some-read = some-json READ Int
+OUTPUT some-read!
+; Expected: 42
+
+; ============================================================
+; CHAR LITERALS
+; ============================================================
+
+LET ch = 'a'
+OUTPUT ch IS Char
+; Expected: TRUE
+
+LET newline = '\n'
+OUTPUT newline IS Char
+; Expected: TRUE
+
+; Char in array (homogeneous)
+LET chars = ['a', 'b', 'c']
+OUTPUT chars IS Array
+; Expected: TRUE
+
 OUTPUT "JSON test complete"

@@ -232,6 +232,7 @@ impl Lexer<'_> {
     fn token() -> impl Parser<char, Spanned, Error = LexErr> {
         choice((
             Self::string_lit(),
+            Self::char_lit(),
             Self::number(),
             Self::global(),
             Self::ident_or_keyword(),
@@ -259,6 +260,25 @@ impl Lexer<'_> {
             .map_with_span(|s, span| {
                 Spanned::from_range(Token::String(s), span)
             })
+    }
+
+    fn char_lit() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+        let escape = just('\\').ignore_then(choice((
+            just('n').to('\n'),
+            just('r').to('\r'),
+            just('t').to('\t'),
+            just('\\').to('\\'),
+            just('\'').to('\''),
+            just('0').to('\0'),
+        )));
+
+        let char_in_lit = escape
+            .or(filter(|c: &char| *c != '\'' && *c != '\\' && *c != '\n'));
+
+        just('\'')
+            .ignore_then(char_in_lit)
+            .then_ignore(just('\''))
+            .map_with_span(|c, span| Spanned::from_range(Token::Char(c), span))
     }
 
     fn number() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
