@@ -288,6 +288,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Range(start_id, end_id, inclusive) => {
                 self.range(start_id, end_id, inclusive, span).await
             }
+            Expr::Annotate(inner, ty) => self.annotate(inner, ty, span).await,
         }
     }
 }
@@ -773,6 +774,23 @@ impl<I: IoContext> Interpreter<'_, I> {
             })?;
 
         self.try_convert(&val, target_base, span)
+    }
+
+    /// Evaluate a type annotation: `(expr) : Type`.
+    ///
+    /// Validates that the value matches the annotated type at runtime.
+    /// Returns the value unchanged if it matches; errors otherwise.
+    #[async_recursion]
+    async fn annotate(
+        &mut self,
+        expr: ExprId,
+        ast_ty: AstTypeExprId,
+        span: Span,
+    ) -> Result<Value> {
+        let val = self.eval(expr).await?;
+        let expected_ty = self.resolve_type_expr(ast_ty, span)?;
+        self.validate_type(&val, expected_ty, span)?;
+        Ok(val)
     }
 
     /// Execute a `LET` binding with destructuring.

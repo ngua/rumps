@@ -82,12 +82,11 @@ LET a = (42) : Int
 
 ### Checklist
 
-- [ ] Lexer: `:` already exists (used in LET, object literals, function params)
-- [ ] Parser/CST: Parse `(expr) : type` — annotation only valid after closing paren
-- [ ] AST: Add `Expr::Annotate { expr: ExprId, ty: AstTypeExpr, span: Span }`
-- [ ] Interpreter: Evaluate inner expr, verify type matches annotation (runtime check for now)
-- [ ] Type checker (later): Use annotation as expected type, unify with inferred type
-- [ ] Tests: Expression annotation parsing and evaluation
+- [x] Lexer: `:` already exists (used in LET, object literals, function params)
+- [x] Parser/CST: Parse `(expr) : type` — annotation only valid after closing paren
+- [x] AST: Add `Expr::Annotate { expr: ExprId, ty: AstTypeExprId }`
+- [x] Interpreter: Evaluate inner expr, verify type matches annotation (runtime check for now)
+- [x] Tests: Expression annotation parsing and evaluation
 
 ---
 
@@ -807,6 +806,11 @@ For ergonomics, we should treat _any_ `Storable AS T`, where `T` is a member of 
 - [ ] Handle `Expr::Get`:
   - [ ] Return `Ty::Named(TypeId::STORABLE, vec![])` (the `Storable` union)
   - [ ] Usage may narrow to specific member (e.g., `x + 1` narrows to `Int | Float`)
+- [ ] Handle `Expr::Annotate`:
+  - [ ] Infer inner expression type
+  - [ ] Parse annotation to `Ty`
+  - [ ] Unify inferred type with annotation (annotation is expected type)
+  - [ ] Return annotation type
 
 ---
 

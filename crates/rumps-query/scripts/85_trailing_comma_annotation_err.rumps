@@ -1,0 +1,5 @@
+; Test: Single-element tuple with type annotation should fail
+; `(x,)` is a tuple (due to trailing comma), so `(x,) : T` is invalid
+
+LET x = (42,) : Int
+OUTPUT x

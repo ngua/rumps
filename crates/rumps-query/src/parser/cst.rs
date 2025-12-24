@@ -167,6 +167,19 @@ pub(crate) enum ExprKind {
     /// - Second `Box<Expr>`: end expression
     /// - `bool`: `true` for inclusive (`..=`), `false` for exclusive (`..`)
     Range(Box<Expr>, Box<Expr>, bool),
+
+    /// Type annotation: `(expr) : Type`.
+    ///
+    /// Explicit type annotation on an expression. The interpreter validates
+    /// that the value matches the annotated type at runtime; the type checker
+    /// (once implemented) will use this as the expected type.
+    Annotate(Box<Expr>, TypeExpr),
+
+    /// A parse error detected during CST construction.
+    ///
+    /// This allows the parser to emit a structured CST while deferring error
+    /// reporting to the lowering pass, where we have access to error handling.
+    Error(String),
 }
 
 /// A CST statement node with inline span.

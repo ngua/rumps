@@ -1,0 +1,5 @@
+; Test: Expression annotation type mismatch error
+; Annotating an Int as String should fail
+
+LET x = (42) : String
+OUTPUT x

@@ -1173,14 +1173,18 @@ impl Parser {
                 cst::Expr::new(cst::ExprKind::Global(name, subs), span)
             });
 
-        // Parenthesized expression or tuple literal
+        // Parenthesized expression, tuple literal, or type annotation
         // - `(expr)` -> parenthesized expression
+        // - `(expr) : Type` -> type annotation
         // - `(expr,)` -> single-element tuple
         // - `(expr, expr, ...)` -> multi-element tuple
         // - `()` -> empty tuple
         //
         // We manually detect trailing comma instead of using `allow_trailing()`
         // so we can distinguish `(x)` from `(x,)`.
+        //
+        // Type annotations `(expr) : Type` are only valid for single-element
+        // parenthesized expressions (not tuples).
         let paren_or_tuple = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
@@ -1219,19 +1223,46 @@ impl Parser {
                         }),
                 ),
             )
-            .map_with_span(|contents, span| match contents {
+            // Optional type annotation after `(expr)`
+            .then(
+                just(Token::Colon)
+                    .ignore_then(Self::opt_newlines())
+                    .ignore_then(Self::type_expr())
+                    .or_not(),
+            )
+            .map_with_span(|(contents, ty_ann), span| match contents {
                 ParenContents::Empty => {
                     cst::Expr::new(cst::ExprKind::Tuple(vec![]), span)
                 }
                 ParenContents::Elements(mut elems, has_comma) => {
                     if elems.len() == 1 && !has_comma {
                         // Single element without comma: parenthesized
-                        // SAFETY: len checked right above, `unwrap` is OK
+                        // SAFETY: len checked above; `unwrap` is OK
                         #[allow(clippy::unwrap_used)]
-                        elems.pop().unwrap()
+                        let inner = elems.pop().unwrap();
+                        // Check for type annotation
+                        match ty_ann {
+                            Some(ty) => cst::Expr::new(
+                                cst::ExprKind::Annotate(Box::new(inner), ty),
+                                span,
+                            ),
+                            None => inner,
+                        }
                     } else {
                         // Multiple elements or has comma: tuple
-                        cst::Expr::new(cst::ExprKind::Tuple(elems), span)
+                        // Type annotations on tuples require extra parens
+                        if ty_ann.is_some() {
+                            cst::Expr::new(
+                                cst::ExprKind::Error(
+                                    "type annotations on tuples require double \
+                                     parentheses: `((a, b) : T)`"
+                                        .into(),
+                                ),
+                                span,
+                            )
+                        } else {
+                            cst::Expr::new(cst::ExprKind::Tuple(elems), span)
+                        }
                     }
                 }
             });

@@ -238,6 +238,14 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let end_id = lower_expr(ast, *end)?;
             Expr::Range(start_id, end_id, inclusive)
         }
+        cst::ExprKind::Annotate(inner, ty) => {
+            let inner_id = lower_expr(ast, *inner)?;
+            let ty_id = lower_type_expr(ast, ty)?;
+            Expr::Annotate(inner_id, ty_id)
+        }
+        cst::ExprKind::Error(msg) => {
+            Err(crate::Error::parse(span, msg, vec![]))?
+        }
     };
     ast.add_expr(e, span)
 }

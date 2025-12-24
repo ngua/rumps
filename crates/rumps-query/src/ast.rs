@@ -639,6 +639,13 @@ pub(crate) enum Expr {
     /// - Second `ExprId`: end expression
     /// - `bool`: `true` for inclusive (`..=`), `false` for exclusive (`..`)
     Range(ExprId, ExprId, bool),
+
+    /// Type annotation: `(expr) : Type`.
+    ///
+    /// Explicit type annotation on an expression. The interpreter validates
+    /// that the value matches the annotated type at runtime; the type checker
+    /// (once implemented) will use this as the expected type.
+    Annotate(ExprId, AstTypeExprId),
 }
 
 /// A statement node.
