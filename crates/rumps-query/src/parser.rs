@@ -47,7 +47,7 @@ use smallvec::SmallVec;
 mod cst;
 mod lower;
 
-use crate::ast::{BinOp, Literal, TypePattern, UnOp};
+use crate::ast::{BinOp, JsonAccessKind, Literal, TypePattern, UnOp};
 use crate::{Ast, Error, Lexer, Result, Span, Spanned, StmtId, Token};
 
 /// Parser error type for token-based parsing.
@@ -1081,7 +1081,7 @@ impl Parser {
         let call_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let call = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(expr.separated_by(call_sep).allow_trailing())
+            .ignore_then(expr.clone().separated_by(call_sep).allow_trailing())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen))
             .map_with_span(PostfixOp::Call);
@@ -1090,8 +1090,41 @@ impl Parser {
         let unwrap =
             just(Token::Bang).map_with_span(|_, span| PostfixOp::Unwrap(span));
 
-        let postfix_op =
-            choice((field_or_tuple_idx, opt_field, index, call, unwrap));
+        // JSON scalar static field: `..field` (returns Option[T])
+        // Uses DotDotNoSpace which requires no space before `..`.
+        // Note: `.field` on Json is handled by regular Field postfix.
+        let json_scalar_field = just(Token::DotDotNoSpace)
+            .ignore_then(Self::ident())
+            .map_with_span(PostfixOp::JsonScalarField);
+
+        // JSON access with dynamic key: `->(expr)` (returns Json)
+        let json_arrow_expr = just(Token::Arrow)
+            .ignore_then(just(Token::LParen))
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::RParen))
+            .map_with_span(|e, span| PostfixOp::JsonArrow(Box::new(e), span));
+
+        // JSON scalar access with dynamic key: `->>(expr)` (returns Option[T])
+        let json_arrow_arrow_expr = just(Token::ArrowArrow)
+            .ignore_then(just(Token::LParen))
+            .ignore_then(expr)
+            .then_ignore(just(Token::RParen))
+            .map_with_span(|e, span| {
+                PostfixOp::JsonArrowArrow(Box::new(e), span)
+            });
+
+        let postfix_op = choice((
+            field_or_tuple_idx,
+            opt_field,
+            index,
+            call,
+            unwrap,
+            // JSON scalar static field access `..field`
+            json_scalar_field,
+            // Dynamic key access with parens
+            json_arrow_arrow_expr,
+            json_arrow_expr,
+        ));
 
         operand
             .then(postfix_op.repeated())
@@ -1130,6 +1163,30 @@ impl Parser {
                 )),
                 PostfixOp::Unwrap(_) => Some(cst::Expr::new(
                     cst::ExprKind::Unwrap(Box::new(acc)),
+                    span,
+                )),
+                PostfixOp::JsonScalarField(name, _) => Some(cst::Expr::new(
+                    cst::ExprKind::JsonAccess(
+                        Box::new(acc),
+                        JsonAccessKind::Scalar,
+                        cst::JsonAccessKey::Field(name),
+                    ),
+                    span,
+                )),
+                PostfixOp::JsonArrow(e, _) => Some(cst::Expr::new(
+                    cst::ExprKind::JsonAccess(
+                        Box::new(acc),
+                        JsonAccessKind::Json,
+                        cst::JsonAccessKey::Expr(e),
+                    ),
+                    span,
+                )),
+                PostfixOp::JsonArrowArrow(e, _) => Some(cst::Expr::new(
+                    cst::ExprKind::JsonAccess(
+                        Box::new(acc),
+                        JsonAccessKind::Scalar,
+                        cst::JsonAccessKey::Expr(e),
+                    ),
                     span,
                 )),
             }
@@ -1279,19 +1336,52 @@ impl Parser {
                 cst::Expr::new(cst::ExprKind::Array(elems), span)
             });
 
-        // Object literal: { field: expr, ... }
-        let obj_field = Self::ident()
+        // Object/JSON literal: { field: expr, ... } or { "field": expr, ... }
+        // Unquoted keys -> Object, quoted keys -> JSON
+        // Mixed quoted/unquoted keys produce a parse error.
+        let unquoted_key = Self::ident().map(|s| (s, false));
+        let quoted_key = select! { Token::String(s) => (s, true) };
+        let obj_key = quoted_key.or(unquoted_key);
+
+        let obj_field = obj_key
             .then_ignore(just(Token::Colon))
-            .then(expr.clone());
+            .then(expr.clone())
+            .map(|((key, quoted), value)| (key, value, quoted));
 
         let obj_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
-        let object = just(Token::LBrace)
+        let object_or_json = just(Token::LBrace)
             .ignore_then(Self::opt_newlines())
             .ignore_then(obj_field.separated_by(obj_sep).allow_trailing())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
-            .map_with_span(|fields, span| {
-                cst::Expr::new(cst::ExprKind::Object(fields), span)
+            .map_with_span(|fields: Vec<(String, cst::Expr, bool)>, span| {
+                // Determine if JSON or Object based on key quoting
+                let all_quoted = fields.iter().all(|(_, _, q)| *q);
+                let all_unquoted = fields.iter().all(|(_, _, q)| !*q);
+                let stripped: Vec<(String, cst::Expr)> =
+                    fields.into_iter().map(|(k, v, _)| (k, v)).collect();
+
+                if all_quoted || stripped.is_empty() && all_unquoted {
+                    // All quoted keys OR empty → JSON
+                    // Note: empty {} defaults to Object, but {"a": 1} is JSON
+                    if all_quoted && !stripped.is_empty() {
+                        cst::Expr::new(cst::ExprKind::Json(stripped), span)
+                    } else {
+                        cst::Expr::new(cst::ExprKind::Object(stripped), span)
+                    }
+                } else if all_unquoted {
+                    // All unquoted keys → Object
+                    cst::Expr::new(cst::ExprKind::Object(stripped), span)
+                } else {
+                    // Mixed quoted/unquoted → error
+                    cst::Expr::new(
+                        cst::ExprKind::Error(
+                            "cannot mix quoted and unquoted keys in object"
+                                .into(),
+                        ),
+                        span,
+                    )
+                }
             });
 
         // Map literal: { key => value, ... }
@@ -1310,12 +1400,11 @@ impl Parser {
                 cst::Expr::new(cst::ExprKind::MapLit(entries), span)
             });
 
-        // Try object first (identifier key + `:`), then fall back to map (expr key + `=>`).
-        // Object is more specific so it should be tried first.
+        // Try object/json first (key + `:`), then fall back to map (expr + `=>`).
         //
         // NOTE: `{}` is ambiguous and parses as an empty object, not an empty map.
         // Use `Map.empty()` for empty maps.
-        let object_or_map = object.or(map_lit);
+        let object_or_map = object_or_json.or(map_lit);
 
         // Block expression
         let block_parser = Self::block(stmt);
@@ -1760,6 +1849,12 @@ enum PostfixOp {
     Index(Box<cst::Expr>, Span),
     Call(Vec<cst::Expr>, Span),
     Unwrap(Span),
+    /// JSON scalar static field: `..field` (returns `Option[T]`).
+    JsonScalarField(String, Span),
+    /// JSON access with dynamic key: `->(expr)` (returns `Json`).
+    JsonArrow(Box<cst::Expr>, Span),
+    /// JSON scalar access with dynamic key: `->>(expr)` (returns `Option[T]`).
+    JsonArrowArrow(Box<cst::Expr>, Span),
 }
 
 /// Helper enum for array pattern elements during parsing.
@@ -1781,7 +1876,10 @@ impl PostfixOp {
             | Self::TupleIndex(_, s)
             | Self::Index(_, s)
             | Self::Call(_, s)
-            | Self::Unwrap(s) => *s,
+            | Self::Unwrap(s)
+            | Self::JsonScalarField(_, s)
+            | Self::JsonArrow(_, s)
+            | Self::JsonArrowArrow(_, s) => *s,
         }
     }
 }
@@ -2621,7 +2719,8 @@ mod tests {
 
     #[test]
     fn parse_range_exclusive() {
-        let (ast, id) = parse_expr_ok("1..10");
+        // Range requires spaces around `..`
+        let (ast, id) = parse_expr_ok("1 .. 10");
         match ast.get_expr(id) {
             Some(Expr::Range(start, end, inclusive)) => {
                 assert!(!inclusive);
@@ -2659,8 +2758,9 @@ mod tests {
 
     #[test]
     fn parse_range_precedence() {
-        // `1..n + 1` should parse as `1..(n + 1)` (range binds looser than additive)
-        let (ast, id) = parse_expr_ok("1..n + 1");
+        // `1 .. n + 1` should parse as `1..(n + 1)` (range binds looser than additive)
+        // Range requires spaces around `..`
+        let (ast, id) = parse_expr_ok("1 .. n + 1");
         match ast.get_expr(id) {
             Some(Expr::Range(start, end, inclusive)) => {
                 assert!(!inclusive);
@@ -2680,7 +2780,8 @@ mod tests {
 
     #[test]
     fn parse_range_with_vars() {
-        let (ast, id) = parse_expr_ok("start..end");
+        // Range requires spaces around `..`
+        let (ast, id) = parse_expr_ok("start .. end");
         match ast.get_expr(id) {
             Some(Expr::Range(s, e, inclusive)) => {
                 assert!(!inclusive);

@@ -77,10 +77,12 @@ pub(crate) enum Token {
     Comma,            // ,
     Colon,            // :
     Dot,              // .
-    DotDot,           // ..
+    DotDot,           // .. (with space before; range operator)
+    DotDotNoSpace,    // .. (no space before; JSON scalar access)
     DotDotEquals,     // ..=
     DotDotDot,        // ...
     Arrow,            // ->
+    ArrowArrow,       // ->>
     QuestionQuestion, // ??
     QuestionDot,      // ?.
     FatArrow,         // =>
@@ -179,9 +181,11 @@ impl fmt::Display for Token {
             Self::Colon => write!(f, ":"),
             Self::Dot => write!(f, "."),
             Self::DotDot => write!(f, ".."),
+            Self::DotDotNoSpace => write!(f, ".."),
             Self::DotDotEquals => write!(f, "..="),
             Self::DotDotDot => write!(f, "..."),
             Self::Arrow => write!(f, "->"),
+            Self::ArrowArrow => write!(f, "->>"),
             Self::QuestionQuestion => write!(f, "??"),
             Self::QuestionDot => write!(f, "?."),
             Self::FatArrow => write!(f, "=>"),

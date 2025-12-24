@@ -8,9 +8,9 @@ use smallvec::SmallVec;
 
 use super::cst;
 use crate::ast::{
-    Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId, MatchArm,
-    MatchPattern, MatchPatternId, RestPattern, Stmt, StmtId, TypeDefAst,
-    VariantAst,
+    Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId,
+    JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, RestPattern, Stmt,
+    StmtId, TypeDefAst, VariantAst,
 };
 use crate::Result;
 
@@ -242,6 +242,24 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let inner_id = lower_expr(ast, *inner)?;
             let ty_id = lower_type_expr(ast, ty)?;
             Expr::Annotate(inner_id, ty_id)
+        }
+        cst::ExprKind::Json(fields) => {
+            let field_ids = fields
+                .into_iter()
+                .map(|(k, v)| lower_expr(ast, v).map(|id| (k, id)))
+                .collect::<Result<Vec<_>>>()?;
+            Expr::Json(field_ids)
+        }
+        cst::ExprKind::JsonAccess(base, kind, key) => {
+            let base_id = lower_expr(ast, *base)?;
+            let key_lowered = match key {
+                cst::JsonAccessKey::Field(name) => JsonAccessKey::Field(name),
+                cst::JsonAccessKey::Expr(e) => {
+                    let e_id = lower_expr(ast, *e)?;
+                    JsonAccessKey::Expr(e_id)
+                }
+            };
+            Expr::JsonAccess(base_id, kind, key_lowered)
         }
         cst::ExprKind::Error(msg) => {
             Err(crate::Error::parse(span, msg, vec![]))?

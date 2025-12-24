@@ -1,0 +1,218 @@
+; Test: JSON type and access operators
+; Tests JSON literals, field access, type conversions, and heterogeneous arrays
+
+; ============================================================
+; JSON LITERALS (quoted keys)
+; ============================================================
+
+LET j = { "name": "Alice", "age": 30, "active": TRUE }
+
+; Type checking
+OUTPUT j IS Json
+; Expected: TRUE
+
+; ============================================================
+; JSON FIELD ACCESS (returns Json)
+; ============================================================
+
+LET name = j.name
+OUTPUT name IS Json
+; Expected: TRUE
+
+; Missing field returns Json null
+LET missing = j.missing
+OUTPUT missing IS Json
+; Expected: TRUE
+
+; ============================================================
+; NESTED JSON ACCESS
+; ============================================================
+
+LET nested = {
+  "user": {
+    "profile": {
+      "firstName": "Bob"
+    }
+  }
+}
+
+OUTPUT nested.user.profile.firstName IS Json
+; Expected: TRUE
+
+; ============================================================
+; NATIVE OBJECTS (unquoted keys) vs JSON
+; ============================================================
+
+LET obj = { name: "Alice", age: 30 }
+OUTPUT obj IS Object
+; Expected: TRUE
+
+; Native object field access returns native type
+OUTPUT obj.name IS String
+; Expected: TRUE
+
+; ============================================================
+; JSON SCALAR EXTRACTION WITH .. (returns Option)
+; ============================================================
+
+LET data = { "a": 1, "b": 2, "c": 3 }
+LET a-scalar = data..a
+OUTPUT a-scalar IS Option.Some(_)
+; Expected: TRUE
+
+; Unwrap scalar extraction
+OUTPUT a-scalar!
+; Expected: 1
+
+; Another scalar extraction
+LET c-val = data..c
+OUTPUT c-val!
+; Expected: 3
+
+; Missing key with .. returns Option.None
+LET miss = data..missing
+OUTPUT miss IS Option.None
+; Expected: TRUE
+
+; Scalar extraction from string field
+LET strs = { "greeting": "hello" }
+LET s = strs..greeting
+OUTPUT s!
+; Expected: hello
+
+; Scalar extraction from bool field
+LET bools = { "flag": TRUE }
+LET b = bools..flag
+OUTPUT b!
+; Expected: TRUE
+
+; Scalar extraction from float field
+LET floats = { "pi": 3.14 }
+LET f = floats..pi
+OUTPUT f!
+; Expected: 3.14
+
+; ============================================================
+; DYNAMIC JSON ACCESS WITH -> AND ->>
+; ============================================================
+
+LET key = "b"
+LET dyn = data->(key)
+OUTPUT dyn IS Json
+; Expected: TRUE
+
+; Dynamic scalar access with ->>(expr)
+LET key-c = "c"
+LET dyn-c = data->>(key-c)
+OUTPUT dyn-c!
+; Expected: 3
+
+; ============================================================
+; AS Json COERCION (native -> Json)
+; ============================================================
+
+; Native object -> Json
+LET native-obj = { x: 1, y: 2 }
+LET json-obj = native-obj AS Json
+OUTPUT json-obj IS Json
+; Expected: TRUE
+
+; Array -> Json
+LET arr = [1, 2, 3]
+LET json-arr = arr AS Json
+OUTPUT json-arr IS Json
+; Expected: TRUE
+
+; Scalar -> Json
+LET int-json = 42 AS Json
+OUTPUT int-json IS Json
+; Expected: TRUE
+
+LET str-json = "hello" AS Json
+OUTPUT str-json IS Json
+; Expected: TRUE
+
+LET bool-json = TRUE AS Json
+OUTPUT bool-json IS Json
+; Expected: TRUE
+
+; ============================================================
+; Json READ T CONVERSIONS (Json -> native)
+; ============================================================
+
+LET j-data = { "name": "John", "age": 30, "active": TRUE, "score": 3.14 }
+
+; Json -> String
+LET name-result = j-data.name READ String
+OUTPUT name-result IS Result.Ok(_)
+; Expected: TRUE
+OUTPUT name-result!
+; Expected: John
+
+; Json -> Int
+LET age-result = j-data.age READ Int
+OUTPUT age-result IS Result.Ok(_)
+; Expected: TRUE
+OUTPUT age-result!
+; Expected: 30
+
+; Json -> Bool
+LET active-result = j-data.active READ Bool
+OUTPUT active-result IS Result.Ok(_)
+; Expected: TRUE
+OUTPUT active-result!
+; Expected: TRUE
+
+; Json -> Float
+LET score-result = j-data.score READ Float
+OUTPUT score-result IS Result.Ok(_)
+; Expected: TRUE
+OUTPUT score-result!
+; Expected: 3.14
+
+; Json -> Object
+LET obj-data = { "nested": { "a": 1, "b": 2 } }
+LET nested-result = obj-data.nested READ Object
+OUTPUT nested-result IS Result.Ok(_)
+; Expected: TRUE
+
+; READ type mismatch returns Result.Err
+LET bad-int = j-data.name READ Int
+OUTPUT bad-int IS Result.Err(_)
+; Expected: TRUE
+
+; READ on missing field (JSON null) returns Result.Err for non-Option types
+LET null-data = { "other": 1 }
+LET null-read = null-data.missing READ Int
+OUTPUT null-read IS Result.Err(_)
+; Expected: TRUE
+
+; ============================================================
+; HETEROGENEOUS ARRAYS -> Json
+; ============================================================
+
+; Mixed types become Json
+LET hetero = [1, "two", TRUE, 3.14]
+OUTPUT hetero IS Json
+; Expected: TRUE
+
+; String mixed with other types
+LET str-mix = ["a", 1, "hello"]
+OUTPUT str-mix IS Json
+; Expected: TRUE
+
+; Two elements of different types
+LET two-mix = [42, "hello"]
+OUTPUT two-mix IS Json
+; Expected: TRUE
+
+; Homogeneous arrays stay as Array
+LET hom-int = [1, 2, 3]
+OUTPUT hom-int IS Array
+; Expected: TRUE
+
+LET hom-str = ["a", "b", "c"]
+OUTPUT hom-str IS Array
+; Expected: TRUE
+
+OUTPUT "JSON test complete"

@@ -126,6 +126,8 @@ impl TypeId {
     pub(crate) const RANGE: Self = Self(12);
     /// Builtin type: `Unit`.
     pub(crate) const UNIT: Self = Self(13);
+    /// Builtin type: `Json`.
+    pub(crate) const JSON: Self = Self(14);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -398,6 +400,16 @@ pub(crate) enum Value {
     /// A point in time (UTC).
     Time(DateTime<Utc>),
 
+    /// An opaque JSON value.
+    ///
+    /// Wraps `serde_json::Value`. JSON values are created from:
+    /// - Object literals with quoted keys: `{ "id": 123 }`
+    /// - Heterogeneous array literals: `[1, "two", true]`
+    /// - Explicit cast: `value AS Json`
+    ///
+    /// Access via `.` and `->` returns `Json`; `..` and `->>` extract scalars.
+    Json(serde_json::Value),
+
     /// A tagged value (sum type variant).
     ///
     /// - `TypeExprId`: the full parameterized type (e.g., `Option[Int]`, `Result[Int, String]`)
@@ -476,6 +488,7 @@ impl Value {
             Self::Object(obj) => !obj.is_empty(),
             Self::Map(_, _, entries) => !entries.is_empty(),
             Self::Time(_) => true, // Time values are always truthy
+            Self::Json(j) => !j.is_null(), // JSON null is falsy
             Self::Tagged(ty_expr, idx, _) => {
                 // Option.None and Result.Err are falsy; other variants are truthy
                 match type_exprs.base_type(*ty_expr) {
@@ -521,6 +534,7 @@ impl Value {
             Self::Tuple(..) => "Tuple",
             Self::Map(..) => "Map",
             Self::Time(_) => "Time",
+            Self::Json(_) => "Json",
             Self::Tagged(ty_expr, _, _) => type_exprs
                 .base_type(*ty_expr)
                 .and_then(|ty| reg.get_def(ty))
@@ -615,6 +629,7 @@ impl Value {
             Self::Tuple(..) => TypeId::TUPLE,
             Self::Map(..) => TypeId::MAP,
             Self::Time(_) => TypeId::TIME,
+            Self::Json(_) => TypeId::JSON,
             Self::Tagged(ty_expr, _, _) => {
                 type_exprs.base_type(*ty_expr).unwrap_or(TypeId::UNKNOWN)
             }
@@ -641,6 +656,7 @@ pub(crate) enum BuiltinType {
     Time,
     Range,
     Unit,
+    Json,
 }
 
 impl BuiltinType {
@@ -658,6 +674,7 @@ impl BuiltinType {
             Self::Time => "Time",
             Self::Range => "Range",
             Self::Unit => "Unit",
+            Self::Json => "Json",
         }
     }
 }
@@ -1153,6 +1170,18 @@ impl TypeRegistry {
             ))
         })?;
 
+        // Json at index 14
+        let json_name = arena.intern("Json");
+        let json =
+            self.register(TypeDef::Builtin(BuiltinType::Json), json_name);
+        (json == TypeId::JSON).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Json at index {}, expected {}",
+                json.0,
+                TypeId::JSON.0
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -1223,7 +1252,7 @@ mod tests {
         let mut arena = ValueArena::new();
         let reg = TypeRegistry::new(&mut arena).unwrap();
 
-        assert_eq!(reg.len(), 14); // 9 primitives (incl. Unit) + Option + Result + Tuple + Range
+        assert_eq!(reg.len(), 15); // 10 primitives (incl. Unit, Json) + Option + Result + Tuple + Range
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

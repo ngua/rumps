@@ -114,7 +114,8 @@ use smallvec::SmallVec;
 
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
-    Literal, Stmt, StmtId, TypeDefAst, TypePattern, UnOp,
+    JsonAccessKey, JsonAccessKind, Literal, Stmt, StmtId, TypeDefAst,
+    TypePattern, UnOp,
 };
 use crate::env::Environment;
 use crate::io::IoContext;
@@ -289,6 +290,10 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.range(start_id, end_id, inclusive, span).await
             }
             Expr::Annotate(inner, ty) => self.annotate(inner, ty, span).await,
+            Expr::Json(fields) => self.json(&fields, span).await,
+            Expr::JsonAccess(base, kind, key) => {
+                self.json_access(base, kind, &key, span).await
+            }
         }
     }
 }
@@ -773,7 +778,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Error::runtime(span, "invalid target type in read")
             })?;
 
-        self.try_convert(&val, target_base, span)
+        self.read_value(&val, target_base, span)
     }
 
     /// Evaluate a type annotation: `(expr) : Type`.
@@ -827,6 +832,130 @@ impl<I: IoContext> Interpreter<'_, I> {
         let val = self.eval(expr_id).await?;
         let s = self.display(&val);
         self.io.stdout(&s, span).await
+    }
+
+    /// Evaluate a JSON object literal.
+    ///
+    /// Evaluates each field expression and converts to JSON via `jsonify`.
+    /// Returns `Value::Json(Object)`.
+    #[async_recursion]
+    #[allow(clippy::while_let_on_iterator)]
+    async fn json(
+        &mut self,
+        fields: &[(String, ExprId)],
+        _span: Span,
+    ) -> Result<Value> {
+        let mut obj = serde_json::Map::new();
+        // Process fields sequentially to maintain order
+        let mut it = fields.iter();
+        while let Some((key, expr_id)) = it.next() {
+            let val = self.eval(*expr_id).await?;
+            let json_val = self.jsonify(&val)?;
+            obj.insert(key.clone(), json_val);
+        }
+        Ok(Value::Json(serde_json::Value::Object(obj)))
+    }
+
+    /// Evaluate JSON field access.
+    ///
+    /// For `JsonAccessKind::Json` (`.` or `->`): returns `Value::Json` (null for missing).
+    /// For `JsonAccessKind::Scalar` (`..` or `->>`): returns `Option[scalar]`.
+    #[async_recursion]
+    async fn json_access(
+        &mut self,
+        base: ExprId,
+        kind: JsonAccessKind,
+        key: &JsonAccessKey,
+        span: Span,
+    ) -> Result<Value> {
+        let base_val = self.eval(base).await?;
+
+        // Get the key string
+        let key_str = match key {
+            JsonAccessKey::Field(name) => name.clone(),
+            JsonAccessKey::Expr(expr_id) => {
+                let key_val = self.eval(*expr_id).await?;
+                match key_val {
+                    Value::String(sid) => {
+                        self.arena.get_str(sid).unwrap_or("").to_owned()
+                    }
+                    Value::Int(n) => n.to_string(),
+                    _ => {
+                        let ty =
+                            key_val.type_name(&self.registry, &self.type_exprs);
+                        Err(Error::runtime_type(
+                            span,
+                            format!("JSON key must be String or Int; got {ty}"),
+                        ))?
+                    }
+                }
+            }
+        };
+
+        // Access the JSON value
+        let json_val = match &base_val {
+            Value::Json(j) => j.get(&key_str).cloned(),
+            _ => {
+                let ty = base_val.type_name(&self.registry, &self.type_exprs);
+                Err(Error::runtime_type(
+                    span,
+                    format!("JSON access requires Json; got {ty}"),
+                ))?
+            }
+        };
+
+        match kind {
+            // `.` or `->`: return Json (null for missing)
+            JsonAccessKind::Json => {
+                Ok(Value::Json(json_val.unwrap_or(serde_json::Value::Null)))
+            }
+            // `..` or `->>`: extract scalar, return Option[T]
+            JsonAccessKind::Scalar => {
+                self.json_to_option_scalar(json_val, span)
+            }
+        }
+    }
+
+    /// Convert a JSON value to `Option[scalar]`.
+    ///
+    /// - `None` or `null` → `Option.None`
+    /// - `bool` → `Option.Some(Bool)`
+    /// - `number` → `Option.Some(Int)` or `Option.Some(Float)`
+    /// - `string` → `Option.Some(String)`
+    /// - `array`/`object` → runtime error
+    fn json_to_option_scalar(
+        &mut self,
+        json: Option<serde_json::Value>,
+        span: Span,
+    ) -> Result<Value> {
+        match json {
+            None | Some(serde_json::Value::Null) => Ok(self.make_none()),
+            Some(serde_json::Value::Bool(b)) => {
+                let val_id = self.arena.add(Value::Bool(b), span);
+                Ok(self.make_some(val_id))
+            }
+            Some(serde_json::Value::Number(n)) => {
+                let val = n.as_i64().map_or_else(
+                    || Value::Float(OrderedFloat(n.as_f64().unwrap_or(0.0))),
+                    Value::Int,
+                );
+                let val_id = self.arena.add(val, span);
+                Ok(self.make_some(val_id))
+            }
+            Some(serde_json::Value::String(s)) => {
+                let sid = self.arena.intern(&s);
+                let val_id = self.arena.add(Value::String(sid), span);
+                Ok(self.make_some(val_id))
+            }
+            Some(serde_json::Value::Array(_)) => Err(Error::runtime_type(
+                span,
+                "JSON scalar access on array; use READ to convert",
+            )),
+            Some(serde_json::Value::Object(_)) => Err(Error::runtime_type(
+                span,
+                "JSON scalar access on object; use READ to convert",
+            )),
+        }
     }
 }
 

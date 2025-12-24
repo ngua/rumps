@@ -629,8 +629,10 @@ impl Array {
                         sub_keys.map(Self::Object)
                     }
 
-                    // Maps and times are not directly comparable for sorting
-                    Value::Map(_, _, _) | Value::Time(_) => None,
+                    // Maps, times, and JSON are not directly comparable for sorting
+                    Value::Map(_, _, _) | Value::Time(_) | Value::Json(_) => {
+                        None
+                    }
 
                     // Unit, closures, functions, module functions, and ranges are not comparable
                     Value::Unit

@@ -45,7 +45,7 @@
 
 use smallvec::SmallVec;
 
-use crate::ast::{BinOp, Literal, TypePattern, UnOp};
+use crate::ast::{BinOp, JsonAccessKind, Literal, TypePattern, UnOp};
 use crate::Span;
 
 /// A CST expression node with inline span.
@@ -180,6 +180,26 @@ pub(crate) enum ExprKind {
     /// This allows the parser to emit a structured CST while deferring error
     /// reporting to the lowering pass, where we have access to error handling.
     Error(String),
+
+    /// A JSON object literal: `{ "key": value, ... }`.
+    ///
+    /// Distinguished from native `Object` by having quoted string keys.
+    Json(Vec<(String, Expr)>),
+
+    /// JSON field access operators.
+    ///
+    /// - `JsonAccessKind::Json`: `.` or `->` (returns Json)
+    /// - `JsonAccessKind::Scalar`: `..` or `->>` (returns Option[scalar])
+    JsonAccess(Box<Expr>, JsonAccessKind, JsonAccessKey),
+}
+
+/// The key specification for JSON access (CST form).
+#[derive(Clone, Debug)]
+pub(crate) enum JsonAccessKey {
+    /// Static field name: `data.field` or `data..field`
+    Field(String),
+    /// Dynamic key expression: `data->"key"` or `data->>"key"`
+    Expr(Box<Expr>),
 }
 
 /// A CST statement node with inline span.

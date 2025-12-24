@@ -33,6 +33,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .app(TypeId::MAP, smallvec::smallvec![*k_ty, *v_ty])
             }
             Value::Time(_) => self.type_exprs.named(TypeId::TIME),
+            Value::Json(_) => self.type_exprs.named(TypeId::JSON),
             Value::Tagged(ty_expr, _, _) => *ty_expr,
             Value::Closure { params, ret, .. }
             | Value::Function { params, ret, .. } => {
@@ -156,6 +157,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(Value::String(id))
             }
 
+            // T -> Json (jsonify anything that can be serialized)
+            (_, TypeId::JSON) => self
+                .jsonify(val)
+                .map(Value::Json)
+                .map_err(|e| Error::runtime_type(span, e.to_string())),
+
             // Unsupported conversion
             _ => {
                 let src_name = val.type_name(&self.registry, &self.type_exprs);
@@ -171,10 +178,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Perform fallible type conversion for `read`.
+    /// Perform fallible type conversion for `READ`.
     ///
-    /// Returns a RUMPS `Result[T, String]` value.
-    pub(super) fn try_convert(
+    /// This is the runtime helper for `expr READ Type` syntax.
+    /// Returns a RUMPS `Result[T, String]` value (not `crate::Result`).
+    pub(super) fn read_value(
         &mut self,
         val: &Value,
         target: TypeId,
@@ -220,6 +228,102 @@ impl<I: IoContext> Interpreter<'_, I> {
                 1 => Ok(self.make_result_ok(Value::Bool(true), span)),
                 _ => {
                     let msg = format!("expected 0 or 1 for Bool, got {n}");
+                    Ok(self.make_result_err(&msg, span))
+                }
+            },
+
+            // Json -> Bool
+            (Value::Json(j), TypeId::BOOL) => match j {
+                serde_json::Value::Bool(b) => {
+                    Ok(self.make_result_ok(Value::Bool(*b), span))
+                }
+                serde_json::Value::Null => {
+                    Ok(self.make_result_err("expected Bool, got null", span))
+                }
+                _ => {
+                    let msg =
+                        format!("expected Bool, got {}", json_type_name(j));
+                    Ok(self.make_result_err(&msg, span))
+                }
+            },
+
+            // Json -> Int
+            (Value::Json(j), TypeId::INT) => match j {
+                serde_json::Value::Number(n) => match n.as_i64() {
+                    Some(i) => Ok(self.make_result_ok(Value::Int(i), span)),
+                    None => {
+                        let msg =
+                            format!("expected Int, got non-integer number {n}");
+                        Ok(self.make_result_err(&msg, span))
+                    }
+                },
+                serde_json::Value::Null => {
+                    Ok(self.make_result_err("expected Int, got null", span))
+                }
+                _ => {
+                    let msg =
+                        format!("expected Int, got {}", json_type_name(j));
+                    Ok(self.make_result_err(&msg, span))
+                }
+            },
+
+            // Json -> Float
+            (Value::Json(j), TypeId::FLOAT) => match j {
+                serde_json::Value::Number(n) => match n.as_f64() {
+                    Some(f) => Ok(self
+                        .make_result_ok(Value::Float(OrderedFloat(f)), span)),
+                    None => {
+                        let msg =
+                            format!("expected Float, got invalid number {n}");
+                        Ok(self.make_result_err(&msg, span))
+                    }
+                },
+                serde_json::Value::Null => {
+                    Ok(self.make_result_err("expected Float, got null", span))
+                }
+                _ => {
+                    let msg =
+                        format!("expected Float, got {}", json_type_name(j));
+                    Ok(self.make_result_err(&msg, span))
+                }
+            },
+
+            // Json -> String
+            (Value::Json(j), TypeId::STRING) => match j {
+                serde_json::Value::String(s) => {
+                    let id = self.arena.intern(s);
+                    Ok(self.make_result_ok(Value::String(id), span))
+                }
+                serde_json::Value::Null => {
+                    Ok(self.make_result_err("expected String, got null", span))
+                }
+                _ => {
+                    let msg =
+                        format!("expected String, got {}", json_type_name(j));
+                    Ok(self.make_result_err(&msg, span))
+                }
+            },
+
+            // Json -> Object
+            (Value::Json(j), TypeId::OBJECT) => match j {
+                serde_json::Value::Object(obj) => {
+                    let fields = obj
+                        .iter()
+                        .map(|(k, v)| {
+                            let key = self.arena.intern(k);
+                            let val = self.unjsonify(v.clone());
+                            let val_id = self.arena.add(val, span);
+                            (key, val_id)
+                        })
+                        .collect();
+                    Ok(self.make_result_ok(Value::Object(fields), span))
+                }
+                serde_json::Value::Null => {
+                    Ok(self.make_result_err("expected Object, got null", span))
+                }
+                _ => {
+                    let msg =
+                        format!("expected Object, got {}", json_type_name(j));
                     Ok(self.make_result_err(&msg, span))
                 }
             },
@@ -272,6 +376,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Tuple(_, _) => type_id == TypeId::TUPLE,
             Value::Map(_, _, _) => type_id == TypeId::MAP,
             Value::Time(_) => type_id == TypeId::TIME,
+            Value::Json(_) => type_id == TypeId::JSON,
             Value::Tagged(ty_expr, _, _) => self
                 .type_exprs
                 .base_type(*ty_expr)
@@ -537,5 +642,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ))
             }
         }
+    }
+}
+
+/// Get a human-readable name for a JSON value type (for error messages).
+fn json_type_name(j: &serde_json::Value) -> &'static str {
+    match j {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "Bool",
+        serde_json::Value::Number(_) => "Number",
+        serde_json::Value::String(_) => "String",
+        serde_json::Value::Array(_) => "Array",
+        serde_json::Value::Object(_) => "Object",
     }
 }

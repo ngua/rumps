@@ -65,13 +65,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Recursively evaluate and type-check array elements.
+    ///
+    /// If all elements have the same type, returns `Value::Array`.
+    /// If types are heterogeneous, converts to `Value::Json` (JSON array).
     #[async_recursion]
     async fn array_elems(
         &mut self,
         elems: &[ExprId],
         elem_ty: TypeExprId,
         mut acc: SmallVec<[ValueId; 4]>,
-        first_span: Span,
+        _first_span: Span,
     ) -> Result<Value> {
         match elems.split_first() {
             None => Ok(Value::Array(elem_ty, acc)),
@@ -83,19 +86,53 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if self.type_exprs.eq(elem_ty, val_ty) {
                     let val_id = self.arena.add(val, span);
                     acc.push(val_id);
-                    self.array_elems(tail, elem_ty, acc, first_span).await
+                    self.array_elems(tail, elem_ty, acc, _first_span).await
                 } else {
-                    Err(Error::runtime_type(
-                        span,
-                        format!(
-                            "array element type mismatch: expected {} (from {}..{}), got {}",
-                            self.type_expr_name(elem_ty),
-                            first_span.start,
-                            first_span.end,
-                            self.type_expr_name(val_ty)
-                        ),
-                    ))
+                    // Heterogeneous: convert accumulated + current + rest to JSON
+                    self.array_elems_json(tail, acc, val).await
                 }
+            }
+        }
+    }
+
+    /// Continue collecting array elements as JSON (heterogeneous array).
+    ///
+    /// Called when a type mismatch is detected. Converts all accumulated
+    /// values to JSON and continues collecting the rest as JSON.
+    #[async_recursion]
+    async fn array_elems_json(
+        &mut self,
+        elems: &[ExprId],
+        acc: SmallVec<[ValueId; 4]>,
+        current: Value,
+    ) -> Result<Value> {
+        // Convert accumulated values to JSON
+        let mut json_arr: Vec<serde_json::Value> = acc
+            .iter()
+            .filter_map(|vid| self.arena.get(*vid))
+            .map(|v| self.jsonify(v))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Add current value
+        json_arr.push(self.jsonify(&current)?);
+
+        // Collect remaining elements as JSON
+        self.array_elems_json_tail(elems, json_arr).await
+    }
+
+    /// Recursively collect remaining array elements as JSON.
+    #[async_recursion]
+    async fn array_elems_json_tail(
+        &mut self,
+        elems: &[ExprId],
+        mut acc: Vec<serde_json::Value>,
+    ) -> Result<Value> {
+        match elems.split_first() {
+            None => Ok(Value::Json(serde_json::Value::Array(acc))),
+            Some((expr_id, tail)) => {
+                let val = self.eval(*expr_id).await?;
+                acc.push(self.jsonify(&val)?);
+                self.array_elems_json_tail(tail, acc).await
             }
         }
     }
@@ -380,6 +417,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                             )
                         })
                 }
+                // JSON field access returns Json (null for missing)
+                Value::Json(j) => Ok(Value::Json(
+                    j.get(field).cloned().unwrap_or(serde_json::Value::Null),
+                )),
                 _ => Err(Error::runtime_type(
                     span,
                     format!(

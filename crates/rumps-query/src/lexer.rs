@@ -36,6 +36,25 @@ impl Spanned {
         }
     }
 
+    /// Post-processes tokens to convert `DotDot` to `DotDotNoSpace`.
+    ///
+    /// A `DotDot` token immediately following another token (no whitespace)
+    /// is converted to `DotDotNoSpace` for JSON scalar access syntax.
+    fn process_dot_dot(tokens: Vec<Self>) -> Vec<Self> {
+        tokens
+            .into_iter()
+            .scan(None::<u32>, |prev_end, mut t| {
+                let is_adjacent =
+                    prev_end.map(|e| e == t.span.start).unwrap_or(false);
+                if t.tok == Token::DotDot && is_adjacent {
+                    t.tok = Token::DotDotNoSpace;
+                }
+                *prev_end = Some(t.span.end);
+                Some(t)
+            })
+            .collect()
+    }
+
     /// Post-processes tokens to add `Indent` and `Dedent` tokens.
     ///
     /// Uses iterative `fold` instead of recursion to avoid stack overflow
@@ -135,6 +154,7 @@ impl<'a> Lexer<'a> {
     pub(crate) fn lex(self) -> Result<Vec<Spanned>> {
         Self::lexer()
             .parse(self.src)
+            .map(Spanned::process_dot_dot)
             .map(Spanned::process_indentation)
             .map_err(|errs| {
                 NonEmpty::collect(errs.into_iter().map(Self::to_error))
@@ -383,6 +403,7 @@ impl Lexer<'_> {
             just("...").to(Token::DotDotDot),
             just("..=").to(Token::DotDotEquals),
             just("..").to(Token::DotDot),
+            just("->>").to(Token::ArrowArrow),
             just("->").to(Token::Arrow),
             just("=>").to(Token::FatArrow),
             just("??").to(Token::QuestionQuestion),
@@ -836,8 +857,24 @@ mod tests {
     }
 
     #[test]
-    fn number_followed_by_range() {
+    fn number_followed_by_dot_dot_no_space() {
+        // `1..10` without space is DotDotNoSpace (JSON scalar access)
         let tokens = lex_ok("1..10");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Int(1),
+                Token::DotDotNoSpace,
+                Token::Int(10),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn number_followed_by_range() {
+        // `1 .. 10` with spaces is DotDot (range operator)
+        let tokens = lex_ok("1 .. 10");
         assert_eq!(
             tokens,
             vec![Token::Int(1), Token::DotDot, Token::Int(10), Token::Eof]
@@ -1012,7 +1049,8 @@ mod tests {
 
     #[test]
     fn range_exclusive() {
-        let tokens = lex_ok("1..10");
+        // Range with spaces
+        let tokens = lex_ok("1 .. 10");
         assert_eq!(
             tokens,
             vec![Token::Int(1), Token::DotDot, Token::Int(10), Token::Eof]
@@ -1021,6 +1059,7 @@ mod tests {
 
     #[test]
     fn range_inclusive() {
+        // Inclusive range; `..=` is always range (no JSON scalar equiv)
         let tokens = lex_ok("1..=10");
         assert_eq!(
             tokens,
@@ -1035,7 +1074,8 @@ mod tests {
 
     #[test]
     fn range_with_identifiers() {
-        let tokens = lex_ok("start..end");
+        // Range with spaces
+        let tokens = lex_ok("start .. end");
         assert_eq!(
             tokens,
             vec![
@@ -1054,6 +1094,51 @@ mod tests {
         assert_eq!(
             tokens,
             vec![Token::DotDotDot, Token::Ident("x".into()), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn dot_dot_with_space_is_range() {
+        // `a .. b` with spaces is range operator
+        let tokens = lex_ok("a .. b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::DotDot,
+                Token::Ident("b".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn dot_dot_no_space_is_json_scalar() {
+        // `a..b` without space before `..` is JSON scalar access
+        let tokens = lex_ok("a..b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::DotDotNoSpace,
+                Token::Ident("b".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn dot_dot_mixed_spacing() {
+        // Space after but not before: `a.. b`
+        let tokens = lex_ok("a.. b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("a".into()),
+                Token::DotDotNoSpace,
+                Token::Ident("b".into()),
+                Token::Eof
+            ]
         );
     }
 }

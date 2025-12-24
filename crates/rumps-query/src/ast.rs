@@ -646,6 +646,40 @@ pub(crate) enum Expr {
     /// that the value matches the annotated type at runtime; the type checker
     /// (once implemented) will use this as the expected type.
     Annotate(ExprId, AstTypeExprId),
+
+    /// A JSON object literal: `{ "key": value, ... }`.
+    ///
+    /// Distinguished from native `Object` by having quoted string keys.
+    /// Evaluates to `Value::Json`.
+    Json(Vec<(String, ExprId)>),
+
+    /// JSON field access operators.
+    ///
+    /// | Operator | Kind               | Returns                                |
+    /// |----------|--------------------|----------------------------------------|
+    /// | `.`      | `Field`            | `Json` (null if missing)               |
+    /// | `..`     | `ScalarField`      | `Option[Bool \| Int \| Float \| String]` |
+    /// | `->`     | `Key`              | `Json` (null if missing)               |
+    /// | `->>`    | `ScalarKey`        | `Option[Bool \| Int \| Float \| String]` |
+    JsonAccess(ExprId, JsonAccessKind, JsonAccessKey),
+}
+
+/// The kind of JSON access operation.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum JsonAccessKind {
+    /// `.` or `->`: returns `Json` (null if missing)
+    Json,
+    /// `..` or `->>`: extracts scalar, returns `Option[T]`
+    Scalar,
+}
+
+/// The key specification for JSON access.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum JsonAccessKey {
+    /// Static field name: `data.field` or `data..field`
+    Field(String),
+    /// Dynamic key expression: `data->"key"` or `data->>"key"`
+    Expr(ExprId),
 }
 
 /// A statement node.

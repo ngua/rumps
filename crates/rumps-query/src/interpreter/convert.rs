@@ -28,6 +28,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| rumps_types::Value::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
+            // Json values store directly
+            Value::Json(j) => Ok(rumps_types::Value::Json(j.clone())),
             // Serialize to JSON for complex values (closures, module fns,
             // and ranges will error in jsonify)
             Value::Array(_, _)
@@ -49,6 +51,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Convert a storage value to a runtime value.
+    ///
+    /// JSON values are loaded as opaque `Value::Json`; use `READ` to convert.
     pub(crate) fn load(&mut self, v: rumps_types::Value) -> Value {
         match v {
             rumps_types::Value::Boolean(b) => Value::Bool(b),
@@ -58,7 +62,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             rumps_types::Value::String(s) => {
                 Value::String(self.arena.intern(&s))
             }
-            rumps_types::Value::Json(j) => self.unjsonify(j),
+            rumps_types::Value::Json(j) => Value::Json(j),
         }
     }
 
@@ -133,6 +137,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 format!("{{ {items} }}")
             }
             Value::Time(t) => t.to_rfc3339(),
+            Value::Json(j) => j.to_string(),
             Value::Tagged(ty_expr, idx, payloads) => {
                 let base_ty = self.type_exprs.base_type(*ty_expr);
                 let ty_name = base_ty
@@ -272,6 +277,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Times serialize as ISO 8601 strings
                 Ok(serde_json::Value::String(t.to_rfc3339()))
             }
+            // Json is already JSON
+            Value::Json(j) => Ok(j.clone()),
             Value::Range {
                 start,
                 end,
@@ -330,8 +337,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .collect();
                     Value::Array(elem_ty, elems)
                 } else {
-                    // TODO: Heterogeneous JSON arrays should map to `Value::Json`
-                    todo!("Value::Json variant for heterogeneous arrays")
+                    // Heterogeneous arrays stay as opaque Json
+                    Value::Json(serde_json::Value::Array(arr))
                 }
             }
             serde_json::Value::Object(obj) => {
@@ -369,6 +376,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Tuple(_, _)
             | Value::Map(_, _, _)
             | Value::Time(_)
+            | Value::Json(_)
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
             | Value::Function { .. }

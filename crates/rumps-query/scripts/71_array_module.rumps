@@ -97,5 +97,5 @@ OUTPUT fe-empty  ; Unit
 
 ; Array.foreach with range
 OUTPUT "range foreach:"
-LET fe-range = Array.foreach(n => { OUTPUT n }, 1..4)
+LET fe-range = Array.foreach(n => { OUTPUT n }, 1 .. 4)
 OUTPUT fe-range  ; Unit

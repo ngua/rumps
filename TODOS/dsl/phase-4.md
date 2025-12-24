@@ -62,7 +62,7 @@ Complete 4.0.0, 4.0.1, 4.0.2, and 4.0.3 before starting 4.1+.
 
 ---
 
-## Phase 4.0.2: Expression Type Annotations
+## Phase 4.0.2: Expression Type Annotations [x]
 
 Add support for inline type annotations on expressions. Currently only `LET x: T = e` and function parameters support annotations; we need `(expr) : T` or `expr : T` syntax.
 
@@ -90,7 +90,7 @@ LET a = (42) : Int
 
 ---
 
-## Phase 4.0.3: Rename Error::Type to Error::RuntimeType
+## Phase 4.0.3: Rename Error::Type to Error::RuntimeType [x]
 
 Before implementing the type checker, rename the existing runtime type error to distinguish it from static type errors. This is needed because `Storable AS T` is typed as infallible but may fail at runtime.
 
@@ -126,16 +126,98 @@ Distinguish native objects from JSON objects by key quoting:
 
 ### JSON Access Operators
 
-| Operator | Description                     | Example        | Result             |
-|----------|---------------------------------|----------------|--------------------|
-| `.`      | Get field (returns JSON)        | `data.name`    | `"John"` (as JSON) |
-| `..`     | Get field (returns text/scalar) | `data..name`   | `John` (as String) |
-| `->`     | Get field by key (returns JSON) | `data->"name"` | `"John"` (as JSON) |
-| `->>`    | Get field by key (returns text) | `data->>"name"`| `John` (as String) |
+JSON-returning operators (`.`, `->`) return `Json` directly; missing fields return `Json::Null`.
+Scalar-extracting operators (`..`, `->>`) return `Option[T]` where `T` is the native RUMPS scalar type.
+
+| Operator   | Description                        | Example          | Result                                   |
+|------------|------------------------------------|------------------|------------------------------------------|
+| `.field`   | Static field access (returns JSON) | `data.name`      | `Json`                                   |
+| `..field`  | Static scalar extraction           | `data..name`     | `Option[Scalar]`                         |
+| `->(expr)` | Dynamic key access (returns JSON)  | `data->("name")` | `Json`                                   |
+| `->>(expr)`| Dynamic scalar extraction          | `data->>("name")`| `Option[Scalar]`                         |
+
+**NOTE**: The `..field` syntax requires NO space before `..`. With a space before `..`, it becomes the range operator. For example:
+- `data..field` → JSON scalar extraction
+- `1 .. 10` → Range from 1 to 10
+
+**Scalar extraction rules for `..` and `->>`:**
+- JSON `null` or missing field -> `Option.None`
+- JSON `true`/`false` -> `Option.Some(Bool)`
+- JSON number (integer) -> `Option.Some(Int)`
+- JSON number (fractional) -> `Option.Some(Float)`
+- JSON string -> `Option.Some(String)`
+- JSON object/array -> runtime error (not a scalar; use `READ` instead)
+
+**Usage examples:**
+```rumps
+LET data = { "name": "John", "age": 30, "active": true }
+
+; JSON field access (returns Json; Json is opaque)
+LET name = data.name              ; Json
+LET missing = data.foo            ; Json (internally null)
+
+; Static scalar extraction with .. (returns Option with native type)
+LET name_str = data..name         ; Option.Some("John") : Option[String]
+LET age = data..age               ; Option.Some(30) : Option[Int]
+LET active = data..active         ; Option.Some(true) : Option[Bool]
+LET missing-val = data..foo       ; Option.None
+
+; Unwrap with !
+OUTPUT data..name!                ; "John"
+OUTPUT data..age! + 1             ; 31 (Int arithmetic works)
+
+; Dynamic access with -> and ->>
+LET key = "name"
+LET dyn-json = data->(key)        ; Json
+LET dyn-scalar = data->>(key)     ; Option[String]
+
+; Coalesce with ??
+LET miss = data..missing ?? Option.Some("default")
+OUTPUT miss!                      ; "default"
+
+; Use READ to convert Json to native types (see "JSON is Opaque" section)
+LET age-result = data.age READ Int   ; Result.Ok(30)
+```
+
+### JSON is Opaque
+
+`Value::Json` is an **opaque** wrapper around `serde_json::Value`. There is no `Json.Null`, `Json.Object`, `Json.Array`, etc. Users cannot pattern match on JSON values directly.
+
+To convert JSON to native RUMPS types, use `READ`:
+
+```rumps
+LET data = { "name": "John", "age": 30, "scores": [95, 87, 92] }
+
+; Convert JSON to native types via READ
+LET name: Result[String, String] = data.name READ String
+LET age: Result[Int, String] = data.age READ Int
+LET scores: Result[Array[Int], String] = data.scores READ Array[Int]
+
+; READ with Option[T] handles null gracefully
+LET maybe-age = data.age READ Option[Int]     ; Result.Ok(Option.Some(30))
+LET maybe-foo = data.foo READ Option[Int]     ; Result.Ok(Option.None) if null or missing
+
+; READ on non-matching types returns Result.Err
+LET bad = data.name READ Int                  ; Result.Err("expected Int, got String")
+
+; Convert entire JSON object to native Object
+LET obj = data READ Object                    ; Result[Object, String]
+```
+
+**READ conversion rules for JSON:**
+
+| JSON Value     | `READ T`              | Result                                        |
+|----------------|-----------------------|-----------------------------------------------|
+| `null`         | `READ T` (non-Option) | `Result.Err("expected T, got null")`          |
+| `null`         | `READ Option[T]`      | `Result.Ok(Option.None)`                      |
+| `true`/`false` | `READ Bool`           | `Result.Ok(Bool)`                             |
+| number (int)   | `READ Int`            | `Result.Ok(Int)`                              |
+| number (float) | `READ Float`          | `Result.Ok(Float)`                            |
+| string         | `READ String`         | `Result.Ok(String)`                           |
+| array          | `READ Array[T]`       | `Result.Ok(Array[T])` if all elements convert |
+| object         | `READ Object`         | `Result.Ok(Object)`                           |
 
 ### JSON Arrays
-
-`Value::Json` is an opaque wrapper around `serde_json::Value`. It is not a sum type; JSON values are manipulated via the JSON access operators.
 
 JSON arrays are created in two ways:
 
@@ -157,16 +239,24 @@ true as Json              ; Value::Json (bool literal)
 
 ### Checklist
 
-- [ ] Lexer: Add `ArrowArrow` (`->>`) token
-  - Note: `DotDot` (`..`), `Arrow` (`->`) already exist
-- [ ] Parser/CST: Detect quoted vs unquoted object keys
-- [ ] Parser/CST: Parse JSON access operators
-- [ ] AST: Add `Expr::Json` variant
-- [ ] AST: Add `Expr::JsonAccess` or extend `Expr::Field` for `..`, `->`, `->>`
-- [ ] Interpreter: Evaluate JSON literals to `Value::Json`
-- [ ] Interpreter: Implement JSON field access operators
-- [ ] Value: Add `Value::Json`
-- [ ] Tests: JSON literal parsing and access
+- [x] Lexer: Add `ArrowArrow` (`->>`) token
+- [x] Lexer: Add `DotDotNoSpace` token for `..field` (when no space before `..`)
+  - Range operator `..` requires spaces: `a .. b`
+- [x] Parser/CST: Detect quoted vs unquoted object keys
+- [x] Parser/CST: Parse JSON access operators
+  - `..field` for static scalar extraction (uses `DotDotNoSpace`)
+  - `->(expr)` for dynamic JSON access
+  - `->>(expr)` for dynamic scalar extraction
+- [x] AST: Add `Expr::Json` variant
+- [x] AST: Add `Expr::JsonAccess` with `JsonAccessKind` and `JsonAccessKey`
+- [x] Interpreter: Evaluate JSON literals to `Value::Json`
+- [x] Interpreter: Implement JSON field access operators
+  - `.field` on JSON returns `Json` (null for missing)
+  - `..field` returns `Option[Scalar]`
+  - `->(expr)` returns `Json`
+  - `->>(expr)` returns `Option[Scalar]`
+- [x] Value: Add `Value::Json` wrapping `serde_json::Value`
+- [x] Tests: JSON literal parsing and access (`scripts/86_json.rumps`)
 
 ---
 
@@ -251,6 +341,16 @@ UNION Storable = Bool | Int | Float | Char | String | Json
 ```
 
 This is the return type of `GET` and element type of `COLLECT` (pre-`SELECT`).
+
+### Built-in Scalar Union
+
+Define a built-in union for JSON scalar extraction (used by `->>` operator):
+
+```rumps
+UNION Scalar = Bool | Int | Float | String
+```
+
+The `->>` operator returns `Option[Scalar]`; the inner type is one of the scalar types that can be extracted from a JSON value. Note that `Char` is intentionally excluded since JSON has no char type.
 
 ### Checklist
 
@@ -1065,8 +1165,6 @@ This is used for:
 - [ ] Modify `crates/rumps-query/src/interpreter.rs`:
   - [ ] Call `crate::typecheck::check(ast, &registry)?` after resolution
 - [ ] Modify `crates/rumps-query/src/error.rs`:
-  - [ ] Rename `Error::Type` to `Error::RuntimeType` (runtime type mismatch)
-  - [ ] Rename `Error::type_err()` to `Error::runtime_type()`
   - [ ] Add `Error::StaticType(TypeError)` variant for compile-time type errors
   - [ ] Add `Error::static_types(Vec<TypeError>) -> Self` constructor:
     - [ ] If single error, return `Error::StaticType(err)`
