@@ -16,6 +16,7 @@
 mod ast;
 mod env;
 mod error;
+mod intern;
 mod interpreter;
 mod io;
 mod lexer;
@@ -24,6 +25,7 @@ mod primitives;
 mod resolve;
 mod span;
 mod token;
+mod typecheck;
 mod value;
 
 #[allow(unused_imports)]
@@ -35,6 +37,8 @@ pub(crate) use env::{Environment, PrimCtx, PrimFn, PrimResult, Scopes};
 #[allow(unused_imports)]
 pub(crate) use error::ErrorDisplay;
 pub use error::{Error, Result};
+#[allow(unused_imports)]
+pub(crate) use intern::{StringId, StringInterner};
 #[allow(unused_imports)]
 pub(crate) use interpreter::Interpreter;
 pub use io::{Io, IoContext, TestIo};
@@ -48,8 +52,7 @@ pub use span::Span;
 pub(crate) use token::Token;
 #[allow(unused_imports)]
 pub(crate) use value::{
-    StringId, TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value,
-    ValueArena, ValueId,
+    TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value, ValueArena, ValueId,
 };
 
 /// Run a RUMPS script, outputting to stdout.

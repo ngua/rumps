@@ -6,8 +6,9 @@ use smallvec::{smallvec, SmallVec};
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
+use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::value::{CapturedEnv, StringId, TypeExprId, TypeId, Value, ValueId};
+use crate::value::{CapturedEnv, TypeExprId, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {

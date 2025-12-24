@@ -49,9 +49,8 @@ use smallvec::{smallvec, SmallVec};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::env::{PrimCtx, PrimResult};
-use crate::value::{
-    MapKey, StringId, TypeExprArena, TypeId, Value, ValueArena, ValueId,
-};
+use crate::intern::StringId;
+use crate::value::{MapKey, TypeExprArena, TypeId, Value, ValueArena, ValueId};
 use crate::Error;
 
 /// Shared utilities for primitive function implementations.

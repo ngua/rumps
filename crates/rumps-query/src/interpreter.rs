@@ -118,10 +118,11 @@ use crate::ast::{
     TypePattern, UnOp,
 };
 use crate::env::Environment;
+use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::value::{
-    CapturedEnv, FunctionDef, StringId, TypeExprArena, TypeExprId, TypeId,
-    TypeRegistry, Value, ValueArena,
+    CapturedEnv, FunctionDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry,
+    Value, ValueArena,
 };
 use crate::{Error, Result, Span};
 

@@ -9,6 +9,7 @@ use miette::{Diagnostic, LabeledSpan};
 use nonempty::NonEmpty;
 use thiserror::Error;
 
+use crate::typecheck::TypeError;
 use crate::{Span, Token};
 
 /// Crate-wide result type.
@@ -42,6 +43,11 @@ pub enum Error {
 
     #[error("{}", fmt_multiple(errors))]
     Multiple { errors: NonEmpty<Box<Self>> },
+
+    /// Static type error from the type checker.
+    #[error("{0}")]
+    #[allow(private_interfaces)]
+    Type(#[from] TypeError),
 }
 
 fn fmt_expected(expected: &[String]) -> String {
@@ -134,6 +140,7 @@ impl Error {
             | Self::Parse { span, .. }
             | Self::RuntimeType { span, .. } => Some(*span),
             Self::Runtime { span, .. } => *span,
+            Self::Type(e) => Some(e.span()),
             Self::Coercion { .. } | Self::Multiple { .. } => None,
         }
     }
@@ -170,6 +177,7 @@ impl Diagnostic for Error {
             Self::RuntimeType { .. } => "rumps::runtime_type",
             Self::Coercion { .. } => "rumps::coercion",
             Self::Multiple { .. } => "rumps::multiple",
+            Self::Type(_) => "rumps::type",
         };
         Some(Box::new(code))
     }
@@ -193,6 +201,9 @@ impl Diagnostic for Error {
                 Some(Box::new(std::iter::once(span_to_label(*s, "here"))))
             }
             Self::Runtime { span: None, .. } | Self::Coercion { .. } => None,
+            Self::Type(e) => {
+                Some(Box::new(std::iter::once(span_to_label(e.span(), "here"))))
+            }
             Self::Multiple { errors } => {
                 let labels: Vec<_> = errors
                     .iter()
@@ -247,6 +258,9 @@ impl fmt::Display for ErrorDisplay<'_> {
             }
             Error::Coercion { from, to, msg } => {
                 write!(f, "cannot coerce {from} to {to}: {msg}")
+            }
+            Error::Type(e) => {
+                write!(f, "type error at {}: {e}", loc(e.span()))
             }
             Error::Multiple { errors } => {
                 let formatted: Vec<_> = errors

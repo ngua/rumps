@@ -388,10 +388,11 @@ Create the core type representation and infrastructure.
 
 ### File Structure
 ```
+crates/rumps-query/src/intern.rs      -- StringId, StringInterner (shared with interpreter)
 crates/rumps-query/src/typecheck.rs   -- pub fn check(ast, registry) -> Result<(), Vec<TypeError>>
 crates/rumps-query/src/typecheck/
   ty.rs                               -- Ty, TyVar, Scheme, Subst
-  env.rs                              -- TypeEnv (scoped type bindings)
+  env.rs                              -- TypeEnv (scoped type bindings + StringInterner)
   error.rs                            -- TypeError enum
 ```
 
@@ -404,24 +405,25 @@ struct TyVar(u32);
 #[derive(Clone, Debug, PartialEq)]
 enum Ty {
     Var(TyVar),
-    Bool, 
-    Int, 
-    Float, 
-    Char, 
-    String, 
-    Unit, 
-    Time, 
+    Bool,
+    Int,
+    Float,
+    Char,
+    String,
+    Unit,
+    Time,
     Range,
+    Json,
     Array(Box<Ty>),
     Option(Box<Ty>),
     Result(Box<Ty>, Box<Ty>),
     Map(Box<Ty>, Box<Ty>),
     Tuple(Vec<Ty>),
     Fn(Vec<Ty>, Box<Ty>),
-    Object(BTreeMap<String, Ty>),  // anonymous record (structural)
-    Named(TypeId, Vec<Ty>),        // user-defined: sum types OR named records (TYPE)
-    Unknown,                       // database reads before inference
-    Error,                         // error recovery
+    Object(BTreeMap<StringId, Ty>),  // anonymous record (structural); field names interned
+    Named(TypeId, Vec<Ty>),          // user-defined: sum types OR named records (TYPE)
+    Unknown,                         // database reads before inference
+    Error,                           // error recovery
 }
 
 struct Scheme {
@@ -434,54 +436,66 @@ struct Subst(HashMap<TyVar, Ty>);
 
 ### Checklist
 
-- [ ] Create `typecheck.rs` with module declarations
-- [ ] Create `typecheck/ty.rs`:
-  - [ ] `TyVar` newtype
-  - [ ] `Ty` enum with all variants
-  - [ ] `impl Ty`:
-    - [ ] `fn free_vars(&self) -> HashSet<TyVar>`
-    - [ ] `fn occurs(&self, v: TyVar) -> bool`
-    - [ ] `fn apply(&self, subst: &Subst) -> Ty`
-  - [ ] `Scheme` struct
-  - [ ] `impl Scheme`:
-    - [ ] `fn mono(ty: Ty) -> Self`
-    - [ ] `fn instantiate(&self, ctx: &mut InferCtx) -> Ty`
-  - [ ] `Subst` struct
-  - [ ] `impl Subst`:
-    - [ ] `fn empty() -> Self`
-    - [ ] `fn singleton(v: TyVar, ty: Ty) -> Self`
-    - [ ] `fn apply(&self, ty: &Ty) -> Ty`
-    - [ ] `fn compose(&self, other: &Subst) -> Subst`
-    - [ ] `fn extend(&mut self, v: TyVar, ty: Ty)`
-- [ ] Create `typecheck/env.rs`:
-  - [ ] `TypeEnv` struct with `scopes: Vec<HashMap<String, Scheme>>`
-  - [ ] `impl TypeEnv`:
-    - [ ] `fn new() -> Self`
-    - [ ] `fn push_scope(&mut self)`
-    - [ ] `fn pop_scope(&mut self)`
-    - [ ] `fn bind(&mut self, name: &str, scheme: Scheme)`
-    - [ ] `fn lookup(&self, name: &str) -> Option<&Scheme>`
-    - [ ] `fn free_vars(&self) -> HashSet<TyVar>`
-    - [ ] `fn generalize(&self, ty: &Ty) -> Scheme`
-- [ ] Create `typecheck/error.rs`:
-  - [ ] `TypeError` enum (wrapped by `Error::StaticType` in main error.rs):
-    - [ ] `Mismatch { expected: Ty, got: Ty, span: Span }`
-    - [ ] `UndefinedVar(String, Span)`
-    - [ ] `NotCallable(Ty, Span)`
-    - [ ] `ArityMismatch { expected: usize, got: usize, span: Span }`
-    - [ ] `NotNumeric(Ty, Span)`
-    - [ ] `NotJsonable(Ty, Span)` - for `as Json`, `store`, etc.
-    - [ ] `NotSubscript(Ty, Span)` - for SET/GET subscript keys
-    - [ ] `NotStorable(Ty, Span)` - for SET value (must be DB-storable)
-    - [ ] `MissingField { ty: TypeId, field: String, span: Span }` - struct missing required field
-    - [ ] `FieldTypeMismatch { ty: TypeId, field: String, expected: Ty, got: Ty, span: Span }`
-    - [ ] `InfiniteType(TyVar, Ty, Span)`
-    - [ ] `MissingAnnotation(Span)`
-    - [ ] `UnknownType(String, Span)`
-    - [ ] `NonExhaustiveMatch(Span)` - match expression doesn't cover all cases
-    - [ ] `NotUnwrappable(Ty, Span)` - postfix `!` on non-Option/Result type
-  - [ ] Note: derive `Error` via `thiserror`
-  - [ ] Note: integrates with `crate::Error` via `Error::StaticType(TypeError)`
+- [x] Create `typecheck.rs` with module declarations
+- [x] Create `typecheck/ty.rs`:
+  - [x] `TyVar` newtype
+  - [x] `Ty` enum with all variants (including `Json`)
+  - [x] `impl Ty`:
+    - [x] `fn free_vars(&self) -> HashSet<TyVar>`
+    - [x] `fn occurs(&self, v: TyVar) -> bool`
+    - [x] `fn apply(&self, subst: &Subst) -> Ty`
+  - [x] `Scheme` struct
+  - [x] `impl Scheme`:
+    - [x] `fn mono(ty: Ty) -> Self`
+    - [x] `fn instantiate(&self, next: &mut u32) -> Ty` (uses counter instead of InferCtx)
+  - [x] `Subst` struct
+  - [x] `impl Subst`:
+    - [x] `fn empty() -> Self`
+    - [x] `fn singleton(v: TyVar, ty: Ty) -> Self`
+    - [x] `fn apply(&self, ty: &Ty) -> Ty`
+    - [x] `fn compose(&self, other: &Subst) -> Subst`
+    - [x] `fn extend(&mut self, v: TyVar, ty: Ty)`
+- [x] Create `intern.rs` (shared with interpreter):
+  - [x] `StringId` newtype (`u32` index)
+  - [x] `StringInterner` struct wrapping `IndexSet<String>`
+  - [x] `impl StringInterner`:
+    - [x] `fn new() -> Self`
+    - [x] `fn intern(&mut self, s: &str) -> StringId`
+    - [x] `fn get(&self, id: StringId) -> Option<&str>`
+    - [x] `fn lookup(&self, s: &str) -> Option<StringId>`
+    - [x] `fn len(&self) -> usize`
+- [x] Create `typecheck/env.rs`:
+  - [x] `TypeEnv` struct with `scopes: Vec<HashMap<StringId, Scheme>>` and `strings: StringInterner`
+  - [x] `impl TypeEnv`:
+    - [x] `fn new() -> Self`
+    - [x] `fn push_scope(&mut self)`
+    - [x] `fn pop_scope(&mut self)`
+    - [x] `fn bind(&mut self, name: &str, scheme: Scheme)` (interns name)
+    - [x] `fn lookup(&self, name: &str) -> Option<&Scheme>` (looks up via interner)
+    - [x] `fn intern(&mut self, s: &str) -> StringId`
+    - [x] `fn get_str(&self, id: StringId) -> Option<&str>`
+    - [x] `fn free_vars(&self) -> HashSet<TyVar>`
+    - [x] `fn generalize(&self, ty: &Ty) -> Scheme`
+    - [x] `fn apply(&mut self, subst: &Subst)` (additional helper)
+- [x] Create `typecheck/error.rs`:
+  - [x] `TypeError` enum (wrapped by `Error::Type` in main error.rs):
+    - [x] `Mismatch { expected: Ty, got: Ty, span: Span }`
+    - [x] `UndefinedVar(String, Span)`
+    - [x] `NotCallable(Ty, Span)`
+    - [x] `ArityMismatch { expected: usize, got: usize, span: Span }`
+    - [x] `NotNumeric(Ty, Span)`
+    - [x] `NotJsonable(Ty, Span)` - for `as Json`, `store`, etc.
+    - [x] `NotSubscript(Ty, Span)` - for SET/GET subscript keys
+    - [x] `NotStorable(Ty, Span)` - for SET value (must be DB-storable)
+    - [x] `MissingField { ty: TypeId, field: String, span: Span }` - struct missing required field
+    - [x] `FieldTypeMismatch { ty: TypeId, field: String, expected: Ty, got: Ty, span: Span }`
+    - [x] `InfiniteType(TyVar, Ty, Span)`
+    - [x] `MissingAnnotation(Span)`
+    - [x] `UnknownType(String, Span)`
+    - [x] `NonExhaustiveMatch(Span)` - match expression doesn't cover all cases
+    - [x] `NotUnwrappable(Ty, Span)` - postfix `!` on non-Option/Result type
+  - [x] Derive `Error` via `thiserror`
+  - [x] Integrate with `crate::Error` via `Error::Type(TypeError)` (code: `rumps::type`)
 
 ---
 
@@ -662,12 +676,14 @@ Infer types for field access, tuple indexing, and array indexing.
 
 ### Access Rules
 
-| Expression   | Type                  | Constraints                    |
-|--------------|-----------------------|--------------------------------|
-| `obj.field`  | `?t`                  | `obj` has field with type `?t` |
-| `obj.?field` | `Option[?t]`          | optional field access          |
-| `tuple.0`    | element type at index | -                              |
-| `arr[i]`     | `?t`                  | `arr ~ Array[?t]`, `i ~ Int`   |
+| Expression   | Type                  | Constraints                                                              |
+|--------------|-----------------------|--------------------------------------------------------------------------|
+| `obj.field`  | `?t`                  | `obj` has field with type `?t`                                           |
+|              |                       | Has to work with both anonymous and "struct" objects declared via `TYPE` |
+|              |                       |                                                                          |
+| `obj.?field` | `Option[?t]`          | optional field access                                                    |
+| `tuple.0`    | element type at index | -                                                                        |
+| `arr[i]`     | `?t`                  | `arr ~ Array[?t]`, `i ~ Int`                                             |
 
 ### Checklist
 
@@ -1243,9 +1259,10 @@ Comprehensive test suite for the type checker.
 
 1. `crates/rumps-query/src/ast.rs` - AST structure for traversal
 2. `crates/rumps-query/src/value.rs` - `TypeId`, `TypeRegistry` for user types
-3. `crates/rumps-query/src/resolve.rs` - resolution pass pattern to follow
-4. `crates/rumps-query/src/interpreter/types.rs` - runtime type helpers for reference
-5. `crates/rumps-query/src/primitives.rs` - builtin function signatures to type
+3. `crates/rumps-query/src/intern.rs` - `StringId`, `StringInterner` for string interning
+4. `crates/rumps-query/src/resolve.rs` - resolution pass pattern to follow
+5. `crates/rumps-query/src/interpreter/types.rs` - runtime type helpers for reference
+6. `crates/rumps-query/src/primitives.rs` - builtin function signatures to type
 
 ---
 

@@ -14,11 +14,12 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
 use crate::ast::ExprId;
+use crate::intern::{StringId, StringInterner};
 use crate::{Result, Span};
 
 /// A hashable key for `Map` values.
@@ -77,17 +78,6 @@ pub(crate) struct ValueId(u32);
 
 impl ValueId {
     const fn idx(self) -> usize {
-        self.0 as usize
-    }
-}
-
-/// Index into the string intern table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub(crate) struct StringId(u32);
-
-impl StringId {
-    fn idx(self) -> usize {
         self.0 as usize
     }
 }
@@ -156,7 +146,7 @@ impl TypeId {
 pub(crate) struct ValueArena {
     values: Vec<Value>,
     value_spans: Vec<Span>,
-    strings: IndexSet<String>,
+    strings: StringInterner,
 }
 
 impl Default for ValueArena {
@@ -171,7 +161,7 @@ impl ValueArena {
         Self {
             values: Vec::new(),
             value_spans: Vec::new(),
-            strings: IndexSet::new(),
+            strings: StringInterner::new(),
         }
     }
 
@@ -206,25 +196,19 @@ impl ValueArena {
     ///
     /// If the string is already interned, returns the existing ID.
     pub(crate) fn intern(&mut self, s: &str) -> StringId {
-        self.strings.get_index_of(s).map_or_else(
-            || {
-                let (idx, _) = self.strings.insert_full(s.to_owned());
-                StringId(idx as u32)
-            },
-            |idx| StringId(idx as u32),
-        )
+        self.strings.intern(s)
     }
 
     /// Get a string by its interned ID.
     pub(crate) fn get_str(&self, id: StringId) -> Option<&str> {
-        self.strings.get_index(id.idx()).map(String::as_str)
+        self.strings.get(id)
     }
 
     /// Look up a string's ID without interning it.
     ///
     /// Returns `None` if the string has not been interned.
     pub(crate) fn lookup_string(&self, s: &str) -> Option<StringId> {
-        self.strings.get_index_of(s).map(|idx| StringId(idx as u32))
+        self.strings.lookup(s)
     }
 
     /// Get array elements by ID, cloning only the element vector.

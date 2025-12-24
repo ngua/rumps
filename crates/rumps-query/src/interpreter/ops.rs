@@ -8,8 +8,9 @@ use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{BinOp, UnOp};
+use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::value::{StringId, Value, ValueId};
+use crate::value::{Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {

@@ -6,8 +6,9 @@ use super::Interpreter;
 use crate::ast::{
     BindingPattern, MatchPattern, MatchPatternId, RestPattern, TypePattern,
 };
+use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::value::{StringId, TypeId, Value, ValueId};
+use crate::value::{TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {

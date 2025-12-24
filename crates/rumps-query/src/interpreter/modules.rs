@@ -27,8 +27,9 @@
 use smallvec::SmallVec;
 
 use super::Interpreter;
+use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::value::{StringId, Value};
+use crate::value::Value;
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {

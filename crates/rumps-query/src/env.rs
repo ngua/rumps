@@ -19,7 +19,8 @@ pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
 use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
 
-use crate::value::{StringId, TypeId, Value, ValueArena, ValueId};
+use crate::intern::StringId;
+use crate::value::{TypeId, Value, ValueArena, ValueId};
 use crate::{Error, Result, Span};
 
 /// Stack of lexical scopes for `LET` bindings.
