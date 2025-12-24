@@ -33,20 +33,20 @@ pub(crate) enum Ty {
     Json,
 
     // Parameterized builtins
-    Array(Box<Ty>),
-    Option(Box<Ty>),
-    Result(Box<Ty>, Box<Ty>),
-    Map(Box<Ty>, Box<Ty>),
+    Array(Box<Self>),
+    Option(Box<Self>),
+    Result(Box<Self>, Box<Self>),
+    Map(Box<Self>, Box<Self>),
 
     // Compound types
-    Tuple(Vec<Ty>),
-    Fn(Vec<Ty>, Box<Ty>),
+    Tuple(Vec<Self>),
+    Fn(Vec<Self>, Box<Self>),
 
     /// Anonymous structural record; compatible if fields match.
-    Object(BTreeMap<StringId, Ty>),
+    Object(BTreeMap<StringId, Self>),
 
     /// User-defined type (sum types, structs, unions) with type parameters.
-    Named(TypeId, Vec<Ty>),
+    Named(TypeId, Vec<Self>),
 
     /// Unresolved; database reads before inference narrows.
     Unknown,
@@ -130,7 +130,7 @@ impl Ty {
     }
 
     /// Apply a substitution, replacing type variables with their bindings.
-    pub(crate) fn apply(&self, subst: &Subst) -> Ty {
+    pub(crate) fn apply(&self, subst: &Subst) -> Self {
         match self {
             Self::Var(v) => subst
                 .0
@@ -263,14 +263,14 @@ impl Subst {
     /// Compose two substitutions: `self . other`.
     ///
     /// Applying the result is equivalent to applying `other` then `self`.
-    pub(crate) fn compose(&self, other: &Subst) -> Subst {
+    pub(crate) fn compose(&self, other: &Self) -> Self {
         let applied: HashMap<TyVar, Ty> =
             other.0.iter().map(|(v, t)| (*v, t.apply(self))).collect();
         let mut merged = self.0.clone();
         applied.into_iter().for_each(|(v, t)| {
             merged.entry(v).or_insert(t);
         });
-        Subst(merged)
+        Self(merged)
     }
 
     /// Extend this substitution with a new binding.

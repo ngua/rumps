@@ -472,30 +472,31 @@ impl<I: IoContext> Interpreter<'_, I> {
                 );
             }
             TypeDefAst::Struct(fields) => {
-                // Struct types don't support type parameters (for now)
-                if !type_params.is_empty() {
-                    Err(Error::runtime(
-                        span,
-                        "struct types do not support type parameters",
-                    ))?;
-                }
+                // Validate field types reference only declared type params
+                fields.iter().try_for_each(|(_, ty_id)| {
+                    self.validate_type_params(*ty_id, type_params, span)
+                })?;
 
-                // Resolve each field's type and build the field map
-                let resolved: Result<IndexMap<StringId, TypeExprId>> = fields
+                // Build field map with AST type expressions (not resolved);
+                // resolution happens at usage site with type param substitution
+                let field_map: IndexMap<StringId, AstTypeExprId> = fields
                     .iter()
                     .map(|(fname, ast_ty_id)| {
                         let fname_id = self.arena.intern(fname);
-                        let ty_expr =
-                            self.resolve_type_expr(*ast_ty_id, span)?;
-                        Ok((fname_id, ty_expr))
+                        (fname_id, *ast_ty_id)
                     })
                     .collect();
+
+                // Intern type parameters
+                let type_param_ids: SmallVec<[StringId; 2]> =
+                    type_params.iter().map(|p| self.arena.intern(p)).collect();
 
                 // Register the struct type
                 self.registry.register(
                     crate::value::TypeDef::Struct {
                         name: name_id,
-                        fields: resolved?,
+                        type_params: type_param_ids,
+                        fields: field_map,
                     },
                     name_id,
                 );

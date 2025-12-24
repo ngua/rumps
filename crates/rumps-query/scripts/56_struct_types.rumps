@@ -60,3 +60,34 @@ FUN make-person (name: String, age: Int) -> Object {
 LET p3 = make-person("Eve", 35)
 OUTPUT p3.name
 OUTPUT p3.age
+
+; --- Parametric struct types ---
+
+; Single type parameter
+TYPE Box[T] = { value: T }
+
+LET int-box: Box[Int] = { value: 42 }
+OUTPUT int-box.value
+
+LET str-box: Box[String] = { value: "hello" }
+OUTPUT str-box.value
+
+; Two type parameters
+TYPE Pair[L, R] = { left: L, right: R }
+
+LET pair: Pair[Int, String] = { left: 1, right: "one" }
+OUTPUT pair.left
+OUTPUT pair.right
+
+; Nested type parameters
+LET nested: Box[Pair[Int, Bool]] = { value: { left: 99, right: true } }
+OUTPUT nested.value.left
+OUTPUT nested.value.right
+
+; Struct with Option type parameter
+TYPE Maybe[T] = { inner: Option[T] }
+
+LET some-val: Maybe[Int] = { inner: Option.Some(123) }
+LET none-val: Maybe[Int] = { inner: Option.None }
+OUTPUT some-val.inner!
+OUTPUT none-val.inner ?? Option.Some(0)

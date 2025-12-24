@@ -1253,12 +1253,12 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Check that a return value matches the declared return type.
     fn check_return_type(
-        &self,
+        &mut self,
         val: Value,
         ret: Option<TypeExprId>,
         span: Span,
     ) -> Result<Value> {
-        ret.map_or(Ok(val.clone()), |expected_ty| {
+        if let Some(expected_ty) = ret {
             if self.value_matches_type_expr(&val, expected_ty) {
                 Ok(val)
             } else {
@@ -1271,7 +1271,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                     ),
                 ))
             }
-        })
+        } else {
+            Ok(val)
+        }
     }
 
     /// Evaluate a list of argument expressions.
@@ -1330,20 +1332,27 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Provides detailed error messages, especially for struct types.
     fn validate_param(
-        &self,
+        &mut self,
         val: &Value,
         expected_ty: TypeExprId,
         param_name: StringId,
         span: Span,
     ) -> Result<()> {
-        let pname = self.arena.get_str(param_name).unwrap_or("?");
+        let pname = self.arena.get_str(param_name).unwrap_or("?").to_owned();
 
-        self.get_struct_fields(expected_ty).map_or_else(
-            || {
-                // Non-struct type: use standard matching
-                if self.value_matches_type_expr(val, expected_ty) {
-                    Ok(())
-                } else {
+        // Check if this is a struct type and get resolved fields
+        let resolved_fields = self.get_struct_fields_resolved(expected_ty);
+
+        if let Some(fields) = resolved_fields {
+            // Struct type: validate with detailed errors
+            match val {
+                Value::Object(obj) => self.validate_object_fields(
+                    obj,
+                    &fields,
+                    span,
+                    Some(&pname),
+                ),
+                _ => {
                     let expected = self.format_type_expr(expected_ty);
                     let actual =
                         val.type_name(&self.registry, &self.type_exprs);
@@ -1355,30 +1364,22 @@ impl<I: IoContext> Interpreter<'_, I> {
                         ),
                     ))
                 }
-            },
-            |expected_fields| {
-                // Struct type: validate with detailed errors
-                match val {
-                    Value::Object(obj) => self.validate_object_fields(
-                        obj,
-                        expected_fields,
-                        span,
-                        Some(pname),
+            }
+        } else {
+            // Non-struct type: use standard matching
+            if self.value_matches_type_expr(val, expected_ty) {
+                Ok(())
+            } else {
+                let expected = self.format_type_expr(expected_ty);
+                let actual = val.type_name(&self.registry, &self.type_exprs);
+                Err(Error::runtime_type(
+                    span,
+                    format!(
+                        "parameter `{pname}`: expected `{expected}`, \
+                         got `{actual}`"
                     ),
-                    _ => {
-                        let expected = self.format_type_expr(expected_ty);
-                        let actual =
-                            val.type_name(&self.registry, &self.type_exprs);
-                        Err(Error::runtime_type(
-                            span,
-                            format!(
-                                "parameter `{pname}`: expected `{expected}`, \
-                                 got `{actual}`"
-                            ),
-                        ))
-                    }
-                }
-            },
-        )
+                ))
+            }
+        }
     }
 }

@@ -51,14 +51,15 @@ Lexer -> CST -> AST -> Name Resolution -> [TYPE CHECK] -> Interpreter
 
 ## Phase Dependencies
 
-**Phase 4.0.x (Json, Union Types, Expression Annotations, Error Rename) blocks all later phases.** The type checker requires:
+**Phase 4.0.x (Json, Union Types, Expression Annotations, Error Rename, Struct Type Params) blocks all later phases.** The type checker requires:
 - `Ty::Json` for database values and JSON literals
 - `UNION Storable` for `GET` return type and `SET` value type
 - Union type syntax for function signatures
 - Expression type annotations for disambiguation (e.g., `(GET local("key")) : Int`)
 - `Error::RuntimeType` distinct from `Error::StaticType`
+- Struct types with type parameters (e.g., `TYPE Pair[L, R] = { left: L, right: R }`)
 
-Complete 4.0.0, 4.0.1, 4.0.2, and 4.0.3 before starting 4.1+.
+Complete 4.0.0, 4.0.0.1, 4.0.1, 4.0.2, 4.0.3, and 4.0.4 before starting 4.1+.
 
 ---
 
@@ -105,6 +106,40 @@ The type checker will add `Error::StaticType(TypeError)` for compile-time errors
 - [x] Update all call sites (grep for `type_err`, `Error::Type`)
 - [x] Update `Diagnostic` impl: change to `"rumps::runtime_type"`
 - [x] Verify tests still pass
+
+---
+
+## Phase 4.0.4: Struct Type Parameters [x]
+
+Add parametric polymorphism support for struct types. Currently, sum types and union types support type parameters (e.g., `TYPE Either[L, R] = Left(L) | Right(R)`), but struct types explicitly reject them.
+
+### Syntax
+
+```rumps
+; Struct with type parameters
+TYPE Pair[L, R] = { left: L, right: R }
+TYPE Box[T] = { value: T }
+TYPE Node[T] = { data: T, next: Option[Node[T]] }  ; recursive (if supported)
+
+; Usage
+LET p: Pair[Int, String] = { left: 42, right: "hello" }
+LET b: Box[Array[Int]] = { value: [1, 2, 3] }
+```
+
+### Why This Is Needed
+
+1. **Generic containers**: Users may want to define reusable struct types like `Pair[L, R]`
+2. **JSON deserialization**: `json READ StructType[T]` needs to work with parameterized structs
+3. **Consistency**: Sum types and unions already support type parameters; structs should too
+
+### Checklist
+
+- [x] Update `TypeDef::Struct` in `value.rs` to include `type_params: SmallVec<[StringId; 2]>`
+- [x] Remove the rejection check in `interpreter.rs:475-481` that errors on struct type params
+- [x] Intern and store type parameters when registering struct types
+- [x] Call `validate_type_params()` on all field types (already exists for sum types)
+- [x] Update `TypeRegistry` methods that work with struct definitions
+- [x] Tests: Struct type parameter parsing and instantiation
 
 ---
 
@@ -200,8 +235,12 @@ LET maybe-foo = data.foo READ Option[Int]     ; Result.Ok(Option.None) if null o
 ; READ on non-matching types returns Result.Err
 LET bad = data.name READ Int                  ; Result.Err("expected Int, got String")
 
-; Convert entire JSON object to native Object
-LET obj = data READ Object                    ; Result[Object, String]
+; Convert JSON object to named struct type
+TYPE Person = { name: String, age: Int }
+LET person = data READ Person                 ; Result[Person, String]
+
+; CANNOT read into anonymous Object (not type-checkable)
+; LET obj = data READ Object                  ; ERROR: use a named struct type
 ```
 
 **READ conversion rules for JSON:**
@@ -215,7 +254,9 @@ LET obj = data READ Object                    ; Result[Object, String]
 | number (float) | `READ Float`          | `Result.Ok(Float)`                            |
 | string         | `READ String`         | `Result.Ok(String)`                           |
 | array          | `READ Array[T]`       | `Result.Ok(Array[T])` if all elements convert |
-| object         | `READ Object`         | `Result.Ok(Object)`                           |
+| object         | `READ StructType`     | `Result.Ok(StructType)` (named struct only)   |
+
+**Note**: JSON objects cannot be read into anonymous `Object`; you must use a named struct type declared via `TYPE`. This enables the type checker to verify field access on the resulting value.
 
 ### JSON Arrays
 
@@ -257,6 +298,50 @@ true as Json              ; Value::Json (bool literal)
   - `->>(expr)` returns `Option[Scalar]`
 - [x] Value: Add `Value::Json` wrapping `serde_json::Value`
 - [x] Tests: JSON literal parsing and access (`scripts/86_json.rumps`)
+
+---
+
+## Phase 4.0.0.1: JSON READ for Struct Types [ ]
+
+Extend `READ` to support converting JSON objects to named struct types (including parametric structs). Currently `READ` only handles primitives (`Bool`, `Int`, `Float`, `String`) and `Object`.
+
+### Syntax
+
+```rumps
+TYPE Person = { name: String, age: Int }
+TYPE Box[T] = { value: T }
+
+LET data = { "name": "Alice", "age": 30 }
+LET person = data READ Person              ; Result[Person, String]
+
+LET boxed = { "value": 42 }
+LET box = boxed READ Box[Int]              ; Result[Box[Int], String]
+```
+
+### Why This Is Needed
+
+1. **Type-safe deserialization**: Users should be able to read JSON into typed structs
+2. **Parametric struct support**: `Box[Int]` needs type parameter substitution during READ
+3. **Error messages**: Provide clear errors when JSON doesn't match struct schema
+
+### Implementation Notes
+
+- `read_value` in `types.rs` currently matches on `TypeId` for primitives
+- For struct types, need to:
+  1. Check the value is a JSON object
+  2. Look up struct definition (including type params)
+  3. For each required field, recursively READ the JSON field to the expected type
+  4. Build a `Value::Object` with the converted fields
+  5. Return `Result.Err` if any field is missing or has wrong type
+
+### Checklist
+
+- [ ] Update `read_value` to handle user-defined struct `TypeId`s
+- [ ] Add `read_json_to_struct` helper that takes `TypeExprId` (for type args)
+- [ ] Recursively READ nested fields using resolved field types
+- [ ] Handle parametric structs by resolving field types with substitution
+- [ ] Return clear error messages for missing/mismatched fields
+- [ ] Tests: `json READ StructType`, `json READ StructType[T]`
 
 ---
 

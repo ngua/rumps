@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Structural object type aliases\n\n; Define a struct type\nTYPE Person = {\n  name: String,\n  age: Int\n}\n\n; Construct an object matching the type\nLET p: Person = { name: \"Alice\", age: 30 }\nOUTPUT p.name\nOUTPUT p.age\n\n; Extra fields are allowed (extensible-record style)\nLET p2: Person = { name: \"Bob\", age: 25, occupation: \"Developer\" }\nOUTPUT p2.name\nOUTPUT p2.occupation\n\n; Direct field access (no MATCH required)\nTYPE Address = {\n  street: String,\n  city: String,\n  zip: String\n}\n\nLET addr: Address = { street: \"123 Main St\", city: \"NYC\", zip: \"10001\" }\nOUTPUT addr.city\n\n; Nested struct types\nTYPE Patient = {\n  id: Int,\n  name: String,\n  active: Bool\n}\n\nTYPE PatientRecord = {\n  patient: Patient,\n  address: Address\n}\n\nLET rec = {\n  patient: { id: 1, name: \"Charlie\", active: true },\n  address: { street: \"456 Oak Ave\", city: \"LA\", zip: \"90001\" }\n}\nOUTPUT rec.patient.name\nOUTPUT rec.address.city\n\n; Function with struct type parameter\nFUN greet (p: Person) -> String {\n  \"Hello, \" ++ p.name ++ \"!\"\n}\n\nOUTPUT greet({ name: \"Diana\", age: 28 })\n\n; Function returning struct-compatible object\nFUN make_person (name: String, age: Int) -> Object {\n  { name: name, age: age }\n}\n\nLET p3 = make_person(\"Eve\", 35)\nOUTPUT p3.name\nOUTPUT p3.age\n"
+description: "; Structural object type aliases\n\n; Define a struct type\nTYPE Person = {\n  name: String,\n  age: Int\n}\n\n; Construct an object matching the type\nLET p: Person = { name: \"Alice\", age: 30 }\nOUTPUT p.name\nOUTPUT p.age\n\n; Extra fields are allowed (extensible-record style)\nLET p2: Person = { name: \"Bob\", age: 25, occupation: \"Developer\" }\nOUTPUT p2.name\nOUTPUT p2.occupation\n\n; Direct field access (no MATCH required)\nTYPE Address = {\n  street: String,\n  city: String,\n  zip: String\n}\n\nLET addr: Address = { street: \"123 Main St\", city: \"NYC\", zip: \"10001\" }\nOUTPUT addr.city\n\n; Nested struct types\nTYPE Patient = {\n  id: Int,\n  name: String,\n  active: Bool\n}\n\nTYPE PatientRecord = {\n  patient: Patient,\n  address: Address\n}\n\nLET rec: PatientRecord = {\n  patient: { id: 1, name: \"Charlie\", active: true },\n  address: { street: \"456 Oak Ave\", city: \"LA\", zip: \"90001\" }\n}\nOUTPUT rec.patient.name\nOUTPUT rec.address.city\n\n; Function with struct type parameter\nFUN greet (p: Person) -> String {\n  \"Hello, \" ++ p.name ++ \"!\"\n}\n\nOUTPUT greet({ name: \"Diana\", age: 28 })\n\n; Function returning struct-compatible object\nFUN make-person (name: String, age: Int) -> Object {\n  { name: name, age: age }\n}\n\nLET p3 = make-person(\"Eve\", 35)\nOUTPUT p3.name\nOUTPUT p3.age\n\n; --- Parametric struct types ---\n\n; Single type parameter\nTYPE Box[T] = { value: T }\n\nLET int-box: Box[Int] = { value: 42 }\nOUTPUT int-box.value\n\nLET str-box: Box[String] = { value: \"hello\" }\nOUTPUT str-box.value\n\n; Two type parameters\nTYPE Pair[L, R] = { left: L, right: R }\n\nLET pair: Pair[Int, String] = { left: 1, right: \"one\" }\nOUTPUT pair.left\nOUTPUT pair.right\n\n; Nested type parameters\nLET nested: Box[Pair[Int, Bool]] = { value: { left: 99, right: true } }\nOUTPUT nested.value.left\nOUTPUT nested.value.right\n\n; Struct with Option type parameter\nTYPE Maybe[T] = { inner: Option[T] }\n\nLET some-val: Maybe[Int] = { inner: Option.Some(123) }\nLET none-val: Maybe[Int] = { inner: Option.None }\nOUTPUT some-val.inner!\nOUTPUT none-val.inner ?? Option.Some(0)\n"
 ---
 Alice
 30
@@ -12,3 +12,11 @@ LA
 Hello, Diana!
 Eve
 35
+42
+hello
+1
+one
+99
+TRUE
+123
+Option.Some(0)

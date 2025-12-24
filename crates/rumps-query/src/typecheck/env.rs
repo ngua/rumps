@@ -43,10 +43,9 @@ impl TypeEnv {
     /// Bind a name to a type scheme in the current scope.
     pub(crate) fn bind(&mut self, name: &str, scheme: Scheme) {
         let id = self.strings.intern(name);
-        self.scopes
-            .last_mut()
-            .expect("env should have at least one scope")
-            .insert(id, scheme);
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(id, scheme);
+        }
     }
 
     /// Look up a name, searching from innermost to outermost scope.

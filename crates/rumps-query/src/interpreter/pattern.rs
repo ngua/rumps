@@ -14,7 +14,7 @@ use crate::{Error, Result, Span};
 impl<I: IoContext> Interpreter<'_, I> {
     /// Check if a value matches a type pattern (without binding).
     pub(super) fn check_pattern(
-        &self,
+        &mut self,
         val: &Value,
         pattern: &TypePattern,
         span: Span,
@@ -24,14 +24,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Simple type check: `is Int`, `is String`, etc.
                 let ty_id = self.arena.lookup_string(ty_name);
                 let type_id = ty_id.and_then(|id| self.registry.lookup(id));
-                type_id
-                    .map(|tid| self.value_matches_type(val, tid))
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!("unknown type `{ty_name}`"),
-                        )
-                    })
+                if let Some(tid) = type_id {
+                    Ok(self.value_matches_type(val, tid))
+                } else {
+                    Err(Error::runtime(
+                        span,
+                        format!("unknown type `{ty_name}`"),
+                    ))
+                }
             }
             TypePattern::Variant(ty_name, var_name) => {
                 // Variant check (zero-arity only): `is Option.None`

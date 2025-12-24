@@ -18,7 +18,7 @@ use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
-use crate::ast::ExprId;
+use crate::ast::{AstTypeExprId, ExprId};
 use crate::intern::{StringId, StringInterner};
 use crate::{Result, Span};
 
@@ -697,7 +697,10 @@ pub(crate) enum TypeDef {
     /// when assigning to a typed variable (`LET x: StructName = ...`).
     Struct {
         name: StringId,
-        fields: IndexMap<StringId, TypeExprId>,
+        type_params: SmallVec<[StringId; 2]>,
+        /// Field types stored as AST expressions (not resolved) to support
+        /// type parameters. Resolution happens at usage site with substitution.
+        fields: IndexMap<StringId, AstTypeExprId>,
     },
     /// Named union type definition.
     ///
@@ -784,6 +787,19 @@ impl TypeExprArena {
             TypeExpr::Fn(..) | TypeExpr::Tuple(..) | TypeExpr::Union(..) => {
                 None
             }
+        })
+    }
+
+    /// Get type arguments from a parameterized type expression.
+    ///
+    /// For `App(T, params)` returns `Some(&params)`; for `Named(T)` returns `None`.
+    pub(crate) fn type_args(
+        &self,
+        id: TypeExprId,
+    ) -> Option<&SmallVec<[TypeExprId; 2]>> {
+        self.get(id).and_then(|expr| match expr {
+            TypeExpr::App(_, params) => Some(params),
+            _ => None,
         })
     }
 

@@ -356,17 +356,22 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// For union types, the value matches if it matches ANY member type.
     pub(super) fn value_matches_type(
-        &self,
+        &mut self,
         val: &Value,
         type_id: TypeId,
     ) -> bool {
         // Check if target is a union type; if so, test each member
-        if let Some(crate::value::TypeDef::Union { members, .. }) =
-            self.registry.get_def(type_id)
+        if let Some(members) =
+            self.registry.get_def(type_id).and_then(|def| match def {
+                crate::value::TypeDef::Union { members, .. } => {
+                    Some(members.clone())
+                }
+                _ => None,
+            })
         {
             members
                 .iter()
-                .any(|m| self.value_matches_type_expr(val, *m))
+                .any(|&m| self.value_matches_type_expr(val, m))
         } else {
             self.value_matches_type_direct(val, type_id)
         }
@@ -382,22 +387,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Char(_) => type_id == TypeId::CHAR,
             Value::String(_) => type_id == TypeId::STRING,
             Value::Array(_, _) => type_id == TypeId::ARRAY,
-            Value::Object(obj) => {
-                // Object matches Object type directly, or any struct type
-                // whose required fields are present with correct types
-                if type_id == TypeId::OBJECT {
-                    true
-                } else {
-                    self.registry.get_def(type_id).is_some_and(
-                        |def| match def {
-                            crate::value::TypeDef::Struct {
-                                fields, ..
-                            } => self.object_matches_struct_fields(obj, fields),
-                            _ => false,
-                        },
-                    )
-                }
-            }
+            Value::Object(_) => type_id == TypeId::OBJECT,
             Value::Tuple(_, _) => type_id == TypeId::TUPLE,
             Value::Map(_, _, _) => type_id == TypeId::MAP,
             Value::Time(_) => type_id == TypeId::TIME,
@@ -414,36 +404,121 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Check if an object matches struct field requirements (presence + types).
-    pub(super) fn object_matches_struct_fields(
-        &self,
+    /// Check if an object matches resolved struct field requirements.
+    ///
+    /// Takes already-resolved field types (after type parameter substitution).
+    pub(super) fn object_matches_resolved_fields(
+        &mut self,
         obj: &IndexMap<StringId, ValueId>,
         fields: &IndexMap<StringId, TypeExprId>,
     ) -> bool {
-        fields.iter().all(|(fname_id, fty)| {
-            obj.get(fname_id).is_some_and(|val_id| {
-                self.arena
-                    .get(*val_id)
-                    .is_some_and(|val| self.field_matches_type(val, *fty))
-            })
+        let fields = fields.clone();
+        let obj = obj.clone();
+        fields.iter().all(|(fname_id, &resolved_ty)| {
+            obj.get(fname_id)
+                .and_then(|&val_id| self.arena.get(val_id).cloned())
+                .is_some_and(|val| self.field_matches_type(&val, resolved_ty))
         })
     }
 
     /// Check if a field value matches its expected type (recursive for nested structs).
     pub(super) fn field_matches_type(
-        &self,
+        &mut self,
         val: &Value,
         expected_ty: TypeExprId,
     ) -> bool {
-        self.get_struct_fields(expected_ty).map_or_else(
-            || self.value_matches_type_expr(val, expected_ty),
-            |nested_fields| match val {
-                Value::Object(nested_obj) => {
-                    self.object_matches_struct_fields(nested_obj, nested_fields)
-                }
+        // Get resolved nested struct fields if this is a struct type
+        let nested = self.get_struct_fields_resolved(expected_ty);
+        if let Some(nested_fields) = nested {
+            match val {
+                Value::Object(nested_obj) => self
+                    .object_matches_resolved_fields(nested_obj, &nested_fields),
                 _ => false,
-            },
-        )
+            }
+        } else {
+            self.value_matches_type_expr(val, expected_ty)
+        }
+    }
+
+    /// Build a substitution map from type params to type args.
+    fn build_subst(
+        type_params: &SmallVec<[StringId; 2]>,
+        type_args: Option<&SmallVec<[TypeExprId; 2]>>,
+    ) -> IndexMap<StringId, TypeExprId> {
+        type_args.map_or_else(IndexMap::new, |args| {
+            type_params
+                .iter()
+                .zip(args.iter())
+                .map(|(&p, &a)| (p, a))
+                .collect()
+        })
+    }
+
+    /// Resolve an AST type expression with type parameter substitution.
+    fn resolve_ast_type_with_subst(
+        &mut self,
+        ast_id: AstTypeExprId,
+        subst: &IndexMap<StringId, TypeExprId>,
+    ) -> Result<TypeExprId> {
+        let span = self.ast.type_expr_span(ast_id).unwrap_or_default();
+        let ast_ty =
+            self.ast.get_type_expr(ast_id).cloned().ok_or_else(|| {
+                Error::runtime(span, "invalid type expression id")
+            })?;
+
+        match ast_ty {
+            AstTypeExpr::Named(name) => {
+                // Check if it's a type parameter
+                let name_id = self.arena.intern(&name);
+                if let Some(&ty) = subst.get(&name_id) {
+                    Ok(ty)
+                } else {
+                    // Regular type lookup
+                    let ty_id =
+                        self.registry.lookup(name_id).ok_or_else(|| {
+                            Error::runtime_type(
+                                span,
+                                format!("unknown type: `{name}`"),
+                            )
+                        })?;
+                    Ok(self.type_exprs.named(ty_id))
+                }
+            }
+            AstTypeExpr::App(name, params) => {
+                let name_id = self.arena.intern(&name);
+                let ty_id = self.registry.lookup(name_id).ok_or_else(|| {
+                    Error::runtime_type(span, format!("unknown type: `{name}`"))
+                })?;
+                let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
+                    .iter()
+                    .map(|&p| self.resolve_ast_type_with_subst(p, subst))
+                    .collect();
+                Ok(self.type_exprs.app(ty_id, resolved?))
+            }
+            AstTypeExpr::Fn(params, ret) => {
+                let resolved_params: Result<SmallVec<[TypeExprId; 4]>> = params
+                    .iter()
+                    .map(|&p| self.resolve_ast_type_with_subst(p, subst))
+                    .collect();
+                let resolved_ret =
+                    self.resolve_ast_type_with_subst(ret, subst)?;
+                Ok(self.type_exprs.fn_type(resolved_params?, resolved_ret))
+            }
+            AstTypeExpr::Tuple(elems) => {
+                let resolved: Result<SmallVec<[TypeExprId; 4]>> = elems
+                    .iter()
+                    .map(|&e| self.resolve_ast_type_with_subst(e, subst))
+                    .collect();
+                Ok(self.type_exprs.tuple(resolved?))
+            }
+            AstTypeExpr::Union(members) => {
+                let resolved: Result<SmallVec<[TypeExprId; 4]>> = members
+                    .iter()
+                    .map(|&m| self.resolve_ast_type_with_subst(m, subst))
+                    .collect();
+                Ok(self.type_exprs.union(resolved?))
+            }
+        }
     }
 
     /// Check if a value matches a type expression.
@@ -452,42 +527,56 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// For function types, checks arity and param/return type compatibility.
     /// For union types, checks if value matches ANY member.
     /// For tuple types, checks element-wise matching.
+    /// For struct types, checks field presence and types with substitution.
     pub(super) fn value_matches_type_expr(
-        &self,
+        &mut self,
         val: &Value,
         ty: TypeExprId,
     ) -> bool {
         // Check for union type expression first
-        if let Some(members) = self.type_exprs.union_members(ty) {
+        if let Some(members) = self.type_exprs.union_members(ty).cloned() {
             members
                 .iter()
-                .any(|m| self.value_matches_type_expr(val, *m))
-        } else if let Some(expected_elems) = self.type_exprs.tuple_elems(ty) {
+                .any(|&m| self.value_matches_type_expr(val, m))
+        } else if let Some(expected_elems) =
+            self.type_exprs.tuple_elems(ty).cloned()
+        {
             // Tuple type: check element-wise matching
             match val {
                 Value::Tuple(_, actual_elems) => {
+                    let actual_elems = actual_elems.clone();
                     expected_elems.len() == actual_elems.len()
                         && expected_elems.iter().zip(actual_elems.iter()).all(
                             |(&exp_ty, &val_id)| {
-                                self.arena.get(val_id).is_some_and(|v| {
-                                    self.value_matches_type_expr(v, exp_ty)
-                                })
+                                self.arena.get(val_id).cloned().is_some_and(
+                                    |v| {
+                                        self.value_matches_type_expr(&v, exp_ty)
+                                    },
+                                )
                             },
                         )
                 }
                 _ => false,
             }
+        } else if let Some(resolved_fields) =
+            self.get_struct_fields_resolved(ty)
+        {
+            // Struct type: check field presence and types
+            match val {
+                Value::Object(obj) => {
+                    self.object_matches_resolved_fields(obj, &resolved_fields)
+                }
+                _ => false,
+            }
+        } else if let Some((params, ret)) = self.type_exprs.fn_parts(ty) {
+            // Function type: check if value is a function/closure
+            let params = params.clone();
+            self.fn_value_matches(val, &params, ret)
+        } else if let Some(type_id) = self.type_exprs.base_type(ty) {
+            // Simple type
+            self.value_matches_type(val, type_id)
         } else {
-            // Try simple type
-            self.type_exprs.base_type(ty).map_or_else(
-                || {
-                    // Function type: check if value is a function/closure
-                    self.type_exprs.fn_parts(ty).is_some_and(|(params, ret)| {
-                        self.fn_value_matches(val, params, ret)
-                    })
-                },
-                |type_id| self.value_matches_type(val, type_id),
-            )
+            false
         }
     }
 
@@ -530,18 +619,55 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Extract struct field definitions from a type expression.
     ///
-    /// Returns `Some(&fields)` if `ty` resolves to a struct type, `None` otherwise.
-    pub(super) fn get_struct_fields(
+    /// Returns `Some((&fields, &type_params, type_args))` if `ty` resolves to
+    /// a struct type, `None` otherwise. The type_args are from the type expression
+    /// (e.g., `[Int]` for `Box[Int]`).
+    pub(super) fn get_struct_def(
         &self,
         ty: TypeExprId,
-    ) -> Option<&IndexMap<StringId, TypeExprId>> {
-        self.type_exprs
-            .base_type(ty)
-            .and_then(|ty_id| self.registry.get_def(ty_id))
-            .and_then(|def| match def {
-                crate::value::TypeDef::Struct { fields, .. } => Some(fields),
-                _ => None,
+    ) -> Option<(
+        &IndexMap<StringId, AstTypeExprId>,
+        &SmallVec<[StringId; 2]>,
+        Option<&SmallVec<[TypeExprId; 2]>>,
+    )> {
+        let base_ty = self.type_exprs.base_type(ty)?;
+        let type_args = self.type_exprs.type_args(ty);
+        self.registry.get_def(base_ty).and_then(|def| match def {
+            crate::value::TypeDef::Struct {
+                fields,
+                type_params,
+                ..
+            } => Some((fields, type_params, type_args)),
+            _ => None,
+        })
+    }
+
+    /// Get resolved struct fields for a type expression.
+    ///
+    /// Resolves AST field types with type parameter substitution.
+    /// Returns `None` if `ty` is not a struct type.
+    pub(super) fn get_struct_fields_resolved(
+        &mut self,
+        ty: TypeExprId,
+    ) -> Option<IndexMap<StringId, TypeExprId>> {
+        // Get struct definition and extract what we need
+        let (fields, type_params, type_args) = {
+            let def = self.get_struct_def(ty)?;
+            (def.0.clone(), def.1.clone(), def.2.cloned())
+        };
+
+        // Build substitution map
+        let subst = Self::build_subst(&type_params, type_args.as_ref());
+
+        // Resolve each field type with substitution
+        fields
+            .iter()
+            .map(|(&fname_id, &ast_ty)| {
+                self.resolve_ast_type_with_subst(ast_ty, &subst)
+                    .ok()
+                    .map(|resolved| (fname_id, resolved))
             })
+            .collect()
     }
 
     /// Validate an object against struct field requirements.
@@ -549,14 +675,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Checks both field presence AND field types recursively.
     /// Extensible-record style: extra fields in the object are allowed.
     pub(super) fn validate_object_fields(
-        &self,
+        &mut self,
         obj: &IndexMap<StringId, ValueId>,
         expected_fields: &IndexMap<StringId, TypeExprId>,
         span: Span,
         ctx: Option<&str>,
     ) -> Result<()> {
+        let expected_fields = expected_fields.clone();
+        let obj = obj.clone();
         expected_fields.iter().try_for_each(|(fname_id, fty)| {
-            let fname = self.arena.get_str(*fname_id).unwrap_or("?");
+            let fname = self.arena.get_str(*fname_id).unwrap_or("?").to_owned();
             obj.get(fname_id).map_or_else(
                 || {
                     let msg = ctx.map_or_else(
@@ -566,8 +694,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Err(Error::runtime_type(span, msg))
                 },
                 |val_id| {
-                    self.arena.get(*val_id).map_or(Ok(()), |val| {
-                        self.validate_field_type(val, *fty, fname, span, ctx)
+                    self.arena.get(*val_id).cloned().map_or(Ok(()), |val| {
+                        self.validate_field_type(&val, *fty, &fname, span, ctx)
                     })
                 },
             )
@@ -576,72 +704,57 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Validate a single field value against its expected type.
     pub(super) fn validate_field_type(
-        &self,
+        &mut self,
         val: &Value,
         expected_ty: TypeExprId,
         fname: &str,
         span: Span,
         ctx: Option<&str>,
     ) -> Result<()> {
-        // Check for nested struct
-        self.get_struct_fields(expected_ty).map_or_else(
-            || {
-                // Non-struct: use standard type matching
-                if self.value_matches_type_expr(val, expected_ty) {
-                    Ok(())
-                } else {
+        // Check for nested struct (get resolved fields)
+        let nested = self.get_struct_fields_resolved(expected_ty);
+        if let Some(nested_fields) = nested {
+            // Nested struct: recursively validate
+            match val {
+                Value::Object(nested_obj) => self.validate_object_fields(
+                    nested_obj,
+                    &nested_fields,
+                    span,
+                    ctx,
+                ),
+                _ => {
                     let expected = self.format_type_expr(expected_ty);
                     let actual =
                         val.type_name(&self.registry, &self.type_exprs);
                     let msg = ctx.map_or_else(
-                        || {
-                            format!(
-                                "field `{fname}`: expected `{expected}`, \
-                                 got `{actual}`"
-                            )
-                        },
+                        || format!("field `{fname}`: expected `{expected}`, got `{actual}`"),
                         |p| {
                             format!(
-                                "parameter `{p}`: field `{fname}` expected \
-                                 `{expected}`, got `{actual}`"
+                                "parameter `{p}`: field `{fname}` expected `{expected}`, got `{actual}`"
                             )
                         },
                     );
                     Err(Error::runtime_type(span, msg))
                 }
-            },
-            |nested_fields| {
-                // Nested struct: recursively validate
-                match val {
-                    Value::Object(nested_obj) => self.validate_object_fields(
-                        nested_obj,
-                        nested_fields,
-                        span,
-                        ctx,
-                    ),
-                    _ => {
-                        let expected = self.format_type_expr(expected_ty);
-                        let actual =
-                            val.type_name(&self.registry, &self.type_exprs);
-                        let msg = ctx.map_or_else(
-                            || {
-                                format!(
-                                    "field `{fname}`: expected `{expected}`, \
-                                     got `{actual}`"
-                                )
-                            },
-                            |p| {
-                                format!(
-                                    "parameter `{p}`: field `{fname}` expected \
-                                     `{expected}`, got `{actual}`"
-                                )
-                            },
-                        );
-                        Err(Error::runtime_type(span, msg))
-                    }
-                }
-            },
-        )
+            }
+        } else {
+            // Non-struct: use standard type matching
+            if self.value_matches_type_expr(val, expected_ty) {
+                Ok(())
+            } else {
+                let expected = self.format_type_expr(expected_ty);
+                let actual = val.type_name(&self.registry, &self.type_exprs);
+                let msg = ctx.map_or_else(
+                    || format!("field `{fname}`: expected `{expected}`, got `{actual}`"),
+                    |p| {
+                        format!(
+                            "parameter `{p}`: field `{fname}` expected `{expected}`, got `{actual}`"
+                        )
+                    },
+                );
+                Err(Error::runtime_type(span, msg))
+            }
+        }
     }
 
     /// Validate that a value conforms to an expected type.
@@ -654,19 +767,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         expected_ty: TypeExprId,
         span: Span,
     ) -> Result<()> {
-        // Check if this is a struct type; if so, validate object fields
-        let is_struct = self.get_struct_fields(expected_ty).is_some();
+        // Check if this is a struct type and get resolved fields
+        let resolved_fields = self.get_struct_fields_resolved(expected_ty);
 
-        if is_struct {
+        if let Some(fields) = resolved_fields {
             match val {
                 Value::Object(obj) => {
-                    // Re-fetch fields (reference released by is_some() check)
-                    self.get_struct_fields(expected_ty).map_or(
-                        Ok(()),
-                        |fields| {
-                            self.validate_object_fields(obj, fields, span, None)
-                        },
-                    )
+                    self.validate_object_fields(obj, &fields, span, None)
                 }
                 _ => {
                     let actual =
