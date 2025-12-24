@@ -9,14 +9,103 @@ Add a Hindley-Milner style type inference and checking phase. The type checker r
 | DB operations    | Infer from usage, fallback to `Storable` | `LET x = GET local(1); x + 1` infers `Int`; ambiguous cases resolve to `Storable` union |
 | Object typing    | Structural                               | Objects compatible if they have required fields                                         |
 | Error handling   | Reject at compile                        | Type errors prevent execution                                                           |
-| Numeric coercion | Float result                             | `Int + Float = Float` (widening)                                                        |
+| Numeric coercion | Float result                             | `Int + Float = Float` (widening); `Int -> Float` only, not bidirectional                |
 | Type erasure     | None                                     | Runtime type info preserved for `IS` operator                                           |
+| Recursive types  | Not supported                            | No use case in query language; simplifies inference                                     |
+| Mutability       | None                                     | All bindings immutable; no value restriction needed for let-generalization              |
+| Variance         | Invariant                                | No subtyping hierarchy; `Int -> Float` coercion is explicit, not subtyping              |
+
+### Variance: Why Invariant?
+
+Variance governs how subtyping of type parameters affects subtyping of generic types. In languages with class hierarchies (e.g., `Cat <: Animal`), this matters:
+
+```java
+// Java: Arrays are covariant (unsound!)
+Animal[] animals = new Cat[10];  // allowed
+animals[0] = new Dog();          // runtime error: Dog into Cat[]
+```
+
+RUMPS avoids this entirely:
+
+1. **No subtyping hierarchy**: There's no `Cat <: Animal` relationship
+2. **No mutability**: Even if we had subtyping, immutable containers are safe
+3. **Numeric coercion is not subtyping**: `Int + Float = Float` is an operation rule, not `Int <: Float`
+
+Therefore, all generic types (`Array[T]`, `Option[T]`, `Map[K, V]`, etc.) are **invariant**:
+
+```rumps
+LET ints: Array[Int] = [1, 2, 3]
+LET floats: Array[Float] = ints    ; ERROR: Array[Int] != Array[Float]
+
+; Explicit conversion if needed
+LET floats: Array[Float] = ints |> Array.map(n => (n) : Float)
+```
+
+This is the simplest correct choice. Variance annotations or inference can be added later if a compelling use case emerges.
 
 ## Pipeline Integration
 
 ```
 Lexer -> CST -> AST -> Name Resolution -> [TYPE CHECK] -> Interpreter
 ```
+
+## Phase Dependencies
+
+**Phase 4.0.x (Json, Union Types, Expression Annotations, Error Rename) blocks all later phases.** The type checker requires:
+- `Ty::Json` for database values and JSON literals
+- `UNION Storable` for `GET` return type and `SET` value type
+- Union type syntax for function signatures
+- Expression type annotations for disambiguation (e.g., `(GET local("key")) : Int`)
+- `Error::RuntimeType` distinct from `Error::StaticType`
+
+Complete 4.0.0, 4.0.1, 4.0.2, and 4.0.3 before starting 4.1+.
+
+---
+
+## Phase 4.0.2: Expression Type Annotations
+
+Add support for inline type annotations on expressions. Currently only `LET x: T = e` and function parameters support annotations; we need `(expr) : T` or `expr : T` syntax.
+
+### Syntax
+
+Parentheses required around annotated expressions (like Haskell):
+
+```rumps
+; Annotate any expression
+LET x = (GET local("key")) : Int      ; disambiguate DB read
+LET y = (1 + 2) : Float               ; force widening
+LET z = (Option.None) : Option[String] ; specify type parameter
+
+; Simple literals still need parens
+LET a = (42) : Int
+```
+
+### Checklist
+
+- [ ] Lexer: `:` already exists (used in LET, object literals, function params)
+- [ ] Parser/CST: Parse `(expr) : type` — annotation only valid after closing paren
+- [ ] AST: Add `Expr::Annotate { expr: ExprId, ty: AstTypeExpr, span: Span }`
+- [ ] Interpreter: Evaluate inner expr, verify type matches annotation (runtime check for now)
+- [ ] Type checker (later): Use annotation as expected type, unify with inferred type
+- [ ] Tests: Expression annotation parsing and evaluation
+
+---
+
+## Phase 4.0.3: Rename Error::Type to Error::RuntimeType
+
+Before implementing the type checker, rename the existing runtime type error to distinguish it from static type errors. This is needed because `Storable AS T` is typed as infallible but may fail at runtime.
+
+### Rationale
+
+The type checker will add `Error::StaticType(TypeError)` for compile-time errors. The existing `Error::Type` is for runtime type mismatches (e.g., `Storable AS Int` when the value is actually a `String`). Renaming avoids confusion.
+
+### Checklist
+
+- [ ] Rename `Error::Type` to `Error::RuntimeType` in `error.rs`
+- [ ] Rename `Error::type_err()` to `Error::runtime_type()`
+- [ ] Update all call sites (grep for `type_err`, `Error::Type`)
+- [ ] Update `Diagnostic` impl: keep code as `"rumps::type"` or change to `"rumps::runtime_type"`
+- [ ] Verify tests still pass
 
 ---
 
@@ -47,21 +136,24 @@ Distinguish native objects from JSON objects by key quoting:
 
 ### JSON Arrays
 
+`Value::Json` is an opaque wrapper around `serde_json::Value`. It is not a sum type; JSON values are manipulated via the JSON access operators.
+
 JSON arrays are created in two ways:
 
 **1. Heterogeneous elements (implicit JSON)**
 ```rumps
-[1, 'a', 10.01]           ; Json (heterogeneous = must be JSON)
-[true, "hello", 42]       ; Json
+[1, 'a', 10.01]           ; Value::Json (heterogeneous = must be JSON)
+[true, "hello", 42]       ; Value::Json
 ```
 
 **2. Explicit cast with `as Json`**
 ```rumps
-[1, 2, 3] as Json         ; Json (homogeneous array cast to JSON)
-"hello" as Json           ; Json (string literal)
-42 as Json                ; Json (int literal)
-3.14 as Json              ; Json (float literal)
-true as Json              ; Json (bool literal)
+[1, 2, 3] as Json         ; Value::Json (homogeneous array cast to JSON)
+"hello" as Json           ; Value::Json (string literal)
+42 as Json                ; Value::Json (int literal)
+3.14 as Json              ; Value::Json (float literal)
+true as Json              ; Value::Json (bool literal)
+{ a: 1 }                  ; Value::Json (object literal to JSON object)
 ```
 
 ### Checklist
@@ -280,7 +372,9 @@ struct Subst(HashMap<TyVar, Ty>);
     - [ ] `InfiniteType(TyVar, Ty, Span)`
     - [ ] `MissingAnnotation(Span)`
     - [ ] `UnknownType(String, Span)`
-  - [ ] `impl Display for TypeError`
+    - [ ] `NonExhaustiveMatch(Span)` - match expression doesn't cover all cases
+    - [ ] `NotUnwrappable(Ty, Span)` - postfix `!` on non-Option/Result type
+  - [ ] Note: derive `Error` via `thiserror`
   - [ ] Note: integrates with `crate::Error` via `Error::StaticType(TypeError)`
 
 ---
@@ -314,9 +408,10 @@ enum Constraint {
     Numeric(Ty, Span),                                         // Int | Float
     Callable { callee: Ty, args: Vec<Ty>, ret: Ty, span: Span },
     Stringable(Ty, Span),                                      // everything (for ++ coercion, OUTPUT)
-    Jsonable(Ty, Span),                                        // NOT Closure/Function/ModuleFn/Range
+    Jsonable(Ty, Span),                                        // NOT Closure/Function/ModuleFn
     Subscript(Ty, Span),                                       // Bool | Int | Float | Char | String | Json
     Storable(Ty, Span),                                        // Bool | Int | Float | Char | String | Json
+    Unwrappable { ty: Ty, inner: Ty, span: Span },             // Option[?t] | Result[?t, _]; extracts ?t
 }
 ```
 
@@ -535,12 +630,70 @@ Infer types for conditionals, blocks, and match expressions.
 | `BLOCK { ...; e }`        | type of `e` | -                              |
 | `MATCH e { p => b, ... }` | `?t`        | all branches ~ `?t`            |
 
+### Branch Type Consistency
+
+All branches of `IF`/`ELSE` and all arms of `MATCH` must evaluate to the same type. This is enforced by unifying all branch types together.
+
+**IF/ELSE examples:**
+
+```rumps
+; OK: both branches are Int
+LET x = IF cond { 42 } ELSE { 0 }
+
+; OK: both branches are String
+LET y = IF cond { "yes" } ELSE { "no" }
+
+; ERROR: branch type mismatch (Int vs String)
+LET z = IF cond { 42 } ELSE { "hello" }
+;                 ^^           ^^^^^^^
+;                 Int          String — cannot unify
+```
+
+**Single-arm IF must be Unit:**
+
+```rumps
+; OK: body is Unit (statement-like)
+IF cond { OUTPUT "hello" }
+
+; ERROR: body is Int, but no ELSE branch
+LET x = IF cond { 42 }
+;                 ^^ Int, but ELSE would be Unit — mismatch
+```
+
+**MATCH examples:**
+
+```rumps
+; OK: all arms return Int
+LET x = MATCH opt {
+    Option.Some(n) => n
+    Option.None => 0
+}
+
+; ERROR: arm type mismatch (Int vs String)
+LET y = MATCH opt {
+    Option.Some(n) => n          ; Int
+    Option.None => "default"     ; String — cannot unify
+}
+
+; OK: all arms return same type after narrowing
+LET desc: String = MATCH val {
+    v IS Int    => "integer: " ++ v
+    v IS String => "string: " ++ v
+    v IS Bool   => "bool: " ++ v
+    _           => "other"
+}
+```
+
 ### Checklist
 
 - [ ] Handle `Expr::If`:
   - [ ] Unify condition with `Bool`
-  - [ ] Infer both branches
-  - [ ] Unify branches together
+  - [ ] If condition is `IS` with pattern bindings:
+    - [ ] Extract bindings and their inferred types
+    - [ ] Add bindings to then-branch scope (not else-branch)
+  - [ ] Infer both branches (with appropriate scopes)
+  - [ ] Unify branch types; emit `TypeError::Mismatch` if incompatible
+  - [ ] For single-arm IF (no ELSE): unify body with `Unit`
   - [ ] Return unified type
 - [ ] Handle `Expr::Block`:
   - [ ] Push scope
@@ -549,15 +702,20 @@ Infer types for conditionals, blocks, and match expressions.
   - [ ] Else return `Unit`
   - [ ] Pop scope
 - [ ] Handle `Expr::Match`:
-  - [ ] Infer scrutinee
+  - [ ] Infer scrutinee type
   - [ ] For each arm:
     - [ ] Check pattern against scrutinee type
-    - [ ] Bind pattern variables
+    - [ ] Bind pattern variables in arm scope
     - [ ] Handle `Pattern::Is` (type-narrowing pattern):
       - [ ] Check target type is member of scrutinee's union (if union)
       - [ ] Bind variable with narrowed type in arm scope
-    - [ ] Infer body
-  - [ ] Unify all arm bodies
+    - [ ] Infer arm body type
+  - [ ] Unify all arm body types; emit `TypeError::Mismatch` if incompatible
+  - [ ] **Exhaustiveness check**: verify patterns cover all cases
+    - [ ] Currently done at runtime in `try_match_arms` (`interpreter/control.rs`); move to type checker
+    - [ ] For sum types: all variants must be covered (or wildcard present)
+    - [ ] For literals: require wildcard/else arm
+    - [ ] Emit `TypeError::NonExhaustiveMatch` if not exhaustive
   - [ ] Return unified type
 
 ---
@@ -596,22 +754,49 @@ Handle unwrap, IS, AS, READ, GET, and other special cases.
 
 ### Special Rules
 
-| Expression     | Type                | Notes                                  |
-|----------------|---------------------|----------------------------------------|
-| `e!` (unwrap)  | `?t`                | `e ~ Option[?t]` or `Result[?t, _]`    |
-| `e IS T`       | `Bool`              | runtime check, no narrowing            |
-| `e AS T`       | `T`                 | infallible cast                        |
-| `e READ T`     | `Result[T, String]` | fallible conversion                    |
-| `GET local(k)` | `Unknown`           | requires annotation or usage inference |
+| Expression     | Type                | Notes                                                              |
+|----------------|---------------------|--------------------------------------------------------------------|
+| `e!` (unwrap)  | `?t`                | `Unwrappable(e, ?t)` constraint; works for `Option` and `Result`   |
+| `e IS T`       | `Bool`              | runtime check; may introduce bindings (see below)                  |
+| `e AS T`       | `T`                 | infallible cast                                                    |
+| `e READ T`     | `Result[T, String]` | fallible conversion                                                |
+| `GET local(k)` | `Storable`          | returns `Storable` union; narrow with `IS`/`AS` or usage inference |
+
+#### Note on `IS` with Pattern Bindings
+
+`IS` can be used with destructuring patterns, similar to Rust's `if let`:
+
+```rumps
+LET r = Result.Ok(999)
+IF r IS Result.Ok(data) {
+    OUTPUT data          ; `data` is bound here with type Int
+} ELSE {
+    OUTPUT "error"
+}
+```
+
+The `IS` expression itself still types as `Bool`. However, when used as an IF condition with bindings:
+1. The type checker types `r IS Result.Ok(data)` as `Bool`
+2. The then-branch scope gets `data` bound with the extracted payload type (`Int` in this case)
+3. The else-branch does NOT have `data` in scope
+
+This is handled in `Expr::If` inference, not in `Expr::Is` — the IF recognizes when its condition is an `IS` with bindings and propagates them to the then-branch.
+
+#### Note on `Storable AS _`
+
+For ergonomics, we should treat _any_ `Storable AS T`, where `T` is a member of the `Storable` union, as infallible. That is, users can _always_ cast from `Storable` to one of those concrete types. We will fall back on a `crate::Error::RuntimeType` error
 
 ### Checklist
 
-- [ ] Handle `Expr::Unwrap`:
-  - [ ] Check operand is `Option[?t]` or `Result[?t, _]`
+- [ ] Handle `Expr::Unwrap` (postfix `!`):
+  - [ ] Infer operand type
+  - [ ] Create fresh var `?t` for inner type
+  - [ ] Add `Unwrappable { ty: operand_ty, inner: ?t, span }` constraint
   - [ ] Return `?t`
 - [ ] Handle `Expr::Is`:
   - [ ] Always returns `Bool`
-  - [ ] No type narrowing (runtime check)
+  - [ ] If pattern has bindings, record them for use by enclosing `IF`
+  - [ ] Infer payload types from the pattern (e.g., `Result.Ok(x)` extracts `x: T` from `Result[T, E]`)
 - [ ] Handle `Expr::As`:
   - [ ] Parse target type from annotation
   - [ ] If target is `Json`, add `Jsonable` constraint on operand
@@ -620,8 +805,8 @@ Handle unwrap, IS, AS, READ, GET, and other special cases.
   - [ ] Parse target type
   - [ ] Return `Result[T, String]`
 - [ ] Handle `Expr::Get`:
-  - [ ] Return `Ty::Unknown`
-  - [ ] Narrowing happens via usage constraints
+  - [ ] Return `Ty::Named(TypeId::STORABLE, vec![])` (the `Storable` union)
+  - [ ] Usage may narrow to specific member (e.g., `x + 1` narrows to `Int | Float`)
 
 ---
 
@@ -710,9 +895,13 @@ unify(_, _) = error
   - [ ] Process `Numeric` constraints (check resolved type is `Int` or `Float`)
   - [ ] Process `Callable` constraints (unify with `Fn` type)
   - [ ] Process `Stringable` constraints (always satisfied; marks implicit coercion)
-  - [ ] Process `Jsonable` constraints (reject `Fn`, `Range`)
+  - [ ] Process `Jsonable` constraints (reject `Closure`, `Function`, `ModuleFn`)
   - [ ] Process `Subscript` constraints (check is `Bool | Int | Float | Char | String | Json`)
   - [ ] Process `Storable` constraints (check is `Bool | Int | Float | Char | String | Json`)
+  - [ ] Process `Unwrappable` constraints:
+    - [ ] Check `ty` is `Option[?t]` or `Result[?t, ?e]`
+    - [ ] Unify `inner` with extracted `?t`
+    - [ ] Emit `TypeError::NotUnwrappable` if neither
   - [ ] Compose all substitutions
 
 ---
@@ -912,20 +1101,20 @@ Self::check_arity("Object.keys", &args, 1, ctx.span)?;
 **Checklist:**
 - [ ] Remove `check_arity` function entirely
 - [ ] Remove all `check_arity` calls (~50+ sites across all module functions)
-- [ ] Object module: lines ~162, 191, 211, 229, 249, 266, 288
-- [ ] Array module: lines ~414, 435, 456, 477, 500, 521, 544, 567, 590, 668, 714, 764, 793
-- [ ] String module: lines ~832, 856, 881, 906, 936, 986, 1031, 1085, 1120
-- [ ] Math module: lines ~1171, 1200, 1218, 1236, 1254, 1272, 1290, 1308, 1326, 1344, 1362
-- [ ] Map module: lines ~1640, 1659, 1687, 1708, 1745, 1777, 1813, 1896, 1926, 1959, 2001, 2050
-- [ ] Time module: lines ~2302, 2318, 2334, 2350, 2366
-- [ ] Random module: lines ~1518, 1543, 1564, 1585
-- [ ] Option/Result module: lines ~2368, 2420
+- [ ] Object module functions (`Object.keys`, `Object.values`, etc.)
+- [ ] Array module functions (`Array.length`, `Array.map`, etc.)
+- [ ] String module functions (`String.length`, `String.split`, etc.)
+- [ ] Math module functions (`Math.abs`, `Math.floor`, etc.)
+- [ ] Map module functions (`Map.length`, `Map.keys`, etc.)
+- [ ] Time module functions (`Time.now`, `Time.parse`, etc.)
+- [ ] Random module functions (`Random.int`, `Random.choice`, etc.)
+- [ ] Option/Result module functions (`Option.unwrap-or`, `Result.map`, etc.)
 
 ---
 
 ### 4.17.2: Remove Array Homogeneity Checks (`collections.rs`)
 
-**Current pattern (`array_elems`, lines 69-101):**
+**Current pattern in `array_elems()`:**
 ```rust
 if self.type_exprs.eq(elem_ty, val_ty) {
     // ok
@@ -940,16 +1129,16 @@ if self.type_exprs.eq(elem_ty, val_ty) {
 ```
 
 **Checklist:**
-- [ ] `array_elems()`: Remove type equality check (lines 83-97)
-- [ ] `map_lit_entries()`: Remove key type homogeneity check (lines 205-215)
-- [ ] `map_lit_entries()`: Remove value type homogeneity check (lines 219-228)
+- [ ] `array_elems()`: Remove type equality check
+- [ ] `map_lit_entries()`: Remove key type homogeneity check
+- [ ] `map_lit_entries()`: Remove value type homogeneity check
 - [ ] Remove `TypeExprArena` tracking from `Value::Array` if no longer needed
 
 ---
 
 ### 4.17.3: Remove Array.map/filter Homogeneity Checks (`call.rs`)
 
-**Current pattern (`array_map_rec`, lines 442-488):**
+**Current pattern in `array_map_rec()`:**
 ```rust
 if fty == result_ty {
     // ok
@@ -966,8 +1155,8 @@ if fty == result_ty {
 ```
 
 **Checklist:**
-- [ ] `array_map_rec()`: Remove result type homogeneity check (lines 467-481)
-- [ ] `range_map_rec()`: Remove result type homogeneity check (lines 411-424)
+- [ ] `array_map_rec()`: Remove result type homogeneity check
+- [ ] `range_map_rec()`: Remove result type homogeneity check
 - [ ] `array_filter_rec()`: Remove similar checks if present
 - [ ] `array_reduce()`: Verify no type checks needed
 
@@ -1001,8 +1190,8 @@ fn binop_add(&mut self, lhs: ValueId, rhs: ValueId) -> Value {
 ```
 
 **Checklist:**
-- [ ] `apply_unop()`: Remove error branches for `-` and `!` (lines 68-84)
-- [ ] `binop_add()`: Remove error branch (lines 126-133)
+- [ ] `apply_unop()`: Remove error branches for `-` and `!`
+- [ ] `binop_add()`: Remove error branch
 - [ ] `binop_sub()`: Remove error branch
 - [ ] `binop_mul()`: Remove error branch
 - [ ] `binop_div()`: Remove error branch
@@ -1016,7 +1205,7 @@ fn binop_add(&mut self, lhs: ValueId, rhs: ValueId) -> Value {
 
 ### 4.17.5: Remove IF/Unit Checks (`control.rs`)
 
-**Current pattern (`check_unit`, lines 317-335):**
+**Current pattern in `check_unit()`:**
 ```rust
 fn check_unit(&self, val: ValueId, span: Span) -> Result<()> {
     let ty = self.type_of(val);
@@ -1036,14 +1225,14 @@ fn check_unit(&self, val: ValueId, span: Span) -> Result<()> {
 
 **Checklist:**
 - [ ] Remove `check_unit()` function entirely
-- [ ] `r#if()`: Remove `check_unit` call (lines 216-220)
-- [ ] `if_with_bindings()`: Remove `check_unit` call (line 269)
+- [ ] `r#if()`: Remove `check_unit` call
+- [ ] `if_with_bindings()`: Remove `check_unit` call
 
 ---
 
 ### 4.17.6: Remove Unwrap/Coalesce Type Checks (`control.rs`)
 
-**Current pattern (`unwrap`, lines 13-70):**
+**Current pattern in `unwrap()`:**
 ```rust
 let is_option = |ty| base_type(ty) == Some(TypeId::OPTION);
 let is_result = |ty| base_type(ty) == Some(TypeId::RESULT);
@@ -1065,15 +1254,15 @@ let Value::Tagged(_, idx, payloads) = val else {
 
 **Checklist:**
 - [ ] `unwrap()`: Remove `is_option`/`is_result` helper closures
-- [ ] `unwrap()`: Remove type error branch (lines 62-68)
-- [ ] `coalesce()`: Remove similar type checking logic (lines 81-170)
+- [ ] `unwrap()`: Remove type error branch
+- [ ] `coalesce()`: Remove similar type checking logic
 - [ ] Simplify to direct pattern matching on `Value::Tagged`
 
 ---
 
 ### 4.17.7: Remove Range Type Checks (`control.rs`)
 
-**Current pattern (`range`, lines 402-439):**
+**Current pattern in `range()`:**
 ```rust
 let start = match self.arena.get(start_id) {
     Value::Int(n) => *n,
@@ -1089,14 +1278,14 @@ let Value::Int(start) = self.arena.get(start_id) else {
 ```
 
 **Checklist:**
-- [ ] `range()`: Remove start type check (lines 412-420)
-- [ ] `range()`: Remove end type check (lines 423-431)
+- [ ] `range()`: Remove start type check
+- [ ] `range()`: Remove end type check
 
 ---
 
 ### 4.17.8: Remove Type Coercion Error Branches (`primitives.rs`, `types.rs`)
 
-**Current pattern (`to_float`, lines 113-128):**
+**Current pattern in `to_float()`:**
 ```rust
 fn to_float(v: &Value) -> Result<f64> {
     match v {
@@ -1143,27 +1332,27 @@ let Value::Array(_, elems) = ctx.arena.get(args[0]).unwrap() else {
 **Checklist by module:**
 
 **Object module:**
-- [ ] `Object.keys`: Remove Object type check (line 167)
-- [ ] `Object.values`: Remove Object type check (line 194)
-- [ ] `Object.entries`: Remove Object type check (line 214)
-- [ ] `Object.has`: Remove Object type check (line 232)
+- [ ] `Object.keys`: Remove Object type check
+- [ ] `Object.values`: Remove Object type check
+- [ ] `Object.entries`: Remove Object type check
+- [ ] `Object.has`: Remove Object type check
 - [ ] `Object.lookup`: Remove Object type check
 - [ ] `Object.insert`: Remove Object type check
 - [ ] `Object.remove`: Remove Object type check
 
 **Array module:**
-- [ ] `Array.length`: Remove Array type check (line 419)
-- [ ] `Array.head`: Remove Array type check (line 438)
-- [ ] `Array.tail`: Remove Array type check (line 459)
-- [ ] `Array.last`: Remove Array type check (line 480)
-- [ ] `Array.init`: Remove Array type check (line 503)
-- [ ] `Array.nth`: Remove Array type check (line 524)
+- [ ] `Array.length`: Remove Array type check
+- [ ] `Array.head`: Remove Array type check
+- [ ] `Array.tail`: Remove Array type check
+- [ ] `Array.last`: Remove Array type check
+- [ ] `Array.init`: Remove Array type check
+- [ ] `Array.nth`: Remove Array type check
 - [ ] `Array.reverse`: Remove Array type check
 - [ ] `Array.concat`: Remove Array type checks
 - [ ] `Array.contains`: Remove Array type check
-- [ ] `Array.map`: Remove Array/closure type checks (line 671)
-- [ ] `Array.filter`: Remove Array/closure type checks (line 717)
-- [ ] `Array.reduce`: Remove Array/closure type checks (line 767)
+- [ ] `Array.map`: Remove Array/closure type checks
+- [ ] `Array.filter`: Remove Array/closure type checks
+- [ ] `Array.reduce`: Remove Array/closure type checks
 - [ ] `Array.find`: Remove type checks
 - [ ] `Array.any`: Remove type checks
 - [ ] `Array.all`: Remove type checks
@@ -1171,10 +1360,10 @@ let Value::Array(_, elems) = ctx.arena.get(args[0]).unwrap() else {
 - [ ] `Array.sort-by`: Remove type checks
 
 **String module:**
-- [ ] `String.length`: Remove String type check (line 835)
-- [ ] `String.chars`: Remove String type check (line 859)
-- [ ] `String.split`: Remove String type checks (line 939-942)
-- [ ] `String.join`: Remove Array/String type checks (line 989, 993)
+- [ ] `String.length`: Remove String type check
+- [ ] `String.chars`: Remove String type check
+- [ ] `String.split`: Remove String type checks
+- [ ] `String.join`: Remove Array/String type checks
 - [ ] `String.trim`: Remove String type check
 - [ ] `String.starts-with`: Remove String type checks
 - [ ] `String.ends-with`: Remove String type checks
@@ -1190,16 +1379,16 @@ let Value::Array(_, elems) = ctx.arena.get(args[0]).unwrap() else {
 - [ ] `Math.abs`, `Math.floor`, `Math.ceil`, `Math.round`, etc.
 
 **Map module:**
-- [ ] `Map.length`: Remove Map type check (line 1643)
-- [ ] `Map.keys`: Remove Map type check (line 1662)
-- [ ] `Map.values`: Remove Map type check (line 1690)
-- [ ] `Map.entries`: Remove Map type check (line 1711)
-- [ ] `Map.has`: Remove Map type check (line 1748)
-- [ ] `Map.lookup`: Remove Map type check (line 1780-1789)
-- [ ] `Map.insert`: Remove Map type check (line 1816)
-- [ ] `Map.remove`: Remove Map type check (line 1854)
-- [ ] `Map.merge`: Remove Map type checks (line 1899, 1908)
-- [ ] `Map.from-entries`: Remove Array type check (line 1948)
+- [ ] `Map.length`: Remove Map type check
+- [ ] `Map.keys`: Remove Map type check
+- [ ] `Map.values`: Remove Map type check
+- [ ] `Map.entries`: Remove Map type check
+- [ ] `Map.has`: Remove Map type check
+- [ ] `Map.lookup`: Remove Map type check
+- [ ] `Map.insert`: Remove Map type check
+- [ ] `Map.remove`: Remove Map type check
+- [ ] `Map.merge`: Remove Map type checks
+- [ ] `Map.from-entries`: Remove Array type check
 
 **Time module:**
 - [ ] `Time.now`: No type checks needed
@@ -1209,14 +1398,14 @@ let Value::Array(_, elems) = ctx.arena.get(args[0]).unwrap() else {
 - [ ] `Time.diff-*`: Remove Time type checks
 
 **Random module:**
-- [ ] `Random.int`: Remove Int type checks (line 1521)
-- [ ] `Random.float`: Remove Float type checks (line 1546)
-- [ ] `Random.choice`: Remove Array type check (line 1567)
+- [ ] `Random.int`: Remove Int type checks
+- [ ] `Random.float`: Remove Float type checks
+- [ ] `Random.choice`: Remove Array type check
 - [ ] `Random.shuffle`: Remove Array type check
 
 **Option/Result module:**
-- [ ] `Option.unwrap-or`: Remove Option type check (line 2371)
-- [ ] `Result.unwrap-or`: Remove Result type check (line 2423)
+- [ ] `Option.unwrap-or`: Remove Option type check
+- [ ] `Result.unwrap-or`: Remove Result type check
 - [ ] `Option.map`: Remove type checks
 - [ ] `Result.map`: Remove type checks
 - [ ] `Result.map-err`: Remove type checks
@@ -1226,8 +1415,8 @@ let Value::Array(_, elems) = ctx.arena.get(args[0]).unwrap() else {
 ### 4.17.10: Simplify Pattern Matching (`pattern.rs`)
 
 **Checklist:**
-- [ ] `check_variant_zero_arity()`: Remove runtime arity validation (lines 66-74)
-- [ ] `check_variant()`: Simplify type/variant matching (lines 98-103)
+- [ ] `check_variant_zero_arity()`: Remove runtime arity validation
+- [ ] `check_variant()`: Simplify type/variant matching
 - [ ] Pattern exhaustiveness is checked statically; remove runtime fallbacks
 
 ---
@@ -1235,9 +1424,9 @@ let Value::Array(_, elems) = ctx.arena.get(args[0]).unwrap() else {
 ### 4.17.11: Simplify Type Coercion (`types.rs`)
 
 **Checklist:**
-- [ ] `coerce()`: Remove unsupported cast error branch (lines 160-169)
+- [ ] `coerce()`: Remove unsupported cast error branch
   - Keep: `AS` on `Storable` union remains fallible at runtime
-- [ ] `try_convert()`: Remove unsupported conversion error branch (lines 228-238)
+- [ ] `try_convert()`: Remove unsupported conversion error branch
   - Keep: `READ` remains fallible at runtime
 - [ ] `value_matches_type()`: May be removable if only used for runtime `IS` checks
 
