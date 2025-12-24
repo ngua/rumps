@@ -30,6 +30,20 @@ impl<I: IoContext> Interpreter<'_, I> {
         Value::none(other_opt_ty)
     }
 
+    /// Create an `Option.None` typed as `Option[Scalar]`.
+    pub(super) fn make_none_scalar(&mut self) -> Value {
+        let scalar_ty = self.type_exprs.named(TypeId::SCALAR);
+        let opt_ty = self.type_exprs.app(TypeId::OPTION, smallvec![scalar_ty]);
+        Value::none(opt_ty)
+    }
+
+    /// Create an `Option.Some(v)` typed as `Option[Scalar]`.
+    pub(super) fn make_some_scalar(&mut self, inner: ValueId) -> Value {
+        let scalar_ty = self.type_exprs.named(TypeId::SCALAR);
+        let opt_ty = self.type_exprs.app(TypeId::OPTION, smallvec![scalar_ty]);
+        Value::some(opt_ty, inner)
+    }
+
     /// Create a `Result.Ok(v)` value.
     pub(super) fn make_result_ok(&mut self, v: Value, span: Span) -> Value {
         let unknown = self.type_exprs.named(TypeId::UNKNOWN);

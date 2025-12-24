@@ -994,8 +994,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Convert a JSON value to `Option[scalar]`.
+    /// Convert a JSON value to `Option[Scalar]`.
     ///
+    /// Returns `Option[Scalar]` where `Scalar = Bool | Int | Float | String`:
     /// - `None` or `null` → `Option.None`
     /// - `bool` → `Option.Some(Bool)`
     /// - `number` → `Option.Some(Int)` or `Option.Some(Float)`
@@ -1007,10 +1008,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         match json {
-            None | Some(serde_json::Value::Null) => Ok(self.make_none()),
+            None | Some(serde_json::Value::Null) => Ok(self.make_none_scalar()),
             Some(serde_json::Value::Bool(b)) => {
                 let val_id = self.arena.add(Value::Bool(b), span);
-                Ok(self.make_some(val_id))
+                Ok(self.make_some_scalar(val_id))
             }
             Some(serde_json::Value::Number(n)) => {
                 let val = n.as_i64().map_or_else(
@@ -1018,12 +1019,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Value::Int,
                 );
                 let val_id = self.arena.add(val, span);
-                Ok(self.make_some(val_id))
+                Ok(self.make_some_scalar(val_id))
             }
             Some(serde_json::Value::String(s)) => {
                 let sid = self.arena.intern(&s);
                 let val_id = self.arena.add(Value::String(sid), span);
-                Ok(self.make_some(val_id))
+                Ok(self.make_some_scalar(val_id))
             }
             Some(serde_json::Value::Array(_)) => Err(Error::runtime_type(
                 span,

@@ -374,10 +374,11 @@ The `->>` operator returns `Option[Scalar]`; the inner type is one of the scalar
 - [x] Interpreter: Evaluate `IS` patterns in `MATCH` (runtime type check + binding)
 - [x] Builtins: Define `Storable` union
   - [x] **NOTE**: Treat `AS` as infallible _only_ for `Storable` to concrete member types
-    - I.e. users can _always_ narrow from `Storable` to concrete type; rumtime type error if not successful
+    - I.e. users can _always_ narrow from `Storable` to concrete type; runtime type error if not successful
     - This is ergonomic choice for making DB access easier
-- [ ] Update `GET` return type to `Storable`
 - [x] Tests: Union declaration, IS checks, AS casts
+
+**NOTE**: `GET` return type is a type-checker concern (no runtime change); see Phase 4.10.
 
 ---
 
@@ -905,7 +906,9 @@ For ergonomics, we should treat _any_ `Storable AS T`, where `T` is a member of 
 - [ ] Handle `Expr::As`:
   - [ ] Parse target type from annotation
   - [ ] If target is `Json`, add `Jsonable` constraint on operand
-  - [ ] Return target type (runtime coercion)
+  - [ ] If operand type is `Storable` and target is a member type, return target (infallible)
+  - [ ] Otherwise, require type compatibility (e.g., `Int AS Float` for widening)
+  - [ ] For incompatible types, emit error; use `READ` for fallible conversion or `MATCH`/`IS` for narrowing
 - [ ] Handle `Expr::Read`:
   - [ ] Parse target type
   - [ ] Return `Result[T, String]`
