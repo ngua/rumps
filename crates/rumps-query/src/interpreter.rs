@@ -634,7 +634,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let right = self.eval(rhs).await?;
                         match right {
                             Value::Bool(b) => Ok(Value::Bool(b)),
-                            _ => Err(Error::type_err(
+                            _ => Err(Error::runtime_type(
                                 span,
                                 format!(
                                     "logical AND requires booleans; got Bool and {}",
@@ -643,7 +643,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             )),
                         }
                     }
-                    _ => Err(Error::type_err(
+                    _ => Err(Error::runtime_type(
                         span,
                         format!(
                             "logical AND requires booleans; got {}",
@@ -661,7 +661,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let right = self.eval(rhs).await?;
                         match right {
                             Value::Bool(b) => Ok(Value::Bool(b)),
-                            _ => Err(Error::type_err(
+                            _ => Err(Error::runtime_type(
                                 span,
                                 format!(
                                     "logical OR requires booleans; got Bool and {}",
@@ -670,7 +670,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             )),
                         }
                     }
-                    _ => Err(Error::type_err(
+                    _ => Err(Error::runtime_type(
                         span,
                         format!(
                             "logical OR requires booleans; got {}",

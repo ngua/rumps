@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Wrong type for destructuring\nLET (a, b) = 42\n"
 ---
-ERROR: type error at 31..46: cannot destructure Int as tuple
+ERROR: runtime type error at 31..46: cannot destructure Int as tuple

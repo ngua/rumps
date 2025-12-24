@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Test: Expression annotation type mismatch error\n; Annotating an Int as String should fail\n\nLET x = (42) : String\nOUTPUT x\n"
 ---
-ERROR: type error at 101..114: type mismatch: expected String, got Int
+ERROR: runtime type error at 101..114: type mismatch: expected String, got Int

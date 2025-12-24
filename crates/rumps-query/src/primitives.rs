@@ -123,7 +123,7 @@ pub(crate) trait Prim {
             .and_then(|v| match v {
                 Value::Int(n) => Ok(*n as f64),
                 Value::Float(f) => Ok(f.0),
-                _ => Err(ctx.type_error(fn_name, "Int or Float")),
+                _ => Err(ctx.runtime_type_error(fn_name, "Int or Float")),
             })
     }
 
@@ -140,7 +140,7 @@ pub(crate) trait Prim {
             })
             .and_then(|v| match v {
                 Value::Int(n) => Ok(*n),
-                _ => Err(ctx.type_error(fn_name, "Int")),
+                _ => Err(ctx.runtime_type_error(fn_name, "Int")),
             })
     }
 }
@@ -161,10 +161,9 @@ impl Object {
         Box::pin(async move {
             Self::check_arity("Object.keys", &args, 1, ctx.span)?;
 
-            let map = ctx
-                .arena
-                .get_object(args[0])
-                .ok_or_else(|| ctx.type_error("Object.keys", "Object"))?;
+            let map = ctx.arena.get_object(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("Object.keys", "Object")
+            })?;
 
             let keys: SmallVec<[ValueId; 4]> = map
                 .keys()
@@ -188,10 +187,9 @@ impl Object {
         Box::pin(async move {
             Self::check_arity("Object.values", &args, 1, ctx.span)?;
 
-            let map = ctx
-                .arena
-                .get_object(args[0])
-                .ok_or_else(|| ctx.type_error("Object.values", "Object"))?;
+            let map = ctx.arena.get_object(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("Object.values", "Object")
+            })?;
 
             Self::values_from_map(ctx, &map)
         })
@@ -208,10 +206,9 @@ impl Object {
         Box::pin(async move {
             Self::check_arity("Object.entries", &args, 1, ctx.span)?;
 
-            let map = ctx
-                .arena
-                .get_object(args[0])
-                .ok_or_else(|| ctx.type_error("Object.entries", "Object"))?;
+            let map = ctx.arena.get_object(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("Object.entries", "Object")
+            })?;
 
             Self::entries_from_map(ctx, &map)
         })
@@ -229,7 +226,7 @@ impl Object {
             Self::check_arity("Object.from-entries", &args, 1, ctx.span)?;
 
             let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                ctx.type_error("Object.from-entries", "Array")
+                ctx.runtime_type_error("Object.from-entries", "Array")
             })?;
 
             Self::from_entries_impl(ctx, &elems)
@@ -373,15 +370,16 @@ impl Object {
                             obj.insert(*s, val_id);
                             Ok(())
                         }
-                        _ => Err(ctx.type_error_msg(
+                        _ => Err(ctx.runtime_type_error_msg(
                             "Object.from-entries",
                             "key must be String",
                         )),
                     }
                 }
-                _ => Err(
-                    ctx.type_error("Object.from-entries", "(String, T) tuples")
-                ),
+                _ => Err(ctx.runtime_type_error(
+                    "Object.from-entries",
+                    "(String, T) tuples",
+                )),
             }
         })?;
 
@@ -413,10 +411,9 @@ impl Array {
         Box::pin(async move {
             Self::check_arity("Array.length", &args, 1, ctx.span)?;
 
-            let (_, elems) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.length", "Array"))?;
+            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("Array.length", "Array")
+            })?;
 
             Ok(ctx.arena.add(Value::Int(elems.len() as i64), ctx.span))
         })
@@ -435,7 +432,7 @@ impl Array {
             let (ty, mut elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.push", "Array"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Array.push", "Array"))?;
 
             elems.push(args[1]);
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
@@ -456,7 +453,7 @@ impl Array {
             let (ty, mut elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.pop", "Array"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Array.pop", "Array"))?;
 
             elems.pop();
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
@@ -477,7 +474,7 @@ impl Array {
             let (_, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.head", "Array"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Array.head", "Array"))?;
 
             Ok(match elems.first() {
                 Some(first) => ctx.option_some(*first),
@@ -500,7 +497,7 @@ impl Array {
             let (ty, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.tail", "Array"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Array.tail", "Array"))?;
 
             let tail: SmallVec<[ValueId; 4]> =
                 elems.get(1..).map(SmallVec::from_slice).unwrap_or_default();
@@ -518,10 +515,10 @@ impl Array {
         Box::pin(async move {
             Self::check_arity("Array.reverse", &args, 1, ctx.span)?;
 
-            let (ty, elems) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.reverse", "Array"))?;
+            let (ty, elems) =
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
+                    ctx.runtime_type_error("Array.reverse", "Array")
+                })?;
 
             let reversed: SmallVec<[ValueId; 4]> =
                 elems.iter().rev().copied().collect();
@@ -668,7 +665,7 @@ impl Array {
             let (ty, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.sort", "Array"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Array.sort", "Array"))?;
 
             // Collect (ValueId, sortable key) pairs
             let mut pairs: Vec<(ValueId, SortKey)> = elems
@@ -682,7 +679,7 @@ impl Array {
                         .and_then(|v| {
                             SortKey::from_value(v, ctx.arena, ctx.type_exprs)
                                 .ok_or_else(|| {
-                                    ctx.type_error_msg(
+                                    ctx.runtime_type_error_msg(
                                         "Array.sort",
                                         "element not comparable",
                                     )
@@ -711,10 +708,10 @@ impl Array {
         Box::pin(async move {
             Self::check_arity("Array.slice", &args, 3, ctx.span)?;
 
-            let (ty, elems) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.slice", "Array"))?;
+            let (ty, elems) =
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
+                    ctx.runtime_type_error("Array.slice", "Array")
+                })?;
 
             let start = ctx
                 .arena
@@ -724,7 +721,10 @@ impl Array {
                     _ => None,
                 })
                 .ok_or_else(|| {
-                    ctx.type_error_msg("Array.slice", "start must be Int")
+                    ctx.runtime_type_error_msg(
+                        "Array.slice",
+                        "start must be Int",
+                    )
                 })?;
 
             let end = ctx
@@ -735,7 +735,7 @@ impl Array {
                     _ => None,
                 })
                 .ok_or_else(|| {
-                    ctx.type_error_msg("Array.slice", "end must be Int")
+                    ctx.runtime_type_error_msg("Array.slice", "end must be Int")
                 })?;
 
             let len = elems.len() as i64;
@@ -761,10 +761,9 @@ impl Array {
         Box::pin(async move {
             Self::check_arity("Array.contains", &args, 2, ctx.span)?;
 
-            let (_, elems) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.contains", "Array"))?;
+            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("Array.contains", "Array")
+            })?;
 
             let needle = ctx.arena.get(args[1]).ok_or_else(|| {
                 ctx.runtime_error("Array.contains: invalid value")
@@ -789,15 +788,15 @@ impl Array {
         Box::pin(async move {
             Self::check_arity("Array.concat", &args, 2, ctx.span)?;
 
-            let (ty_a, elems_a) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Array.concat", "Array"))?;
+            let (ty_a, elems_a) =
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
+                    ctx.runtime_type_error("Array.concat", "Array")
+                })?;
 
-            let (ty_b, elems_b) = ctx
-                .arena
-                .get_array(args[1])
-                .ok_or_else(|| ctx.type_error("Array.concat", "Array"))?;
+            let (ty_b, elems_b) =
+                ctx.arena.get_array(args[1]).ok_or_else(|| {
+                    ctx.runtime_type_error("Array.concat", "Array")
+                })?;
 
             // Check element types match using the stored TypeExprId
             if ctx.type_exprs.eq(ty_a, ty_b) {
@@ -805,7 +804,10 @@ impl Array {
                 combined.extend(elems_b);
                 Ok(ctx.arena.add(Value::Array(ty_a, combined), ctx.span))
             } else {
-                Err(ctx.type_error_msg("Array.concat", "element types differ"))
+                Err(ctx.runtime_type_error_msg(
+                    "Array.concat",
+                    "element types differ",
+                ))
             }
         })
     }
@@ -829,10 +831,9 @@ impl Str {
         Box::pin(async move {
             Self::check_arity("String.length", &args, 1, ctx.span)?;
 
-            let sid = ctx
-                .arena
-                .get_string_id(args[0])
-                .ok_or_else(|| ctx.type_error("String.length", "String"))?;
+            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("String.length", "String")
+            })?;
 
             let s = ctx.arena.get_str(sid).ok_or_else(|| {
                 ctx.runtime_error("String.length: invalid string")
@@ -853,10 +854,9 @@ impl Str {
         Box::pin(async move {
             Self::check_arity("String.upper", &args, 1, ctx.span)?;
 
-            let sid = ctx
-                .arena
-                .get_string_id(args[0])
-                .ok_or_else(|| ctx.type_error("String.upper", "String"))?;
+            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("String.upper", "String")
+            })?;
 
             let s = ctx.arena.get_str(sid).ok_or_else(|| {
                 ctx.runtime_error("String.upper: invalid string")
@@ -878,10 +878,9 @@ impl Str {
         Box::pin(async move {
             Self::check_arity("String.lower", &args, 1, ctx.span)?;
 
-            let sid = ctx
-                .arena
-                .get_string_id(args[0])
-                .ok_or_else(|| ctx.type_error("String.lower", "String"))?;
+            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("String.lower", "String")
+            })?;
 
             let s = ctx.arena.get_str(sid).ok_or_else(|| {
                 ctx.runtime_error("String.lower: invalid string")
@@ -903,10 +902,9 @@ impl Str {
         Box::pin(async move {
             Self::check_arity("String.trim", &args, 1, ctx.span)?;
 
-            let sid = ctx
-                .arena
-                .get_string_id(args[0])
-                .ok_or_else(|| ctx.type_error("String.trim", "String"))?;
+            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("String.trim", "String")
+            })?;
 
             // Copy to owned String to release borrow before interning
             let trimmed = ctx
@@ -933,13 +931,15 @@ impl Str {
         Box::pin(async move {
             Self::check_arity("String.split", &args, 2, ctx.span)?;
 
-            let s_sid = ctx
-                .arena
-                .get_string_id(args[0])
-                .ok_or_else(|| ctx.type_error("String.split", "String"))?;
+            let s_sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("String.split", "String")
+            })?;
 
             let d_sid = ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                ctx.type_error_msg("String.split", "delimiter must be String")
+                ctx.runtime_type_error_msg(
+                    "String.split",
+                    "delimiter must be String",
+                )
             })?;
 
             // Copy strings to owned values to release borrow before iteration
@@ -983,14 +983,16 @@ impl Str {
         Box::pin(async move {
             Self::check_arity("String.join", &args, 2, ctx.span)?;
 
-            let (_, elems) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("String.join", "Array"))?;
+            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("String.join", "Array")
+            })?;
             let elems = elems.clone();
 
             let d_sid = ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                ctx.type_error_msg("String.join", "delimiter must be String")
+                ctx.runtime_type_error_msg(
+                    "String.join",
+                    "delimiter must be String",
+                )
             })?;
 
             // Collect string slices from array elements
@@ -1001,7 +1003,10 @@ impl Str {
                         .get_string_id(*id)
                         .and_then(|sid| ctx.arena.get_str(sid))
                         .ok_or_else(|| {
-                            ctx.type_error("String.join", "Array[String]")
+                            ctx.runtime_type_error(
+                                "String.join",
+                                "Array[String]",
+                            )
                         })
                 })
                 .collect();
@@ -1027,10 +1032,9 @@ impl Str {
         Box::pin(async move {
             Self::check_arity("String.slice", &args, 3, ctx.span)?;
 
-            let sid = ctx
-                .arena
-                .get_string_id(args[0])
-                .ok_or_else(|| ctx.type_error("String.slice", "String"))?;
+            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("String.slice", "String")
+            })?;
 
             let start = ctx
                 .arena
@@ -1040,7 +1044,10 @@ impl Str {
                     _ => None,
                 })
                 .ok_or_else(|| {
-                    ctx.type_error_msg("String.slice", "start must be Int")
+                    ctx.runtime_type_error_msg(
+                        "String.slice",
+                        "start must be Int",
+                    )
                 })?;
 
             let end = ctx
@@ -1051,7 +1058,10 @@ impl Str {
                     _ => None,
                 })
                 .ok_or_else(|| {
-                    ctx.type_error_msg("String.slice", "end must be Int")
+                    ctx.runtime_type_error_msg(
+                        "String.slice",
+                        "end must be Int",
+                    )
                 })?;
 
             let s = ctx.arena.get_str(sid).ok_or_else(|| {
@@ -1082,14 +1092,13 @@ impl Str {
         Box::pin(async move {
             Self::check_arity("String.contains", &args, 2, ctx.span)?;
 
-            let s_sid = ctx
-                .arena
-                .get_string_id(args[0])
-                .ok_or_else(|| ctx.type_error("String.contains", "String"))?;
+            let s_sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("String.contains", "String")
+            })?;
 
             let sub_sid =
                 ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                    ctx.type_error_msg(
+                    ctx.runtime_type_error_msg(
                         "String.contains",
                         "substring must be String",
                     )
@@ -1117,14 +1126,13 @@ impl Str {
         Box::pin(async move {
             Self::check_arity("String.replace", &args, 3, ctx.span)?;
 
-            let s_sid = ctx
-                .arena
-                .get_string_id(args[0])
-                .ok_or_else(|| ctx.type_error("String.replace", "String"))?;
+            let s_sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("String.replace", "String")
+            })?;
 
             let old_sid =
                 ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                    ctx.type_error_msg(
+                    ctx.runtime_type_error_msg(
                         "String.replace",
                         "pattern must be String",
                     )
@@ -1132,7 +1140,7 @@ impl Str {
 
             let new_sid =
                 ctx.arena.get_string_id(args[2]).ok_or_else(|| {
-                    ctx.type_error_msg(
+                    ctx.runtime_type_error_msg(
                         "String.replace",
                         "replacement must be String",
                     )
@@ -1181,7 +1189,7 @@ impl Math {
             let result = match v {
                 Value::Int(n) => Value::Int(n.abs()),
                 Value::Float(f) => Value::Float(OrderedFloat(f.0.abs())),
-                _ => Err(ctx.type_error("Math.abs", "Int or Float"))?,
+                _ => Err(ctx.runtime_type_error("Math.abs", "Int or Float"))?,
             };
 
             Ok(ctx.arena.add(result, ctx.span))
@@ -1515,10 +1523,9 @@ impl Random {
         Box::pin(async move {
             Self::check_arity("Random.choice", &args, 1, ctx.span)?;
 
-            let (_, elems) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Random.choice", "Array"))?;
+            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("Random.choice", "Array")
+            })?;
 
             let result = elems
                 .choose(&mut rand::thread_rng())
@@ -1540,10 +1547,10 @@ impl Random {
         Box::pin(async move {
             Self::check_arity("Random.shuffle", &args, 1, ctx.span)?;
 
-            let (ty, mut elems) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Random.shuffle", "Array"))?;
+            let (ty, mut elems) =
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
+                    ctx.runtime_type_error("Random.shuffle", "Array")
+                })?;
 
             elems.shuffle(&mut rand::thread_rng());
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
@@ -1561,10 +1568,10 @@ impl Random {
         Box::pin(async move {
             Self::check_arity("Random.sample", &args, 2, ctx.span)?;
 
-            let (ty, elems) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Random.sample", "Array"))?;
+            let (ty, elems) =
+                ctx.arena.get_array(args[0]).ok_or_else(|| {
+                    ctx.runtime_type_error("Random.sample", "Array")
+                })?;
 
             let n = Self::to_int(ctx, args[1], "Random.sample")? as usize;
 
@@ -1640,7 +1647,7 @@ impl Map {
             let (_, _, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.type_error("Map.length", "Map"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Map.length", "Map"))?;
 
             Ok(ctx.arena.add(Value::Int(entries.len() as i64), ctx.span))
         })
@@ -1659,7 +1666,7 @@ impl Map {
             let (k_ty, _, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.type_error("Map.keys", "Map"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Map.keys", "Map"))?;
 
             // Collect keys before mutating arena
             let key_vals: SmallVec<[MapKey; 8]> =
@@ -1687,7 +1694,7 @@ impl Map {
             let (_, v_ty, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.type_error("Map.values", "Map"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Map.values", "Map"))?;
 
             let vals: SmallVec<[ValueId; 4]> =
                 entries.values().copied().collect();
@@ -1708,7 +1715,7 @@ impl Map {
             let (k_ty, v_ty, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.type_error("Map.entries", "Map"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Map.entries", "Map"))?;
 
             // Collect entries before mutating arena
             let entry_pairs: SmallVec<[(MapKey, ValueId); 8]> =
@@ -1745,7 +1752,7 @@ impl Map {
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
             let map_key = MapKey::from_value(key).ok_or_else(|| {
-                ctx.type_error_msg(
+                ctx.runtime_type_error_msg(
                     "Map.has",
                     "key must be scalar (Bool, Int, Float, Char, String)",
                 )
@@ -1754,7 +1761,7 @@ impl Map {
             let (_, _, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.type_error("Map.has", "Map"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Map.has", "Map"))?;
 
             let exists = entries.contains_key(&map_key);
             Ok(ctx.arena.add(Value::Bool(exists), ctx.span))
@@ -1777,7 +1784,7 @@ impl Map {
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
             let map_key = MapKey::from_value(key).ok_or_else(|| {
-                ctx.type_error_msg(
+                ctx.runtime_type_error_msg(
                     "Map.lookup",
                     "key must be scalar (Bool, Int, Float, Char, String)",
                 )
@@ -1786,7 +1793,7 @@ impl Map {
             let (_, _, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.type_error("Map.lookup", "Map"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Map.lookup", "Map"))?;
 
             match entries.get(&map_key) {
                 Some(v_id) => Ok(ctx.option_some(*v_id)),
@@ -1813,7 +1820,7 @@ impl Map {
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
             let map_key = MapKey::from_value(key).ok_or_else(|| {
-                ctx.type_error_msg(
+                ctx.runtime_type_error_msg(
                     "Map.insert",
                     "key must be scalar (Bool, Int, Float, Char, String)",
                 )
@@ -1829,7 +1836,7 @@ impl Map {
             let (k_ty, v_ty, mut entries) = ctx
                 .arena
                 .get_map(args[0])
-                .ok_or_else(|| ctx.type_error("Map.insert", "Map"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Map.insert", "Map"))?;
 
             // Type check key (if map has known key type)
             let expected_k_ty = ctx.type_exprs.base_type(k_ty);
@@ -1837,7 +1844,7 @@ impl Map {
             if expected_k_ty != Some(TypeId::UNKNOWN)
                 && expected_k_ty != Some(new_k_ty)
             {
-                Err(ctx.type_error_msg(
+                Err(ctx.runtime_type_error_msg(
                     "Map.insert",
                     &format!(
                         "key type mismatch: map has {:?}, got {:?}",
@@ -1851,7 +1858,7 @@ impl Map {
             if expected_v_ty != Some(TypeId::UNKNOWN)
                 && expected_v_ty != Some(new_v_ty)
             {
-                Err(ctx.type_error_msg(
+                Err(ctx.runtime_type_error_msg(
                     "Map.insert",
                     &format!(
                         "value type mismatch: map has {:?}, got {:?}",
@@ -1896,7 +1903,7 @@ impl Map {
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
             let map_key = MapKey::from_value(key).ok_or_else(|| {
-                ctx.type_error_msg(
+                ctx.runtime_type_error_msg(
                     "Map.remove",
                     "key must be scalar (Bool, Int, Float, Char, String)",
                 )
@@ -1905,7 +1912,7 @@ impl Map {
             let (k_ty, v_ty, mut entries) = ctx
                 .arena
                 .get_map(args[0])
-                .ok_or_else(|| ctx.type_error("Map.remove", "Map"))?;
+                .ok_or_else(|| ctx.runtime_type_error("Map.remove", "Map"))?;
 
             entries.shift_remove(&map_key);
 
@@ -1926,12 +1933,12 @@ impl Map {
 
             let (k_ty_a, v_ty_a, mut entries_a) =
                 ctx.arena.get_map(args[0]).ok_or_else(|| {
-                    ctx.type_error("Map.merge", "Map (first arg)")
+                    ctx.runtime_type_error("Map.merge", "Map (first arg)")
                 })?;
 
             let (k_ty_b, v_ty_b, entries_b) =
                 ctx.arena.get_map(args[1]).ok_or_else(|| {
-                    ctx.type_error("Map.merge", "Map (second arg)")
+                    ctx.runtime_type_error("Map.merge", "Map (second arg)")
                 })?;
 
             // Type check: both maps must have compatible types
@@ -1945,7 +1952,7 @@ impl Map {
                 && base_k_b != Some(TypeId::UNKNOWN)
                 && base_k_a != base_k_b
             {
-                Err(ctx.type_error_msg(
+                Err(ctx.runtime_type_error_msg(
                     "Map.merge",
                     &format!(
                         "key type mismatch: first map has {:?}, second has {:?}",
@@ -1959,7 +1966,7 @@ impl Map {
                 && base_v_b != Some(TypeId::UNKNOWN)
                 && base_v_a != base_v_b
             {
-                Err(ctx.type_error_msg(
+                Err(ctx.runtime_type_error_msg(
                     "Map.merge",
                     &format!(
                         "value type mismatch: first map has {:?}, second has {:?}",
@@ -1998,10 +2005,9 @@ impl Map {
         Box::pin(async move {
             Self::check_arity("Map.from-entries", &args, 1, ctx.span)?;
 
-            let (_, arr) = ctx
-                .arena
-                .get_array(args[0])
-                .ok_or_else(|| ctx.type_error("Map.from-entries", "Array"))?;
+            let (_, arr) = ctx.arena.get_array(args[0]).ok_or_else(|| {
+                ctx.runtime_type_error("Map.from-entries", "Array")
+            })?;
 
             // Infer types from first entry
             let first_entry = arr.first().and_then(|id| ctx.arena.get(*id));
@@ -2050,7 +2056,7 @@ impl Map {
                             })?;
                         let map_key =
                             MapKey::from_value(k_val).ok_or_else(|| {
-                                ctx.type_error_msg(
+                                ctx.runtime_type_error_msg(
                                     "Map.from-entries",
                                     "key must be scalar",
                                 )
@@ -2058,7 +2064,7 @@ impl Map {
                         entries.insert(map_key, elems[1]);
                         Ok(())
                     }
-                    _ => Err(ctx.type_error_msg(
+                    _ => Err(ctx.runtime_type_error_msg(
                         "Map.from-entries",
                         "array elements must be 2-tuples",
                     )),
@@ -2121,7 +2127,7 @@ impl Time {
 
             let fmt_sid =
                 ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                    ctx.type_error("Time.parse", "String (format)")
+                    ctx.runtime_type_error("Time.parse", "String (format)")
                 })?;
             let fmt = ctx
                 .arena
@@ -2129,7 +2135,7 @@ impl Time {
                 .ok_or_else(|| ctx.runtime_error("invalid format string"))?;
 
             let s_sid = ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                ctx.type_error("Time.parse", "String (input)")
+                ctx.runtime_type_error("Time.parse", "String (input)")
             })?;
             let s = ctx
                 .arena
@@ -2164,7 +2170,7 @@ impl Time {
 
             let fmt_sid =
                 ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                    ctx.type_error("Time.format", "String (format)")
+                    ctx.runtime_type_error("Time.format", "String (format)")
                 })?;
             let fmt = ctx
                 .arena
@@ -2302,7 +2308,7 @@ impl Time {
                 Value::Time(t) => Some(*t),
                 _ => None,
             })
-            .ok_or_else(|| ctx.type_error(fn_name, "Time"))
+            .ok_or_else(|| ctx.runtime_type_error(fn_name, "Time"))
     }
 
     /// Helper to extract a `Float` value from an argument (accepts Int too).
@@ -2318,7 +2324,7 @@ impl Time {
                 Value::Int(n) => Some(*n as f64),
                 _ => None,
             })
-            .ok_or_else(|| ctx.type_error(fn_name, "Float or Int"))
+            .ok_or_else(|| ctx.runtime_type_error(fn_name, "Float or Int"))
     }
 }
 
@@ -2368,7 +2374,7 @@ impl Opt {
                     // Option.None - return the default
                     Ok(args[1])
                 }
-                _ => Err(ctx.type_error("Option.unwrap-or", "Option")),
+                _ => Err(ctx.runtime_type_error("Option.unwrap-or", "Option")),
             }
         })
     }
@@ -2420,7 +2426,7 @@ impl Res {
                     // Result.Err - return the default
                     Ok(args[1])
                 }
-                _ => Err(ctx.type_error("Result.unwrap-or", "Result")),
+                _ => Err(ctx.runtime_type_error("Result.unwrap-or", "Result")),
             }
         })
     }

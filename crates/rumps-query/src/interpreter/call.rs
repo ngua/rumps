@@ -44,7 +44,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ModuleFn { path } => {
                 self.invoke_module_fn(&path, &[arg_id], span).await
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "`|>` requires function on right side; got {}",
@@ -346,7 +346,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 end,
                 inclusive,
             }) => self.range_map(fn_id, *start, *end, *inclusive, span).await,
-            Some(other) => Err(Error::type_err(
+            Some(other) => Err(Error::runtime_type(
                 span,
                 format!(
                     "Array.map expects Array or Range; got {}",
@@ -533,7 +533,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.range_filter(pred_id, *start, *end, *inclusive, span)
                     .await
             }
-            Some(other) => Err(Error::type_err(
+            Some(other) => Err(Error::runtime_type(
                 span,
                 format!(
                     "Array.filter expects Array or Range; got {}",
@@ -681,7 +681,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 )
                 .await
             }
-            Some(other) => Err(Error::type_err(
+            Some(other) => Err(Error::runtime_type(
                 span,
                 format!(
                     "Array.reduce expects Array or Range; got {}",
@@ -795,7 +795,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.range_foreach(fn_id, *start, *end, *inclusive, span)
                     .await
             }
-            Some(other) => Err(Error::type_err(
+            Some(other) => Err(Error::runtime_type(
                 span,
                 format!(
                     "Array.foreach expects Array or Range; got {}",
@@ -930,7 +930,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.type_exprs.app(TypeId::OPTION, smallvec![unknown]);
                 Ok(Value::none(opt_ty))
             }
-            _ => Err(Error::type_err(span, "Option.map: expected Option")),
+            _ => Err(Error::runtime_type(span, "Option.map: expected Option")),
         }
     }
 
@@ -1006,7 +1006,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Result.Err(e) - return unchanged (clone needed for passthrough)
                 Ok(res.clone())
             }
-            _ => Err(Error::type_err(span, "Result.map: expected Result")),
+            _ => Err(Error::runtime_type(span, "Result.map: expected Result")),
         }
     }
 
@@ -1084,7 +1084,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .app(TypeId::RESULT, smallvec![unknown, err_ty]);
                 Ok(Value::err(res_ty, result_id))
             }
-            _ => Err(Error::type_err(span, "Result.map-err: expected Result")),
+            _ => Err(Error::runtime_type(
+                span,
+                "Result.map-err: expected Result",
+            )),
         }
     }
 
@@ -1128,7 +1131,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let result = self.invoke_module_fn(&path, args, span).await?;
                 Ok(self.arena.add(result, span))
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "expected function, got {}",
@@ -1260,7 +1263,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             } else {
                 let expected = self.format_type_expr(expected_ty);
                 let actual = val.type_name(&self.registry, &self.type_exprs);
-                Err(Error::type_err(
+                Err(Error::runtime_type(
                     span,
                     format!(
                         "expected return type `{expected}`, got `{actual}`"
@@ -1343,7 +1346,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let expected = self.format_type_expr(expected_ty);
                     let actual =
                         val.type_name(&self.registry, &self.type_exprs);
-                    Err(Error::type_err(
+                    Err(Error::runtime_type(
                         span,
                         format!(
                             "parameter `{pname}`: expected `{expected}`, \
@@ -1365,7 +1368,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let expected = self.format_type_expr(expected_ty);
                         let actual =
                             val.type_name(&self.registry, &self.type_exprs);
-                        Err(Error::type_err(
+                        Err(Error::runtime_type(
                             span,
                             format!(
                                 "parameter `{pname}`: expected `{expected}`, \

@@ -68,14 +68,14 @@ impl<I: IoContext> Interpreter<'_, I> {
             UnOp::Neg => match v {
                 Value::Int(n) => Ok(Value::Int(-n)),
                 Value::Float(f) => Ok(Value::Float(OrderedFloat(-f.0))),
-                _ => Err(Error::type_err(
+                _ => Err(Error::runtime_type(
                     span,
                     format!("cannot negate {}", self.type_name(v)),
                 )),
             },
             UnOp::Not => match v {
                 Value::Bool(b) => Ok(Value::Bool(!b)),
-                _ => Err(Error::type_err(
+                _ => Err(Error::runtime_type(
                     span,
                     format!(
                         "logical NOT requires Bool; got {}",
@@ -123,7 +123,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Ok(Value::Float(OrderedFloat(a.0 + *b as f64)))
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot add {} and {}",
@@ -154,7 +154,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Ok(Value::Float(OrderedFloat(a.0 - *b as f64)))
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot subtract {} from {}",
@@ -185,7 +185,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Ok(Value::Float(OrderedFloat(a.0 * *b as f64)))
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot multiply {} and {}",
@@ -208,7 +208,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Float(a), Value::Float(b)) => Ok((a.0, b.0)),
             (Value::Int(a), Value::Float(b)) => Ok((*a as f64, b.0)),
             (Value::Float(a), Value::Int(b)) => Ok((a.0, *b as f64)),
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot divide {} by {}",
@@ -260,7 +260,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Ok(Value::Int((a.0 / *b as f64).floor() as i64))
                 }
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot floor divide {} by {}",
@@ -307,7 +307,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Ok(Value::Float(OrderedFloat(a.0 % *b as f64)))
                 }
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot compute {} mod {}",
@@ -360,7 +360,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Ok(Value::Float(OrderedFloat(a.0.powf(*b as f64))))
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot raise {} to power {}",
@@ -397,7 +397,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(sa.cmp(sb))
             }
             (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot compare {} and {}",
@@ -447,7 +447,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.payloads_equal(p1, p2, span)
                 }
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot compare {} and {} for equality",

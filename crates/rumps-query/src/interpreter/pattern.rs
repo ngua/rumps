@@ -409,7 +409,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     )
                 }
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot destructure {} as tuple",
@@ -444,7 +444,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         self.destructure(pat, &field_val, span)
                     })
             }),
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot destructure {} as object",
@@ -522,7 +522,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     }
                 }
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot destructure {} as array",

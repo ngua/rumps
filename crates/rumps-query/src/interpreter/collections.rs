@@ -85,7 +85,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     acc.push(val_id);
                     self.array_elems(tail, elem_ty, acc, first_span).await
                 } else {
-                    Err(Error::type_err(
+                    Err(Error::runtime_type(
                         span,
                         format!(
                             "array element type mismatch: expected {} (from {}..{}), got {}",
@@ -205,7 +205,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if !self.type_exprs.eq(k_ty, this_k_ty) {
                     let expected = self.type_expr_name(k_ty);
                     let got = self.type_expr_name(this_k_ty);
-                    Err(Error::type_err(
+                    Err(Error::runtime_type(
                         k_span,
                         format!(
                             "map key type mismatch: expected {expected} \
@@ -219,7 +219,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if !self.type_exprs.eq(v_ty, this_v_ty) {
                     let expected = self.type_expr_name(v_ty);
                     let got = self.type_expr_name(this_v_ty);
-                    Err(Error::type_err(
+                    Err(Error::runtime_type(
                         v_span,
                         format!(
                             "map value type mismatch: expected {expected}, got {got}"
@@ -240,7 +240,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a value to a `MapKey`, or error if not a scalar.
     fn value_to_map_key(&self, v: &Value, span: Span) -> Result<MapKey> {
         MapKey::from_value(v).ok_or_else(|| {
-            Error::type_err(
+            Error::runtime_type(
                 span,
                 format!(
                     "map keys must be scalar (Bool, Int, Float, Char, String); \
@@ -274,7 +274,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         ),
                     )
                 }),
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot index `{}` with `.{idx}`; expected tuple",
@@ -320,7 +320,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let key_str = self.arena.get_str(*key).unwrap_or("?");
                     Error::runtime(span, format!("key `{key_str}` not found"))
                 }),
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot index {} with {}",
@@ -380,7 +380,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             )
                         })
                 }
-                _ => Err(Error::type_err(
+                _ => Err(Error::runtime_type(
                     span,
                     format!(
                         "cannot access field on {}",
@@ -460,7 +460,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         )
                     })
             }
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "cannot access field on {}",

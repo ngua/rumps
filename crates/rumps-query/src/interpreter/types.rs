@@ -84,14 +84,14 @@ impl<I: IoContext> Interpreter<'_, I> {
             AstTypeExpr::Named(name) => {
                 let name_id = self.arena.intern(&name);
                 let ty_id = self.registry.lookup(name_id).ok_or_else(|| {
-                    Error::type_err(span, format!("unknown type: {name}"))
+                    Error::runtime_type(span, format!("unknown type: {name}"))
                 })?;
                 Ok(self.type_exprs.named(ty_id))
             }
             AstTypeExpr::App(name, params) => {
                 let name_id = self.arena.intern(&name);
                 let ty_id = self.registry.lookup(name_id).ok_or_else(|| {
-                    Error::type_err(span, format!("unknown type: {name}"))
+                    Error::runtime_type(span, format!("unknown type: {name}"))
                 })?;
                 // Recursively resolve type parameters
                 let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
@@ -163,7 +163,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .registry
                     .type_name(target, &self.arena)
                     .unwrap_or("Unknown");
-                Err(Error::type_err(
+                Err(Error::runtime_type(
                     span,
                     format!("cannot cast {src_name} as {tgt_name}"),
                 ))
@@ -231,7 +231,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .registry
                     .type_name(target, &self.arena)
                     .unwrap_or("Unknown");
-                Err(Error::type_err(
+                Err(Error::runtime_type(
                     span,
                     format!("cannot read {src_name} as {tgt_name}"),
                 ))
@@ -409,7 +409,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         || format!("missing required field `{fname}`"),
                         |p| format!("parameter `{p}`: missing field `{fname}`"),
                     );
-                    Err(Error::type_err(span, msg))
+                    Err(Error::runtime_type(span, msg))
                 },
                 |val_id| {
                     self.arena.get(*val_id).map_or(Ok(()), |val| {
@@ -453,7 +453,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             )
                         },
                     );
-                    Err(Error::type_err(span, msg))
+                    Err(Error::runtime_type(span, msg))
                 }
             },
             |nested_fields| {
@@ -483,7 +483,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 )
                             },
                         );
-                        Err(Error::type_err(span, msg))
+                        Err(Error::runtime_type(span, msg))
                     }
                 }
             },
@@ -517,7 +517,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => {
                     let actual =
                         val.type_name(&self.registry, &self.type_exprs);
-                    Err(Error::type_err(
+                    Err(Error::runtime_type(
                         span,
                         format!("expected struct (Object), got {actual}"),
                     ))
@@ -531,7 +531,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             } else {
                 let expected = self.type_expr_name(expected_ty);
                 let actual = self.type_expr_name(actual_ty);
-                Err(Error::type_err(
+                Err(Error::runtime_type(
                     span,
                     format!("type mismatch: expected {expected}, got {actual}"),
                 ))

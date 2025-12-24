@@ -59,7 +59,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Err(Error::runtime(span, format!("unwrap failed: {err_msg}")))
             }
             // Other types -> type error
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "`!` (unwrap) requires Option or Result; got {}",
@@ -124,7 +124,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.eval(rhs).await
             }
             // Other types -> type error
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "`??` requires Option or Result; got {}",
@@ -327,7 +327,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             let span = self.ast.expr_span(expr).unwrap_or(fallback_span);
             let ty_name = val.type_name(&self.registry, &self.type_exprs);
-            Err(Error::type_err(
+            Err(Error::runtime_type(
                 span,
                 format!("single-arm IF body must be Unit; got {ty_name}"),
             ))
@@ -411,7 +411,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         let start = match &start_val {
             Value::Int(n) => *n,
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "range start must be Int; got {}",
@@ -422,7 +422,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         let end = match &end_val {
             Value::Int(n) => *n,
-            _ => Err(Error::type_err(
+            _ => Err(Error::runtime_type(
                 span,
                 format!(
                     "range end must be Int; got {}",

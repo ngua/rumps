@@ -100,11 +100,11 @@ The type checker will add `Error::StaticType(TypeError)` for compile-time errors
 
 ### Checklist
 
-- [ ] Rename `Error::Type` to `Error::RuntimeType` in `error.rs`
-- [ ] Rename `Error::type_err()` to `Error::runtime_type()`
-- [ ] Update all call sites (grep for `type_err`, `Error::Type`)
-- [ ] Update `Diagnostic` impl: change to `"rumps::runtime_type"`
-- [ ] Verify tests still pass
+- [x] Rename `Error::Type` to `Error::RuntimeType` in `error.rs`
+- [x] Rename `Error::type_err()` to `Error::runtime_type()`
+- [x] Update all call sites (grep for `type_err`, `Error::Type`)
+- [x] Update `Diagnostic` impl: change to `"rumps::runtime_type"`
+- [x] Verify tests still pass
 
 ---
 

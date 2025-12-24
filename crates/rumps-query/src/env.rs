@@ -174,18 +174,29 @@ impl PrimCtx<'_> {
         Error::runtime(self.span, msg)
     }
 
-    /// Create a type error with span information.
+    /// Create a runtime type error with span information.
     ///
     /// Formats as `"{fn_name}: expected {expected}"`.
-    pub(crate) fn type_error(&self, fn_name: &str, expected: &str) -> Error {
-        Error::type_err(self.span, format!("{fn_name}: expected {expected}"))
+    pub(crate) fn runtime_type_error(
+        &self,
+        fn_name: &str,
+        expected: &str,
+    ) -> Error {
+        Error::runtime_type(
+            self.span,
+            format!("{fn_name}: expected {expected}"),
+        )
     }
 
-    /// Create a type error with a custom message suffix.
+    /// Create a runtime type error with a custom message suffix.
     ///
     /// Formats as `"{fn_name}: {msg}"`.
-    pub(crate) fn type_error_msg(&self, fn_name: &str, msg: &str) -> Error {
-        Error::type_err(self.span, format!("{fn_name}: {msg}"))
+    pub(crate) fn runtime_type_error_msg(
+        &self,
+        fn_name: &str,
+        msg: &str,
+    ) -> Error {
+        Error::runtime_type(self.span, format!("{fn_name}: {msg}"))
     }
 }
 

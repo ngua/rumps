@@ -30,8 +30,8 @@ pub enum Error {
     #[error("runtime error{}: {msg}", fmt_span(span))]
     Runtime { span: Option<Span>, msg: String },
 
-    #[error("type error at {span}: {msg}")]
-    Type { span: Span, msg: String },
+    #[error("runtime type error at {span}: {msg}")]
+    RuntimeType { span: Span, msg: String },
 
     #[error("cannot coerce {from} to {to}: {msg}")]
     Coercion {
@@ -96,8 +96,8 @@ impl Error {
         }
     }
 
-    pub(crate) fn type_err(span: Span, msg: impl Into<String>) -> Self {
-        Self::Type {
+    pub(crate) fn runtime_type(span: Span, msg: impl Into<String>) -> Self {
+        Self::RuntimeType {
             span,
             msg: msg.into(),
         }
@@ -132,7 +132,7 @@ impl Error {
         match self {
             Self::Lex { span, .. }
             | Self::Parse { span, .. }
-            | Self::Type { span, .. } => Some(*span),
+            | Self::RuntimeType { span, .. } => Some(*span),
             Self::Runtime { span, .. } => *span,
             Self::Coercion { .. } | Self::Multiple { .. } => None,
         }
@@ -167,7 +167,7 @@ impl Diagnostic for Error {
             Self::Lex { .. } => "rumps::lex",
             Self::Parse { .. } => "rumps::parse",
             Self::Runtime { .. } => "rumps::runtime",
-            Self::Type { .. } => "rumps::type",
+            Self::RuntimeType { .. } => "rumps::runtime_type",
             Self::Coercion { .. } => "rumps::coercion",
             Self::Multiple { .. } => "rumps::multiple",
         };
@@ -186,7 +186,7 @@ impl Diagnostic for Error {
             Self::Parse { span, .. } => {
                 Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
             }
-            Self::Type { span, .. } => {
+            Self::RuntimeType { span, .. } => {
                 Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
             }
             Self::Runtime { span: Some(s), .. } => {
@@ -242,8 +242,8 @@ impl fmt::Display for ErrorDisplay<'_> {
             Error::Runtime { span: None, msg } => {
                 write!(f, "runtime error: {msg}")
             }
-            Error::Type { span, msg } => {
-                write!(f, "type error at {}: {msg}", loc(*span))
+            Error::RuntimeType { span, msg } => {
+                write!(f, "runtime type error at {}: {msg}", loc(*span))
             }
             Error::Coercion { from, to, msg } => {
                 write!(f, "cannot coerce {from} to {to}: {msg}")
@@ -298,12 +298,12 @@ mod tests {
     }
 
     #[test]
-    fn type_error_display() {
+    fn runtime_type_error_display() {
         let err =
-            Error::type_err(Span::new(5, 10), "cannot add Int and String");
+            Error::runtime_type(Span::new(5, 10), "cannot add Int and String");
         assert_eq!(
             err.to_string(),
-            "type error at 5..10: cannot add Int and String"
+            "runtime type error at 5..10: cannot add Int and String"
         );
     }
 
