@@ -336,12 +336,12 @@ LET box = boxed READ Box[Int]              ; Result[Box[Int], String]
 
 ### Checklist
 
-- [ ] Update `read_value` to handle user-defined struct `TypeId`s
-- [ ] Add `read_json_to_struct` helper that takes `TypeExprId` (for type args)
-- [ ] Recursively READ nested fields using resolved field types
-- [ ] Handle parametric structs by resolving field types with substitution
-- [ ] Return clear error messages for missing/mismatched fields
-- [ ] Tests: `json READ StructType`, `json READ StructType[T]`
+- [x] Update `read_value` to handle user-defined struct `TypeId`s
+- [x] Add `read_json_to_struct` helper that takes `TypeExprId` (for type args)
+- [x] Recursively READ nested fields using resolved field types
+- [x] Handle parametric structs by resolving field types with substitution
+- [x] Return clear error messages for missing/mismatched fields
+- [x] Tests: `json READ StructType`, `json READ StructType[T]`
 
 ---
 

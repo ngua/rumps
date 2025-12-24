@@ -853,12 +853,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         let val = self.eval(expr).await?;
         let target_ty = self.resolve_type_expr(ast_ty, span)?;
-        let target_base =
-            self.type_exprs.base_type(target_ty).ok_or_else(|| {
-                Error::runtime(span, "invalid target type in read")
-            })?;
-
-        self.read_value(&val, target_base, span)
+        self.read_value_expr(&val, target_ty, span)
     }
 
     /// Evaluate a type annotation: `(expr) : Type`.

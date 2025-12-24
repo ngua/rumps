@@ -2463,8 +2463,8 @@ async fn read_int_to_bool_invalid() {
 }
 
 #[tokio::test]
-async fn read_unsupported_conversion_error() {
-    // 42 read Int -> runtime error (not a fallible conversion)
+async fn read_identity_returns_ok() {
+    // `42 READ Int` -> Result.Ok(42) (identity; value already matches type)
     let mut ast = Ast::new();
     let val = ast
         .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
@@ -2476,9 +2476,10 @@ async fn read_unsupported_conversion_error() {
 
     let mut interp = test_interp(&ast);
     let result = interp.eval(read).await;
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("cannot read"));
+    assert!(result.is_ok());
+    // Result should be Result.Ok(42)
+    let val = result.unwrap();
+    assert!(matches!(val, Value::Tagged(_, 0, _))); // idx 0 = Ok
 }
 
 // ---- Closure tests ----

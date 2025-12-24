@@ -266,4 +266,161 @@ LET chars = ['a', 'b', 'c']
 OUTPUT chars IS Array
 ; Expected: TRUE
 
+; ============================================================
+; JSON READ INTO STRUCT TYPES
+; ============================================================
+
+; Define a struct type
+TYPE Person = { name: String, age: Int }
+
+; Read JSON into struct
+LET person-json = { "name": "Alice", "age": 30 }
+LET person-result = person-json READ Person
+OUTPUT person-result IS Result.Ok(_)
+; Expected: TRUE
+
+; Read NATIVE object into struct (extra fields allowed)
+LET native-obj = { name: "Native", age: 25, extra: "ignored" }
+LET native-result = native-obj READ Person
+OUTPUT native-result IS Result.Ok(_)
+; Expected: TRUE
+
+LET native-person = native-result!
+OUTPUT native-person.name
+; Expected: Native
+OUTPUT native-person.age
+; Expected: 25
+
+LET person = person-result!
+OUTPUT person.name
+; Expected: Alice
+OUTPUT person.age
+; Expected: 30
+
+; Missing field returns Result.Err
+LET incomplete = { "name": "Bob" }
+LET incomplete-result = incomplete READ Person
+OUTPUT incomplete-result IS Result.Err(_)
+; Expected: TRUE
+
+; Wrong field type returns Result.Err
+LET wrong-type = { "name": "Carol", "age": "thirty" }
+LET wrong-result = wrong-type READ Person
+OUTPUT wrong-result IS Result.Err(_)
+; Expected: TRUE
+
+; ============================================================
+; JSON READ INTO PARAMETRIC STRUCT TYPES
+; ============================================================
+
+; Define parametric struct
+TYPE Box[T] = { value: T }
+
+; Read into Box[Int]
+LET box-json = { "value": 42 }
+LET box-result = box-json READ Box[Int]
+OUTPUT box-result IS Result.Ok(_)
+; Expected: TRUE
+
+LET box-val = box-result!
+OUTPUT box-val.value
+; Expected: 42
+
+; Read into Box[String]
+LET str-box-json = { "value": "hello" }
+LET str-box-result = str-box-json READ Box[String]
+OUTPUT str-box-result IS Result.Ok(_)
+; Expected: TRUE
+
+OUTPUT str-box-result!.value
+; Expected: hello
+
+; Multi-param struct
+TYPE Pair[A, B] = { first: A, second: B }
+
+LET pair-json = { "first": 1, "second": "one" }
+LET pair-result = pair-json READ Pair[Int, String]
+OUTPUT pair-result IS Result.Ok(_)
+; Expected: TRUE
+
+LET pair-val = pair-result!
+OUTPUT pair-val.first
+; Expected: 1
+OUTPUT pair-val.second
+; Expected: one
+
+; ============================================================
+; JSON READ INTO ARRAY[T]
+; ============================================================
+
+LET arr-json = [1, 2, 3] AS Json
+LET arr-result = arr-json READ Array[Int]
+OUTPUT arr-result IS Result.Ok(_)
+; Expected: TRUE
+
+LET arr-val = arr-result!
+OUTPUT arr-val IS Array
+; Expected: TRUE
+OUTPUT Array.length(arr-val)
+; Expected: 3
+
+; Type mismatch in array element
+LET bad-arr = [1, "two", 3] AS Json
+LET bad-arr-result = bad-arr READ Array[Int]
+OUTPUT bad-arr-result IS Result.Err(_)
+; Expected: TRUE
+
+; ============================================================
+; JSON READ INTO OPTION[T]
+; ============================================================
+
+; Non-null -> Some
+LET opt-json = 42 AS Json
+LET opt-result = opt-json READ Option[Int]
+OUTPUT opt-result IS Result.Ok(_)
+; Expected: TRUE
+
+LET opt-val = opt-result!
+OUTPUT opt-val IS Option.Some(_)
+; Expected: TRUE
+OUTPUT opt-val!
+; Expected: 42
+
+; null -> None
+LET null-json = { "value": null }
+LET null-opt-result = null-json.value READ Option[Int]
+OUTPUT null-opt-result IS Result.Ok(_)
+; Expected: TRUE
+
+LET null-opt-val = null-opt-result!
+OUTPUT null-opt-val IS Option.None
+; Expected: TRUE
+
+; ============================================================
+; NESTED STRUCTS IN JSON READ
+; ============================================================
+
+TYPE Address = { city: String, zip: Int }
+TYPE Employee = { name: String, addr: Address }
+
+LET emp-json = {
+  "name": "Dave",
+  "addr": {
+    "city": "NYC",
+    "zip": 10001
+  }
+}
+
+LET emp-result = emp-json READ Employee
+OUTPUT emp-result IS Result.Ok(_)
+; Expected: TRUE
+
+LET emp = emp-result!
+OUTPUT emp.name
+; Expected: Dave
+OUTPUT emp.addr.city
+; Expected: NYC
+OUTPUT emp.addr.zip
+; Expected: 10001
+
 OUTPUT "JSON test complete"

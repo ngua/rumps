@@ -352,6 +352,273 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    /// Perform typed conversion for `READ` with full type expression support.
+    ///
+    /// Handles struct types (with type parameters), arrays, options, and
+    /// delegates to `read_value` for primitive types.
+    pub(super) fn read_value_expr(
+        &mut self,
+        val: &Value,
+        target: TypeExprId,
+        span: Span,
+    ) -> Result<Value> {
+        let base_ty = self.type_exprs.base_type(target);
+        let type_args = self.type_exprs.type_args(target).cloned();
+
+        // Identity: if value already matches target type, return as-is
+        if self.value_matches_type_expr(val, target) {
+            Ok(self.make_result_ok(val.clone(), span))
+        } else if let Some(fields) = self.get_struct_fields_resolved(target) {
+            // Struct type: read object into struct
+            self.read_to_struct(val, &fields, target, span)
+        } else if base_ty == Some(TypeId::ARRAY) {
+            // Array[T]: read JSON array with element type
+            let elem_ty = type_args
+                .as_ref()
+                .and_then(|args| args.first().copied())
+                .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
+            self.read_json_to_array(val, elem_ty, span)
+        } else if base_ty == Some(TypeId::OPTION) {
+            // Option[T]: null -> None, otherwise read inner
+            let inner_ty = type_args
+                .as_ref()
+                .and_then(|args| args.first().copied())
+                .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
+            self.read_json_to_option(val, inner_ty, target, span)
+        } else if let Some(ty_id) = base_ty {
+            // Primitive type: delegate to read_value
+            self.read_value(val, ty_id, span)
+        } else {
+            let tgt_name = self.format_type_expr(target);
+            Err(Error::runtime_type(
+                span,
+                format!("cannot read into type `{tgt_name}`"),
+            ))
+        }
+    }
+
+    /// Read an object (JSON or native) into a struct type.
+    ///
+    /// Accepts both `Value::Json(Object)` and `Value::Object`. The object must
+    /// have all required fields with compatible types (extra fields are allowed).
+    fn read_to_struct(
+        &mut self,
+        val: &Value,
+        fields: &IndexMap<StringId, TypeExprId>,
+        struct_ty: TypeExprId,
+        span: Span,
+    ) -> Result<Value> {
+        // Extract object source; hard error if not an object
+        let (json_obj, native_obj) = match val {
+            Value::Json(serde_json::Value::Object(obj)) => {
+                (Some(obj.clone()), None)
+            }
+            Value::Object(obj) => (None, Some(obj.clone())),
+            _ => {
+                let src = val.type_name(&self.registry, &self.type_exprs);
+                let tgt = self.format_type_expr(struct_ty);
+                Err(Error::runtime_type(
+                    span,
+                    format!("cannot read `{src}` as `{tgt}`"),
+                ))?
+            }
+        };
+
+        let fields = fields.clone();
+
+        // Use a local enum to distinguish soft errors (Result.Err) from hard errors
+        enum FieldErr {
+            Soft(String),
+            Hard(Error),
+        }
+
+        // Process each required field
+        let result: std::result::Result<IndexMap<StringId, ValueId>, FieldErr> =
+            fields
+                .iter()
+                .try_fold(IndexMap::new(), |mut acc, (&fid, &fty)| {
+                    let fname = self
+                        .arena
+                        .get_str(fid)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| "?".to_owned());
+
+                    // Get field value from JSON or native object
+                    let field_val = json_obj
+                        .as_ref()
+                        .and_then(|obj| {
+                            obj.get(&fname).map(|v| Value::Json(v.clone()))
+                        })
+                        .or_else(|| {
+                            native_obj
+                                .as_ref()
+                                .and_then(|obj| obj.get(&fid))
+                                .and_then(|id| self.arena.get(*id).cloned())
+                        });
+
+                    match field_val {
+                        None => Err(FieldErr::Soft(format!(
+                            "missing field `{fname}`"
+                        ))),
+                        Some(v) => {
+                            let field_result = self
+                                .read_value_expr(&v, fty, span)
+                                .map_err(FieldErr::Hard)?;
+
+                            // Check for Result.Err (soft error)
+                            if let Value::Tagged(ty, 1, _) = &field_result {
+                                if self.type_exprs.base_type(*ty)
+                                    == Some(TypeId::RESULT)
+                                {
+                                    let msg = self
+                                        .extract_result_err_msg(&field_result);
+                                    Err(FieldErr::Soft(format!(
+                                        "field `{fname}`: {msg}"
+                                    )))
+                                } else {
+                                    // Tagged but not Result.Err; extract value
+                                    let inner = self
+                                        .unwrap_result_ok(&field_result, span)
+                                        .map_err(FieldErr::Hard)?;
+                                    let inner_id = self.arena.add(inner, span);
+                                    acc.insert(fid, inner_id);
+                                    Ok(acc)
+                                }
+                            } else {
+                                // Result.Ok case
+                                let inner = self
+                                    .unwrap_result_ok(&field_result, span)
+                                    .map_err(FieldErr::Hard)?;
+                                let inner_id = self.arena.add(inner, span);
+                                acc.insert(fid, inner_id);
+                                Ok(acc)
+                            }
+                        }
+                    }
+                });
+
+        match result {
+            Ok(obj_fields) => {
+                Ok(self.make_result_ok(Value::Object(obj_fields), span))
+            }
+            Err(FieldErr::Soft(msg)) => Ok(self.make_result_err(&msg, span)),
+            Err(FieldErr::Hard(e)) => Err(e),
+        }
+    }
+
+    /// Read a JSON array into an Array[T].
+    fn read_json_to_array(
+        &mut self,
+        val: &Value,
+        elem_ty: TypeExprId,
+        span: Span,
+    ) -> Result<Value> {
+        let Value::Json(serde_json::Value::Array(arr)) = val else {
+            let src_name = val.type_name(&self.registry, &self.type_exprs);
+            let msg = format!("expected JSON array, got {src_name}");
+            return Ok(self.make_result_err(&msg, span));
+        };
+
+        let arr = arr.clone();
+        let mut elems: SmallVec<[ValueId; 4]> = SmallVec::new();
+
+        for (i, json_val) in arr.into_iter().enumerate() {
+            let elem_result =
+                self.read_value_expr(&Value::Json(json_val), elem_ty, span)?;
+
+            // Check if the recursive read succeeded
+            if let Value::Tagged(ty, idx, _) = &elem_result {
+                if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT)
+                    && *idx == 1
+                {
+                    // Propagate error with index context
+                    let err_msg = self.extract_result_err_msg(&elem_result);
+                    let msg = format!("at index {i}: {err_msg}");
+                    return Ok(self.make_result_err(&msg, span));
+                }
+            }
+
+            let inner = self.unwrap_result_ok(&elem_result, span)?;
+            let inner_id = self.arena.add(inner, span);
+            elems.push(inner_id);
+        }
+
+        Ok(self.make_result_ok(Value::Array(elem_ty, elems), span))
+    }
+
+    /// Read a JSON value into an Option[T].
+    fn read_json_to_option(
+        &mut self,
+        val: &Value,
+        inner_ty: TypeExprId,
+        opt_ty: TypeExprId,
+        span: Span,
+    ) -> Result<Value> {
+        match val {
+            Value::Json(serde_json::Value::Null) => {
+                // null -> Option.None
+                let none = self.make_none_like(opt_ty);
+                Ok(self.make_result_ok(none, span))
+            }
+            _ => {
+                // Non-null: read inner value
+                let inner_result = self.read_value_expr(val, inner_ty, span)?;
+
+                // Check if the recursive read succeeded
+                if let Value::Tagged(ty, idx, _) = &inner_result {
+                    if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT)
+                        && *idx == 1
+                    {
+                        return Ok(inner_result);
+                    }
+                }
+
+                let inner = self.unwrap_result_ok(&inner_result, span)?;
+                let inner_id = self.arena.add(inner, span);
+                let some = self.make_some(inner_id);
+                Ok(self.make_result_ok(some, span))
+            }
+        }
+    }
+
+    /// Extract the Ok value from a Result.
+    fn unwrap_result_ok(&self, result: &Value, span: Span) -> Result<Value> {
+        match result {
+            Value::Tagged(ty, 0, payloads)
+                if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT) =>
+            {
+                payloads
+                    .first()
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(span, "invalid Result.Ok payload")
+                    })
+            }
+            _ => Err(Error::runtime(span, "expected Result.Ok")),
+        }
+    }
+
+    /// Extract the error message from a Result.Err.
+    fn extract_result_err_msg(&self, result: &Value) -> String {
+        match result {
+            Value::Tagged(ty, 1, payloads)
+                if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT) =>
+            {
+                payloads
+                    .first()
+                    .and_then(|id| self.arena.get(*id))
+                    .and_then(|v| match v {
+                        Value::String(sid) => {
+                            self.arena.get_str(*sid).map(str::to_owned)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "unknown error".to_owned())
+            }
+            _ => "unknown error".to_owned(),
+        }
+    }
+
     /// Check if a value matches a simple type (non-variant).
     ///
     /// For union types, the value matches if it matches ANY member type.
