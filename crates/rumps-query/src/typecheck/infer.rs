@@ -306,76 +306,72 @@ impl<'a> InferCtx<'a> {
     ///
     /// Currently handles Phase 4.3 expressions (literals and variables).
     /// Other expression types will be added in subsequent phases.
-    pub(crate) fn infer_expr(&mut self, id: ExprId) -> Ty {
+    pub(crate) fn expr(&mut self, id: ExprId) -> Ty {
         let span = self.ast.expr_span(id).unwrap_or(Span::new(0, 0));
-        let ty = self.ast.get_expr(id).map_or_else(
-            || Ty::Error,
-            |expr| self.infer_expr_inner(expr, span),
-        );
+        let ty = self
+            .ast
+            .get_expr(id)
+            .map_or_else(|| Ty::Error, |expr| self.expr_inner(expr, span));
         self.record_type(id, ty.clone());
         ty
     }
 
     /// Inner expression inference; dispatches on expression variant.
-    fn infer_expr_inner(&mut self, expr: &Expr, span: Span) -> Ty {
+    fn expr_inner(&mut self, expr: &Expr, span: Span) -> Ty {
         match expr {
             // Literals
-            Expr::Literal(lit) => self.infer_literal(lit),
+            Expr::Literal(lit) => self.literal(lit),
 
             // Unit: empty tuple
             Expr::Tuple(elems) if elems.is_empty() => Ty::Unit,
 
             // Variable reference
-            Expr::Var(name) => self.infer_var(name, span),
+            Expr::Var(name) => self.var(name, span),
 
             // Binary operations
-            Expr::Binary(lhs, op, rhs) => {
-                self.infer_binary(*lhs, *op, *rhs, span)
-            }
+            Expr::Binary(lhs, op, rhs) => self.binary(*lhs, *op, *rhs, span),
 
             // Unary operations
-            Expr::Unary(op, operand) => self.infer_unary(*op, *operand, span),
+            Expr::Unary(op, operand) => self.unary(*op, *operand, span),
 
             // Range expressions
             Expr::Range(start, end, _inclusive) => {
-                let start_ty = self.infer_expr(*start);
-                let end_ty = self.infer_expr(*end);
+                let start_ty = self.expr(*start);
+                let end_ty = self.expr(*end);
                 self.unify(start_ty, Ty::Int, span);
                 self.unify(end_ty, Ty::Int, span);
                 Ty::Range
             }
 
             // Arrays
-            Expr::Array(elems) => self.infer_array(elems, span),
+            Expr::Array(elems) => self.array(elems, span),
 
             // Non-empty tuples (empty handled above as Unit)
-            Expr::Tuple(elems) => self.infer_tuple(elems),
+            Expr::Tuple(elems) => self.tuple(elems),
 
             // Structural objects
-            Expr::Object(fields) => self.infer_object(fields),
+            Expr::Object(fields) => self.object(fields),
 
             // Map literals
-            Expr::MapLit(entries) => self.infer_map_lit(entries, span),
+            Expr::MapLit(entries) => self.map_lit(entries, span),
 
             // Field access: obj.field
-            Expr::Field(base, field) => self.infer_field(*base, field, span),
+            Expr::Field(base, field) => self.field(*base, field, span),
 
             // Optional field access: obj?.field
             Expr::OptionalField(base, field) => {
-                self.infer_optional_field(*base, field, span)
+                self.optional_field(*base, field, span)
             }
 
             // Tuple index: tuple.0, tuple.1, etc.
-            Expr::TupleIndex(base, idx) => {
-                self.infer_tuple_index(*base, *idx, span)
-            }
+            Expr::TupleIndex(base, idx) => self.tuple_index(*base, *idx, span),
 
             // Index access: arr[i] or map[k]
-            Expr::Index(base, idx) => self.infer_index(*base, *idx, span),
+            Expr::Index(base, idx) => self.index(*base, *idx, span),
 
             // JSON access: data.field, data..field, data->"key", data->>"key"
             Expr::JsonAccess(base, kind, key) => {
-                self.infer_json_access(*base, kind, key, span)
+                self.json_access(*base, kind, key, span)
             }
 
             // JSON literals
@@ -383,11 +379,11 @@ impl<'a> InferCtx<'a> {
 
             // Closures: (x, y) => body
             Expr::Closure { params, ret, body } => {
-                self.infer_closure(params, ret.as_ref(), *body, span)
+                self.closure(params, ret.as_ref(), *body, span)
             }
 
             // Function calls: f(args...)
-            Expr::Call(callee, args) => self.infer_call(*callee, args, span),
+            Expr::Call(callee, args) => self.call(*callee, args, span),
 
             // Other expressions handled in later phases
             _ => Ty::Error,
@@ -395,7 +391,7 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Infer type of a literal.
-    fn infer_literal(&self, lit: &Literal) -> Ty {
+    fn literal(&self, lit: &Literal) -> Ty {
         match lit {
             Literal::Bool(_) => Ty::Bool,
             Literal::Int(_) => Ty::Int,
@@ -412,7 +408,7 @@ impl<'a> InferCtx<'a> {
     /// Looks up the variable in the type environment and instantiates its
     /// scheme with fresh type variables. If undefined, records an error
     /// and returns `Ty::Error`.
-    fn infer_var(&mut self, name: &str, span: Span) -> Ty {
+    fn var(&mut self, name: &str, span: Span) -> Ty {
         match self.env.lookup(name) {
             Some(scheme) => scheme.instantiate(&mut self.next_var),
             None => {
@@ -426,15 +422,15 @@ impl<'a> InferCtx<'a> {
     ///
     /// Generates appropriate constraints based on the operator and returns
     /// the result type.
-    fn infer_binary(
+    fn binary(
         &mut self,
         lhs_id: ExprId,
         op: BinOp,
         rhs_id: ExprId,
         span: Span,
     ) -> Ty {
-        let lhs_ty = self.infer_expr(lhs_id);
-        let rhs_ty = self.infer_expr(rhs_id);
+        let lhs_ty = self.expr(lhs_id);
+        let rhs_ty = self.expr(rhs_id);
 
         match op {
             // Arithmetic: both numeric, result depends on operand types
@@ -523,8 +519,8 @@ impl<'a> InferCtx<'a> {
     ///
     /// Generates appropriate constraints based on the operator and returns
     /// the result type.
-    fn infer_unary(&mut self, op: UnOp, operand_id: ExprId, span: Span) -> Ty {
-        let operand_ty = self.infer_expr(operand_id);
+    fn unary(&mut self, op: UnOp, operand_id: ExprId, span: Span) -> Ty {
+        let operand_ty = self.expr(operand_id);
 
         match op {
             // Negation: operand must be numeric, result is same type
@@ -545,11 +541,11 @@ impl<'a> InferCtx<'a> {
     ///
     /// Empty arrays get a fresh element type. Non-empty arrays infer the first
     /// element's type and unify all subsequent elements with it.
-    fn infer_array(&mut self, elems: &[ExprId], span: Span) -> Ty {
+    fn array(&mut self, elems: &[ExprId], span: Span) -> Ty {
         if let Some((first, rest)) = elems.split_first() {
-            let first_ty = self.infer_expr(*first);
+            let first_ty = self.expr(*first);
             rest.iter().for_each(|id| {
-                let ty = self.infer_expr(*id);
+                let ty = self.expr(*id);
                 self.unify(first_ty.clone(), ty, span);
             });
             Ty::Array(Box::new(first_ty))
@@ -561,19 +557,19 @@ impl<'a> InferCtx<'a> {
     /// Infer type of a tuple literal.
     ///
     /// Infers each element independently; the tuple type contains all element
-    /// types in order. Empty tuples are handled as `Unit` in `infer_expr_inner`.
-    fn infer_tuple(&mut self, elems: &SmallVec<[ExprId; 4]>) -> Ty {
-        Ty::Tuple(elems.iter().map(|id| self.infer_expr(*id)).collect())
+    /// types in order. Empty tuples are handled as `Unit` in `expr_inner`.
+    fn tuple(&mut self, elems: &SmallVec<[ExprId; 4]>) -> Ty {
+        Ty::Tuple(elems.iter().map(|id| self.expr(*id)).collect())
     }
 
     /// Infer type of an object literal.
     ///
     /// Produces a structural object type with inferred field types.
-    fn infer_object(&mut self, fields: &[(String, ExprId)]) -> Ty {
+    fn object(&mut self, fields: &[(String, ExprId)]) -> Ty {
         let obj_fields = fields
             .iter()
             .map(|(name, expr_id)| {
-                let field_ty = self.infer_expr(*expr_id);
+                let field_ty = self.expr(*expr_id);
                 let field_id = self.env.intern(name);
                 (field_id, field_ty)
             })
@@ -585,17 +581,17 @@ impl<'a> InferCtx<'a> {
     ///
     /// Keys are unified to a common type; values are unified to a common type.
     /// Empty maps get fresh type variables for both.
-    fn infer_map_lit(
+    fn map_lit(
         &mut self,
         entries: &SmallVec<[(ExprId, ExprId); 8]>,
         span: Span,
     ) -> Ty {
         if let Some(((first_k, first_v), rest)) = entries.split_first() {
-            let k_ty = self.infer_expr(*first_k);
-            let v_ty = self.infer_expr(*first_v);
+            let k_ty = self.expr(*first_k);
+            let v_ty = self.expr(*first_v);
             rest.iter().for_each(|(k, v)| {
-                let k = self.infer_expr(*k);
-                let v = self.infer_expr(*v);
+                let k = self.expr(*k);
+                let v = self.expr(*v);
                 self.unify(k_ty.clone(), k, span);
                 self.unify(v_ty.clone(), v, span);
             });
@@ -611,8 +607,8 @@ impl<'a> InferCtx<'a> {
     /// (`Ty::Named` with `TypeDef::Struct`). For type variables, we cannot
     /// yet infer the field type without row polymorphism, so we create a
     /// structural object constraint.
-    fn infer_field(&mut self, base_id: ExprId, field: &str, span: Span) -> Ty {
-        let base_ty = self.infer_expr(base_id);
+    fn field(&mut self, base_id: ExprId, field: &str, span: Span) -> Ty {
+        let base_ty = self.expr(base_id);
         self.field_type(&base_ty, field, span)
     }
 
@@ -841,13 +837,13 @@ impl<'a> InferCtx<'a> {
     ///
     /// The base must be `Option[T]` where `T` has the field.
     /// Returns `Option[FieldType]`.
-    fn infer_optional_field(
+    fn optional_field(
         &mut self,
         base_id: ExprId,
         field: &str,
         span: Span,
     ) -> Ty {
-        let base_ty = self.infer_expr(base_id);
+        let base_ty = self.expr(base_id);
 
         match &base_ty {
             Ty::Option(inner) => {
@@ -882,13 +878,8 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Infer type of tuple index: `tuple.0`, `tuple.1`, etc.
-    fn infer_tuple_index(
-        &mut self,
-        base_id: ExprId,
-        idx: u32,
-        span: Span,
-    ) -> Ty {
-        let base_ty = self.infer_expr(base_id);
+    fn tuple_index(&mut self, base_id: ExprId, idx: u32, span: Span) -> Ty {
+        let base_ty = self.expr(base_id);
 
         match &base_ty {
             Ty::Tuple(elems) => {
@@ -922,14 +913,9 @@ impl<'a> InferCtx<'a> {
     ///
     /// Works for `Array[T]` (index must be `Int`, returns `T`) and
     /// `Map[K, V]` (index unifies with `K`, returns `V`).
-    fn infer_index(
-        &mut self,
-        base_id: ExprId,
-        idx_id: ExprId,
-        span: Span,
-    ) -> Ty {
-        let base_ty = self.infer_expr(base_id);
-        let idx_ty = self.infer_expr(idx_id);
+    fn index(&mut self, base_id: ExprId, idx_id: ExprId, span: Span) -> Ty {
+        let base_ty = self.expr(base_id);
+        let idx_ty = self.expr(idx_id);
 
         match &base_ty {
             Ty::Array(elem) => {
@@ -971,18 +957,18 @@ impl<'a> InferCtx<'a> {
     /// | `..`     | `Option[Scalar]` (union)          |
     /// | `->`     | `Json`                            |
     /// | `->>`    | `Option[Scalar]` (union)          |
-    fn infer_json_access(
+    fn json_access(
         &mut self,
         base_id: ExprId,
         kind: &JsonAccessKind,
         key: &JsonAccessKey,
         span: Span,
     ) -> Ty {
-        let base_ty = self.infer_expr(base_id);
+        let base_ty = self.expr(base_id);
 
         // Infer the key expression type if dynamic
         if let JsonAccessKey::Expr(key_id) = key {
-            let key_ty = self.infer_expr(*key_id);
+            let key_ty = self.expr(*key_id);
             // Dynamic key must be String
             self.unify(key_ty, Ty::String, span);
         }
@@ -1019,7 +1005,7 @@ impl<'a> InferCtx<'a> {
     /// Infer types for function/closure parameters.
     ///
     /// For each parameter: uses annotation if present, otherwise fresh type var.
-    fn infer_param_tys(
+    fn param_tys(
         &mut self,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
     ) -> Vec<Ty> {
@@ -1048,19 +1034,19 @@ impl<'a> InferCtx<'a> {
     /// For each parameter: uses annotation if present, otherwise fresh type var.
     /// Binds parameters in a new scope, infers body, then pops scope.
     /// If return annotation present, unifies body type with it.
-    fn infer_closure(
+    fn closure(
         &mut self,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
         body: ExprId,
         span: Span,
     ) -> Ty {
-        let param_tys = self.infer_param_tys(params);
+        let param_tys = self.param_tys(params);
 
         self.env.push_scope();
         self.bind_params(params, &param_tys);
 
-        let body_ty = self.infer_expr(body);
+        let body_ty = self.expr(body);
         self.env.pop_scope();
 
         // If return annotation present, unify body with it
@@ -1080,15 +1066,15 @@ impl<'a> InferCtx<'a> {
     ///
     /// Infers callee and argument types, then adds a `Callable` constraint.
     /// Returns a fresh type variable that will be unified with the return type.
-    fn infer_call(
+    fn call(
         &mut self,
         callee_id: ExprId,
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> Ty {
-        let callee_ty = self.infer_expr(callee_id);
+        let callee_ty = self.expr(callee_id);
         let arg_tys: SmallVec<[Ty; 4]> =
-            args.iter().map(|id| self.infer_expr(*id)).collect();
+            args.iter().map(|id| self.expr(*id)).collect();
 
         let ret = self.fresh();
         self.constrain(Constraint::Callable {
@@ -1104,22 +1090,22 @@ impl<'a> InferCtx<'a> {
     ///
     /// Most statements don't produce a type, but function definitions
     /// bind the function name with its inferred type scheme in the environment.
-    pub(crate) fn infer_stmt(&mut self, id: StmtId) {
+    pub(crate) fn stmt(&mut self, id: StmtId) {
         let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
         if let Some(stmt) = self.ast.get_stmt(id).cloned() {
-            self.infer_stmt_inner(&stmt, span);
+            self.stmt_inner(&stmt, span);
         }
     }
 
     /// Inner statement inference; dispatches on statement variant.
-    fn infer_stmt_inner(&mut self, stmt: &Stmt, span: Span) {
+    fn stmt_inner(&mut self, stmt: &Stmt, span: Span) {
         match stmt {
             Stmt::Fun {
                 name,
                 params,
                 ret,
                 body,
-            } => self.infer_fun(name, params, ret.as_ref(), *body, span),
+            } => self.fun(name, params, ret.as_ref(), *body, span),
 
             // Other statements handled in later phases
             _ => {}
@@ -1131,7 +1117,7 @@ impl<'a> InferCtx<'a> {
     /// Named functions support recursion: the function name is bound with a
     /// provisional type (fresh vars for params/return) before inferring the body.
     /// After inference, the type is generalized and the binding is updated.
-    fn infer_fun(
+    fn fun(
         &mut self,
         name: &str,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
@@ -1142,7 +1128,7 @@ impl<'a> InferCtx<'a> {
         // Capture outer env free vars BEFORE binding function (for generalization)
         let outer_free = self.env.free_vars();
 
-        let param_tys = self.infer_param_tys(params);
+        let param_tys = self.param_tys(params);
 
         // Declared return type annotation (if any)
         let declared_ret =
@@ -1158,7 +1144,7 @@ impl<'a> InferCtx<'a> {
         self.bind_params(params, &param_tys);
 
         // Infer body type
-        let body_ty = self.infer_expr(body);
+        let body_ty = self.expr(body);
 
         // Pop parameter scope
         self.env.pop_scope();
@@ -1359,67 +1345,67 @@ mod tests {
     }
 
     #[test]
-    fn infer_literal_bool_true() {
+    fn literal_bool_true() {
         let (ast, id) = ast_with_expr(Expr::Literal(Literal::Bool(true)));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
     }
 
     #[test]
-    fn infer_literal_bool_false() {
+    fn literal_bool_false() {
         let (ast, id) = ast_with_expr(Expr::Literal(Literal::Bool(false)));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
     }
 
     #[test]
-    fn infer_literal_int() {
+    fn literal_int() {
         let (ast, id) = ast_with_expr(Expr::Literal(Literal::Int(42)));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Int);
     }
 
     #[test]
-    fn infer_literal_float() {
+    fn literal_float() {
         let (ast, id) = ast_with_expr(Expr::Literal(Literal::Float(3.14)));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Float);
     }
 
     #[test]
-    fn infer_literal_char() {
+    fn literal_char() {
         let (ast, id) = ast_with_expr(Expr::Literal(Literal::Char('x')));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Char);
     }
 
     #[test]
-    fn infer_literal_string() {
+    fn literal_string() {
         let (ast, id) =
             ast_with_expr(Expr::Literal(Literal::String("hello".into())));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::String);
     }
 
     #[test]
-    fn infer_literal_null() {
+    fn literal_null() {
         let (ast, id) = ast_with_expr(Expr::Literal(Literal::Null));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Json);
     }
 
     #[test]
-    fn infer_literal_unit() {
+    fn literal_unit() {
         let (ast, id) = ast_with_expr(Expr::Literal(Literal::Unit));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Unit);
     }
 
@@ -1427,26 +1413,26 @@ mod tests {
     fn infer_empty_tuple_as_unit() {
         let (ast, id) = ast_with_expr(Expr::Tuple(smallvec::smallvec![]));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Unit);
     }
 
     #[test]
-    fn infer_var_found() {
+    fn var_found() {
         let (ast, id) = ast_with_expr(Expr::Var("x".into()));
         let mut ctx = test_ctx(&ast);
         // Bind "x" to Int in the environment
         ctx.env_mut().bind("x", Scheme::mono(Ty::Int));
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Int);
         assert!(!ctx.has_errors());
     }
 
     #[test]
-    fn infer_var_not_found() {
+    fn var_not_found() {
         let (ast, id) = ast_with_expr(Expr::Var("undefined".into()));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Error);
         assert!(ctx.has_errors());
         assert_eq!(ctx.errors().len(), 1);
@@ -1457,7 +1443,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_var_instantiates_scheme() {
+    fn var_instantiates_scheme() {
         let (ast, id) = ast_with_expr(Expr::Var("id".into()));
         let mut ctx = test_ctx(&ast);
         // Bind "id" to a polymorphic scheme: forall a. a -> a
@@ -1468,7 +1454,7 @@ mod tests {
             ty: Ty::Fn(vec![Ty::Var(a)], Box::new(Ty::Var(a))),
         };
         ctx.env_mut().bind("id", scheme);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         // Should get Fn with fresh type variable (not the original `a`)
         match ty {
             Ty::Fn(params, ret) => {
@@ -1490,7 +1476,7 @@ mod tests {
     fn infer_expr_records_type() {
         let (ast, id) = ast_with_expr(Expr::Literal(Literal::Int(42)));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ctx.get_type(id), Some(&ty));
     }
 
@@ -1512,7 +1498,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(1), BinOp::Add, Literal::Int(2));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Int);
         // Should have 2 Numeric constraints for operands
         let numerics: Vec<_> = ctx
@@ -1531,7 +1517,7 @@ mod tests {
             Literal::Float(2.0),
         );
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Float);
     }
 
@@ -1540,7 +1526,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(1), BinOp::Add, Literal::Float(2.0));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Float); // Widening to Float
     }
 
@@ -1549,7 +1535,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Float(1.0), BinOp::Add, Literal::Int(2));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Float);
     }
 
@@ -1558,7 +1544,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(5), BinOp::Sub, Literal::Int(3));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Int);
     }
 
@@ -1567,7 +1553,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(2), BinOp::Mul, Literal::Float(3.5));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Float);
     }
 
@@ -1576,7 +1562,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(10), BinOp::Mod, Literal::Int(3));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Int);
     }
 
@@ -1585,7 +1571,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(2), BinOp::Pow, Literal::Int(3));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Int);
     }
 
@@ -1594,7 +1580,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Float(2.0), BinOp::Pow, Literal::Int(3));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Float);
     }
 
@@ -1605,7 +1591,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(10), BinOp::Div, Literal::Int(3));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Float); // Division always Float
     }
 
@@ -1614,7 +1600,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(10), BinOp::FloorDiv, Literal::Int(3));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Int); // Floor division always Int
     }
 
@@ -1626,7 +1612,7 @@ mod tests {
             Literal::Float(3.0),
         );
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Int); // Floor division always Int
     }
 
@@ -1637,7 +1623,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(1), BinOp::Eq, Literal::Int(2));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
         // Should have Eq constraint unifying operands
         assert!(ctx
@@ -1654,7 +1640,7 @@ mod tests {
             Literal::String("b".into()),
         );
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
     }
 
@@ -1663,7 +1649,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(1), BinOp::Lt, Literal::Int(2));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
     }
 
@@ -1672,7 +1658,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(5), BinOp::Gt, Literal::Int(3));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
     }
 
@@ -1684,7 +1670,7 @@ mod tests {
             Literal::Float(2.0),
         );
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
     }
 
@@ -1693,7 +1679,7 @@ mod tests {
         let (ast, id) =
             ast_with_binary(Literal::Int(5), BinOp::Ge, Literal::Int(5));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
     }
 
@@ -1707,7 +1693,7 @@ mod tests {
             Literal::Bool(false),
         );
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
         // Should have 2 Eq constraints unifying operands with Bool
         let eqs: Vec<_> = ctx
@@ -1726,7 +1712,7 @@ mod tests {
             Literal::Bool(true),
         );
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::Bool);
     }
 
@@ -1740,7 +1726,7 @@ mod tests {
             Literal::String(" world".into()),
         );
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::String);
         // Should have Stringable constraint for rhs
         assert!(ctx
@@ -1758,7 +1744,7 @@ mod tests {
             Literal::Int(42),
         );
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         assert_eq!(ty, Ty::String);
         // Stringable constraint on Int
         let stringables: Vec<_> = ctx
@@ -1790,7 +1776,7 @@ mod tests {
         // Bind "opt" to Option[Int]
         ctx.env_mut()
             .bind("opt", Scheme::mono(Ty::Option(Box::new(Ty::Int))));
-        let ty = ctx.infer_expr(coal);
+        let ty = ctx.expr(coal);
 
         // Result should be fresh var unified with rhs (Int)
         match ty {
@@ -1832,7 +1818,7 @@ mod tests {
             "f",
             Scheme::mono(Ty::Fn(vec![Ty::Int], Box::new(Ty::String))),
         );
-        let ty = ctx.infer_expr(pipe);
+        let ty = ctx.expr(pipe);
 
         // Result is fresh var
         match ty {
@@ -1862,7 +1848,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(neg);
+        let ty = ctx.expr(neg);
         assert_eq!(ty, Ty::Int);
         // Should have Numeric constraint
         assert!(ctx
@@ -1882,7 +1868,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(neg);
+        let ty = ctx.expr(neg);
         assert_eq!(ty, Ty::Float);
     }
 
@@ -1897,7 +1883,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(not);
+        let ty = ctx.expr(not);
         assert_eq!(ty, Ty::Bool);
         // Should have Eq constraint unifying operand with Bool
         assert!(ctx
@@ -1922,7 +1908,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(range);
+        let ty = ctx.expr(range);
         assert_eq!(ty, Ty::Range);
         // Should have 2 Eq constraints unifying operands with Int
         let int_constraints: Vec<_> = ctx
@@ -1947,7 +1933,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(range);
+        let ty = ctx.expr(range);
         assert_eq!(ty, Ty::Range); // Same type regardless of inclusive flag
     }
 
@@ -1978,7 +1964,7 @@ mod tests {
             },
         );
 
-        let ty = ctx.infer_expr(add);
+        let ty = ctx.expr(add);
         // Result should be a fresh type variable (since one operand is var)
         match ty {
             Ty::Var(_) => {
@@ -1995,10 +1981,10 @@ mod tests {
     }
 
     #[test]
-    fn infer_array_empty() {
+    fn array_empty() {
         let (ast, id) = ast_with_expr(Expr::Array(vec![]));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         match ty {
             Ty::Array(elem) => match *elem {
                 Ty::Var(_) => {} // Fresh type variable is expected
@@ -2009,7 +1995,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_array_homogeneous_int() {
+    fn array_homogeneous_int() {
         let mut ast = Ast::new();
         let e1 = ast
             .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
@@ -2025,12 +2011,12 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(arr);
+        let ty = ctx.expr(arr);
         assert_eq!(ty, Ty::Array(Box::new(Ty::Int)));
     }
 
     #[test]
-    fn infer_array_homogeneous_string() {
+    fn array_homogeneous_string() {
         let mut ast = Ast::new();
         let e1 = ast
             .add_expr(
@@ -2049,12 +2035,12 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(arr);
+        let ty = ctx.expr(arr);
         assert_eq!(ty, Ty::Array(Box::new(Ty::String)));
     }
 
     #[test]
-    fn infer_array_single_element() {
+    fn array_single_element() {
         let mut ast = Ast::new();
         let e1 = ast
             .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(1, 5))
@@ -2064,12 +2050,12 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(arr);
+        let ty = ctx.expr(arr);
         assert_eq!(ty, Ty::Array(Box::new(Ty::Bool)));
     }
 
     #[test]
-    fn infer_array_mixed_adds_constraints() {
+    fn array_mixed_adds_constraints() {
         // [1, 2.0] should unify Int with Float
         let mut ast = Ast::new();
         let e1 = ast
@@ -2083,7 +2069,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(arr);
+        let ty = ctx.expr(arr);
         // Result type is Array[Int] (first element's type)
         // but there's an Eq constraint to unify Int with Float
         assert_eq!(ty, Ty::Array(Box::new(Ty::Int)));
@@ -2096,7 +2082,7 @@ mod tests {
     // Tuples
 
     #[test]
-    fn infer_tuple_two_elements() {
+    fn tuple_two_elements() {
         let mut ast = Ast::new();
         let e1 = ast
             .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
@@ -2115,12 +2101,12 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(tup);
+        let ty = ctx.expr(tup);
         assert_eq!(ty, Ty::Tuple(vec![Ty::Int, Ty::String]));
     }
 
     #[test]
-    fn infer_tuple_three_elements() {
+    fn tuple_three_elements() {
         let mut ast = Ast::new();
         let e1 = ast
             .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(1, 5))
@@ -2139,12 +2125,12 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(tup);
+        let ty = ctx.expr(tup);
         assert_eq!(ty, Ty::Tuple(vec![Ty::Bool, Ty::Int, Ty::Float]));
     }
 
     #[test]
-    fn infer_tuple_single_element() {
+    fn tuple_single_element() {
         // Single-element tuple (trailing comma): (42,)
         let mut ast = Ast::new();
         let e1 = ast
@@ -2155,12 +2141,12 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(tup);
+        let ty = ctx.expr(tup);
         assert_eq!(ty, Ty::Tuple(vec![Ty::Int]));
     }
 
     #[test]
-    fn infer_tuple_nested() {
+    fn tuple_nested() {
         // ((1, 2), "hello")
         let mut ast = Ast::new();
         let e1 = ast
@@ -2186,7 +2172,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(outer);
+        let ty = ctx.expr(outer);
         assert_eq!(
             ty,
             Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String])
@@ -2196,7 +2182,7 @@ mod tests {
     // Objects
 
     #[test]
-    fn infer_object_single_field() {
+    fn object_single_field() {
         let mut ast = Ast::new();
         let val = ast
             .add_expr(Expr::Literal(Literal::Int(42)), Span::new(7, 9))
@@ -2206,7 +2192,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(obj);
+        let ty = ctx.expr(obj);
         match ty {
             Ty::Object(fields) => {
                 assert_eq!(fields.len(), 1);
@@ -2219,7 +2205,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_object_multiple_fields() {
+    fn object_multiple_fields() {
         let mut ast = Ast::new();
         let v1 = ast
             .add_expr(
@@ -2238,7 +2224,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(obj);
+        let ty = ctx.expr(obj);
         match ty {
             Ty::Object(fields) => {
                 assert_eq!(fields.len(), 2);
@@ -2251,7 +2237,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_object_nested() {
+    fn object_nested() {
         // { outer: { inner: 123 } }
         let mut ast = Ast::new();
         let inner_val = ast
@@ -2271,7 +2257,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(outer);
+        let ty = ctx.expr(outer);
         match ty {
             Ty::Object(fields) => {
                 assert_eq!(fields.len(), 1);
@@ -2290,10 +2276,10 @@ mod tests {
     }
 
     #[test]
-    fn infer_object_empty() {
+    fn object_empty() {
         let (ast, id) = ast_with_expr(Expr::Object(vec![]));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         match ty {
             Ty::Object(fields) => assert!(fields.is_empty()),
             _ => panic!("expected Object type, got {ty:?}"),
@@ -2306,7 +2292,7 @@ mod tests {
     fn infer_map_empty() {
         let (ast, id) = ast_with_expr(Expr::MapLit(smallvec::smallvec![]));
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(id);
+        let ty = ctx.expr(id);
         match ty {
             Ty::Map(k, v) => match (*k, *v) {
                 (Ty::Var(_), Ty::Var(_)) => {}
@@ -2336,7 +2322,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(map);
+        let ty = ctx.expr(map);
         assert_eq!(ty, Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)));
     }
 
@@ -2369,7 +2355,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(map);
+        let ty = ctx.expr(map);
         assert_eq!(ty, Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)));
         // Should have Eq constraints unifying keys and values
         let eq_constraints: Vec<_> = ctx
@@ -2411,7 +2397,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(map);
+        let ty = ctx.expr(map);
         // Result type is Map[String, Int] (first entry's types)
         assert_eq!(ty, Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)));
         // but there's an Eq constraint to unify Int with Float
@@ -2450,14 +2436,14 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(map);
+        let ty = ctx.expr(map);
         assert_eq!(ty, Ty::Map(Box::new(Ty::Int), Box::new(Ty::String)));
     }
 
     // Field access
 
     #[test]
-    fn infer_field_access_object() {
+    fn field_access_object() {
         // { name: "Alice" }.name
         let mut ast = Ast::new();
         let val = ast
@@ -2477,13 +2463,13 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(field);
+        let ty = ctx.expr(field);
         assert_eq!(ty, Ty::String);
         assert!(!ctx.has_errors());
     }
 
     #[test]
-    fn infer_field_access_object_nested() {
+    fn field_access_object_nested() {
         // { user: { name: "Alice" } }.user.name
         let mut ast = Ast::new();
         let name_val = ast
@@ -2512,13 +2498,13 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(name_field);
+        let ty = ctx.expr(name_field);
         assert_eq!(ty, Ty::String);
         assert!(!ctx.has_errors());
     }
 
     #[test]
-    fn infer_field_access_missing_field() {
+    fn field_access_missing_field() {
         // { name: "Alice" }.age
         let mut ast = Ast::new();
         let val = ast
@@ -2538,7 +2524,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(field);
+        let ty = ctx.expr(field);
         assert_eq!(ty, Ty::Error);
         assert!(ctx.has_errors());
         match &ctx.errors()[0] {
@@ -2550,7 +2536,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_field_access_on_int() {
+    fn field_access_on_int() {
         // 42.field
         let mut ast = Ast::new();
         let n = ast
@@ -2561,7 +2547,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(field);
+        let ty = ctx.expr(field);
         assert_eq!(ty, Ty::Error);
         assert!(ctx.has_errors());
         match &ctx.errors()[0] {
@@ -2571,7 +2557,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_field_access_var_creates_constraint() {
+    fn field_access_var_creates_constraint() {
         // x.name where x is a type variable
         let mut ast = Ast::new();
         let var = ast
@@ -2591,7 +2577,7 @@ mod tests {
                 ty: Ty::Var(a),
             },
         );
-        let ty = ctx.infer_expr(field);
+        let ty = ctx.expr(field);
         // Result should be a fresh type variable
         match ty {
             Ty::Var(_) => {
@@ -2608,7 +2594,7 @@ mod tests {
     // Tuple indexing
 
     #[test]
-    fn infer_tuple_index_first() {
+    fn tuple_index_first() {
         // (1, "hello").0
         let mut ast = Ast::new();
         let e1 = ast
@@ -2631,13 +2617,13 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(idx);
+        let ty = ctx.expr(idx);
         assert_eq!(ty, Ty::Int);
         assert!(!ctx.has_errors());
     }
 
     #[test]
-    fn infer_tuple_index_second() {
+    fn tuple_index_second() {
         // (1, "hello").1
         let mut ast = Ast::new();
         let e1 = ast
@@ -2660,13 +2646,13 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(idx);
+        let ty = ctx.expr(idx);
         assert_eq!(ty, Ty::String);
         assert!(!ctx.has_errors());
     }
 
     #[test]
-    fn infer_tuple_index_out_of_bounds() {
+    fn tuple_index_out_of_bounds() {
         // (1, "hello").5
         let mut ast = Ast::new();
         let e1 = ast
@@ -2689,7 +2675,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(idx);
+        let ty = ctx.expr(idx);
         assert_eq!(ty, Ty::Error);
         assert!(ctx.has_errors());
         match &ctx.errors()[0] {
@@ -2702,7 +2688,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_tuple_index_on_non_tuple() {
+    fn tuple_index_on_non_tuple() {
         // "hello".0
         let mut ast = Ast::new();
         let s = ast
@@ -2716,7 +2702,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(idx);
+        let ty = ctx.expr(idx);
         assert_eq!(ty, Ty::Error);
         assert!(ctx.has_errors());
         match &ctx.errors()[0] {
@@ -2728,7 +2714,7 @@ mod tests {
     // Index access
 
     #[test]
-    fn infer_index_array() {
+    fn index_array() {
         // [1, 2, 3][0]
         let mut ast = Ast::new();
         let e1 = ast
@@ -2751,7 +2737,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(idx);
+        let ty = ctx.expr(idx);
         assert_eq!(ty, Ty::Int);
         // Index should be unified with Int
         assert!(ctx
@@ -2761,7 +2747,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_index_map() {
+    fn index_map() {
         // { "a" => 1 }["a"]
         let mut ast = Ast::new();
         let k = ast
@@ -2790,12 +2776,12 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(idx);
+        let ty = ctx.expr(idx);
         assert_eq!(ty, Ty::Int);
     }
 
     #[test]
-    fn infer_index_string() {
+    fn index_string() {
         // "hello"[0]
         let mut ast = Ast::new();
         let s = ast
@@ -2812,12 +2798,12 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(idx);
+        let ty = ctx.expr(idx);
         assert_eq!(ty, Ty::Char);
     }
 
     #[test]
-    fn infer_index_on_non_indexable() {
+    fn index_on_non_indexable() {
         // true[0]
         let mut ast = Ast::new();
         let b = ast
@@ -2831,7 +2817,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(idx);
+        let ty = ctx.expr(idx);
         assert_eq!(ty, Ty::Error);
         assert!(ctx.has_errors());
         match &ctx.errors()[0] {
@@ -2843,7 +2829,7 @@ mod tests {
     // JSON access
 
     #[test]
-    fn infer_json_access_field() {
+    fn json_access_field() {
         // data.name (where data is Json)
         use crate::ast::{JsonAccessKey, JsonAccessKind};
         let mut ast = Ast::new();
@@ -2862,12 +2848,12 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(access);
+        let ty = ctx.expr(access);
         assert_eq!(ty, Ty::Json);
     }
 
     #[test]
-    fn infer_json_access_scalar() {
+    fn json_access_scalar() {
         // data..name (where data is Json)
         use crate::ast::{JsonAccessKey, JsonAccessKind};
         let mut ast = Ast::new();
@@ -2886,7 +2872,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(access);
+        let ty = ctx.expr(access);
         // Returns Option[Scalar]
         match ty {
             Ty::Option(inner) => {
@@ -2897,7 +2883,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_json_access_dynamic_key() {
+    fn json_access_dynamic_key() {
         // data->(key) where key is String
         use crate::ast::{JsonAccessKey, JsonAccessKind};
         let mut ast = Ast::new();
@@ -2922,7 +2908,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(access);
+        let ty = ctx.expr(access);
         assert_eq!(ty, Ty::Json);
         // Key should be unified with String
         assert!(ctx
@@ -2932,7 +2918,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_json_access_on_non_json() {
+    fn json_access_on_non_json() {
         // 42.name (where 42 is Int)
         use crate::ast::{JsonAccessKey, JsonAccessKind};
         let mut ast = Ast::new();
@@ -2951,7 +2937,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(access);
+        let ty = ctx.expr(access);
         assert_eq!(ty, Ty::Error);
         assert!(ctx.has_errors());
         match &ctx.errors()[0] {
@@ -2975,14 +2961,14 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(json);
+        let ty = ctx.expr(json);
         assert_eq!(ty, Ty::Json);
     }
 
     // Optional field access
 
     #[test]
-    fn infer_optional_field_on_option() {
+    fn optional_field_on_option() {
         // opt?.name where opt is Option[{ name: String }]
         let mut ast = Ast::new();
         let var = ast
@@ -2999,7 +2985,7 @@ mod tests {
             Ty::Object(std::iter::once((name_id, Ty::String)).collect());
         ctx.env_mut()
             .bind("opt", Scheme::mono(Ty::Option(Box::new(inner))));
-        let ty = ctx.infer_expr(field);
+        let ty = ctx.expr(field);
         // Should return Option[String]
         match ty {
             Ty::Option(inner) => assert_eq!(*inner, Ty::String),
@@ -3008,7 +2994,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_optional_field_on_non_option() {
+    fn optional_field_on_non_option() {
         // obj?.name where obj is { name: String }
         let mut ast = Ast::new();
         let var = ast
@@ -3023,7 +3009,7 @@ mod tests {
         let obj_ty =
             Ty::Object(std::iter::once((name_id, Ty::String)).collect());
         ctx.env_mut().bind("obj", Scheme::mono(obj_ty));
-        let ty = ctx.infer_expr(field);
+        let ty = ctx.expr(field);
         // Should produce error (not Option)
         assert_eq!(ty, Ty::Error);
         assert!(ctx.has_errors());
@@ -3173,7 +3159,7 @@ mod tests {
     // --- Closure inference tests ---
 
     #[test]
-    fn infer_closure_zero_params() {
+    fn closure_zero_params() {
         // Build: () => 42
         let mut ast = Ast::new();
         let span = Span::new(0, 10);
@@ -3190,14 +3176,14 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(closure);
+        let ty = ctx.expr(closure);
 
         // Should be Fn([], Int)
         assert_eq!(ty, Ty::Fn(vec![], Box::new(Ty::Int)));
     }
 
     #[test]
-    fn infer_closure_no_annotations() {
+    fn closure_no_annotations() {
         // Build: x => x
         let mut ast = Ast::new();
         let span = Span::new(0, 10);
@@ -3214,7 +3200,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(closure);
+        let ty = ctx.expr(closure);
 
         // Should be Fn([?0], ?0) since x has fresh type and body returns x
         match ty {
@@ -3233,7 +3219,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_closure_with_param_annotations() {
+    fn closure_with_param_annotations() {
         // Build: (x: Int) => x
         let mut ast = Ast::new();
         let span = Span::new(0, 10);
@@ -3253,14 +3239,14 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(closure);
+        let ty = ctx.expr(closure);
 
         // Should be Fn([Int], Int)
         assert_eq!(ty, Ty::Fn(vec![Ty::Int], Box::new(Ty::Int)));
     }
 
     #[test]
-    fn infer_closure_with_return_annotation() {
+    fn closure_with_return_annotation() {
         // Build: (x: Int) -> String => ...
         // Body returns Int, so there should be a unification constraint
         let mut ast = Ast::new();
@@ -3284,7 +3270,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(closure);
+        let ty = ctx.expr(closure);
 
         // Return type should be String (from annotation)
         assert_eq!(ty, Ty::Fn(vec![Ty::Int], Box::new(Ty::String)));
@@ -3299,7 +3285,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_closure_multi_param() {
+    fn closure_multi_param() {
         // Build: (a: Int, b: Float) => 42
         let mut ast = Ast::new();
         let span = Span::new(0, 10);
@@ -3325,14 +3311,14 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(closure);
+        let ty = ctx.expr(closure);
 
         // Should be Fn([Int, Float], Int)
         assert_eq!(ty, Ty::Fn(vec![Ty::Int, Ty::Float], Box::new(Ty::Int)));
     }
 
     #[test]
-    fn infer_closure_body_uses_params() {
+    fn closure_body_uses_params() {
         // Build: (a, b) => a + b
         let mut ast = Ast::new();
         let span = Span::new(0, 10);
@@ -3354,7 +3340,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(closure);
+        let ty = ctx.expr(closure);
 
         // Should be Fn([?a, ?b], ?result) with Numeric constraints
         match ty {
@@ -3380,7 +3366,7 @@ mod tests {
     // --- Call inference tests ---
 
     #[test]
-    fn infer_call_no_args() {
+    fn call_no_args() {
         // Build: f()
         let mut ast = Ast::new();
         let span = Span::new(0, 10);
@@ -3394,7 +3380,7 @@ mod tests {
         ctx.env_mut()
             .bind("f", Scheme::mono(Ty::Fn(vec![], Box::new(Ty::Int))));
 
-        let ty = ctx.infer_expr(call);
+        let ty = ctx.expr(call);
 
         // Result is fresh type var
         assert!(matches!(ty, Ty::Var(_)));
@@ -3409,7 +3395,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_call_with_args() {
+    fn call_with_args() {
         // Build: f(1, "hello")
         let mut ast = Ast::new();
         let span = Span::new(0, 10);
@@ -3428,7 +3414,7 @@ mod tests {
             Scheme::mono(Ty::Fn(vec![Ty::Int, Ty::String], Box::new(Ty::Bool))),
         );
 
-        let ty = ctx.infer_expr(call);
+        let ty = ctx.expr(call);
 
         // Result is fresh type var
         assert!(matches!(ty, Ty::Var(_)));
@@ -3446,7 +3432,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_call_on_closure() {
+    fn call_on_closure() {
         // Build: (x => x)(42)
         let mut ast = Ast::new();
         let span = Span::new(0, 10);
@@ -3467,7 +3453,7 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let ty = ctx.infer_expr(call);
+        let ty = ctx.expr(call);
 
         // Result is fresh type var
         assert!(matches!(ty, Ty::Var(_)));
@@ -3505,7 +3491,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_fun_no_annotations() {
+    fn fun_no_annotations() {
         // Build: FUN id(x) { x }
         let mut ast = Ast::new();
         let span = Span::new(0, 20);
@@ -3520,7 +3506,7 @@ mod tests {
         );
 
         let mut ctx = test_ctx(&ast);
-        ctx.infer_stmt(stmt_id);
+        ctx.stmt(stmt_id);
 
         // Function should be bound in environment
         let scheme = ctx.env().lookup("id");
@@ -3540,7 +3526,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_fun_with_annotations() {
+    fn fun_with_annotations() {
         // Build: FUN inc(x: Int) -> Int { x + 1 }
         let mut ast = Ast::new();
         let span = Span::new(0, 30);
@@ -3562,7 +3548,7 @@ mod tests {
         );
 
         let mut ctx = test_ctx(&ast);
-        ctx.infer_stmt(stmt_id);
+        ctx.stmt(stmt_id);
 
         // Function should be bound in environment
         let scheme = ctx.env().lookup("inc");
@@ -3575,7 +3561,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_fun_recursive() {
+    fn fun_recursive() {
         // Build: FUN factorial(n: Int) -> Int { n * factorial(n - 1) }
         // (simplified: just testing that recursive call works)
         let mut ast = Ast::new();
@@ -3617,7 +3603,7 @@ mod tests {
         );
 
         let mut ctx = test_ctx(&ast);
-        ctx.infer_stmt(stmt_id);
+        ctx.stmt(stmt_id);
 
         // Should not have errors about undefined variable "factorial"
         // (function name is bound before body is inferred)
@@ -3638,7 +3624,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_fun_polymorphic_identity() {
+    fn fun_polymorphic_identity() {
         // Build: FUN id(x) { x }
         // Should generalize to: forall a. (a) -> a
         let mut ast = Ast::new();
@@ -3654,7 +3640,7 @@ mod tests {
         );
 
         let mut ctx = test_ctx(&ast);
-        ctx.infer_stmt(stmt_id);
+        ctx.stmt(stmt_id);
 
         let scheme = ctx.env().lookup("id").unwrap();
 
@@ -3678,7 +3664,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_fun_multi_params() {
+    fn fun_multi_params() {
         // Build: FUN add(a: Int, b: Int) -> Int { a + b }
         let mut ast = Ast::new();
         let span = Span::new(0, 40);
@@ -3701,7 +3687,7 @@ mod tests {
         );
 
         let mut ctx = test_ctx(&ast);
-        ctx.infer_stmt(stmt_id);
+        ctx.stmt(stmt_id);
 
         let scheme = ctx.env().lookup("add");
         assert!(scheme.is_some());
