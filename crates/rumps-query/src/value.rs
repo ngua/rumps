@@ -11,6 +11,7 @@
 
 #![allow(dead_code)]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
@@ -510,38 +511,56 @@ impl Value {
     }
 
     /// Get the type name of this value for error messages.
+    ///
+    /// Returns a structural type representation for objects (e.g., `{ name: String }`).
+    /// Other types return their simple names.
     pub(crate) fn type_name(
         &self,
         reg: &TypeRegistry,
         type_exprs: &TypeExprArena,
-    ) -> &'static str {
+        arena: &ValueArena,
+    ) -> Cow<'static, str> {
         match self {
-            Self::Unit => "Unit",
-            Self::Bool(_) => "Bool",
-            Self::Int(_) => "Int",
-            Self::Float(_) => "Float",
-            Self::Char(_) => "Char",
-            Self::String(_) => "String",
-            Self::Array(..) => "Array",
-            Self::Object(_) => "Object",
-            Self::Tuple(..) => "Tuple",
-            Self::Map(..) => "Map",
-            Self::Time(_) => "Time",
-            Self::Json(_) => "Json",
-            Self::Tagged(ty_expr, _, _) => type_exprs
-                .base_type(*ty_expr)
-                .and_then(|ty| reg.get_def(ty))
-                .map(|def| match def {
-                    TypeDef::Builtin(b) => b.name(),
-                    TypeDef::Sum { .. } => "Tagged",
-                    TypeDef::Struct { .. } => "Struct",
-                    TypeDef::Union { .. } => "Union",
-                })
-                .unwrap_or("Unknown"),
-            Self::Closure { .. } => "Closure",
-            Self::Function { .. } => "Function",
-            Self::ModuleFn { .. } => "ModuleFn",
-            Self::Range { .. } => "Range",
+            Self::Unit => Cow::Borrowed("Unit"),
+            Self::Bool(_) => Cow::Borrowed("Bool"),
+            Self::Int(_) => Cow::Borrowed("Int"),
+            Self::Float(_) => Cow::Borrowed("Float"),
+            Self::Char(_) => Cow::Borrowed("Char"),
+            Self::String(_) => Cow::Borrowed("String"),
+            Self::Array(..) => Cow::Borrowed("Array"),
+            Self::Object(fields) => {
+                // Build structural type: `{ field: Type, ... }`
+                let parts: Vec<_> = fields
+                    .iter()
+                    .filter_map(|(name_id, val_id)| {
+                        let name = arena.get_str(*name_id)?;
+                        let val = arena.get(*val_id)?;
+                        let ty = val.type_name(reg, type_exprs, arena);
+                        Some(format!("{name}: {ty}"))
+                    })
+                    .collect();
+                Cow::Owned(format!("{{ {} }}", parts.join(", ")))
+            }
+            Self::Tuple(..) => Cow::Borrowed("Tuple"),
+            Self::Map(..) => Cow::Borrowed("Map"),
+            Self::Time(_) => Cow::Borrowed("Time"),
+            Self::Json(_) => Cow::Borrowed("Json"),
+            Self::Tagged(ty_expr, _, _) => Cow::Borrowed(
+                type_exprs
+                    .base_type(*ty_expr)
+                    .and_then(|ty| reg.get_def(ty))
+                    .map(|def| match def {
+                        TypeDef::Builtin(b) => b.name(),
+                        TypeDef::Sum { .. } => "Tagged",
+                        TypeDef::Struct { .. } => "Struct",
+                        TypeDef::Union { .. } => "Union",
+                    })
+                    .unwrap_or("Unknown"),
+            ),
+            Self::Closure { .. } => Cow::Borrowed("Closure"),
+            Self::Function { .. } => Cow::Borrowed("Function"),
+            Self::ModuleFn { .. } => Cow::Borrowed("ModuleFn"),
+            Self::Range { .. } => Cow::Borrowed("Range"),
         }
     }
 
@@ -742,6 +761,11 @@ enum TypeExpr {
     ///
     /// A value matches a union if it matches ANY member type.
     Union(SmallVec<[TypeExprId; 4]>),
+    /// Structural object type: `{ field: Type, ... }`
+    ///
+    /// Anonymous structural object type. A value matches if it has at least
+    /// the specified fields with matching types (extensible record semantics).
+    Object(IndexMap<StringId, TypeExprId>),
 }
 
 /// A named function definition stored in the function registry.
@@ -780,13 +804,15 @@ impl TypeExprArena {
     /// Get the base `TypeId` from a type expression.
     ///
     /// For `Named(T)` returns `T`; for `App(T, params)` returns `T`.
-    /// For `Fn`, `Tuple`, and `Union` returns `None` (compound types have no single base).
+    /// For `Fn`, `Tuple`, `Union`, and `Object` returns `None` (compound types
+    /// have no single base).
     pub(crate) fn base_type(&self, id: TypeExprId) -> Option<TypeId> {
         self.get(id).and_then(|expr| match expr {
             TypeExpr::Named(ty) | TypeExpr::App(ty, _) => Some(*ty),
-            TypeExpr::Fn(..) | TypeExpr::Tuple(..) | TypeExpr::Union(..) => {
-                None
-            }
+            TypeExpr::Fn(..)
+            | TypeExpr::Tuple(..)
+            | TypeExpr::Union(..)
+            | TypeExpr::Object(..) => None,
         })
     }
 
@@ -869,23 +895,43 @@ impl TypeExprArena {
                 ma.len() == mb.len()
                     && ma.iter().zip(mb.iter()).all(|(a, b)| self.eq(*a, *b))
             }
+            (TypeExpr::Object(fa), TypeExpr::Object(fb)) => {
+                fa.len() == fb.len()
+                    && fa.iter().all(|(k, va)| {
+                        fb.get(k).is_some_and(|vb| self.eq(*va, *vb))
+                    })
+            }
             _ => false,
         }
     }
 
     /// Format a type expression for display.
     ///
-    /// The `name_fn` closure converts `TypeId` to a name string.
-    pub(crate) fn format<F>(&self, id: TypeExprId, name_fn: F) -> Option<String>
+    /// - `name_fn`: converts `TypeId` to a type name string
+    /// - `str_fn`: converts `StringId` to a string (for object field names)
+    pub(crate) fn format<F, S>(
+        &self,
+        id: TypeExprId,
+        name_fn: F,
+        str_fn: S,
+    ) -> Option<String>
     where
         F: Fn(TypeId) -> String + Copy,
+        S: Fn(StringId) -> String + Copy,
     {
-        self.get(id).map(|expr| self.format_expr(expr, name_fn))
+        self.get(id)
+            .map(|expr| self.format_expr(expr, name_fn, str_fn))
     }
 
-    fn format_expr<F>(&self, expr: &TypeExpr, name_fn: F) -> String
+    fn format_expr<F, S>(
+        &self,
+        expr: &TypeExpr,
+        name_fn: F,
+        str_fn: S,
+    ) -> String
     where
         F: Fn(TypeId) -> String + Copy,
+        S: Fn(StringId) -> String + Copy,
     {
         match expr {
             TypeExpr::Named(ty) => name_fn(*ty),
@@ -893,7 +939,7 @@ impl TypeExprArena {
                 let name = name_fn(*ty);
                 let args = params
                     .iter()
-                    .filter_map(|p| self.format(*p, name_fn))
+                    .filter_map(|p| self.format(*p, name_fn, str_fn))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{name}[{args}]")
@@ -901,18 +947,18 @@ impl TypeExprArena {
             TypeExpr::Fn(params, ret) => {
                 let args = params
                     .iter()
-                    .filter_map(|p| self.format(*p, name_fn))
+                    .filter_map(|p| self.format(*p, name_fn, str_fn))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let ret_str = self
-                    .format(*ret, name_fn)
+                    .format(*ret, name_fn, str_fn)
                     .unwrap_or_else(|| "?".to_owned());
                 format!("({args}) -> {ret_str}")
             }
             TypeExpr::Tuple(elems) => {
                 let parts = elems
                     .iter()
-                    .filter_map(|p| self.format(*p, name_fn))
+                    .filter_map(|p| self.format(*p, name_fn, str_fn))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({parts})")
@@ -920,10 +966,24 @@ impl TypeExprArena {
             TypeExpr::Union(members) => {
                 let parts = members
                     .iter()
-                    .filter_map(|p| self.format(*p, name_fn))
+                    .filter_map(|p| self.format(*p, name_fn, str_fn))
                     .collect::<Vec<_>>()
                     .join(" | ");
                 parts
+            }
+            TypeExpr::Object(fields) => {
+                let parts = fields
+                    .iter()
+                    .map(|(k, v)| {
+                        let name = str_fn(*k);
+                        let ty = self
+                            .format(*v, name_fn, str_fn)
+                            .unwrap_or_else(|| "?".to_owned());
+                        format!("{name}: {ty}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {parts} }}")
             }
         }
     }
@@ -985,6 +1045,31 @@ impl TypeExprArena {
     pub(crate) fn is_union(&self, id: TypeExprId) -> bool {
         self.get(id)
             .is_some_and(|e| matches!(e, TypeExpr::Union(..)))
+    }
+
+    /// Add a structural object type expression (e.g., `{ name: String, age: Int }`).
+    pub(crate) fn object(
+        &mut self,
+        fields: IndexMap<StringId, TypeExprId>,
+    ) -> TypeExprId {
+        self.add(TypeExpr::Object(fields))
+    }
+
+    /// Get object field types if this is a structural object type.
+    pub(crate) fn object_fields(
+        &self,
+        id: TypeExprId,
+    ) -> Option<&IndexMap<StringId, TypeExprId>> {
+        self.get(id).and_then(|expr| match expr {
+            TypeExpr::Object(fields) => Some(fields),
+            _ => None,
+        })
+    }
+
+    /// Check if a type expression is a structural object type.
+    pub(crate) fn is_object(&self, id: TypeExprId) -> bool {
+        self.get(id)
+            .is_some_and(|e| matches!(e, TypeExpr::Object(..)))
     }
 }
 
@@ -1106,8 +1191,10 @@ impl TypeRegistry {
         let array_name = arena.intern("Array");
         self.register(TypeDef::Builtin(BuiltinType::Array), array_name);
 
-        let object_name = arena.intern("Object");
-        self.register(TypeDef::Builtin(BuiltinType::Object), object_name);
+        // Object at index 5: registered internally but NOT user-accessible.
+        // Users should use structural object types: `{ field: Type, ... }`
+        self.defs.push(TypeDef::Builtin(BuiltinType::Object));
+        // NOTE: No by_name insert; users cannot reference "Object" in annotations.
 
         // Option[T] at index 6
         let option_name = arena.intern("Option");

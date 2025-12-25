@@ -49,7 +49,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "`|>` requires function on right side; got {}",
-                    right.type_name(&self.registry, &self.type_exprs)
+                    right.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }
@@ -351,7 +355,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "Array.map expects Array or Range; got {}",
-                    other.type_name(&self.registry, &self.type_exprs)
+                    other.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
             None => Err(Error::runtime(span, "Array.map: invalid iterable")),
@@ -538,7 +546,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "Array.filter expects Array or Range; got {}",
-                    other.type_name(&self.registry, &self.type_exprs)
+                    other.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
             None => Err(Error::runtime(span, "Array.filter: invalid iterable")),
@@ -686,7 +698,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "Array.reduce expects Array or Range; got {}",
-                    other.type_name(&self.registry, &self.type_exprs)
+                    other.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
             None => Err(Error::runtime(span, "Array.reduce: invalid iterable")),
@@ -800,7 +816,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "Array.foreach expects Array or Range; got {}",
-                    other.type_name(&self.registry, &self.type_exprs)
+                    other.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
             None => {
@@ -1136,7 +1156,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "expected function, got {}",
-                    callee.type_name(&self.registry, &self.type_exprs)
+                    callee.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }
@@ -1193,7 +1217,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot call non-function value of type {}",
-                    callee.type_name(&self.registry, &self.type_exprs)
+                    callee.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }
@@ -1263,7 +1291,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(val)
             } else {
                 let expected = self.format_type_expr(expected_ty);
-                let actual = val.type_name(&self.registry, &self.type_exprs);
+                let actual = val.type_name(
+                    &self.registry,
+                    &self.type_exprs,
+                    &self.arena,
+                );
                 Err(Error::runtime_type(
                     span,
                     format!(
@@ -1354,8 +1386,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ),
                 _ => {
                     let expected = self.format_type_expr(expected_ty);
-                    let actual =
-                        val.type_name(&self.registry, &self.type_exprs);
+                    let actual = val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena,
+                    );
                     Err(Error::runtime_type(
                         span,
                         format!(
@@ -1371,7 +1406,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(())
             } else {
                 let expected = self.format_type_expr(expected_ty);
-                let actual = val.type_name(&self.registry, &self.type_exprs);
+                let actual = val.type_name(
+                    &self.registry,
+                    &self.type_exprs,
+                    &self.arena,
+                );
                 Err(Error::runtime_type(
                     span,
                     format!(

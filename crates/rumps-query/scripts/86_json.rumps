@@ -44,7 +44,7 @@ OUTPUT nested.user.profile.firstName IS Json
 ; ============================================================
 
 LET obj = { name: "Alice", age: 30 }
-OUTPUT obj IS Object
+OUTPUT obj IS { name: String, age: Int }
 ; Expected: TRUE
 
 ; Native object field access returns native type
@@ -170,9 +170,9 @@ OUTPUT score-result IS Result.Ok(_)
 OUTPUT score-result!
 ; Expected: 3.14
 
-; Json -> Object
+; Json -> Object (structural type)
 LET obj-data = { "nested": { "a": 1, "b": 2 } }
-LET nested-result = obj-data.nested READ Object
+LET nested-result = obj-data.nested READ { a: Int, b: Int }
 OUTPUT nested-result IS Result.Ok(_)
 ; Expected: TRUE
 

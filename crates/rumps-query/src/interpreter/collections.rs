@@ -311,7 +311,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 format!(
                     "map keys must be scalar (Bool, Int, Float, Char, String); \
                      got {}",
-                    v.type_name(&self.registry, &self.type_exprs)
+                    v.type_name(&self.registry, &self.type_exprs, &self.arena)
                 ),
             )
         })
@@ -344,7 +344,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot index `{}` with `.{idx}`; expected tuple",
-                    base_val.type_name(&self.registry, &self.type_exprs)
+                    base_val.type_name(&self.registry, &self.type_exprs, &self.arena)
                 ),
             )),
         }
@@ -390,8 +390,16 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot index {} with {}",
-                    base_val.type_name(&self.registry, &self.type_exprs),
-                    idx_val.type_name(&self.registry, &self.type_exprs)
+                    base_val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    ),
+                    idx_val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }
@@ -454,7 +462,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                     format!(
                         "cannot access field on {}",
-                        base_val.type_name(&self.registry, &self.type_exprs)
+                        base_val.type_name(
+                            &self.registry,
+                            &self.type_exprs,
+                            &self.arena
+                        )
                     ),
                 )),
             }
@@ -534,7 +546,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot access field on {}",
-                    val.type_name(&self.registry, &self.type_exprs)
+                    val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }

@@ -46,6 +46,29 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Variant check (bindings handled elsewhere): `is Option.Some(val)`
                 self.check_variant(val, ty_name, var_name, span)
             }
+            TypePattern::Object(fields) => {
+                // Structural object check: `is { name: String, age: Int }`
+                // Resolve field type exprs, then check value matches.
+                match val {
+                    Value::Object(obj) => {
+                        let obj = obj.clone();
+                        fields.iter().try_fold(true, |acc, (name, ty_id)| {
+                            let ty = self.resolve_type_expr(*ty_id, span)?;
+                            let name_id = self.arena.intern(name);
+                            let matches =
+                                obj.get(&name_id).is_some_and(|&vid| {
+                                    self.arena.get(vid).cloned().is_some_and(
+                                        |v| {
+                                            self.value_matches_type_expr(&v, ty)
+                                        },
+                                    )
+                                });
+                            Ok(acc && matches)
+                        })
+                    }
+                    _ => Ok(false),
+                }
+            }
         }
     }
 
@@ -435,7 +458,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot destructure {} as tuple",
-                    val.type_name(&self.registry, &self.type_exprs)
+                    val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }
@@ -470,7 +497,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot destructure {} as object",
-                    val.type_name(&self.registry, &self.type_exprs)
+                    val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }
@@ -548,7 +579,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "cannot destructure {} as array",
-                    val.type_name(&self.registry, &self.type_exprs)
+                    val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }

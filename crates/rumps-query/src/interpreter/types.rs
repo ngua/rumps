@@ -26,7 +26,24 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.type_exprs
                     .app(TypeId::ARRAY, smallvec::smallvec![*elem_ty])
             }
-            Value::Object(_) => self.type_exprs.named(TypeId::OBJECT),
+            Value::Object(obj) => {
+                // Build structural object type from actual field types.
+                // Collect field values first to avoid borrow conflict.
+                let entries: SmallVec<[(StringId, Value); 8]> = obj
+                    .iter()
+                    .filter_map(|(&name, &val_id)| {
+                        self.arena.get(val_id).cloned().map(|v| (name, v))
+                    })
+                    .collect();
+                let fields: IndexMap<StringId, TypeExprId> = entries
+                    .into_iter()
+                    .map(|(name, val)| {
+                        let ty = self.value_type_expr(&val);
+                        (name, ty)
+                    })
+                    .collect();
+                self.type_exprs.object(fields)
+            }
             Value::Tuple(ty, _) => *ty,
             Value::Map(k_ty, v_ty, _) => {
                 // Map[k_ty, v_ty]
@@ -60,12 +77,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Get a human-readable name for a type expression (for error messages).
     pub(super) fn type_expr_name(&self, id: TypeExprId) -> String {
         self.type_exprs
-            .format(id, |ty| {
-                self.registry
-                    .type_name(ty, &self.arena)
-                    .unwrap_or("?")
-                    .to_owned()
-            })
+            .format(
+                id,
+                |ty| {
+                    self.registry
+                        .type_name(ty, &self.arena)
+                        .unwrap_or("?")
+                        .to_owned()
+                },
+                |sid| self.arena.get_str(sid).unwrap_or("?").to_owned(),
+            )
             .unwrap_or_else(|| "?".to_owned())
     }
 
@@ -128,6 +149,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect();
                 Ok(self.type_exprs.union(resolved?))
             }
+            AstTypeExpr::Object(fields) => {
+                // Resolve each field's type and intern field names
+                let resolved: Result<IndexMap<StringId, TypeExprId>> = fields
+                    .iter()
+                    .map(|(name, ty_id)| {
+                        let name_id = self.arena.intern(name);
+                        self.resolve_type_expr(*ty_id, span)
+                            .map(|ty| (name_id, ty))
+                    })
+                    .collect();
+                Ok(self.type_exprs.object(resolved?))
+            }
         }
     }
 
@@ -174,7 +207,11 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             // Unsupported conversion
             _ => {
-                let src_name = val.type_name(&self.registry, &self.type_exprs);
+                let src_name = val.type_name(
+                    &self.registry,
+                    &self.type_exprs,
+                    &self.arena,
+                );
                 let tgt_name = self
                     .registry
                     .type_name(target, &self.arena)
@@ -339,7 +376,11 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             // Unsupported conversion
             _ => {
-                let src_name = val.type_name(&self.registry, &self.type_exprs);
+                let src_name = val.type_name(
+                    &self.registry,
+                    &self.type_exprs,
+                    &self.arena,
+                );
                 let tgt_name = self
                     .registry
                     .type_name(target, &self.arena)
@@ -388,6 +429,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else if let Some(ty_id) = base_ty {
             // Primitive type: delegate to read_value
             self.read_value(val, ty_id, span)
+        } else if let Some(fields) =
+            self.type_exprs.object_fields(target).cloned()
+        {
+            // Anonymous structural object type: `{ field: Type, ... }`
+            // Reuse read_to_struct with the structural fields.
+            self.read_to_struct(val, &fields, target, span)
         } else {
             let tgt_name = self.format_type_expr(target);
             Err(Error::runtime_type(
@@ -415,7 +462,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Value::Object(obj) => (None, Some(obj.clone())),
             _ => {
-                let src = val.type_name(&self.registry, &self.type_exprs);
+                let src = val.type_name(
+                    &self.registry,
+                    &self.type_exprs,
+                    &self.arena,
+                );
                 let tgt = self.format_type_expr(struct_ty);
                 Err(Error::runtime_type(
                     span,
@@ -514,36 +565,64 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         let Value::Json(serde_json::Value::Array(arr)) = val else {
-            let src_name = val.type_name(&self.registry, &self.type_exprs);
+            let src_name =
+                val.type_name(&self.registry, &self.type_exprs, &self.arena);
             let msg = format!("expected JSON array, got {src_name}");
             return Ok(self.make_result_err(&msg, span));
         };
 
         let arr = arr.clone();
-        let mut elems: SmallVec<[ValueId; 4]> = SmallVec::new();
 
-        for (i, json_val) in arr.into_iter().enumerate() {
-            let elem_result =
-                self.read_value_expr(&Value::Json(json_val), elem_ty, span)?;
-
-            // Check if the recursive read succeeded
-            if let Value::Tagged(ty, idx, _) = &elem_result {
-                if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT)
-                    && *idx == 1
-                {
-                    // Propagate error with index context
-                    let err_msg = self.extract_result_err_msg(&elem_result);
-                    let msg = format!("at index {i}: {err_msg}");
-                    return Ok(self.make_result_err(&msg, span));
-                }
-            }
-
-            let inner = self.unwrap_result_ok(&elem_result, span)?;
-            let inner_id = self.arena.add(inner, span);
-            elems.push(inner_id);
+        // Process each element, propagating errors with index context.
+        // We use a local enum to distinguish between:
+        // - Continue accumulating elements
+        // - Short-circuit with a soft error (Result.Err value)
+        // - Short-circuit with a hard error (crate::Error)
+        enum Acc {
+            Elems(SmallVec<[ValueId; 4]>),
+            SoftErr(Value),
         }
 
-        Ok(self.make_result_ok(Value::Array(elem_ty, elems), span))
+        let result = arr.into_iter().enumerate().try_fold(
+            Acc::Elems(SmallVec::new()),
+            |acc, (i, json_val)| {
+                // Short-circuit if we already have a soft error
+                let Acc::Elems(mut elems) = acc else {
+                    return Ok::<_, crate::Error>(acc);
+                };
+
+                let elem_result = self.read_value_expr(
+                    &Value::Json(json_val),
+                    elem_ty,
+                    span,
+                )?;
+
+                // Check if the recursive read returned Result.Err (soft error)
+                if let Value::Tagged(ty, idx, _) = &elem_result {
+                    if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT)
+                        && *idx == 1
+                    {
+                        let err_msg = self.extract_result_err_msg(&elem_result);
+                        let msg = format!("at index {i}: {err_msg}");
+                        return Ok(Acc::SoftErr(
+                            self.make_result_err(&msg, span),
+                        ));
+                    }
+                }
+
+                let inner = self.unwrap_result_ok(&elem_result, span)?;
+                let inner_id = self.arena.add(inner, span);
+                elems.push(inner_id);
+                Ok(Acc::Elems(elems))
+            },
+        )?;
+
+        match result {
+            Acc::Elems(elems) => {
+                Ok(self.make_result_ok(Value::Array(elem_ty, elems), span))
+            }
+            Acc::SoftErr(v) => Ok(v),
+        }
     }
 
     /// Read a JSON value into an Option[T].
@@ -785,6 +864,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect();
                 Ok(self.type_exprs.union(resolved?))
             }
+            AstTypeExpr::Object(fields) => {
+                let resolved: Result<IndexMap<StringId, TypeExprId>> = fields
+                    .iter()
+                    .map(|(name, ty_id)| {
+                        let name_id = self.arena.intern(name);
+                        self.resolve_ast_type_with_subst(*ty_id, subst)
+                            .map(|ty| (name_id, ty))
+                    })
+                    .collect();
+                Ok(self.type_exprs.object(resolved?))
+            }
         }
     }
 
@@ -825,10 +915,26 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
                 _ => false,
             }
+        } else if let Some(fields) = self.type_exprs.object_fields(ty).cloned()
+        {
+            // Structural object type: check field presence and types (extensible)
+            match val {
+                Value::Object(obj) => {
+                    let obj = obj.clone();
+                    fields.iter().all(|(field_name, field_ty)| {
+                        obj.get(field_name).is_some_and(|&val_id| {
+                            self.arena.get(val_id).cloned().is_some_and(|v| {
+                                self.value_matches_type_expr(&v, *field_ty)
+                            })
+                        })
+                    })
+                }
+                _ => false,
+            }
         } else if let Some(resolved_fields) =
             self.get_struct_fields_resolved(ty)
         {
-            // Struct type: check field presence and types
+            // Named struct type: check field presence and types
             match val {
                 Value::Object(obj) => {
                     self.object_matches_resolved_fields(obj, &resolved_fields)
@@ -875,12 +981,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Format a type expression for error messages.
     pub(super) fn format_type_expr(&self, ty: TypeExprId) -> String {
         self.type_exprs
-            .format(ty, |tid| {
-                self.registry
-                    .type_name(tid, &self.arena)
-                    .unwrap_or("?")
-                    .to_owned()
-            })
+            .format(
+                ty,
+                |tid| {
+                    self.registry
+                        .type_name(tid, &self.arena)
+                        .unwrap_or("?")
+                        .to_owned()
+                },
+                |sid| self.arena.get_str(sid).unwrap_or("?").to_owned(),
+            )
             .unwrap_or_else(|| "?".to_owned())
     }
 
@@ -991,8 +1101,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ),
                 _ => {
                     let expected = self.format_type_expr(expected_ty);
-                    let actual =
-                        val.type_name(&self.registry, &self.type_exprs);
+                    let actual = val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena,
+                    );
                     let msg = ctx.map_or_else(
                         || format!("field `{fname}`: expected `{expected}`, got `{actual}`"),
                         |p| {
@@ -1010,7 +1123,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(())
             } else {
                 let expected = self.format_type_expr(expected_ty);
-                let actual = val.type_name(&self.registry, &self.type_exprs);
+                let actual = val.type_name(
+                    &self.registry,
+                    &self.type_exprs,
+                    &self.arena,
+                );
                 let msg = ctx.map_or_else(
                     || format!("field `{fname}`: expected `{expected}`, got `{actual}`"),
                     |p| {
@@ -1043,8 +1160,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.validate_object_fields(obj, &fields, span, None)
                 }
                 _ => {
-                    let actual =
-                        val.type_name(&self.registry, &self.type_exprs);
+                    let actual = val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena,
+                    );
                     Err(Error::runtime_type(
                         span,
                         format!("expected struct (Object), got {actual}"),
@@ -1057,7 +1177,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(())
             } else {
                 let expected = self.type_expr_name(expected_ty);
-                let actual = val.type_name(&self.registry, &self.type_exprs);
+                let actual = val.type_name(
+                    &self.registry,
+                    &self.type_exprs,
+                    &self.arena,
+                );
                 Err(Error::runtime_type(
                     span,
                     format!("type mismatch: expected {expected}, got {actual}"),

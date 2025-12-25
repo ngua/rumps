@@ -51,15 +51,16 @@ Lexer -> CST -> AST -> Name Resolution -> [TYPE CHECK] -> Interpreter
 
 ## Phase Dependencies
 
-**Phase 4.0.x (Json, Union Types, Expression Annotations, Error Rename, Struct Type Params) blocks all later phases.** The type checker requires:
+**Phase 4.0.x (Json, Union Types, Expression Annotations, Error Rename, Struct Type Params, Structural Objects) blocks all later phases.** The type checker requires:
 - `Ty::Json` for database values and JSON literals
 - `UNION Storable` for `GET` return type and `SET` value type
 - Union type syntax for function signatures
 - Expression type annotations for disambiguation (e.g., `(GET local("key")) : Int`)
 - `Error::RuntimeType` distinct from `Error::StaticType`
 - Struct types with type parameters (e.g., `TYPE Pair[L, R] = { left: L, right: R }`)
+- Structural object types for anonymous records (e.g., `{ name: String, age: Int }`)
 
-Complete 4.0.0, 4.0.0.1, 4.0.1, 4.0.2, 4.0.3, and 4.0.4 before starting 4.1+.
+Complete 4.0.0, 4.0.0.1, 4.0.1, 4.0.2, 4.0.3, 4.0.4, and 4.0.5 before starting 4.1+.
 
 ---
 
@@ -140,6 +141,205 @@ LET b: Box[Array[Int]] = { value: [1, 2, 3] }
 - [x] Call `validate_type_params()` on all field types (already exists for sum types)
 - [x] Update `TypeRegistry` methods that work with struct definitions
 - [x] Tests: Struct type parameter parsing and instantiation
+
+---
+
+## Phase 4.0.5: Structural Object Types [x]
+
+Replace the opaque `Object` primitive type with structural anonymous object types. Objects become typed by their fields: `{ name: String, age: Int }` rather than the untyped `Object`.
+
+### Implementation Notes
+
+**Parser Stack Overflow Mitigation**: The `type_pattern()` parser for `IS` expressions must use `boxed()` on the field parser to avoid stack overflow during parser construction. Additionally, `boxed()` is used at strategic points in the expression parser chain (postfix, mul, cmp, read) to reduce stack depth. This is a chumsky-specific issue where deeply nested parser combinators exhaust the stack during construction, not parsing.
+
+**NOTE**: Named struct types declared via `TYPE` are unaffected. This phase adds anonymous structural object types for inline use in annotations, `IS` checks, and function signatures.
+
+### Motivation
+
+Currently, `Object` is a primitive type with no field information:
+
+```rumps
+LET obj = { name: "Alice", age: 30 }
+OUTPUT obj IS Object        ; TRUE, but says nothing about fields
+```
+
+With structural object types:
+
+```rumps
+LET obj = { name: "Alice", age: 30 }
+OUTPUT obj IS { name: String, age: Int }     ; TRUE
+OUTPUT obj IS { name: String }               ; TRUE (extensible-record)
+OUTPUT obj IS { name: Int }                  ; FALSE (wrong field type)
+OUTPUT obj IS { missing: String }            ; FALSE (missing field)
+```
+
+### Extensible Record Semantics
+
+Structural object types use extensible-record semantics: an object matches a type if it has _at least_ the required fields with matching types. Extra fields are allowed.
+
+```rumps
+LET x = { a: 1, b: 2, c: 3 }
+
+OUTPUT x IS { a: Int }                  ; TRUE (has field `a: Int`)
+OUTPUT x IS { a: Int, b: Int }          ; TRUE (has both fields)
+OUTPUT x IS { a: Int, b: Int, c: Int }  ; TRUE (exact match)
+OUTPUT x IS { d: Int }                  ; FALSE (missing `d`)
+```
+
+This is consistent with how named struct types already work:
+
+```rumps
+TYPE Point = { x: Int, y: Int }
+LET p = { x: 1, y: 2, z: 3 }  ; extra field `z`
+OUTPUT p IS Point             ; TRUE (has required fields)
+```
+
+### Syntax
+
+Structural object types can appear anywhere a type expression is valid:
+
+```rumps
+; Type annotations
+LET obj: { name: String, age: Int } = { name: "Alice", age: 30 }
+
+; Function parameters and return types
+FUN get-name(person: { name: String }) -> String {
+  person.name
+}
+
+; Function returning structural object
+FUN make-point(x: Int, y: Int) -> { x: Int, y: Int } {
+  { x: x, y: y }
+}
+
+; IS checks
+IF val IS { id: Int, data: String } {
+  OUTPUT val.id
+}
+
+; In union types
+UNION Config = { host: String, port: Int } | { path: String }
+```
+
+### Removing `Object` as User-Facing Type
+
+The `Object` type name becomes unavailable to users:
+
+```rumps
+; BEFORE (removed)
+LET obj: Object = { a: 1 }
+OUTPUT obj IS Object
+
+; AFTER (error)
+LET obj: Object = { a: 1 }    ; ERROR: unknown type `Object`
+OUTPUT obj IS Object          ; ERROR: unknown type `Object`
+
+; Use structural types instead
+LET obj: { a: Int } = { a: 1 }
+OUTPUT obj IS { a: Int }
+```
+
+**Internal note**: `TypeId::OBJECT` and `Value::Object` remain for runtime representation. Only the user-facing type name is removed.
+
+### Object Module Unchanged
+
+The `Object` module (`Object.keys`, `Object.values`, etc.) remains available. These functions operate on any structural object type:
+
+```rumps
+LET obj: { a: Int, b: String } = { a: 1, b: "hello" }
+OUTPUT Object.keys(obj)       ; ["a", "b"]
+OUTPUT Object.values(obj)     ; [1, "hello"]
+```
+
+### Implementation Notes
+
+**Parser**: The type expression parser must recognize `{ field: Type, ... }` as a structural object type. This is similar to struct definition bodies but appears in type position.
+
+**Disambiguation**: `{ ... }` in expression position is a value; in type position it's a structural type. Context determines interpretation:
+- `LET x: { a: Int } = ...` — type position (after `:`)
+- `LET x = { a: 1 }` — expression position
+
+**Named vs Anonymous**: Named structs (`TYPE Foo = { ... }`) create a nominal type registered in `TypeRegistry`. Anonymous structural types (`{ a: Int }`) are not registered; they exist only as `TypeExpr::Object` / `AstTypeExpr::Object`.
+
+### Checklist
+
+#### Lexer (no changes needed)
+- [x] `{`, `}`, `:`, `,` tokens already exist
+
+#### Parser / CST
+- [x] Add `TypeExprKind::Object(SmallVec<[(String, TypeExpr); 4]>)` variant
+- [x] Parse `{ field: Type, ... }` in type expression context
+- [x] Distinguish from map type syntax (if any) and expression-level object literals
+- [x] Add `cst::TypePattern::Object` for IS expression patterns (uses `boxed()` to avoid stack overflow)
+
+#### AST
+- [x] Add `AstTypeExpr::Object(SmallVec<[(String, AstTypeExprId); 4]>)` variant
+- [x] Add `TypePattern::Object(SmallVec<[(String, AstTypeExprId); 4]>)` for IS patterns
+- [ ] Update `Value::type_name` to render the object with field types
+  - E.g. `{ name: String }`, not `Object`
+  - **NOTE**: This may require refactor to get the types of the fields
+    - I.e. we may need another method or move `Value::type_name`, or pass in type arena to resolve type correctly
+    - Or we may need to annotate `Value::Object` with types of fields to render correctly
+
+#### Lowering (CST → AST)
+- [x] Lower `cst::TypeExprKind::Object` to `AstTypeExpr::Object`
+- [x] Lower `cst::TypePattern::Object` to `TypePattern::Object`
+
+#### TypeExprArena / TypeExpr (value.rs)
+- [x] Add `TypeExpr::Object(IndexMap<StringId, TypeExprId>)` variant
+- [x] Add `TypeExprArena::object(fields: IndexMap<StringId, TypeExprId>) -> TypeExprId` helper
+- [x] Add `TypeExprArena::object_fields()` accessor
+- [x] Update `TypeExprArena::format` to display `{ field: Type, ... }`
+- [x] Update `TypeExprArena::eq` for **structural** object equality
+
+#### Interpreter: resolve_type_expr (types.rs)
+- [x] Handle `AstTypeExpr::Object`: resolve each field type, intern field names, create `TypeExpr::Object`
+
+#### Interpreter: IS checking (types.rs / pattern.rs)
+- [x] Update `value_matches_type_expr` to handle `TypeExpr::Object`:
+  - Check value is `Value::Object`
+  - For each field in type: check object has field with matching type (recursive)
+  - Extra fields in object are OK (extensible-record)
+- [x] Handle `TypePattern::Object` in `check_pattern` for IS expressions
+
+#### Interpreter: value_type_expr (types.rs)
+- [x] Update to return `TypeExpr::Object` with actual field types for `Value::Object`
+  - Previously returned `TypeExpr::Named(TypeId::OBJECT)`
+  - Now builds structural type from object's actual fields
+
+#### Interpreter: READ conversions (types.rs)
+- [x] Support `READ { field: Type, ... }` for JSON to structural object conversion
+- [x] Support `READ NamedStruct` for JSON to named struct conversion
+
+#### TypeRegistry: Remove Object registration
+- [ ] Remove `Object` from user-accessible type names
+  - Option A: Don't register "Object" name in `register_builtins`
+  - Option B: Register but mark as internal-only (reject in `resolve_type_expr`)
+  - Choose the best/correct option here
+- [x] Keep `TypeId::OBJECT` constant for internal use (base type detection)
+- [x] Keep `BuiltinType::Object` for `Value::type_name` error messages
+
+#### Static Type Checker (typecheck/ty.rs)
+- [x] `Ty::Object(BTreeMap<StringId, Ty>)` already exists; no changes needed
+- [ ] Ensure unification handles structural object subtyping (extensible records)
+
+#### Error Messages
+- [ ] Update error messages that mention "Object" to show structural type instead
+
+#### Tests
+- [x] Structural object type parsing: `{ a: Int }`, `{ a: Int, b: Int }`
+- [ ] Nested structural types: `{ user: { name: String } }`
+- [x] IS checks with structural types
+- [ ] Function params/returns with structural types
+- [x] Extensible record semantics (superset matches subset type)
+- [ ] Error: `IS Object` rejected
+- [ ] Error: `x: Object` rejected
+- [x] Object module still works with structural types
+
+#### Migration
+- [x] Update `scripts/86_json.rumps` line 47: `OUTPUT obj IS Object` → `OUTPUT obj IS { name: String, age: Int }`
+- [x] Update any other test scripts using `IS Object`
+- [ ] Update any other test scripts that `OUTPUT` and object (`Value::type_name` has changed)
 
 ---
 
@@ -239,8 +439,8 @@ LET bad = data.name READ Int                  ; Result.Err("expected Int, got St
 TYPE Person = { name: String, age: Int }
 LET person = data READ Person                 ; Result[Person, String]
 
-; CANNOT read into anonymous Object (not type-checkable)
-; LET obj = data READ Object                  ; ERROR: use a named struct type
+; READ into structural object type works too
+LET obj = data READ { name: String, age: Int }  ; Result[{ name: String, age: Int }, String]
 ```
 
 **READ conversion rules for JSON:**
@@ -254,9 +454,9 @@ LET person = data READ Person                 ; Result[Person, String]
 | number (float) | `READ Float`          | `Result.Ok(Float)`                            |
 | string         | `READ String`         | `Result.Ok(String)`                           |
 | array          | `READ Array[T]`       | `Result.Ok(Array[T])` if all elements convert |
-| object         | `READ StructType`     | `Result.Ok(StructType)` (named struct only)   |
+| object         | `READ StructType`     | `Result.Ok(StructType)` (named or structural) |
 
-**Note**: JSON objects cannot be read into anonymous `Object`; you must use a named struct type declared via `TYPE`. This enables the type checker to verify field access on the resulting value.
+**Note**: JSON objects can be read into structural object types (`{ name: String }`) or named struct types (`TYPE Person = ...`). Both work because they specify the expected fields and their types, enabling validation during READ. The old opaque `Object` type couldn't be used with READ because it had no field information to validate against.
 
 ### JSON Arrays
 
@@ -303,7 +503,7 @@ true as Json              ; Value::Json (bool literal)
 
 ## Phase 4.0.0.1: JSON READ for Struct Types [ ]
 
-Extend `READ` to support converting JSON objects to named struct types (including parametric structs). Currently `READ` only handles primitives (`Bool`, `Int`, `Float`, `String`) and `Object`.
+Extend `READ` to support converting JSON objects to named struct types (including parametric structs). Currently `READ` only handles primitives (`Bool`, `Int`, `Float`, `String`) and structural object types.
 
 ### Syntax
 
@@ -730,7 +930,7 @@ Infer types for arrays, tuples, objects, maps, and ranges.
 | `[a, b, c]`        | `Array[?t]`                | `a ~ ?t`, `b ~ ?t`, `c ~ ?t`       |
 | `[]`               | `Array[?t]`                | (empty, `?t` is fresh)             |
 | `(a, b, c)`        | `(?a, ?b, ?c)`             | -                                  |
-| `{ x: a, y: b }`   | `Object({ x: ?a, y: ?b })` | -                                  |
+| `{ x: a, y: b }`   | `{ x: ?a, y: ?b }`         | structural object type             |
 | `{ k => v, ... }`  | `Map[?k, ?v]`              | all keys ~ `?k`, all values ~ `?v` |
 | `a..b`, `a..=b`    | `Range`                    | `a ~ Int`, `b ~ Int`               |
 
@@ -773,8 +973,8 @@ Infer types for field access, tuple indexing, and array indexing.
 ### Checklist
 
 - [ ] Handle `Expr::Field`:
-  - [ ] If base is `Object`, look up field type
-  - [ ] If base is `Unknown`, create `Object({ field: ?t })` constraint
+  - [ ] If base is structural object (`Ty::Object`), look up field type
+  - [ ] If base is `Unknown`, create structural object constraint `{ field: ?t }`
   - [ ] If field missing, emit error
 - [ ] Handle `Expr::OptionalField`:
   - [ ] Same as `Field` but wrap result in `Option[?t]`
@@ -1078,7 +1278,7 @@ unify(Int, Float) = {} (coercion)
 unify(Float, Int) = {} (coercion)
 unify(Array(a), Array(b)) = unify(a, b)
 unify(Fn(p1, r1), Fn(p2, r2)) = unify(p1, p2) . unify(r1, r2)
-unify(Object(f1), Object(f2)) = unify common fields (structural)
+unify({ f1 }, { f2 }) = unify common fields (structural objects)
 unify(Unknown, _) = {}
 unify(_, Unknown) = {}
 unify(T, T) = {}
@@ -1095,13 +1295,13 @@ unify(_, _) = error
 - [ ] Handle `Array`, `Option`, `Result`, `Map` recursively
 - [ ] Handle `Tuple` (element-wise, same length)
 - [ ] Handle `Fn` (params + return)
-- [ ] Handle `Object` (structural, common fields only)
+- [ ] Handle structural objects (`Ty::Object`): unify common fields, allow extras
 - [ ] Handle `Named` (same TypeId, unify params)
-- [ ] Handle `Named` struct with `Object` (extensible record check):
+- [ ] Handle `Named` struct with structural object (extensible record check):
   - [ ] Look up required fields from TypeRegistry
-  - [ ] Check all required fields present in Object
+  - [ ] Check all required fields present in structural object
   - [ ] Unify each required field's type
-  - [ ] Extra fields in Object are allowed (extensible)
+  - [ ] Extra fields in structural object are allowed (extensible)
 - [ ] Handle `Unknown` (unifies with anything)
 - [ ] Handle `Error` (unifies with anything, for recovery)
 - [ ] `impl InferCtx`: `fn solve_constraints(&mut self) -> Subst`
@@ -1138,9 +1338,13 @@ Option.map:      forall a b. (Option[a], (a) -> b) -> Option[b]
 Option.unwrap:   forall a. (Option[a]) -> a
 Option.unwrap-or: forall a. (Option[a], a) -> a
 
-; Object module
-Object.keys:   (Object) -> Array[String]
-Object.values: forall a. (Object) -> Array[a]  // or Unknown
+; Object module (accepts any structural object via `{ }`)
+; `{ }` means "any object with any fields" (empty structural type = wildcard)
+Object.keys:    ({ }) -> Array[String]
+Object.values:  ({ }) -> Array[Unknown]
+Object.entries: ({ }) -> Array[(String, Unknown)]
+Object.has:     ({ }, String) -> Bool
+Object.lookup:  ({ }, String) -> Option[Unknown]
 
 ; Math module
 Math.abs:   (Float) -> Float
@@ -1247,10 +1451,17 @@ impl TypeExprArena {
                     .collect();
                 self.app(*type_id, param_ids)
             }
-            Ty::Fn(_, _) | Ty::Object(_) => {
-                // Functions and objects don't have TypeId representations;
-                // use UNKNOWN or handle specially
+            Ty::Fn(_, _) => {
+                // Functions don't have TypeId representations
                 self.named(TypeId::UNKNOWN)
+            }
+            Ty::Object(fields) => {
+                // Convert structural object to TypeExpr::Object
+                let converted: IndexMap<StringId, TypeExprId> = fields
+                    .iter()
+                    .map(|(k, ty)| (*k, self.from_ty(ty, registry)))
+                    .collect();
+                self.object(converted)
             }
             Ty::Var(_) | Ty::Unknown | Ty::Error => {
                 unreachable!("from_ty called on unresolved type: {:?}", ty)

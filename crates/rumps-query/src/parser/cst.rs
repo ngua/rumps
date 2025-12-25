@@ -45,8 +45,30 @@
 
 use smallvec::SmallVec;
 
-use crate::ast::{BinOp, JsonAccessKind, Literal, TypePattern, UnOp};
+use crate::ast::{BinOp, JsonAccessKind, Literal, UnOp};
 use crate::Span;
+
+/// Type pattern for the `IS` operator (CST version).
+///
+/// This is the CST equivalent of `ast::TypePattern`. During lowering,
+/// CST `TypeExpr` fields are converted to `AstTypeExprId`.
+#[derive(Clone, Debug)]
+pub(crate) enum TypePattern {
+    /// Simple type check: `is Int`, `is String`.
+    Type(String),
+
+    /// Variant check without payload: `is Option.None`.
+    Variant(String, String),
+
+    /// Variant check ignoring payload: `is Option.Some(_)`.
+    VariantWildcard(String, String),
+
+    /// Variant check with binding: `is Option.Some(val)`.
+    VariantBind(String, String, SmallVec<[String; 2]>),
+
+    /// Structural object check: `is { name: String, age: Int }`.
+    Object(Vec<(String, TypeExpr)>),
+}
 
 /// A CST expression node with inline span.
 #[derive(Clone, Debug)]
@@ -322,6 +344,12 @@ pub(crate) enum TypeExprKind {
     /// Anonymous unions for type annotations. For named union declarations,
     /// see `StmtKind::Union`.
     Union(Vec<TypeExpr>),
+
+    /// Structural object type: `{ field: Type, ... }`.
+    ///
+    /// Anonymous structural object types in type position. Uses extensible
+    /// record semantics: an object matches if it has at least these fields.
+    Object(Vec<(String, TypeExpr)>),
 }
 
 /// A variant definition in a user-defined sum type (CST form).

@@ -15,8 +15,8 @@ use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Get type name for error messages.
-    fn type_name(&self, v: &Value) -> &'static str {
-        v.type_name(&self.registry, &self.type_exprs)
+    fn type_name(&self, v: &Value) -> std::borrow::Cow<'static, str> {
+        v.type_name(&self.registry, &self.type_exprs, &self.arena)
     }
 
     /// Apply a binary operation to two values.

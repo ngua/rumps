@@ -257,6 +257,12 @@ pub(crate) enum AstTypeExpr {
     /// Anonymous unions for type annotations. Named union declarations use
     /// `Stmt::Union`.
     Union(SmallVec<[AstTypeExprId; 4]>),
+
+    /// Structural object type: `{ field: Type, ... }`.
+    ///
+    /// Anonymous structural object type in type position. Uses extensible
+    /// record semantics: a value matches if it has at least the specified fields.
+    Object(SmallVec<[(String, AstTypeExprId); 4]>),
 }
 
 /// Binary operators.
@@ -367,6 +373,11 @@ pub(crate) enum TypePattern {
     ///
     /// Bindings are only visible in the `then` branch of an `IF`.
     VariantBind(String, String, SmallVec<[String; 2]>),
+
+    /// Structural object check: `is { name: String, age: Int }`.
+    ///
+    /// Extensible record semantics: value matches if it has at least these fields.
+    Object(SmallVec<[(String, AstTypeExprId); 4]>),
 }
 
 /// A match pattern for the `MATCH` expression.

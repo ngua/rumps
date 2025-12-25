@@ -47,7 +47,8 @@ use smallvec::SmallVec;
 mod cst;
 mod lower;
 
-use crate::ast::{BinOp, JsonAccessKind, Literal, TypePattern, UnOp};
+use crate::ast::{BinOp, JsonAccessKind, Literal, UnOp};
+use crate::parser::cst::TypePattern;
 use crate::{Ast, Error, Lexer, Result, Span, Spanned, StmtId, Token};
 
 /// Parser error type for token-based parsing.
@@ -673,18 +674,25 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        // Construct type_expr and type_pattern once BEFORE the recursive block.
+        // Parser construction inside recursive() can cause stack overflow.
+        let ty = Self::type_expr();
+        let ty_pat = Self::type_pattern();
+
         recursive(move |expr| {
+            // Use boxed() at strategic points to reduce stack depth during
+            // parser construction. Each boxed() moves the parser to the heap.
             let primary = Self::primary_expr(expr.clone(), stmt.clone());
-            let postfix = Self::postfix_expr(expr.clone(), primary);
+            let postfix = Self::postfix_expr(expr.clone(), primary).boxed();
             let unary = Self::unary_expr(expr, postfix);
             let pow = Self::pow_expr(unary);
-            let mul = Self::mul_expr(pow);
+            let mul = Self::mul_expr(pow).boxed();
             let add = Self::add_expr(mul);
             let range = Self::range_expr(add);
-            let cmp = Self::cmp_expr(range);
-            let is = Self::is_expr(cmp);
-            let as_cast = Self::as_expr(is);
-            let read = Self::read_expr(as_cast);
+            let cmp = Self::cmp_expr(range).boxed();
+            let is = Self::is_expr(cmp, ty_pat.clone());
+            let as_cast = Self::as_expr(is, ty.clone());
+            let read = Self::read_expr(as_cast, ty.clone()).boxed();
             let and = Self::and_expr(read);
             let or = Self::or_expr(and);
             let coalesce = Self::coalesce_expr(or);
@@ -784,9 +792,10 @@ impl Parser {
         operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
+        type_pattern: impl chumsky::Parser<Token, TypePattern, Error = ParseErr>
+            + Clone
+            + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
-        let type_pattern = Self::type_pattern();
-
         let is_rhs = Self::opt_newlines()
             .ignore_then(just(Token::Is))
             .then_ignore(Self::opt_newlines())
@@ -844,22 +853,74 @@ impl Parser {
                 }
             });
 
+        // Structural object pattern: `{ name: Type, age: Int }`
+        // Using boxed() to reduce stack pressure from parser construction
+        let field = Self::ident()
+            .then_ignore(just(Token::Colon))
+            .then(Self::ident().map_with_span(|name, span| {
+                cst::TypeExpr::new(cst::TypeExprKind::Named(name), span)
+            }))
+            .boxed();
+        let struct_pat = just(Token::LBrace)
+            .ignore_then(
+                field.separated_by(just(Token::Comma)).allow_trailing(),
+            )
+            .then_ignore(just(Token::RBrace))
+            .map(TypePattern::Object);
+
         // Simple type pattern
         let simple_type = Self::ident().map(TypePattern::Type);
 
-        variant_pattern.or(simple_type)
+        variant_pattern.or(struct_pat).or(simple_type)
     }
 
-    /// Type cast: `expr as Type`
+    /// Simplified type expression parser for use in type patterns.
+    ///
+    /// Supports named types and one level of type application (e.g., `Int`,
+    /// `Array[String]`). Does not support nested type params like `Map[K, V]`
+    /// where K or V are themselves parameterized.
+    ///
+    /// This is intentionally non-recursive to avoid stack overflow issues
+    /// when combined with the expression parser's recursive structure.
+    fn simple_type_expr(
+    ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
+    {
+        // Inner type for type params: just named types, no nesting
+        let inner_ty = Self::ident().map_with_span(|name, span| {
+            cst::TypeExpr::new(cst::TypeExprKind::Named(name), span)
+        });
+
+        // Type parameters: `[T]` or `[T, E]` (one level only)
+        let type_params = inner_ty
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .delimited_by(just(Token::LBracket), just(Token::RBracket));
+
+        // Named type optionally with type params
+        Self::ident().then(type_params.or_not()).map_with_span(
+            |(name, params), span| {
+                let kind = match params {
+                    None => cst::TypeExprKind::Named(name),
+                    Some(ps) => cst::TypeExprKind::App(name, ps),
+                };
+                cst::TypeExpr::new(kind, span)
+            },
+        )
+    }
+
+    /// Type cast: `expr AS Type`
     fn as_expr(
         operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+        ty: impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let as_rhs = Self::opt_newlines()
             .ignore_then(just(Token::As))
             .then_ignore(Self::opt_newlines())
-            .ignore_then(Self::type_expr());
+            .ignore_then(ty);
 
         operand.clone().then(as_rhs.or_not()).map_with_span(
             |(expr, ty), span| match ty {
@@ -872,16 +933,19 @@ impl Parser {
         )
     }
 
-    /// Fallible conversion: `expr read Type`
+    /// Fallible conversion: `expr READ Type`
     fn read_expr(
         operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+        ty: impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let read_rhs = Self::opt_newlines()
             .ignore_then(just(Token::Read))
             .then_ignore(Self::opt_newlines())
-            .ignore_then(Self::type_expr());
+            .ignore_then(ty);
 
         operand.clone().then(read_rhs.or_not()).map_with_span(
             |(expr, ty), span| match ty {
@@ -1814,7 +1878,7 @@ impl Parser {
                 .ignore_then(Self::opt_newlines())
                 .ignore_then(
                     ty.clone()
-                        .separated_by(sep)
+                        .separated_by(sep.clone())
                         .allow_trailing()
                         .then(just(Token::Comma).or_not()),
                 )
@@ -1824,8 +1888,26 @@ impl Parser {
                     TypeAtomOrParams::Params(types, span, trailing.is_some())
                 });
 
-            // atom_or_params
-            let atom_or_params = paren.or(atom);
+            // Structural object type: `{ field: Type, ... }`
+            let struct_field = Self::ident()
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::Colon))
+                .then_ignore(Self::opt_newlines())
+                .then(ty.clone());
+            let struct_ty = just(Token::LBrace)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(struct_field.separated_by(sep).allow_trailing())
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RBrace))
+                .map_with_span(|fields, span| {
+                    TypeAtomOrParams::Single(cst::TypeExpr::new(
+                        cst::TypeExprKind::Object(fields),
+                        span,
+                    ))
+                });
+
+            // atom_or_params: structural object, parenthesized, or named type
+            let atom_or_params = struct_ty.or(paren).or(atom);
 
             // Function type with `->`
             let fn_or_single = atom_or_params
@@ -2288,7 +2370,7 @@ mod tests {
     fn parse_is_pattern() {
         let (ast, id) = parse_expr_ok("x is Int");
         match ast.get_expr(id) {
-            Some(Expr::Is(_, TypePattern::Type(ty))) => {
+            Some(Expr::Is(_, crate::ast::TypePattern::Type(ty))) => {
                 assert_eq!(ty, "Int");
             }
             _ => panic!("expected Is with Type pattern"),
@@ -2299,7 +2381,7 @@ mod tests {
     fn parse_is_variant() {
         let (ast, id) = parse_expr_ok("x is Option.None");
         match ast.get_expr(id) {
-            Some(Expr::Is(_, TypePattern::Variant(ty, var))) => {
+            Some(Expr::Is(_, crate::ast::TypePattern::Variant(ty, var))) => {
                 assert_eq!(ty, "Option");
                 assert_eq!(var, "None");
             }
@@ -2311,7 +2393,10 @@ mod tests {
     fn parse_is_variant_bind() {
         let (ast, id) = parse_expr_ok("x is Option.Some(val)");
         match ast.get_expr(id) {
-            Some(Expr::Is(_, TypePattern::VariantBind(ty, var, names))) => {
+            Some(Expr::Is(
+                _,
+                crate::ast::TypePattern::VariantBind(ty, var, names),
+            )) => {
                 assert_eq!(ty, "Option");
                 assert_eq!(var, "Some");
                 assert_eq!(names.len(), 1);

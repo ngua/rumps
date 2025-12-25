@@ -63,7 +63,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "`!` (unwrap) requires Option or Result; got {}",
-                    val.type_name(&self.registry, &self.type_exprs)
+                    val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }
@@ -128,7 +132,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "`??` requires Option or Result; got {}",
-                    left.type_name(&self.registry, &self.type_exprs)
+                    left.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             )),
         }
@@ -326,7 +334,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Ok(())
         } else {
             let span = self.ast.expr_span(expr).unwrap_or(fallback_span);
-            let ty_name = val.type_name(&self.registry, &self.type_exprs);
+            let ty_name =
+                val.type_name(&self.registry, &self.type_exprs, &self.arena);
             Err(Error::runtime_type(
                 span,
                 format!("single-arm IF body must be Unit; got {ty_name}"),
@@ -415,7 +424,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "range start must be Int; got {}",
-                    start_val.type_name(&self.registry, &self.type_exprs)
+                    start_val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             ))?,
         };
@@ -426,7 +439,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
                 format!(
                     "range end must be Int; got {}",
-                    end_val.type_name(&self.registry, &self.type_exprs)
+                    end_val.type_name(
+                        &self.registry,
+                        &self.type_exprs,
+                        &self.arena
+                    )
                 ),
             ))?,
         };

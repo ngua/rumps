@@ -594,6 +594,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             AstTypeExpr::Union(members) => members.iter().try_for_each(|m| {
                 self.validate_type_params(*m, declared, span)
             }),
+            AstTypeExpr::Object(fields) => {
+                fields.iter().try_for_each(|(_, ty)| {
+                    self.validate_type_params(*ty, declared, span)
+                })
+            }
         })
     }
 
@@ -706,7 +711,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 span,
                                 format!(
                                     "logical AND requires booleans; got Bool and {}",
-                                    right.type_name(&self.registry, &self.type_exprs)
+                                    right.type_name(&self.registry, &self.type_exprs, &self.arena)
                                 ),
                             )),
                         }
@@ -715,7 +720,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                         span,
                         format!(
                             "logical AND requires booleans; got {}",
-                            left.type_name(&self.registry, &self.type_exprs)
+                            left.type_name(
+                                &self.registry,
+                                &self.type_exprs,
+                                &self.arena
+                            )
                         ),
                     )),
                 }
@@ -733,7 +742,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 span,
                                 format!(
                                     "logical OR requires booleans; got Bool and {}",
-                                    right.type_name(&self.registry, &self.type_exprs)
+                                    right.type_name(&self.registry, &self.type_exprs, &self.arena)
                                 ),
                             )),
                         }
@@ -742,7 +751,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                         span,
                         format!(
                             "logical OR requires booleans; got {}",
-                            left.type_name(&self.registry, &self.type_exprs)
+                            left.type_name(
+                                &self.registry,
+                                &self.type_exprs,
+                                &self.arena
+                            )
                         ),
                     )),
                 }
@@ -956,8 +969,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     }
                     Value::Int(n) => n.to_string(),
                     _ => {
-                        let ty =
-                            key_val.type_name(&self.registry, &self.type_exprs);
+                        let ty = key_val.type_name(
+                            &self.registry,
+                            &self.type_exprs,
+                            &self.arena,
+                        );
                         Err(Error::runtime_type(
                             span,
                             format!("JSON key must be String or Int; got {ty}"),
@@ -971,7 +987,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         let json_val = match &base_val {
             Value::Json(j) => j.get(&key_str).cloned(),
             _ => {
-                let ty = base_val.type_name(&self.registry, &self.type_exprs);
+                let ty = base_val.type_name(
+                    &self.registry,
+                    &self.type_exprs,
+                    &self.arena,
+                );
                 Err(Error::runtime_type(
                     span,
                     format!("JSON access requires Json; got {ty}"),

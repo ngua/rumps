@@ -10,7 +10,7 @@ use super::cst;
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId,
     JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, RestPattern, Stmt,
-    StmtId, TypeDefAst, VariantAst,
+    StmtId, TypeDefAst, TypePattern, VariantAst,
 };
 use crate::Result;
 
@@ -193,7 +193,8 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
         // NOTE: No `Path` case; `Expr::Path` will be used for modules (not yet implemented).
         cst::ExprKind::Is(inner, pattern) => {
             let inner_id = lower_expr(ast, *inner)?;
-            Expr::Is(inner_id, pattern)
+            let lowered_pat = lower_type_pattern(ast, pattern)?;
+            Expr::Is(inner_id, lowered_pat)
         }
         cst::ExprKind::As(inner, ty) => {
             let inner_id = lower_expr(ast, *inner)?;
@@ -328,8 +329,39 @@ fn lower_type_expr(ast: &mut Ast, ty: cst::TypeExpr) -> Result<AstTypeExprId> {
                 .collect::<Result<SmallVec<_>>>()?;
             AstTypeExpr::Union(member_ids)
         }
+        cst::TypeExprKind::Object(fields) => {
+            let lowered = fields
+                .into_iter()
+                .map(|(name, ty)| lower_type_expr(ast, ty).map(|id| (name, id)))
+                .collect::<Result<SmallVec<_>>>()?;
+            AstTypeExpr::Object(lowered)
+        }
     };
     ast.add_type_expr(te, span)
+}
+
+/// Lower a CST type pattern to AST.
+fn lower_type_pattern(
+    ast: &mut Ast,
+    pat: cst::TypePattern,
+) -> Result<TypePattern> {
+    Ok(match pat {
+        cst::TypePattern::Type(name) => TypePattern::Type(name),
+        cst::TypePattern::Variant(ty, var) => TypePattern::Variant(ty, var),
+        cst::TypePattern::VariantWildcard(ty, var) => {
+            TypePattern::VariantWildcard(ty, var)
+        }
+        cst::TypePattern::VariantBind(ty, var, names) => {
+            TypePattern::VariantBind(ty, var, names)
+        }
+        cst::TypePattern::Object(fields) => {
+            let lowered = fields
+                .into_iter()
+                .map(|(name, ty)| lower_type_expr(ast, ty).map(|id| (name, id)))
+                .collect::<Result<SmallVec<_>>>()?;
+            TypePattern::Object(lowered)
+        }
+    })
 }
 
 /// Lower a CST binding pattern to AST.
