@@ -11,10 +11,10 @@ use smallvec::SmallVec;
 
 use super::env::TypeEnv;
 use super::error::TypeError;
-use super::ty::{Ty, TyVar};
+use super::ty::{Scheme, Ty, TyVar};
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey,
-    JsonAccessKind, Literal, UnOp,
+    JsonAccessKind, Literal, Stmt, StmtId, UnOp,
 };
 use crate::intern::StringId;
 use crate::value::{TypeDef, TypeId, TypeRegistry};
@@ -380,6 +380,14 @@ impl<'a> InferCtx<'a> {
 
             // JSON literals
             Expr::Json(_) => Ty::Json,
+
+            // Closures: (x, y) => body
+            Expr::Closure { params, ret, body } => {
+                self.infer_closure(params, ret.as_ref(), *body, span)
+            }
+
+            // Function calls: f(args...)
+            Expr::Call(callee, args) => self.infer_call(*callee, args, span),
 
             // Other expressions handled in later phases
             _ => Ty::Error,
@@ -1006,6 +1014,173 @@ impl<'a> InferCtx<'a> {
                 Ty::Error
             }
         }
+    }
+
+    /// Infer types for function/closure parameters.
+    ///
+    /// For each parameter: uses annotation if present, otherwise fresh type var.
+    fn infer_param_tys(
+        &mut self,
+        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+    ) -> Vec<Ty> {
+        params
+            .iter()
+            .map(|(_, ann)| match ann {
+                Some(id) => self.ast_type_to_ty(*id, &HashMap::new()),
+                None => self.fresh(),
+            })
+            .collect()
+    }
+
+    /// Bind parameters in the current scope with their inferred types.
+    fn bind_params(
+        &mut self,
+        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        tys: &[Ty],
+    ) {
+        params.iter().zip(tys.iter()).for_each(|((name, _), ty)| {
+            self.env.bind(name, Scheme::mono(ty.clone()));
+        });
+    }
+
+    /// Infer type of a closure expression.
+    ///
+    /// For each parameter: uses annotation if present, otherwise fresh type var.
+    /// Binds parameters in a new scope, infers body, then pops scope.
+    /// If return annotation present, unifies body type with it.
+    fn infer_closure(
+        &mut self,
+        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        ret: Option<&AstTypeExprId>,
+        body: ExprId,
+        span: Span,
+    ) -> Ty {
+        let param_tys = self.infer_param_tys(params);
+
+        self.env.push_scope();
+        self.bind_params(params, &param_tys);
+
+        let body_ty = self.infer_expr(body);
+        self.env.pop_scope();
+
+        // If return annotation present, unify body with it
+        let ret_ty = match ret {
+            Some(ret_id) => {
+                let expected = self.ast_type_to_ty(*ret_id, &HashMap::new());
+                self.unify(body_ty.clone(), expected.clone(), span);
+                expected
+            }
+            None => body_ty,
+        };
+
+        Ty::Fn(param_tys, Box::new(ret_ty))
+    }
+
+    /// Infer type of a function call expression.
+    ///
+    /// Infers callee and argument types, then adds a `Callable` constraint.
+    /// Returns a fresh type variable that will be unified with the return type.
+    fn infer_call(
+        &mut self,
+        callee_id: ExprId,
+        args: &SmallVec<[ExprId; 4]>,
+        span: Span,
+    ) -> Ty {
+        let callee_ty = self.infer_expr(callee_id);
+        let arg_tys: SmallVec<[Ty; 4]> =
+            args.iter().map(|id| self.infer_expr(*id)).collect();
+
+        let ret = self.fresh();
+        self.constrain(Constraint::Callable {
+            callee: callee_ty,
+            args: arg_tys,
+            ret: ret.clone(),
+            span,
+        });
+        ret
+    }
+
+    /// Infer types for a statement.
+    ///
+    /// Most statements don't produce a type, but function definitions
+    /// bind the function name with its inferred type scheme in the environment.
+    pub(crate) fn infer_stmt(&mut self, id: StmtId) {
+        let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
+        if let Some(stmt) = self.ast.get_stmt(id).cloned() {
+            self.infer_stmt_inner(&stmt, span);
+        }
+    }
+
+    /// Inner statement inference; dispatches on statement variant.
+    fn infer_stmt_inner(&mut self, stmt: &Stmt, span: Span) {
+        match stmt {
+            Stmt::Fun {
+                name,
+                params,
+                ret,
+                body,
+            } => self.infer_fun(name, params, ret.as_ref(), *body, span),
+
+            // Other statements handled in later phases
+            _ => {}
+        }
+    }
+
+    /// Infer type of a named function definition.
+    ///
+    /// Named functions support recursion: the function name is bound with a
+    /// provisional type (fresh vars for params/return) before inferring the body.
+    /// After inference, the type is generalized and the binding is updated.
+    fn infer_fun(
+        &mut self,
+        name: &str,
+        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        ret: Option<&AstTypeExprId>,
+        body: ExprId,
+        span: Span,
+    ) {
+        // Capture outer env free vars BEFORE binding function (for generalization)
+        let outer_free = self.env.free_vars();
+
+        let param_tys = self.infer_param_tys(params);
+
+        // Declared return type annotation (if any)
+        let declared_ret =
+            ret.map(|id| self.ast_type_to_ty(*id, &HashMap::new()));
+
+        // Fresh var for provisional return (supports recursive calls)
+        let provisional_ret = self.fresh();
+        let provisional_fn =
+            Ty::Fn(param_tys.clone(), Box::new(provisional_ret.clone()));
+        self.env.bind(name, Scheme::mono(provisional_fn));
+
+        self.env.push_scope();
+        self.bind_params(params, &param_tys);
+
+        // Infer body type
+        let body_ty = self.infer_expr(body);
+
+        // Pop parameter scope
+        self.env.pop_scope();
+
+        // Determine actual return type: use annotation if present, else body type
+        let actual_ret = match declared_ret {
+            Some(ret_ty) => {
+                self.unify(body_ty.clone(), ret_ty.clone(), span);
+                ret_ty
+            }
+            None => body_ty,
+        };
+
+        // Link provisional return var with actual (for recursive call consistency)
+        self.unify(provisional_ret, actual_ret.clone(), span);
+
+        // Build final function type and generalize
+        let fn_ty = Ty::Fn(param_tys, Box::new(actual_ret));
+        let ty_vars = fn_ty.free_vars();
+        let vars: Vec<_> = ty_vars.difference(&outer_free).copied().collect();
+        let scheme = Scheme { vars, ty: fn_ty };
+        self.env.bind(name, scheme);
     }
 }
 
@@ -2993,5 +3168,546 @@ mod tests {
             TypeError::EmptyUnion(_) => {}
             e => panic!("expected EmptyUnion, got {e:?}"),
         }
+    }
+
+    // --- Closure inference tests ---
+
+    #[test]
+    fn infer_closure_zero_params() {
+        // Build: () => 42
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let body = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![],
+                    ret: None,
+                    body,
+                },
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(closure);
+
+        // Should be Fn([], Int)
+        assert_eq!(ty, Ty::Fn(vec![], Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn infer_closure_no_annotations() {
+        // Build: x => x
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let x = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body: x,
+                },
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(closure);
+
+        // Should be Fn([?0], ?0) since x has fresh type and body returns x
+        match ty {
+            Ty::Fn(params, ret) => {
+                assert_eq!(params.len(), 1);
+                match (&params[0], ret.as_ref()) {
+                    (Ty::Var(p), Ty::Var(r)) => {
+                        // Body returns x, so param var and return var should match
+                        assert_eq!(p, r);
+                    }
+                    _ => panic!("expected type variables"),
+                }
+            }
+            _ => panic!("expected Fn type, got {ty:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_closure_with_param_annotations() {
+        // Build: (x: Int) => x
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let x = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), Some(int_ty))],
+                    ret: None,
+                    body: x,
+                },
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(closure);
+
+        // Should be Fn([Int], Int)
+        assert_eq!(ty, Ty::Fn(vec![Ty::Int], Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn infer_closure_with_return_annotation() {
+        // Build: (x: Int) -> String => ...
+        // Body returns Int, so there should be a unification constraint
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let str_ty = ast
+            .add_type_expr(AstTypeExpr::Named("String".into()), span)
+            .unwrap();
+        let x = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), Some(int_ty))],
+                    ret: Some(str_ty),
+                    body: x,
+                },
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(closure);
+
+        // Return type should be String (from annotation)
+        assert_eq!(ty, Ty::Fn(vec![Ty::Int], Box::new(Ty::String)));
+
+        // Should have Eq constraint unifying body (Int) with return (String)
+        let eq_constraints: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Eq(_, _, _)))
+            .collect();
+        assert!(!eq_constraints.is_empty());
+    }
+
+    #[test]
+    fn infer_closure_multi_param() {
+        // Build: (a: Int, b: Float) => 42
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let float_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Float".into()), span)
+            .unwrap();
+        let body = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![
+                        ("a".into(), Some(int_ty)),
+                        ("b".into(), Some(float_ty))
+                    ],
+                    ret: None,
+                    body,
+                },
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(closure);
+
+        // Should be Fn([Int, Float], Int)
+        assert_eq!(ty, Ty::Fn(vec![Ty::Int, Ty::Float], Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn infer_closure_body_uses_params() {
+        // Build: (a, b) => a + b
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let a = ast.add_expr(Expr::Var("a".into()), span).unwrap();
+        let b = ast.add_expr(Expr::Var("b".into()), span).unwrap();
+        let add = ast.add_expr(Expr::Binary(a, BinOp::Add, b), span).unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![
+                        ("a".into(), None),
+                        ("b".into(), None)
+                    ],
+                    ret: None,
+                    body: add,
+                },
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(closure);
+
+        // Should be Fn([?a, ?b], ?result) with Numeric constraints
+        match ty {
+            Ty::Fn(params, ret) => {
+                assert_eq!(params.len(), 2);
+                // Both params should be type vars, and result should be type var
+                assert!(matches!(&params[0], Ty::Var(_)));
+                assert!(matches!(&params[1], Ty::Var(_)));
+                assert!(matches!(ret.as_ref(), Ty::Var(_)));
+            }
+            _ => panic!("expected Fn type, got {ty:?}"),
+        }
+
+        // Should have Numeric constraints for operands
+        let numerics: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Numeric(_, _)))
+            .collect();
+        assert!(!numerics.is_empty());
+    }
+
+    // --- Call inference tests ---
+
+    #[test]
+    fn infer_call_no_args() {
+        // Build: f()
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let f = ast.add_expr(Expr::Var("f".into()), span).unwrap();
+        let call = ast
+            .add_expr(Expr::Call(f, smallvec::smallvec![]), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        // Bind f to () -> Int
+        ctx.env_mut()
+            .bind("f", Scheme::mono(Ty::Fn(vec![], Box::new(Ty::Int))));
+
+        let ty = ctx.infer_expr(call);
+
+        // Result is fresh type var
+        assert!(matches!(ty, Ty::Var(_)));
+
+        // Should have Callable constraint
+        let callables: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Callable { .. }))
+            .collect();
+        assert_eq!(callables.len(), 1);
+    }
+
+    #[test]
+    fn infer_call_with_args() {
+        // Build: f(1, "hello")
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let f = ast.add_expr(Expr::Var("f".into()), span).unwrap();
+        let arg1 = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let arg2 = ast
+            .add_expr(Expr::Literal(Literal::String("hello".into())), span)
+            .unwrap();
+        let call = ast
+            .add_expr(Expr::Call(f, smallvec::smallvec![arg1, arg2]), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.env_mut().bind(
+            "f",
+            Scheme::mono(Ty::Fn(vec![Ty::Int, Ty::String], Box::new(Ty::Bool))),
+        );
+
+        let ty = ctx.infer_expr(call);
+
+        // Result is fresh type var
+        assert!(matches!(ty, Ty::Var(_)));
+
+        // Check Callable constraint has correct arg types
+        let callable = ctx.constraints().iter().find_map(|c| match c {
+            Constraint::Callable { args, .. } => Some(args.clone()),
+            _ => None,
+        });
+        assert!(callable.is_some());
+        let args = callable.unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], Ty::Int);
+        assert_eq!(args[1], Ty::String);
+    }
+
+    #[test]
+    fn infer_call_on_closure() {
+        // Build: (x => x)(42)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let x = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let closure = ast
+            .add_expr(
+                Expr::Closure {
+                    params: smallvec::smallvec![("x".into(), None)],
+                    ret: None,
+                    body: x,
+                },
+                span,
+            )
+            .unwrap();
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let call = ast
+            .add_expr(Expr::Call(closure, smallvec::smallvec![arg]), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(call);
+
+        // Result is fresh type var
+        assert!(matches!(ty, Ty::Var(_)));
+
+        // Should have Callable constraint with the closure type
+        let callables: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Callable { .. }))
+            .collect();
+        assert_eq!(callables.len(), 1);
+    }
+
+    // --- Named function inference tests ---
+
+    /// Helper to create an AST with a function statement.
+    fn ast_with_fun_stmt(
+        name: &str,
+        params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        ret: Option<AstTypeExprId>,
+        body: ExprId,
+        ast: &mut Ast,
+        span: Span,
+    ) -> StmtId {
+        ast.add_stmt(
+            Stmt::Fun {
+                name: name.into(),
+                params,
+                ret,
+                body,
+            },
+            span,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn infer_fun_no_annotations() {
+        // Build: FUN id(x) { x }
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+        let x = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let stmt_id = ast_with_fun_stmt(
+            "id",
+            smallvec::smallvec![("x".into(), None)],
+            None,
+            x,
+            &mut ast,
+            span,
+        );
+
+        let mut ctx = test_ctx(&ast);
+        ctx.infer_stmt(stmt_id);
+
+        // Function should be bound in environment
+        let scheme = ctx.env().lookup("id");
+        assert!(scheme.is_some());
+
+        let scheme = scheme.unwrap();
+        // Should be polymorphic: forall a. (a) -> a
+        assert!(!scheme.vars.is_empty());
+        match &scheme.ty {
+            Ty::Fn(params, ret) => {
+                assert_eq!(params.len(), 1);
+                // Param and return should be the same type var
+                assert_eq!(&params[0], ret.as_ref());
+            }
+            _ => panic!("expected Fn type, got {:?}", scheme.ty),
+        }
+    }
+
+    #[test]
+    fn infer_fun_with_annotations() {
+        // Build: FUN inc(x: Int) -> Int { x + 1 }
+        let mut ast = Ast::new();
+        let span = Span::new(0, 30);
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let x = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(x, BinOp::Add, one), span)
+            .unwrap();
+        let stmt_id = ast_with_fun_stmt(
+            "inc",
+            smallvec::smallvec![("x".into(), Some(int_ty))],
+            Some(int_ty),
+            add,
+            &mut ast,
+            span,
+        );
+
+        let mut ctx = test_ctx(&ast);
+        ctx.infer_stmt(stmt_id);
+
+        // Function should be bound in environment
+        let scheme = ctx.env().lookup("inc");
+        assert!(scheme.is_some());
+
+        let scheme = scheme.unwrap();
+        // Should be monomorphic: (Int) -> Int (no quantified vars for concrete types)
+        assert!(scheme.vars.is_empty());
+        assert_eq!(scheme.ty, Ty::Fn(vec![Ty::Int], Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn infer_fun_recursive() {
+        // Build: FUN factorial(n: Int) -> Int { n * factorial(n - 1) }
+        // (simplified: just testing that recursive call works)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 50);
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+
+        // n - 1
+        let n = ast.add_expr(Expr::Var("n".into()), span).unwrap();
+        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let n_minus_1 = ast
+            .add_expr(Expr::Binary(n, BinOp::Sub, one), span)
+            .unwrap();
+
+        // factorial(n - 1)
+        let factorial_var =
+            ast.add_expr(Expr::Var("factorial".into()), span).unwrap();
+        let rec_call = ast
+            .add_expr(
+                Expr::Call(factorial_var, smallvec::smallvec![n_minus_1]),
+                span,
+            )
+            .unwrap();
+
+        // n * factorial(n - 1)
+        let n2 = ast.add_expr(Expr::Var("n".into()), span).unwrap();
+        let body = ast
+            .add_expr(Expr::Binary(n2, BinOp::Mul, rec_call), span)
+            .unwrap();
+
+        let stmt_id = ast_with_fun_stmt(
+            "factorial",
+            smallvec::smallvec![("n".into(), Some(int_ty))],
+            Some(int_ty),
+            body,
+            &mut ast,
+            span,
+        );
+
+        let mut ctx = test_ctx(&ast);
+        ctx.infer_stmt(stmt_id);
+
+        // Should not have errors about undefined variable "factorial"
+        // (function name is bound before body is inferred)
+        let undef_errors: Vec<_> = ctx
+            .errors()
+            .iter()
+            .filter(|e| matches!(e, TypeError::UndefinedVar(name, _) if name == "factorial"))
+            .collect();
+        assert!(undef_errors.is_empty());
+
+        // Function should be bound
+        let scheme = ctx.env().lookup("factorial");
+        assert!(scheme.is_some());
+        assert_eq!(
+            scheme.unwrap().ty,
+            Ty::Fn(vec![Ty::Int], Box::new(Ty::Int))
+        );
+    }
+
+    #[test]
+    fn infer_fun_polymorphic_identity() {
+        // Build: FUN id(x) { x }
+        // Should generalize to: forall a. (a) -> a
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+        let x = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let stmt_id = ast_with_fun_stmt(
+            "id",
+            smallvec::smallvec![("x".into(), None)],
+            None,
+            x,
+            &mut ast,
+            span,
+        );
+
+        let mut ctx = test_ctx(&ast);
+        ctx.infer_stmt(stmt_id);
+
+        let scheme = ctx.env().lookup("id").unwrap();
+
+        // Should have exactly one quantified variable
+        assert_eq!(scheme.vars.len(), 1);
+
+        // Type should be Fn([?a], ?a) where ?a is the quantified var
+        match &scheme.ty {
+            Ty::Fn(params, ret) => {
+                assert_eq!(params.len(), 1);
+                match (&params[0], ret.as_ref()) {
+                    (Ty::Var(p), Ty::Var(r)) => {
+                        assert_eq!(p, r);
+                        assert!(scheme.vars.contains(p));
+                    }
+                    _ => panic!("expected type vars"),
+                }
+            }
+            _ => panic!("expected Fn"),
+        }
+    }
+
+    #[test]
+    fn infer_fun_multi_params() {
+        // Build: FUN add(a: Int, b: Int) -> Int { a + b }
+        let mut ast = Ast::new();
+        let span = Span::new(0, 40);
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let a = ast.add_expr(Expr::Var("a".into()), span).unwrap();
+        let b = ast.add_expr(Expr::Var("b".into()), span).unwrap();
+        let add = ast.add_expr(Expr::Binary(a, BinOp::Add, b), span).unwrap();
+        let stmt_id = ast_with_fun_stmt(
+            "add",
+            smallvec::smallvec![
+                ("a".into(), Some(int_ty)),
+                ("b".into(), Some(int_ty))
+            ],
+            Some(int_ty),
+            add,
+            &mut ast,
+            span,
+        );
+
+        let mut ctx = test_ctx(&ast);
+        ctx.infer_stmt(stmt_id);
+
+        let scheme = ctx.env().lookup("add");
+        assert!(scheme.is_some());
+        assert_eq!(
+            scheme.unwrap().ty,
+            Ty::Fn(vec![Ty::Int, Ty::Int], Box::new(Ty::Int))
+        );
     }
 }

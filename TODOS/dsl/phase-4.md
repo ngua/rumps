@@ -1036,7 +1036,7 @@ For `TYPE` structs, field types are resolved via `ast_type_to_ty()` which conver
 
 ---
 
-## Phase 4.7: Function and Closure Inference
+## Phase 4.7: Function and Closure Inference [x]
 
 Infer types for closures, function calls, and function definitions.
 
@@ -1050,26 +1050,26 @@ Infer types for closures, function calls, and function definitions.
 
 ### Checklist
 
-- [ ] Handle `Expr::Closure`:
-  - [ ] For each param: use annotation if present, else fresh var
-  - [ ] Push scope, bind params
-  - [ ] Infer body type
-  - [ ] Pop scope
-  - [ ] If return annotation present, unify body with it
-  - [ ] Return `Ty::Fn(param_types, body_type)`
-- [ ] Handle `Expr::Call`:
-  - [ ] Infer callee type
-  - [ ] Infer arg types
-  - [ ] Create fresh var `?r` for result
-  - [ ] Add `Callable` constraint
-  - [ ] Return `?r`
-- [ ] Handle `Stmt::Fun`:
-  - [ ] Extract param types (annotations or fresh)
-  - [ ] Push scope, bind params
-  - [ ] Infer body
-  - [ ] Pop scope
-  - [ ] If return annotation, unify
-  - [ ] Generalize and bind function name in env
+- [x] Handle `Expr::Closure`:
+  - [x] For each param: use annotation if present, else fresh var
+  - [x] Push scope, bind params
+  - [x] Infer body type
+  - [x] Pop scope
+  - [x] If return annotation present, unify body with it
+  - [x] Return `Ty::Fn(param_types, body_type)`
+- [x] Handle `Expr::Call`:
+  - [x] Infer callee type
+  - [x] Infer arg types
+  - [x] Create fresh var `?r` for result
+  - [x] Add `Callable` constraint
+  - [x] Return `?r`
+- [x] Handle `Stmt::Fun`:
+  - [x] Extract param types (annotations or fresh)
+  - [x] Push scope, bind params
+  - [x] Infer body
+  - [x] Pop scope
+  - [x] If return annotation, unify
+  - [x] Generalize and bind function name in env
 
 ---
 
@@ -1079,11 +1079,11 @@ Infer types for conditionals, blocks, and match expressions.
 
 ### Control Flow Rules
 
-| Expression                | Type        | Constraints                    |
-|---------------------------|-------------|--------------------------------|
-| `IF c { a } ELSE { b }`   | `?t`        | `c ~ Bool`, `a ~ ?t`, `b ~ ?t` |
-| `{ ... e }` (block)       | type of `e` | -                              |
-| `MATCH e { p => b, ... }` | `?t`        | all branches ~ `?t`            |
+| Expression                | Type        | Constraints                     |
+|---------------------------|-------------|---------------------------------|
+| `IF c { a } ELSE { b }`   | `?t`        | `c ~ Bool`, `a ~ ?t`, `b ~ ?t`  |
+| `{ ... e }` (block)       | type of `e` | -                               |
+| `MATCH e { p => b, ... }` | `?t`        | all branches ~ `?t`; exhaustive |
 
 ### Branch Type Consistency
 
@@ -1116,6 +1116,8 @@ LET x = IF cond { 42 }
 ```
 
 **MATCH examples:**
+
+**NOTE**: Matches _must_ be exhaustive. Currently, this is done in the interpreter runtime. Exhaustiveness checking should be re-implemented in type-checker (do not remove runtime checks yet).
 
 ```rumps
 ; OK: all arms return Int
@@ -1169,7 +1171,7 @@ LET desc: String = MATCH val {
   - [ ] **Exhaustiveness check**: verify patterns cover all cases
     - [ ] Currently done at runtime in `try_match_arms` (`interpreter/control.rs`); move to type checker
     - [ ] For sum types: all variants must be covered (or wildcard present)
-    - [ ] For literals: require wildcard/else arm
+    - [ ] For literals (numbers, strings, chars, etc...): require wildcard/else arm
     - [ ] Emit `TypeError::NonExhaustiveMatch` if not exhaustive
   - [ ] Return unified type
 
