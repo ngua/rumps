@@ -147,7 +147,8 @@ impl TypeId {
 pub(crate) struct ValueArena {
     values: Vec<Value>,
     value_spans: Vec<Span>,
-    strings: StringInterner,
+    /// Shared with `TypeEnv` so type lookups use consistent `StringId`s.
+    pub(crate) strings: StringInterner,
 }
 
 impl Default for ValueArena {
@@ -649,6 +650,9 @@ pub(crate) struct VariantDef {
     pub(crate) name: StringId,
     pub(crate) idx: u8,
     pub(crate) arity: u8,
+    /// Payload types for this variant (AST type expression IDs).
+    /// Used by type checker to get payload types for pattern matching.
+    pub(crate) payloads: SmallVec<[AstTypeExprId; 2]>,
 }
 
 /// A type definition.
@@ -1161,12 +1165,16 @@ impl TypeRegistry {
                     VariantDef {
                         name: none_name,
                         idx: 0,
-                        arity: 0
+                        arity: 0,
+                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: some_name,
                         idx: 1,
-                        arity: 1
+                        arity: 1,
+                        // Builtin types don't use AST type expressions for payloads;
+                        // the type checker handles Option/Result specially via Ty::Option/Ty::Result
+                        payloads: SmallVec::new(),
                     },
                 ],
             },
@@ -1194,12 +1202,16 @@ impl TypeRegistry {
                     VariantDef {
                         name: ok_name,
                         idx: 0,
-                        arity: 1
+                        arity: 1,
+                        // Builtin: type checker handles Result specially
+                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: err_name,
                         idx: 1,
-                        arity: 1
+                        arity: 1,
+                        // Builtin: type checker handles Result specially
+                        payloads: SmallVec::new(),
                     },
                 ],
             },

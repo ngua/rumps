@@ -823,26 +823,7 @@ crates/rumps-query/src/typecheck/
 ### Inference Context (`infer.rs`)
 
 ```rust
-struct InferCtx<'a> {
-    ast: &'a Ast,
-    registry: &'a TypeRegistry,
-    env: TypeEnv,
-    constraints: Vec<Constraint>,
-    next_var: u32,
-    expr_types: HashMap<ExprId, Ty>,
-    errors: Vec<TypeError>,
-}
-
-enum Constraint {
-    Eq(Ty, Ty, Span),
-    Numeric(Ty, Span),                                         // Int | Float
-    Callable { callee: Ty, args: Vec<Ty>, ret: Ty, span: Span },
-    Stringable(Ty, Span),                                      // everything (for ++ coercion, OUTPUT)
-    Jsonable(Ty, Span),                                        // NOT Closure/Function/ModuleFn
-    Subscript(Ty, Span),                                       // Bool | Int | Float | Char | String | Json
-    Storable(Ty, Span),                                        // Bool | Int | Float | Char | String | Json
-    Unwrappable { ty: Ty, inner: Ty, span: Span },             // Option[?t] | Result[?t, _]; extracts ?t
-}
+// Complete
 ```
 
 ### Checklist
@@ -1143,37 +1124,37 @@ LET desc: String = MATCH val {
 
 ### Checklist
 
-- [ ] Handle `Expr::If`:
-  - [ ] Unify condition with `Bool`
-  - [ ] If condition is `IS` with pattern bindings:
-    - [ ] Extract bindings and their inferred types
-    - [ ] Add bindings to then-branch scope (not else-branch)
-  - [ ] Infer both branches (with appropriate scopes)
-  - [ ] Unify branch types; emit `TypeError::Mismatch` if incompatible
-  - [ ] For single-arm IF (no ELSE): unify body with `Unit`
-  - [ ] Return unified type
-- [ ] Handle `Expr::Block`:
-  - [ ] Push scope
-  - [ ] Infer all statements
-  - [ ] If final expr, return its type
-  - [ ] Else return `Unit`
-  - [ ] Pop scope
-- [ ] Handle `Expr::Match`:
-  - [ ] Infer scrutinee type
-  - [ ] For each arm:
-    - [ ] Check pattern against scrutinee type
-    - [ ] Bind pattern variables in arm scope
-    - [ ] Handle `Pattern::Is` (type-narrowing pattern):
-      - [ ] Check target type is member of scrutinee's union (if union)
-      - [ ] Bind variable with narrowed type in arm scope
-    - [ ] Infer arm body type
-  - [ ] Unify all arm body types; emit `TypeError::Mismatch` if incompatible
-  - [ ] **Exhaustiveness check**: verify patterns cover all cases
-    - [ ] Currently done at runtime in `try_match_arms` (`interpreter/control.rs`); re-implement in type checker **but do not remove** from interpreter yet
-    - [ ] For sum types: all variants must be covered (or wildcard present)
-    - [ ] For literals (numbers, strings, chars, etc...): require wildcard/else arm
-    - [ ] Emit `TypeError::NonExhaustiveMatch` if not exhaustive
-  - [ ] Return unified type
+- [x] Handle `Expr::If`:
+  - [x] Unify condition with `Bool`
+  - [x] If condition is `IS` with pattern bindings:
+    - [x] Extract bindings and their inferred types
+    - [x] Add bindings to then-branch scope (not else-branch)
+  - [x] Infer both branches (with appropriate scopes)
+  - [x] Unify branch types; emit `TypeError::Mismatch` if incompatible
+  - [x] For single-arm IF (no ELSE): unify body with `Unit`
+  - [x] Return unified type
+- [x] Handle `Expr::Block`:
+  - [x] Push scope
+  - [x] Infer all statements
+  - [x] If final expr, return its type
+  - [x] Else return `Unit`
+  - [x] Pop scope
+- [x] Handle `Expr::Match`:
+  - [x] Infer scrutinee type
+  - [x] For each arm:
+    - [x] Check pattern against scrutinee type
+    - [x] Bind pattern variables in arm scope
+    - [x] Handle `Pattern::Is` (type-narrowing pattern):
+      - [x] Check target type is member of scrutinee's union (if union)
+      - [x] Bind variable with narrowed type in arm scope
+    - [x] Infer arm body type
+  - [x] Unify all arm body types; emit `TypeError::Mismatch` if incompatible
+  - [x] **Exhaustiveness check**: verify patterns cover all cases
+    - [x] Currently done at runtime in `try_match_arms` (`interpreter/control.rs`); re-implement in type checker **but do not remove** from interpreter yet
+    - [x] For sum types: all variants must be covered (or wildcard present)
+    - [x] For literals (numbers, strings, chars, etc...): require wildcard/else arm
+    - [x] Emit `TypeError::NonExhaustiveMatch` if not exhaustive
+  - [x] Return unified type
 
 ---
 

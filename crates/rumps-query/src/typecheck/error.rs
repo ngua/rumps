@@ -119,6 +119,14 @@ pub(crate) enum TypeError {
     /// Empty union type.
     #[error("union type must have at least one member")]
     EmptyUnion(Span),
+
+    /// Type is not a member of the union being matched.
+    #[error("type `{member}` is not a member of union `{union_ty}`")]
+    NotAUnionMember {
+        member: Ty,
+        union_ty: Ty,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -146,7 +154,8 @@ impl TypeError {
             | Self::TupleIndexOutOfBounds { span, .. }
             | Self::NotIndexable(_, span)
             | Self::NotJson(_, span)
-            | Self::EmptyUnion(span) => *span,
+            | Self::EmptyUnion(span)
+            | Self::NotAUnionMember { span, .. } => *span,
         }
     }
 }

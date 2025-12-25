@@ -18,10 +18,13 @@ pub(crate) struct TypeEnv {
 
 impl TypeEnv {
     /// Create an empty environment with one global scope.
-    pub(crate) fn new() -> Self {
+    ///
+    /// The interner should be shared with `TypeRegistry` so `StringId`
+    /// lookups are consistent.
+    pub(crate) fn new(strings: StringInterner) -> Self {
         Self {
             scopes: vec![HashMap::new()],
-            strings: StringInterner::new(),
+            strings,
         }
     }
 
@@ -111,13 +114,13 @@ mod tests {
 
     #[test]
     fn new_has_one_scope() {
-        let env = TypeEnv::new();
+        let env = TypeEnv::new(StringInterner::new());
         assert_eq!(env.scopes.len(), 1);
     }
 
     #[test]
     fn bind_and_lookup() {
-        let mut env = TypeEnv::new();
+        let mut env = TypeEnv::new(StringInterner::new());
         env.bind("x", Scheme::mono(Ty::Int));
         assert_eq!(env.lookup("x"), Some(&Scheme::mono(Ty::Int)));
         assert_eq!(env.lookup("y"), None);
@@ -125,7 +128,7 @@ mod tests {
 
     #[test]
     fn shadowing() {
-        let mut env = TypeEnv::new();
+        let mut env = TypeEnv::new(StringInterner::new());
         env.bind("x", Scheme::mono(Ty::Int));
         env.push_scope();
         env.bind("x", Scheme::mono(Ty::String));
@@ -136,7 +139,7 @@ mod tests {
 
     #[test]
     fn inner_scope_sees_outer() {
-        let mut env = TypeEnv::new();
+        let mut env = TypeEnv::new(StringInterner::new());
         env.bind("x", Scheme::mono(Ty::Int));
         env.push_scope();
         env.bind("y", Scheme::mono(Ty::String));
@@ -146,7 +149,7 @@ mod tests {
 
     #[test]
     fn free_vars_collects_all() {
-        let mut env = TypeEnv::new();
+        let mut env = TypeEnv::new(StringInterner::new());
         let a = TyVar::new(0);
         let b = TyVar::new(1);
         env.bind("x", Scheme::mono(Ty::Var(a)));
@@ -159,7 +162,7 @@ mod tests {
 
     #[test]
     fn generalize_no_env_vars() {
-        let env = TypeEnv::new();
+        let env = TypeEnv::new(StringInterner::new());
         let a = TyVar::new(0);
         let ty = Ty::Array(Box::new(Ty::Var(a)));
         let scheme = env.generalize(&ty);
@@ -168,7 +171,7 @@ mod tests {
 
     #[test]
     fn generalize_excludes_env_vars() {
-        let mut env = TypeEnv::new();
+        let mut env = TypeEnv::new(StringInterner::new());
         let a = TyVar::new(0);
         let b = TyVar::new(1);
         env.bind("existing", Scheme::mono(Ty::Var(a)));

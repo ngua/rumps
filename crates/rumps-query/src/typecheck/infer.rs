@@ -4,8 +4,8 @@
 //! expression types, type variable generation, and constraint collection.
 //! Constraints are solved later via unification.
 
-#![allow(clippy::large_enum_variant)]
-use std::collections::HashMap;
+#![allow(clippy::large_enum_variant, dead_code)]
+use std::collections::{HashMap, HashSet};
 
 use smallvec::SmallVec;
 
@@ -14,9 +14,10 @@ use super::error::TypeError;
 use super::ty::{Scheme, Ty, TyVar};
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey,
-    JsonAccessKind, Literal, Stmt, StmtId, UnOp,
+    JsonAccessKind, Literal, MatchArm, MatchPattern, MatchPatternId, Stmt,
+    StmtId, TypePattern, UnOp,
 };
-use crate::intern::StringId;
+use crate::intern::{StringId, StringInterner};
 use crate::value::{TypeDef, TypeId, TypeRegistry};
 use crate::Span;
 
@@ -145,11 +146,18 @@ pub(crate) struct InferCtx<'a> {
 
 impl<'a> InferCtx<'a> {
     /// Create a new inference context.
-    pub(crate) fn new(ast: &'a Ast, registry: &'a TypeRegistry) -> Self {
+    ///
+    /// The `strings` interner should be shared with the `TypeRegistry` so
+    /// type name lookups produce consistent `StringId`s.
+    pub(crate) fn new(
+        ast: &'a Ast,
+        registry: &'a TypeRegistry,
+        strings: StringInterner,
+    ) -> Self {
         Self {
             ast,
             registry,
-            env: TypeEnv::new(),
+            env: TypeEnv::new(strings),
             constraints: Vec::new(),
             next_var: 0,
             expr_types: HashMap::new(),
@@ -384,6 +392,26 @@ impl<'a> InferCtx<'a> {
 
             // Function calls: f(args...)
             Expr::Call(callee, args) => self.call(*callee, args, span),
+
+            // Control flow: IF
+            Expr::If(cond, then_br, else_br) => {
+                self.r#if(*cond, *then_br, else_br.as_ref().copied(), span)
+            }
+
+            // Control flow: blocks
+            Expr::Block(stmts, tail) => {
+                self.block(stmts, tail.as_ref().copied(), span)
+            }
+
+            // Control flow: MATCH
+            Expr::Match(scrutinee, arms) => {
+                self.r#match(*scrutinee, arms, span)
+            }
+
+            // Variant constructors
+            Expr::Variant(ty_name, var_name, args) => {
+                self.variant(ty_name, var_name, args, span)
+            }
 
             // Other expressions handled in later phases
             _ => Ty::Error,
@@ -1086,30 +1114,597 @@ impl<'a> InferCtx<'a> {
         ret
     }
 
+    /// Infer type of an IF expression.
+    ///
+    /// # Type Checking Rules
+    ///
+    /// - Condition must be `Bool`
+    /// - IF/ELSE: both branches must have the same type
+    /// - Single-arm IF (no ELSE): body must be `Unit`, whole expression is `Unit`
+    ///
+    /// # IS with Bindings
+    ///
+    /// If the condition is `expr IS Pattern(bindings)`, the bindings are only
+    /// visible in the then branch, not the else branch. The type checker
+    /// extracts these bindings and adds them to the then-branch scope.
+    fn r#if(
+        &mut self,
+        cond_id: ExprId,
+        then_id: ExprId,
+        else_id: Option<ExprId>,
+        span: Span,
+    ) -> Ty {
+        // Check if condition is an IS expression with variant bindings
+        let cond_expr = self.ast.get_expr(cond_id).cloned();
+
+        let then_ty = match cond_expr {
+            Some(Expr::Is(
+                scrutinee_id,
+                TypePattern::VariantBind(ty_name, var_name, names),
+            )) => {
+                // IS with variant bindings: bindings only visible in then branch
+                let scrutinee_ty = self.expr(scrutinee_id);
+                let payload_tys = self.variant_payload_types(
+                    &ty_name,
+                    &var_name,
+                    &scrutinee_ty,
+                    span,
+                );
+
+                if payload_tys.len() != names.len() {
+                    self.error(TypeError::ArityMismatch {
+                        expected: payload_tys.len(),
+                        got: names.len(),
+                        span,
+                    });
+                }
+
+                self.env.push_scope();
+                names.iter().zip(payload_tys.iter()).for_each(|(name, ty)| {
+                    self.env.bind(name, Scheme::mono(ty.clone()));
+                });
+                let ty = self.expr(then_id);
+                self.env.pop_scope();
+                ty
+            }
+            _ => {
+                // Regular condition: infer and unify with Bool
+                let cond_ty = self.expr(cond_id);
+                self.unify(cond_ty, Ty::Bool, span);
+                self.expr(then_id)
+            }
+        };
+
+        // Unify branches
+        if let Some(else_id) = else_id {
+            let else_ty = self.expr(else_id);
+            self.unify(then_ty.clone(), else_ty, span);
+            then_ty
+        } else {
+            self.unify(then_ty, Ty::Unit, span);
+            Ty::Unit
+        }
+    }
+
+    /// Get the payload types for a variant.
+    ///
+    /// Looks up the variant definition and extracts payload types.
+    /// Uses the scrutinee type for type parameter substitution.
+    fn variant_payload_types(
+        &mut self,
+        ty_name: &str,
+        var_name: &str,
+        scrutinee_ty: &Ty,
+        span: Span,
+    ) -> Vec<Ty> {
+        let var_name_id = self.env.intern(var_name);
+        let lookup = self
+            .env
+            .lookup_str(ty_name)
+            .and_then(|id| self.registry.lookup(id))
+            .and_then(|type_id| {
+                self.registry
+                    .lookup_variant(type_id, var_name_id)
+                    .map(|var_def| (type_id, var_def))
+            });
+
+        match lookup {
+            None => {
+                self.error(TypeError::UnknownType(
+                    format!("{ty_name}.{var_name}"),
+                    span,
+                ));
+                vec![]
+            }
+            Some((type_id, var_def)) => {
+                // Special handling for Option/Result builtins
+                if type_id == TypeId::OPTION {
+                    if var_def.arity == 0 {
+                        vec![]
+                    } else if let Ty::Option(inner) = scrutinee_ty {
+                        vec![inner.as_ref().clone()]
+                    } else {
+                        vec![self.fresh()]
+                    }
+                } else if type_id == TypeId::RESULT {
+                    match (var_def.idx, scrutinee_ty) {
+                        (0, Ty::Result(ok, _)) => vec![ok.as_ref().clone()],
+                        (1, Ty::Result(_, err)) => vec![err.as_ref().clone()],
+                        _ => vec![self.fresh()],
+                    }
+                } else {
+                    // User-defined sum types
+                    let type_args: Vec<Ty> = match scrutinee_ty {
+                        Ty::Named(_, args) => args.clone(),
+                        Ty::Option(inner) => vec![inner.as_ref().clone()],
+                        Ty::Result(ok, err) => {
+                            vec![ok.as_ref().clone(), err.as_ref().clone()]
+                        }
+                        _ => vec![],
+                    };
+
+                    let type_params: SmallVec<[StringId; 2]> =
+                        match self.registry.get_def(type_id) {
+                            Some(TypeDef::Sum { type_params, .. }) => {
+                                type_params.clone()
+                            }
+                            _ => SmallVec::new(),
+                        };
+
+                    let subst: HashMap<StringId, Ty> = type_params
+                        .iter()
+                        .zip(type_args.iter())
+                        .map(|(p, a)| (*p, a.clone()))
+                        .collect();
+
+                    var_def
+                        .payloads
+                        .iter()
+                        .map(|ty_id| self.ast_type_to_ty(*ty_id, &subst))
+                        .collect()
+                }
+            }
+        }
+    }
+
+    /// Infer type of a block expression.
+    ///
+    /// Executes statements for side effects, then evaluates to the trailing
+    /// expression. Returns `Unit` if no trailing expression.
+    fn block(
+        &mut self,
+        stmts: &[StmtId],
+        tail: Option<ExprId>,
+        _span: Span,
+    ) -> Ty {
+        self.env.push_scope();
+        stmts.iter().for_each(|id| self.stmt(*id));
+        let result_ty = tail.map_or(Ty::Unit, |id| self.expr(id));
+        self.env.pop_scope();
+        result_ty
+    }
+
+    /// Infer type of a MATCH expression.
+    ///
+    /// Evaluates the scrutinee once, then checks each arm. All arm bodies must
+    /// have the same type. Also performs exhaustiveness checking.
+    fn r#match(
+        &mut self,
+        scrutinee_id: ExprId,
+        arms: &[MatchArm],
+        span: Span,
+    ) -> Ty {
+        let scrutinee_ty = self.expr(scrutinee_id);
+
+        if arms.is_empty() {
+            self.error(TypeError::NonExhaustiveMatch(span));
+            Ty::Error
+        } else {
+            // Infer all arm body types
+            let arm_tys: Vec<Ty> = arms
+                .iter()
+                .map(|arm| self.match_arm(arm, &scrutinee_ty, span))
+                .collect();
+
+            // Unify all arm types
+            let result_ty = arm_tys.first().cloned().unwrap_or(Ty::Error);
+
+            arm_tys.iter().skip(1).for_each(|ty| {
+                self.unify(result_ty.clone(), ty.clone(), span);
+            });
+
+            // Exhaustiveness check
+            self.check_exhaustiveness(arms, &scrutinee_ty, span);
+
+            result_ty
+        }
+    }
+
+    /// Infer type of a single match arm.
+    ///
+    /// Checks the pattern, binds variables, evaluates guard (if any),
+    /// and infers the body type.
+    fn match_arm(
+        &mut self,
+        arm: &MatchArm,
+        scrutinee_ty: &Ty,
+        span: Span,
+    ) -> Ty {
+        self.env.push_scope();
+
+        // Check pattern and collect bindings
+        self.pattern_bindings(arm.pattern, scrutinee_ty, span);
+
+        // Check guard if present
+        if let Some(guard_id) = arm.guard {
+            let guard_ty = self.expr(guard_id);
+            self.unify(guard_ty, Ty::Bool, span);
+        }
+
+        // Infer body
+        let body_ty = self.expr(arm.body);
+        self.env.pop_scope();
+        body_ty
+    }
+
+    /// Extract bindings from a pattern and add them to the current scope.
+    ///
+    /// Also validates that the pattern is compatible with the scrutinee type.
+    fn pattern_bindings(
+        &mut self,
+        pat_id: MatchPatternId,
+        scrutinee_ty: &Ty,
+        span: Span,
+    ) {
+        if let Some(pat) = self.ast.get_pattern(pat_id).cloned() {
+            match &pat {
+                MatchPattern::Wildcard => {}
+
+                MatchPattern::Var(name) => {
+                    self.env.bind(name, Scheme::mono(scrutinee_ty.clone()));
+                }
+
+                MatchPattern::Literal(lit) => {
+                    let lit_ty = self.literal(lit);
+                    self.unify(lit_ty, scrutinee_ty.clone(), span);
+                }
+
+                MatchPattern::Variant(ty_name, var_name, sub_pats) => {
+                    let payload_tys = self.variant_payload_types(
+                        ty_name,
+                        var_name,
+                        scrutinee_ty,
+                        span,
+                    );
+                    sub_pats.iter().zip(payload_tys.iter()).for_each(
+                        |(sub_pat_id, payload_ty)| {
+                            self.pattern_bindings(
+                                *sub_pat_id,
+                                payload_ty,
+                                span,
+                            );
+                        },
+                    );
+                }
+
+                MatchPattern::Object(fields) => {
+                    fields.iter().for_each(|(field_name, sub_pat_id)| {
+                        let field_ty =
+                            self.field_type(scrutinee_ty, field_name, span);
+                        self.pattern_bindings(*sub_pat_id, &field_ty, span);
+                    });
+                }
+
+                MatchPattern::Tuple(pats) => {
+                    let elem_tys = match scrutinee_ty {
+                        Ty::Tuple(ts) => ts.clone(),
+                        Ty::Var(_) => {
+                            let tys: Vec<Ty> =
+                                (0..pats.len()).map(|_| self.fresh()).collect();
+                            self.unify(
+                                scrutinee_ty.clone(),
+                                Ty::Tuple(tys.clone()),
+                                span,
+                            );
+                            tys
+                        }
+                        _ => {
+                            self.error(TypeError::NotATuple(
+                                scrutinee_ty.clone(),
+                                span,
+                            ));
+                            vec![Ty::Error; pats.len()]
+                        }
+                    };
+                    pats.iter().zip(elem_tys.iter()).for_each(
+                        |(pat_id, ty)| {
+                            self.pattern_bindings(*pat_id, ty, span);
+                        },
+                    );
+                }
+
+                MatchPattern::Is(name, ty_id) => {
+                    let narrowed_ty =
+                        self.ast_type_to_ty(*ty_id, &HashMap::new());
+
+                    if self.expand_union_members(scrutinee_ty).is_some()
+                        && !self.is_union_member(scrutinee_ty, &narrowed_ty)
+                    {
+                        self.error(TypeError::NotAUnionMember {
+                            member: narrowed_ty.clone(),
+                            union_ty: scrutinee_ty.clone(),
+                            span,
+                        });
+                    }
+
+                    self.env.bind(name, Scheme::mono(narrowed_ty));
+                }
+            }
+        }
+    }
+
+    /// Check exhaustiveness of match patterns.
+    ///
+    /// For sum types: all variants must be covered (or wildcard present).
+    /// For literals: require wildcard/else arm.
+    /// Patterns with guards do NOT count for coverage (guard might fail).
+    /// Emits `TypeError::NonExhaustiveMatch` if not exhaustive.
+    fn check_exhaustiveness(
+        &mut self,
+        arms: &[MatchArm],
+        scrutinee_ty: &Ty,
+        span: Span,
+    ) {
+        // Only unguarded patterns count for exhaustiveness
+        let unguarded: Vec<_> =
+            arms.iter().filter(|arm| arm.guard.is_none()).collect();
+
+        // If any unguarded arm is a catch-all, it's exhaustive
+        let has_catch_all = unguarded.iter().any(|arm| {
+            self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                matches!(p, MatchPattern::Wildcard | MatchPattern::Var(_))
+            })
+        });
+
+        if !has_catch_all {
+            match scrutinee_ty {
+                Ty::Named(type_id, _) => {
+                    if let Some(TypeDef::Sum { variants, .. }) =
+                        self.registry.get_def(*type_id)
+                    {
+                        let covered: HashSet<u8> = unguarded
+                            .iter()
+                            .filter_map(|arm| {
+                                self.ast.get_pattern(arm.pattern).and_then(
+                                    |p| match p {
+                                        MatchPattern::Variant(
+                                            _,
+                                            var_name,
+                                            _,
+                                        ) => {
+                                            let var_id =
+                                                self.env.intern(var_name);
+                                            self.registry
+                                                .lookup_variant(
+                                                    *type_id, var_id,
+                                                )
+                                                .map(|v| v.idx)
+                                        }
+                                        _ => None,
+                                    },
+                                )
+                            })
+                            .collect();
+
+                        if !variants.iter().all(|v| covered.contains(&v.idx)) {
+                            self.error(TypeError::NonExhaustiveMatch(span));
+                        }
+                    }
+                }
+
+                Ty::Option(_) => {
+                    let has_some = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Option" && var == "Some")
+                        })
+                    });
+                    let has_none = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Option" && var == "None")
+                        })
+                    });
+                    if !has_some || !has_none {
+                        self.error(TypeError::NonExhaustiveMatch(span));
+                    }
+                }
+
+                Ty::Result(_, _) => {
+                    let has_ok = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Result" && var == "Ok")
+                        })
+                    });
+                    let has_err = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Result" && var == "Err")
+                        })
+                    });
+                    if !has_ok || !has_err {
+                        self.error(TypeError::NonExhaustiveMatch(span));
+                    }
+                }
+
+                Ty::Bool => {
+                    let has_true = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(
+                                p,
+                                MatchPattern::Literal(Literal::Bool(true))
+                            )
+                        })
+                    });
+                    let has_false = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(
+                                p,
+                                MatchPattern::Literal(Literal::Bool(false))
+                            )
+                        })
+                    });
+                    if !has_true || !has_false {
+                        self.error(TypeError::NonExhaustiveMatch(span));
+                    }
+                }
+
+                Ty::Union(members) => {
+                    // Collect covered types (small N, Vec is fine)
+                    let covered: Vec<Ty> = unguarded
+                        .iter()
+                        .filter_map(|arm| {
+                            self.ast.get_pattern(arm.pattern).and_then(|p| {
+                                match p {
+                                    MatchPattern::Is(_, ty_id) => {
+                                        Some(self.ast_type_to_ty(
+                                            *ty_id,
+                                            &HashMap::new(),
+                                        ))
+                                    }
+                                    _ => None,
+                                }
+                            })
+                        })
+                        .collect();
+
+                    if !members.iter().all(|m| covered.contains(m)) {
+                        self.error(TypeError::NonExhaustiveMatch(span));
+                    }
+                }
+
+                // For other types (Int, String, etc.), require wildcard
+                _ => {
+                    self.error(TypeError::NonExhaustiveMatch(span));
+                }
+            }
+        }
+    }
+
+    /// Infer type of a variant constructor: `Type.Variant(args)`.
+    fn variant(
+        &mut self,
+        ty_name: &str,
+        var_name: &str,
+        args: &SmallVec<[ExprId; 4]>,
+        span: Span,
+    ) -> Ty {
+        let arg_tys: Vec<Ty> = args.iter().map(|id| self.expr(*id)).collect();
+
+        // Look up type and variant
+        let var_name_id = self.env.intern(var_name);
+        let lookup = self
+            .env
+            .lookup_str(ty_name)
+            .and_then(|id| self.registry.lookup(id))
+            .and_then(|type_id| {
+                self.registry
+                    .lookup_variant(type_id, var_name_id)
+                    .map(|var_def| (type_id, var_def))
+            });
+
+        match lookup {
+            None => {
+                self.error(TypeError::UnknownType(
+                    format!("{ty_name}.{var_name}"),
+                    span,
+                ));
+                Ty::Error
+            }
+            Some((type_id, var_def)) => {
+                if var_def.arity as usize != arg_tys.len() {
+                    self.error(TypeError::ArityMismatch {
+                        expected: var_def.arity as usize,
+                        got: arg_tys.len(),
+                        span,
+                    });
+                }
+
+                if type_id == TypeId::OPTION {
+                    let inner = arg_tys
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| self.fresh());
+                    Ty::Option(Box::new(inner))
+                } else if type_id == TypeId::RESULT {
+                    match var_def.idx {
+                        0 => {
+                            let ok = arg_tys
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| self.fresh());
+                            Ty::Result(Box::new(ok), Box::new(self.fresh()))
+                        }
+                        1 => {
+                            let err = arg_tys
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| self.fresh());
+                            Ty::Result(Box::new(self.fresh()), Box::new(err))
+                        }
+                        _ => Ty::Error,
+                    }
+                } else {
+                    match self.registry.get_def(type_id) {
+                        Some(TypeDef::Sum { type_params, .. }) => {
+                            let type_args: Vec<Ty> = type_params
+                                .iter()
+                                .map(|_| self.fresh())
+                                .collect();
+                            let subst: HashMap<StringId, Ty> = type_params
+                                .iter()
+                                .zip(type_args.iter())
+                                .map(|(p, a)| (*p, a.clone()))
+                                .collect();
+
+                            var_def
+                                .payloads
+                                .iter()
+                                .zip(arg_tys.iter())
+                                .for_each(|(expected_id, got)| {
+                                    let expected = self
+                                        .ast_type_to_ty(*expected_id, &subst);
+                                    self.unify(expected, got.clone(), span);
+                                });
+
+                            Ty::Named(type_id, type_args)
+                        }
+                        _ => {
+                            self.error(TypeError::UnknownType(
+                                format!("{ty_name}.{var_name}"),
+                                span,
+                            ));
+                            Ty::Error
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Infer types for a statement.
     ///
     /// Most statements don't produce a type, but function definitions
     /// bind the function name with its inferred type scheme in the environment.
     pub(crate) fn stmt(&mut self, id: StmtId) {
         let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
-        if let Some(stmt) = self.ast.get_stmt(id).cloned() {
-            self.stmt_inner(&stmt, span);
+        if let Some(Stmt::Fun {
+            name,
+            params,
+            ret,
+            body,
+        }) = self.ast.get_stmt(id).cloned()
+        {
+            self.fun(&name, &params, ret.as_ref(), body, span);
         }
-    }
-
-    /// Inner statement inference; dispatches on statement variant.
-    fn stmt_inner(&mut self, stmt: &Stmt, span: Span) {
-        match stmt {
-            Stmt::Fun {
-                name,
-                params,
-                ret,
-                body,
-            } => self.fun(name, params, ret.as_ref(), *body, span),
-
-            // Other statements handled in later phases
-            _ => {}
-        }
+        // Other statement types handled in later phases
     }
 
     /// Infer type of a named function definition.
@@ -1172,6 +1767,8 @@ impl<'a> InferCtx<'a> {
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
+
     use super::*;
 
     /// Test helper: create minimal context components for testing.
@@ -1189,7 +1786,7 @@ mod tests {
     impl TestState {
         fn new() -> Self {
             Self {
-                env: TypeEnv::new(),
+                env: TypeEnv::new(StringInterner::new()),
                 constraints: Vec::new(),
                 next_var: 0,
                 expr_types: HashMap::new(),
@@ -1332,9 +1929,11 @@ mod tests {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
+        // Clone interner before leaking registry; shared with TypeEnv
+        let strings = arena.strings.clone();
         // Leak to get 'static lifetime; tests don't need to clean up
         let registry = Box::leak(Box::new(registry));
-        InferCtx::new(ast, registry)
+        InferCtx::new(ast, registry, strings)
     }
 
     /// Create an AST with a single expression.
@@ -3695,5 +4294,565 @@ mod tests {
             scheme.unwrap().ty,
             Ty::Fn(vec![Ty::Int, Ty::Int], Box::new(Ty::Int))
         );
+    }
+
+    // Control Flow Tests (Phase 4.8)
+
+    #[test]
+    fn if_expr_same_branch_types() {
+        // IF true { 1 } ELSE { 2 } -> Int
+        let mut ast = Ast::new();
+        let span = Span::new(0, 30);
+
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), span)
+            .unwrap();
+        let then_br =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let else_br =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), span).unwrap();
+        let if_expr = ast
+            .add_expr(Expr::If(cond, then_br, Some(else_br)), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(if_expr);
+
+        assert_eq!(ty, Ty::Int);
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn if_expr_unifies_branch_types() {
+        // IF true { 1 } ELSE { "hello" } -> error (mismatch)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 40);
+
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), span)
+            .unwrap();
+        let then_br =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let else_br = ast
+            .add_expr(Expr::Literal(Literal::String("hello".into())), span)
+            .unwrap();
+        let if_expr = ast
+            .add_expr(Expr::If(cond, then_br, Some(else_br)), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(if_expr);
+
+        // Should have a unification constraint between Int and String
+        assert!(ctx.constraints().iter().any(|c| {
+            matches!(
+                c,
+                Constraint::Eq(Ty::Int, Ty::String, _)
+                    | Constraint::Eq(Ty::String, Ty::Int, _)
+            )
+        }));
+    }
+
+    #[test]
+    fn if_single_arm_requires_unit() {
+        // IF true { 42 } -> should unify body with Unit
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+
+        let cond = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), span)
+            .unwrap();
+        let then_br =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let if_expr =
+            ast.add_expr(Expr::If(cond, then_br, None), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(if_expr);
+
+        // Single-arm IF always returns Unit
+        assert_eq!(ty, Ty::Unit);
+        // Should have constraint unifying body with Unit
+        assert!(ctx.constraints().iter().any(|c| {
+            matches!(
+                c,
+                Constraint::Eq(Ty::Int, Ty::Unit, _)
+                    | Constraint::Eq(Ty::Unit, Ty::Int, _)
+            )
+        }));
+    }
+
+    #[test]
+    fn if_condition_must_be_bool() {
+        // IF 42 { 1 } ELSE { 2 } -> should unify condition with Bool
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+
+        let cond = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let then_br =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let else_br =
+            ast.add_expr(Expr::Literal(Literal::Int(2)), span).unwrap();
+        let if_expr = ast
+            .add_expr(Expr::If(cond, then_br, Some(else_br)), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(if_expr);
+
+        // Should have constraint unifying Int with Bool
+        assert!(ctx.constraints().iter().any(|c| {
+            matches!(
+                c,
+                Constraint::Eq(Ty::Int, Ty::Bool, _)
+                    | Constraint::Eq(Ty::Bool, Ty::Int, _)
+            )
+        }));
+    }
+
+    #[test]
+    fn block_empty_returns_unit() {
+        // { } -> Unit
+        let mut ast = Ast::new();
+        let span = Span::new(0, 5);
+
+        let block = ast.add_expr(Expr::Block(vec![], None), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(block);
+
+        assert_eq!(ty, Ty::Unit);
+    }
+
+    #[test]
+    fn block_with_tail_returns_tail_type() {
+        // { 42 } -> Int
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+
+        let tail = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let block =
+            ast.add_expr(Expr::Block(vec![], Some(tail)), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(block);
+
+        assert_eq!(ty, Ty::Int);
+    }
+
+    #[test]
+    fn block_with_string_tail() {
+        // { "hello" } -> String
+        let mut ast = Ast::new();
+        let span = Span::new(0, 15);
+
+        let tail = ast
+            .add_expr(Expr::Literal(Literal::String("hello".into())), span)
+            .unwrap();
+        let block =
+            ast.add_expr(Expr::Block(vec![], Some(tail)), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(block);
+
+        assert_eq!(ty, Ty::String);
+    }
+
+    // MATCH Expression Tests
+
+    #[test]
+    fn match_option_some_extracts_inner_type() {
+        // MATCH opt { Option.Some(x) => x, Option.None => 0 }
+        // With opt : Option[Int], x should be Int
+        let mut ast = Ast::new();
+        let span = Span::new(0, 50);
+
+        // Create scrutinee: Option.Some(42)
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Some".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        // Create patterns
+        let x_pat = ast.add_pattern(MatchPattern::Var("x".into())).unwrap();
+        let some_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec![x_pat],
+            ))
+            .unwrap();
+        let none_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Option".into(),
+                "None".into(),
+                smallvec![],
+            ))
+            .unwrap();
+
+        // Create arm bodies
+        let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let zero = ast.add_expr(Expr::Literal(Literal::Int(0)), span).unwrap();
+
+        // Create match expression
+        let arms = vec![
+            MatchArm {
+                pattern: some_pat,
+                guard: None,
+                body: x_var,
+            },
+            MatchArm {
+                pattern: none_pat,
+                guard: None,
+                body: zero,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(match_expr);
+
+        // Debug: print errors if any
+        if !ctx.errors.is_empty() {
+            eprintln!("Errors: {:?}", ctx.errors);
+        }
+
+        // Result should be Int (from both arms)
+        assert_eq!(ty, Ty::Int);
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn match_result_ok_and_err_extract_types() {
+        // MATCH res { Result.Ok(v) => v, Result.Err(e) => 0 }
+        let mut ast = Ast::new();
+        let span = Span::new(0, 60);
+
+        // Create scrutinee: Result.Ok(42)
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Ok".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        // Patterns
+        let v_pat = ast.add_pattern(MatchPattern::Var("v".into())).unwrap();
+        let ok_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Result".into(),
+                "Ok".into(),
+                smallvec![v_pat],
+            ))
+            .unwrap();
+
+        let e_pat = ast.add_pattern(MatchPattern::Var("e".into())).unwrap();
+        let err_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Result".into(),
+                "Err".into(),
+                smallvec![e_pat],
+            ))
+            .unwrap();
+
+        // Bodies
+        let v_var = ast.add_expr(Expr::Var("v".into()), span).unwrap();
+        let zero = ast.add_expr(Expr::Literal(Literal::Int(0)), span).unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: ok_pat,
+                guard: None,
+                body: v_var,
+            },
+            MatchArm {
+                pattern: err_pat,
+                guard: None,
+                body: zero,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(match_expr);
+
+        assert_eq!(ty, Ty::Int);
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn match_non_exhaustive_option_emits_error() {
+        // MATCH opt { Option.Some(x) => x } -- missing None
+        let mut ast = Ast::new();
+        let span = Span::new(0, 40);
+
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Some".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let x_pat = ast.add_pattern(MatchPattern::Var("x".into())).unwrap();
+        let some_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec![x_pat],
+            ))
+            .unwrap();
+
+        let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+
+        let arms = vec![MatchArm {
+            pattern: some_pat,
+            guard: None,
+            body: x_var,
+        }];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(match_expr);
+
+        // Should have NonExhaustiveMatch error
+        assert!(ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn match_wildcard_makes_exhaustive() {
+        // MATCH opt { Option.Some(x) => x, _ => 0 } -- wildcard covers None
+        let mut ast = Ast::new();
+        let span = Span::new(0, 50);
+
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Some".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let x_pat = ast.add_pattern(MatchPattern::Var("x".into())).unwrap();
+        let some_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec![x_pat],
+            ))
+            .unwrap();
+        let wildcard_pat = ast.add_pattern(MatchPattern::Wildcard).unwrap();
+
+        let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let zero = ast.add_expr(Expr::Literal(Literal::Int(0)), span).unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: some_pat,
+                guard: None,
+                body: x_var,
+            },
+            MatchArm {
+                pattern: wildcard_pat,
+                guard: None,
+                body: zero,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(match_expr);
+
+        assert_eq!(ty, Ty::Int);
+        // No NonExhaustiveMatch error
+        assert!(!ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn match_guarded_wildcard_not_exhaustive() {
+        // MATCH opt { Option.Some(x) => x, _ IF false => 0 }
+        // Guarded wildcard does NOT count for exhaustiveness (guard might fail)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 50);
+
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Some".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let x_pat = ast.add_pattern(MatchPattern::Var("x".into())).unwrap();
+        let some_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec![x_pat],
+            ))
+            .unwrap();
+        let wildcard_pat = ast.add_pattern(MatchPattern::Wildcard).unwrap();
+
+        let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let zero = ast.add_expr(Expr::Literal(Literal::Int(0)), span).unwrap();
+        let guard = ast
+            .add_expr(Expr::Literal(Literal::Bool(false)), span)
+            .unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: some_pat,
+                guard: None,
+                body: x_var,
+            },
+            MatchArm {
+                pattern: wildcard_pat,
+                guard: Some(guard), // Guard makes this arm not count!
+                body: zero,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(match_expr);
+
+        // Should have NonExhaustiveMatch because guarded wildcard doesn't cover
+        assert!(ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn match_arm_type_mismatch_emits_constraint() {
+        // MATCH opt { Option.Some(x) => x, Option.None => "hello" }
+        // Arms have Int and String; should emit unification constraint
+        let mut ast = Ast::new();
+        let span = Span::new(0, 60);
+
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Some".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let x_pat = ast.add_pattern(MatchPattern::Var("x".into())).unwrap();
+        let some_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec![x_pat],
+            ))
+            .unwrap();
+        let none_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Option".into(),
+                "None".into(),
+                smallvec![],
+            ))
+            .unwrap();
+
+        let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let hello = ast
+            .add_expr(Expr::Literal(Literal::String("hello".into())), span)
+            .unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: some_pat,
+                guard: None,
+                body: x_var,
+            },
+            MatchArm {
+                pattern: none_pat,
+                guard: None,
+                body: hello,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(match_expr);
+
+        // Should have constraint unifying Int with String
+        assert!(ctx.constraints().iter().any(|c| matches!(
+            c,
+            Constraint::Eq(Ty::Int, Ty::String, _)
+                | Constraint::Eq(Ty::String, Ty::Int, _)
+        )));
+    }
+
+    // Union type exhaustiveness tests
+
+    #[test]
+    fn match_union_exhaustive_with_is_patterns() {
+        // MATCH val { x IS Int => x, x IS String => 0 }
+        // where val : Int | String
+        let mut ast = Ast::new();
+        let span = Span::new(0, 50);
+
+        // Create type expressions for the union members
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let string_ty = ast
+            .add_type_expr(AstTypeExpr::Named("String".into()), span)
+            .unwrap();
+
+        // Create scrutinee as an Int literal (will have type Int, but we'll
+        // test exhaustiveness against the union conceptually)
+        let scrutinee =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+
+        // IS patterns
+        let int_is = ast
+            .add_pattern(MatchPattern::Is("x".into(), int_ty))
+            .unwrap();
+        let str_is = ast
+            .add_pattern(MatchPattern::Is("y".into(), string_ty))
+            .unwrap();
+
+        // Bodies
+        let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let zero = ast.add_expr(Expr::Literal(Literal::Int(0)), span).unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: int_is,
+                guard: None,
+                body: x_var,
+            },
+            MatchArm {
+                pattern: str_is,
+                guard: None,
+                body: zero,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(match_expr);
+
+        // Both arms return Int
+        assert_eq!(ty, Ty::Int);
     }
 }

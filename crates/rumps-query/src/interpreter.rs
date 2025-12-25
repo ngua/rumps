@@ -453,6 +453,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 name: vname_id,
                                 idx: idx as u8,
                                 arity: v.payloads.len() as u8,
+                                payloads: v.payloads.clone(),
                             }
                         })
                         .collect();
