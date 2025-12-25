@@ -3,7 +3,9 @@
 //! Defines the core types: `Ty` (types), `TyVar` (type variables), `Scheme`
 //! (polymorphic type schemes), and `Subst` (type substitutions).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
+
+use indexmap::IndexMap;
 
 use crate::intern::StringId;
 use crate::TypeId;
@@ -55,7 +57,7 @@ pub(crate) enum Ty {
     Fn(Vec<Self>, Box<Self>),
 
     /// Anonymous structural record; compatible if fields match.
-    Object(BTreeMap<StringId, Self>),
+    Object(IndexMap<StringId, Self>),
 
     /// User-defined type (sum types, structs, unions) with type parameters.
     Named(TypeId, Vec<Self>),

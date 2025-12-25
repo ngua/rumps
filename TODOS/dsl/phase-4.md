@@ -320,7 +320,7 @@ OUTPUT Object.values(obj)     ; [1, "hello"]
 - [x] Keep `BuiltinType::Object` for `Value::type_name` error messages
 
 #### Static Type Checker (typecheck/ty.rs)
-- [x] `Ty::Object(BTreeMap<StringId, Ty>)` already exists; no changes needed
+- [x] `Ty::Object(IndexMap<StringId, Ty>)` already exists; no changes needed
 - [x] Unification for structural objects is covered in Phase 4.12
 
 #### Tests
@@ -891,14 +891,14 @@ Infer types for arrays, tuples, objects, maps, and ranges.
 
 ### Collection Rules
 
-| Expression         | Type                       | Constraints                        |
-|--------------------|----------------------------|------------------------------------|
-| `[a, b, c]`        | `Array[?t]`                | `a ~ ?t`, `b ~ ?t`, `c ~ ?t`       |
-| `[]`               | `Array[?t]`                | (empty, `?t` is fresh)             |
-| `(a, b, c)`        | `(?a, ?b, ?c)`             | -                                  |
-| `{ x: a, y: b }`   | `{ x: ?a, y: ?b }`         | structural object type             |
-| `{ k => v, ... }`  | `Map[?k, ?v]`              | all keys ~ `?k`, all values ~ `?v` |
-| `a..b`, `a..=b`    | `Range`                    | `a ~ Int`, `b ~ Int`               |
+| Expression          | Type               | Constraints                        |
+|---------------------|--------------------|------------------------------------|
+| `[a, b, c]`         | `Array[?t]`        | `a ~ ?t`, `b ~ ?t`, `c ~ ?t`       |
+| `[]`                | `Array[?t]`        | (empty, `?t` is fresh)             |
+| `(a, b, c)`         | `(?a, ?b, ?c)`     | -                                  |
+| `{ x: a, y: b }`    | `{ x: ?a, y: ?b }` | structural object type             |
+| `{ k => v, ... }`   | `Map[?k, ?v]`      | all keys ~ `?k`, all values ~ `?v` |
+| `a .. b`, `a ..= b` | `Range`            | `a ~ Int`, `b ~ Int`               |
 
 ### Checklist
 
@@ -912,7 +912,8 @@ Infer types for arrays, tuples, objects, maps, and ranges.
   - [ ] Return `Ty::Tuple(vec![...])`
 - [ ] Handle `Expr::Object`:
   - [ ] Infer each field value
-  - [ ] Return `Ty::Object(BTreeMap { field: ty, ... })`
+  - [ ] Return `Ty::Object(IndexMap { field: ty, ... })`
+  - [ ] **NOTE**: You need to ensure that this works with nested object types!
 - [ ] Handle `Expr::MapLit`:
   - [ ] Infer key and value types
   - [ ] Unify all keys, unify all values
