@@ -350,7 +350,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate index access (array or object).
+    /// Evaluate index access (array, map, or string).
     #[async_recursion]
     pub(super) async fn index(
         &mut self,
@@ -379,13 +379,28 @@ impl<I: IoContext> Interpreter<'_, I> {
                         )
                     })
             }
-            (Value::Object(obj), Value::String(key)) => obj
-                .get(key)
-                .and_then(|id| self.arena.get(*id).cloned())
-                .ok_or_else(|| {
-                    let key_str = self.arena.get_str(*key).unwrap_or("?");
-                    Error::runtime(span, format!("key `{key_str}` not found"))
-                }),
+            (Value::Map(_, _, entries), key) => {
+                let map_key = self.value_to_map_key(key, span)?;
+                entries
+                    .get(&map_key)
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(span, format!("key not found in map"))
+                    })
+            }
+            (Value::String(sid), Value::Int(i)) => {
+                let s = self.arena.get_str(*sid).unwrap_or("");
+                let len = s.chars().count() as i64;
+                let index = if *i < 0 { len + *i } else { *i };
+                s.chars().nth(index as usize).map(Value::Char).ok_or_else(
+                    || {
+                        Error::runtime(
+                            span,
+                            format!("string index {i} out of bounds"),
+                        )
+                    },
+                )
+            }
             _ => Err(Error::runtime_type(
                 span,
                 format!(

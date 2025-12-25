@@ -1,5 +1,5 @@
-; Test: object field and bracket access
-; Tests dot notation and bracket notation for objects
+; Test: object field access
+; Tests dot notation for objects (bracket notation is for arrays/maps only)
 
 LET obj = { name: "Alice", age: 30, active: TRUE }
 
@@ -13,54 +13,21 @@ OUTPUT obj.age
 OUTPUT obj.active
 ; Expected: TRUE
 
-; Bracket notation with string literal
-OUTPUT obj["name"]
-; Expected: Alice
-
-OUTPUT obj["age"]
-; Expected: 30
-
-OUTPUT obj["active"]
-; Expected: TRUE
-
-; Bracket notation with string variable
-LET key = "name"
-OUTPUT obj[key]
-; Expected: Alice
-
-LET key2 = "age"
-OUTPUT obj[key2]
-; Expected: 30
-
-; Dynamic key lookup
-LET keys = ["name", "age", "active"]
-OUTPUT obj[keys[0]]
-; Expected: Alice
-
-OUTPUT obj[keys[1]]
-; Expected: 30
-
-; Nested object access (mixed notation)
+; Nested object access (dot notation)
 LET data = {
   user: {
     profile: {
-      firstName: "Bob",
-      lastName: "Smith"
+      first-name: "Bob",
+      last-name: "Smith"
     },
     scores: [90, 85, 95]
   }
 }
 
-OUTPUT data.user.profile.firstName
+OUTPUT data.user.profile.first-name
 ; Expected: Bob
 
-OUTPUT data["user"]["profile"]["lastName"]
-; Expected: Smith
-
-OUTPUT data.user["profile"].firstName
-; Expected: Bob
-
-OUTPUT data["user"].profile["lastName"]
+OUTPUT data.user.profile.last-name
 ; Expected: Smith
 
 OUTPUT data.user.scores[0]
@@ -69,20 +36,12 @@ OUTPUT data.user.scores[0]
 OUTPUT data.user.scores[-1]
 ; Expected: 95
 
-; Object with numeric string keys
-LET nums = { "1": "one", "2": "two", "3": "three" }
-OUTPUT nums["1"]
-; Expected: one
-
-OUTPUT nums["2"]
-; Expected: two
-
-; Object with special characters in keys (via bracket)
-LET special = { "my-key": "value1", "another.key": "value2" }
-OUTPUT special["my-key"]
+; Object with dashed keys (valid RUMPS identifiers)
+LET special = { my-key: "value1", another-key: "value2" }
+OUTPUT special.my-key
 ; Expected: value1
 
-OUTPUT special["another.key"]
+OUTPUT special.another-key
 ; Expected: value2
 
 OUTPUT "Object access test complete"

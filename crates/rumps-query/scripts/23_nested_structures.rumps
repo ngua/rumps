@@ -59,7 +59,7 @@ OUTPUT complex.users[1].scores[-1]
 OUTPUT complex.meta.tags[0]
 ; Expected: active
 
-OUTPUT complex["users"][1]["name"]
+OUTPUT complex.users[1].name
 ; Expected: Bob
 
 ; === Nested blocks ===
