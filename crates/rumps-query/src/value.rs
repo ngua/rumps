@@ -461,55 +461,6 @@ pub(crate) enum Value {
 }
 
 impl Value {
-    /// Check if this value is truthy.
-    ///
-    /// Falsy values: `false`, `0`, `0.0`, `""`, `[]`, `{}`, `Option.None`, `Result.Err`
-    pub(crate) fn is_truthy(
-        &self,
-        arena: &ValueArena,
-        type_exprs: &TypeExprArena,
-    ) -> bool {
-        match self {
-            Self::Unit => true, // Unit is truthy (like a non-empty tuple)
-            Self::Bool(b) => *b,
-            Self::Int(n) => *n != 0,
-            Self::Float(f) => f.0 != 0.0,
-            Self::Char(c) => *c != '\0',
-            Self::String(id) => {
-                arena.get_str(*id).map(|s| !s.is_empty()).unwrap_or(false)
-            }
-            Self::Array(_, elems) | Self::Tuple(_, elems) => !elems.is_empty(),
-            Self::Object(obj) => !obj.is_empty(),
-            Self::Map(_, _, entries) => !entries.is_empty(),
-            Self::Time(_) => true, // Time values are always truthy
-            Self::Json(j) => !j.is_null(), // JSON null is falsy
-            Self::Tagged(ty_expr, idx, _) => {
-                // Option.None and Result.Err are falsy; other variants are truthy
-                match type_exprs.base_type(*ty_expr) {
-                    Some(TypeId::OPTION) => *idx != 0, // Some is truthy
-                    Some(TypeId::RESULT) => *idx == 0, // Ok is truthy
-                    _ => true, // Unknown tagged → truthy
-                }
-            }
-            // Closures, functions, and module functions are always truthy
-            Self::Closure { .. }
-            | Self::Function { .. }
-            | Self::ModuleFn { .. } => true,
-            // Ranges are truthy if non-empty
-            Self::Range {
-                start,
-                end,
-                inclusive,
-            } => {
-                if *inclusive {
-                    start <= end
-                } else {
-                    start < end
-                }
-            }
-        }
-    }
-
     /// Get the type name of this value for error messages.
     ///
     /// Returns a structural type representation for objects (e.g., `{ name: String }`).
@@ -1540,56 +1491,6 @@ mod tests {
         assert!(!err.is_ok(&type_exprs));
         assert!(err.is_err(&type_exprs));
         assert!(unwrap_inner(&err, &type_exprs).is_none()); // Err doesn't unwrap
-    }
-
-    #[test]
-    fn truthy_falsy() {
-        let mut arena = ValueArena::new();
-        let mut type_exprs = TypeExprArena::new();
-        let _reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
-        let int_ty = type_exprs.named(TypeId::INT);
-        let unknown = type_exprs.named(TypeId::UNKNOWN);
-
-        // Falsy values
-        assert!(!Value::Bool(false).is_truthy(&arena, &type_exprs));
-        assert!(!Value::Int(0).is_truthy(&arena, &type_exprs));
-        assert!(!Value::Float(OrderedFloat(0.0)).is_truthy(&arena, &type_exprs));
-
-        let empty_str = arena.intern("");
-        assert!(!Value::String(empty_str).is_truthy(&arena, &type_exprs));
-        assert!(!Value::Array(int_ty, SmallVec::new())
-            .is_truthy(&arena, &type_exprs));
-        assert!(!Value::Object(IndexMap::new()).is_truthy(&arena, &type_exprs));
-
-        let opt_unknown =
-            type_exprs.app(TypeId::OPTION, smallvec::smallvec![unknown]);
-        let none = Value::none(opt_unknown);
-        assert!(!none.is_truthy(&arena, &type_exprs));
-
-        let res_err_ty = type_exprs
-            .app(TypeId::RESULT, smallvec::smallvec![unknown, int_ty]);
-        let err_val = arena.add(Value::Int(42), Span::new(5, 7));
-        let err = Value::err(res_err_ty, err_val);
-        assert!(!err.is_truthy(&arena, &type_exprs));
-
-        // Truthy values
-        assert!(Value::Bool(true).is_truthy(&arena, &type_exprs));
-        assert!(Value::Int(1).is_truthy(&arena, &type_exprs));
-        assert!(Value::Float(OrderedFloat(0.1)).is_truthy(&arena, &type_exprs));
-
-        let hello = arena.intern("hello");
-        assert!(Value::String(hello).is_truthy(&arena, &type_exprs));
-
-        let opt_int =
-            type_exprs.app(TypeId::OPTION, smallvec::smallvec![int_ty]);
-        let val = arena.add(Value::Int(1), Span::new(10, 11));
-        let some = Value::some(opt_int, val);
-        assert!(some.is_truthy(&arena, &type_exprs));
-
-        let res_ok_ty = type_exprs
-            .app(TypeId::RESULT, smallvec::smallvec![int_ty, unknown]);
-        let ok = Value::ok(res_ok_ty, val);
-        assert!(ok.is_truthy(&arena, &type_exprs));
     }
 
     #[test]

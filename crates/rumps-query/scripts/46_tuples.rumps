@@ -40,11 +40,6 @@ OUTPUT expr-tuple.0
 OUTPUT expr-tuple.1
 OUTPUT expr-tuple.2
 
-; Tuple truthiness (non-empty is truthy)
-IF pair {
-  OUTPUT "pair is truthy"
-}
-
 ; Tuple passed to closure
 LET get-first = t => t.0
 LET get-second = t => t.1

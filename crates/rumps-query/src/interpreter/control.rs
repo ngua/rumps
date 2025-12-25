@@ -202,8 +202,16 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             _ => {
                 let cond_val = self.eval(cond).await?;
-                let cond_true =
-                    cond_val.is_truthy(&self.arena, &self.type_exprs);
+                let cond_true = match cond_val {
+                    Value::Bool(b) => b,
+                    _ => {
+                        let span = self.ast.expr_span(cond).unwrap_or_default();
+                        Err(Error::runtime_type(
+                            span,
+                            "IF condition must be Bool",
+                        ))?
+                    }
+                };
 
                 match else_br {
                     Some(else_id) => {
@@ -346,7 +354,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a `MATCH` expression.
     ///
     /// Evaluates the scrutinee once, then tries each arm in order. The first
-    /// arm whose pattern matches (and whose guard, if any, is truthy) has its
+    /// arm whose pattern matches (and whose guard, if any, is `true`) has its
     /// body evaluated. Returns error if no arm matches.
     #[async_recursion]
     pub(super) async fn r#match(
@@ -382,8 +390,19 @@ impl<I: IoContext> Interpreter<'_, I> {
                             None => true,
                             Some(guard_expr) => {
                                 let guard_val = self.eval(guard_expr).await?;
-                                guard_val
-                                    .is_truthy(&self.arena, &self.type_exprs)
+                                match guard_val {
+                                    Value::Bool(b) => b,
+                                    _ => {
+                                        let g_span = self
+                                            .ast
+                                            .expr_span(guard_expr)
+                                            .unwrap_or_default();
+                                        Err(Error::runtime_type(
+                                            g_span,
+                                            "MATCH guard must be Bool",
+                                        ))?
+                                    }
+                                }
                             }
                         };
 

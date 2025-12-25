@@ -10,11 +10,6 @@ OUTPUT r1  ; 1..5
 LET r2 = 1 ..= 5
 OUTPUT r2  ; 1..=5
 
-; Range truthiness: non-empty ranges are truthy
-OUTPUT IF 1 .. 5 { "truthy" } ELSE { "falsy" }  ; truthy
-OUTPUT IF 5 .. 5 { "truthy" } ELSE { "falsy" }  ; falsy (exclusive empty)
-OUTPUT IF 5 ..= 5 { "truthy" } ELSE { "falsy" }  ; truthy (inclusive has 1 element)
-
 ; Range with expressions: binds looser than additive
 ; So `1 .. n + 1` parses as `1..(n + 1)`, not `(1..n) + 1`
 LET n = 3

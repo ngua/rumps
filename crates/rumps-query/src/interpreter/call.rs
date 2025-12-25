@@ -500,7 +500,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// `Array.filter(predicate, arr) -> Array`
     ///
     /// Returns a new array containing only elements for which `predicate`
-    /// returns a truthy value. Also works with Range values.
+    /// returns `true`. Also works with Range values.
     #[async_recursion]
     async fn array_filter(
         &mut self,
@@ -602,7 +602,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Error::runtime(span, "Array.filter: invalid result")
                 })?;
 
-            let keep = result_val.is_truthy(&self.arena, &self.type_exprs);
+            let keep = match result_val {
+                Value::Bool(b) => b,
+                _ => Err(Error::runtime_type(
+                    span,
+                    "Array.filter predicate must return Bool",
+                ))?,
+            };
             let mut new_acc = acc;
             if keep {
                 new_acc.push(int_id);
@@ -639,7 +645,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                         Error::runtime(span, "Array.filter: invalid result")
                     })?;
 
-                let keep = result_val.is_truthy(&self.arena, &self.type_exprs);
+                let keep = match result_val {
+                    Value::Bool(b) => b,
+                    _ => Err(Error::runtime_type(
+                        span,
+                        "Array.filter predicate must return Bool",
+                    ))?,
+                };
                 let mut new_acc = acc;
                 if keep {
                     new_acc.push(*head);

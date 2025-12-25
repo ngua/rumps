@@ -66,13 +66,13 @@ OUTPUT missing
 
 ; Without coalesce, result is Option.Some
 LET result = { value: 10 }?.value
-; result is Option.Some(10), which is truthy
-OUTPUT IF result { "has value" } ELSE { "no value" }
+; result is Option.Some(10); check with IS
+OUTPUT IF result IS Option.Some(_) { "has value" } ELSE { "no value" }
 ; Expected: has value
 
-; None result is falsy
+; None result
 LET result2 = Option.None?.value
-OUTPUT IF result2 { "has value" } ELSE { "no value" }
+OUTPUT IF result2 IS Option.Some(_) { "has value" } ELSE { "no value" }
 ; Expected: no value
 
 OUTPUT "Optional chaining tests complete"

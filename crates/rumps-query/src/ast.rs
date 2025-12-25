@@ -438,7 +438,7 @@ pub(crate) struct MatchArm {
     /// Optional guard condition: `IF cond`.
     ///
     /// If present, the arm only matches if the pattern matches AND the guard
-    /// evaluates to truthy. Variables bound by the pattern are visible in the
+    /// evaluates to `true`. Variables bound by the pattern are visible in the
     /// guard.
     pub(crate) guard: Option<ExprId>,
 
@@ -631,7 +631,7 @@ pub(crate) enum Expr {
     /// Match expression: `MATCH expr { pattern => body, ... }`.
     ///
     /// Evaluates the scrutinee once, then tries each arm in order. The first
-    /// arm whose pattern matches (and whose guard, if any, is truthy) has its
+    /// arm whose pattern matches (and whose guard, if any, is `true`) has its
     /// body evaluated. Errors if no arm matches.
     Match(ExprId, Vec<MatchArm>),
 

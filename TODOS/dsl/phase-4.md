@@ -855,10 +855,10 @@ Infer types for unary and binary operators.
 
 ### Unary Operator Rules
 
-| Operator | Constraint         | Result Type     |
-|----------|--------------------|-----------------|
-| `-`      | `Numeric(operand)` | same as operand |
-| `!`      | `operand ~ Bool`   | `Bool`          |
+| Operator      | Constraint         | Result Type     |
+|---------------|--------------------|-----------------|
+| `-`           | `Numeric(operand)` | same as operand |
+| `!` (prefix)  | `operand ~ Bool`   | `Bool`          |
 
 ### Checklist
 
@@ -1000,7 +1000,7 @@ Infer types for conditionals, blocks, and match expressions.
 | Expression                | Type        | Constraints                    |
 |---------------------------|-------------|--------------------------------|
 | `IF c { a } ELSE { b }`   | `?t`        | `c ~ Bool`, `a ~ ?t`, `b ~ ?t` |
-| `BLOCK { ...; e }`        | type of `e` | -                              |
+| `{ ... e }` (block)       | type of `e` | -                              |
 | `MATCH e { p => b, ... }` | `?t`        | all branches ~ `?t`            |
 
 ### Branch Type Consistency
@@ -1157,7 +1157,7 @@ This is handled in `Expr::If` inference, not in `Expr::Is` — the IF recognizes
 
 #### Note on `Storable AS _`
 
-For ergonomics, we should treat _any_ `Storable AS T`, where `T` is a member of the `Storable` union, as infallible. That is, users can _always_ cast from `Storable` to one of those concrete types. We will fall back on a `crate::Error::RuntimeType` error
+For ergonomics, we should treat _any_ `Storable AS T`, where `T` is a member of the `Storable` union, as infallible. That is, users can _always_ cast from `Storable` to one of those concrete types. We will fall back on a `crate::Error::RuntimeType` error. This does **not** apply to other uses of `AS`, which should be infallible (i.e. `T` to `String`, `Int` to `Float`, etc...)
 
 ### Checklist
 
@@ -1174,7 +1174,7 @@ For ergonomics, we should treat _any_ `Storable AS T`, where `T` is a member of 
   - [ ] Parse target type from annotation
   - [ ] If target is `Json`, add `Jsonable` constraint on operand
   - [ ] If operand type is `Storable` and target is a member type, return target (infallible)
-  - [ ] Otherwise, require type compatibility (e.g., `Int AS Float` for widening)
+  - [ ] Otherwise, require type compatibility (e.g., `Int AS Float` for widening; any `T` is `Stringable`, etc...)
   - [ ] For incompatible types, emit error; use `READ` for fallible conversion or `MATCH`/`IS` for narrowing
 - [ ] Handle `Expr::Read`:
   - [ ] Parse target type
@@ -1687,6 +1687,10 @@ fn check_unit(&self, val: ValueId, span: Span) -> Result<()> {
 - [ ] Remove `check_unit()` function entirely
 - [ ] `r#if()`: Remove `check_unit` call
 - [ ] `if_with_bindings()`: Remove `check_unit` call
+- [ ] `r#if()`: Remove `Bool` check on condition (type checker guarantees `Bool`)
+- [ ] `try_match_arms()`: Remove `Bool` check on guard (type checker guarantees `Bool`)
+- [ ] `array_filter_rec()`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
+- [ ] `range_filter_rec()`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
 
 ---
 
@@ -1961,7 +1965,7 @@ Once the type-checker reliably catches the error, remove the corresponding runti
 - [ ] Remove unwrap type checks
 
 **Range:**
-- [ ] Write test: `"a".."z"` (non-Int range bounds)
+- [ ] Write test: `"a" .. "z"` (non-Int range bounds)
 - [ ] Verify type-checker catches `Mismatch`
 - [ ] Remove range type checks
 
@@ -2069,3 +2073,23 @@ Users can:
 3. Use `AS` to cast (runtime, may fail)
 
 This is more precise than `Any` since we know exactly what the DB can store, and users have first-class tools (`IS`, `AS`) to work with unions.
+
+---
+
+## Note: Truthiness Removed
+
+As part of preparing for the static type system, the concept of "truthiness" was removed from RUMPS. Previously, values like `0`, `""`, `[]`, `{}`, `Option.None`, and `Result.Err` were "falsy", while other values were "truthy". This allowed using any value in `IF` conditions.
+
+With the move to static typing:
+- `IF` conditions now require `Bool` type explicitly
+- `MATCH` guards require `Bool` type explicitly
+- `Array.filter` predicates must return `Bool`
+
+To check if an `Option` has a value, use `opt IS Option.Some(_)` instead of relying on truthiness. This is more explicit and type-safe.
+
+**Removed:**
+- `Value::is_truthy()` method
+- Truthiness tests in `value.rs`
+- Range truthiness tests (`IF 1..5 { ... }`)
+- Tuple truthiness tests (`IF pair { ... }`)
+- Option truthiness in conditions (`IF result { ... }` → `IF result IS Option.Some(_) { ... }`)
