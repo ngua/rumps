@@ -1334,36 +1334,36 @@ unify(_, _) = error
 
 ### Checklist
 
-- [ ] Create `typecheck/unify.rs`
-- [ ] `impl InferCtx`: `fn unify_types(&mut self, t1: &Ty, t2: &Ty, span: Span) -> Option<Subst>`
-- [ ] Handle `Var` binding (with occurs check)
-- [ ] Handle primitive equality
-- [ ] Handle numeric coercion (`Int` ~ `Float`)
-- [ ] Handle `Array`, `Option`, `Result`, `Map` recursively
-- [ ] Handle `Tuple` (element-wise, same length)
-- [ ] Handle `Fn` (params + return)
-- [ ] Handle structural objects (`Ty::Object`): unify common fields, allow extras
-- [ ] Handle `Named` (same TypeId, unify params)
-- [ ] Handle `Named` struct with structural object (extensible record check):
-  - [ ] Look up required fields from TypeRegistry
-  - [ ] Check all required fields present in structural object
-  - [ ] Unify each required field's type
-  - [ ] Extra fields in structural object are allowed (extensible)
-- [ ] Handle `Unknown` (unifies with anything)
-- [ ] Handle `Error` (unifies with anything, for recovery)
-- [ ] `impl InferCtx`: `fn solve_constraints(&mut self) -> Subst`
-  - [ ] Process `Eq` constraints via unification
-  - [ ] Process `Numeric` constraints (check resolved type is `Int` or `Float`)
-  - [ ] Process `Callable` constraints (unify with `Fn` type)
-  - [ ] Process `Stringable` constraints (always satisfied; marks implicit coercion)
-  - [ ] Process `Jsonable` constraints (reject `Closure`, `Function`, `ModuleFn`)
-  - [ ] Process `Subscript` constraints (check is `Bool | Int | Float | Char | String | Json`)
-  - [ ] Process `Storable` constraints (check is `Bool | Int | Float | Char | String | Json`)
-  - [ ] Process `Unwrappable` constraints:
-    - [ ] Check `ty` is `Option[?t]` or `Result[?t, ?e]`
-    - [ ] Unify `inner` with extracted `?t`
-    - [ ] Emit `TypeError::NotUnwrappable` if neither
-  - [ ] Compose all substitutions
+- [x] Create `typecheck/unify.rs`
+- [x] `impl InferCtx`: `fn unify_types(&mut self, t1: &Ty, t2: &Ty, span: Span) -> Option<Subst>`
+- [x] Handle `Var` binding (with occurs check)
+- [x] Handle primitive equality
+- [x] Handle numeric coercion (`Int` ~ `Float`)
+- [x] Handle `Array`, `Option`, `Result`, `Map` recursively
+- [x] Handle `Tuple` (element-wise, same length)
+- [x] Handle `Fn` (params + return)
+- [x] Handle structural objects (`Ty::Object`): unify common fields, allow extras
+- [x] Handle `Named` (same TypeId, unify params)
+- [x] Handle `Named` struct with structural object (extensible record check):
+  - [x] Look up required fields from TypeRegistry
+  - [x] Check all required fields present in structural object
+  - [x] Unify each required field's type
+  - [x] Extra fields in structural object are allowed (extensible)
+- [x] Handle `Unknown` (unifies with anything)
+- [x] Handle `Error` (unifies with anything, for recovery)
+- [x] `impl InferCtx`: `fn solve_constraints(&mut self) -> Subst`
+  - [x] Process `Eq` constraints via unification
+  - [x] Process `Numeric` constraints (check resolved type is `Int` or `Float`)
+  - [x] Process `Callable` constraints (unify with `Fn` type)
+  - [x] Process `Stringable` constraints (always satisfied; marks implicit coercion)
+  - [x] Process `Jsonable` constraints (reject `Closure`, `Function`, `ModuleFn`)
+  - [x] Process `Subscript` constraints (check is `Bool | Int | Float | Char | String | Json`)
+  - [x] Process `Storable` constraints (check is `Bool | Int | Float | Char | String | Json`)
+  - [x] Process `Unwrappable` constraints:
+    - [x] Check `ty` is `Option[?t]` or `Result[?t, ?e]`
+    - [x] Unify `inner` with extracted `?t`
+    - [x] Emit `TypeError::NotUnwrappable` if neither
+  - [x] Compose all substitutions
 
 ---
 

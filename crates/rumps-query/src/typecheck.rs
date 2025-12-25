@@ -17,6 +17,7 @@ mod env;
 mod error;
 mod infer;
 mod ty;
+mod unify;
 
 pub(crate) use env::TypeEnv;
 pub(crate) use error::TypeError;

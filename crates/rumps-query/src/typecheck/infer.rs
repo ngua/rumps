@@ -674,7 +674,7 @@ impl<'a> InferCtx<'a> {
     ///
     /// The `subst` map substitutes type parameter names with concrete types;
     /// used for generic struct field resolution.
-    fn ast_type_to_ty(
+    pub(super) fn ast_type_to_ty(
         &mut self,
         id: AstTypeExprId,
         subst: &HashMap<StringId, Ty>,
