@@ -850,9 +850,6 @@ Infer types for unary and binary operators.
 | `\|>`                    | `Callable(rhs, [lhs], ?r)`            | `?r`                                             |
 | `..`, `..=`              | `lhs ~ Int`, `rhs ~ Int`              | `Range`                                          |
 
-
-**NOTE**: The preceding table was written before "Phase 4.0.0: Add Json Type". Refer to that phase for implemented JSON operators and their result type.
-
 ### Unary Operator Rules
 
 | Operator      | Constraint         | Result Type     |
@@ -862,26 +859,26 @@ Infer types for unary and binary operators.
 
 ### Checklist
 
-- [ ] `impl InferCtx`: `fn infer_binary(&mut self, lhs: ExprId, op: BinOp, rhs: ExprId, span: Span) -> Ty`
-- [ ] Handle arithmetic ops (`Add`, `Sub`, `Mul`, `Mod`, `Pow`):
-  - [ ] Add `Numeric` constraints for both operands
-  - [ ] Result: fresh var with numeric constraint (or `Float` if either operand is `Float`)
-- [ ] Handle `Div` -> always `Float`
-- [ ] Handle `FloorDiv` -> always `Int`
-- [ ] Handle comparison ops -> `Bool`
-- [ ] Handle logical ops (`And`, `Or`) -> unify both with `Bool`, return `Bool`
-- [ ] Handle `Concat` -> add `Stringable` constraint for both, return `String`
-- [ ] Handle `Coalesce`:
-  - [ ] Check lhs is `Option[?t]` or `Result[?t, _]`
-  - [ ] Unify rhs with `?t`
-  - [ ] Return `?t`
-- [ ] Handle `Pipe`:
-  - [ ] Add `Callable` constraint
-  - [ ] Return fresh var for result
-- [ ] Handle `Range`, `RangeInclusive` -> `Range`
-- [ ] `impl InferCtx`: `fn infer_unary(&mut self, op: UnaryOp, operand: ExprId, span: Span) -> Ty`
-- [ ] Handle `Neg` -> add `Numeric` constraint, return same type
-- [ ] Handle `Not` -> unify with `Bool`, return `Bool`
+- [x] `impl InferCtx`: `fn infer_binary(&mut self, lhs: ExprId, op: BinOp, rhs: ExprId, span: Span) -> Ty`
+- [x] Handle arithmetic ops (`Add`, `Sub`, `Mul`, `Mod`, `Pow`):
+  - [x] Add `Numeric` constraints for both operands
+  - [x] Result: fresh var with numeric constraint (or `Float` if either operand is `Float`)
+- [x] Handle `Div` -> always `Float`
+- [x] Handle `FloorDiv` -> always `Int`
+- [x] Handle comparison ops -> `Bool`
+- [x] Handle logical ops (`And`, `Or`) -> unify both with `Bool`, return `Bool`
+- [x] Handle `Concat` -> add `Stringable` constraint for both, return `String`
+- [x] Handle `Coalesce`:
+  - [x] Check lhs is `Option[?t]` or `Result[?t, _]`
+  - [x] Unify rhs with `?t`
+  - [x] Return `?t`
+- [x] Handle `Pipe`:
+  - [x] Add `Callable` constraint
+  - [x] Return fresh var for result
+- [x] Handle `Range`, `RangeInclusive` -> `Range`
+- [x] `impl InferCtx`: `fn infer_unary(&mut self, op: UnaryOp, operand: ExprId, span: Span) -> Ty`
+- [x] Handle `Neg` -> add `Numeric` constraint, return same type
+- [x] Handle `Not` -> unify with `Bool`, return `Bool`
 
 ---
 
@@ -936,6 +933,8 @@ Infer types for field access, tuple indexing, and array indexing.
 | `obj.?field` | `Option[?t]`          | optional field access                                                    |
 | `tuple.0`    | element type at index | -                                                                        |
 | `arr[i]`     | `?t`                  | `arr ~ Array[?t]`, `i ~ Int`                                             |
+
+**NOTE**: The preceding table was written before "Phase 4.0.0: Add Json Type". Refer to that phase for implemented JSON operators and their result type. E.g. `..`, `->>`
 
 ### Checklist
 

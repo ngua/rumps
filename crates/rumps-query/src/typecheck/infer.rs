@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use super::env::TypeEnv;
 use super::error::TypeError;
 use super::ty::{Ty, TyVar};
-use crate::ast::{Ast, Expr, ExprId, Literal};
+use crate::ast::{Ast, BinOp, Expr, ExprId, Literal, UnOp};
 use crate::value::TypeRegistry;
 use crate::Span;
 
@@ -275,6 +275,23 @@ impl<'a> InferCtx<'a> {
             // Variable reference
             Expr::Var(name) => self.infer_var(name, span),
 
+            // Binary operations
+            Expr::Binary(lhs, op, rhs) => {
+                self.infer_binary(*lhs, *op, *rhs, span)
+            }
+
+            // Unary operations
+            Expr::Unary(op, operand) => self.infer_unary(*op, *operand, span),
+
+            // Range expressions
+            Expr::Range(start, end, _inclusive) => {
+                let start_ty = self.infer_expr(*start);
+                let end_ty = self.infer_expr(*end);
+                self.unify(start_ty, Ty::Int, span);
+                self.unify(end_ty, Ty::Int, span);
+                Ty::Range
+            }
+
             // Other expressions handled in later phases
             _ => Ty::Error,
         }
@@ -304,6 +321,125 @@ impl<'a> InferCtx<'a> {
             None => {
                 self.error(TypeError::UndefinedVar(name.to_string(), span));
                 Ty::Error
+            }
+        }
+    }
+
+    /// Infer type of a binary operation.
+    ///
+    /// Generates appropriate constraints based on the operator and returns
+    /// the result type.
+    fn infer_binary(
+        &mut self,
+        lhs_id: ExprId,
+        op: BinOp,
+        rhs_id: ExprId,
+        span: Span,
+    ) -> Ty {
+        let lhs_ty = self.infer_expr(lhs_id);
+        let rhs_ty = self.infer_expr(rhs_id);
+
+        match op {
+            // Arithmetic: both numeric, result depends on operand types
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod | BinOp::Pow => {
+                self.constrain(Constraint::Numeric(lhs_ty.clone(), span));
+                self.constrain(Constraint::Numeric(rhs_ty.clone(), span));
+                // If either is Float, result is Float; else fresh numeric
+                if lhs_ty == Ty::Float || rhs_ty == Ty::Float {
+                    Ty::Float
+                } else if lhs_ty == Ty::Int && rhs_ty == Ty::Int {
+                    Ty::Int
+                } else {
+                    // One or both are type vars; result is fresh numeric
+                    let result = self.fresh();
+                    self.constrain(Constraint::Numeric(result.clone(), span));
+                    result
+                }
+            }
+
+            // Division always returns Float
+            BinOp::Div => {
+                self.constrain(Constraint::Numeric(lhs_ty, span));
+                self.constrain(Constraint::Numeric(rhs_ty, span));
+                Ty::Float
+            }
+
+            // Floor division always returns Int
+            BinOp::FloorDiv => {
+                self.constrain(Constraint::Numeric(lhs_ty, span));
+                self.constrain(Constraint::Numeric(rhs_ty, span));
+                Ty::Int
+            }
+
+            // Comparison: operands must unify, result is Bool
+            BinOp::Eq
+            | BinOp::Ne
+            | BinOp::Lt
+            | BinOp::Gt
+            | BinOp::Le
+            | BinOp::Ge => {
+                self.unify(lhs_ty, rhs_ty, span);
+                Ty::Bool
+            }
+
+            // Logical: both must be Bool, result is Bool
+            BinOp::And | BinOp::Or => {
+                self.unify(lhs_ty, Ty::Bool, span);
+                self.unify(rhs_ty, Ty::Bool, span);
+                Ty::Bool
+            }
+
+            // String concatenation: lhs is String, rhs is Stringable
+            BinOp::Concat => {
+                self.unify(lhs_ty, Ty::String, span);
+                self.constrain(Constraint::Stringable(rhs_ty, span));
+                Ty::String
+            }
+
+            // Coalesce: lhs is Option[T] or Result[T, E], rhs unifies with T
+            BinOp::Coalesce => {
+                let inner = self.fresh();
+                self.constrain(Constraint::Unwrappable {
+                    ty: lhs_ty,
+                    inner: inner.clone(),
+                    span,
+                });
+                self.unify(rhs_ty, inner.clone(), span);
+                inner
+            }
+
+            // Pipe: rhs is callable with lhs as argument
+            BinOp::Pipe => {
+                let result = self.fresh();
+                self.constrain(Constraint::Callable {
+                    callee: rhs_ty,
+                    args: smallvec::smallvec![lhs_ty],
+                    ret: result.clone(),
+                    span,
+                });
+                result
+            }
+        }
+    }
+
+    /// Infer type of a unary operation.
+    ///
+    /// Generates appropriate constraints based on the operator and returns
+    /// the result type.
+    fn infer_unary(&mut self, op: UnOp, operand_id: ExprId, span: Span) -> Ty {
+        let operand_ty = self.infer_expr(operand_id);
+
+        match op {
+            // Negation: operand must be numeric, result is same type
+            UnOp::Neg => {
+                self.constrain(Constraint::Numeric(operand_ty.clone(), span));
+                operand_ty
+            }
+
+            // Logical not: operand must be Bool, result is Bool
+            UnOp::Not => {
+                self.unify(operand_ty, Ty::Bool, span);
+                Ty::Bool
             }
         }
     }
@@ -617,5 +753,505 @@ mod tests {
         let mut ctx = test_ctx(&ast);
         let ty = ctx.infer_expr(id);
         assert_eq!(ctx.get_type(id), Some(&ty));
+    }
+
+    /// Helper to create AST with binary expression from two literals.
+    fn ast_with_binary(lhs: Literal, op: BinOp, rhs: Literal) -> (Ast, ExprId) {
+        let mut ast = Ast::new();
+        let l = ast.add_expr(Expr::Literal(lhs), Span::new(0, 1)).unwrap();
+        let r = ast.add_expr(Expr::Literal(rhs), Span::new(4, 5)).unwrap();
+        let bin = ast
+            .add_expr(Expr::Binary(l, op, r), Span::new(0, 5))
+            .unwrap();
+        (ast, bin)
+    }
+
+    // Arithmetic operators
+
+    #[test]
+    fn infer_add_int_int() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(1), BinOp::Add, Literal::Int(2));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Int);
+        // Should have 2 Numeric constraints for operands
+        let numerics: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Numeric(_, _)))
+            .collect();
+        assert_eq!(numerics.len(), 2);
+    }
+
+    #[test]
+    fn infer_add_float_float() {
+        let (ast, id) = ast_with_binary(
+            Literal::Float(1.0),
+            BinOp::Add,
+            Literal::Float(2.0),
+        );
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Float);
+    }
+
+    #[test]
+    fn infer_add_int_float() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(1), BinOp::Add, Literal::Float(2.0));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Float); // Widening to Float
+    }
+
+    #[test]
+    fn infer_add_float_int() {
+        let (ast, id) =
+            ast_with_binary(Literal::Float(1.0), BinOp::Add, Literal::Int(2));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Float);
+    }
+
+    #[test]
+    fn infer_sub_int_int() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(5), BinOp::Sub, Literal::Int(3));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Int);
+    }
+
+    #[test]
+    fn infer_mul_int_float() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(2), BinOp::Mul, Literal::Float(3.5));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Float);
+    }
+
+    #[test]
+    fn infer_mod_int_int() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(10), BinOp::Mod, Literal::Int(3));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Int);
+    }
+
+    #[test]
+    fn infer_pow_int_int() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(2), BinOp::Pow, Literal::Int(3));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Int);
+    }
+
+    #[test]
+    fn infer_pow_float_int() {
+        let (ast, id) =
+            ast_with_binary(Literal::Float(2.0), BinOp::Pow, Literal::Int(3));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Float);
+    }
+
+    // Division operators
+
+    #[test]
+    fn infer_div_int_int_returns_float() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(10), BinOp::Div, Literal::Int(3));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Float); // Division always Float
+    }
+
+    #[test]
+    fn infer_floor_div_int_int_returns_int() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(10), BinOp::FloorDiv, Literal::Int(3));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Int); // Floor division always Int
+    }
+
+    #[test]
+    fn infer_floor_div_float_float_returns_int() {
+        let (ast, id) = ast_with_binary(
+            Literal::Float(10.0),
+            BinOp::FloorDiv,
+            Literal::Float(3.0),
+        );
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Int); // Floor division always Int
+    }
+
+    // Comparison operators
+
+    #[test]
+    fn infer_eq_int_int() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(1), BinOp::Eq, Literal::Int(2));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+        // Should have Eq constraint unifying operands
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Eq(_, _, _))));
+    }
+
+    #[test]
+    fn infer_ne_returns_bool() {
+        let (ast, id) = ast_with_binary(
+            Literal::String("a".into()),
+            BinOp::Ne,
+            Literal::String("b".into()),
+        );
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+    }
+
+    #[test]
+    fn infer_lt_returns_bool() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(1), BinOp::Lt, Literal::Int(2));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+    }
+
+    #[test]
+    fn infer_gt_returns_bool() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(5), BinOp::Gt, Literal::Int(3));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+    }
+
+    #[test]
+    fn infer_le_returns_bool() {
+        let (ast, id) = ast_with_binary(
+            Literal::Float(1.0),
+            BinOp::Le,
+            Literal::Float(2.0),
+        );
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+    }
+
+    #[test]
+    fn infer_ge_returns_bool() {
+        let (ast, id) =
+            ast_with_binary(Literal::Int(5), BinOp::Ge, Literal::Int(5));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+    }
+
+    // Logical operators
+
+    #[test]
+    fn infer_and_bool_bool() {
+        let (ast, id) = ast_with_binary(
+            Literal::Bool(true),
+            BinOp::And,
+            Literal::Bool(false),
+        );
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+        // Should have 2 Eq constraints unifying operands with Bool
+        let eqs: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Eq(_, Ty::Bool, _)))
+            .collect();
+        assert_eq!(eqs.len(), 2);
+    }
+
+    #[test]
+    fn infer_or_bool_bool() {
+        let (ast, id) = ast_with_binary(
+            Literal::Bool(false),
+            BinOp::Or,
+            Literal::Bool(true),
+        );
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+    }
+
+    // String concatenation
+
+    #[test]
+    fn infer_concat_string_string() {
+        let (ast, id) = ast_with_binary(
+            Literal::String("hello".into()),
+            BinOp::Concat,
+            Literal::String(" world".into()),
+        );
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::String);
+        // Should have Stringable constraint for rhs
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Stringable(_, _))));
+    }
+
+    #[test]
+    fn infer_concat_string_int() {
+        // String ++ Int is valid; Int is Stringable
+        let (ast, id) = ast_with_binary(
+            Literal::String("count: ".into()),
+            BinOp::Concat,
+            Literal::Int(42),
+        );
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::String);
+        // Stringable constraint on Int
+        let stringables: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Stringable(Ty::Int, _)))
+            .collect();
+        assert_eq!(stringables.len(), 1);
+    }
+
+    // Coalesce
+
+    #[test]
+    fn infer_coalesce_creates_unwrappable_constraint() {
+        // For coalesce, lhs needs to be Option[T] or Result[T, E]
+        // Here we test with a variable that would be Option[Int]
+        let mut ast = Ast::new();
+        let lhs = ast
+            .add_expr(Expr::Var("opt".into()), Span::new(0, 3))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(7, 8))
+            .unwrap();
+        let coal = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Coalesce, rhs), Span::new(0, 8))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        // Bind "opt" to Option[Int]
+        ctx.env_mut()
+            .bind("opt", Scheme::mono(Ty::Option(Box::new(Ty::Int))));
+        let ty = ctx.infer_expr(coal);
+
+        // Result should be fresh var unified with rhs (Int)
+        match ty {
+            Ty::Var(_) => {
+                // Should have Unwrappable constraint
+                assert!(ctx
+                    .constraints()
+                    .iter()
+                    .any(|c| matches!(c, Constraint::Unwrappable { .. })));
+                // And Eq constraint unifying inner with rhs
+                assert!(ctx
+                    .constraints()
+                    .iter()
+                    .any(|c| matches!(c, Constraint::Eq(_, _, _))));
+            }
+            _ => panic!("expected type variable, got {ty:?}"),
+        }
+    }
+
+    // Pipe
+
+    #[test]
+    fn infer_pipe_creates_callable_constraint() {
+        // 42 |> f should add Callable constraint on f
+        let mut ast = Ast::new();
+        let lhs = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Var("f".into()), Span::new(6, 7))
+            .unwrap();
+        let pipe = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Pipe, rhs), Span::new(0, 7))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        // Bind "f" to Int -> String
+        ctx.env_mut().bind(
+            "f",
+            Scheme::mono(Ty::Fn(vec![Ty::Int], Box::new(Ty::String))),
+        );
+        let ty = ctx.infer_expr(pipe);
+
+        // Result is fresh var
+        match ty {
+            Ty::Var(_) => {
+                // Should have Callable constraint
+                let callables: Vec<_> = ctx
+                    .constraints()
+                    .iter()
+                    .filter(|c| matches!(c, Constraint::Callable { .. }))
+                    .collect();
+                assert_eq!(callables.len(), 1);
+            }
+            _ => panic!("expected type variable, got {ty:?}"),
+        }
+    }
+
+    // Unary operators
+
+    #[test]
+    fn infer_neg_int() {
+        let mut ast = Ast::new();
+        let operand = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(1, 3))
+            .unwrap();
+        let neg = ast
+            .add_expr(Expr::Unary(UnOp::Neg, operand), Span::new(0, 3))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(neg);
+        assert_eq!(ty, Ty::Int);
+        // Should have Numeric constraint
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Numeric(Ty::Int, _))));
+    }
+
+    #[test]
+    fn infer_neg_float() {
+        let mut ast = Ast::new();
+        let operand = ast
+            .add_expr(Expr::Literal(Literal::Float(3.14)), Span::new(1, 5))
+            .unwrap();
+        let neg = ast
+            .add_expr(Expr::Unary(UnOp::Neg, operand), Span::new(0, 5))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(neg);
+        assert_eq!(ty, Ty::Float);
+    }
+
+    #[test]
+    fn infer_not_bool() {
+        let mut ast = Ast::new();
+        let operand = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(1, 5))
+            .unwrap();
+        let not = ast
+            .add_expr(Expr::Unary(UnOp::Not, operand), Span::new(0, 5))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(not);
+        assert_eq!(ty, Ty::Bool);
+        // Should have Eq constraint unifying operand with Bool
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Eq(Ty::Bool, Ty::Bool, _))));
+    }
+
+    // Range
+
+    #[test]
+    fn infer_range_int_int() {
+        let mut ast = Ast::new();
+        let start = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(0, 1))
+            .unwrap();
+        let end = ast
+            .add_expr(Expr::Literal(Literal::Int(10)), Span::new(4, 6))
+            .unwrap();
+        let range = ast
+            .add_expr(Expr::Range(start, end, false), Span::new(0, 6))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(range);
+        assert_eq!(ty, Ty::Range);
+        // Should have 2 Eq constraints unifying operands with Int
+        let int_constraints: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Eq(Ty::Int, Ty::Int, _)))
+            .collect();
+        assert_eq!(int_constraints.len(), 2);
+    }
+
+    #[test]
+    fn infer_range_inclusive_int_int() {
+        let mut ast = Ast::new();
+        let start = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(0, 1))
+            .unwrap();
+        let end = ast
+            .add_expr(Expr::Literal(Literal::Int(5)), Span::new(5, 6))
+            .unwrap();
+        let range = ast
+            .add_expr(Expr::Range(start, end, true), Span::new(0, 6))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(range);
+        assert_eq!(ty, Ty::Range); // Same type regardless of inclusive flag
+    }
+
+    // Arithmetic with type variables
+
+    #[test]
+    fn infer_add_with_var_produces_fresh_numeric() {
+        // x + 1 where x is a type variable
+        let mut ast = Ast::new();
+        let lhs = ast
+            .add_expr(Expr::Var("x".into()), Span::new(0, 1))
+            .unwrap();
+        let rhs = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(4, 5))
+            .unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Add, rhs), Span::new(0, 5))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        // Bind "x" to a fresh type variable via polymorphic scheme
+        let a = TyVar::new(1000);
+        ctx.env_mut().bind(
+            "x",
+            Scheme {
+                vars: vec![a],
+                ty: Ty::Var(a),
+            },
+        );
+
+        let ty = ctx.infer_expr(add);
+        // Result should be a fresh type variable (since one operand is var)
+        match ty {
+            Ty::Var(_) => {
+                // Should have 3 Numeric constraints: lhs, rhs, result
+                let numerics: Vec<_> = ctx
+                    .constraints()
+                    .iter()
+                    .filter(|c| matches!(c, Constraint::Numeric(_, _)))
+                    .collect();
+                assert_eq!(numerics.len(), 3);
+            }
+            _ => panic!("expected type variable, got {ty:?}"),
+        }
     }
 }
