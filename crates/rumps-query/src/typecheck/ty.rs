@@ -12,6 +12,18 @@ use crate::TypeId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct TyVar(u32);
 
+impl TyVar {
+    /// Create a new type variable with the given index.
+    pub(crate) const fn new(idx: u32) -> Self {
+        Self(idx)
+    }
+
+    /// Get the index of this type variable.
+    pub(crate) const fn idx(self) -> u32 {
+        self.0
+    }
+}
+
 /// Static types used during type checking.
 ///
 /// Unlike runtime `TypeExpr`, these include type variables (`Var`) for
@@ -202,7 +214,7 @@ impl Scheme {
                 self.vars
                     .iter()
                     .map(|v| {
-                        let fresh = TyVar(*next);
+                        let fresh = TyVar::new(*next);
                         *next += 1;
                         (*v, Ty::Var(fresh))
                     })
@@ -296,7 +308,7 @@ mod tests {
 
     #[test]
     fn free_vars_var() {
-        let v = TyVar(0);
+        let v = TyVar::new(0);
         let fv = Ty::Var(v).free_vars();
         assert!(fv.contains(&v));
         assert_eq!(fv.len(), 1);
@@ -304,7 +316,7 @@ mod tests {
 
     #[test]
     fn free_vars_array() {
-        let v = TyVar(1);
+        let v = TyVar::new(1);
         let arr = Ty::Array(Box::new(Ty::Var(v)));
         let fv = arr.free_vars();
         assert!(fv.contains(&v));
@@ -312,8 +324,8 @@ mod tests {
 
     #[test]
     fn free_vars_fn() {
-        let a = TyVar(0);
-        let b = TyVar(1);
+        let a = TyVar::new(0);
+        let b = TyVar::new(1);
         let f = Ty::Fn(vec![Ty::Var(a)], Box::new(Ty::Var(b)));
         let fv = f.free_vars();
         assert!(fv.contains(&a));
@@ -323,7 +335,7 @@ mod tests {
 
     #[test]
     fn occurs_check() {
-        let v = TyVar(0);
+        let v = TyVar::new(0);
         assert!(Ty::Var(v).occurs(v));
         assert!(!Ty::Int.occurs(v));
         assert!(Ty::Array(Box::new(Ty::Var(v))).occurs(v));
@@ -332,14 +344,14 @@ mod tests {
 
     #[test]
     fn apply_subst_var() {
-        let v = TyVar(0);
+        let v = TyVar::new(0);
         let subst = Subst::singleton(v, Ty::Int);
         assert_eq!(Ty::Var(v).apply(&subst), Ty::Int);
     }
 
     #[test]
     fn apply_subst_nested() {
-        let v = TyVar(0);
+        let v = TyVar::new(0);
         let subst = Subst::singleton(v, Ty::String);
         let arr = Ty::Array(Box::new(Ty::Var(v)));
         assert_eq!(arr.apply(&subst), Ty::Array(Box::new(Ty::String)));
@@ -347,8 +359,8 @@ mod tests {
 
     #[test]
     fn apply_subst_no_match() {
-        let v = TyVar(0);
-        let w = TyVar(1);
+        let v = TyVar::new(0);
+        let w = TyVar::new(1);
         let subst = Subst::singleton(v, Ty::Int);
         assert_eq!(Ty::Var(w).apply(&subst), Ty::Var(w));
     }
@@ -362,22 +374,22 @@ mod tests {
 
     #[test]
     fn scheme_instantiate() {
-        let v = TyVar(0);
+        let v = TyVar::new(0);
         let s = Scheme {
             vars: vec![v],
             ty: Ty::Array(Box::new(Ty::Var(v))),
         };
         let mut next = 100;
         let inst = s.instantiate(&mut next);
-        // Should have replaced `v` with fresh var `TyVar(100)`
+        // Should have replaced `v` with fresh var `TyVar::new(100)`
         assert_eq!(next, 101);
-        assert_eq!(inst, Ty::Array(Box::new(Ty::Var(TyVar(100)))));
+        assert_eq!(inst, Ty::Array(Box::new(Ty::Var(TyVar::new(100)))));
     }
 
     #[test]
     fn scheme_free_vars_excludes_bound() {
-        let a = TyVar(0);
-        let b = TyVar(1);
+        let a = TyVar::new(0);
+        let b = TyVar::new(1);
         let s = Scheme {
             vars: vec![a],
             ty: Ty::Fn(vec![Ty::Var(a)], Box::new(Ty::Var(b))),
@@ -389,8 +401,8 @@ mod tests {
 
     #[test]
     fn subst_compose() {
-        let a = TyVar(0);
-        let b = TyVar(1);
+        let a = TyVar::new(0);
+        let b = TyVar::new(1);
         // s1: a -> Int
         // s2: b -> a
         // composed: b -> Int, a -> Int
@@ -403,8 +415,8 @@ mod tests {
 
     #[test]
     fn subst_extend() {
-        let a = TyVar(0);
-        let b = TyVar(1);
+        let a = TyVar::new(0);
+        let b = TyVar::new(1);
         let mut s = Subst::singleton(a, Ty::Int);
         s.extend(b, Ty::String);
         assert_eq!(s.apply(&Ty::Var(a)), Ty::Int);

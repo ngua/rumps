@@ -120,7 +120,7 @@ impl TypeError {
 impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Var(v) => write!(f, "?{}", v.0),
+            Self::Var(v) => write!(f, "?{}", v.idx()),
             Self::Bool => write!(f, "Bool"),
             Self::Int => write!(f, "Int"),
             Self::Float => write!(f, "Float"),
@@ -189,7 +189,7 @@ impl fmt::Display for Ty {
 /// Display for `TyVar` (used in error messages).
 impl fmt::Display for TyVar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "?{}", self.0)
+        write!(f, "?{}", self.idx())
     }
 }
 
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn ty_display_var() {
-        assert_eq!(Ty::Var(TyVar(42)).to_string(), "?42");
+        assert_eq!(Ty::Var(TyVar::new(42)).to_string(), "?42");
     }
 
     #[test]

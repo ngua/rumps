@@ -15,8 +15,10 @@
 
 mod env;
 mod error;
+mod infer;
 mod ty;
 
 pub(crate) use env::TypeEnv;
 pub(crate) use error::TypeError;
+pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use ty::{Scheme, Subst, Ty, TyVar};

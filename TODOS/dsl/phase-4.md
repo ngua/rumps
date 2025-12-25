@@ -785,18 +785,18 @@ enum Constraint {
 
 ### Checklist
 
-- [ ] Create `typecheck/infer.rs`:
-  - [ ] `Constraint` enum
-  - [ ] `InferCtx` struct
-  - [ ] `impl InferCtx`:
-    - [ ] `fn new(ast: &Ast, registry: &TypeRegistry) -> Self`
-    - [ ] `fn fresh_var(&mut self) -> TyVar`
-    - [ ] `fn fresh(&mut self) -> Ty` (returns `Ty::Var(self.fresh_var())`)
-    - [ ] `fn constrain(&mut self, c: Constraint)`
-    - [ ] `fn unify(&mut self, t1: Ty, t2: Ty, span: Span)` (adds `Eq` constraint)
-    - [ ] `fn record_type(&mut self, id: ExprId, ty: Ty)`
-    - [ ] `fn error(&mut self, e: TypeError)`
-- [ ] Add `mod infer` to `typecheck.rs`
+- [x] Create `typecheck/infer.rs`:
+  - [x] `Constraint` enum
+  - [x] `InferCtx` struct
+  - [x] `impl InferCtx`:
+    - [x] `fn new(ast: &Ast, registry: &TypeRegistry) -> Self`
+    - [x] `fn fresh_var(&mut self) -> TyVar`
+    - [x] `fn fresh(&mut self) -> Ty` (returns `Ty::Var(self.fresh_var())`)
+    - [x] `fn constrain(&mut self, c: Constraint)`
+    - [x] `fn unify(&mut self, t1: Ty, t2: Ty, span: Span)` (adds `Eq` constraint)
+    - [x] `fn record_type(&mut self, id: ExprId, ty: Ty)`
+    - [x] `fn error(&mut self, e: TypeError)`
+- [x] Add `mod infer` to `typecheck.rs`
 
 ---
 
@@ -849,6 +849,9 @@ Infer types for unary and binary operators.
 | `??`                     | `lhs ~ Option[?t]` or `Result[?t, _]` | `?t` (unify with `rhs`)                          |
 | `\|>`                    | `Callable(rhs, [lhs], ?r)`            | `?r`                                             |
 | `..`, `..=`              | `lhs ~ Int`, `rhs ~ Int`              | `Range`                                          |
+
+
+**NOTE**: The preceding table was written before "Phase 4.0.0: Add Json Type". Refer to that phase for implemented JSON operators and their result type.
 
 ### Unary Operator Rules
 

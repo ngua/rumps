@@ -142,8 +142,8 @@ mod tests {
     #[test]
     fn free_vars_collects_all() {
         let mut env = TypeEnv::new();
-        let a = TyVar(0);
-        let b = TyVar(1);
+        let a = TyVar::new(0);
+        let b = TyVar::new(1);
         env.bind("x", Scheme::mono(Ty::Var(a)));
         env.push_scope();
         env.bind("y", Scheme::mono(Ty::Var(b)));
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn generalize_no_env_vars() {
         let env = TypeEnv::new();
-        let a = TyVar(0);
+        let a = TyVar::new(0);
         let ty = Ty::Array(Box::new(Ty::Var(a)));
         let scheme = env.generalize(&ty);
         assert!(scheme.vars.contains(&a));
@@ -164,8 +164,8 @@ mod tests {
     #[test]
     fn generalize_excludes_env_vars() {
         let mut env = TypeEnv::new();
-        let a = TyVar(0);
-        let b = TyVar(1);
+        let a = TyVar::new(0);
+        let b = TyVar::new(1);
         env.bind("existing", Scheme::mono(Ty::Var(a)));
         // `b` is free in ty but not in env; `a` is in both
         let ty = Ty::Fn(vec![Ty::Var(a)], Box::new(Ty::Var(b)));
