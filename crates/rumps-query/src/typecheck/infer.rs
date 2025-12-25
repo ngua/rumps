@@ -292,6 +292,18 @@ impl<'a> InferCtx<'a> {
                 Ty::Range
             }
 
+            // Arrays
+            Expr::Array(elems) => self.infer_array(elems, span),
+
+            // Non-empty tuples (empty handled above as Unit)
+            Expr::Tuple(elems) => self.infer_tuple(elems),
+
+            // Structural objects
+            Expr::Object(fields) => self.infer_object(fields),
+
+            // Map literals
+            Expr::MapLit(entries) => self.infer_map_lit(entries, span),
+
             // Other expressions handled in later phases
             _ => Ty::Error,
         }
@@ -441,6 +453,70 @@ impl<'a> InferCtx<'a> {
                 self.unify(operand_ty, Ty::Bool, span);
                 Ty::Bool
             }
+        }
+    }
+
+    /// Infer type of an array literal.
+    ///
+    /// Empty arrays get a fresh element type. Non-empty arrays infer the first
+    /// element's type and unify all subsequent elements with it.
+    fn infer_array(&mut self, elems: &[ExprId], span: Span) -> Ty {
+        if let Some((first, rest)) = elems.split_first() {
+            let first_ty = self.infer_expr(*first);
+            rest.iter().for_each(|id| {
+                let ty = self.infer_expr(*id);
+                self.unify(first_ty.clone(), ty, span);
+            });
+            Ty::Array(Box::new(first_ty))
+        } else {
+            Ty::Array(Box::new(self.fresh()))
+        }
+    }
+
+    /// Infer type of a tuple literal.
+    ///
+    /// Infers each element independently; the tuple type contains all element
+    /// types in order. Empty tuples are handled as `Unit` in `infer_expr_inner`.
+    fn infer_tuple(&mut self, elems: &SmallVec<[ExprId; 4]>) -> Ty {
+        Ty::Tuple(elems.iter().map(|id| self.infer_expr(*id)).collect())
+    }
+
+    /// Infer type of an object literal.
+    ///
+    /// Produces a structural object type with inferred field types.
+    fn infer_object(&mut self, fields: &[(String, ExprId)]) -> Ty {
+        let obj_fields = fields
+            .iter()
+            .map(|(name, expr_id)| {
+                let field_ty = self.infer_expr(*expr_id);
+                let field_id = self.env.intern(name);
+                (field_id, field_ty)
+            })
+            .collect();
+        Ty::Object(obj_fields)
+    }
+
+    /// Infer type of a map literal.
+    ///
+    /// Keys are unified to a common type; values are unified to a common type.
+    /// Empty maps get fresh type variables for both.
+    fn infer_map_lit(
+        &mut self,
+        entries: &SmallVec<[(ExprId, ExprId); 8]>,
+        span: Span,
+    ) -> Ty {
+        if let Some(((first_k, first_v), rest)) = entries.split_first() {
+            let k_ty = self.infer_expr(*first_k);
+            let v_ty = self.infer_expr(*first_v);
+            rest.iter().for_each(|(k, v)| {
+                let k = self.infer_expr(*k);
+                let v = self.infer_expr(*v);
+                self.unify(k_ty.clone(), k, span);
+                self.unify(v_ty.clone(), v, span);
+            });
+            Ty::Map(Box::new(k_ty), Box::new(v_ty))
+        } else {
+            Ty::Map(Box::new(self.fresh()), Box::new(self.fresh()))
         }
     }
 }
@@ -1253,5 +1329,465 @@ mod tests {
             }
             _ => panic!("expected type variable, got {ty:?}"),
         }
+    }
+
+    #[test]
+    fn infer_array_empty() {
+        let (ast, id) = ast_with_expr(Expr::Array(vec![]));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        match ty {
+            Ty::Array(elem) => match *elem {
+                Ty::Var(_) => {} // Fresh type variable is expected
+                _ => panic!("expected type variable for empty array element"),
+            },
+            _ => panic!("expected Array type, got {ty:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_array_homogeneous_int() {
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
+            .unwrap();
+        let e2 = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5))
+            .unwrap();
+        let e3 = ast
+            .add_expr(Expr::Literal(Literal::Int(3)), Span::new(7, 8))
+            .unwrap();
+        let arr = ast
+            .add_expr(Expr::Array(vec![e1, e2, e3]), Span::new(0, 9))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(arr);
+        assert_eq!(ty, Ty::Array(Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn infer_array_homogeneous_string() {
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("a".into())),
+                Span::new(1, 4),
+            )
+            .unwrap();
+        let e2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("b".into())),
+                Span::new(6, 9),
+            )
+            .unwrap();
+        let arr = ast
+            .add_expr(Expr::Array(vec![e1, e2]), Span::new(0, 10))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(arr);
+        assert_eq!(ty, Ty::Array(Box::new(Ty::String)));
+    }
+
+    #[test]
+    fn infer_array_single_element() {
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(1, 5))
+            .unwrap();
+        let arr = ast
+            .add_expr(Expr::Array(vec![e1]), Span::new(0, 6))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(arr);
+        assert_eq!(ty, Ty::Array(Box::new(Ty::Bool)));
+    }
+
+    #[test]
+    fn infer_array_mixed_adds_constraints() {
+        // [1, 2.0] should unify Int with Float
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
+            .unwrap();
+        let e2 = ast
+            .add_expr(Expr::Literal(Literal::Float(2.0)), Span::new(4, 7))
+            .unwrap();
+        let arr = ast
+            .add_expr(Expr::Array(vec![e1, e2]), Span::new(0, 8))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(arr);
+        // Result type is Array[Int] (first element's type)
+        // but there's an Eq constraint to unify Int with Float
+        assert_eq!(ty, Ty::Array(Box::new(Ty::Int)));
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Eq(Ty::Int, Ty::Float, _))));
+    }
+
+    // Tuples
+
+    #[test]
+    fn infer_tuple_two_elements() {
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
+            .unwrap();
+        let e2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("hello".into())),
+                Span::new(4, 11),
+            )
+            .unwrap();
+        let tup = ast
+            .add_expr(
+                Expr::Tuple(smallvec::smallvec![e1, e2]),
+                Span::new(0, 12),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(tup);
+        assert_eq!(ty, Ty::Tuple(vec![Ty::Int, Ty::String]));
+    }
+
+    #[test]
+    fn infer_tuple_three_elements() {
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(1, 5))
+            .unwrap();
+        let e2 = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(7, 9))
+            .unwrap();
+        let e3 = ast
+            .add_expr(Expr::Literal(Literal::Float(3.14)), Span::new(11, 15))
+            .unwrap();
+        let tup = ast
+            .add_expr(
+                Expr::Tuple(smallvec::smallvec![e1, e2, e3]),
+                Span::new(0, 16),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(tup);
+        assert_eq!(ty, Ty::Tuple(vec![Ty::Bool, Ty::Int, Ty::Float]));
+    }
+
+    #[test]
+    fn infer_tuple_single_element() {
+        // Single-element tuple (trailing comma): (42,)
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(1, 3))
+            .unwrap();
+        let tup = ast
+            .add_expr(Expr::Tuple(smallvec::smallvec![e1]), Span::new(0, 5))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(tup);
+        assert_eq!(ty, Ty::Tuple(vec![Ty::Int]));
+    }
+
+    #[test]
+    fn infer_tuple_nested() {
+        // ((1, 2), "hello")
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(2, 3))
+            .unwrap();
+        let e2 = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(5, 6))
+            .unwrap();
+        let inner = ast
+            .add_expr(Expr::Tuple(smallvec::smallvec![e1, e2]), Span::new(1, 7))
+            .unwrap();
+        let e3 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("hello".into())),
+                Span::new(9, 16),
+            )
+            .unwrap();
+        let outer = ast
+            .add_expr(
+                Expr::Tuple(smallvec::smallvec![inner, e3]),
+                Span::new(0, 17),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(outer);
+        assert_eq!(
+            ty,
+            Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String])
+        );
+    }
+
+    // Objects
+
+    #[test]
+    fn infer_object_single_field() {
+        let mut ast = Ast::new();
+        let val = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(7, 9))
+            .unwrap();
+        let obj = ast
+            .add_expr(Expr::Object(vec![("age".into(), val)]), Span::new(0, 11))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(obj);
+        match ty {
+            Ty::Object(fields) => {
+                assert_eq!(fields.len(), 1);
+                // Look up by getting the field value
+                let field_ty = fields.values().next().unwrap();
+                assert_eq!(*field_ty, Ty::Int);
+            }
+            _ => panic!("expected Object type, got {ty:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_object_multiple_fields() {
+        let mut ast = Ast::new();
+        let v1 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("Alice".into())),
+                Span::new(8, 15),
+            )
+            .unwrap();
+        let v2 = ast
+            .add_expr(Expr::Literal(Literal::Int(30)), Span::new(23, 25))
+            .unwrap();
+        let obj = ast
+            .add_expr(
+                Expr::Object(vec![("name".into(), v1), ("age".into(), v2)]),
+                Span::new(0, 27),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(obj);
+        match ty {
+            Ty::Object(fields) => {
+                assert_eq!(fields.len(), 2);
+                let tys: Vec<_> = fields.values().collect();
+                assert_eq!(*tys[0], Ty::String);
+                assert_eq!(*tys[1], Ty::Int);
+            }
+            _ => panic!("expected Object type, got {ty:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_object_nested() {
+        // { outer: { inner: 123 } }
+        let mut ast = Ast::new();
+        let inner_val = ast
+            .add_expr(Expr::Literal(Literal::Int(123)), Span::new(18, 21))
+            .unwrap();
+        let inner_obj = ast
+            .add_expr(
+                Expr::Object(vec![("inner".into(), inner_val)]),
+                Span::new(9, 23),
+            )
+            .unwrap();
+        let outer = ast
+            .add_expr(
+                Expr::Object(vec![("outer".into(), inner_obj)]),
+                Span::new(0, 25),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(outer);
+        match ty {
+            Ty::Object(fields) => {
+                assert_eq!(fields.len(), 1);
+                let outer_ty = fields.values().next().unwrap();
+                match outer_ty {
+                    Ty::Object(inner_fields) => {
+                        assert_eq!(inner_fields.len(), 1);
+                        let inner_ty = inner_fields.values().next().unwrap();
+                        assert_eq!(*inner_ty, Ty::Int);
+                    }
+                    _ => panic!("expected nested Object type"),
+                }
+            }
+            _ => panic!("expected Object type, got {ty:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_object_empty() {
+        let (ast, id) = ast_with_expr(Expr::Object(vec![]));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        match ty {
+            Ty::Object(fields) => assert!(fields.is_empty()),
+            _ => panic!("expected Object type, got {ty:?}"),
+        }
+    }
+
+    // Map literals
+
+    #[test]
+    fn infer_map_empty() {
+        let (ast, id) = ast_with_expr(Expr::MapLit(smallvec::smallvec![]));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        match ty {
+            Ty::Map(k, v) => match (*k, *v) {
+                (Ty::Var(_), Ty::Var(_)) => {}
+                _ => panic!("expected type variables for empty map"),
+            },
+            _ => panic!("expected Map type, got {ty:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_map_single_entry() {
+        let mut ast = Ast::new();
+        let k = ast
+            .add_expr(
+                Expr::Literal(Literal::String("key".into())),
+                Span::new(2, 7),
+            )
+            .unwrap();
+        let v = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(11, 13))
+            .unwrap();
+        let map = ast
+            .add_expr(
+                Expr::MapLit(smallvec::smallvec![(k, v)]),
+                Span::new(0, 15),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(map);
+        assert_eq!(ty, Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn infer_map_multiple_entries() {
+        let mut ast = Ast::new();
+        let k1 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("a".into())),
+                Span::new(2, 5),
+            )
+            .unwrap();
+        let v1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(9, 10))
+            .unwrap();
+        let k2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("b".into())),
+                Span::new(13, 16),
+            )
+            .unwrap();
+        let v2 = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(20, 21))
+            .unwrap();
+        let map = ast
+            .add_expr(
+                Expr::MapLit(smallvec::smallvec![(k1, v1), (k2, v2)]),
+                Span::new(0, 23),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(map);
+        assert_eq!(ty, Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)));
+        // Should have Eq constraints unifying keys and values
+        let eq_constraints: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Eq(_, _, _)))
+            .collect();
+        // 2 constraints: one for keys (String ~ String), one for values (Int ~ Int)
+        assert_eq!(eq_constraints.len(), 2);
+    }
+
+    #[test]
+    fn infer_map_mixed_values_adds_constraints() {
+        // { "a" => 1, "b" => 2.0 } should unify Int with Float
+        let mut ast = Ast::new();
+        let k1 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("a".into())),
+                Span::new(2, 5),
+            )
+            .unwrap();
+        let v1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(9, 10))
+            .unwrap();
+        let k2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("b".into())),
+                Span::new(13, 16),
+            )
+            .unwrap();
+        let v2 = ast
+            .add_expr(Expr::Literal(Literal::Float(2.0)), Span::new(20, 23))
+            .unwrap();
+        let map = ast
+            .add_expr(
+                Expr::MapLit(smallvec::smallvec![(k1, v1), (k2, v2)]),
+                Span::new(0, 25),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(map);
+        // Result type is Map[String, Int] (first entry's types)
+        assert_eq!(ty, Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)));
+        // but there's an Eq constraint to unify Int with Float
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Eq(Ty::Int, Ty::Float, _))));
+    }
+
+    #[test]
+    fn infer_map_int_keys() {
+        let mut ast = Ast::new();
+        let k1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(2, 3))
+            .unwrap();
+        let v1 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("one".into())),
+                Span::new(7, 12),
+            )
+            .unwrap();
+        let k2 = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(15, 16))
+            .unwrap();
+        let v2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("two".into())),
+                Span::new(20, 25),
+            )
+            .unwrap();
+        let map = ast
+            .add_expr(
+                Expr::MapLit(smallvec::smallvec![(k1, v1), (k2, v2)]),
+                Span::new(0, 27),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(map);
+        assert_eq!(ty, Ty::Map(Box::new(Ty::Int), Box::new(Ty::String)));
     }
 }

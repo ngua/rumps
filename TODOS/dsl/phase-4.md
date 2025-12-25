@@ -882,7 +882,7 @@ Infer types for unary and binary operators.
 
 ---
 
-## Phase 4.5: Collection Inference
+## Phase 4.5: Collection Inference [x]
 
 Infer types for arrays, tuples, objects, maps, and ranges.
 
@@ -899,23 +899,23 @@ Infer types for arrays, tuples, objects, maps, and ranges.
 
 ### Checklist
 
-- [ ] Handle `Expr::Array`:
-  - [ ] If empty, return `Ty::Array(fresh())`
-  - [ ] Infer first element type `?t`
-  - [ ] Unify all subsequent elements with `?t`
-  - [ ] Return `Ty::Array(?t)`
-- [ ] Handle `Expr::Tuple`:
-  - [ ] Infer each element
-  - [ ] Return `Ty::Tuple(vec![...])`
-- [ ] Handle `Expr::Object`:
-  - [ ] Infer each field value
-  - [ ] Return `Ty::Object(IndexMap { field: ty, ... })`
-  - [ ] **NOTE**: You need to ensure that this works with nested object types!
-- [ ] Handle `Expr::MapLit`:
-  - [ ] Infer key and value types
-  - [ ] Unify all keys, unify all values
-  - [ ] Return `Ty::Map(key_ty, val_ty)`
-- [ ] **Note**: Range (`..`, `..=`) is handled in Phase 4.4 (operators) but listed here as it's a collection type
+- [x] Handle `Expr::Array`:
+  - [x] If empty, return `Ty::Array(fresh())`
+  - [x] Infer first element type `?t`
+  - [x] Unify all subsequent elements with `?t`
+  - [x] Return `Ty::Array(?t)`
+- [x] Handle `Expr::Tuple`:
+  - [x] Infer each element
+  - [x] Return `Ty::Tuple(vec![...])`
+- [x] Handle `Expr::Object`:
+  - [x] Infer each field value
+  - [x] Return `Ty::Object(IndexMap { field: ty, ... })`
+  - [x] **NOTE**: You need to ensure that this works with nested object types!
+- [x] Handle `Expr::MapLit`:
+  - [x] Infer key and value types
+  - [x] Unify all keys, unify all values
+  - [x] Return `Ty::Map(key_ty, val_ty)`
+- [x] **Note**: Range (` .. `, ` ..= `) is handled in Phase 4.4 (operators) but listed here as it's a collection type
 
 ---
 
