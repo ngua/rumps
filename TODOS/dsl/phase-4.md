@@ -1269,33 +1269,46 @@ Infer types for all statement types.
 | `LET x = e`        | bind `x` to `typeof(e)` in env                                                |
 | `LET x: T = e`     | unify `typeof(e) ~ T`, bind `x` to `T`                                        |
 | `SET local(k) = e` | no env binding (db write)                                                     |
+| `KILL local(k)`    | no env binding (db delete); infer subscripts with `Subscript` constraint      |
 | `OUTPUT e`         | infer `e`, no constraint on type (all types satisfy `Constraint::Stringable`) |
+| `expr`             | infer `e` for side effects; no env binding                                    |
 | `TYPE T = ...`     | register in type registry                                                     |
+| `UNION T = ...`    | register in type registry                                                     |
 
 ### Checklist
 
-- [ ] `impl InferCtx`: `fn stmt(&mut self, id: StmtId)`
-- [ ] Handle `Stmt::Let`:
-  - [ ] Infer RHS type
-  - [ ] If type annotation present:
-    - [ ] Parse annotation to `Ty`
-    - [ ] Unify RHS type with annotation type
-    - [ ] For `Named` struct annotations: triggers extensible record check
-  - [ ] Generalize and bind in env
-- [ ] Handle `Stmt::Set`:
-  - [ ] Infer subscripts and value
-  - [ ] Add `Subscript` constraint for each subscript expression
-  - [ ] Add `Storable` constraint for value (or infer via usage)
-  - [ ] No env binding
-- [ ] Handle `Stmt::Output`:
-  - [ ] Infer expression
-  - [ ] Add `Stringable` constraint (always satisfied; marks stringify needed)
-- [ ] Handle `Stmt::Fun`:
-  - [ ] (already covered in Phase 4.7)
-- [ ] Handle `Stmt::Type`:
-  - [ ] Register type definition in registry
-  - [ ] For struct types: store required fields and their types
-  - [ ] No inference needed (declaration only)
+- [x] `impl InferCtx`: `fn stmt(&mut self, id: StmtId)`
+- [x] Handle `Stmt::Let`:
+  - [x] Infer RHS type
+  - [x] If type annotation present:
+    - [x] Parse annotation to `Ty`
+    - [x] Unify RHS type with annotation type
+    - [x] For `Named` struct annotations: triggers extensible record check
+  - [x] Generalize and bind in env
+- [x] Handle `Stmt::Set`:
+  - [x] Infer subscripts and value
+  - [x] Add `Subscript` constraint for each subscript expression
+  - [x] Add `Storable` constraint for value (or infer via usage)
+  - [x] No env binding
+- [x] Handle `Stmt::Kill`:
+  - [x] Infer subscripts
+  - [x] Add `Subscript` constraint for each subscript expression
+  - [x] No env binding
+- [x] Handle `Stmt::Output`:
+  - [x] Infer expression
+  - [x] Add `Stringable` constraint (always satisfied; marks stringify needed)
+- [x] Handle `Stmt::Expr`:
+  - [x] Infer expression for side effects
+  - [x] No env binding; discard result type
+- [x] Handle `Stmt::Fun`:
+  - [x] (already covered in Phase 4.7)
+- [x] Handle `Stmt::Type`:
+  - [x] Register type definition in registry
+  - [x] For struct types: store required fields and their types
+  - [x] No inference needed (declaration only)
+- [x] Handle `Stmt::Union`:
+  - [x] Register union definition in registry
+  - [x] No inference needed (declaration only)
 
 ---
 

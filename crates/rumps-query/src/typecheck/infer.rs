@@ -13,9 +13,9 @@ use super::env::TypeEnv;
 use super::error::TypeError;
 use super::ty::{Scheme, Ty, TyVar};
 use crate::ast::{
-    Ast, AstTypeExpr, AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey,
-    JsonAccessKind, Literal, MatchArm, MatchPattern, MatchPatternId, Stmt,
-    StmtId, TypePattern, UnOp,
+    Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
+    JsonAccessKey, JsonAccessKind, Literal, MatchArm, MatchPattern,
+    MatchPatternId, RestPattern, Stmt, StmtId, TypePattern, UnOp,
 };
 use crate::intern::{StringId, StringInterner};
 use crate::value::{TypeDef, TypeId, TypeRegistry};
@@ -2011,16 +2011,42 @@ impl<'a> InferCtx<'a> {
     /// bind the function name with its inferred type scheme in the environment.
     pub(crate) fn stmt(&mut self, id: StmtId) {
         let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
-        if let Some(Stmt::Fun {
-            name,
-            params,
-            ret,
-            body,
-        }) = self.ast.get_stmt(id).cloned()
-        {
-            self.fun(&name, &params, ret.as_ref(), body, span);
+        let stmt = self.ast.get_stmt(id).cloned();
+
+        match stmt {
+            Some(Stmt::Fun {
+                name,
+                params,
+                ret,
+                body,
+            }) => self.fun(&name, &params, ret.as_ref(), body, span),
+
+            Some(Stmt::Let(pattern, ann, rhs)) => {
+                self.r#let(&pattern, ann.as_ref(), rhs, span)
+            }
+
+            Some(Stmt::Set(target, value)) => self.set(target, value, span),
+
+            Some(Stmt::Kill(target)) => self.kill(target, span),
+
+            Some(Stmt::Output(expr)) => self.output(expr, span),
+
+            Some(Stmt::Expr(expr)) => {
+                self.expr(expr);
+            }
+
+            Some(Stmt::Type { .. }) => {
+                // Type declarations are processed by the registry; nothing to
+                // infer here. The types are registered before type checking.
+            }
+
+            Some(Stmt::Union { .. }) => {
+                // Union declarations are processed by the registry; nothing to
+                // infer here. The unions are registered before type checking.
+            }
+
+            None => {}
         }
-        // Other statement types handled in later phases
     }
 
     /// Infer type of a named function definition.
@@ -2078,6 +2104,173 @@ impl<'a> InferCtx<'a> {
         let vars: Vec<_> = ty_vars.difference(&outer_free).copied().collect();
         let scheme = Scheme { vars, ty: fn_ty };
         self.env.bind(name, scheme);
+    }
+
+    /// Infer types for a `LET` statement.
+    ///
+    /// Infers the RHS type, optionally unifies with an annotation, then
+    /// binds variables from the pattern with appropriate types.
+    fn r#let(
+        &mut self,
+        pattern: &BindingPattern,
+        ann: Option<&AstTypeExprId>,
+        rhs: ExprId,
+        span: Span,
+    ) {
+        let rhs_ty = self.expr(rhs);
+
+        // If annotation present, parse and unify
+        let ty = match ann {
+            None => rhs_ty,
+            Some(id) => {
+                let ann_ty = self.ast_type_to_ty(*id, &HashMap::new());
+                self.unify(rhs_ty, ann_ty.clone(), span);
+                ann_ty
+            }
+        };
+
+        // Bind variables from the pattern
+        self.bind_pattern(pattern, &ty, span);
+    }
+
+    /// Bind variables from a binding pattern to types in the environment.
+    ///
+    /// Recursively descends into the pattern, extracting types from the
+    /// value type and binding each variable with the appropriate type.
+    fn bind_pattern(&mut self, pattern: &BindingPattern, ty: &Ty, span: Span) {
+        match pattern {
+            BindingPattern::Var(name) => {
+                self.env.bind(name, Scheme::mono(ty.clone()));
+            }
+
+            BindingPattern::Wildcard => {
+                // No binding
+            }
+
+            BindingPattern::Tuple(pats) => {
+                let elem_tys = match ty {
+                    Ty::Tuple(ts) => {
+                        if ts.len() != pats.len() {
+                            self.error(TypeError::ArityMismatch {
+                                expected: pats.len(),
+                                got: ts.len(),
+                                span,
+                            });
+                            vec![Ty::Error; pats.len()]
+                        } else {
+                            ts.clone()
+                        }
+                    }
+                    Ty::Var(_) => {
+                        // Create fresh vars for each element and constrain
+                        let fresh: Vec<_> =
+                            (0..pats.len()).map(|_| self.fresh()).collect();
+                        self.unify(ty.clone(), Ty::Tuple(fresh.clone()), span);
+                        fresh
+                    }
+                    Ty::Error => vec![Ty::Error; pats.len()],
+                    _ => {
+                        self.error(TypeError::NotATuple(ty.clone(), span));
+                        vec![Ty::Error; pats.len()]
+                    }
+                };
+                pats.iter()
+                    .zip(elem_tys.iter())
+                    .for_each(|(p, t)| self.bind_pattern(p, t, span));
+            }
+
+            BindingPattern::Object(fields) => {
+                fields.iter().for_each(|(name, sub)| {
+                    let fty = self.field_type(ty, name, span);
+                    self.bind_pattern(sub, &fty, span);
+                });
+            }
+
+            BindingPattern::Array(pats, rest) => {
+                let elem_ty = match ty {
+                    Ty::Array(e) => e.as_ref().clone(),
+                    Ty::Var(_) => {
+                        let fresh = self.fresh();
+                        self.unify(
+                            ty.clone(),
+                            Ty::Array(Box::new(fresh.clone())),
+                            span,
+                        );
+                        fresh
+                    }
+                    Ty::Error => Ty::Error,
+                    _ => {
+                        self.error(TypeError::NotIndexable(ty.clone(), span));
+                        Ty::Error
+                    }
+                };
+
+                // Bind each fixed-position pattern
+                pats.iter()
+                    .for_each(|p| self.bind_pattern(p, &elem_ty, span));
+
+                // Bind rest pattern if present
+                if let Some(RestPattern::Bind(name)) = rest {
+                    self.env.bind(name, Scheme::mono(ty.clone()));
+                }
+            }
+        }
+    }
+
+    /// Infer types for a `SET` statement.
+    ///
+    /// Type-checks subscript expressions and the value, adding appropriate
+    /// constraints. Does not modify the environment (database write).
+    fn set(&mut self, target: ExprId, value: ExprId, span: Span) {
+        // Extract subscripts from target (Local or Global)
+        let subs: SmallVec<[ExprId; 4]> = self
+            .ast
+            .get_expr(target)
+            .and_then(|e| match e {
+                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        // Type-check subscript expressions
+        subs.iter().for_each(|sub_id| {
+            let sub_ty = self.expr(*sub_id);
+            self.constrain(Constraint::Subscript(sub_ty, span));
+        });
+
+        // Type-check value and add Storable constraint
+        let val_ty = self.expr(value);
+        self.constrain(Constraint::Storable(val_ty, span));
+    }
+
+    /// Infer types for a `KILL` statement.
+    ///
+    /// Type-checks subscript expressions with `Subscript` constraints.
+    /// Does not modify the environment (database delete).
+    fn kill(&mut self, target: ExprId, span: Span) {
+        // Extract subscripts from target (Local or Global)
+        let subs: SmallVec<[ExprId; 4]> = self
+            .ast
+            .get_expr(target)
+            .and_then(|e| match e {
+                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        // Type-check subscript expressions
+        subs.iter().for_each(|sub_id| {
+            let sub_ty = self.expr(*sub_id);
+            self.constrain(Constraint::Subscript(sub_ty, span));
+        });
+    }
+
+    /// Infer types for an `OUTPUT` statement.
+    ///
+    /// Type-checks the expression and adds a `Stringable` constraint.
+    fn output(&mut self, expr: ExprId, span: Span) {
+        let ty = self.expr(expr);
+        self.constrain(Constraint::Stringable(ty, span));
     }
 }
 
@@ -6403,5 +6596,360 @@ mod tests {
 
         assert_eq!(ty, Ty::Option(Box::new(Ty::String)));
         // Unification will handle type variable reconciliation
+    }
+
+    // --- Statement inference tests ---
+
+    #[test]
+    fn let_simple_var() {
+        // LET x = 42
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let lit = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let stmt_id = ast
+            .add_stmt(
+                Stmt::Let(BindingPattern::Var("x".into()), None, lit),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        let scheme = ctx.env().lookup("x");
+        assert!(scheme.is_some());
+        assert_eq!(scheme.unwrap().ty, Ty::Int);
+    }
+
+    #[test]
+    fn let_with_annotation() {
+        // LET x: Float = 42 (should unify Int with Float)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 15);
+        let float_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Float".into()), span)
+            .unwrap();
+        let lit = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let stmt_id = ast
+            .add_stmt(
+                Stmt::Let(BindingPattern::Var("x".into()), Some(float_ty), lit),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // Variable bound with annotation type
+        let scheme = ctx.env().lookup("x");
+        assert!(scheme.is_some());
+        assert_eq!(scheme.unwrap().ty, Ty::Float);
+
+        // Should have Eq constraint for unification
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Eq(Ty::Int, Ty::Float, _))));
+    }
+
+    #[test]
+    fn let_tuple_destructure() {
+        // LET (a, b) = (1, "hello")
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+        let int_lit =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let str_lit = ast
+            .add_expr(Expr::Literal(Literal::String("hello".into())), span)
+            .unwrap();
+        let tuple = ast
+            .add_expr(Expr::Tuple(smallvec![int_lit, str_lit]), span)
+            .unwrap();
+
+        let pattern = BindingPattern::Tuple(vec![
+            BindingPattern::Var("a".into()),
+            BindingPattern::Var("b".into()),
+        ]);
+        let stmt_id =
+            ast.add_stmt(Stmt::Let(pattern, None, tuple), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // Both bindings should be in env
+        assert_eq!(ctx.env().lookup("a").map(|s| &s.ty), Some(&Ty::Int));
+        assert_eq!(ctx.env().lookup("b").map(|s| &s.ty), Some(&Ty::String));
+    }
+
+    #[test]
+    fn let_object_destructure() {
+        // LET { name } = { name: "Alice" }
+        let mut ast = Ast::new();
+        let span = Span::new(0, 30);
+        let str_lit = ast
+            .add_expr(Expr::Literal(Literal::String("Alice".into())), span)
+            .unwrap();
+        let obj = ast
+            .add_expr(Expr::Object(vec![("name".into(), str_lit)]), span)
+            .unwrap();
+
+        let pattern = BindingPattern::Object(vec![(
+            "name".into(),
+            BindingPattern::Var("name".into()),
+        )]);
+        let stmt_id =
+            ast.add_stmt(Stmt::Let(pattern, None, obj), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        assert_eq!(ctx.env().lookup("name").map(|s| &s.ty), Some(&Ty::String));
+    }
+
+    #[test]
+    fn let_array_destructure() {
+        // LET [a, b] = [1, 2]
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+        let e1 = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let e2 = ast.add_expr(Expr::Literal(Literal::Int(2)), span).unwrap();
+        let arr = ast.add_expr(Expr::Array(vec![e1, e2]), span).unwrap();
+
+        let pattern = BindingPattern::Array(
+            vec![
+                BindingPattern::Var("a".into()),
+                BindingPattern::Var("b".into()),
+            ],
+            None,
+        );
+        let stmt_id =
+            ast.add_stmt(Stmt::Let(pattern, None, arr), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // Both should have element type (Int)
+        assert_eq!(ctx.env().lookup("a").map(|s| &s.ty), Some(&Ty::Int));
+        assert_eq!(ctx.env().lookup("b").map(|s| &s.ty), Some(&Ty::Int));
+    }
+
+    #[test]
+    fn let_array_rest_pattern() {
+        // LET [head, ...rest] = [1, 2, 3]
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+        let e1 = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let e2 = ast.add_expr(Expr::Literal(Literal::Int(2)), span).unwrap();
+        let e3 = ast.add_expr(Expr::Literal(Literal::Int(3)), span).unwrap();
+        let arr = ast.add_expr(Expr::Array(vec![e1, e2, e3]), span).unwrap();
+
+        let pattern = BindingPattern::Array(
+            vec![BindingPattern::Var("head".into())],
+            Some(RestPattern::Bind("rest".into())),
+        );
+        let stmt_id =
+            ast.add_stmt(Stmt::Let(pattern, None, arr), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // head should have element type
+        assert_eq!(ctx.env().lookup("head").map(|s| &s.ty), Some(&Ty::Int));
+        // rest should have array type
+        assert_eq!(
+            ctx.env().lookup("rest").map(|s| &s.ty),
+            Some(&Ty::Array(Box::new(Ty::Int)))
+        );
+    }
+
+    #[test]
+    fn let_wildcard() {
+        // LET _ = 42 (no binding)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let lit = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let stmt_id = ast
+            .add_stmt(Stmt::Let(BindingPattern::Wildcard, None, lit), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // No bindings added
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn let_nested_destructure() {
+        // LET (a, (b, c)) = (1, (2, 3))
+        let mut ast = Ast::new();
+        let span = Span::new(0, 30);
+        let e1 = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let e2 = ast.add_expr(Expr::Literal(Literal::Int(2)), span).unwrap();
+        let e3 = ast.add_expr(Expr::Literal(Literal::Int(3)), span).unwrap();
+        let inner = ast.add_expr(Expr::Tuple(smallvec![e2, e3]), span).unwrap();
+        let outer = ast
+            .add_expr(Expr::Tuple(smallvec![e1, inner]), span)
+            .unwrap();
+
+        let pattern = BindingPattern::Tuple(vec![
+            BindingPattern::Var("a".into()),
+            BindingPattern::Tuple(vec![
+                BindingPattern::Var("b".into()),
+                BindingPattern::Var("c".into()),
+            ]),
+        ]);
+        let stmt_id =
+            ast.add_stmt(Stmt::Let(pattern, None, outer), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        assert_eq!(ctx.env().lookup("a").map(|s| &s.ty), Some(&Ty::Int));
+        assert_eq!(ctx.env().lookup("b").map(|s| &s.ty), Some(&Ty::Int));
+        assert_eq!(ctx.env().lookup("c").map(|s| &s.ty), Some(&Ty::Int));
+    }
+
+    #[test]
+    fn output_adds_stringable_constraint() {
+        // OUTPUT 42
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+        let lit = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let stmt_id = ast.add_stmt(Stmt::Output(lit), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // Should have Stringable constraint
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Stringable(Ty::Int, _))));
+    }
+
+    #[test]
+    fn expr_stmt_infers_expression() {
+        // 1 + 2 (expression statement)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 5);
+        let lhs = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let rhs = ast.add_expr(Expr::Literal(Literal::Int(2)), span).unwrap();
+        let add = ast
+            .add_expr(Expr::Binary(lhs, BinOp::Add, rhs), span)
+            .unwrap();
+        let stmt_id = ast.add_stmt(Stmt::Expr(add), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // Expression should be typed
+        assert_eq!(ctx.get_type(add), Some(&Ty::Int));
+    }
+
+    #[test]
+    fn set_adds_storable_constraint() {
+        // SET local("key") = 42
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+        let key = ast
+            .add_expr(Expr::Literal(Literal::String("key".into())), span)
+            .unwrap();
+        let target = ast
+            .add_expr(Expr::Local("local".into(), smallvec![key]), span)
+            .unwrap();
+        let val = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let stmt_id = ast.add_stmt(Stmt::Set(target, val), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // Should have Subscript constraint for the key
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Subscript(Ty::String, _))));
+
+        // Should have Storable constraint for the value
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Storable(Ty::Int, _))));
+    }
+
+    #[test]
+    fn kill_adds_subscript_constraints() {
+        // KILL local("key", 123)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+        let k1 = ast
+            .add_expr(Expr::Literal(Literal::String("key".into())), span)
+            .unwrap();
+        let k2 = ast
+            .add_expr(Expr::Literal(Literal::Int(123)), span)
+            .unwrap();
+        let target = ast
+            .add_expr(Expr::Local("local".into(), smallvec![k1, k2]), span)
+            .unwrap();
+        let stmt_id = ast.add_stmt(Stmt::Kill(target), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // Should have Subscript constraints for both keys
+        let subs: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Subscript(_, _)))
+            .collect();
+        assert_eq!(subs.len(), 2);
+    }
+
+    #[test]
+    fn type_stmt_no_error() {
+        // TYPE Foo = { x: Int }
+        // Type declarations are processed by registry; stmt just ignores them
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+        let stmt_id = ast
+            .add_stmt(
+                Stmt::Type {
+                    name: "Foo".into(),
+                    type_params: SmallVec::new(),
+                    def: crate::ast::TypeDefAst::Struct(vec![]),
+                },
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // No errors, no changes to env
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn union_stmt_no_error() {
+        // UNION Bar = Int | String
+        // Union declarations are processed by registry; stmt just ignores them
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+        let stmt_id = ast
+            .add_stmt(
+                Stmt::Union {
+                    name: "Bar".into(),
+                    type_params: SmallVec::new(),
+                    members: SmallVec::new(),
+                },
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.stmt(stmt_id);
+
+        // No errors, no changes to env
+        assert!(!ctx.has_errors());
     }
 }
