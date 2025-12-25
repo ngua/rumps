@@ -487,6 +487,8 @@ pub(crate) enum Literal {
     String(String),
     /// JSON `null`; only valid in JSON contexts (arrays, quoted-key objects).
     Null,
+    /// The unit value `Unit`.
+    Unit,
 }
 
 /// An expression node.

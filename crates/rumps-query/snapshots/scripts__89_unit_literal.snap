@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Unit literal\n; Tests the `Unit` value literal\n\n; Unit equals itself\nOUTPUT Unit IS Unit\n; Expected: true\n\n; Unit in variable\nLET u = Unit\nOUTPUT u\n; Expected: Unit\n\n; Unit equality via variable\nOUTPUT u IS Unit\n; Expected: true\n\n; Unit in tuple\nLET pair = (1, Unit)\nOUTPUT pair\n; Expected: (1, Unit)\n\nOUTPUT \"Unit literal test complete\"\n"
+---
+TRUE
+Unit
+TRUE
+(1, Unit)
+Unit literal test complete

@@ -1329,12 +1329,15 @@ impl Parser {
             just(Token::False).to(Literal::Bool(false)),
         ));
         let null_lit = just(Token::Null).to(Literal::Null);
+        let unit_lit =
+            select! { Token::Ident(s) if s == "Unit" => Literal::Unit };
 
-        let literal =
-            choice((int_lit, float_lit, char_lit, str_lit, bool_lit, null_lit))
-                .map_with_span(|lit, span| {
-                    cst::Expr::new(cst::ExprKind::Literal(lit), span)
-                });
+        let literal = choice((
+            int_lit, float_lit, char_lit, str_lit, bool_lit, null_lit, unit_lit,
+        ))
+        .map_with_span(|lit, span| {
+            cst::Expr::new(cst::ExprKind::Literal(lit), span)
+        });
 
         // Lexical variable
         let var = Self::ident().map_with_span(|name, span| {

@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use super::env::TypeEnv;
 use super::error::TypeError;
 use super::ty::{Ty, TyVar};
-use crate::ast::{Ast, ExprId};
+use crate::ast::{Ast, Expr, ExprId, Literal};
 use crate::value::TypeRegistry;
 use crate::Span;
 
@@ -245,6 +245,68 @@ impl<'a> InferCtx<'a> {
     pub(crate) fn take_errors(&mut self) -> Vec<TypeError> {
         std::mem::take(&mut self.errors)
     }
+
+    /// Infer the type of an expression.
+    ///
+    /// Records the inferred type in `expr_types` and returns it. For undefined
+    /// variables, records an error and returns `Ty::Error` for recovery.
+    ///
+    /// Currently handles Phase 4.3 expressions (literals and variables).
+    /// Other expression types will be added in subsequent phases.
+    pub(crate) fn infer_expr(&mut self, id: ExprId) -> Ty {
+        let span = self.ast.expr_span(id).unwrap_or(Span::new(0, 0));
+        let ty = self.ast.get_expr(id).map_or_else(
+            || Ty::Error,
+            |expr| self.infer_expr_inner(expr, span),
+        );
+        self.record_type(id, ty.clone());
+        ty
+    }
+
+    /// Inner expression inference; dispatches on expression variant.
+    fn infer_expr_inner(&mut self, expr: &Expr, span: Span) -> Ty {
+        match expr {
+            // Literals
+            Expr::Literal(lit) => self.infer_literal(lit),
+
+            // Unit: empty tuple
+            Expr::Tuple(elems) if elems.is_empty() => Ty::Unit,
+
+            // Variable reference
+            Expr::Var(name) => self.infer_var(name, span),
+
+            // Other expressions handled in later phases
+            _ => Ty::Error,
+        }
+    }
+
+    /// Infer type of a literal.
+    fn infer_literal(&self, lit: &Literal) -> Ty {
+        match lit {
+            Literal::Bool(_) => Ty::Bool,
+            Literal::Int(_) => Ty::Int,
+            Literal::Float(_) => Ty::Float,
+            Literal::Char(_) => Ty::Char,
+            Literal::String(_) => Ty::String,
+            Literal::Null => Ty::Json,
+            Literal::Unit => Ty::Unit,
+        }
+    }
+
+    /// Infer type of a variable reference.
+    ///
+    /// Looks up the variable in the type environment and instantiates its
+    /// scheme with fresh type variables. If undefined, records an error
+    /// and returns `Ty::Error`.
+    fn infer_var(&mut self, name: &str, span: Span) -> Ty {
+        match self.env.lookup(name) {
+            Some(scheme) => scheme.instantiate(&mut self.next_var),
+            None => {
+                self.error(TypeError::UndefinedVar(name.to_string(), span));
+                Ty::Error
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -399,5 +461,161 @@ mod tests {
             .span(),
             span
         );
+    }
+
+    use crate::typecheck::Scheme;
+    use crate::value::{TypeExprArena, ValueArena};
+
+    /// Create an `InferCtx` for testing with a minimal AST.
+    fn test_ctx(ast: &Ast) -> InferCtx<'_> {
+        let mut arena = ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+        let registry = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
+        // Leak to get 'static lifetime; tests don't need to clean up
+        let registry = Box::leak(Box::new(registry));
+        InferCtx::new(ast, registry)
+    }
+
+    /// Create an AST with a single expression.
+    fn ast_with_expr(expr: Expr) -> (Ast, ExprId) {
+        let mut ast = Ast::new();
+        let id = ast.add_expr(expr, Span::new(0, 10)).unwrap();
+        (ast, id)
+    }
+
+    #[test]
+    fn infer_literal_bool_true() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Bool(true)));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+    }
+
+    #[test]
+    fn infer_literal_bool_false() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Bool(false)));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Bool);
+    }
+
+    #[test]
+    fn infer_literal_int() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Int(42)));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Int);
+    }
+
+    #[test]
+    fn infer_literal_float() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Float(3.14)));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Float);
+    }
+
+    #[test]
+    fn infer_literal_char() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Char('x')));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Char);
+    }
+
+    #[test]
+    fn infer_literal_string() {
+        let (ast, id) =
+            ast_with_expr(Expr::Literal(Literal::String("hello".into())));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::String);
+    }
+
+    #[test]
+    fn infer_literal_null() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Null));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Json);
+    }
+
+    #[test]
+    fn infer_literal_unit() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Unit));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Unit);
+    }
+
+    #[test]
+    fn infer_empty_tuple_as_unit() {
+        let (ast, id) = ast_with_expr(Expr::Tuple(smallvec::smallvec![]));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Unit);
+    }
+
+    #[test]
+    fn infer_var_found() {
+        let (ast, id) = ast_with_expr(Expr::Var("x".into()));
+        let mut ctx = test_ctx(&ast);
+        // Bind "x" to Int in the environment
+        ctx.env_mut().bind("x", Scheme::mono(Ty::Int));
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Int);
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn infer_var_not_found() {
+        let (ast, id) = ast_with_expr(Expr::Var("undefined".into()));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx.has_errors());
+        assert_eq!(ctx.errors().len(), 1);
+        match &ctx.errors()[0] {
+            TypeError::UndefinedVar(name, _) => assert_eq!(name, "undefined"),
+            e => panic!("expected UndefinedVar, got {e:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_var_instantiates_scheme() {
+        let (ast, id) = ast_with_expr(Expr::Var("id".into()));
+        let mut ctx = test_ctx(&ast);
+        // Bind "id" to a polymorphic scheme: forall a. a -> a
+        // Use a high index to avoid collision with fresh vars (which start at 0)
+        let a = TyVar::new(1000);
+        let scheme = Scheme {
+            vars: vec![a],
+            ty: Ty::Fn(vec![Ty::Var(a)], Box::new(Ty::Var(a))),
+        };
+        ctx.env_mut().bind("id", scheme);
+        let ty = ctx.infer_expr(id);
+        // Should get Fn with fresh type variable (not the original `a`)
+        match ty {
+            Ty::Fn(params, ret) => {
+                assert_eq!(params.len(), 1);
+                // The fresh variable should have a different index
+                match (&params[0], ret.as_ref()) {
+                    (Ty::Var(v1), Ty::Var(v2)) => {
+                        assert_eq!(v1, v2); // Same fresh variable
+                        assert_ne!(*v1, a); // Different from original (1000)
+                    }
+                    _ => panic!("expected Var types"),
+                }
+            }
+            _ => panic!("expected Fn type, got {ty:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_expr_records_type() {
+        let (ast, id) = ast_with_expr(Expr::Literal(Literal::Int(42)));
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(id);
+        assert_eq!(ctx.get_type(id), Some(&ty));
     }
 }

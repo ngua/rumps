@@ -818,16 +818,16 @@ Infer types for the simplest expressions.
 
 ### Checklist
 
-- [ ] `impl InferCtx`: `fn infer_expr(&mut self, id: ExprId) -> Ty`
-- [ ] Handle `Expr::Bool` -> `Ty::Bool`
-- [ ] Handle `Expr::Int` -> `Ty::Int`
-- [ ] Handle `Expr::Float` -> `Ty::Float`
-- [ ] Handle `Expr::Char` -> `Ty::Char`
-- [ ] Handle `Expr::String` -> `Ty::String`
-- [ ] Handle `Expr::Var`:
-  - [ ] Look up in `env`
-  - [ ] If found, instantiate scheme with fresh vars
-  - [ ] If not found, emit `TypeError::UndefinedVar`
+- [x] `impl InferCtx`: `fn infer_expr(&mut self, id: ExprId) -> Ty`
+- [x] Handle `Expr::Bool` -> `Ty::Bool`
+- [x] Handle `Expr::Int` -> `Ty::Int`
+- [x] Handle `Expr::Float` -> `Ty::Float`
+- [x] Handle `Expr::Char` -> `Ty::Char`
+- [x] Handle `Expr::String` -> `Ty::String`
+- [x] Handle `Expr::Var`:
+  - [x] Look up in `env`
+  - [x] If found, instantiate scheme with fresh vars
+  - [x] If not found, emit `TypeError::UndefinedVar`
 
 ---
 

@@ -611,6 +611,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Literal::Char(c) => Value::Char(*c),
             Literal::String(s) => Value::String(self.arena.intern(s)),
             Literal::Null => Value::Json(serde_json::Value::Null),
+            Literal::Unit => Value::Unit,
         }
     }
 

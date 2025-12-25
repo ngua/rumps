@@ -104,7 +104,7 @@ impl Token {
     /// Returns the keyword token for a given identifier, if it matches.
     ///
     /// Most keywords are case-insensitive (e.g., `SET`, `set`, `SeT`).
-    /// Exception: `null` is case-sensitive (JSON compatibility).
+    /// Exception: `null` is case-sensitive (JSON literal).
     pub(crate) fn keyword(s: &str) -> Option<Self> {
         // `null` is case-sensitive (JSON requires lowercase)
         if s == "null" {
@@ -131,8 +131,7 @@ impl Token {
                 "TYPE" => Some(Self::Type),
                 "MATCH" => Some(Self::Match),
                 "UNION" => Some(Self::Union),
-                // `null` is case-sensitive (JSON requires lowercase);
-                // `NULL`, `Null`, etc. are identifiers, not keywords
+                // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
             }
@@ -253,6 +252,16 @@ mod tests {
         assert_eq!(Token::keyword("FUN"), Some(Token::Fun));
         assert_eq!(Token::keyword("MATCH"), Some(Token::Match));
         assert_eq!(Token::keyword("UNION"), Some(Token::Union));
+        // Case-sensitive: null
+        assert_eq!(Token::keyword("null"), Some(Token::Null));
+    }
+
+    #[test]
+    fn null_case_sensitive() {
+        // `null` is case-sensitive (JSON literal)
+        assert_eq!(Token::keyword("null"), Some(Token::Null));
+        assert_eq!(Token::keyword("NULL"), None);
+        assert_eq!(Token::keyword("Null"), None);
     }
 
     #[test]
@@ -265,5 +274,6 @@ mod tests {
         assert_eq!(Token::Global("PATIENT".into()).to_string(), "^PATIENT");
         assert_eq!(Token::Concat.to_string(), "++");
         assert_eq!(Token::FloorDiv.to_string(), "//");
+        assert_eq!(Token::Null.to_string(), "null");
     }
 }

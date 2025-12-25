@@ -2638,8 +2638,6 @@ mod tests {
         }
     }
 
-    // ============ Array module tests ============
-
     fn make_int_array(
         arena: &mut crate::value::ValueArena,
         type_exprs: &mut TypeExprArena,
@@ -2971,8 +2969,6 @@ mod tests {
 
         assert!(result.is_err());
     }
-
-    // ============ String module tests ============
 
     fn make_string(arena: &mut crate::value::ValueArena, s: &str) -> ValueId {
         let sid = arena.intern(s);
