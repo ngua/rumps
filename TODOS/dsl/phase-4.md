@@ -1188,7 +1188,7 @@ Infer types for variant constructors and pattern matching.
 
 ---
 
-## Phase 4.10: Special Expressions
+## Phase 4.10: Special Expressions [x]
 
 Handle unwrap, IS, AS, READ, GET, and other special cases.
 
@@ -1228,32 +1228,33 @@ For ergonomics, we should treat _any_ `Storable AS T`, where `T` is a member of 
 
 ### Checklist
 
-- [ ] Handle `Expr::Unwrap` (postfix `!`):
-  - [ ] Infer operand type
-  - [ ] Create fresh var `?t` for inner type
-  - [ ] Add `Unwrappable { ty: operand_ty, inner: ?t, span }` constraint
-  - [ ] Return `?t`
-- [ ] Handle `Expr::Is`:
-  - [ ] Always returns `Bool`
-  - [ ] If pattern has bindings, record them for use by enclosing `IF`
-  - [ ] Infer payload types from the pattern (e.g., `Result.Ok(x)` extracts `x: T` from `Result[T, E]`)
-- [ ] Handle `Expr::As`:
-  - [ ] Parse target type from annotation
-  - [ ] If target is `Json`, add `Jsonable` constraint on operand
-  - [ ] If operand type is `Storable` and target is a member type, return target (infallible)
-  - [ ] Otherwise, require type compatibility (e.g., `Int AS Float` for widening; any `T` is `Stringable`, etc...)
-  - [ ] For incompatible types, emit error; use `READ` for fallible conversion or `MATCH`/`IS` for narrowing
-- [ ] Handle `Expr::Read`:
-  - [ ] Parse target type
-  - [ ] Return `Result[T, String]`
-- [ ] Handle `Expr::Get`:
-  - [ ] Return `Ty::Named(TypeId::STORABLE, vec![])` (the `Storable` union)
-  - [ ] Usage may narrow to specific member (e.g., `x + 1` narrows to `Int | Float`)
-- [ ] Handle `Expr::Annotate`:
-  - [ ] Infer inner expression type
-  - [ ] Parse annotation to `Ty`
-  - [ ] Unify inferred type with annotation (annotation is expected type)
-  - [ ] Return annotation type
+- [x] Handle `Expr::Unwrap` (postfix `!`):
+  - [x] Infer operand type
+  - [x] Create fresh var `?t` for inner type
+  - [x] Add `Unwrappable { ty: operand_ty, inner: ?t, span }` constraint
+  - [x] Return `?t`
+- [x] Handle `Expr::Is`:
+  - [x] Always returns `Bool`
+  - [x] If pattern has bindings, record them for use by enclosing `IF`
+  - [x] Infer payload types from the pattern (e.g., `Result.Ok(x)` extracts `x: T` from `Result[T, E]`)
+- [x] Handle `Expr::As`:
+  - [x] Parse target type from annotation
+  - [x] If target is `Json`, add `Jsonable` constraint on operand
+  - [x] If operand type is `Storable` and target is a member type, return target (**infallible**)
+  - [x] If operand type is `T` and target is `String`, return target (**infallible**; all types coerce to `String`)
+  - [x] Otherwise, require type compatibility (e.g., `Int AS Float` for widening)
+  - [x] For incompatible types, emit error; e.g. "use `READ` for fallible conversion or `MATCH`/`IS` for narrowing"
+- [x] Handle `Expr::Read`:
+  - [x] Parse target type
+  - [x] Return `Result[T, String]`
+- [x] Handle `Expr::Get`:
+  - [x] Return `Ty::Named(TypeId::STORABLE, vec![])` (the `Storable` union)
+  - [x] Usage may narrow to specific member (e.g., `x + 1` narrows to `Int | Float`)
+- [x] Handle `Expr::Annotate`:
+  - [x] Infer inner expression type
+  - [x] Parse annotation to `Ty`
+  - [x] Unify inferred type with annotation (annotation is expected type)
+  - [x] Return annotation type
 
 ---
 

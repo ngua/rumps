@@ -127,6 +127,13 @@ pub(crate) enum TypeError {
         union_ty: Ty,
         span: Span,
     },
+
+    /// Invalid type cast.
+    ///
+    /// The source type cannot be cast to the target type. Suggests alternatives
+    /// like `READ` for fallible conversion or `MATCH`/`IS` for narrowing.
+    #[error("cannot cast `{from}` to `{to}`; use `READ` for fallible conversion or `MATCH`/`IS` for narrowing")]
+    InvalidCast { from: Ty, to: Ty, span: Span },
 }
 
 impl TypeError {
@@ -155,7 +162,8 @@ impl TypeError {
             | Self::NotIndexable(_, span)
             | Self::NotJson(_, span)
             | Self::EmptyUnion(span)
-            | Self::NotAUnionMember { span, .. } => *span,
+            | Self::NotAUnionMember { span, .. }
+            | Self::InvalidCast { span, .. } => *span,
         }
     }
 }

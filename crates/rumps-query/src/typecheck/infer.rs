@@ -413,8 +413,38 @@ impl<'a> InferCtx<'a> {
                 self.variant(ty_name, var_name, args, span)
             }
 
-            // Other expressions handled in later phases
-            _ => Ty::Error,
+            // Unwrap: postfix `!`
+            Expr::Unwrap(inner) => self.unwrap(*inner, span),
+
+            // Type check: `expr IS Pattern`
+            Expr::Is(scrutinee, pattern) => {
+                self.is_check(*scrutinee, pattern, span)
+            }
+
+            // Type cast: `expr AS Type`
+            Expr::As(inner, ty_id) => self.as_cast(*inner, *ty_id, span),
+
+            // Fallible conversion: `expr READ Type`
+            Expr::Read(inner, ty_id) => self.read_conv(*inner, *ty_id, span),
+
+            // Database read: `GET local(...)` or `GET ^global(...)`
+            Expr::Get(inner) => self.get(*inner, span),
+
+            // Type annotation: `(expr) : Type`
+            Expr::Annotate(inner, ty_id) => self.annotate(*inner, *ty_id, span),
+
+            // Local/Global B-tree variables (subscript expressions)
+            Expr::Local(_, _) | Expr::Global(_, _) => {
+                // These are always wrapped in GET; standalone is not typed
+                Ty::Error
+            }
+
+            // Module path: `Module.function`
+            Expr::Path(_) => {
+                // Module functions have polymorphic types registered in env
+                // The actual typing is done via Callable constraint at call site
+                Ty::Unknown
+            }
         }
     }
 
@@ -1687,6 +1717,292 @@ impl<'a> InferCtx<'a> {
                 }
             }
         }
+    }
+
+    /// Infer type of postfix unwrap `!`.
+    ///
+    /// The operand must be `Option[T]` or `Result[T, E]`. Returns `T`.
+    /// Adds an `Unwrappable` constraint that the solver will check.
+    fn unwrap(&mut self, inner_id: ExprId, span: Span) -> Ty {
+        let inner_ty = self.expr(inner_id);
+        let result = self.fresh();
+        self.constrain(Constraint::Unwrappable {
+            ty: inner_ty,
+            inner: result.clone(),
+            span,
+        });
+        result
+    }
+
+    /// Infer type of `IS` expression.
+    ///
+    /// Always returns `Bool`. Pattern bindings are extracted by `Expr::If`
+    /// and added to the then-branch scope; they are not bound here.
+    ///
+    /// # Pattern Handling
+    ///
+    /// - `Type`: runtime type check
+    /// - `Variant(ty, var)`: zero-arity variant check
+    /// - `VariantWildcard(ty, var)`: variant check ignoring payload
+    /// - `VariantBind(ty, var, names)`: variant check with payload bindings
+    ///   (bindings handled by enclosing `IF`)
+    /// - `Object(fields)`: structural object check
+    fn is_check(
+        &mut self,
+        scrutinee_id: ExprId,
+        pattern: &TypePattern,
+        span: Span,
+    ) -> Ty {
+        let scrutinee_ty = self.expr(scrutinee_id);
+
+        match pattern {
+            TypePattern::Type(name) => {
+                let target_ty = self.named_type_to_ty(name);
+                // If scrutinee is a union, verify target is a member
+                if let Some(members) = self.expand_union_members(&scrutinee_ty)
+                {
+                    if !members.contains(&target_ty) && target_ty != Ty::Unknown
+                    {
+                        self.error(TypeError::NotAUnionMember {
+                            member: target_ty,
+                            union_ty: scrutinee_ty,
+                            span,
+                        });
+                    }
+                }
+            }
+            TypePattern::Variant(ty_name, var_name)
+            | TypePattern::VariantWildcard(ty_name, var_name) => {
+                // Just validate that the variant exists
+                let var_name_id = self.env.intern(var_name);
+                let exists = self
+                    .env
+                    .lookup_str(ty_name)
+                    .and_then(|id| self.registry.lookup(id))
+                    .and_then(|type_id| {
+                        self.registry.lookup_variant(type_id, var_name_id)
+                    })
+                    .is_some();
+                if !exists {
+                    self.error(TypeError::UnknownType(
+                        format!("{ty_name}.{var_name}"),
+                        span,
+                    ));
+                }
+            }
+            TypePattern::VariantBind(ty_name, var_name, names) => {
+                // Validate variant and arity; bindings are handled by IF
+                let var_name_id = self.env.intern(var_name);
+                let lookup = self
+                    .env
+                    .lookup_str(ty_name)
+                    .and_then(|id| self.registry.lookup(id))
+                    .and_then(|type_id| {
+                        self.registry
+                            .lookup_variant(type_id, var_name_id)
+                            .map(|v| (type_id, v))
+                    });
+                match lookup {
+                    None => {
+                        self.error(TypeError::UnknownType(
+                            format!("{ty_name}.{var_name}"),
+                            span,
+                        ));
+                    }
+                    Some((_, var_def)) => {
+                        if var_def.arity as usize != names.len() {
+                            self.error(TypeError::ArityMismatch {
+                                expected: var_def.arity as usize,
+                                got: names.len(),
+                                span,
+                            });
+                        }
+                    }
+                }
+            }
+            TypePattern::Object(fields) => {
+                // Validate that scrutinee could be an object with these fields
+                match &scrutinee_ty {
+                    Ty::Object(_) | Ty::Var(_) | Ty::Unknown | Ty::Error => {}
+                    Ty::Named(type_id, _) => {
+                        // Check it's a struct
+                        if !matches!(
+                            self.registry.get_def(*type_id),
+                            Some(TypeDef::Struct { .. })
+                        ) {
+                            self.error(TypeError::NotAnObject(
+                                scrutinee_ty.clone(),
+                                span,
+                            ));
+                        }
+                    }
+                    _ => {
+                        self.error(TypeError::NotAnObject(scrutinee_ty, span));
+                    }
+                }
+                // Resolve field types (validates type expressions)
+                fields.iter().for_each(|(_, ty_id)| {
+                    self.ast_type_to_ty(*ty_id, &HashMap::new());
+                });
+            }
+        }
+
+        Ty::Bool
+    }
+
+    /// Infer type of `AS` cast expression.
+    ///
+    /// Handles several cases:
+    /// - `T AS Json`: add `Jsonable` constraint, return `Json`
+    /// - `Storable AS T` (where `T` is a `Storable` member): return `T` (infallible)
+    /// - `T AS String`: all types can stringify, return `String`
+    /// - `Int AS Float` / `Float AS Int`: numeric coercion
+    /// - Otherwise: emit `InvalidCast` error
+    fn as_cast(
+        &mut self,
+        inner_id: ExprId,
+        ty_id: AstTypeExprId,
+        span: Span,
+    ) -> Ty {
+        let inner_ty = self.expr(inner_id);
+        let target_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
+
+        // If target is Json, add Jsonable constraint
+        if target_ty == Ty::Json {
+            self.constrain(Constraint::Jsonable(inner_ty, span));
+            Ty::Json
+        } else if target_ty == Ty::String {
+            // All types can be cast to String
+            self.constrain(Constraint::Stringable(inner_ty, span));
+            Ty::String
+        } else {
+            // Check for valid conversions
+            match (&inner_ty, &target_ty) {
+                // Numeric coercions
+                (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => target_ty,
+
+                // Bool <-> Int
+                (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => target_ty,
+
+                // Same type is always valid
+                (a, b) if a == b => target_ty,
+
+                // Type variable: defer to unification
+                (Ty::Var(_), _) | (_, Ty::Var(_)) => {
+                    self.unify(inner_ty.clone(), target_ty.clone(), span);
+                    target_ty
+                }
+
+                // Error recovery
+                (Ty::Error, _) | (_, Ty::Error) => Ty::Error,
+
+                // Unknown can be cast to anything (database reads)
+                (Ty::Unknown, _) => target_ty,
+
+                // Storable to member type (special case: infallible at compile
+                // time but may fail at runtime with RuntimeType error)
+                (Ty::Named(id, _), _) if *id == TypeId::STORABLE => {
+                    if Ty::STORABLE_MEMBERS.contains(&target_ty) {
+                        target_ty
+                    } else {
+                        self.error(TypeError::InvalidCast {
+                            from: inner_ty,
+                            to: target_ty.clone(),
+                            span,
+                        });
+                        target_ty
+                    }
+                }
+
+                // Invalid cast
+                _ => {
+                    self.error(TypeError::InvalidCast {
+                        from: inner_ty,
+                        to: target_ty.clone(),
+                        span,
+                    });
+                    target_ty
+                }
+            }
+        }
+    }
+
+    /// Infer type of `READ` conversion expression.
+    ///
+    /// `expr READ T` returns `Result[T, String]`. The conversion is fallible;
+    /// if the value cannot be converted to `T`, an error message is returned.
+    fn read_conv(
+        &mut self,
+        inner_id: ExprId,
+        ty_id: AstTypeExprId,
+        span: Span,
+    ) -> Ty {
+        let _inner_ty = self.expr(inner_id);
+        let target_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
+
+        // Validate the target type is usable for READ
+        match &target_ty {
+            Ty::Bool
+            | Ty::Int
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Array(_)
+            | Ty::Option(_)
+            | Ty::Object(_)
+            | Ty::Named(_, _) => {}
+            Ty::Fn(_, _) => {
+                self.error(TypeError::Mismatch {
+                    expected: Ty::String, // placeholder
+                    got: target_ty.clone(),
+                    span,
+                });
+            }
+            Ty::Var(_) | Ty::Unknown | Ty::Error => {}
+            _ => {}
+        }
+
+        Ty::Result(Box::new(target_ty), Box::new(Ty::String))
+    }
+
+    /// Infer type of `GET` expression.
+    ///
+    /// Database reads return `Storable` union. Usage may narrow via
+    /// `IS`/`AS` checks or arithmetic operations.
+    fn get(&mut self, inner_id: ExprId, span: Span) -> Ty {
+        // Extract subscript IDs if Local or Global; ExprId is Copy so cheap
+        let subs: SmallVec<[ExprId; 4]> = self
+            .ast
+            .get_expr(inner_id)
+            .and_then(|e| match e {
+                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        // Type-check subscript expressions
+        subs.iter().for_each(|sub_id| {
+            let sub_ty = self.expr(*sub_id);
+            self.constrain(Constraint::Subscript(sub_ty, span));
+        });
+
+        Ty::Named(TypeId::STORABLE, vec![])
+    }
+
+    /// Infer type of type annotation expression `(expr) : Type`.
+    ///
+    /// Infers the inner expression type, parses the annotation, and unifies
+    /// them. Returns the annotation type (which is the expected type).
+    fn annotate(
+        &mut self,
+        inner_id: ExprId,
+        ty_id: AstTypeExprId,
+        span: Span,
+    ) -> Ty {
+        let inner_ty = self.expr(inner_id);
+        let ann_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
+        self.unify(inner_ty, ann_ty.clone(), span);
+        ann_ty
     }
 
     /// Infer types for a statement.
@@ -5655,5 +5971,437 @@ mod tests {
             .errors
             .iter()
             .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    // Phase 4.10: Special Expressions Tests
+
+    #[test]
+    fn unwrap_creates_unwrappable_constraint() {
+        // opt! where opt is Option[Int]
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+
+        // Create a variable that we'll type as Option[Int]
+        let opt_var = ast.add_expr(Expr::Var("opt".into()), span).unwrap();
+        let unwrap_expr = ast.add_expr(Expr::Unwrap(opt_var), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        // Bind opt to Option[Int]
+        ctx.env_mut()
+            .bind("opt", Scheme::mono(Ty::Option(Box::new(Ty::Int))));
+
+        let ty = ctx.expr(unwrap_expr);
+
+        // Should be a fresh type variable (unification will resolve to Int)
+        assert!(matches!(ty, Ty::Var(_)));
+
+        // Should have an Unwrappable constraint
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Unwrappable { .. })));
+    }
+
+    #[test]
+    fn is_check_returns_bool() {
+        // x IS Int
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+
+        let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let is_expr = ast
+            .add_expr(Expr::Is(x_var, TypePattern::Type("Int".into())), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.env_mut().bind("x", Scheme::mono(Ty::Unknown));
+
+        let ty = ctx.expr(is_expr);
+        assert_eq!(ty, Ty::Bool);
+    }
+
+    #[test]
+    fn is_check_variant() {
+        // opt IS Option.Some(x)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+
+        let opt_var = ast.add_expr(Expr::Var("opt".into()), span).unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    opt_var,
+                    TypePattern::VariantBind(
+                        "Option".into(),
+                        "Some".into(),
+                        smallvec!["val".into()],
+                    ),
+                ),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.env_mut()
+            .bind("opt", Scheme::mono(Ty::Option(Box::new(Ty::Int))));
+
+        let ty = ctx.expr(is_expr);
+        assert_eq!(ty, Ty::Bool);
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn is_check_variant_arity_mismatch() {
+        // opt IS Option.Some(a, b) -- wrong arity (should be 1)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+
+        let opt_var = ast.add_expr(Expr::Var("opt".into()), span).unwrap();
+        let is_expr = ast
+            .add_expr(
+                Expr::Is(
+                    opt_var,
+                    TypePattern::VariantBind(
+                        "Option".into(),
+                        "Some".into(),
+                        smallvec!["a".into(), "b".into()],
+                    ),
+                ),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.env_mut()
+            .bind("opt", Scheme::mono(Ty::Option(Box::new(Ty::Int))));
+
+        let ty = ctx.expr(is_expr);
+        assert_eq!(ty, Ty::Bool);
+        assert!(ctx.has_errors());
+        assert!(ctx
+            .errors()
+            .iter()
+            .any(|e| matches!(e, TypeError::ArityMismatch { .. })));
+    }
+
+    #[test]
+    fn as_cast_int_to_float() {
+        // 42 AS Float
+        let mut ast = Ast::new();
+        let span = Span::new(0, 12);
+
+        let int_lit =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let float_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Float".into()), span)
+            .unwrap();
+        let as_expr = ast.add_expr(Expr::As(int_lit, float_ty), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(as_expr);
+
+        assert_eq!(ty, Ty::Float);
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn as_cast_float_to_int() {
+        // 3.14 AS Int
+        let mut ast = Ast::new();
+        let span = Span::new(0, 12);
+
+        let float_lit = ast
+            .add_expr(Expr::Literal(Literal::Float(3.14)), span)
+            .unwrap();
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let as_expr = ast.add_expr(Expr::As(float_lit, int_ty), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(as_expr);
+
+        assert_eq!(ty, Ty::Int);
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn as_cast_to_string() {
+        // 42 AS String
+        let mut ast = Ast::new();
+        let span = Span::new(0, 14);
+
+        let int_lit =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let string_ty = ast
+            .add_type_expr(AstTypeExpr::Named("String".into()), span)
+            .unwrap();
+        let as_expr = ast.add_expr(Expr::As(int_lit, string_ty), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(as_expr);
+
+        assert_eq!(ty, Ty::String);
+        assert!(!ctx.has_errors());
+
+        // Should have Stringable constraint
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Stringable(_, _))));
+    }
+
+    #[test]
+    fn as_cast_to_json() {
+        // { a: 1 } AS Json
+        let mut ast = Ast::new();
+        let span = Span::new(0, 18);
+
+        let one_lit =
+            ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let obj = ast
+            .add_expr(Expr::Object(vec![("a".into(), one_lit)]), span)
+            .unwrap();
+        let json_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Json".into()), span)
+            .unwrap();
+        let as_expr = ast.add_expr(Expr::As(obj, json_ty), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(as_expr);
+
+        assert_eq!(ty, Ty::Json);
+        assert!(!ctx.has_errors());
+
+        // Should have Jsonable constraint
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Jsonable(_, _))));
+    }
+
+    #[test]
+    fn as_cast_invalid() {
+        // [1, 2] AS Int -- invalid
+        let mut ast = Ast::new();
+        let span = Span::new(0, 12);
+
+        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let two = ast.add_expr(Expr::Literal(Literal::Int(2)), span).unwrap();
+        let arr = ast.add_expr(Expr::Array(vec![one, two]), span).unwrap();
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let as_expr = ast.add_expr(Expr::As(arr, int_ty), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(as_expr);
+
+        // Still returns target type for error recovery
+        assert_eq!(ty, Ty::Int);
+        assert!(ctx.has_errors());
+        assert!(ctx
+            .errors()
+            .iter()
+            .any(|e| matches!(e, TypeError::InvalidCast { .. })));
+    }
+
+    #[test]
+    fn as_cast_storable_to_non_member() {
+        // x AS Array[Int] where x: Storable -- invalid (Array is not a Storable member)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+
+        let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let arr_ty = ast
+            .add_type_expr(
+                AstTypeExpr::App("Array".into(), smallvec![int_ty]),
+                span,
+            )
+            .unwrap();
+        let as_expr = ast.add_expr(Expr::As(x_var, arr_ty), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        // Bind x to Storable union type
+        ctx.env_mut()
+            .bind("x", Scheme::mono(Ty::Named(TypeId::STORABLE, vec![])));
+
+        let ty = ctx.expr(as_expr);
+
+        // Returns target type for error recovery
+        assert_eq!(ty, Ty::Array(Box::new(Ty::Int)));
+        // Should emit InvalidCast error
+        assert!(ctx.has_errors());
+        assert!(ctx
+            .errors()
+            .iter()
+            .any(|e| matches!(e, TypeError::InvalidCast { .. })));
+    }
+
+    #[test]
+    fn read_returns_result() {
+        // "42" READ Int
+        let mut ast = Ast::new();
+        let span = Span::new(0, 14);
+
+        let str_lit = ast
+            .add_expr(Expr::Literal(Literal::String("42".into())), span)
+            .unwrap();
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let read_expr =
+            ast.add_expr(Expr::Read(str_lit, int_ty), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(read_expr);
+
+        assert_eq!(ty, Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)));
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn read_array_type() {
+        // json READ Array[Int]
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+
+        let json_var = ast.add_expr(Expr::Var("json".into()), span).unwrap();
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let arr_ty = ast
+            .add_type_expr(
+                AstTypeExpr::App("Array".into(), smallvec![int_ty]),
+                span,
+            )
+            .unwrap();
+        let read_expr =
+            ast.add_expr(Expr::Read(json_var, arr_ty), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        ctx.env_mut().bind("json", Scheme::mono(Ty::Json));
+
+        let ty = ctx.expr(read_expr);
+
+        assert_eq!(
+            ty,
+            Ty::Result(
+                Box::new(Ty::Array(Box::new(Ty::Int))),
+                Box::new(Ty::String)
+            )
+        );
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn get_returns_storable() {
+        // GET local("key")
+        let mut ast = Ast::new();
+        let span = Span::new(0, 15);
+
+        let key_lit = ast
+            .add_expr(Expr::Literal(Literal::String("key".into())), span)
+            .unwrap();
+        let local = ast
+            .add_expr(Expr::Local("test".into(), smallvec![key_lit]), span)
+            .unwrap();
+        let get_expr = ast.add_expr(Expr::Get(local), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(get_expr);
+
+        assert_eq!(ty, Ty::Named(TypeId::STORABLE, vec![]));
+        assert!(!ctx.has_errors());
+
+        // Should have Subscript constraint for the key
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Subscript(_, _))));
+    }
+
+    #[test]
+    fn annotate_unifies_types() {
+        // (42) : Int
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+
+        let int_lit =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let int_ty = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let ann_expr =
+            ast.add_expr(Expr::Annotate(int_lit, int_ty), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(ann_expr);
+
+        assert_eq!(ty, Ty::Int);
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn annotate_mismatch() {
+        // (42) : String -- mismatch
+        let mut ast = Ast::new();
+        let span = Span::new(0, 14);
+
+        let int_lit =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let string_ty = ast
+            .add_type_expr(AstTypeExpr::Named("String".into()), span)
+            .unwrap();
+        let ann_expr = ast
+            .add_expr(Expr::Annotate(int_lit, string_ty), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(ann_expr);
+
+        // Returns annotation type
+        assert_eq!(ty, Ty::String);
+
+        // Should have Eq constraint that will fail during solving
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Eq(Ty::Int, Ty::String, _))));
+    }
+
+    #[test]
+    fn annotate_option_none() {
+        // (Option.None) : Option[String]
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+
+        let none_expr = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "None".into(), smallvec![]),
+                span,
+            )
+            .unwrap();
+        let string_ty = ast
+            .add_type_expr(AstTypeExpr::Named("String".into()), span)
+            .unwrap();
+        let opt_ty = ast
+            .add_type_expr(
+                AstTypeExpr::App("Option".into(), smallvec![string_ty]),
+                span,
+            )
+            .unwrap();
+        let ann_expr = ast
+            .add_expr(Expr::Annotate(none_expr, opt_ty), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(ann_expr);
+
+        assert_eq!(ty, Ty::Option(Box::new(Ty::String)));
+        // Unification will handle type variable reconciliation
     }
 }
