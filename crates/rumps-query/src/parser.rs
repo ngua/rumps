@@ -857,9 +857,7 @@ impl Parser {
         // Using boxed() to reduce stack pressure from parser construction
         let field = Self::ident()
             .then_ignore(just(Token::Colon))
-            .then(Self::ident().map_with_span(|name, span| {
-                cst::TypeExpr::new(cst::TypeExprKind::Named(name), span)
-            }))
+            .then(Self::type_expr())
             .boxed();
         let struct_pat = just(Token::LBrace)
             .ignore_then(

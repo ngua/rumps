@@ -594,7 +594,7 @@ impl Value {
         }
     }
 
-    /// Check if this is `Option.Some`.
+    /// Check if this is `Option.Some(_)`.
     pub(crate) fn is_some(&self, type_exprs: &TypeExprArena) -> bool {
         match self {
             Self::Tagged(ty_expr, 1, _) => type_exprs
@@ -604,7 +604,7 @@ impl Value {
         }
     }
 
-    /// Check if this is `Result.Ok`.
+    /// Check if this is `Result.Ok(_)`.
     pub(crate) fn is_ok(&self, type_exprs: &TypeExprArena) -> bool {
         match self {
             Self::Tagged(ty_expr, 0, _) => type_exprs
@@ -614,7 +614,7 @@ impl Value {
         }
     }
 
-    /// Check if this is `Result.Err`.
+    /// Check if this is `Result.Err(_)`.
     pub(crate) fn is_err(&self, type_exprs: &TypeExprArena) -> bool {
         match self {
             Self::Tagged(ty_expr, 1, _) => type_exprs

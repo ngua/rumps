@@ -1,0 +1,120 @@
+; Test: Nested structural types in various contexts
+; Verifies that anonymous records with nested fields work everywhere
+
+; ============================================================
+; NESTED STRUCTURAL TYPES IN LET BINDINGS
+; ============================================================
+
+LET simple: { a: Int } = { a: 1 }
+OUTPUT simple.a
+; Expected: 1
+
+LET nested: { a: { b: Int } } = { a: { b: 10 } }
+OUTPUT nested.a.b
+; Expected: 10
+
+LET deep: { x: { y: { z: String } } } = { x: { y: { z: "hello" } } }
+OUTPUT deep.x.y.z
+; Expected: hello
+
+LET multi: { a: { b: Int }, c: { d: String } } = { a: { b: 1 }, c: { d: "two" } }
+OUTPUT multi.a.b
+; Expected: 1
+OUTPUT multi.c.d
+; Expected: two
+
+; ============================================================
+; NESTED STRUCTURAL TYPES IN IS PATTERNS
+; ============================================================
+
+OUTPUT { a: 1 } IS { a: Int }
+; Expected: TRUE
+
+OUTPUT { a: { b: 1 } } IS { a: { b: Int } }
+; Expected: TRUE
+
+OUTPUT { a: { b: { c: 1 } } } IS { a: { b: { c: Int } } }
+; Expected: TRUE
+
+; Wrong inner type
+OUTPUT { a: { b: "hello" } } IS { a: { b: Int } }
+; Expected: FALSE
+
+; Missing inner field
+OUTPUT { a: { c: 1 } } IS { a: { b: Int } }
+; Expected: FALSE
+
+; Extra fields are OK (extensible records)
+OUTPUT { a: { b: 1, c: 2 } } IS { a: { b: Int } }
+; Expected: TRUE
+
+; ============================================================
+; MIXED NESTED TYPES
+; ============================================================
+
+LET mixed: { arr: Array[Int], nested: { x: Int } } = { arr: [1, 2, 3], nested: { x: 42 } }
+OUTPUT mixed.arr IS Array
+; Expected: TRUE
+OUTPUT mixed.nested.x
+; Expected: 42
+
+; ============================================================
+; NESTED STRUCTURAL TYPES WITH OPTION
+; ============================================================
+
+LET opt: Option[{ a: { b: Int } }] = Option.Some({ a: { b: 99 } })
+OUTPUT opt IS Option.Some(_)
+; Expected: TRUE
+
+IF opt IS Option.Some(val) {
+  OUTPUT val.a.b
+}
+; Expected: 99
+
+; ============================================================
+; NESTED IN FUNCTION PARAMETERS
+; ============================================================
+
+FUN get-inner(obj: { inner: { val: Int } }) -> Int {
+  obj.inner.val
+}
+
+OUTPUT get-inner({ inner: { val: 777 } })
+; Expected: 777
+
+FUN get-deep(obj: { a: { b: { c: String } } }) -> String {
+  obj.a.b.c
+}
+
+OUTPUT get-deep({ a: { b: { c: "deep" } } })
+; Expected: deep
+
+; ============================================================
+; NESTED IN FUNCTION RETURN TYPES
+; ============================================================
+
+FUN make-nested(x: Int) -> { outer: { inner: Int } } {
+  { outer: { inner: x } }
+}
+
+LET made = make-nested(123)
+OUTPUT made.outer.inner
+; Expected: 123
+
+; ============================================================
+; COMBINED WITH NAMED STRUCT TYPES
+; ============================================================
+
+TYPE Inner = { value: Int }
+TYPE Outer = { child: Inner }
+
+LET named: Outer = { child: { value: 42 } }
+OUTPUT named.child.value
+; Expected: 42
+
+; Anonymous nested inside named
+LET hybrid: { wrapper: Inner } = { wrapper: { value: 55 } }
+OUTPUT hybrid.wrapper.value
+; Expected: 55
+
+OUTPUT "Nested structural types test complete"

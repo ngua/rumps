@@ -10,7 +10,7 @@ use crate::TypeId;
 
 /// A type variable; placeholder for an unknown type during inference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct TyVar(pub(crate) u32);
+pub(crate) struct TyVar(u32);
 
 /// Static types used during type checking.
 ///

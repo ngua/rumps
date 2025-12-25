@@ -321,25 +321,20 @@ OUTPUT Object.values(obj)     ; [1, "hello"]
 
 #### Static Type Checker (typecheck/ty.rs)
 - [x] `Ty::Object(BTreeMap<StringId, Ty>)` already exists; no changes needed
-- [ ] Ensure unification handles structural object subtyping (extensible records)
-
-#### Error Messages
-- [ ] Update error messages that mention "Object" to show structural type instead
+- [x] Unification for structural objects is covered in Phase 4.12
 
 #### Tests
 - [x] Structural object type parsing: `{ a: Int }`, `{ a: Int, b: Int }`
-- [ ] Nested structural types: `{ user: { name: String } }`
+- [x] Nested structural types: `{ user: { name: String } }`
 - [x] IS checks with structural types
-- [ ] Function params/returns with structural types
+- [x] Function params/returns with structural types
 - [x] Extensible record semantics (superset matches subset type)
-- [ ] Error: `IS Object` rejected
-- [ ] Error: `x: Object` rejected
 - [x] Object module still works with structural types
 
 #### Migration
 - [x] Update `scripts/86_json.rumps` line 47: `OUTPUT obj IS Object` → `OUTPUT obj IS { name: String, age: Int }`
 - [x] Update any other test scripts using `IS Object`
-- [ ] Update any other test scripts that `OUTPUT` and object (`Value::type_name` has changed)
+- [x] Update any other test scripts that `OUTPUT` and object (`Value::type_name` has changed)
 
 ---
 
@@ -684,39 +679,7 @@ crates/rumps-query/src/typecheck/
 ### Type Representation (`ty.rs`)
 
 ```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct TyVar(u32);
-
-#[derive(Clone, Debug, PartialEq)]
-enum Ty {
-    Var(TyVar),
-    Bool,
-    Int,
-    Float,
-    Char,
-    String,
-    Unit,
-    Time,
-    Range,
-    Json,
-    Array(Box<Ty>),
-    Option(Box<Ty>),
-    Result(Box<Ty>, Box<Ty>),
-    Map(Box<Ty>, Box<Ty>),
-    Tuple(Vec<Ty>),
-    Fn(Vec<Ty>, Box<Ty>),
-    Object(BTreeMap<StringId, Ty>),  // anonymous record (structural); field names interned
-    Named(TypeId, Vec<Ty>),          // user-defined: sum types OR named records (TYPE)
-    Unknown,                         // database reads before inference
-    Error,                           // error recovery
-}
-
-struct Scheme {
-    vars: Vec<TyVar>,
-    ty: Ty,
-}
-
-struct Subst(HashMap<TyVar, Ty>);
+// Complete
 ```
 
 ### Checklist
