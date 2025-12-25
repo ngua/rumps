@@ -115,6 +115,10 @@ pub(crate) enum TypeError {
     /// JSON access on non-JSON type.
     #[error("type `{0}` is not JSON; cannot use JSON access operators")]
     NotJson(Ty, Span),
+
+    /// Empty union type.
+    #[error("union type must have at least one member")]
+    EmptyUnion(Span),
 }
 
 impl TypeError {
@@ -141,7 +145,8 @@ impl TypeError {
             | Self::NotATuple(_, span)
             | Self::TupleIndexOutOfBounds { span, .. }
             | Self::NotIndexable(_, span)
-            | Self::NotJson(_, span) => *span,
+            | Self::NotJson(_, span)
+            | Self::EmptyUnion(span) => *span,
         }
     }
 }
@@ -196,6 +201,14 @@ impl fmt::Display for Ty {
                     write!(f, "#{}: {t}", k.idx())
                 })?;
                 write!(f, "}}")
+            }
+            Self::Union(members) => {
+                members.iter().enumerate().try_for_each(|(i, t)| {
+                    if i > 0 {
+                        write!(f, " | ")?;
+                    }
+                    write!(f, "{t}")
+                })
             }
             Self::Named(id, args) => {
                 // Use Debug format since TypeId field is private

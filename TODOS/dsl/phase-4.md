@@ -747,6 +747,68 @@ crates/rumps-query/src/typecheck/
 
 ---
 
+## Phase 4.1.1: Union Type Representation
+
+Add the `Ty::Union` variant for anonymous union types and wire named unions into the type checker.
+
+### Design
+
+There are two kinds of unions in RUMPS:
+
+| Kind          | Example                                 | Representation              | Semantics                                  |
+|---------------|-----------------------------------------|-----------------------------|--------------------------------------------|
+| **Named**     | `Storable`, `Scalar`, `UNION Foo = ...` | `Ty::Named(TypeId, params)` | Nominal identity; special runtime behavior |
+| **Anonymous** | `Int \| String`                         | `Ty::Union(Vec<Ty>)`        | Structural; "one of these types"           |
+
+Named unions keep their `Ty::Named` representation because:
+- `Storable` has special `AS` semantics (infallible cast with runtime error)
+- Named unions can have type parameters: `UNION F[T] = Int | Option[T]`
+- User-defined unions have registered names for error messages
+
+Anonymous unions become `Ty::Union(vec![...])` for structural matching.
+
+### Helper: `expand_union_members`
+
+To handle unification and `IS`/`AS` checks, we need to expand unions to their members:
+
+```rust
+fn expand_union_members(&self, ty: &Ty) -> Option<Vec<Ty>> {
+    match ty {
+        Ty::Union(members) => Some(members.clone()),
+        Ty::Named(id, params) => {
+            // Look up in registry; if TypeDef::Union, resolve members
+            self.registry.get_def(*id).and_then(|def| match def {
+                TypeDef::Union { members, type_params, .. } => {
+                    // Build substitution from type_params -> params
+                    // Resolve each member TypeExprId to Ty
+                    Some(...)
+                }
+                _ => None,
+            })
+        }
+        _ => None,
+    }
+}
+```
+
+### Checklist
+
+- [x] Add `Ty::Union(Vec<Self>)` to `ty.rs`
+- [x] Update `Ty::free_vars()` for `Union` variant
+- [x] Update `Ty::occurs()` for `Union` variant
+- [x] Update `Ty::apply()` for `Union` variant
+- [x] Update `ast_type_to_ty` to handle `AstTypeExpr::Union` → `Ty::Union`
+- [x] Add `expand_union_members(ty: &Ty) -> Option<Vec<Ty>>` helper to `InferCtx`
+- [x] Unit tests:
+  - [x] `Ty::Union` free vars collection
+  - [x] `Ty::Union` occurs check
+  - [x] `Ty::Union` substitution application
+  - [x] `ast_type_to_ty` for anonymous unions
+  - [x] `expand_union_members` for named unions (`Storable`, `Scalar`)
+  - [x] `expand_union_members` for anonymous unions
+
+---
+
 ## Phase 4.2: Inference Context
 
 Create the main inference context and constraint types.
@@ -1464,6 +1526,8 @@ This is used for:
 
 ### Checklist
 
+- [ ] Handle `Stmt::Union` in `infer_stmt` (register type, no env binding needed)
+- [ ] Resolve user-defined union members in `expand_union_members` (requires `TypeExprArena`)
 - [ ] Add `pub(crate) fn check(ast, registry) -> crate::Result<()>` to `typecheck.rs`
 - [ ] `impl InferCtx`: `fn into_result(self) -> crate::Result<()>`
 - [ ] `impl TypeExprArena`: `fn from_ty(&mut self, ty: &Ty, registry: &TypeRegistry) -> TypeExprId`

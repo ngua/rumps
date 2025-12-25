@@ -13,6 +13,10 @@
 //! // Prints: 3
 //! ```
 
+#![allow(clippy::result_large_err)]
+/// NOTE: We don't really care about the large error types; they are
+/// only relevant in program termination, not the happy-path interpreter, so
+/// we silence them here.
 mod ast;
 mod env;
 mod error;

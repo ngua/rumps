@@ -385,7 +385,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .get(&map_key)
                     .and_then(|id| self.arena.get(*id).cloned())
                     .ok_or_else(|| {
-                        Error::runtime(span, format!("key not found in map"))
+                        Error::runtime(span, "key not found in map".to_string())
                     })
             }
             (Value::String(sid), Value::Int(i)) => {

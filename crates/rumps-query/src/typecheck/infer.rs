@@ -4,6 +4,7 @@
 //! expression types, type variable generation, and constraint collection.
 //! Constraints are solved later via unification.
 
+#![allow(clippy::large_enum_variant)]
 use std::collections::HashMap;
 
 use smallvec::SmallVec;
@@ -248,6 +249,54 @@ impl<'a> InferCtx<'a> {
     /// Take ownership of collected errors, leaving an empty vec.
     pub(crate) fn take_errors(&mut self) -> Vec<TypeError> {
         std::mem::take(&mut self.errors)
+    }
+
+    /// Expand a union type to its member types.
+    ///
+    /// Returns `Some(members)` for union types, `None` for non-unions.
+    ///
+    /// # Union Representations
+    ///
+    /// - **Anonymous unions** (`Ty::Union`): Members returned directly.
+    /// - **Named unions** (`Ty::Named` with `TypeDef::Union`): Members looked up
+    ///   from registry. Builtin unions (`Storable`, `Scalar`) are hardcoded;
+    ///   user-defined unions require `TypeExprArena` (Phase 4.14).
+    ///
+    /// Named unions use `Ty::Named` (not `Ty::Union`) to preserve nominal
+    /// identity. This matters for `Storable`'s special `AS` semantics: casting
+    /// `x AS Storable` is infallible at compile time but may fail at runtime
+    /// with `Error::RuntimeType`. See `Ty::Union` docs for full rationale.
+    pub(crate) fn expand_union_members(&self, ty: &Ty) -> Option<Vec<Ty>> {
+        match ty {
+            Ty::Union(members) => Some(members.clone()),
+            Ty::Named(id, _params) => {
+                // Handle builtin unions by their known members
+                if *id == TypeId::STORABLE {
+                    Some(Ty::STORABLE_MEMBERS.to_vec())
+                } else if *id == TypeId::SCALAR {
+                    Some(Ty::SCALAR_MEMBERS.to_vec())
+                } else {
+                    // Check if it's a user-defined union
+                    self.registry.get_def(*id).and_then(|def| match def {
+                        TypeDef::Union { .. } => {
+                            // TODO: Resolve member TypeExprIds to Ty when
+                            // TypeExprArena is available (Phase 4.14)
+                            None
+                        }
+                        _ => None,
+                    })
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if a type is a member of a union.
+    ///
+    /// Returns `true` if `member` is one of the types in `union_ty`.
+    pub(crate) fn is_union_member(&self, union_ty: &Ty, member: &Ty) -> bool {
+        self.expand_union_members(union_ty)
+            .is_some_and(|members| members.iter().any(|m| m == member))
     }
 
     /// Infer the type of an expression.
@@ -599,10 +648,19 @@ impl<'a> InferCtx<'a> {
                     .collect();
                 Ty::Tuple(elem_tys)
             }
-            // FIXME What should `UNION` declarations resolve to?
-            AstTypeExpr::Union(_) => {
-                // Anonymous unions not yet supported in Ty
-                Ty::Unknown
+            AstTypeExpr::Union(members) => {
+                if members.is_empty() {
+                    let span =
+                        self.ast.type_expr_span(id).unwrap_or(Span::new(0, 0));
+                    self.error(TypeError::EmptyUnion(span));
+                    Ty::Error
+                } else {
+                    let member_tys: Vec<_> = members
+                        .iter()
+                        .map(|m| self.ast_type_to_ty(*m, subst))
+                        .collect();
+                    Ty::Union(member_tys)
+                }
             }
             AstTypeExpr::Object(fields) => {
                 let field_tys = fields
@@ -878,11 +936,8 @@ impl<'a> InferCtx<'a> {
 
             Ty::Var(_) => {
                 // Base is type variable; could be Array or Map.
-                // Create fresh variables for element/value type.
-                let result = self.fresh();
-                // We can't know if it's Array or Map, so just
-                // return fresh and let unification handle it.
-                result
+                // We can't know which, so return fresh and let unification handle it.
+                self.fresh()
             }
 
             Ty::Error => Ty::Error,
@@ -2800,6 +2855,143 @@ mod tests {
         match &ctx.errors()[0] {
             TypeError::Mismatch { .. } => {}
             e => panic!("expected Mismatch, got {e:?}"),
+        }
+    }
+
+    // --- Union type tests ---
+
+    #[test]
+    fn expand_union_members_anonymous() {
+        let ast = Ast::new();
+        let ctx = test_ctx(&ast);
+        let u = Ty::Union(vec![Ty::Int, Ty::String, Ty::Bool]);
+        let members = ctx.expand_union_members(&u);
+        assert_eq!(members, Some(vec![Ty::Int, Ty::String, Ty::Bool]));
+    }
+
+    #[test]
+    fn expand_union_members_storable() {
+        let ast = Ast::new();
+        let ctx = test_ctx(&ast);
+        let storable = Ty::Named(TypeId::STORABLE, vec![]);
+        let members = ctx.expand_union_members(&storable);
+        assert!(members.is_some());
+        let members = members.unwrap();
+        assert!(members.contains(&Ty::Bool));
+        assert!(members.contains(&Ty::Int));
+        assert!(members.contains(&Ty::Float));
+        assert!(members.contains(&Ty::Char));
+        assert!(members.contains(&Ty::String));
+        assert!(members.contains(&Ty::Json));
+        assert_eq!(members.len(), 6);
+    }
+
+    #[test]
+    fn expand_union_members_scalar() {
+        let ast = Ast::new();
+        let ctx = test_ctx(&ast);
+        let scalar = Ty::Named(TypeId::SCALAR, vec![]);
+        let members = ctx.expand_union_members(&scalar);
+        assert!(members.is_some());
+        let members = members.unwrap();
+        assert!(members.contains(&Ty::Bool));
+        assert!(members.contains(&Ty::Int));
+        assert!(members.contains(&Ty::Float));
+        assert!(members.contains(&Ty::String));
+        assert_eq!(members.len(), 4);
+    }
+
+    #[test]
+    fn expand_union_members_non_union() {
+        let ast = Ast::new();
+        let ctx = test_ctx(&ast);
+        // Primitive types are not unions
+        assert!(ctx.expand_union_members(&Ty::Int).is_none());
+        assert!(ctx.expand_union_members(&Ty::String).is_none());
+        // Array is not a union
+        assert!(ctx
+            .expand_union_members(&Ty::Array(Box::new(Ty::Int)))
+            .is_none());
+    }
+
+    #[test]
+    fn is_union_member_anonymous() {
+        let ast = Ast::new();
+        let ctx = test_ctx(&ast);
+        let u = Ty::Union(vec![Ty::Int, Ty::String]);
+        assert!(ctx.is_union_member(&u, &Ty::Int));
+        assert!(ctx.is_union_member(&u, &Ty::String));
+        assert!(!ctx.is_union_member(&u, &Ty::Bool));
+    }
+
+    #[test]
+    fn is_union_member_storable() {
+        let ast = Ast::new();
+        let ctx = test_ctx(&ast);
+        let storable = Ty::Named(TypeId::STORABLE, vec![]);
+        assert!(ctx.is_union_member(&storable, &Ty::Int));
+        assert!(ctx.is_union_member(&storable, &Ty::String));
+        assert!(ctx.is_union_member(&storable, &Ty::Json));
+        // Array is not in Storable
+        assert!(!ctx.is_union_member(&storable, &Ty::Array(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn is_union_member_non_union_returns_false() {
+        let ast = Ast::new();
+        let ctx = test_ctx(&ast);
+        // Non-union type should return false for any member check
+        assert!(!ctx.is_union_member(&Ty::Int, &Ty::Int));
+    }
+
+    #[test]
+    fn ast_type_to_ty_anonymous_union() {
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+
+        // Build `Int | String | Bool` as AstTypeExpr::Union
+        let int_id = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
+        let str_id = ast
+            .add_type_expr(AstTypeExpr::Named("String".into()), span)
+            .unwrap();
+        let bool_id = ast
+            .add_type_expr(AstTypeExpr::Named("Bool".into()), span)
+            .unwrap();
+        let union_id = ast
+            .add_type_expr(
+                AstTypeExpr::Union(smallvec::smallvec![
+                    int_id, str_id, bool_id
+                ]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.ast_type_to_ty(union_id, &HashMap::new());
+
+        assert_eq!(ty, Ty::Union(vec![Ty::Int, Ty::String, Ty::Bool]));
+    }
+
+    #[test]
+    fn ast_type_to_ty_empty_union_is_error() {
+        let mut ast = Ast::new();
+        let span = Span::new(0, 10);
+
+        // Empty union
+        let union_id = ast
+            .add_type_expr(AstTypeExpr::Union(smallvec::smallvec![]), span)
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.ast_type_to_ty(union_id, &HashMap::new());
+
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx.has_errors());
+        match &ctx.errors()[0] {
+            TypeError::EmptyUnion(_) => {}
+            e => panic!("expected EmptyUnion, got {e:?}"),
         }
     }
 }

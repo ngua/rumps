@@ -11,7 +11,7 @@
 //! ```
 
 // Foundation types; will be used in later phases.
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code, unused_imports, unused_assignments)]
 
 mod env;
 mod error;

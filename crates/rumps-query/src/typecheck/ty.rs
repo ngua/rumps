@@ -59,6 +59,26 @@ pub(crate) enum Ty {
     /// Anonymous structural record; compatible if fields match.
     Object(IndexMap<StringId, Self>),
 
+    /// Anonymous union type; value is one of the member types.
+    ///
+    /// For inline `Int | String` syntax. Named unions (`Storable`, `Scalar`,
+    /// user-defined `UNION`) use `Named(TypeId, params)` instead.
+    ///
+    /// # Why Named Unions Are Separate
+    ///
+    /// Named unions preserve nominal identity, which matters for:
+    ///
+    /// 1. **Special `AS` semantics**: `Storable` has infallible `AS` casts that
+    ///    may fail at runtime with `Error::RuntimeType`. Anonymous unions don't
+    ///    have this special case; `x AS T` on an anonymous union is a static error.
+    ///
+    /// 2. **Type parameters**: Named unions can be generic (`UNION F[T] = Int | Option[T]`),
+    ///    requiring parameter substitution during type checking.
+    ///
+    /// 3. **Error messages**: Named unions display their registered name (`Storable`)
+    ///    rather than the expanded member list.
+    Union(Vec<Self>),
+
     /// User-defined type (sum types, structs, unions) with type parameters.
     Named(TypeId, Vec<Self>),
 
@@ -70,6 +90,25 @@ pub(crate) enum Ty {
 }
 
 impl Ty {
+    /// Member types of the `Storable` union: values that can be stored in the database.
+    ///
+    /// Matches `UNION Storable = Bool | Int | Float | Char | String | Json`.
+    pub(crate) const STORABLE_MEMBERS: &'static [Self] = &[
+        Self::Bool,
+        Self::Int,
+        Self::Float,
+        Self::Char,
+        Self::String,
+        Self::Json,
+    ];
+
+    /// Member types of the `Scalar` union: JSON scalar extraction results.
+    ///
+    /// Matches `UNION Scalar = Bool | Int | Float | String`.
+    /// Excludes `Char` (JSON has no char type) and `Null` (handled by `Option`).
+    pub(crate) const SCALAR_MEMBERS: &'static [Self] =
+        &[Self::Bool, Self::Int, Self::Float, Self::String];
+
     /// Collect all free type variables in this type.
     pub(crate) fn free_vars(&self) -> HashSet<TyVar> {
         let mut acc = HashSet::new();
@@ -110,6 +149,9 @@ impl Ty {
             Self::Object(fields) => {
                 fields.values().for_each(|t| t.collect_free_vars(acc));
             }
+            Self::Union(members) => {
+                members.iter().for_each(|t| t.collect_free_vars(acc));
+            }
             Self::Named(_, args) => {
                 args.iter().for_each(|t| t.collect_free_vars(acc));
             }
@@ -139,6 +181,7 @@ impl Ty {
                 params.iter().any(|t| t.occurs(v)) || ret.occurs(v)
             }
             Self::Object(fields) => fields.values().any(|t| t.occurs(v)),
+            Self::Union(members) => members.iter().any(|t| t.occurs(v)),
             Self::Named(_, args) => args.iter().any(|t| t.occurs(v)),
         }
     }
@@ -180,6 +223,9 @@ impl Ty {
             Self::Object(fields) => Self::Object(
                 fields.iter().map(|(k, t)| (*k, t.apply(subst))).collect(),
             ),
+            Self::Union(members) => {
+                Self::Union(members.iter().map(|t| t.apply(subst)).collect())
+            }
             Self::Named(id, args) => {
                 Self::Named(*id, args.iter().map(|t| t.apply(subst)).collect())
             }
@@ -423,5 +469,85 @@ mod tests {
         s.extend(b, Ty::String);
         assert_eq!(s.apply(&Ty::Var(a)), Ty::Int);
         assert_eq!(s.apply(&Ty::Var(b)), Ty::String);
+    }
+
+    // --- Union type tests ---
+
+    #[test]
+    fn union_free_vars_empty() {
+        let u = Ty::Union(vec![Ty::Int, Ty::String]);
+        assert!(u.free_vars().is_empty());
+    }
+
+    #[test]
+    fn union_free_vars_with_var() {
+        let v = TyVar::new(0);
+        let u = Ty::Union(vec![Ty::Int, Ty::Var(v), Ty::String]);
+        let fv = u.free_vars();
+        assert!(fv.contains(&v));
+        assert_eq!(fv.len(), 1);
+    }
+
+    #[test]
+    fn union_free_vars_multiple_vars() {
+        let a = TyVar::new(0);
+        let b = TyVar::new(1);
+        let u = Ty::Union(vec![Ty::Var(a), Ty::Var(b)]);
+        let fv = u.free_vars();
+        assert!(fv.contains(&a));
+        assert!(fv.contains(&b));
+        assert_eq!(fv.len(), 2);
+    }
+
+    #[test]
+    fn union_occurs_positive() {
+        let v = TyVar::new(0);
+        let u = Ty::Union(vec![Ty::Int, Ty::Var(v)]);
+        assert!(u.occurs(v));
+    }
+
+    #[test]
+    fn union_occurs_negative() {
+        let v = TyVar::new(0);
+        let u = Ty::Union(vec![Ty::Int, Ty::String]);
+        assert!(!u.occurs(v));
+    }
+
+    #[test]
+    fn union_occurs_nested() {
+        let v = TyVar::new(0);
+        let u = Ty::Union(vec![Ty::Int, Ty::Array(Box::new(Ty::Var(v)))]);
+        assert!(u.occurs(v));
+    }
+
+    #[test]
+    fn union_apply_subst() {
+        let v = TyVar::new(0);
+        let subst = Subst::singleton(v, Ty::Bool);
+        let u = Ty::Union(vec![Ty::Int, Ty::Var(v)]);
+        let result = u.apply(&subst);
+        assert_eq!(result, Ty::Union(vec![Ty::Int, Ty::Bool]));
+    }
+
+    #[test]
+    fn union_apply_subst_no_match() {
+        let v = TyVar::new(0);
+        let w = TyVar::new(1);
+        let subst = Subst::singleton(v, Ty::Bool);
+        let u = Ty::Union(vec![Ty::Int, Ty::Var(w)]);
+        let result = u.apply(&subst);
+        assert_eq!(result, Ty::Union(vec![Ty::Int, Ty::Var(w)]));
+    }
+
+    #[test]
+    fn union_apply_subst_nested() {
+        let v = TyVar::new(0);
+        let subst = Subst::singleton(v, Ty::String);
+        let u = Ty::Union(vec![Ty::Int, Ty::Option(Box::new(Ty::Var(v)))]);
+        let result = u.apply(&subst);
+        assert_eq!(
+            result,
+            Ty::Union(vec![Ty::Int, Ty::Option(Box::new(Ty::String))])
+        );
     }
 }
