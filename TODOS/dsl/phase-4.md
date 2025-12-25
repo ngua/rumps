@@ -1174,15 +1174,17 @@ Infer types for variant constructors and pattern matching.
 
 ### Checklist
 
-- [ ] Handle `Expr::Variant`:
-  - [ ] Look up type and variant in registry
-  - [ ] Infer arg types
-  - [ ] Match against variant arity
-  - [ ] For `Option`/`Result`: construct parameterized type
-  - [ ] For user types: construct `Ty::Named`
-- [ ] Handle pattern matching on variants:
-  - [ ] Extract payload types from scrutinee
-  - [ ] Bind to pattern variables
+- [x] Handle `Expr::Variant`:
+  - [x] Look up type and variant in registry
+  - [x] Infer arg types
+  - [x] Match against variant arity
+  - [x] For `Option`/`Result`: construct parameterized type
+  - [x] For user types: construct `Ty::Named`
+- [x] Handle pattern matching on variants:
+  - [x] Extract payload types from scrutinee
+  - [x] Bind to pattern variables
+  
+**NOTE**: Almost entirely handled in 4.8
 
 ---
 

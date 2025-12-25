@@ -4855,4 +4855,805 @@ mod tests {
         // Both arms return Int
         assert_eq!(ty, Ty::Int);
     }
+
+    #[test]
+    fn variant_option_none_fresh_type() {
+        // Option.None -> Option[?t] (fresh type variable for inner)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 15);
+
+        let none = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "None".into(), smallvec![]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(none);
+
+        // Should be Option[?t] where ?t is a fresh type variable
+        match ty {
+            Ty::Option(inner) => {
+                assert!(
+                    matches!(*inner, Ty::Var(_)),
+                    "Option.None inner should be fresh type var, got {inner:?}"
+                );
+            }
+            _ => panic!("expected Option type, got {ty:?}"),
+        }
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_option_some_infers_inner() {
+        // Option.Some(42) -> Option[Int]
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let some = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Some".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(some);
+
+        assert_eq!(ty, Ty::Option(Box::new(Ty::Int)));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_option_some_with_string() {
+        // Option.Some("hello") -> Option[String]
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+
+        let arg = ast
+            .add_expr(Expr::Literal(Literal::String("hello".into())), span)
+            .unwrap();
+        let some = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Some".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(some);
+
+        assert_eq!(ty, Ty::Option(Box::new(Ty::String)));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_option_some_nested() {
+        // Option.Some(Option.Some(42)) -> Option[Option[Int]]
+        let mut ast = Ast::new();
+        let span = Span::new(0, 30);
+
+        let inner_arg =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let inner_some = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec![inner_arg],
+                ),
+                span,
+            )
+            .unwrap();
+        let outer_some = ast
+            .add_expr(
+                Expr::Variant(
+                    "Option".into(),
+                    "Some".into(),
+                    smallvec![inner_some],
+                ),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(outer_some);
+
+        assert_eq!(ty, Ty::Option(Box::new(Ty::Option(Box::new(Ty::Int)))));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_result_ok_infers_ok_type() {
+        // Result.Ok(42) -> Result[Int, ?e] (fresh error type)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let ok = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Ok".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(ok);
+
+        match ty {
+            Ty::Result(ok_ty, err_ty) => {
+                assert_eq!(*ok_ty, Ty::Int);
+                assert!(
+                    matches!(*err_ty, Ty::Var(_)),
+                    "Result.Ok error type should be fresh var, got {err_ty:?}"
+                );
+            }
+            _ => panic!("expected Result type, got {ty:?}"),
+        }
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_result_err_infers_err_type() {
+        // Result.Err("error") -> Result[?t, String] (fresh ok type)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+
+        let arg = ast
+            .add_expr(Expr::Literal(Literal::String("error".into())), span)
+            .unwrap();
+        let err = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Err".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(err);
+
+        match ty {
+            Ty::Result(ok_ty, err_ty) => {
+                assert!(
+                    matches!(*ok_ty, Ty::Var(_)),
+                    "Result.Err ok type should be fresh var, got {ok_ty:?}"
+                );
+                assert_eq!(*err_ty, Ty::String);
+            }
+            _ => panic!("expected Result type, got {ty:?}"),
+        }
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_result_ok_with_array() {
+        // Result.Ok([1, 2, 3]) -> Result[Array[Int], ?e]
+        let mut ast = Ast::new();
+        let span = Span::new(0, 30);
+
+        let e1 = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let e2 = ast.add_expr(Expr::Literal(Literal::Int(2)), span).unwrap();
+        let e3 = ast.add_expr(Expr::Literal(Literal::Int(3)), span).unwrap();
+        let arr = ast.add_expr(Expr::Array(vec![e1, e2, e3]), span).unwrap();
+        let ok = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Ok".into(), smallvec![arr]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(ok);
+
+        match ty {
+            Ty::Result(ok_ty, err_ty) => {
+                assert_eq!(*ok_ty, Ty::Array(Box::new(Ty::Int)));
+                assert!(matches!(*err_ty, Ty::Var(_)));
+            }
+            _ => panic!("expected Result type, got {ty:?}"),
+        }
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_arity_mismatch_some_no_args() {
+        // Option.Some() -> arity error (expected 1, got 0)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 15);
+
+        let some = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Some".into(), smallvec![]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(some);
+
+        assert!(ctx.errors.iter().any(|e| matches!(
+            e,
+            TypeError::ArityMismatch {
+                expected: 1,
+                got: 0,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn variant_arity_mismatch_none_with_args() {
+        // Option.None(42) -> arity error (expected 0, got 1)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let none = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "None".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(none);
+
+        assert!(ctx.errors.iter().any(|e| matches!(
+            e,
+            TypeError::ArityMismatch {
+                expected: 0,
+                got: 1,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn variant_arity_mismatch_ok_no_args() {
+        // Result.Ok() -> arity error (expected 1, got 0)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 15);
+
+        let ok = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Ok".into(), smallvec![]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(ok);
+
+        assert!(ctx.errors.iter().any(|e| matches!(
+            e,
+            TypeError::ArityMismatch {
+                expected: 1,
+                got: 0,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn variant_arity_mismatch_err_too_many_args() {
+        // Result.Err("a", "b") -> arity error (expected 1, got 2)
+        let mut ast = Ast::new();
+        let span = Span::new(0, 25);
+
+        let a = ast
+            .add_expr(Expr::Literal(Literal::String("a".into())), span)
+            .unwrap();
+        let b = ast
+            .add_expr(Expr::Literal(Literal::String("b".into())), span)
+            .unwrap();
+        let err = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Err".into(), smallvec![a, b]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(err);
+
+        assert!(ctx.errors.iter().any(|e| matches!(
+            e,
+            TypeError::ArityMismatch {
+                expected: 1,
+                got: 2,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn variant_unknown_type() {
+        // Unknown.Foo() -> unknown type error
+        let mut ast = Ast::new();
+        let span = Span::new(0, 15);
+
+        let var = ast
+            .add_expr(
+                Expr::Variant("Unknown".into(), "Foo".into(), smallvec![]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(var);
+
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::UnknownType(name, _) if name == "Unknown.Foo")));
+    }
+
+    #[test]
+    fn variant_unknown_variant_name() {
+        // Option.Unknown() -> unknown type error
+        let mut ast = Ast::new();
+        let span = Span::new(0, 20);
+
+        let var = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Unknown".into(), smallvec![]),
+                span,
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(var);
+
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::UnknownType(name, _) if name == "Option.Unknown")));
+    }
+
+    #[test]
+    fn variant_pattern_extracts_option_some_payload() {
+        // In a MATCH, Option.Some(x) pattern should bind x with inner type
+        let mut ast = Ast::new();
+        let span = Span::new(0, 50);
+
+        // Scrutinee: Option.Some("hello")
+        let arg = ast
+            .add_expr(Expr::Literal(Literal::String("hello".into())), span)
+            .unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Option".into(), "Some".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        // Pattern: Option.Some(x)
+        let x_pat = ast.add_pattern(MatchPattern::Var("x".into())).unwrap();
+        let some_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Option".into(),
+                "Some".into(),
+                smallvec![x_pat],
+            ))
+            .unwrap();
+        let none_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Option".into(),
+                "None".into(),
+                smallvec![],
+            ))
+            .unwrap();
+
+        // Body uses x (should be String)
+        let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let empty = ast
+            .add_expr(Expr::Literal(Literal::String("".into())), span)
+            .unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: some_pat,
+                guard: None,
+                body: x_var,
+            },
+            MatchArm {
+                pattern: none_pat,
+                guard: None,
+                body: empty,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(match_expr);
+
+        // Result should be String (from both arms)
+        assert_eq!(ty, Ty::String);
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_pattern_extracts_result_ok_payload() {
+        // Result.Ok(v) pattern should bind v with ok type
+        let mut ast = Ast::new();
+        let span = Span::new(0, 60);
+
+        // Scrutinee: Result.Ok(3.14)
+        let arg = ast
+            .add_expr(Expr::Literal(Literal::Float(3.14)), span)
+            .unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Ok".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        // Patterns
+        let v_pat = ast.add_pattern(MatchPattern::Var("v".into())).unwrap();
+        let ok_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Result".into(),
+                "Ok".into(),
+                smallvec![v_pat],
+            ))
+            .unwrap();
+
+        let e_pat = ast.add_pattern(MatchPattern::Var("e".into())).unwrap();
+        let err_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Result".into(),
+                "Err".into(),
+                smallvec![e_pat],
+            ))
+            .unwrap();
+
+        // Bodies
+        let v_var = ast.add_expr(Expr::Var("v".into()), span).unwrap();
+        let zero = ast
+            .add_expr(Expr::Literal(Literal::Float(0.0)), span)
+            .unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: ok_pat,
+                guard: None,
+                body: v_var,
+            },
+            MatchArm {
+                pattern: err_pat,
+                guard: None,
+                body: zero,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(match_expr);
+
+        // Result should be Float
+        assert_eq!(ty, Ty::Float);
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_pattern_extracts_result_err_payload() {
+        // Result.Err(e) pattern should bind e with err type
+        let mut ast = Ast::new();
+        let span = Span::new(0, 60);
+
+        // Scrutinee: Result.Err("oops")
+        let arg = ast
+            .add_expr(Expr::Literal(Literal::String("oops".into())), span)
+            .unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Err".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        // Patterns
+        let v_pat = ast.add_pattern(MatchPattern::Var("v".into())).unwrap();
+        let ok_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Result".into(),
+                "Ok".into(),
+                smallvec![v_pat],
+            ))
+            .unwrap();
+
+        let e_pat = ast.add_pattern(MatchPattern::Var("e".into())).unwrap();
+        let err_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Result".into(),
+                "Err".into(),
+                smallvec![e_pat],
+            ))
+            .unwrap();
+
+        // Bodies: Ok arm returns "", Err arm returns e (String)
+        let empty = ast
+            .add_expr(Expr::Literal(Literal::String("".into())), span)
+            .unwrap();
+        let e_var = ast.add_expr(Expr::Var("e".into()), span).unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: ok_pat,
+                guard: None,
+                body: empty,
+            },
+            MatchArm {
+                pattern: err_pat,
+                guard: None,
+                body: e_var,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(match_expr);
+
+        // Result should be String (both arms return String)
+        assert_eq!(ty, Ty::String);
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn variant_non_exhaustive_result_missing_err() {
+        // MATCH res { Result.Ok(v) => v } -- missing Err arm
+        let mut ast = Ast::new();
+        let span = Span::new(0, 40);
+
+        let arg = ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Ok".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let v_pat = ast.add_pattern(MatchPattern::Var("v".into())).unwrap();
+        let ok_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Result".into(),
+                "Ok".into(),
+                smallvec![v_pat],
+            ))
+            .unwrap();
+
+        let v_var = ast.add_expr(Expr::Var("v".into()), span).unwrap();
+
+        let arms = vec![MatchArm {
+            pattern: ok_pat,
+            guard: None,
+            body: v_var,
+        }];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(match_expr);
+
+        // Should have NonExhaustiveMatch error
+        assert!(ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn variant_non_exhaustive_result_missing_ok() {
+        // MATCH res { Result.Err(e) => e } -- missing Ok arm
+        let mut ast = Ast::new();
+        let span = Span::new(0, 40);
+
+        let arg = ast
+            .add_expr(Expr::Literal(Literal::String("err".into())), span)
+            .unwrap();
+        let scrutinee = ast
+            .add_expr(
+                Expr::Variant("Result".into(), "Err".into(), smallvec![arg]),
+                span,
+            )
+            .unwrap();
+
+        let e_pat = ast.add_pattern(MatchPattern::Var("e".into())).unwrap();
+        let err_pat = ast
+            .add_pattern(MatchPattern::Variant(
+                "Result".into(),
+                "Err".into(),
+                smallvec![e_pat],
+            ))
+            .unwrap();
+
+        let e_var = ast.add_expr(Expr::Var("e".into()), span).unwrap();
+
+        let arms = vec![MatchArm {
+            pattern: err_pat,
+            guard: None,
+            body: e_var,
+        }];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(match_expr);
+
+        // Should have NonExhaustiveMatch error
+        assert!(ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn variant_bool_exhaustive() {
+        // MATCH b { true => 1, false => 0 }
+        let mut ast = Ast::new();
+        let span = Span::new(0, 40);
+
+        let scrutinee = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), span)
+            .unwrap();
+
+        let true_pat = ast
+            .add_pattern(MatchPattern::Literal(Literal::Bool(true)))
+            .unwrap();
+        let false_pat = ast
+            .add_pattern(MatchPattern::Literal(Literal::Bool(false)))
+            .unwrap();
+
+        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+        let zero = ast.add_expr(Expr::Literal(Literal::Int(0)), span).unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: true_pat,
+                guard: None,
+                body: one,
+            },
+            MatchArm {
+                pattern: false_pat,
+                guard: None,
+                body: zero,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(match_expr);
+
+        assert_eq!(ty, Ty::Int);
+        // No NonExhaustiveMatch error
+        assert!(!ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn variant_bool_non_exhaustive_missing_false() {
+        // MATCH b { true => 1 } -- missing false
+        let mut ast = Ast::new();
+        let span = Span::new(0, 30);
+
+        let scrutinee = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), span)
+            .unwrap();
+
+        let true_pat = ast
+            .add_pattern(MatchPattern::Literal(Literal::Bool(true)))
+            .unwrap();
+
+        let one = ast.add_expr(Expr::Literal(Literal::Int(1)), span).unwrap();
+
+        let arms = vec![MatchArm {
+            pattern: true_pat,
+            guard: None,
+            body: one,
+        }];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(match_expr);
+
+        // Should have NonExhaustiveMatch error
+        assert!(ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn variant_int_requires_wildcard() {
+        // MATCH n { 1 => "one" } -- non-exhaustive without wildcard
+        let mut ast = Ast::new();
+        let span = Span::new(0, 30);
+
+        let scrutinee =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+
+        let one_pat = ast
+            .add_pattern(MatchPattern::Literal(Literal::Int(1)))
+            .unwrap();
+
+        let one_str = ast
+            .add_expr(Expr::Literal(Literal::String("one".into())), span)
+            .unwrap();
+
+        let arms = vec![MatchArm {
+            pattern: one_pat,
+            guard: None,
+            body: one_str,
+        }];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let _ty = ctx.expr(match_expr);
+
+        // Should have NonExhaustiveMatch error (Int requires wildcard)
+        assert!(ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
+
+    #[test]
+    fn variant_int_with_wildcard_exhaustive() {
+        // MATCH n { 1 => "one", _ => "other" }
+        let mut ast = Ast::new();
+        let span = Span::new(0, 40);
+
+        let scrutinee =
+            ast.add_expr(Expr::Literal(Literal::Int(42)), span).unwrap();
+
+        let one_pat = ast
+            .add_pattern(MatchPattern::Literal(Literal::Int(1)))
+            .unwrap();
+        let wild_pat = ast.add_pattern(MatchPattern::Wildcard).unwrap();
+
+        let one_str = ast
+            .add_expr(Expr::Literal(Literal::String("one".into())), span)
+            .unwrap();
+        let other_str = ast
+            .add_expr(Expr::Literal(Literal::String("other".into())), span)
+            .unwrap();
+
+        let arms = vec![
+            MatchArm {
+                pattern: one_pat,
+                guard: None,
+                body: one_str,
+            },
+            MatchArm {
+                pattern: wild_pat,
+                guard: None,
+                body: other_str,
+            },
+        ];
+        let match_expr =
+            ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.expr(match_expr);
+
+        assert_eq!(ty, Ty::String);
+        // No NonExhaustiveMatch error
+        assert!(!ctx
+            .errors
+            .iter()
+            .any(|e| matches!(e, TypeError::NonExhaustiveMatch(_))));
+    }
 }
