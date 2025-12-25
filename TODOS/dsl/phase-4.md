@@ -880,7 +880,7 @@ Infer types for the simplest expressions.
 
 ### Checklist
 
-- [x] `impl InferCtx`: `fn infer_expr(&mut self, id: ExprId) -> Ty`
+- [x] `impl InferCtx`: `fn expr(&mut self, id: ExprId) -> Ty`
 - [x] Handle `Expr::Bool` -> `Ty::Bool`
 - [x] Handle `Expr::Int` -> `Ty::Int`
 - [x] Handle `Expr::Float` -> `Ty::Float`
@@ -921,7 +921,7 @@ Infer types for unary and binary operators.
 
 ### Checklist
 
-- [x] `impl InferCtx`: `fn infer_binary(&mut self, lhs: ExprId, op: BinOp, rhs: ExprId, span: Span) -> Ty`
+- [x] `impl InferCtx`: `fn binary(&mut self, lhs: ExprId, op: BinOp, rhs: ExprId, span: Span) -> Ty`
 - [x] Handle arithmetic ops (`Add`, `Sub`, `Mul`, `Mod`, `Pow`):
   - [x] Add `Numeric` constraints for both operands
   - [x] Result: fresh var with numeric constraint (or `Float` if either operand is `Float`)
@@ -938,7 +938,7 @@ Infer types for unary and binary operators.
   - [x] Add `Callable` constraint
   - [x] Return fresh var for result
 - [x] Handle `Range`, `RangeInclusive` -> `Range`
-- [x] `impl InferCtx`: `fn infer_unary(&mut self, op: UnaryOp, operand: ExprId, span: Span) -> Ty`
+- [x] `impl InferCtx`: `fn unary(&mut self, op: UnaryOp, operand: ExprId, span: Span) -> Ty`
 - [x] Handle `Neg` -> add `Numeric` constraint, return same type
 - [x] Handle `Not` -> unify with `Bool`, return `Bool`
 
@@ -1169,7 +1169,7 @@ LET desc: String = MATCH val {
     - [ ] Infer arm body type
   - [ ] Unify all arm body types; emit `TypeError::Mismatch` if incompatible
   - [ ] **Exhaustiveness check**: verify patterns cover all cases
-    - [ ] Currently done at runtime in `try_match_arms` (`interpreter/control.rs`); move to type checker
+    - [ ] Currently done at runtime in `try_match_arms` (`interpreter/control.rs`); re-implement in type checker **but do not remove** from interpreter yet
     - [ ] For sum types: all variants must be covered (or wildcard present)
     - [ ] For literals (numbers, strings, chars, etc...): require wildcard/else arm
     - [ ] Emit `TypeError::NonExhaustiveMatch` if not exhaustive
@@ -1290,7 +1290,7 @@ Infer types for all statement types.
 
 ### Checklist
 
-- [ ] `impl InferCtx`: `fn infer_stmt(&mut self, id: StmtId)`
+- [ ] `impl InferCtx`: `fn stmt(&mut self, id: StmtId)`
 - [ ] Handle `Stmt::Let`:
   - [ ] Infer RHS type
   - [ ] If type annotation present:
@@ -1430,7 +1430,7 @@ pub(crate) fn check(ast: &Ast, registry: &TypeRegistry) -> crate::Result<()> {
     let mut ctx = InferCtx::new(ast, registry);
     ctx.register_builtins();
 
-    ast.stmt_ids().for_each(|id| ctx.infer_stmt(id));
+    ast.stmt_ids().for_each(|id| ctx.stmt(id));
 
     let subst = ctx.solve_constraints();
     ctx.apply_subst(&subst);
@@ -1528,7 +1528,7 @@ This is used for:
 
 ### Checklist
 
-- [ ] Handle `Stmt::Union` in `infer_stmt` (register type, no env binding needed)
+- [ ] Handle `Stmt::Union` in `stmt` (register type, no env binding needed)
 - [ ] Resolve user-defined union members in `expand_union_members` (requires `TypeExprArena`)
 - [ ] Add `pub(crate) fn check(ast, registry) -> crate::Result<()>` to `typecheck.rs`
 - [ ] `impl InferCtx`: `fn into_result(self) -> crate::Result<()>`
@@ -1632,6 +1632,45 @@ Once the type checker is working and we're confident in its soundness, eliminate
 
 ---
 
+### The `typechecked!` Macro
+
+Instead of scattering `unreachable!("type checker guarantees ...")` throughout the codebase, define a declarative macro for consistent messaging:
+
+```rust
+/// Marks a branch as unreachable due to static type checking.
+///
+/// Use instead of `unreachable!` when the type checker guarantees a constraint.
+/// Provides consistent error messages if the "impossible" case is somehow reached.
+macro_rules! typechecked {
+    ($op:expr, $constraint:expr) => {
+        unreachable!(
+            "type checker guarantees `{}` satisfies `{}`",
+            $op,
+            $constraint
+        )
+    };
+}
+```
+
+**Usage examples:**
+
+| Call | Expands to |
+|------|------------|
+| `typechecked!("+", "Numeric")` | `unreachable!("type checker guarantees \`+\` satisfies \`Numeric\`")` |
+| `typechecked!("!", "Unwrappable")` | `unreachable!("type checker guarantees \`!\` satisfies \`Unwrappable\`")` |
+| `typechecked!("Array.map", "Array")` | `unreachable!("type checker guarantees \`Array.map\` satisfies \`Array\`")` |
+| `typechecked!("..", "Int")` | `unreachable!("type checker guarantees \`..\` satisfies \`Int\`")` |
+
+**Benefits:**
+- Consistent error messages across the codebase
+- Easy to grep for all type-checker-guaranteed branches
+- Single point of change if we want to modify the message format
+- Self-documenting: the macro name makes intent clear
+
+**Placement:** Define in `crates/rumps-query/src/interpreter/mod.rs` or a shared `macros.rs` module.
+
+---
+
 ### 4.17.1: Remove Arity Checks (`primitives.rs`)
 
 **Current pattern:**
@@ -1730,7 +1769,7 @@ fn binop_add(&mut self, lhs: ValueId, rhs: ValueId) -> Value {
         (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
         (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b.0),
         (Value::Float(a), Value::Int(b)) => Value::Float(a.0 + *b as f64),
-        _ => unreachable!("type checker guarantees numeric operands")
+        _ => typechecked!("+", "Numeric")
     }
 }
 ```
@@ -1796,9 +1835,8 @@ match val {
 
 **After cleanup:**
 ```rust
-// Type checker ensures unwrap operand is Option[T] or Result[T, E]
 let Value::Tagged(_, idx, payloads) = val else {
-    unreachable!("type checker guarantees Option or Result")
+    typechecked!("!", "Unwrappable")
 };
 ```
 
@@ -1823,7 +1861,7 @@ let start = match self.arena.get(start_id) {
 **After cleanup:**
 ```rust
 let Value::Int(start) = self.arena.get(start_id) else {
-    unreachable!("type checker guarantees Int")
+    typechecked!("..", "Int")
 };
 ```
 
@@ -1852,7 +1890,7 @@ fn to_float(v: &Value) -> f64 {
     match v {
         Value::Int(n) => *n as f64,
         Value::Float(f) => f.0,
-        _ => unreachable!("Numeric constraint guarantees Int or Float")
+        _ => typechecked!("to_float", "Numeric")
     }
 }
 ```
@@ -1875,7 +1913,7 @@ let arr = ctx.arena.get_array(args[0])
 **After cleanup:**
 ```rust
 let Value::Array(_, elems) = ctx.arena.get(args[0]).unwrap() else {
-    unreachable!("type checker guarantees Array")
+    typechecked!("Array.length", "Array")
 };
 ```
 
