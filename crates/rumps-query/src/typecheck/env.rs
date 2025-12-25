@@ -60,6 +60,11 @@ impl TypeEnv {
         self.strings.intern(s)
     }
 
+    /// Look up a string's ID without interning it.
+    pub(crate) fn lookup_str(&self, s: &str) -> Option<StringId> {
+        self.strings.lookup(s)
+    }
+
     /// Get a string by its interned ID.
     pub(crate) fn get_str(&self, id: StringId) -> Option<&str> {
         self.strings.get(id)

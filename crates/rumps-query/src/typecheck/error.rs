@@ -91,6 +91,30 @@ pub(crate) enum TypeError {
     /// Postfix `!` on type that is not `Option` or `Result`.
     #[error("type `{0}` cannot be unwrapped; expected `Option` or `Result`")]
     NotUnwrappable(Ty, Span),
+
+    /// Field access on non-object/struct type.
+    #[error("type `{0}` has no fields")]
+    NotAnObject(Ty, Span),
+
+    /// Field not found on object or struct type.
+    #[error("field `{field}` not found on type `{ty}`")]
+    FieldNotFound { ty: Ty, field: String, span: Span },
+
+    /// Tuple index on non-tuple type.
+    #[error("type `{0}` is not a tuple")]
+    NotATuple(Ty, Span),
+
+    /// Tuple index out of bounds.
+    #[error("tuple index {idx} is out of bounds for tuple of length {len}")]
+    TupleIndexOutOfBounds { idx: u32, len: usize, span: Span },
+
+    /// Index access on non-indexable type.
+    #[error("type `{0}` is not indexable")]
+    NotIndexable(Ty, Span),
+
+    /// JSON access on non-JSON type.
+    #[error("type `{0}` is not JSON; cannot use JSON access operators")]
+    NotJson(Ty, Span),
 }
 
 impl TypeError {
@@ -111,7 +135,13 @@ impl TypeError {
             | Self::MissingAnnotation(span)
             | Self::UnknownType(_, span)
             | Self::NonExhaustiveMatch(span)
-            | Self::NotUnwrappable(_, span) => *span,
+            | Self::NotUnwrappable(_, span)
+            | Self::NotAnObject(_, span)
+            | Self::FieldNotFound { span, .. }
+            | Self::NotATuple(_, span)
+            | Self::TupleIndexOutOfBounds { span, .. }
+            | Self::NotIndexable(_, span)
+            | Self::NotJson(_, span) => *span,
         }
     }
 }

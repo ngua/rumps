@@ -11,8 +11,12 @@ use smallvec::SmallVec;
 use super::env::TypeEnv;
 use super::error::TypeError;
 use super::ty::{Ty, TyVar};
-use crate::ast::{Ast, BinOp, Expr, ExprId, Literal, UnOp};
-use crate::value::TypeRegistry;
+use crate::ast::{
+    Ast, AstTypeExpr, AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey,
+    JsonAccessKind, Literal, UnOp,
+};
+use crate::intern::StringId;
+use crate::value::{TypeDef, TypeId, TypeRegistry};
 use crate::Span;
 
 /// A type constraint generated during inference.
@@ -304,6 +308,30 @@ impl<'a> InferCtx<'a> {
             // Map literals
             Expr::MapLit(entries) => self.infer_map_lit(entries, span),
 
+            // Field access: obj.field
+            Expr::Field(base, field) => self.infer_field(*base, field, span),
+
+            // Optional field access: obj?.field
+            Expr::OptionalField(base, field) => {
+                self.infer_optional_field(*base, field, span)
+            }
+
+            // Tuple index: tuple.0, tuple.1, etc.
+            Expr::TupleIndex(base, idx) => {
+                self.infer_tuple_index(*base, *idx, span)
+            }
+
+            // Index access: arr[i] or map[k]
+            Expr::Index(base, idx) => self.infer_index(*base, *idx, span),
+
+            // JSON access: data.field, data..field, data->"key", data->>"key"
+            Expr::JsonAccess(base, kind, key) => {
+                self.infer_json_access(*base, kind, key, span)
+            }
+
+            // JSON literals
+            Expr::Json(_) => Ty::Json,
+
             // Other expressions handled in later phases
             _ => Ty::Error,
         }
@@ -517,6 +545,411 @@ impl<'a> InferCtx<'a> {
             Ty::Map(Box::new(k_ty), Box::new(v_ty))
         } else {
             Ty::Map(Box::new(self.fresh()), Box::new(self.fresh()))
+        }
+    }
+
+    /// Infer type of field access: `base.field`.
+    ///
+    /// Works for structural objects (`Ty::Object`) and named struct types
+    /// (`Ty::Named` with `TypeDef::Struct`). For type variables, we cannot
+    /// yet infer the field type without row polymorphism, so we create a
+    /// structural object constraint.
+    fn infer_field(&mut self, base_id: ExprId, field: &str, span: Span) -> Ty {
+        let base_ty = self.infer_expr(base_id);
+        self.field_type(&base_ty, field, span)
+    }
+
+    /// Convert an AST type expression to a `Ty`.
+    ///
+    /// The `subst` map substitutes type parameter names with concrete types;
+    /// used for generic struct field resolution.
+    fn ast_type_to_ty(
+        &mut self,
+        id: AstTypeExprId,
+        subst: &HashMap<StringId, Ty>,
+    ) -> Ty {
+        self.ast.get_type_expr(id).map_or(Ty::Error, |te| match te {
+            AstTypeExpr::Named(name) => {
+                let name_id = self.env.intern(name);
+                // Check substitution first (for type params)
+                subst
+                    .get(&name_id)
+                    .cloned()
+                    .unwrap_or_else(|| self.named_type_to_ty(name))
+            }
+            AstTypeExpr::App(name, args) => {
+                let arg_tys: Vec<_> = args
+                    .iter()
+                    .map(|a| self.ast_type_to_ty(*a, subst))
+                    .collect();
+                self.parameterized_type_to_ty(name, arg_tys)
+            }
+            AstTypeExpr::Fn(params, ret) => {
+                let param_tys: Vec<_> = params
+                    .iter()
+                    .map(|p| self.ast_type_to_ty(*p, subst))
+                    .collect();
+                let ret_ty = self.ast_type_to_ty(*ret, subst);
+                Ty::Fn(param_tys, Box::new(ret_ty))
+            }
+            AstTypeExpr::Tuple(elems) => {
+                let elem_tys: Vec<_> = elems
+                    .iter()
+                    .map(|e| self.ast_type_to_ty(*e, subst))
+                    .collect();
+                Ty::Tuple(elem_tys)
+            }
+            // FIXME What should `UNION` declarations resolve to?
+            AstTypeExpr::Union(_) => {
+                // Anonymous unions not yet supported in Ty
+                Ty::Unknown
+            }
+            AstTypeExpr::Object(fields) => {
+                let field_tys = fields
+                    .iter()
+                    .map(|(name, ty_id)| {
+                        let name_id = self.env.intern(name);
+                        let ty = self.ast_type_to_ty(*ty_id, subst);
+                        (name_id, ty)
+                    })
+                    .collect();
+                Ty::Object(field_tys)
+            }
+        })
+    }
+
+    /// Convert a simple named type to `Ty`.
+    fn named_type_to_ty(&self, name: &str) -> Ty {
+        match name {
+            "Bool" => Ty::Bool,
+            "Int" => Ty::Int,
+            "Float" => Ty::Float,
+            "Char" => Ty::Char,
+            "String" => Ty::String,
+            "Unit" => Ty::Unit,
+            "Time" => Ty::Time,
+            "Range" => Ty::Range,
+            "Json" => Ty::Json,
+            _ => {
+                // Look up in registry
+                self.env
+                    .lookup_str(name)
+                    .and_then(|id| self.registry.lookup(id))
+                    .map_or(Ty::Unknown, |ty_id| Ty::Named(ty_id, vec![]))
+            }
+        }
+    }
+
+    /// Convert a parameterized type to `Ty`.
+    fn parameterized_type_to_ty(&self, name: &str, args: Vec<Ty>) -> Ty {
+        match name {
+            "Array" => args
+                .into_iter()
+                .next()
+                .map_or(Ty::Error, |t| Ty::Array(Box::new(t))),
+            "Option" => args
+                .into_iter()
+                .next()
+                .map_or(Ty::Error, |t| Ty::Option(Box::new(t))),
+            "Result" => {
+                let mut it = args.into_iter();
+                it.next().map_or(Ty::Error, |ok| {
+                    it.next().map_or(Ty::Error, |err| {
+                        Ty::Result(Box::new(ok), Box::new(err))
+                    })
+                })
+            }
+            "Map" => {
+                let mut it = args.into_iter();
+                it.next().map_or(Ty::Error, |k| {
+                    it.next().map_or(Ty::Error, |v| {
+                        Ty::Map(Box::new(k), Box::new(v))
+                    })
+                })
+            }
+            _ => {
+                // User-defined parameterized type
+                self.env
+                    .lookup_str(name)
+                    .and_then(|id| self.registry.lookup(id))
+                    .map_or(Ty::Unknown, |ty_id| Ty::Named(ty_id, args))
+            }
+        }
+    }
+
+    /// Extract the type of a field from a type.
+    ///
+    /// Handles structural objects, named structs, and type variables.
+    fn field_type(&mut self, base_ty: &Ty, field: &str, span: Span) -> Ty {
+        match base_ty {
+            // Structural object: look up field in IndexMap
+            Ty::Object(fields) => {
+                let field_id = self.env.intern(field);
+                fields.get(&field_id).cloned().unwrap_or_else(|| {
+                    self.error(TypeError::FieldNotFound {
+                        ty: base_ty.clone(),
+                        field: field.to_string(),
+                        span,
+                    });
+                    Ty::Error
+                })
+            }
+
+            // Named type: check if it's a struct and look up field
+            Ty::Named(type_id, type_args) => {
+                let field_id = self.env.intern(field);
+                let def = self.registry.get_def(*type_id);
+                match def {
+                    Some(TypeDef::Struct {
+                        type_params,
+                        fields,
+                        ..
+                    }) => {
+                        // Copy what we need before borrowing self mutably
+                        let field_ty_id = fields.get(&field_id).copied();
+                        let params: SmallVec<[_; 2]> = type_params.clone();
+                        match field_ty_id {
+                            Some(ty_id) => {
+                                let subst: HashMap<_, _> = params
+                                    .iter()
+                                    .zip(type_args.iter())
+                                    .map(|(p, a)| (*p, a.clone()))
+                                    .collect();
+                                self.ast_type_to_ty(ty_id, &subst)
+                            }
+                            None => {
+                                self.error(TypeError::FieldNotFound {
+                                    ty: base_ty.clone(),
+                                    field: field.to_string(),
+                                    span,
+                                });
+                                Ty::Error
+                            }
+                        }
+                    }
+                    Some(_) => {
+                        self.error(TypeError::NotAnObject(
+                            base_ty.clone(),
+                            span,
+                        ));
+                        Ty::Error
+                    }
+                    None => {
+                        self.error(TypeError::NotAnObject(
+                            base_ty.clone(),
+                            span,
+                        ));
+                        Ty::Error
+                    }
+                }
+            }
+
+            // Type variable: create a structural object constraint with the
+            // required field. The constraint solver will ensure the variable
+            // unifies with a type that has this field.
+            Ty::Var(_) => {
+                let field_ty = self.fresh();
+                let field_id = self.env.intern(field);
+                let obj_ty = Ty::Object(
+                    std::iter::once((field_id, field_ty.clone())).collect(),
+                );
+                self.unify(base_ty.clone(), obj_ty, span);
+                field_ty
+            }
+
+            // Error recovery: propagate error
+            Ty::Error => Ty::Error,
+
+            // Unknown: field access might succeed at runtime
+            Ty::Unknown => self.fresh(),
+
+            // All other types don't have fields
+            _ => {
+                self.error(TypeError::NotAnObject(base_ty.clone(), span));
+                Ty::Error
+            }
+        }
+    }
+
+    /// Infer type of optional field access: `base?.field`.
+    ///
+    /// The base must be `Option[T]` where `T` has the field.
+    /// Returns `Option[FieldType]`.
+    fn infer_optional_field(
+        &mut self,
+        base_id: ExprId,
+        field: &str,
+        span: Span,
+    ) -> Ty {
+        let base_ty = self.infer_expr(base_id);
+
+        match &base_ty {
+            Ty::Option(inner) => {
+                let field_ty = self.field_type(inner, field, span);
+                Ty::Option(Box::new(field_ty))
+            }
+
+            Ty::Var(_) => {
+                // Base is a type variable; create Option[?t] constraint
+                // where ?t has the required field
+                let inner = self.fresh();
+                let field_ty = self.field_type(&inner, field, span);
+                self.unify(base_ty, Ty::Option(Box::new(inner)), span);
+                Ty::Option(Box::new(field_ty))
+            }
+
+            Ty::Error => Ty::Error,
+
+            _ => {
+                // Optional field access on non-Option type
+                // This could also work on the bare type, returning
+                // Option[FieldType], but we require Option for now
+                let fresh = self.fresh();
+                self.error(TypeError::Mismatch {
+                    expected: Ty::Option(Box::new(fresh)),
+                    got: base_ty,
+                    span,
+                });
+                Ty::Error
+            }
+        }
+    }
+
+    /// Infer type of tuple index: `tuple.0`, `tuple.1`, etc.
+    fn infer_tuple_index(
+        &mut self,
+        base_id: ExprId,
+        idx: u32,
+        span: Span,
+    ) -> Ty {
+        let base_ty = self.infer_expr(base_id);
+
+        match &base_ty {
+            Ty::Tuple(elems) => {
+                elems.get(idx as usize).cloned().unwrap_or_else(|| {
+                    self.error(TypeError::TupleIndexOutOfBounds {
+                        idx,
+                        len: elems.len(),
+                        span,
+                    });
+                    Ty::Error
+                })
+            }
+
+            Ty::Var(_) => {
+                // Cannot infer tuple structure from index access alone;
+                // the constraint solver would need tuple row polymorphism.
+                // For now, return fresh var and hope it unifies later.
+                self.fresh()
+            }
+
+            Ty::Error => Ty::Error,
+
+            _ => {
+                self.error(TypeError::NotATuple(base_ty, span));
+                Ty::Error
+            }
+        }
+    }
+
+    /// Infer type of index access: `base[idx]`.
+    ///
+    /// Works for `Array[T]` (index must be `Int`, returns `T`) and
+    /// `Map[K, V]` (index unifies with `K`, returns `V`).
+    fn infer_index(
+        &mut self,
+        base_id: ExprId,
+        idx_id: ExprId,
+        span: Span,
+    ) -> Ty {
+        let base_ty = self.infer_expr(base_id);
+        let idx_ty = self.infer_expr(idx_id);
+
+        match &base_ty {
+            Ty::Array(elem) => {
+                self.unify(idx_ty, Ty::Int, span);
+                elem.as_ref().clone()
+            }
+
+            Ty::Map(key, val) => {
+                self.unify(idx_ty, key.as_ref().clone(), span);
+                val.as_ref().clone()
+            }
+
+            Ty::Var(_) => {
+                // Base is type variable; could be Array or Map.
+                // Create fresh variables for element/value type.
+                let result = self.fresh();
+                // We can't know if it's Array or Map, so just
+                // return fresh and let unification handle it.
+                result
+            }
+
+            Ty::Error => Ty::Error,
+
+            Ty::String => {
+                // String indexing returns Char
+                self.unify(idx_ty, Ty::Int, span);
+                Ty::Char
+            }
+
+            _ => {
+                self.error(TypeError::NotIndexable(base_ty, span));
+                Ty::Error
+            }
+        }
+    }
+
+    /// Infer type of JSON access operators.
+    ///
+    /// | Operator | Returns                           |
+    /// |----------|-----------------------------------|
+    /// | `.`      | `Json`                            |
+    /// | `..`     | `Option[Scalar]` (union)          |
+    /// | `->`     | `Json`                            |
+    /// | `->>`    | `Option[Scalar]` (union)          |
+    fn infer_json_access(
+        &mut self,
+        base_id: ExprId,
+        kind: &JsonAccessKind,
+        key: &JsonAccessKey,
+        span: Span,
+    ) -> Ty {
+        let base_ty = self.infer_expr(base_id);
+
+        // Infer the key expression type if dynamic
+        if let JsonAccessKey::Expr(key_id) = key {
+            let key_ty = self.infer_expr(*key_id);
+            // Dynamic key must be String
+            self.unify(key_ty, Ty::String, span);
+        }
+
+        // Base must be Json
+        match &base_ty {
+            Ty::Json => match kind {
+                JsonAccessKind::Json => Ty::Json,
+                JsonAccessKind::Scalar => {
+                    Ty::Option(Box::new(Ty::Named(TypeId::SCALAR, vec![])))
+                }
+            },
+
+            Ty::Var(_) => {
+                // Constrain base to be Json
+                self.unify(base_ty, Ty::Json, span);
+                match kind {
+                    JsonAccessKind::Json => Ty::Json,
+                    JsonAccessKind::Scalar => {
+                        Ty::Option(Box::new(Ty::Named(TypeId::SCALAR, vec![])))
+                    }
+                }
+            }
+
+            Ty::Error => Ty::Error,
+
+            _ => {
+                self.error(TypeError::NotJson(base_ty, span));
+                Ty::Error
+            }
         }
     }
 }
@@ -1789,5 +2222,584 @@ mod tests {
         let mut ctx = test_ctx(&ast);
         let ty = ctx.infer_expr(map);
         assert_eq!(ty, Ty::Map(Box::new(Ty::Int), Box::new(Ty::String)));
+    }
+
+    // Field access
+
+    #[test]
+    fn infer_field_access_object() {
+        // { name: "Alice" }.name
+        let mut ast = Ast::new();
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("Alice".into())),
+                Span::new(8, 15),
+            )
+            .unwrap();
+        let obj = ast
+            .add_expr(
+                Expr::Object(vec![("name".into(), val)]),
+                Span::new(0, 17),
+            )
+            .unwrap();
+        let field = ast
+            .add_expr(Expr::Field(obj, "name".into()), Span::new(0, 22))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(field);
+        assert_eq!(ty, Ty::String);
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn infer_field_access_object_nested() {
+        // { user: { name: "Alice" } }.user.name
+        let mut ast = Ast::new();
+        let name_val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("Alice".into())),
+                Span::new(16, 23),
+            )
+            .unwrap();
+        let inner_obj = ast
+            .add_expr(
+                Expr::Object(vec![("name".into(), name_val)]),
+                Span::new(8, 25),
+            )
+            .unwrap();
+        let outer_obj = ast
+            .add_expr(
+                Expr::Object(vec![("user".into(), inner_obj)]),
+                Span::new(0, 27),
+            )
+            .unwrap();
+        let user_field = ast
+            .add_expr(Expr::Field(outer_obj, "user".into()), Span::new(0, 32))
+            .unwrap();
+        let name_field = ast
+            .add_expr(Expr::Field(user_field, "name".into()), Span::new(0, 37))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(name_field);
+        assert_eq!(ty, Ty::String);
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn infer_field_access_missing_field() {
+        // { name: "Alice" }.age
+        let mut ast = Ast::new();
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("Alice".into())),
+                Span::new(8, 15),
+            )
+            .unwrap();
+        let obj = ast
+            .add_expr(
+                Expr::Object(vec![("name".into(), val)]),
+                Span::new(0, 17),
+            )
+            .unwrap();
+        let field = ast
+            .add_expr(Expr::Field(obj, "age".into()), Span::new(0, 21))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(field);
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx.has_errors());
+        match &ctx.errors()[0] {
+            TypeError::FieldNotFound { field, .. } => {
+                assert_eq!(field, "age");
+            }
+            e => panic!("expected FieldNotFound, got {e:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_field_access_on_int() {
+        // 42.field
+        let mut ast = Ast::new();
+        let n = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let field = ast
+            .add_expr(Expr::Field(n, "field".into()), Span::new(0, 8))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(field);
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx.has_errors());
+        match &ctx.errors()[0] {
+            TypeError::NotAnObject(_, _) => {}
+            e => panic!("expected NotAnObject, got {e:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_field_access_var_creates_constraint() {
+        // x.name where x is a type variable
+        let mut ast = Ast::new();
+        let var = ast
+            .add_expr(Expr::Var("x".into()), Span::new(0, 1))
+            .unwrap();
+        let field = ast
+            .add_expr(Expr::Field(var, "name".into()), Span::new(0, 6))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        // Bind x to fresh type variable
+        let a = TyVar::new(1000);
+        ctx.env_mut().bind(
+            "x",
+            Scheme {
+                vars: vec![a],
+                ty: Ty::Var(a),
+            },
+        );
+        let ty = ctx.infer_expr(field);
+        // Result should be a fresh type variable
+        match ty {
+            Ty::Var(_) => {
+                // Should have Eq constraint with structural object
+                assert!(ctx.constraints().iter().any(|c| matches!(
+                    c,
+                    Constraint::Eq(Ty::Var(_), Ty::Object(_), _)
+                )));
+            }
+            _ => panic!("expected type variable, got {ty:?}"),
+        }
+    }
+
+    // Tuple indexing
+
+    #[test]
+    fn infer_tuple_index_first() {
+        // (1, "hello").0
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
+            .unwrap();
+        let e2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("hello".into())),
+                Span::new(4, 11),
+            )
+            .unwrap();
+        let tup = ast
+            .add_expr(
+                Expr::Tuple(smallvec::smallvec![e1, e2]),
+                Span::new(0, 12),
+            )
+            .unwrap();
+        let idx = ast
+            .add_expr(Expr::TupleIndex(tup, 0), Span::new(0, 14))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(idx);
+        assert_eq!(ty, Ty::Int);
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn infer_tuple_index_second() {
+        // (1, "hello").1
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
+            .unwrap();
+        let e2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("hello".into())),
+                Span::new(4, 11),
+            )
+            .unwrap();
+        let tup = ast
+            .add_expr(
+                Expr::Tuple(smallvec::smallvec![e1, e2]),
+                Span::new(0, 12),
+            )
+            .unwrap();
+        let idx = ast
+            .add_expr(Expr::TupleIndex(tup, 1), Span::new(0, 14))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(idx);
+        assert_eq!(ty, Ty::String);
+        assert!(!ctx.has_errors());
+    }
+
+    #[test]
+    fn infer_tuple_index_out_of_bounds() {
+        // (1, "hello").5
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
+            .unwrap();
+        let e2 = ast
+            .add_expr(
+                Expr::Literal(Literal::String("hello".into())),
+                Span::new(4, 11),
+            )
+            .unwrap();
+        let tup = ast
+            .add_expr(
+                Expr::Tuple(smallvec::smallvec![e1, e2]),
+                Span::new(0, 12),
+            )
+            .unwrap();
+        let idx = ast
+            .add_expr(Expr::TupleIndex(tup, 5), Span::new(0, 14))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(idx);
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx.has_errors());
+        match &ctx.errors()[0] {
+            TypeError::TupleIndexOutOfBounds { idx, len, .. } => {
+                assert_eq!(*idx, 5);
+                assert_eq!(*len, 2);
+            }
+            e => panic!("expected TupleIndexOutOfBounds, got {e:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_tuple_index_on_non_tuple() {
+        // "hello".0
+        let mut ast = Ast::new();
+        let s = ast
+            .add_expr(
+                Expr::Literal(Literal::String("hello".into())),
+                Span::new(0, 7),
+            )
+            .unwrap();
+        let idx = ast
+            .add_expr(Expr::TupleIndex(s, 0), Span::new(0, 9))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(idx);
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx.has_errors());
+        match &ctx.errors()[0] {
+            TypeError::NotATuple(_, _) => {}
+            e => panic!("expected NotATuple, got {e:?}"),
+        }
+    }
+
+    // Index access
+
+    #[test]
+    fn infer_index_array() {
+        // [1, 2, 3][0]
+        let mut ast = Ast::new();
+        let e1 = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
+            .unwrap();
+        let e2 = ast
+            .add_expr(Expr::Literal(Literal::Int(2)), Span::new(4, 5))
+            .unwrap();
+        let e3 = ast
+            .add_expr(Expr::Literal(Literal::Int(3)), Span::new(7, 8))
+            .unwrap();
+        let arr = ast
+            .add_expr(Expr::Array(vec![e1, e2, e3]), Span::new(0, 9))
+            .unwrap();
+        let idx_val = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(10, 11))
+            .unwrap();
+        let idx = ast
+            .add_expr(Expr::Index(arr, idx_val), Span::new(0, 12))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(idx);
+        assert_eq!(ty, Ty::Int);
+        // Index should be unified with Int
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Eq(Ty::Int, Ty::Int, _))));
+    }
+
+    #[test]
+    fn infer_index_map() {
+        // { "a" => 1 }["a"]
+        let mut ast = Ast::new();
+        let k = ast
+            .add_expr(
+                Expr::Literal(Literal::String("a".into())),
+                Span::new(2, 5),
+            )
+            .unwrap();
+        let v = ast
+            .add_expr(Expr::Literal(Literal::Int(1)), Span::new(9, 10))
+            .unwrap();
+        let map = ast
+            .add_expr(
+                Expr::MapLit(smallvec::smallvec![(k, v)]),
+                Span::new(0, 12),
+            )
+            .unwrap();
+        let idx_val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("a".into())),
+                Span::new(13, 16),
+            )
+            .unwrap();
+        let idx = ast
+            .add_expr(Expr::Index(map, idx_val), Span::new(0, 17))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(idx);
+        assert_eq!(ty, Ty::Int);
+    }
+
+    #[test]
+    fn infer_index_string() {
+        // "hello"[0]
+        let mut ast = Ast::new();
+        let s = ast
+            .add_expr(
+                Expr::Literal(Literal::String("hello".into())),
+                Span::new(0, 7),
+            )
+            .unwrap();
+        let idx_val = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(8, 9))
+            .unwrap();
+        let idx = ast
+            .add_expr(Expr::Index(s, idx_val), Span::new(0, 10))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(idx);
+        assert_eq!(ty, Ty::Char);
+    }
+
+    #[test]
+    fn infer_index_on_non_indexable() {
+        // true[0]
+        let mut ast = Ast::new();
+        let b = ast
+            .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(0, 4))
+            .unwrap();
+        let idx_val = ast
+            .add_expr(Expr::Literal(Literal::Int(0)), Span::new(5, 6))
+            .unwrap();
+        let idx = ast
+            .add_expr(Expr::Index(b, idx_val), Span::new(0, 7))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(idx);
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx.has_errors());
+        match &ctx.errors()[0] {
+            TypeError::NotIndexable(_, _) => {}
+            e => panic!("expected NotIndexable, got {e:?}"),
+        }
+    }
+
+    // JSON access
+
+    #[test]
+    fn infer_json_access_field() {
+        // data.name (where data is Json)
+        use crate::ast::{JsonAccessKey, JsonAccessKind};
+        let mut ast = Ast::new();
+        let json = ast
+            .add_expr(Expr::Literal(Literal::Null), Span::new(0, 4))
+            .unwrap();
+        let access = ast
+            .add_expr(
+                Expr::JsonAccess(
+                    json,
+                    JsonAccessKind::Json,
+                    JsonAccessKey::Field("name".into()),
+                ),
+                Span::new(0, 9),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(access);
+        assert_eq!(ty, Ty::Json);
+    }
+
+    #[test]
+    fn infer_json_access_scalar() {
+        // data..name (where data is Json)
+        use crate::ast::{JsonAccessKey, JsonAccessKind};
+        let mut ast = Ast::new();
+        let json = ast
+            .add_expr(Expr::Literal(Literal::Null), Span::new(0, 4))
+            .unwrap();
+        let access = ast
+            .add_expr(
+                Expr::JsonAccess(
+                    json,
+                    JsonAccessKind::Scalar,
+                    JsonAccessKey::Field("name".into()),
+                ),
+                Span::new(0, 10),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(access);
+        // Returns Option[Scalar]
+        match ty {
+            Ty::Option(inner) => {
+                assert_eq!(*inner, Ty::Named(TypeId::SCALAR, vec![]))
+            }
+            _ => panic!("expected Option, got {ty:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_json_access_dynamic_key() {
+        // data->(key) where key is String
+        use crate::ast::{JsonAccessKey, JsonAccessKind};
+        let mut ast = Ast::new();
+        let json = ast
+            .add_expr(Expr::Literal(Literal::Null), Span::new(0, 4))
+            .unwrap();
+        let key = ast
+            .add_expr(
+                Expr::Literal(Literal::String("name".into())),
+                Span::new(7, 13),
+            )
+            .unwrap();
+        let access = ast
+            .add_expr(
+                Expr::JsonAccess(
+                    json,
+                    JsonAccessKind::Json,
+                    JsonAccessKey::Expr(key),
+                ),
+                Span::new(0, 14),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(access);
+        assert_eq!(ty, Ty::Json);
+        // Key should be unified with String
+        assert!(ctx
+            .constraints()
+            .iter()
+            .any(|c| matches!(c, Constraint::Eq(Ty::String, Ty::String, _))));
+    }
+
+    #[test]
+    fn infer_json_access_on_non_json() {
+        // 42.name (where 42 is Int)
+        use crate::ast::{JsonAccessKey, JsonAccessKind};
+        let mut ast = Ast::new();
+        let n = ast
+            .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
+            .unwrap();
+        let access = ast
+            .add_expr(
+                Expr::JsonAccess(
+                    n,
+                    JsonAccessKind::Json,
+                    JsonAccessKey::Field("name".into()),
+                ),
+                Span::new(0, 7),
+            )
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(access);
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx.has_errors());
+        match &ctx.errors()[0] {
+            TypeError::NotJson(_, _) => {}
+            e => panic!("expected NotJson, got {e:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_json_literal() {
+        // { "name": "Alice" } as JSON
+        let mut ast = Ast::new();
+        let val = ast
+            .add_expr(
+                Expr::Literal(Literal::String("Alice".into())),
+                Span::new(10, 17),
+            )
+            .unwrap();
+        let json = ast
+            .add_expr(Expr::Json(vec![("name".into(), val)]), Span::new(0, 19))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let ty = ctx.infer_expr(json);
+        assert_eq!(ty, Ty::Json);
+    }
+
+    // Optional field access
+
+    #[test]
+    fn infer_optional_field_on_option() {
+        // opt?.name where opt is Option[{ name: String }]
+        let mut ast = Ast::new();
+        let var = ast
+            .add_expr(Expr::Var("opt".into()), Span::new(0, 3))
+            .unwrap();
+        let field = ast
+            .add_expr(Expr::OptionalField(var, "name".into()), Span::new(0, 9))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        // Create an Option type with a structural object inside
+        let name_id = ctx.env_mut().intern("name");
+        let inner =
+            Ty::Object(std::iter::once((name_id, Ty::String)).collect());
+        ctx.env_mut()
+            .bind("opt", Scheme::mono(Ty::Option(Box::new(inner))));
+        let ty = ctx.infer_expr(field);
+        // Should return Option[String]
+        match ty {
+            Ty::Option(inner) => assert_eq!(*inner, Ty::String),
+            _ => panic!("expected Option, got {ty:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_optional_field_on_non_option() {
+        // obj?.name where obj is { name: String }
+        let mut ast = Ast::new();
+        let var = ast
+            .add_expr(Expr::Var("obj".into()), Span::new(0, 3))
+            .unwrap();
+        let field = ast
+            .add_expr(Expr::OptionalField(var, "name".into()), Span::new(0, 9))
+            .unwrap();
+
+        let mut ctx = test_ctx(&ast);
+        let name_id = ctx.env_mut().intern("name");
+        let obj_ty =
+            Ty::Object(std::iter::once((name_id, Ty::String)).collect());
+        ctx.env_mut().bind("obj", Scheme::mono(obj_ty));
+        let ty = ctx.infer_expr(field);
+        // Should produce error (not Option)
+        assert_eq!(ty, Ty::Error);
+        assert!(ctx.has_errors());
+        match &ctx.errors()[0] {
+            TypeError::Mismatch { .. } => {}
+            e => panic!("expected Mismatch, got {e:?}"),
+        }
     }
 }

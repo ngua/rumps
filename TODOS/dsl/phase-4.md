@@ -496,7 +496,7 @@ true as Json              ; Value::Json (bool literal)
 
 ---
 
-## Phase 4.0.0.1: JSON READ for Struct Types [ ]
+## Phase 4.0.0.1: JSON READ for Struct Types [x]
 
 Extend `READ` to support converting JSON objects to named struct types (including parametric structs). Currently `READ` only handles primitives (`Bool`, `Int`, `Float`, `String`) and structural object types.
 
@@ -938,19 +938,39 @@ Infer types for field access, tuple indexing, and array indexing.
 
 ### Checklist
 
-- [ ] Handle `Expr::Field`:
-  - [ ] If base is structural object (`Ty::Object`), look up field type
-  - [ ] If base is `Unknown`, create structural object constraint `{ field: ?t }`
-  - [ ] If field missing, emit error
-- [ ] Handle `Expr::OptionalField`:
-  - [ ] Same as `Field` but wrap result in `Option[?t]`
-- [ ] Handle `Expr::TupleIndex`:
-  - [ ] Check base is `Tuple`
-  - [ ] Extract type at index (error if out of bounds)
-- [ ] Handle `Expr::Index`:
-  - [ ] Check base is `Array[?t]` or `Map[?k, ?v]`
-  - [ ] For array: unify index with `Int`, return `?t`
-  - [ ] For map: unify index with `?k`, return `?v`
+- [x] Handle `Expr::Field`:
+  - [x] If base is structural object (`Ty::Object`), look up field type
+  - [x] If base is type variable, create structural object constraint `{ field: ?t }`
+  - [x] If base is `Ty::Named` with `TypeDef::Struct`, look up field in registry
+  - [x] If base is `Unknown`, return fresh type variable
+  - [x] If field missing, emit `FieldNotFound` error
+  - [x] If base is non-object type, emit `NotAnObject` error
+- [x] Handle `Expr::OptionalField`:
+  - [x] If base is `Option[T]`, extract field from `T` and wrap in `Option`
+  - [x] If base is type variable, unify with `Option[?t]` and extract field
+  - [x] If base is not `Option`, emit `Mismatch` error
+- [x] Handle `Expr::TupleIndex`:
+  - [x] Check base is `Tuple`
+  - [x] Extract type at index (emit `TupleIndexOutOfBounds` if out of bounds)
+  - [x] If base is type variable, return fresh var (cannot infer structure)
+  - [x] If base is non-tuple, emit `NotATuple` error
+- [x] Handle `Expr::Index`:
+  - [x] Check base is `Array[?t]` or `Map[?k, ?v]`
+  - [x] For array: unify index with `Int`, return element type
+  - [x] For map: unify index with key type, return value type
+  - [x] For string: unify index with `Int`, return `Char`
+  - [x] If base is non-indexable, emit `NotIndexable` error
+- [x] Handle `Expr::JsonAccess`:
+  - [x] Base must be `Json` (emit `NotJson` if not)
+  - [x] For `JsonAccessKind::Json`, return `Ty::Json`
+  - [x] For `JsonAccessKind::Scalar`, return `Option[Scalar]`
+  - [x] For dynamic key (`JsonAccessKey::Expr`), unify key with `String`
+- [x] Handle `Expr::Json` literals: return `Ty::Json`
+- [x] Add unit tests for all access and indexing inference
+
+### Struct Field Type Resolution
+
+For `TYPE` structs, field types are resolved via `ast_type_to_ty()` which converts the `AstTypeExprId` stored in `TypeDef::Struct.fields` to a `Ty`. Type parameter substitution is handled by building a `HashMap<StringId, Ty>` from `type_params` to `type_args`.
 
 ---
 
