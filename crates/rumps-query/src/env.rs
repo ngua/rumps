@@ -246,6 +246,9 @@ pub(crate) struct Module {
     /// `ValueId`s index into `Environment::consts`.
     constants: HashMap<String, ValueId>,
 
+    /// Types for constants, keyed by constant name.
+    const_types: HashMap<String, Ty>,
+
     /// Submodules, keyed by submodule name.
     submodules: HashMap<String, Self>,
 }
@@ -263,6 +266,7 @@ impl Module {
             functions,
             types: HashMap::new(),
             constants: HashMap::new(),
+            const_types: HashMap::new(),
             submodules: HashMap::new(),
         }
     }
@@ -281,6 +285,7 @@ impl Module {
             functions,
             types,
             constants: HashMap::new(),
+            const_types: HashMap::new(),
             submodules: HashMap::new(),
         }
     }
@@ -291,15 +296,22 @@ impl Module {
         self
     }
 
-    /// Builder method to add a constant.
-    pub(crate) fn with_const(mut self, name: &str, id: ValueId) -> Self {
+    /// Builder method to add a constant with its type.
+    pub(crate) fn with_const(
+        mut self,
+        name: &str,
+        id: ValueId,
+        ty: Ty,
+    ) -> Self {
         self.constants.insert(name.to_string(), id);
+        self.const_types.insert(name.to_string(), ty);
         self
     }
 
-    /// Mutably add a constant.
-    pub(crate) fn add_const(&mut self, name: &str, id: ValueId) {
+    /// Mutably add a constant with its type.
+    pub(crate) fn add_const(&mut self, name: &str, id: ValueId, ty: Ty) {
         self.constants.insert(name.to_string(), id);
+        self.const_types.insert(name.to_string(), ty);
     }
 
     /// Look up a function by path within this module.
@@ -336,6 +348,18 @@ impl Module {
             [first, rest @ ..] => {
                 self.submodules.get(*first).and_then(|m| m.get_const(rest))
             }
+        }
+    }
+
+    /// Look up a constant's type by path within this module.
+    pub(crate) fn get_const_type(&self, path: &[&str]) -> Option<&Ty> {
+        match path {
+            [] => None,
+            [name] => self.const_types.get(*name),
+            [first, rest @ ..] => self
+                .submodules
+                .get(*first)
+                .and_then(|m| m.get_const_type(rest)),
         }
     }
 
@@ -445,6 +469,15 @@ impl Environment {
     pub(crate) fn get_module_const(&self, path: &[&str]) -> Option<ValueId> {
         path.split_first().and_then(|(module, rest)| {
             self.modules.get(*module).and_then(|m| m.get_const(rest))
+        })
+    }
+
+    /// Look up a constant's type by its full path.
+    pub(crate) fn get_module_const_type(&self, path: &[&str]) -> Option<&Ty> {
+        path.split_first().and_then(|(module, rest)| {
+            self.modules
+                .get(*module)
+                .and_then(|m| m.get_const_type(rest))
         })
     }
 
@@ -716,7 +749,7 @@ impl Environment {
             let id = self
                 .consts
                 .add(Value::Float(OrderedFloat(val)), Span::MODULE_CONST);
-            math_module.add_const(name, id);
+            math_module.add_const(name, id, Ty::Float);
         });
 
         self.modules.insert(
@@ -1268,8 +1301,8 @@ mod tests {
         let e = arena.add(Value::Int(271), span);
 
         let math = Module::from_fns(&[("sqrt", dummy_prim)])
-            .with_const("pi", pi)
-            .with_const("e", e);
+            .with_const("pi", pi, Ty::Int)
+            .with_const("e", e, Ty::Int);
 
         // Lookup constants
         assert_eq!(math.get_const(&["pi"]), Some(pi));

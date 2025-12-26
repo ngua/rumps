@@ -556,16 +556,21 @@ impl<'a> InferCtx<'a> {
                 Ty::Error
             }
 
-            // Module path: `Module.function`
+            // Module path: `Module.function` or `Module.constant`
             Expr::Path(segments) => {
-                // Look up the polymorphic type scheme from the runtime environment
+                // Look up the type from the runtime environment;
+                // first check constants, then functions
                 let path: SmallVec<[&str; 4]> =
                     segments.iter().map(String::as_str).collect();
                 self.runtime_env
-                    .get_module_fn_type(&path)
-                    .map_or(Ty::Unknown, |scheme| {
-                        scheme.instantiate(&mut self.next_var)
+                    .get_module_const_type(&path)
+                    .cloned()
+                    .or_else(|| {
+                        self.runtime_env.get_module_fn_type(&path).map(
+                            |scheme| scheme.instantiate(&mut self.next_var),
+                        )
                     })
+                    .unwrap_or(Ty::Unknown)
             }
         }
     }
