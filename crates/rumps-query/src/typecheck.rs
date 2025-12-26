@@ -20,14 +20,14 @@ mod ty;
 mod unify;
 
 pub(crate) use env::TypeEnv;
-pub(crate) use error::TypeError;
+pub(crate) use error::{FormattedTypeError, TyPrinter, TypeError};
 pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use ty::{Scheme, Subst, Ty, TyVar};
 
 use crate::ast::{Ast, StmtId};
 use crate::env::Environment;
 use crate::intern::StringInterner;
-use crate::value::{TypeExprArena, TypeRegistry};
+use crate::value::{TypeExprArena, TypeRegistry, ValueArena};
 
 /// Run the type checker on an AST.
 ///
@@ -41,6 +41,7 @@ use crate::value::{TypeExprArena, TypeRegistry};
 /// * `registry` - Type registry with builtin and user-defined types
 /// * `type_exprs` - Type expression arena for union member lookups
 /// * `runtime_env` - Runtime environment for module function type lookups
+/// * `arena` - Value arena for string lookups in error messages
 /// * `strings` - String interner shared with the registry
 pub(crate) fn check(
     ast: &Ast,
@@ -48,6 +49,7 @@ pub(crate) fn check(
     registry: &TypeRegistry,
     type_exprs: &TypeExprArena,
     runtime_env: &Environment,
+    arena: &ValueArena,
     strings: StringInterner,
 ) -> crate::Result<()> {
     let mut ctx =
@@ -65,5 +67,5 @@ pub(crate) fn check(
     // Check for remaining unresolved type variables
     ctx.check_remaining_unknowns();
 
-    ctx.into_result()
+    ctx.into_result_formatted(registry, arena)
 }

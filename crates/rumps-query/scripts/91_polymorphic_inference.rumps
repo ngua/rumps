@@ -1,0 +1,116 @@
+; Test: Polymorphic inference and generalization
+; Tests that the type checker correctly handles polymorphic functions
+
+; === Identity function at multiple types ===
+
+FUN identity(x) { x }
+
+; Use at Int
+LET int-result = identity(42)
+OUTPUT int-result  ; 42
+
+; Use at String
+LET str-result = identity("hello")
+OUTPUT str-result  ; hello
+
+; Use at Bool
+LET bool-result = identity(TRUE)
+OUTPUT bool-result  ; true
+
+; Use at Array[Int]
+LET arr-result = identity([1, 2, 3])
+OUTPUT arr-result  ; [1, 2, 3]
+
+; === Const function at multiple types ===
+
+FUN const(a, b) { a }
+
+OUTPUT const(1, "ignored")  ; 1
+OUTPUT const("kept", 999)   ; kept
+
+; === Flip function ===
+
+FUN flip(pair) { (pair.1, pair.0) }
+
+LET flipped-int-str = flip((1, "hello"))
+OUTPUT flipped-int-str  ; ("hello", 1)
+
+LET flipped-bool-float = flip((TRUE, 3.14))
+OUTPUT flipped-bool-float  ; (3.14, true)
+
+; === Generic higher-order function ===
+
+FUN apply-twice(f, x) {
+  f(f(x))
+}
+
+FUN inc(n: Int) -> Int { n + 1 }
+FUN double-str(s: String) -> String { s ++ s }
+
+OUTPUT apply-twice(inc, 0)           ; 2
+OUTPUT apply-twice(double-str, "a")  ; aaaa
+
+; === Compose functions ===
+
+FUN compose(f, g) {
+  x => f(g(x))
+}
+
+FUN negate(n: Int) -> Int { 0 - n }
+FUN triple(n: Int) -> Int { n * 3 }
+
+LET neg-triple = compose(negate, triple)
+OUTPUT neg-triple(5)  ; -15
+
+; === Polymorphic with Option ===
+
+FUN wrap-some(x) {
+  Option.Some(x)
+}
+
+OUTPUT wrap-some(42)       ; Option.Some(42)
+OUTPUT wrap-some("hello")  ; Option.Some("hello")
+OUTPUT wrap-some(TRUE)     ; Option.Some(true)
+
+; === Polymorphic with Array.map ===
+
+; Same closure structure, different element types
+LET nums = [1, 2, 3]
+LET strs = ["a", "b", "c"]
+
+LET mapped-nums = Array.map(x => identity(x), nums)
+OUTPUT mapped-nums  ; [1, 2, 3]
+
+LET mapped-strs = Array.map(x => identity(x), strs)
+OUTPUT mapped-strs  ; [a, b, c]
+
+; === Generic function returning different types ===
+
+FUN pair-with-zero(x) {
+  (x, 0)
+}
+
+OUTPUT pair-with-zero("hello")  ; ("hello", 0)
+OUTPUT pair-with-zero(TRUE)     ; (true, 0)
+
+; === Polymorphic empty array ===
+
+LET empty-int: Array[Int] = []
+LET empty-str: Array[String] = []
+
+OUTPUT empty-int   ; []
+OUTPUT empty-str   ; []
+
+; === Test generalization: same fn, multiple instantiations in sequence ===
+
+FUN make-pair(a, b) { (a, b) }
+
+LET p1 = make-pair(1, 2)
+LET p2 = make-pair("x", "y")
+LET p3 = make-pair(TRUE, 3.14)
+
+OUTPUT p1  ; (1, 2)
+OUTPUT p2  ; ("x", "y")
+OUTPUT p3  ; (true, 3.14)
+
+OUTPUT "Polymorphic inference test complete"

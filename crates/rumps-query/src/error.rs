@@ -9,7 +9,7 @@ use miette::{Diagnostic, LabeledSpan};
 use nonempty::NonEmpty;
 use thiserror::Error;
 
-use crate::typecheck::TypeError;
+use crate::typecheck::{FormattedTypeError, TypeError};
 use crate::{Span, Token};
 
 /// Crate-wide result type.
@@ -44,10 +44,15 @@ pub enum Error {
     #[error("{}", fmt_multiple(errors))]
     Multiple { errors: NonEmpty<Box<Self>> },
 
-    /// Static type error from the type checker.
+    /// Static type error from the type checker (unformatted; legacy).
     #[error("{0}")]
     #[allow(private_interfaces)]
     Type(#[from] TypeError),
+
+    /// Formatted static type error with resolved type names.
+    #[error("{}", .0.message)]
+    #[allow(private_interfaces)]
+    FormattedType(FormattedTypeError),
 }
 
 fn fmt_expected(expected: &[String]) -> String {
@@ -141,6 +146,7 @@ impl Error {
             | Self::RuntimeType { span, .. } => Some(*span),
             Self::Runtime { span, .. } => *span,
             Self::Type(e) => Some(e.span()),
+            Self::FormattedType(e) => Some(e.span),
             Self::Coercion { .. } | Self::Multiple { .. } => None,
         }
     }
@@ -177,7 +183,7 @@ impl Diagnostic for Error {
             Self::RuntimeType { .. } => "rumps::runtime_type",
             Self::Coercion { .. } => "rumps::coercion",
             Self::Multiple { .. } => "rumps::multiple",
-            Self::Type(_) => "rumps::type",
+            Self::Type(_) | Self::FormattedType(_) => "rumps::type",
         };
         Some(Box::new(code))
     }
@@ -204,17 +210,51 @@ impl Diagnostic for Error {
             Self::Type(e) => {
                 Some(Box::new(std::iter::once(span_to_label(e.span(), "here"))))
             }
+            Self::FormattedType(e) => {
+                Some(Box::new(std::iter::once(span_to_label(e.span, "error"))))
+            }
             Self::Multiple { errors } => {
+                // Collect labels with individual error messages
                 let labels: Vec<_> = errors
                     .iter()
-                    .filter_map(|e| e.span())
-                    .map(|s| span_to_label(s, "error"))
+                    .filter_map(|e| {
+                        e.span().map(|s| {
+                            let msg = match e.as_ref() {
+                                Self::FormattedType(fe) => fe.message.clone(),
+                                _ => "error".to_owned(),
+                            };
+                            span_to_label(s, &msg)
+                        })
+                    })
                     .collect();
                 (!labels.is_empty()).then(|| {
                     Box::new(labels.into_iter())
                         as Box<dyn Iterator<Item = LabeledSpan>>
                 })
             }
+        }
+    }
+
+    fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        match self {
+            Self::FormattedType(e) => e
+                .help
+                .as_ref()
+                .map(|h| Box::new(h.as_str()) as Box<dyn fmt::Display>),
+            Self::Multiple { errors } => {
+                // Collect help messages from formatted errors
+                let helps: Vec<_> = errors
+                    .iter()
+                    .filter_map(|e| match e.as_ref() {
+                        Self::FormattedType(fe) => fe.help.as_ref(),
+                        _ => None,
+                    })
+                    .collect();
+                helps
+                    .first()
+                    .map(|h| Box::new(h.as_str()) as Box<dyn fmt::Display>)
+            }
+            _ => None,
         }
     }
 }
@@ -261,6 +301,9 @@ impl fmt::Display for ErrorDisplay<'_> {
             }
             Error::Type(e) => {
                 write!(f, "type error at {}: {e}", loc(e.span()))
+            }
+            Error::FormattedType(e) => {
+                write!(f, "type error at {}: {}", loc(e.span), e.message)
             }
             Error::Multiple { errors } => {
                 let formatted: Vec<_> = errors

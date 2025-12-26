@@ -1,6 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
 description: "; Tuple size mismatch\nLET (a, b, c) = (1, 2)\n"
 ---
-ERROR: arity mismatch: expected 3 argument(s), got 2
+ERROR: expected 3 argument(s), got 2

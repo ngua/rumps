@@ -1,6 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
 description: "; Object missing field\nLET { name, missing } = { name: \"Alice\" }\n"
 ---
-ERROR: field `missing` not found on type `{#22: String}`
+ERROR: field `missing` not found on type `{ name: String }`

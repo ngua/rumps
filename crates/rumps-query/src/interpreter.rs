@@ -202,6 +202,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             &registry,
             &type_exprs,
             &env,
+            &arena,
             arena.interner(),
         )?;
 

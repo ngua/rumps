@@ -11,7 +11,7 @@ use nonempty::NonEmpty;
 use smallvec::SmallVec;
 
 use super::env::TypeEnv;
-use super::error::TypeError;
+use super::error::{TyPrinter, TypeError};
 use super::ty::{Scheme, Subst, Ty, TyVar};
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
@@ -374,9 +374,27 @@ impl<'a> InferCtx<'a> {
     /// Consume the context and return `Ok(())` if no errors, or an error otherwise.
     ///
     /// Multiple type errors are wrapped in `Error::Multiple`.
+    #[allow(dead_code)]
     pub(crate) fn into_result(self) -> crate::Result<()> {
         NonEmpty::from_vec(self.errors).map_or(Ok(()), |errs| {
             let errors = errs.map(crate::Error::from);
+            Err(crate::Error::multiple(errors))
+        })
+    }
+
+    /// Consume the context and return formatted errors.
+    ///
+    /// Unlike `into_result`, this formats type errors with proper type names
+    /// using the provided registry and arena.
+    pub(crate) fn into_result_formatted(
+        self,
+        registry: &TypeRegistry,
+        arena: &crate::value::ValueArena,
+    ) -> crate::Result<()> {
+        NonEmpty::from_vec(self.errors).map_or(Ok(()), |errs| {
+            let printer = TyPrinter::new(registry, arena, &self.env.strings);
+            let formatted = errs.map(|e| e.format_with(&printer));
+            let errors = formatted.map(crate::Error::FormattedType);
             Err(crate::Error::multiple(errors))
         })
     }

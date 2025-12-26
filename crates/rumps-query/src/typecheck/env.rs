@@ -13,7 +13,7 @@ use crate::intern::{StringId, StringInterner};
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TypeEnv {
     scopes: Vec<HashMap<StringId, Scheme>>,
-    strings: StringInterner,
+    pub(super) strings: StringInterner,
 }
 
 impl TypeEnv {

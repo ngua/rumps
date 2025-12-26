@@ -1447,8 +1447,6 @@ mod tests {
 
     #[test]
     fn environment_builtin_types_correct() {
-        use crate::typecheck::TyVar;
-
         let env = Environment::new();
 
         // Array.map: forall T U. (Array[T], T -> U) -> Array[U]

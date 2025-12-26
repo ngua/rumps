@@ -1,7 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
 description: "; Unwrap on non-Option/Result should error\nLET plain = 42\nOUTPUT plain!\n"
 ---
-ERROR: type `Int` cannot be unwrapped; expected `Option` or `Result`
-type `Int` cannot be unwrapped; expected `Option` or `Result`
+ERROR: type `Int` cannot be unwrapped
+type `Int` cannot be unwrapped
