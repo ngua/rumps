@@ -7,16 +7,18 @@
 #![allow(clippy::large_enum_variant, dead_code)]
 use std::collections::{HashMap, HashSet};
 
+use nonempty::NonEmpty;
 use smallvec::SmallVec;
 
 use super::env::TypeEnv;
 use super::error::TypeError;
-use super::ty::{Scheme, Ty, TyVar};
+use super::ty::{Scheme, Subst, Ty, TyVar};
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
     JsonAccessKey, JsonAccessKind, Literal, MatchArm, MatchPattern,
     MatchPatternId, RestPattern, Stmt, StmtId, TypePattern, UnOp,
 };
+use crate::env::Environment;
 use crate::intern::{StringId, StringInterner};
 use crate::value::{TypeDef, TypeId, TypeRegistry};
 use crate::Span;
@@ -132,6 +134,8 @@ pub(crate) struct InferCtx<'a> {
     ast: &'a Ast,
     /// Registry of user-defined and builtin types.
     registry: &'a TypeRegistry,
+    /// Runtime environment; used to look up module function type schemes.
+    runtime_env: &'a Environment,
     /// Scoped type environment (variable -> scheme bindings).
     env: TypeEnv,
     /// Collected constraints to be solved.
@@ -148,15 +152,18 @@ impl<'a> InferCtx<'a> {
     /// Create a new inference context.
     ///
     /// The `strings` interner should be shared with the `TypeRegistry` so
-    /// type name lookups produce consistent `StringId`s.
+    /// type name lookups produce consistent `StringId`s. The `runtime_env`
+    /// is used to look up module function type schemes.
     pub(crate) fn new(
         ast: &'a Ast,
         registry: &'a TypeRegistry,
+        runtime_env: &'a Environment,
         strings: StringInterner,
     ) -> Self {
         Self {
             ast,
             registry,
+            runtime_env,
             env: TypeEnv::new(strings),
             constraints: Vec::new(),
             next_var: 0,
@@ -259,6 +266,80 @@ impl<'a> InferCtx<'a> {
         std::mem::take(&mut self.errors)
     }
 
+    /// Apply a substitution to all inferred expression types.
+    ///
+    /// Called after constraint solving to replace type variables with their
+    /// resolved concrete types.
+    pub(crate) fn apply_subst(&mut self, subst: &Subst) {
+        self.expr_types
+            .values_mut()
+            .for_each(|ty| *ty = ty.apply(subst));
+    }
+
+    /// Check for remaining unresolved type variables and emit errors.
+    ///
+    /// After constraint solving and substitution application, any remaining
+    /// `Ty::Var` or `Ty::Unknown` indicates incomplete inference. This emits
+    /// `MissingAnnotation` errors for such cases.
+    pub(crate) fn check_remaining_unknowns(&mut self) {
+        let unresolved: Vec<_> = self
+            .expr_types
+            .iter()
+            .filter(|(_, ty)| Self::has_unresolved_vars(ty))
+            .map(|(id, _)| {
+                self.ast.expr_span(*id).unwrap_or_else(|| Span::new(0, 0))
+            })
+            .collect();
+
+        unresolved.into_iter().for_each(|span| {
+            self.errors.push(TypeError::MissingAnnotation(span));
+        });
+    }
+
+    /// Check if a type contains unresolved type variables.
+    fn has_unresolved_vars(ty: &Ty) -> bool {
+        match ty {
+            Ty::Var(_) | Ty::Unknown => true,
+            Ty::Bool
+            | Ty::Int
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Unit
+            | Ty::Time
+            | Ty::Range
+            | Ty::Json
+            | Ty::Error => false,
+            Ty::Array(t) | Ty::Option(t) => Self::has_unresolved_vars(t),
+            Ty::Result(ok, err) | Ty::Map(ok, err) => {
+                Self::has_unresolved_vars(ok) || Self::has_unresolved_vars(err)
+            }
+            Ty::Tuple(ts) | Ty::Union(ts) => {
+                ts.iter().any(|t| Self::has_unresolved_vars(t))
+            }
+            Ty::Fn(params, ret) => {
+                params.iter().any(|t| Self::has_unresolved_vars(t))
+                    || Self::has_unresolved_vars(ret)
+            }
+            Ty::Object(fields) => {
+                fields.values().any(|t| Self::has_unresolved_vars(t))
+            }
+            Ty::Named(_, args) => {
+                args.iter().any(|t| Self::has_unresolved_vars(t))
+            }
+        }
+    }
+
+    /// Consume the context and return `Ok(())` if no errors, or an error otherwise.
+    ///
+    /// Multiple type errors are wrapped in `Error::Multiple`.
+    pub(crate) fn into_result(self) -> crate::Result<()> {
+        NonEmpty::from_vec(self.errors).map_or(Ok(()), |errs| {
+            let errors = errs.map(crate::Error::from);
+            Err(crate::Error::multiple(errors))
+        })
+    }
+
     /// Expand a union type to its member types.
     ///
     /// Returns `Some(members)` for union types, `None` for non-unions.
@@ -287,8 +368,8 @@ impl<'a> InferCtx<'a> {
                     // Check if it's a user-defined union
                     self.registry.get_def(*id).and_then(|def| match def {
                         TypeDef::Union { .. } => {
-                            // TODO: Resolve member TypeExprIds to Ty when
-                            // TypeExprArena is available (Phase 4.14)
+                            // TODO(Phase 4.14.1): Resolve member TypeExprIds
+                            // to Ty; requires TypeExprArena in InferCtx
                             None
                         }
                         _ => None,
@@ -440,10 +521,15 @@ impl<'a> InferCtx<'a> {
             }
 
             // Module path: `Module.function`
-            Expr::Path(_) => {
-                // Module functions have polymorphic types registered in env
-                // The actual typing is done via Callable constraint at call site
-                Ty::Unknown
+            Expr::Path(segments) => {
+                // Look up the polymorphic type scheme from the runtime environment
+                let path: SmallVec<[&str; 4]> =
+                    segments.iter().map(String::as_str).collect();
+                self.runtime_env
+                    .get_module_fn_type(&path)
+                    .map_or(Ty::Unknown, |scheme| {
+                        scheme.instantiate(&mut self.next_var)
+                    })
             }
         }
     }
@@ -493,18 +579,33 @@ impl<'a> InferCtx<'a> {
         match op {
             // Arithmetic: both numeric, result depends on operand types
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod | BinOp::Pow => {
-                self.constrain(Constraint::Numeric(lhs_ty.clone(), span));
-                self.constrain(Constraint::Numeric(rhs_ty.clone(), span));
-                // If either is Float, result is Float; else fresh numeric
-                if lhs_ty == Ty::Float || rhs_ty == Ty::Float {
-                    Ty::Float
-                } else if lhs_ty == Ty::Int && rhs_ty == Ty::Int {
-                    Ty::Int
-                } else {
-                    // One or both are type vars; result is fresh numeric
-                    let result = self.fresh();
-                    self.constrain(Constraint::Numeric(result.clone(), span));
-                    result
+                // If either is concrete Int/Float, unify the other with it
+                // Otherwise add Numeric constraints for both
+                match (&lhs_ty, &rhs_ty) {
+                    (Ty::Float, _) | (_, Ty::Float) => {
+                        self.constrain(Constraint::Numeric(lhs_ty, span));
+                        self.constrain(Constraint::Numeric(rhs_ty, span));
+                        Ty::Float
+                    }
+                    (Ty::Int, _) => {
+                        self.unify(rhs_ty, Ty::Int, span);
+                        Ty::Int
+                    }
+                    (_, Ty::Int) => {
+                        self.unify(lhs_ty, Ty::Int, span);
+                        Ty::Int
+                    }
+                    _ => {
+                        // Both are type vars or unknown; add Numeric constraints
+                        self.constrain(Constraint::Numeric(lhs_ty, span));
+                        self.constrain(Constraint::Numeric(rhs_ty, span));
+                        let result = self.fresh();
+                        self.constrain(Constraint::Numeric(
+                            result.clone(),
+                            span,
+                        ));
+                        result
+                    }
                 }
             }
 
@@ -893,8 +994,10 @@ impl<'a> InferCtx<'a> {
 
     /// Infer type of optional field access: `base?.field`.
     ///
-    /// The base must be `Option[T]` where `T` has the field.
-    /// Returns `Option[FieldType]`.
+    /// Works on any type that has the field; always returns `Option[FieldType]`.
+    /// - If base is `Option[T]`, unwraps and accesses field on `T`
+    /// - If base is an object/struct with the field, accesses it directly
+    /// - Either way, result is wrapped in `Option`
     fn optional_field(
         &mut self,
         base_id: ExprId,
@@ -904,32 +1007,28 @@ impl<'a> InferCtx<'a> {
         let base_ty = self.expr(base_id);
 
         match &base_ty {
+            // Option[T]: unwrap, access field on T, rewrap
             Ty::Option(inner) => {
                 let field_ty = self.field_type(inner, field, span);
                 Ty::Option(Box::new(field_ty))
             }
 
+            // Object/struct: access field directly, wrap in Option
+            Ty::Object(_) | Ty::Named(_, _) => {
+                let field_ty = self.field_type(&base_ty, field, span);
+                Ty::Option(Box::new(field_ty))
+            }
+
+            // Type variable: create object constraint, wrap result in Option
             Ty::Var(_) => {
-                // Base is a type variable; create Option[?t] constraint
-                // where ?t has the required field
-                let inner = self.fresh();
-                let field_ty = self.field_type(&inner, field, span);
-                self.unify(base_ty, Ty::Option(Box::new(inner)), span);
+                let field_ty = self.field_type(&base_ty, field, span);
                 Ty::Option(Box::new(field_ty))
             }
 
             Ty::Error => Ty::Error,
 
             _ => {
-                // Optional field access on non-Option type
-                // This could also work on the bare type, returning
-                // Option[FieldType], but we require Option for now
-                let fresh = self.fresh();
-                self.error(TypeError::Mismatch {
-                    expected: Ty::Option(Box::new(fresh)),
-                    got: base_ty,
-                    span,
-                });
+                self.error(TypeError::NotAnObject(base_ty, span));
                 Ty::Error
             }
         }
@@ -2439,10 +2538,11 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
         // Clone interner before leaking registry; shared with TypeEnv
-        let strings = arena.strings.clone();
+        let strings = arena.interner();
         // Leak to get 'static lifetime; tests don't need to clean up
         let registry = Box::leak(Box::new(registry));
-        InferCtx::new(ast, registry, strings)
+        let env = Box::leak(Box::new(crate::env::Environment::new()));
+        InferCtx::new(ast, registry, env, strings)
     }
 
     /// Create an AST with a single expression.
@@ -2607,14 +2707,9 @@ mod tests {
             ast_with_binary(Literal::Int(1), BinOp::Add, Literal::Int(2));
         let mut ctx = test_ctx(&ast);
         let ty = ctx.expr(id);
+        // Both operands are concrete Int, result is Int directly
         assert_eq!(ty, Ty::Int);
-        // Should have 2 Numeric constraints for operands
-        let numerics: Vec<_> = ctx
-            .constraints()
-            .iter()
-            .filter(|c| matches!(c, Constraint::Numeric(_, _)))
-            .collect();
-        assert_eq!(numerics.len(), 2);
+        assert!(!ctx.has_errors());
     }
 
     #[test]
@@ -3048,8 +3143,8 @@ mod tests {
     // Arithmetic with type variables
 
     #[test]
-    fn infer_add_with_var_produces_fresh_numeric() {
-        // x + 1 where x is a type variable
+    fn infer_add_with_var_unifies_with_int() {
+        // x + 1 where x is a type variable; should unify x with Int
         let mut ast = Ast::new();
         let lhs = ast
             .add_expr(Expr::Var("x".into()), Span::new(0, 1))
@@ -3073,19 +3168,15 @@ mod tests {
         );
 
         let ty = ctx.expr(add);
-        // Result should be a fresh type variable (since one operand is var)
-        match ty {
-            Ty::Var(_) => {
-                // Should have 3 Numeric constraints: lhs, rhs, result
-                let numerics: Vec<_> = ctx
-                    .constraints()
-                    .iter()
-                    .filter(|c| matches!(c, Constraint::Numeric(_, _)))
-                    .collect();
-                assert_eq!(numerics.len(), 3);
-            }
-            _ => panic!("expected type variable, got {ty:?}"),
-        }
+        // Since rhs is Int, lhs is unified with Int, result is Int
+        assert_eq!(ty, Ty::Int);
+        // Should have an Eq constraint unifying the type var with Int
+        let eq_constraints: Vec<_> = ctx
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c, Constraint::Eq(_, Ty::Int, _)))
+            .collect();
+        assert_eq!(eq_constraints.len(), 1);
     }
 
     #[test]
@@ -4104,6 +4195,7 @@ mod tests {
     #[test]
     fn optional_field_on_non_option() {
         // obj?.name where obj is { name: String }
+        // Should return Option[String] (wraps field access in Option)
         let mut ast = Ast::new();
         let var = ast
             .add_expr(Expr::Var("obj".into()), Span::new(0, 3))
@@ -4118,13 +4210,12 @@ mod tests {
             Ty::Object(std::iter::once((name_id, Ty::String)).collect());
         ctx.env_mut().bind("obj", Scheme::mono(obj_ty));
         let ty = ctx.expr(field);
-        // Should produce error (not Option)
-        assert_eq!(ty, Ty::Error);
-        assert!(ctx.has_errors());
-        match &ctx.errors()[0] {
-            TypeError::Mismatch { .. } => {}
-            e => panic!("expected Mismatch, got {e:?}"),
+        // Should return Option[String]
+        match ty {
+            Ty::Option(inner) => assert_eq!(*inner, Ty::String),
+            _ => panic!("expected Option[String], got {ty:?}"),
         }
+        assert!(!ctx.has_errors());
     }
 
     // --- Union type tests ---

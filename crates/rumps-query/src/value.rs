@@ -17,10 +17,11 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{AstTypeExprId, ExprId};
 use crate::intern::{StringId, StringInterner};
+use crate::typecheck::Ty;
 use crate::{Result, Span};
 
 /// A hashable key for `Map` values.
@@ -302,6 +303,15 @@ impl ValueArena {
 
     fn string_count(&self) -> usize {
         self.strings.len()
+    }
+
+    /// Clone the string interner for type checking.
+    ///
+    /// The type checker needs a separate copy of the interner because
+    /// `TypeEnv` is consumed at the end of type checking. Interned strings
+    /// are shared by reference (both copies have the same `StringId` mappings).
+    pub(crate) fn interner(&self) -> StringInterner {
+        self.strings.clone()
     }
 }
 
@@ -1025,6 +1035,83 @@ impl TypeExprArena {
     pub(crate) fn is_object(&self, id: TypeExprId) -> bool {
         self.get(id)
             .is_some_and(|e| matches!(e, TypeExpr::Object(..)))
+    }
+
+    /// Convert a resolved static type to a runtime type expression.
+    ///
+    /// Used after type checking to create runtime type tags for:
+    /// - Runtime `IS` checks (compare value's type tag against annotation)
+    /// - Runtime `AS` casts (verify cast is valid)
+    /// - Error messages with concrete types
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ty` contains unresolved type variables (`Var`, `Unknown`, `Error`).
+    /// These should be resolved during constraint solving before calling this.
+    #[allow(dead_code)]
+    pub(crate) fn from_ty(&mut self, ty: &Ty) -> TypeExprId {
+        match ty {
+            Ty::Bool => self.named(TypeId::BOOL),
+            Ty::Int => self.named(TypeId::INT),
+            Ty::Float => self.named(TypeId::FLOAT),
+            Ty::Char => self.named(TypeId::CHAR),
+            Ty::String => self.named(TypeId::STRING),
+            Ty::Unit => self.named(TypeId::UNIT),
+            Ty::Time => self.named(TypeId::TIME),
+            Ty::Range => self.named(TypeId::RANGE),
+            Ty::Json => self.named(TypeId::JSON),
+            Ty::Array(elem) => {
+                let elem_id = self.from_ty(elem);
+                self.app(TypeId::ARRAY, smallvec![elem_id])
+            }
+            Ty::Option(inner) => {
+                let inner_id = self.from_ty(inner);
+                self.app(TypeId::OPTION, smallvec![inner_id])
+            }
+            Ty::Result(ok, err) => {
+                let ok_id = self.from_ty(ok);
+                let err_id = self.from_ty(err);
+                self.app(TypeId::RESULT, smallvec![ok_id, err_id])
+            }
+            Ty::Map(k, v) => {
+                let k_id = self.from_ty(k);
+                let v_id = self.from_ty(v);
+                self.app(TypeId::MAP, smallvec![k_id, v_id])
+            }
+            Ty::Tuple(elems) => {
+                let elem_ids: SmallVec<[_; 4]> =
+                    elems.iter().map(|e| self.from_ty(e)).collect();
+                self.tuple(elem_ids)
+            }
+            Ty::Named(type_id, params) => {
+                if params.is_empty() {
+                    self.named(*type_id)
+                } else {
+                    let param_ids: SmallVec<[_; 2]> =
+                        params.iter().map(|p| self.from_ty(p)).collect();
+                    self.app(*type_id, param_ids)
+                }
+            }
+            Ty::Fn(params, ret) => {
+                let param_ids: SmallVec<[_; 4]> =
+                    params.iter().map(|p| self.from_ty(p)).collect();
+                let ret_id = self.from_ty(ret);
+                self.fn_type(param_ids, ret_id)
+            }
+            Ty::Object(fields) => {
+                let converted: IndexMap<StringId, TypeExprId> =
+                    fields.iter().map(|(k, t)| (*k, self.from_ty(t))).collect();
+                self.object(converted)
+            }
+            Ty::Union(members) => {
+                let member_ids: SmallVec<[_; 4]> =
+                    members.iter().map(|m| self.from_ty(m)).collect();
+                self.union(member_ids)
+            }
+            Ty::Var(_) | Ty::Unknown | Ty::Error => {
+                unreachable!("from_ty called on unresolved type: {ty:?}")
+            }
+        }
     }
 }
 

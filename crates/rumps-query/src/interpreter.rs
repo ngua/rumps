@@ -172,18 +172,30 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Create a new interpreter for the given AST, database, and I/O context.
     ///
     /// This is the main constructor. It creates the value arena and type
-    /// registry, runs name resolution on the AST, and sets up the interpreter.
+    /// registry, runs name resolution on the AST, runs type checking, and
+    /// sets up the interpreter.
+    ///
     /// Takes `&mut Ast` because resolution mutates it, but stores `&Ast`
     /// since interpretation only reads.
-    pub(crate) fn new(ast: &'a mut Ast, db: Database, io: I) -> Result<Self> {
+    pub(crate) fn new(
+        ast: &'a mut Ast,
+        stmts: &[StmtId],
+        db: Database,
+        io: I,
+    ) -> Result<Self> {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs)?;
         crate::resolve::resolve(ast, &mut arena, &registry);
 
+        let env = Environment::new();
+
+        // Run type checking after resolution
+        crate::typecheck::check(ast, stmts, &registry, &env, arena.interner())?;
+
         Ok(Self {
             ast,
-            env: Environment::new(),
+            env,
             db,
             txn: None,
             arena,

@@ -1382,15 +1382,15 @@ Module::from_fns(&[
 **New pattern (runtime + types):**
 ```rust
 Module::from_prims(&[
-    Prim { name: "length", f: Array::length, ty: Scheme::poly(|t| Fn([Array(t)], Int)) },
-    Prim { name: "map", f: Array::placeholder, ty: Scheme::poly2(|t, u| Fn([Array(t), Fn([t], u)], Array(u))) },
+    PrimDef { name: "length", f: Array::length, ty: Scheme::poly(|t| Fn([Array(t)], Int)) },
+    PrimDef { name: "map", f: Array::placeholder, ty: Scheme::poly2(|t, u| Fn([Array(t), Fn([t], u)], Array(u))) },
 ])
 ```
 
-The `Prim` struct has named fields; compile error if any field is missing.
+The `PrimDef` struct has named fields; compile error if any field is missing.
 
 ```rust
-pub(crate) struct Prim {
+pub(crate) struct PrimDef {
     pub(crate) name: &'static str,
     pub(crate) f: PrimFn,
     pub(crate) ty: Scheme,
@@ -1413,11 +1413,7 @@ impl Scheme {
     }
 
     /// Polymorphic with 2 type variables: `forall T U. ...`
-    fn poly2(f: impl FnOnce(Ty, Ty) -> Ty) -> Self {
-        let t = Ty::Var(TyVar(0));
-        let u = Ty::Var(TyVar(1));
-        Scheme { vars: vec![TyVar(0), TyVar(1)], ty: f(t, u) }
-    }
+    fn poly2(f: impl FnOnce(Ty, Ty) -> Ty) -> Self { ... }
 
     /// Polymorphic with 3 type variables: `forall T U V. ...`
     fn poly3(f: impl FnOnce(Ty, Ty, Ty) -> Ty) -> Self { ... }
@@ -1435,21 +1431,15 @@ impl Ty {
 
 ```rust
 // Array module
-Prim { name: "length", f: Array::length, ty: Scheme::poly(|t| Ty::func([Ty::Array(Box::new(t))], Ty::Int)) },
-Prim { name: "map", f: Array::placeholder, ty: Scheme::poly2(|t, u| {
+PrimDef { name: "length", f: Array::length, ty: Scheme::poly(|t| Ty::func([Ty::Array(Box::new(t))], Ty::Int)) },
+PrimDef { name: "map", f: Array::placeholder, ty: Scheme::poly2(|t, u| {
     Ty::func([Ty::Array(Box::new(t.clone())), Ty::func([t], u.clone())], Ty::Array(Box::new(u)))
-})},
-Prim { name: "filter", f: Array::placeholder, ty: Scheme::poly(|t| {
-    Ty::func([Ty::Array(Box::new(t.clone())), Ty::func([t.clone()], Ty::Bool)], Ty::Array(Box::new(t)))
-})},
-Prim { name: "reduce", f: Array::placeholder, ty: Scheme::poly2(|t, u| {
-    Ty::func([Ty::Array(Box::new(t.clone())), u.clone(), Ty::func([u.clone(), t], u.clone())], u)
 })},
 
 // Math module (monomorphic)
-Prim { name: "abs", f: Math::abs, ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)) },
-Prim { name: "sqrt", f: Math::sqrt, ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)) },
-Prim { name: "floor", f: Math::floor, ty: Scheme::mono(Ty::func([Ty::Float], Ty::Int)) },
+PrimDef { name: "abs", f: Math::abs, ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)) },
+PrimDef { name: "sqrt", f: Math::sqrt, ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)) },
+PrimDef { name: "floor", f: Math::floor, ty: Scheme::mono(Ty::func([Ty::Float], Ty::Int)) },
 ```
 
 **Note**: The `Object` module has been removed. Dynamic field iteration is incompatible with static typing (objects have heterogeneous field types). Use `Map[String, V]` for dynamic key-value collections.
@@ -1462,7 +1452,7 @@ Extend `Module` to store type schemes:
 
 ```rust
 /// A primitive function with its type.
-pub(crate) struct Prim {
+pub(crate) struct PrimDef {
     pub(crate) name: &'static str,
     pub(crate) f: PrimFn,
     pub(crate) ty: Scheme,
@@ -1477,7 +1467,7 @@ pub(crate) struct Module {
 
 impl Module {
     /// Register primitives (function + type together).
-    pub(crate) fn from_prims(prims: &[Prim]) -> Self { ... }
+    pub(crate) fn from_prims(prims: &[PrimDef]) -> Self { ... }
 
     /// Look up a function's type scheme.
     pub(crate) fn get_fn_type(&self, path: &[&str]) -> Option<&Scheme> { ... }
@@ -1488,24 +1478,23 @@ The type checker queries `env.get_module_fn_type(&["Array", "length"])` to get t
 
 ### Checklist
 
-- [ ] Add `Prim` struct to `env.rs`
-- [ ] Add `Scheme::mono`, `Scheme::poly`, `Scheme::poly2`, `Scheme::poly3` helpers
-- [ ] Add `Ty::func` helper for function type construction
-- [ ] Add `types: HashMap<String, Scheme>` field to `Module`
-- [ ] Add `Module::from_prims(&[Prim]) -> Self`
-- [ ] Add `Module::get_fn_type(&self, path: &[&str]) -> Option<&Scheme>`
-- [ ] Add `Environment::get_module_fn_type(&self, path: &[&str]) -> Option<&Scheme>`
-- [ ] Update `register_builtins` to use `Prim` for all functions, with correct type scheme:
-  - [ ] `Array` module (including HoF placeholders)
-  - [ ] `String` module
-  - [ ] `Math` module (including `Trig` submodule)
-  - [ ] `Map` module
-  - [ ] `Option` module
-  - [ ] `Result` module
-  - [ ] `Time` module
-  - [ ] `Random` module
-- [ ] Type checker: query types from `Environment` instead of separate registry
-- [ ] Test: missing field in `Prim` causes compile error
+- [x] Add `PrimDef` struct to `env.rs`
+- [x] Add `Scheme::mono`, `Scheme::poly`, `Scheme::poly2`, `Scheme::poly3` helpers
+- [x] Add `Ty::func` helper for function type construction
+- [x] Add `types: HashMap<String, Scheme>` field to `Module`
+- [x] Add `Module::from_prims(&[PrimDef]) -> Self`
+- [x] Add `Module::get_fn_type(&self, path: &[&str]) -> Option<&Scheme>`
+- [x] Add `Environment::get_module_fn_type(&self, path: &[&str]) -> Option<&Scheme>`
+- [x] Update `register_builtins` to use `PrimDef` for all functions, with correct type scheme:
+  - [x] `Array` module (including HoF placeholders)
+  - [x] `String` module
+  - [x] `Math` module (including `Trig` submodule)
+  - [x] `Map` module
+  - [x] `Option` module
+  - [x] `Result` module
+  - [x] `Time` module
+  - [x] `Random` module
+- [x] Test: missing field in `PrimDef` causes compile error
 
 ---
 
@@ -1620,23 +1609,235 @@ This is used for:
 
 ### Checklist
 
-- [ ] Handle `Stmt::Union` in `stmt` (register type, no env binding needed)
-- [ ] Resolve user-defined union members in `expand_union_members` (requires `TypeExprArena`)
-- [ ] Add `pub(crate) fn check(ast, registry, env) -> crate::Result<()>` to `typecheck.rs`
-- [ ] `impl InferCtx`: `fn into_result(self) -> crate::Result<()>`
-- [ ] `impl TypeExprArena`: `fn from_ty(&mut self, ty: &Ty, registry: &TypeRegistry) -> TypeExprId`
-- [ ] Modify `crates/rumps-query/src/lib.rs`:
-  - [ ] Add `mod typecheck;`
-- [ ] Modify `crates/rumps-query/src/interpreter.rs`:
-  - [ ] Call `crate::typecheck::check(ast, &registry, &env)?` after resolution
-- [ ] Modify `crates/rumps-query/src/error.rs`:
-  - [ ] Add `Error::StaticType(TypeError)` variant for compile-time type errors
-  - [ ] Add `Error::static_types(Vec<TypeError>) -> Self` constructor:
-    - [ ] If single error, return `Error::StaticType(err)`
-    - [ ] If multiple, wrap in `Error::Multiple`
-  - [ ] Update `Diagnostic` impl: add `"rumps::static_type"` code for new variant
-  - [ ] Update `ErrorDisplay` impl for new variant
-  - [ ] Update all call sites of `Error::type_err()` to `Error::runtime_type()`
+- [x] Type checker: handle `Expr::Path` (module function references):
+  - [x] Look up scheme via `env.get_module_fn_type(path)`
+  - [x] Instantiate scheme with fresh type variables (`scheme.instantiate(&mut self.next_var)`)
+  - [x] Return the instantiated `Ty::Fn` (not `Ty::Unknown`)
+  - [x] This allows `Callable` constraint solving to unify type variables with concrete arg types
+- [x] Handle `Stmt::Union` in `stmt` (no-op; registry handles registration)
+- [ ] Resolve user-defined union members in `expand_union_members` → **Deferred to Phase 4.14.1**
+- [x] Add `pub(crate) fn check(ast, registry, env) -> crate::Result<()>` to `typecheck.rs`
+- [x] `impl InferCtx`: `fn into_result(self) -> crate::Result<()>`
+- [ ] `impl TypeExprArena`: `fn from_ty(&mut self, ty: &Ty, registry: &TypeRegistry) -> TypeExprId` → **Not needed yet**
+- [x] Modify `crates/rumps-query/src/lib.rs`:
+  - [x] Add `mod typecheck;`
+- [x] Modify `crates/rumps-query/src/interpreter.rs`:
+  - [x] Call `crate::typecheck::check(ast, &registry, &env)?` after resolution
+- [x] Modify `crates/rumps-query/src/error.rs`:
+  - [x] Add `Error::StaticType(TypeError)` variant for compile-time type errors
+  - [x] Add `Error::static_types(Vec<TypeError>) -> Self` constructor:
+    - [x] If single error, return `Error::StaticType(err)`
+    - [x] If multiple, wrap in `Error::Multiple`
+  - [x] Update `Diagnostic` impl: add `"rumps::static_type"` code for new variant
+  - [x] Update `ErrorDisplay` impl for new variant
+  - [x] Update all call sites of `Error::type_err()` to `Error::runtime_type()`
+
+### Issues Fixed After Initial Implementation
+
+1. **Stack overflow in `Ty::apply`**: `Scheme::poly` uses `TyVar(0)`, but `InferCtx.next_var` also starts at `0`. First polymorphic instantiation created `{TyVar(0) -> Var(TyVar(0))}` causing infinite recursion. **Fix**: Filter identity mappings in `Scheme::instantiate`.
+
+2. **Array module type signatures backwards**: Type signatures had `(Array[T], T -> U)` but scripts use `(T -> U, Array[T])`. **Fix**: Swapped argument order for `map`, `filter`, `reduce`, `foreach`.
+
+3. **Closure parameter inference failing**: `x => x * 2` didn't infer `x: Int` even though `2` is `Int`. The `binary` function added `Numeric` constraints but never unified type vars with concrete `Int`. **Fix**: In arithmetic ops, if one operand is concrete `Int`, unify the other with `Int`.
+
+4. **Optional chaining `?.` required `Option` base**: `obj?.field` expected `obj` to be `Option[T]`, but it should work on any object and wrap the result in `Option`. **Fix**: Handle `Object` and `Named` types directly in `optional_field`, wrapping field type in `Option`.
+
+5. **Tests expected old broken behavior**: `infer_add_int_int` and `infer_add_with_var_produces_fresh_numeric` expected `Numeric` constraints even for concrete `Int` operands, and expected type variables as results when one operand was `Int`. Updated tests to expect the new correct behavior: `Int + Int = Int` directly, `?var + Int` unifies `?var` with `Int`.
+
+---
+
+## Phase 4.14.1: User-Defined Union Support
+
+The type checker currently skips user-defined unions because their members are stored as `TypeExprId`s (runtime type references) rather than `Ty` (static types). This phase adds the missing infrastructure.
+
+### Problem
+
+```rust
+// In TypeDef::Union
+TypeDef::Union {
+    name: StringId,
+    type_params: SmallVec<[StringId; 2]>,
+    members: Vec<TypeExprId>,  // Runtime type refs, not Ty!
+}
+```
+
+When `expand_union_members` encounters a user-defined union, it finds `TypeDef::Union` but can't convert `TypeExprId -> Ty` without the `TypeExprArena`.
+
+### Solution
+
+Add `TypeExprArena` reference to `InferCtx` and implement `TypeExpr -> Ty` conversion.
+
+### Implementation
+
+#### 1. Extend `InferCtx` with `TypeExprArena`
+
+```rust
+pub(crate) struct InferCtx<'a> {
+    ast: &'a Ast,
+    registry: &'a TypeRegistry,
+    type_exprs: &'a TypeExprArena,  // NEW
+    // ...
+}
+
+impl<'a> InferCtx<'a> {
+    pub(crate) fn new(
+        ast: &'a Ast,
+        registry: &'a TypeRegistry,
+        type_exprs: &'a TypeExprArena,  // NEW
+        env: &'a Environment,
+        strings: &'a StringArena,
+    ) -> Self {
+        // ...
+    }
+}
+```
+
+#### 2. Add `TypeExpr -> Ty` conversion
+
+```rust
+impl InferCtx<'_> {
+    /// Convert a runtime `TypeExprId` to a static `Ty`.
+    fn type_expr_to_ty(&self, id: TypeExprId) -> Ty {
+        match self.type_exprs.get(id) {
+            Some(TypeExpr::Named(type_id)) => self.type_id_to_ty(*type_id),
+            Some(TypeExpr::App { base, args }) => {
+                let base_ty = self.type_id_to_ty(*base);
+                let arg_tys: Vec<Ty> = args
+                    .iter()
+                    .map(|a| self.type_expr_to_ty(*a))
+                    .collect();
+                self.apply_type_args(base_ty, arg_tys)
+            }
+            Some(TypeExpr::Object(fields)) => {
+                let field_tys: IndexMap<StringId, Ty> = fields
+                    .iter()
+                    .map(|(k, v)| (*k, self.type_expr_to_ty(*v)))
+                    .collect();
+                Ty::Object(field_tys)
+            }
+            None => Ty::Unknown,
+        }
+    }
+
+    /// Convert a `TypeId` to primitive `Ty` or `Ty::Named`.
+    fn type_id_to_ty(&self, id: TypeId) -> Ty {
+        match id {
+            TypeId::BOOL => Ty::Bool,
+            TypeId::INT => Ty::Int,
+            TypeId::FLOAT => Ty::Float,
+            TypeId::CHAR => Ty::Char,
+            TypeId::STRING => Ty::String,
+            TypeId::UNIT => Ty::Unit,
+            TypeId::TIME => Ty::Time,
+            TypeId::RANGE => Ty::Range,
+            TypeId::JSON => Ty::Json,
+            // For parameterized or user-defined types, use Named
+            _ => Ty::Named(id, vec![]),
+        }
+    }
+
+    /// Apply type arguments to a base type.
+    fn apply_type_args(&self, base: Ty, args: Vec<Ty>) -> Ty {
+        match base {
+            Ty::Named(id, _) if id == TypeId::ARRAY && args.len() == 1 => {
+                Ty::Array(Box::new(args.into_iter().next().unwrap()))
+            }
+            Ty::Named(id, _) if id == TypeId::OPTION && args.len() == 1 => {
+                Ty::Option(Box::new(args.into_iter().next().unwrap()))
+            }
+            Ty::Named(id, _) if id == TypeId::MAP && args.len() == 2 => {
+                let mut it = args.into_iter();
+                Ty::Map(Box::new(it.next().unwrap()), Box::new(it.next().unwrap()))
+            }
+            Ty::Named(id, _) if id == TypeId::RESULT && args.len() == 2 => {
+                let mut it = args.into_iter();
+                Ty::Result(Box::new(it.next().unwrap()), Box::new(it.next().unwrap()))
+            }
+            Ty::Named(id, _) if id == TypeId::TUPLE => Ty::Tuple(args),
+            Ty::Named(id, _) => Ty::Named(id, args),
+            _ => base,
+        }
+    }
+}
+```
+
+#### 3. Update `expand_union_members`
+
+```rust
+pub(crate) fn expand_union_members(&self, ty: &Ty) -> Option<Vec<Ty>> {
+    match ty {
+        Ty::Union(members) => Some(members.clone()),
+        Ty::Named(id, _params) => {
+            if *id == TypeId::STORABLE {
+                Some(Ty::STORABLE_MEMBERS.to_vec())
+            } else if *id == TypeId::SCALAR {
+                Some(Ty::SCALAR_MEMBERS.to_vec())
+            } else {
+                self.registry.get_def(*id).and_then(|def| match def {
+                    TypeDef::Union { members, .. } => {
+                        // Convert each TypeExprId to Ty
+                        Some(
+                            members
+                                .iter()
+                                .map(|m| self.type_expr_to_ty(*m))
+                                .collect(),
+                        )
+                    }
+                    _ => None,
+                })
+            }
+        }
+        _ => None,
+    }
+}
+```
+
+#### 4. Update `check()` entry point
+
+```rust
+pub(crate) fn check(
+    ast: &Ast,
+    stmts: &[StmtId],
+    registry: &TypeRegistry,
+    type_exprs: &TypeExprArena,  // NEW
+    env: &Environment,
+    strings: &StringArena,
+) -> crate::Result<()> {
+    let mut ctx = InferCtx::new(ast, registry, type_exprs, env, strings);
+    // ...
+}
+```
+
+### Checklist
+
+- [ ] Add `type_exprs: &'a TypeExprArena` field to `InferCtx`
+- [ ] Update `InferCtx::new` to accept `TypeExprArena`
+- [ ] Implement `type_expr_to_ty(TypeExprId) -> Ty`
+- [ ] Implement `type_id_to_ty(TypeId) -> Ty`
+- [ ] Implement `apply_type_args(Ty, Vec<Ty>) -> Ty`
+- [ ] Update `expand_union_members` to use `type_expr_to_ty` for user-defined unions
+- [ ] Update `check()` signature to accept `TypeExprArena`
+- [ ] Update interpreter call site to pass `TypeExprArena`
+- [ ] Add test script with user-defined union and match
+- [ ] Add test: `UNION Num = Int | Float` then `MATCH x { IS Int => ..., IS Float => ... }`
+- [ ] Verify exhaustiveness checking works for user-defined unions
+
+### Test Script
+
+```rumps
+; scripts/80_user_union.rumps
+UNION NumOrStr = Int | String
+
+LET x: NumOrStr = 42
+
+; Pattern matching should validate members
+LET result = MATCH x {
+    IS Int => "got int"
+    IS String => "got string"
+}
+
+PRINT result
+```
 
 ---
 
@@ -1675,10 +1876,6 @@ Comprehensive test suite for the type checker.
 
 ### Checklist
 
-- [ ] Create `crates/rumps-query/src/typecheck/tests.rs`
-- [ ] Add unit tests for each `Ty` method
-- [ ] Add unit tests for `Subst` operations
-- [ ] Add unit tests for `TypeEnv` scoping
 - [ ] Add integration tests for expression inference
 - [ ] Add integration tests for statement inference
 - [ ] Add integration tests for unification

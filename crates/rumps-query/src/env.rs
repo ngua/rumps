@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+use crate::typecheck::{Scheme, Ty};
+
 /// Names of built-in modules.
 ///
 /// This is the single source of truth for which module names are recognized
@@ -211,6 +213,16 @@ impl PrimCtx<'_> {
 pub(crate) type PrimFn =
     for<'a> fn(&'a mut PrimCtx<'a>, SmallVec<[ValueId; 4]>) -> PrimResult<'a>;
 
+/// A primitive function definition with its type scheme.
+///
+/// Colocates the runtime function with its static type, ensuring every
+/// registered primitive has a corresponding type for the type checker.
+pub(crate) struct PrimDef {
+    pub(crate) name: &'static str,
+    pub(crate) f: PrimFn,
+    pub(crate) ty: Scheme,
+}
+
 /// A built-in module containing primitive functions, constants, and submodules.
 ///
 /// Modules group related functions under a namespace (e.g., `Array.map`,
@@ -227,6 +239,9 @@ pub(crate) struct Module {
     /// Functions in this module, keyed by function name.
     functions: HashMap<String, PrimFn>,
 
+    /// Type schemes for functions, keyed by function name.
+    types: HashMap<String, Scheme>,
+
     /// Constants in this module, keyed by constant name.
     /// `ValueId`s index into `Environment::consts`.
     constants: HashMap<String, ValueId>,
@@ -237,6 +252,8 @@ pub(crate) struct Module {
 
 impl Module {
     /// Create a module from a list of `(name, function)` pairs.
+    ///
+    /// **Deprecated**: Use [`from_prims`] to register functions with their types.
     pub(crate) fn from_fns(fns: &[(&str, PrimFn)]) -> Self {
         let functions = fns
             .iter()
@@ -244,6 +261,25 @@ impl Module {
             .collect();
         Self {
             functions,
+            types: HashMap::new(),
+            constants: HashMap::new(),
+            submodules: HashMap::new(),
+        }
+    }
+
+    /// Create a module from primitive definitions (function + type together).
+    pub(crate) fn from_prims(prims: &[PrimDef]) -> Self {
+        let (functions, types) = prims.iter().fold(
+            (HashMap::new(), HashMap::new()),
+            |(mut fns, mut tys), p| {
+                fns.insert(p.name.to_string(), p.f);
+                tys.insert(p.name.to_string(), p.ty.clone());
+                (fns, tys)
+            },
+        );
+        Self {
+            functions,
+            types,
             constants: HashMap::new(),
             submodules: HashMap::new(),
         }
@@ -277,6 +313,18 @@ impl Module {
             [first, rest @ ..] => {
                 self.submodules.get(*first).and_then(|m| m.get_fn(rest))
             }
+        }
+    }
+
+    /// Look up a function's type scheme by path within this module.
+    pub(crate) fn get_fn_type(&self, path: &[&str]) -> Option<&Scheme> {
+        match path {
+            [] => None,
+            [name] => self.types.get(*name),
+            [first, rest @ ..] => self
+                .submodules
+                .get(*first)
+                .and_then(|m| m.get_fn_type(rest)),
         }
     }
 
@@ -381,6 +429,16 @@ impl Environment {
         })
     }
 
+    /// Look up a function's type scheme by its full path.
+    ///
+    /// The path must have at least two segments: the first is the module name,
+    /// and the remaining segments form the path within that module.
+    pub(crate) fn get_module_fn_type(&self, path: &[&str]) -> Option<&Scheme> {
+        path.split_first().and_then(|(module, rest)| {
+            self.modules.get(*module).and_then(|m| m.get_fn_type(rest))
+        })
+    }
+
     /// Look up a constant by its full path.
     ///
     /// Returns the `ValueId` indexing into `self.consts`.
@@ -410,53 +468,238 @@ impl Environment {
             Array, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
         };
 
+        // Type shorthands for readability
+        fn arr(t: Ty) -> Ty {
+            Ty::Array(Box::new(t))
+        }
+        fn opt(t: Ty) -> Ty {
+            Ty::Option(Box::new(t))
+        }
+        fn res(t: Ty, e: Ty) -> Ty {
+            Ty::Result(Box::new(t), Box::new(e))
+        }
+        fn map(k: Ty, v: Ty) -> Ty {
+            Ty::Map(Box::new(k), Box::new(v))
+        }
+
         self.modules.insert(
             "Array".to_string(),
-            Module::from_fns(&[
+            Module::from_prims(&[
                 // Higher-order function placeholders
-                ("map", Array::placeholder),
-                ("filter", Array::placeholder),
-                ("reduce", Array::placeholder),
-                ("foreach", Array::placeholder),
+                PrimDef {
+                    name: "map",
+                    f: Array::placeholder,
+                    ty: Scheme::poly2(|t, u| {
+                        Ty::func(
+                            [Ty::func([t.clone()], u.clone()), arr(t)],
+                            arr(u),
+                        )
+                    }),
+                },
+                PrimDef {
+                    name: "filter",
+                    f: Array::placeholder,
+                    ty: Scheme::poly(|t| {
+                        Ty::func(
+                            [Ty::func([t.clone()], Ty::Bool), arr(t.clone())],
+                            arr(t),
+                        )
+                    }),
+                },
+                PrimDef {
+                    name: "reduce",
+                    f: Array::placeholder,
+                    ty: Scheme::poly2(|t, u| {
+                        Ty::func(
+                            [
+                                Ty::func([u.clone(), t.clone()], u.clone()),
+                                u.clone(),
+                                arr(t),
+                            ],
+                            u,
+                        )
+                    }),
+                },
+                PrimDef {
+                    name: "foreach",
+                    f: Array::placeholder,
+                    ty: Scheme::poly(|t| {
+                        Ty::func(
+                            [Ty::func([t.clone()], Ty::Unit), arr(t)],
+                            Ty::Unit,
+                        )
+                    }),
+                },
                 // Regular primitives
-                ("length", Array::length),
-                ("push", Array::push),
-                ("pop", Array::pop),
-                ("head", Array::head),
-                ("tail", Array::tail),
-                ("reverse", Array::reverse),
-                ("sort", Array::sort),
-                ("slice", Array::slice),
-                ("contains", Array::contains),
-                ("concat", Array::concat),
+                PrimDef {
+                    name: "length",
+                    f: Array::length,
+                    ty: Scheme::poly(|t| Ty::func([arr(t)], Ty::Int)),
+                },
+                PrimDef {
+                    name: "push",
+                    f: Array::push,
+                    ty: Scheme::poly(|t| {
+                        Ty::func([arr(t.clone()), t.clone()], arr(t))
+                    }),
+                },
+                PrimDef {
+                    name: "pop",
+                    f: Array::pop,
+                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                },
+                PrimDef {
+                    name: "head",
+                    f: Array::head,
+                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], opt(t))),
+                },
+                PrimDef {
+                    name: "tail",
+                    f: Array::tail,
+                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                },
+                PrimDef {
+                    name: "reverse",
+                    f: Array::reverse,
+                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                },
+                PrimDef {
+                    name: "sort",
+                    f: Array::sort,
+                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                },
+                PrimDef {
+                    name: "slice",
+                    f: Array::slice,
+                    ty: Scheme::poly(|t| {
+                        Ty::func([arr(t.clone()), Ty::Int, Ty::Int], arr(t))
+                    }),
+                },
+                PrimDef {
+                    name: "contains",
+                    f: Array::contains,
+                    ty: Scheme::poly(|t| {
+                        Ty::func([arr(t.clone()), t], Ty::Bool)
+                    }),
+                },
+                PrimDef {
+                    name: "concat",
+                    f: Array::concat,
+                    ty: Scheme::poly(|t| {
+                        Ty::func([arr(t.clone()), arr(t.clone())], arr(t))
+                    }),
+                },
             ]),
         );
 
         self.modules.insert(
             "String".to_string(),
-            Module::from_fns(&[
-                ("length", Str::length),
-                ("upper", Str::upper),
-                ("lower", Str::lower),
-                ("trim", Str::trim),
-                ("split", Str::split),
-                ("join", Str::join),
-                ("slice", Str::slice),
-                ("contains", Str::contains),
-                ("replace", Str::replace),
+            Module::from_prims(&[
+                PrimDef {
+                    name: "length",
+                    f: Str::length,
+                    ty: Scheme::mono(Ty::func([Ty::String], Ty::Int)),
+                },
+                PrimDef {
+                    name: "upper",
+                    f: Str::upper,
+                    ty: Scheme::mono(Ty::func([Ty::String], Ty::String)),
+                },
+                PrimDef {
+                    name: "lower",
+                    f: Str::lower,
+                    ty: Scheme::mono(Ty::func([Ty::String], Ty::String)),
+                },
+                PrimDef {
+                    name: "trim",
+                    f: Str::trim,
+                    ty: Scheme::mono(Ty::func([Ty::String], Ty::String)),
+                },
+                PrimDef {
+                    name: "split",
+                    f: Str::split,
+                    ty: Scheme::mono(Ty::func(
+                        [Ty::String, Ty::String],
+                        arr(Ty::String),
+                    )),
+                },
+                PrimDef {
+                    name: "join",
+                    f: Str::join,
+                    ty: Scheme::mono(Ty::func(
+                        [arr(Ty::String), Ty::String],
+                        Ty::String,
+                    )),
+                },
+                PrimDef {
+                    name: "slice",
+                    f: Str::slice,
+                    ty: Scheme::mono(Ty::func(
+                        [Ty::String, Ty::Int, Ty::Int],
+                        Ty::String,
+                    )),
+                },
+                PrimDef {
+                    name: "contains",
+                    f: Str::contains,
+                    ty: Scheme::mono(Ty::func(
+                        [Ty::String, Ty::String],
+                        Ty::Bool,
+                    )),
+                },
+                PrimDef {
+                    name: "replace",
+                    f: Str::replace,
+                    ty: Scheme::mono(Ty::func(
+                        [Ty::String, Ty::String, Ty::String],
+                        Ty::String,
+                    )),
+                },
             ]),
         );
 
         // Math module
-        let mut math = Module::from_fns(&[
-            ("abs", Math::abs),
-            ("min", Math::min),
-            ("max", Math::max),
-            ("floor", Math::floor),
-            ("ceil", Math::ceil),
-            ("round", Math::round),
-            ("sqrt", Math::sqrt),
-            ("log", Math::log),
+        let mut math_module = Module::from_prims(&[
+            PrimDef {
+                name: "abs",
+                f: Math::abs,
+                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+            },
+            PrimDef {
+                name: "min",
+                f: Math::min,
+                ty: Scheme::mono(Ty::func([Ty::Float, Ty::Float], Ty::Float)),
+            },
+            PrimDef {
+                name: "max",
+                f: Math::max,
+                ty: Scheme::mono(Ty::func([Ty::Float, Ty::Float], Ty::Float)),
+            },
+            PrimDef {
+                name: "floor",
+                f: Math::floor,
+                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Int)),
+            },
+            PrimDef {
+                name: "ceil",
+                f: Math::ceil,
+                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Int)),
+            },
+            PrimDef {
+                name: "round",
+                f: Math::round,
+                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Int)),
+            },
+            PrimDef {
+                name: "sqrt",
+                f: Math::sqrt,
+                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+            },
+            PrimDef {
+                name: "log",
+                f: Math::log,
+                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+            },
         ]);
 
         // Math constants (intern into `consts` arena)
@@ -473,92 +716,336 @@ impl Environment {
             let id = self
                 .consts
                 .add(Value::Float(OrderedFloat(val)), Span::MODULE_CONST);
-            math.add_const(name, id);
+            math_module.add_const(name, id);
         });
 
         self.modules.insert(
             "Math".to_string(),
-            math.with_submodule(
+            math_module.with_submodule(
                 "Trig",
-                Module::from_fns(&[
-                    ("sin", Trig::sin),
-                    ("cos", Trig::cos),
-                    ("tan", Trig::tan),
-                    ("asin", Trig::asin),
-                    ("acos", Trig::acos),
-                    ("atan", Trig::atan),
-                    ("atan2", Trig::atan2),
+                Module::from_prims(&[
+                    PrimDef {
+                        name: "sin",
+                        f: Trig::sin,
+                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                    },
+                    PrimDef {
+                        name: "cos",
+                        f: Trig::cos,
+                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                    },
+                    PrimDef {
+                        name: "tan",
+                        f: Trig::tan,
+                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                    },
+                    PrimDef {
+                        name: "asin",
+                        f: Trig::asin,
+                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                    },
+                    PrimDef {
+                        name: "acos",
+                        f: Trig::acos,
+                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                    },
+                    PrimDef {
+                        name: "atan",
+                        f: Trig::atan,
+                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                    },
+                    PrimDef {
+                        name: "atan2",
+                        f: Trig::atan2,
+                        ty: Scheme::mono(Ty::func(
+                            [Ty::Float, Ty::Float],
+                            Ty::Float,
+                        )),
+                    },
                 ]),
             ),
         );
 
         self.modules.insert(
             "Random".to_string(),
-            Module::from_fns(&[
-                ("random", Random::random),
-                ("range", Random::range),
-                ("int", Random::int),
-                ("bool", Random::bool),
-                ("choice", Random::choice),
-                ("shuffle", Random::shuffle),
-                ("sample", Random::sample),
-                ("uuid", Random::uuid),
+            Module::from_prims(&[
+                PrimDef {
+                    name: "random",
+                    f: Random::random,
+                    ty: Scheme::mono(Ty::func([], Ty::Float)),
+                },
+                PrimDef {
+                    name: "range",
+                    f: Random::range,
+                    ty: Scheme::mono(Ty::func([Ty::Int, Ty::Int], Ty::Int)),
+                },
+                PrimDef {
+                    name: "int",
+                    f: Random::int,
+                    ty: Scheme::mono(Ty::func([Ty::Int], Ty::Int)),
+                },
+                PrimDef {
+                    name: "bool",
+                    f: Random::bool,
+                    ty: Scheme::mono(Ty::func([], Ty::Bool)),
+                },
+                PrimDef {
+                    name: "choice",
+                    f: Random::choice,
+                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], t)),
+                },
+                PrimDef {
+                    name: "shuffle",
+                    f: Random::shuffle,
+                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                },
+                PrimDef {
+                    name: "sample",
+                    f: Random::sample,
+                    ty: Scheme::poly(|t| {
+                        Ty::func([arr(t.clone()), Ty::Int], arr(t))
+                    }),
+                },
+                PrimDef {
+                    name: "uuid",
+                    f: Random::uuid,
+                    ty: Scheme::mono(Ty::func([], Ty::String)),
+                },
             ]),
         );
 
         self.modules.insert(
             "Map".to_string(),
-            Module::from_fns(&[
-                ("empty", Map::empty),
-                ("length", Map::length),
-                ("keys", Map::keys),
-                ("values", Map::values),
-                ("entries", Map::entries),
-                ("has", Map::has),
-                ("lookup", Map::get),
-                ("insert", Map::set),
-                ("remove", Map::remove),
-                ("merge", Map::merge),
-                ("from-entries", Map::from_entries),
+            Module::from_prims(&[
+                PrimDef {
+                    name: "empty",
+                    f: Map::empty,
+                    ty: Scheme::poly2(|k, v| Ty::func([], map(k, v))),
+                },
+                PrimDef {
+                    name: "length",
+                    f: Map::length,
+                    ty: Scheme::poly2(|k, v| Ty::func([map(k, v)], Ty::Int)),
+                },
+                PrimDef {
+                    name: "keys",
+                    f: Map::keys,
+                    ty: Scheme::poly2(|k, v| {
+                        Ty::func([map(k.clone(), v)], arr(k))
+                    }),
+                },
+                PrimDef {
+                    name: "values",
+                    f: Map::values,
+                    ty: Scheme::poly2(|k, v| {
+                        Ty::func([map(k, v.clone())], arr(v))
+                    }),
+                },
+                PrimDef {
+                    name: "entries",
+                    f: Map::entries,
+                    ty: Scheme::poly2(|k, v| {
+                        Ty::func(
+                            [map(k.clone(), v.clone())],
+                            arr(Ty::Tuple(vec![k, v])),
+                        )
+                    }),
+                },
+                PrimDef {
+                    name: "has",
+                    f: Map::has,
+                    ty: Scheme::poly2(|k, v| {
+                        Ty::func([map(k.clone(), v), k], Ty::Bool)
+                    }),
+                },
+                PrimDef {
+                    name: "lookup",
+                    f: Map::get,
+                    ty: Scheme::poly2(|k, v| {
+                        Ty::func([map(k.clone(), v.clone()), k], opt(v))
+                    }),
+                },
+                PrimDef {
+                    name: "insert",
+                    f: Map::set,
+                    ty: Scheme::poly2(|k, v| {
+                        Ty::func(
+                            [map(k.clone(), v.clone()), k.clone(), v.clone()],
+                            map(k, v),
+                        )
+                    }),
+                },
+                PrimDef {
+                    name: "remove",
+                    f: Map::remove,
+                    ty: Scheme::poly2(|k, v| {
+                        Ty::func(
+                            [map(k.clone(), v.clone()), k.clone()],
+                            map(k, v),
+                        )
+                    }),
+                },
+                PrimDef {
+                    name: "merge",
+                    f: Map::merge,
+                    ty: Scheme::poly2(|k, v| {
+                        Ty::func(
+                            [
+                                map(k.clone(), v.clone()),
+                                map(k.clone(), v.clone()),
+                            ],
+                            map(k, v),
+                        )
+                    }),
+                },
+                PrimDef {
+                    name: "from-entries",
+                    f: Map::from_entries,
+                    ty: Scheme::poly2(|k, v| {
+                        Ty::func(
+                            [arr(Ty::Tuple(vec![k.clone(), v.clone()]))],
+                            map(k, v),
+                        )
+                    }),
+                },
             ]),
         );
 
         self.modules.insert(
             "Time".to_string(),
-            Module::from_fns(&[
-                ("now", Time::now),
-                ("epoch", Time::epoch),
-                ("parse", Time::parse),
-                ("format", Time::format),
-                ("add-seconds", Time::add_seconds),
-                ("diff-seconds", Time::diff_seconds),
-                ("year", Time::year),
-                ("month", Time::month),
-                ("day", Time::day),
-                ("hour", Time::hour),
-                ("minute", Time::minute),
-                ("second", Time::second),
+            Module::from_prims(&[
+                PrimDef {
+                    name: "now",
+                    f: Time::now,
+                    ty: Scheme::mono(Ty::func([], Ty::Time)),
+                },
+                PrimDef {
+                    name: "epoch",
+                    f: Time::epoch,
+                    ty: Scheme::mono(Ty::func([], Ty::Time)),
+                },
+                PrimDef {
+                    name: "parse",
+                    f: Time::parse,
+                    ty: Scheme::mono(Ty::func(
+                        [Ty::String],
+                        res(Ty::Time, Ty::String),
+                    )),
+                },
+                PrimDef {
+                    name: "format",
+                    f: Time::format,
+                    ty: Scheme::mono(Ty::func(
+                        [Ty::Time, Ty::String],
+                        Ty::String,
+                    )),
+                },
+                PrimDef {
+                    name: "add-seconds",
+                    f: Time::add_seconds,
+                    ty: Scheme::mono(Ty::func([Ty::Time, Ty::Int], Ty::Time)),
+                },
+                PrimDef {
+                    name: "diff-seconds",
+                    f: Time::diff_seconds,
+                    ty: Scheme::mono(Ty::func([Ty::Time, Ty::Time], Ty::Int)),
+                },
+                PrimDef {
+                    name: "year",
+                    f: Time::year,
+                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                },
+                PrimDef {
+                    name: "month",
+                    f: Time::month,
+                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                },
+                PrimDef {
+                    name: "day",
+                    f: Time::day,
+                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                },
+                PrimDef {
+                    name: "hour",
+                    f: Time::hour,
+                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                },
+                PrimDef {
+                    name: "minute",
+                    f: Time::minute,
+                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                },
+                PrimDef {
+                    name: "second",
+                    f: Time::second,
+                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                },
             ]),
         );
 
         self.modules.insert(
             "Option".to_string(),
-            Module::from_fns(&[
+            Module::from_prims(&[
                 // Higher-order function placeholder
-                ("map", Opt::placeholder),
+                PrimDef {
+                    name: "map",
+                    f: Opt::placeholder,
+                    ty: Scheme::poly2(|t, u| {
+                        Ty::func(
+                            [opt(t.clone()), Ty::func([t], u.clone())],
+                            opt(u),
+                        )
+                    }),
+                },
                 // Regular primitives
-                ("unwrap-or", Opt::unwrap_or),
+                PrimDef {
+                    name: "unwrap-or",
+                    f: Opt::unwrap_or,
+                    ty: Scheme::poly(|t| {
+                        Ty::func([opt(t.clone()), t.clone()], t)
+                    }),
+                },
             ]),
         );
 
         self.modules.insert(
             "Result".to_string(),
-            Module::from_fns(&[
+            Module::from_prims(&[
                 // Higher-order function placeholders
-                ("map", Res::placeholder),
-                ("map-err", Res::placeholder),
+                PrimDef {
+                    name: "map",
+                    f: Res::placeholder,
+                    ty: Scheme::poly3(|t, u, e| {
+                        Ty::func(
+                            [
+                                res(t.clone(), e.clone()),
+                                Ty::func([t], u.clone()),
+                            ],
+                            res(u, e),
+                        )
+                    }),
+                },
+                PrimDef {
+                    name: "map-err",
+                    f: Res::placeholder,
+                    ty: Scheme::poly3(|t, e, f| {
+                        Ty::func(
+                            [
+                                res(t.clone(), e.clone()),
+                                Ty::func([e], f.clone()),
+                            ],
+                            res(t, f),
+                        )
+                    }),
+                },
                 // Regular primitives
-                ("unwrap-or", Res::unwrap_or),
+                PrimDef {
+                    name: "unwrap-or",
+                    f: Res::unwrap_or,
+                    ty: Scheme::poly2(|t, e| {
+                        Ty::func([res(t.clone(), e), t.clone()], t)
+                    }),
+                },
             ]),
         );
     }
@@ -814,5 +1301,136 @@ mod tests {
         assert!(
             matches!(pi_val, Value::Float(f) if (*f - std::f64::consts::PI).abs() < 1e-10)
         );
+    }
+
+    // --- PrimDef and type scheme tests ---
+
+    #[test]
+    fn module_from_prims_registers_types() {
+        let m = Module::from_prims(&[
+            PrimDef {
+                name: "foo",
+                f: dummy_prim,
+                ty: Scheme::mono(Ty::func([Ty::Int], Ty::Bool)),
+            },
+            PrimDef {
+                name: "bar",
+                f: dummy_prim,
+                ty: Scheme::poly(|t| {
+                    Ty::func([Ty::Array(Box::new(t))], Ty::Int)
+                }),
+            },
+        ]);
+
+        // Functions are registered
+        assert!(m.contains_fn(&["foo"]));
+        assert!(m.contains_fn(&["bar"]));
+
+        // Types are registered
+        assert!(m.get_fn_type(&["foo"]).is_some());
+        assert!(m.get_fn_type(&["bar"]).is_some());
+        assert!(m.get_fn_type(&["baz"]).is_none());
+    }
+
+    #[test]
+    fn module_get_fn_type_monomorphic() {
+        let m = Module::from_prims(&[PrimDef {
+            name: "sqrt",
+            f: dummy_prim,
+            ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+        }]);
+
+        let scheme = m.get_fn_type(&["sqrt"]).unwrap();
+        assert!(scheme.vars.is_empty()); // monomorphic
+        assert_eq!(scheme.ty, Ty::Fn(vec![Ty::Float], Box::new(Ty::Float)));
+    }
+
+    #[test]
+    fn module_get_fn_type_polymorphic() {
+        use crate::typecheck::TyVar;
+
+        let m = Module::from_prims(&[PrimDef {
+            name: "length",
+            f: dummy_prim,
+            ty: Scheme::poly(|t| Ty::func([Ty::Array(Box::new(t))], Ty::Int)),
+        }]);
+
+        let scheme = m.get_fn_type(&["length"]).unwrap();
+        assert_eq!(scheme.vars, vec![TyVar::new(0)]);
+        assert_eq!(
+            scheme.ty,
+            Ty::Fn(
+                vec![Ty::Array(Box::new(Ty::Var(TyVar::new(0))))],
+                Box::new(Ty::Int)
+            )
+        );
+    }
+
+    #[test]
+    fn module_get_fn_type_submodule() {
+        let sub = Module::from_prims(&[PrimDef {
+            name: "sin",
+            f: dummy_prim,
+            ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+        }]);
+        let m = Module::default().with_submodule("Trig", sub);
+
+        // Submodule function type lookup
+        let scheme = m.get_fn_type(&["Trig", "sin"]).unwrap();
+        assert!(scheme.vars.is_empty());
+        assert_eq!(scheme.ty, Ty::Fn(vec![Ty::Float], Box::new(Ty::Float)));
+
+        // Non-existent paths
+        assert!(m.get_fn_type(&["sin"]).is_none());
+        assert!(m.get_fn_type(&["Trig", "cos"]).is_none());
+    }
+
+    #[test]
+    fn environment_get_module_fn_type() {
+        let env = Environment::new();
+
+        // Array.length has a polymorphic type
+        let length_ty = env.get_module_fn_type(&["Array", "length"]).unwrap();
+        assert_eq!(length_ty.vars.len(), 1);
+
+        // String.length has a monomorphic type
+        let str_len_ty = env.get_module_fn_type(&["String", "length"]).unwrap();
+        assert!(str_len_ty.vars.is_empty());
+
+        // Math.Trig.sin has a monomorphic type
+        let sin_ty = env.get_module_fn_type(&["Math", "Trig", "sin"]).unwrap();
+        assert!(sin_ty.vars.is_empty());
+
+        // Non-existent paths return None
+        assert!(env.get_module_fn_type(&["Unknown", "fn"]).is_none());
+        assert!(env.get_module_fn_type(&["Array", "unknown"]).is_none());
+    }
+
+    #[test]
+    fn environment_builtin_types_correct() {
+        use crate::typecheck::TyVar;
+
+        let env = Environment::new();
+
+        // Array.map: forall T U. (Array[T], T -> U) -> Array[U]
+        let map_ty = env.get_module_fn_type(&["Array", "map"]).unwrap();
+        assert_eq!(map_ty.vars.len(), 2);
+
+        // Array.filter: forall T. (Array[T], T -> Bool) -> Array[T]
+        let filter_ty = env.get_module_fn_type(&["Array", "filter"]).unwrap();
+        assert_eq!(filter_ty.vars.len(), 1);
+
+        // Map.lookup: forall K V. (Map[K, V], K) -> Option[V]
+        let lookup_ty = env.get_module_fn_type(&["Map", "lookup"]).unwrap();
+        assert_eq!(lookup_ty.vars.len(), 2);
+
+        // Result.map: forall T U E. (Result[T, E], T -> U) -> Result[U, E]
+        let res_map_ty = env.get_module_fn_type(&["Result", "map"]).unwrap();
+        assert_eq!(res_map_ty.vars.len(), 3);
+
+        // Time.now: () -> Time (monomorphic)
+        let now_ty = env.get_module_fn_type(&["Time", "now"]).unwrap();
+        assert!(now_ty.vars.is_empty());
+        assert_eq!(now_ty.ty, Ty::Fn(vec![], Box::new(Ty::Time)));
     }
 }

@@ -109,6 +109,11 @@ impl Ty {
     pub(crate) const SCALAR_MEMBERS: &'static [Self] =
         &[Self::Bool, Self::Int, Self::Float, Self::String];
 
+    /// Construct a function type: `Fn([A, B, ...], R)`.
+    pub(crate) fn func(params: impl Into<Vec<Self>>, ret: Self) -> Self {
+        Self::Fn(params.into(), Box::new(ret))
+    }
+
     /// Collect all free type variables in this type.
     pub(crate) fn free_vars(&self) -> HashSet<TyVar> {
         let mut acc = HashSet::new();
@@ -250,6 +255,36 @@ impl Scheme {
         Self { vars: vec![], ty }
     }
 
+    /// Polymorphic with 1 type variable: `forall T. ...`
+    pub(crate) fn poly(f: impl FnOnce(Ty) -> Ty) -> Self {
+        let t = Ty::Var(TyVar(0));
+        Self {
+            vars: vec![TyVar(0)],
+            ty: f(t),
+        }
+    }
+
+    /// Polymorphic with 2 type variables: `forall T U. ...`
+    pub(crate) fn poly2(f: impl FnOnce(Ty, Ty) -> Ty) -> Self {
+        let t = Ty::Var(TyVar(0));
+        let u = Ty::Var(TyVar(1));
+        Self {
+            vars: vec![TyVar(0), TyVar(1)],
+            ty: f(t, u),
+        }
+    }
+
+    /// Polymorphic with 3 type variables: `forall T U V. ...`
+    pub(crate) fn poly3(f: impl FnOnce(Ty, Ty, Ty) -> Ty) -> Self {
+        let t = Ty::Var(TyVar(0));
+        let u = Ty::Var(TyVar(1));
+        let v = Ty::Var(TyVar(2));
+        Self {
+            vars: vec![TyVar(0), TyVar(1), TyVar(2)],
+            ty: f(t, u, v),
+        }
+    }
+
     /// Instantiate the scheme with fresh type variables.
     ///
     /// Takes a mutable counter for generating fresh `TyVar`s. Returns a
@@ -261,10 +296,12 @@ impl Scheme {
             let subst = Subst(
                 self.vars
                     .iter()
-                    .map(|v| {
+                    .filter_map(|v| {
                         let fresh = TyVar::new(*next);
                         *next += 1;
-                        (*v, Ty::Var(fresh))
+                        // Skip identity mappings (v -> Var(v)) to avoid
+                        // infinite recursion in apply
+                        (*v != fresh).then_some((*v, Ty::Var(fresh)))
                     })
                     .collect(),
             );
@@ -548,6 +585,119 @@ mod tests {
         assert_eq!(
             result,
             Ty::Union(vec![Ty::Int, Ty::Option(Box::new(Ty::String))])
+        );
+    }
+
+    // --- Ty::func tests ---
+
+    #[test]
+    fn func_helper_empty_params() {
+        let f = Ty::func([], Ty::Int);
+        assert_eq!(f, Ty::Fn(vec![], Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn func_helper_single_param() {
+        let f = Ty::func([Ty::String], Ty::Bool);
+        assert_eq!(f, Ty::Fn(vec![Ty::String], Box::new(Ty::Bool)));
+    }
+
+    #[test]
+    fn func_helper_multiple_params() {
+        let f = Ty::func([Ty::Int, Ty::String, Ty::Bool], Ty::Float);
+        assert_eq!(
+            f,
+            Ty::Fn(vec![Ty::Int, Ty::String, Ty::Bool], Box::new(Ty::Float))
+        );
+    }
+
+    // --- Scheme::poly tests ---
+
+    #[test]
+    fn scheme_poly_creates_one_var() {
+        let s = Scheme::poly(|t| Ty::Array(Box::new(t)));
+        assert_eq!(s.vars, vec![TyVar::new(0)]);
+        assert_eq!(s.ty, Ty::Array(Box::new(Ty::Var(TyVar::new(0)))));
+    }
+
+    #[test]
+    fn scheme_poly_fn_type() {
+        // forall T. Array[T] -> Int
+        let s = Scheme::poly(|t| Ty::func([Ty::Array(Box::new(t))], Ty::Int));
+        assert_eq!(s.vars, vec![TyVar::new(0)]);
+        assert_eq!(
+            s.ty,
+            Ty::Fn(
+                vec![Ty::Array(Box::new(Ty::Var(TyVar::new(0))))],
+                Box::new(Ty::Int)
+            )
+        );
+    }
+
+    #[test]
+    fn scheme_poly2_creates_two_vars() {
+        // forall T U. (T, U) -> (U, T)
+        let s = Scheme::poly2(|t, u| {
+            Ty::func(
+                [Ty::Tuple(vec![t.clone(), u.clone()])],
+                Ty::Tuple(vec![u, t]),
+            )
+        });
+        assert_eq!(s.vars, vec![TyVar::new(0), TyVar::new(1)]);
+    }
+
+    #[test]
+    fn scheme_poly2_map_type() {
+        // forall T U. (Array[T], (T -> U)) -> Array[U]
+        let s = Scheme::poly2(|t, u| {
+            Ty::func(
+                [Ty::Array(Box::new(t.clone())), Ty::func([t], u.clone())],
+                Ty::Array(Box::new(u)),
+            )
+        });
+        assert_eq!(s.vars, vec![TyVar::new(0), TyVar::new(1)]);
+        let t = Ty::Var(TyVar::new(0));
+        let u = Ty::Var(TyVar::new(1));
+        assert_eq!(
+            s.ty,
+            Ty::Fn(
+                vec![
+                    Ty::Array(Box::new(t.clone())),
+                    Ty::Fn(vec![t], Box::new(u.clone())),
+                ],
+                Box::new(Ty::Array(Box::new(u)))
+            )
+        );
+    }
+
+    #[test]
+    fn scheme_poly3_creates_three_vars() {
+        // forall T U V. (T, U, V) -> T
+        let s = Scheme::poly3(|t, u, v| {
+            Ty::func([Ty::Tuple(vec![t.clone(), u, v])], t)
+        });
+        assert_eq!(s.vars, vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)]);
+    }
+
+    #[test]
+    fn scheme_poly_instantiate() {
+        let s = Scheme::poly(|t| Ty::Array(Box::new(t)));
+        let mut next = 100;
+        let inst = s.instantiate(&mut next);
+        // Should replace TyVar(0) with fresh TyVar(100)
+        assert_eq!(next, 101);
+        assert_eq!(inst, Ty::Array(Box::new(Ty::Var(TyVar::new(100)))));
+    }
+
+    #[test]
+    fn scheme_poly2_instantiate() {
+        let s = Scheme::poly2(|t, u| Ty::Tuple(vec![t, u]));
+        let mut next = 50;
+        let inst = s.instantiate(&mut next);
+        assert_eq!(next, 52);
+        assert_eq!(
+            inst,
+            Ty::Tuple(vec![Ty::Var(TyVar::new(50)), Ty::Var(TyVar::new(51))])
         );
     }
 }

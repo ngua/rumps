@@ -815,9 +815,10 @@ mod tests {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
-        let strings = arena.strings.clone();
+        let strings = arena.interner();
         let registry = Box::leak(Box::new(registry));
-        InferCtx::new(ast, registry, strings)
+        let env = Box::leak(Box::new(crate::env::Environment::new()));
+        InferCtx::new(ast, registry, env, strings)
     }
 
     // --- Basic unification tests ---

@@ -74,7 +74,7 @@ pub async fn run_with_io<I: IoContext>(
     io: I,
 ) -> Result<I> {
     let mut result = Parser::parse(src)?;
-    let interp = Interpreter::new(&mut result.ast, db, io)?;
+    let interp = Interpreter::new(&mut result.ast, &result.stmts, db, io)?;
     let interp = interp.run(&result.stmts).await?;
     Ok(interp.into_io())
 }
