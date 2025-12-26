@@ -203,7 +203,7 @@ For each of the ~46 failing test scripts:
 | `71_array_module`              | OK     | ✓ Resolved | Numeric defaulting + polymorphic type var fix               |
 | `72_array_hetero_tagged_err`   | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
 | `72_array_primitives`          | OK     | ✓ Resolved | Polymorphic type var fix                                    |
-| `73_array_sort_types`          | FAIL   | Bug        | Needs investigation                                         |
+| `73_array_sort_types`          | FAIL   | ✓ Resolved | Now passes                                                  |
 | `76_random_module`             | FAIL   | ✓ Resolved | Now passes                                                  |
 | `77_map_module`                | OK     | ✓ Resolved | Polymorphic Map type fix                                    |
 | `78_time_module`               | FAIL   | ✓ Resolved | Now passes                                                  |

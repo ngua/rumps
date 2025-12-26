@@ -357,14 +357,12 @@ impl<'a> InferCtx<'a> {
             | Ty::Map(..)
             | Ty::Fn(..) => false,
             Ty::Tuple(ts) | Ty::Union(ts) => {
-                ts.iter().any(|t| Self::has_unresolved_vars(t))
+                ts.iter().any(Self::has_unresolved_vars)
             }
             Ty::Object(fields) => {
-                fields.values().any(|t| Self::has_unresolved_vars(t))
+                fields.values().any(Self::has_unresolved_vars)
             }
-            Ty::Named(_, args) => {
-                args.iter().any(|t| Self::has_unresolved_vars(t))
-            }
+            Ty::Named(_, args) => args.iter().any(Self::has_unresolved_vars),
         }
     }
 
@@ -811,7 +809,7 @@ impl<'a> InferCtx<'a> {
                 a.len() == b.len()
                     && a.keys().all(|k| b.contains_key(k))
                     && a.iter().all(|(k, ty_a)| {
-                        b.get(k).map_or(false, |ty_b| {
+                        b.get(k).is_some_and(|ty_b| {
                             self.types_compatible(ty_a, ty_b)
                         })
                     })

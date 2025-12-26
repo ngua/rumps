@@ -564,64 +564,62 @@ impl<I: IoContext> Interpreter<'_, I> {
         elem_ty: TypeExprId,
         span: Span,
     ) -> Result<Value> {
-        let Value::Json(serde_json::Value::Array(arr)) = val else {
+        if let Value::Json(serde_json::Value::Array(arr)) = val {
+            let arr = arr.clone();
+
+            // Process each element, propagating errors with index context.
+            // We use a local enum to distinguish between:
+            // - Continue accumulating elements
+            // - Short-circuit with a soft error (Result.Err value)
+            // - Short-circuit with a hard error (crate::Error)
+            enum Acc {
+                Elems(SmallVec<[ValueId; 4]>),
+                SoftErr(Value),
+            }
+
+            let result = arr.into_iter().enumerate().try_fold(
+                Acc::Elems(SmallVec::new()),
+                |acc, (i, json_val)| match acc {
+                    Acc::SoftErr(_) => Ok::<_, crate::Error>(acc),
+                    Acc::Elems(mut elems) => {
+                        let elem_result = self.read_value_expr(
+                            &Value::Json(json_val),
+                            elem_ty,
+                            span,
+                        )?;
+
+                        // Check if the recursive read returned Result.Err
+                        let is_soft_err =
+                            matches!(&elem_result, Value::Tagged(ty, 1, _)
+                                if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT));
+
+                        if is_soft_err {
+                            let err_msg =
+                                self.extract_result_err_msg(&elem_result);
+                            let msg = format!("at index {i}: {err_msg}");
+                            Ok(Acc::SoftErr(self.make_result_err(&msg, span)))
+                        } else {
+                            let inner =
+                                self.unwrap_result_ok(&elem_result, span)?;
+                            let inner_id = self.arena.add(inner, span);
+                            elems.push(inner_id);
+                            Ok(Acc::Elems(elems))
+                        }
+                    }
+                },
+            )?;
+
+            match result {
+                Acc::Elems(elems) => {
+                    Ok(self.make_result_ok(Value::Array(elem_ty, elems), span))
+                }
+                Acc::SoftErr(v) => Ok(v),
+            }
+        } else {
             let src_name =
                 val.type_name(&self.registry, &self.type_exprs, &self.arena);
             let msg = format!("expected JSON array, got {src_name}");
-            return Ok(self.make_result_err(&msg, span));
-        };
-
-        let arr = arr.clone();
-
-        // Process each element, propagating errors with index context.
-        // We use a local enum to distinguish between:
-        // - Continue accumulating elements
-        // - Short-circuit with a soft error (Result.Err value)
-        // - Short-circuit with a hard error (crate::Error)
-        enum Acc {
-            Elems(SmallVec<[ValueId; 4]>),
-            SoftErr(Value),
-        }
-
-        let result = arr.into_iter().enumerate().try_fold(
-            Acc::Elems(SmallVec::new()),
-            |acc, (i, json_val)| {
-                // Short-circuit if we already have a soft error
-                let Acc::Elems(mut elems) = acc else {
-                    return Ok::<_, crate::Error>(acc);
-                };
-
-                let elem_result = self.read_value_expr(
-                    &Value::Json(json_val),
-                    elem_ty,
-                    span,
-                )?;
-
-                // Check if the recursive read returned Result.Err (soft error)
-                if let Value::Tagged(ty, idx, _) = &elem_result {
-                    if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT)
-                        && *idx == 1
-                    {
-                        let err_msg = self.extract_result_err_msg(&elem_result);
-                        let msg = format!("at index {i}: {err_msg}");
-                        return Ok(Acc::SoftErr(
-                            self.make_result_err(&msg, span),
-                        ));
-                    }
-                }
-
-                let inner = self.unwrap_result_ok(&elem_result, span)?;
-                let inner_id = self.arena.add(inner, span);
-                elems.push(inner_id);
-                Ok(Acc::Elems(elems))
-            },
-        )?;
-
-        match result {
-            Acc::Elems(elems) => {
-                Ok(self.make_result_ok(Value::Array(elem_ty, elems), span))
-            }
-            Acc::SoftErr(v) => Ok(v),
+            Ok(self.make_result_err(&msg, span))
         }
     }
 
@@ -643,19 +641,21 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Non-null: read inner value
                 let inner_result = self.read_value_expr(val, inner_ty, span)?;
 
-                // Check if the recursive read succeeded
-                if let Value::Tagged(ty, idx, _) = &inner_result {
-                    if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT)
-                        && *idx == 1
-                    {
-                        return Ok(inner_result);
-                    }
-                }
+                // Check if the recursive read returned Result.Err
+                let is_soft_err = matches!(
+                    &inner_result,
+                    Value::Tagged(ty, 1, _)
+                        if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT)
+                );
 
-                let inner = self.unwrap_result_ok(&inner_result, span)?;
-                let inner_id = self.arena.add(inner, span);
-                let some = self.make_some(inner_id);
-                Ok(self.make_result_ok(some, span))
+                if is_soft_err {
+                    Ok(inner_result)
+                } else {
+                    let inner = self.unwrap_result_ok(&inner_result, span)?;
+                    let inner_id = self.arena.add(inner, span);
+                    let some = self.make_some(inner_id);
+                    Ok(self.make_result_ok(some, span))
+                }
             }
         }
     }

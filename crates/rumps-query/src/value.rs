@@ -1049,7 +1049,7 @@ impl TypeExprArena {
     /// Panics if `ty` contains unresolved type variables (`Var`, `Unknown`, `Error`).
     /// These should be resolved during constraint solving before calling this.
     #[allow(dead_code)]
-    pub(crate) fn from_ty(&mut self, ty: &Ty) -> TypeExprId {
+    pub(crate) fn intern_ty(&mut self, ty: &Ty) -> TypeExprId {
         match ty {
             Ty::Bool => self.named(TypeId::BOOL),
             Ty::Int => self.named(TypeId::INT),
@@ -1061,26 +1061,26 @@ impl TypeExprArena {
             Ty::Range => self.named(TypeId::RANGE),
             Ty::Json => self.named(TypeId::JSON),
             Ty::Array(elem) => {
-                let elem_id = self.from_ty(elem);
+                let elem_id = self.intern_ty(elem);
                 self.app(TypeId::ARRAY, smallvec![elem_id])
             }
             Ty::Option(inner) => {
-                let inner_id = self.from_ty(inner);
+                let inner_id = self.intern_ty(inner);
                 self.app(TypeId::OPTION, smallvec![inner_id])
             }
             Ty::Result(ok, err) => {
-                let ok_id = self.from_ty(ok);
-                let err_id = self.from_ty(err);
+                let ok_id = self.intern_ty(ok);
+                let err_id = self.intern_ty(err);
                 self.app(TypeId::RESULT, smallvec![ok_id, err_id])
             }
             Ty::Map(k, v) => {
-                let k_id = self.from_ty(k);
-                let v_id = self.from_ty(v);
+                let k_id = self.intern_ty(k);
+                let v_id = self.intern_ty(v);
                 self.app(TypeId::MAP, smallvec![k_id, v_id])
             }
             Ty::Tuple(elems) => {
                 let elem_ids: SmallVec<[_; 4]> =
-                    elems.iter().map(|e| self.from_ty(e)).collect();
+                    elems.iter().map(|e| self.intern_ty(e)).collect();
                 self.tuple(elem_ids)
             }
             Ty::Named(type_id, params) => {
@@ -1088,28 +1088,30 @@ impl TypeExprArena {
                     self.named(*type_id)
                 } else {
                     let param_ids: SmallVec<[_; 2]> =
-                        params.iter().map(|p| self.from_ty(p)).collect();
+                        params.iter().map(|p| self.intern_ty(p)).collect();
                     self.app(*type_id, param_ids)
                 }
             }
             Ty::Fn(params, ret) => {
                 let param_ids: SmallVec<[_; 4]> =
-                    params.iter().map(|p| self.from_ty(p)).collect();
-                let ret_id = self.from_ty(ret);
+                    params.iter().map(|p| self.intern_ty(p)).collect();
+                let ret_id = self.intern_ty(ret);
                 self.fn_type(param_ids, ret_id)
             }
             Ty::Object(fields) => {
-                let converted: IndexMap<StringId, TypeExprId> =
-                    fields.iter().map(|(k, t)| (*k, self.from_ty(t))).collect();
+                let converted: IndexMap<StringId, TypeExprId> = fields
+                    .iter()
+                    .map(|(k, t)| (*k, self.intern_ty(t)))
+                    .collect();
                 self.object(converted)
             }
             Ty::Union(members) => {
                 let member_ids: SmallVec<[_; 4]> =
-                    members.iter().map(|m| self.from_ty(m)).collect();
+                    members.iter().map(|m| self.intern_ty(m)).collect();
                 self.union(member_ids)
             }
             Ty::Var(_) | Ty::Unknown | Ty::Error => {
-                unreachable!("from_ty called on unresolved type: {ty:?}")
+                unreachable!("intern_ty called on unresolved type: {ty:?}")
             }
         }
     }
@@ -1124,6 +1126,13 @@ impl TypeExprArena {
 pub(crate) struct TypeRegistry {
     defs: Vec<TypeDef>,
     by_name: HashMap<StringId, TypeId>,
+}
+
+/// Context for union type registration.
+struct UnionRegCtx<'a> {
+    arena: &'a mut ValueArena,
+    type_exprs: &'a mut TypeExprArena,
+    ast: &'a Ast,
 }
 
 impl TypeRegistry {
@@ -1461,19 +1470,21 @@ impl TypeRegistry {
         arena: &mut ValueArena,
         type_exprs: &mut TypeExprArena,
     ) -> Result<()> {
+        let mut ctx = UnionRegCtx {
+            arena,
+            type_exprs,
+            ast,
+        };
         stmts.iter().try_for_each(|id| {
-            ast.get_stmt(*id).map_or(Ok(()), |stmt| match stmt {
+            let span = ctx.ast.stmt_span(*id).unwrap_or_default();
+            ctx.ast.get_stmt(*id).map_or(Ok(()), |stmt| match stmt {
                 Stmt::Type {
                     name,
                     type_params,
                     def,
-                } => self.register_type(
-                    name,
-                    type_params,
-                    def,
-                    arena,
-                    ast.stmt_span(*id).unwrap_or_default(),
-                ),
+                } => {
+                    self.register_type(name, type_params, def, ctx.arena, span)
+                }
                 Stmt::Union {
                     name,
                     type_params,
@@ -1482,10 +1493,8 @@ impl TypeRegistry {
                     name,
                     type_params,
                     members,
-                    arena,
-                    type_exprs,
-                    ast,
-                    ast.stmt_span(*id).unwrap_or_default(),
+                    &mut ctx,
+                    span,
                 ),
                 _ => Ok(()),
             })
@@ -1568,12 +1577,10 @@ impl TypeRegistry {
         name: &str,
         type_params: &[String],
         ast_members: &[AstTypeExprId],
-        arena: &mut ValueArena,
-        type_exprs: &mut TypeExprArena,
-        ast: &Ast,
+        ctx: &mut UnionRegCtx,
         span: Span,
     ) -> Result<()> {
-        let name_id = arena.intern(name);
+        let name_id = ctx.arena.intern(name);
 
         // Check for duplicate
         if self.lookup(name_id).is_some() {
@@ -1584,13 +1591,21 @@ impl TypeRegistry {
         }
 
         let type_param_ids: SmallVec<[StringId; 2]> =
-            type_params.iter().map(|p| arena.intern(p)).collect();
+            type_params.iter().map(|p| ctx.arena.intern(p)).collect();
 
         // Convert AST type expressions to TypeExprIds
         let members: SmallVec<[TypeExprId; 8]> = ast_members
             .iter()
             .filter_map(|m| {
-                resolve_type_expr(ast, arena, self, type_exprs, *m, span).ok()
+                resolve_type_expr(
+                    ctx.ast,
+                    ctx.arena,
+                    self,
+                    ctx.type_exprs,
+                    *m,
+                    span,
+                )
+                .ok()
             })
             .collect();
 
