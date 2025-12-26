@@ -1707,12 +1707,10 @@ impl<'a> InferCtx<'a> {
         let unguarded: Vec<_> =
             arms.iter().filter(|arm| arm.guard.is_none()).collect();
 
-        // If any unguarded arm is a catch-all, it's exhaustive
-        let has_catch_all = unguarded.iter().any(|arm| {
-            self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                matches!(p, MatchPattern::Wildcard | MatchPattern::Var(_))
-            })
-        });
+        // If any unguarded arm is irrefutable (catch-all), it's exhaustive
+        let has_catch_all = unguarded
+            .iter()
+            .any(|arm| self.is_irrefutable_pattern(arm.pattern));
 
         if !has_catch_all {
             match scrutinee_ty {
@@ -1834,6 +1832,30 @@ impl<'a> InferCtx<'a> {
                 }
             }
         }
+    }
+
+    /// Check if a pattern is irrefutable (always matches any value).
+    ///
+    /// Irrefutable patterns:
+    /// - `_` (wildcard)
+    /// - `x` (variable binding)
+    /// - `(a, b, ...)` where all elements are irrefutable
+    /// - `{ field1, field2, ... }` where all field patterns are irrefutable
+    ///   (object patterns are partial; extra fields allowed)
+    fn is_irrefutable_pattern(&self, pat_id: MatchPatternId) -> bool {
+        self.ast.get_pattern(pat_id).is_some_and(|p| match p {
+            MatchPattern::Wildcard | MatchPattern::Var(_) => true,
+            MatchPattern::Tuple(elems) => {
+                elems.iter().all(|e| self.is_irrefutable_pattern(*e))
+            }
+            MatchPattern::Object(fields) => {
+                fields.iter().all(|(_, p)| self.is_irrefutable_pattern(*p))
+            }
+            // Literals, variants, and IS patterns are refutable
+            MatchPattern::Literal(_)
+            | MatchPattern::Variant(..)
+            | MatchPattern::Is(..) => false,
+        })
     }
 
     /// Infer type of a variant constructor: `Type.Variant(args)`.
@@ -2328,6 +2350,10 @@ impl<'a> InferCtx<'a> {
     ///
     /// Infers the RHS type, optionally unifies with an annotation, then
     /// binds variables from the pattern with appropriate types.
+    ///
+    /// For extensible records: when the RHS is a structural object and the
+    /// annotation is a named struct, we bind with the full object type
+    /// (preserving extra fields) rather than the narrower annotation type.
     fn r#let(
         &mut self,
         pattern: &BindingPattern,
@@ -2342,8 +2368,18 @@ impl<'a> InferCtx<'a> {
             None => rhs_ty,
             Some(id) => {
                 let ann_ty = self.ast_type_to_ty(*id, &HashMap::new());
-                self.unify(rhs_ty, ann_ty.clone(), span);
-                ann_ty
+                self.unify(rhs_ty.clone(), ann_ty.clone(), span);
+
+                // Extensible records: if rhs is an object and annotation is a
+                // struct, keep the full object type to preserve extra fields
+                let is_struct = matches!(&ann_ty, Ty::Named(id, _)
+                    if matches!(self.registry.get_def(*id), Some(TypeDef::Struct { .. })));
+
+                if matches!(&rhs_ty, Ty::Object(_)) && is_struct {
+                    rhs_ty
+                } else {
+                    ann_ty
+                }
             }
         };
 

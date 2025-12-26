@@ -185,7 +185,7 @@ For each of the ~46 failing test scripts:
 | `49_destructure_tuple_err`     | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
 | `50_destructure_obj_err`       | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
 | `51_destructure_type_err`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `53_user_sum_types`            | FAIL   | Bug           | Needs investigation                                         |
+| `53_user_sum_types`            | OK     | ✓ Resolved    | User types registered before resolution                     |
 | `55_undeclared_type_param`     | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
 | `56_struct_types`              | FAIL   | Bug           | Needs investigation                                         |
 | `57_struct_missing_field`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
@@ -193,7 +193,7 @@ For each of the ~46 failing test scripts:
 | `59_struct_param_error`        | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
 | `60_struct_field_type_error`   | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
 | `61_nested_struct_field_error` | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `62_match`                     | FAIL   | Bug           | Needs investigation                                         |
+| `62_match`                     | OK     | ✓ Resolved    | Fixed irrefutable tuple/object pattern detection            |
 | `63_match_nonexhaustive`       | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
 | `64_match_arity_err`           | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
 | `65_match_unknown_variant`     | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
