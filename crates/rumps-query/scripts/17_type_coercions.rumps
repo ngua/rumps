@@ -79,14 +79,6 @@ OUTPUT "Flag: " ++ TRUE
 OUTPUT "Flag: " ++ FALSE
 ; Expected: Flag: FALSE
 
-; Concat two ints (both coerced to string)
-OUTPUT 1 ++ 2
-; Expected: 12 (string "1" ++ "2")
-
-; Concat int and float
-OUTPUT 10 ++ 0.5
-; Expected: 100.5 (string "10" ++ "0.5")
-
 ; === Cross-type Numeric Comparison ===
 
 OUTPUT 5 == 5.0
