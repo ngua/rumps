@@ -1367,38 +1367,145 @@ unify(_, _) = error
 
 Register type schemes for all primitive/module functions.
 
+### Design: Colocated Types
+
+Types are registered **inline** with function implementations in `register_builtins`. This makes it impossible to forget a type; you cannot register a function without its `Scheme`.
+
+**Current pattern (runtime only):**
+```rust
+Module::from_fns(&[
+    ("length", Array::length),
+    ("map", Array::placeholder),
+])
+```
+
+**New pattern (runtime + types):**
+```rust
+Module::from_prims(&[
+    Prim { name: "length", f: Array::length, ty: Scheme::poly(|t| Fn([Array(t)], Int)) },
+    Prim { name: "map", f: Array::placeholder, ty: Scheme::poly2(|t, u| Fn([Array(t), Fn([t], u)], Array(u))) },
+])
+```
+
+The `Prim` struct has named fields; compile error if any field is missing.
+
+```rust
+pub(crate) struct Prim {
+    pub(crate) name: &'static str,
+    pub(crate) f: PrimFn,
+    pub(crate) ty: Scheme,
+}
+```
+
+### `Scheme` Construction Helpers
+
+Add ergonomic constructors for common patterns:
+
+```rust
+impl Scheme {
+    /// Monomorphic type (no type variables).
+    fn mono(ty: Ty) -> Self { Scheme { vars: vec![], ty } }
+
+    /// Polymorphic with 1 type variable: `forall T. ...`
+    fn poly(f: impl FnOnce(Ty) -> Ty) -> Self {
+        let t = Ty::Var(TyVar(0));
+        Scheme { vars: vec![TyVar(0)], ty: f(t) }
+    }
+
+    /// Polymorphic with 2 type variables: `forall T U. ...`
+    fn poly2(f: impl FnOnce(Ty, Ty) -> Ty) -> Self {
+        let t = Ty::Var(TyVar(0));
+        let u = Ty::Var(TyVar(1));
+        Scheme { vars: vec![TyVar(0), TyVar(1)], ty: f(t, u) }
+    }
+
+    /// Polymorphic with 3 type variables: `forall T U V. ...`
+    fn poly3(f: impl FnOnce(Ty, Ty, Ty) -> Ty) -> Self { ... }
+}
+
+impl Ty {
+    /// Helper: `Fn([A, B], R)` for function types.
+    fn func(params: impl Into<Vec<Ty>>, ret: Ty) -> Self {
+        Ty::Fn(params.into(), Box::new(ret))
+    }
+}
+```
+
 ### Example Signatures
 
-```
-; Array module (also accepts Range where Array[Int] expected)
-Array.len:    forall T. (Array[T] | Range) -> Int
-Array.map:    forall T U. (Array[T] | Range, (T) -> U) -> Array[U]
-Array.filter: forall T. (Array[T] | Range, (T) -> Bool) -> Array[T]
-Array.fold:   forall T U. (Array[T] | Range, U, (U, T) -> U) -> U
+```rust
+// Array module
+Prim { name: "length", f: Array::length, ty: Scheme::poly(|t| Ty::func([Ty::Array(Box::new(t))], Ty::Int)) },
+Prim { name: "map", f: Array::placeholder, ty: Scheme::poly2(|t, u| {
+    Ty::func([Ty::Array(Box::new(t.clone())), Ty::func([t], u.clone())], Ty::Array(Box::new(u)))
+})},
+Prim { name: "filter", f: Array::placeholder, ty: Scheme::poly(|t| {
+    Ty::func([Ty::Array(Box::new(t.clone())), Ty::func([t.clone()], Ty::Bool)], Ty::Array(Box::new(t)))
+})},
+Prim { name: "reduce", f: Array::placeholder, ty: Scheme::poly2(|t, u| {
+    Ty::func([Ty::Array(Box::new(t.clone())), u.clone(), Ty::func([u.clone(), t], u.clone())], u)
+})},
 
-; Math module
-Math.abs:   (Float) -> Float
-Math.sqrt:  (Float) -> Float
-Math.floor: (Float) -> Int
-
-; Etc...
+// Math module (monomorphic)
+Prim { name: "abs", f: Math::abs, ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)) },
+Prim { name: "sqrt", f: Math::sqrt, ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)) },
+Prim { name: "floor", f: Math::floor, ty: Scheme::mono(Ty::func([Ty::Float], Ty::Int)) },
 ```
 
 **Note**: The `Object` module has been removed. Dynamic field iteration is incompatible with static typing (objects have heterogeneous field types). Use `Map[String, V]` for dynamic key-value collections.
 
+**Note**: Array functions accept `Range` as first arg (Range is iterable over `Int`). Use union type `Array[T] | Range` for first param where applicable.
+
+### Module Changes
+
+Extend `Module` to store type schemes:
+
+```rust
+/// A primitive function with its type.
+pub(crate) struct Prim {
+    pub(crate) name: &'static str,
+    pub(crate) f: PrimFn,
+    pub(crate) ty: Scheme,
+}
+
+pub(crate) struct Module {
+    fns: HashMap<String, PrimFn>,
+    types: HashMap<String, Scheme>,  // NEW
+    consts: HashMap<String, ValueId>,
+    submodules: HashMap<String, Module>,
+}
+
+impl Module {
+    /// Register primitives (function + type together).
+    pub(crate) fn from_prims(prims: &[Prim]) -> Self { ... }
+
+    /// Look up a function's type scheme.
+    pub(crate) fn get_fn_type(&self, path: &[&str]) -> Option<&Scheme> { ... }
+}
+```
+
+The type checker queries `env.get_module_fn_type(&["Array", "length"])` to get the scheme.
+
 ### Checklist
 
-- [ ] Create `typecheck/builtins.rs`
-- [ ] `impl InferCtx`: `fn register_builtins(&mut self)`
-- [ ] Register `Array` module functions
-- [ ] Register `Option` module functions
-- [ ] Register `Result` module functions
-- [ ] Register `String` module functions
-- [ ] Register `Math` module functions
-- [ ] Register `Time` module functions
-- [ ] Register `Map` module functions
-- [ ] Register `Range` module functions (if any)
-- [ ] **Note**: Array functions accept `Range` as first arg (Range is iterable over `Int`)
+- [ ] Add `Prim` struct to `env.rs`
+- [ ] Add `Scheme::mono`, `Scheme::poly`, `Scheme::poly2`, `Scheme::poly3` helpers
+- [ ] Add `Ty::func` helper for function type construction
+- [ ] Add `types: HashMap<String, Scheme>` field to `Module`
+- [ ] Add `Module::from_prims(&[Prim]) -> Self`
+- [ ] Add `Module::get_fn_type(&self, path: &[&str]) -> Option<&Scheme>`
+- [ ] Add `Environment::get_module_fn_type(&self, path: &[&str]) -> Option<&Scheme>`
+- [ ] Update `register_builtins` to use `Prim` for all functions, with correct type scheme:
+  - [ ] `Array` module (including HoF placeholders)
+  - [ ] `String` module
+  - [ ] `Math` module (including `Trig` submodule)
+  - [ ] `Map` module
+  - [ ] `Option` module
+  - [ ] `Result` module
+  - [ ] `Time` module
+  - [ ] `Random` module
+- [ ] Type checker: query types from `Environment` instead of separate registry
+- [ ] Test: missing field in `Prim` causes compile error
 
 ---
 
@@ -1409,9 +1516,9 @@ Hook type checking into the interpreter pipeline.
 ### Entry Point (`typecheck.rs`)
 
 ```rust
-pub(crate) fn check(ast: &Ast, registry: &TypeRegistry) -> crate::Result<()> {
-    let mut ctx = InferCtx::new(ast, registry);
-    ctx.register_builtins();
+pub(crate) fn check(ast: &Ast, registry: &TypeRegistry, env: &Environment) -> crate::Result<()> {
+    // Builtin types come from `env`; no separate registration needed
+    let mut ctx = InferCtx::new(ast, registry, env);
 
     ast.stmt_ids().for_each(|id| ctx.stmt(id));
 
@@ -1432,6 +1539,8 @@ impl InferCtx<'_> {
     }
 }
 ```
+
+**Note**: `InferCtx` receives `&Environment` and queries `env.get_module_fn_type()` when type-checking module function calls. No separate builtin registration step.
 
 ### Mapping Static Types to Runtime Types
 
@@ -1513,13 +1622,13 @@ This is used for:
 
 - [ ] Handle `Stmt::Union` in `stmt` (register type, no env binding needed)
 - [ ] Resolve user-defined union members in `expand_union_members` (requires `TypeExprArena`)
-- [ ] Add `pub(crate) fn check(ast, registry) -> crate::Result<()>` to `typecheck.rs`
+- [ ] Add `pub(crate) fn check(ast, registry, env) -> crate::Result<()>` to `typecheck.rs`
 - [ ] `impl InferCtx`: `fn into_result(self) -> crate::Result<()>`
 - [ ] `impl TypeExprArena`: `fn from_ty(&mut self, ty: &Ty, registry: &TypeRegistry) -> TypeExprId`
 - [ ] Modify `crates/rumps-query/src/lib.rs`:
   - [ ] Add `mod typecheck;`
 - [ ] Modify `crates/rumps-query/src/interpreter.rs`:
-  - [ ] Call `crate::typecheck::check(ast, &registry)?` after resolution
+  - [ ] Call `crate::typecheck::check(ast, &registry, &env)?` after resolution
 - [ ] Modify `crates/rumps-query/src/error.rs`:
   - [ ] Add `Error::StaticType(TypeError)` variant for compile-time type errors
   - [ ] Add `Error::static_types(Vec<TypeError>) -> Self` constructor:
@@ -1637,12 +1746,12 @@ macro_rules! typechecked {
 
 **Usage examples:**
 
-| Call | Expands to |
-|------|------------|
-| `typechecked!("+", "Numeric")` | `unreachable!("type checker guarantees \`+\` satisfies \`Numeric\`")` |
-| `typechecked!("!", "Unwrappable")` | `unreachable!("type checker guarantees \`!\` satisfies \`Unwrappable\`")` |
-| `typechecked!("Array.map", "Array")` | `unreachable!("type checker guarantees \`Array.map\` satisfies \`Array\`")` |
-| `typechecked!("..", "Int")` | `unreachable!("type checker guarantees \`..\` satisfies \`Int\`")` |
+| Call                                                                                                                   | Expands to                                                              |
+|------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| `typechecked!("+", "Numeric")`                                                                                         | `unreachable!("type checker guarantees \`+\` satisfies \`Numeric\`")` | |
+| | `typechecked!("!", "Unwrappable")` | `unreachable!("type checker guarantees \`!\` satisfies \`Unwrappable\`")` |     |                                                                         |
+| | `typechecked!("Array.map", "Array")` | `unreachable!("type checker guarantees \`Array.map\` satisfies \`Array\`")` | |                                                                         |
+| | `typechecked!("..", "Int")` | `unreachable!("type checker guarantees \`..\` satisfies \`Int\`")`                     |                                                                         |
 
 **Benefits:**
 - Consistent error messages across the codebase
@@ -1792,12 +1901,14 @@ fn check_unit(&self, val: ValueId, span: Span) -> Result<()> {
 
 **Checklist:**
 - [ ] Remove `check_unit()` function entirely
-- [ ] `r#if()`: Remove `check_unit` call
-- [ ] `if_with_bindings()`: Remove `check_unit` call
-- [ ] `r#if()`: Remove `Bool` check on condition (type checker guarantees `Bool`)
-- [ ] `try_match_arms()`: Remove `Bool` check on guard (type checker guarantees `Bool`)
-- [ ] `array_filter_rec()`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
-- [ ] `range_filter_rec()`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
+- [ ] `r#if`: Remove `check_unit` call
+- [ ] `if_with_bindings`: Remove `check_unit` call
+- [ ] `r#if`: Remove `Bool` check on condition (type checker guarantees `Bool`)
+- [ ] `r#match`:
+  - [ ] Remove all exhaustiveness checking (already statically guaranteed)
+  - [ ] `try_match_arms`: Remove `Bool` check on guard (type checker guarantees `Bool`)
+- [ ] `array_filter_rec`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
+- [ ] `range_filter_rec`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
 
 ---
 
