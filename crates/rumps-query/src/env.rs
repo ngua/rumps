@@ -777,12 +777,15 @@ impl Environment {
                 PrimDef {
                     name: "range",
                     f: Random::range,
-                    ty: Scheme::mono(Ty::func([Ty::Int, Ty::Int], Ty::Int)),
+                    ty: Scheme::mono(Ty::func(
+                        [Ty::Float, Ty::Float],
+                        Ty::Float,
+                    )),
                 },
                 PrimDef {
                     name: "int",
                     f: Random::int,
-                    ty: Scheme::mono(Ty::func([Ty::Int], Ty::Int)),
+                    ty: Scheme::mono(Ty::func([Ty::Int, Ty::Int], Ty::Int)),
                 },
                 PrimDef {
                     name: "bool",
@@ -792,7 +795,7 @@ impl Environment {
                 PrimDef {
                     name: "choice",
                     f: Random::choice,
-                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], t)),
+                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], opt(t))),
                 },
                 PrimDef {
                     name: "shuffle",
@@ -803,7 +806,10 @@ impl Environment {
                     name: "sample",
                     f: Random::sample,
                     ty: Scheme::poly(|t| {
-                        Ty::func([arr(t.clone()), Ty::Int], arr(t))
+                        Ty::func(
+                            [arr(t.clone()), Ty::Int],
+                            res(arr(t), Ty::String),
+                        )
                     }),
                 },
                 PrimDef {
@@ -928,7 +934,7 @@ impl Environment {
                     name: "parse",
                     f: Time::parse,
                     ty: Scheme::mono(Ty::func(
-                        [Ty::String],
+                        [Ty::String, Ty::String],
                         res(Ty::Time, Ty::String),
                     )),
                 },
@@ -936,7 +942,7 @@ impl Environment {
                     name: "format",
                     f: Time::format,
                     ty: Scheme::mono(Ty::func(
-                        [Ty::Time, Ty::String],
+                        [Ty::String, Ty::Time],
                         Ty::String,
                     )),
                 },
@@ -948,7 +954,7 @@ impl Environment {
                 PrimDef {
                     name: "diff-seconds",
                     f: Time::diff_seconds,
-                    ty: Scheme::mono(Ty::func([Ty::Time, Ty::Time], Ty::Int)),
+                    ty: Scheme::mono(Ty::func([Ty::Time, Ty::Time], Ty::Float)),
                 },
                 PrimDef {
                     name: "year",

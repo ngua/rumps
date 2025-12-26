@@ -165,54 +165,54 @@ For each of the ~46 failing test scripts:
 
 #### Audit Checklist
 
-| Script                         | Status | Category      | Notes                                                       |
-|--------------------------------|--------|---------------|-------------------------------------------------------------|
-| `15_arrays_objects`            | OK     | ✓ Resolved    | Object compat fix                                           |
-| `17_type_coercions`            | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `20_equality`                  | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
-| `31_is_operator`               | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
-| `33_type_mismatch`             | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `37_closures`                  | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
-| `38_named_functions`           | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
-| `39_expression_callees`        | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
-| `40_function_type_errors`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `41_function_arity_error`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `42_higher_order_type_error`   | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `43_return_type_error`         | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `44_closure_type_error`        | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `45_pipeline`                  | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
-| `46_tuples`                    | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
-| `49_destructure_tuple_err`     | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `50_destructure_obj_err`       | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `51_destructure_type_err`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `53_user_sum_types`            | OK     | ✓ Resolved    | User types registered before resolution                     |
-| `55_undeclared_type_param`     | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `56_struct_types`              | FAIL   | Bug           | Needs investigation                                         |
-| `57_struct_missing_field`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `58_struct_not_object`         | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `59_struct_param_error`        | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `60_struct_field_type_error`   | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `61_nested_struct_field_error` | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `62_match`                     | OK     | ✓ Resolved    | Fixed irrefutable tuple/object pattern detection            |
-| `63_match_nonexhaustive`       | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `64_match_arity_err`           | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `65_match_unknown_variant`     | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `68_unwrap_none_err`           | OK     | ✓ Resolved    | Now passes                                                  |
-| `69_unwrap_err`                | OK     | ✓ Resolved    | Now passes                                                  |
-| `70_unwrap_type_err`           | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `71_array_module`              | OK     | ✓ Resolved    | Numeric defaulting + polymorphic type var fix               |
-| `72_array_hetero_tagged_err`   | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `72_array_primitives`          | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
-| `73_array_sort_types`          | FAIL   | Bug           | Needs investigation                                         |
-| `76_random_module`             | FAIL   | Bug           | Needs investigation                                         |
-| `77_map_module`                | OK     | ✓ Resolved    | Polymorphic Map type fix                                    |
-| `78_time_module`               | FAIL   | Bug           | Needs investigation                                         |
-| `80_module_constants`          | FAIL   | Bug           | Needs investigation                                         |
-| `81_range`                     | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
-| `83_expr_annotation_err`       | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
-| `86_json`                      | OK     | ✓ Resolved    | JSON fixes applied                                          |
-| `87_union_types`               | FAIL   | Blocked       | Cannot be fixed until 4.14.2; contains user-defined `UNION` |
-| `88_nested_structural_types`   | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| Script                         | Status | Category   | Notes                                                       |
+|--------------------------------|--------|------------|-------------------------------------------------------------|
+| `15_arrays_objects`            | OK     | ✓ Resolved | Object compat fix                                           |
+| `17_type_coercions`            | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `20_equality`                  | OK     | ✓ Resolved | Polymorphic type var fix                                    |
+| `31_is_operator`               | OK     | ✓ Resolved | Polymorphic type var fix                                    |
+| `33_type_mismatch`             | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `37_closures`                  | OK     | ✓ Resolved | Polymorphic type var fix                                    |
+| `38_named_functions`           | OK     | ✓ Resolved | Polymorphic type var fix                                    |
+| `39_expression_callees`        | OK     | ✓ Resolved | Polymorphic type var fix                                    |
+| `40_function_type_errors`      | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `41_function_arity_error`      | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `42_higher_order_type_error`   | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `43_return_type_error`         | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `44_closure_type_error`        | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `45_pipeline`                  | OK     | ✓ Resolved | Polymorphic type var fix                                    |
+| `46_tuples`                    | OK     | ✓ Resolved | Polymorphic type var fix                                    |
+| `49_destructure_tuple_err`     | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `50_destructure_obj_err`       | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `51_destructure_type_err`      | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `53_user_sum_types`            | OK     | ✓ Resolved | User types registered before resolution                     |
+| `55_undeclared_type_param`     | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `56_struct_types`              | FAIL   | ✓ Resolved | Now passes                                                  |
+| `57_struct_missing_field`      | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `58_struct_not_object`         | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `59_struct_param_error`        | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `60_struct_field_type_error`   | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `61_nested_struct_field_error` | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `62_match`                     | OK     | ✓ Resolved | Fixed irrefutable tuple/object pattern detection            |
+| `63_match_nonexhaustive`       | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `64_match_arity_err`           | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `65_match_unknown_variant`     | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `68_unwrap_none_err`           | OK     | ✓ Resolved | Now passes                                                  |
+| `69_unwrap_err`                | OK     | ✓ Resolved | Now passes                                                  |
+| `70_unwrap_type_err`           | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `71_array_module`              | OK     | ✓ Resolved | Numeric defaulting + polymorphic type var fix               |
+| `72_array_hetero_tagged_err`   | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `72_array_primitives`          | OK     | ✓ Resolved | Polymorphic type var fix                                    |
+| `73_array_sort_types`          | FAIL   | Bug        | Needs investigation                                         |
+| `76_random_module`             | FAIL   | ✓ Resolved | Now passes                                                  |
+| `77_map_module`                | OK     | ✓ Resolved | Polymorphic Map type fix                                    |
+| `78_time_module`               | FAIL   | ✓ Resolved | Now passes                                                  |
+| `80_module_constants`          | FAIL   | Bug        | Needs investigation                                         |
+| `81_range`                     | OK     | ✓ Resolved | Polymorphic type var fix                                    |
+| `83_expr_annotation_err`       | FAIL   | Snapshot   | Expected error; needs snapshot update                       |
+| `86_json`                      | OK     | ✓ Resolved | JSON fixes applied                                          |
+| `87_union_types`               | FAIL   | Blocked    | Cannot be fixed until 4.14.2; contains user-defined `UNION` |
+| `88_nested_structural_types`   | OK     | ✓ Resolved | Polymorphic type var fix                                    |
 
 #### Success Criteria
 

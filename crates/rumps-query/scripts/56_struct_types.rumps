@@ -90,4 +90,4 @@ TYPE Maybe[T] = { inner: Option[T] }
 LET some-val: Maybe[Int] = { inner: Option.Some(123) }
 LET none-val: Maybe[Int] = { inner: Option.None }
 OUTPUT some-val.inner!
-OUTPUT none-val.inner ?? Option.Some(0)
+OUTPUT none-val.inner ?? 0

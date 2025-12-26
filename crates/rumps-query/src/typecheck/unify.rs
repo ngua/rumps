@@ -579,10 +579,16 @@ impl<'a> InferCtx<'a> {
         constraints.iter().for_each(|c| {
             match c {
                 Constraint::Eq(..)
-                | Constraint::Unwrappable { .. }
                 | Constraint::HasField { .. }
                 | Constraint::Iterable { .. } => {
                     // Already processed in first pass
+                }
+
+                // Re-check Unwrappable now that Callable has resolved types
+                Constraint::Unwrappable { ty, inner, span } => {
+                    let ty = ty.apply(&subst);
+                    let inner = inner.apply(&subst);
+                    self.check_unwrappable(&ty, &inner, *span, &mut subst);
                 }
 
                 Constraint::Numeric(ty, span) => {
@@ -829,18 +835,9 @@ impl<'a> InferCtx<'a> {
                 }
             },
 
-            Ty::Var(v) => {
-                // Create Option[inner] and bind the variable
-                let opt_ty = Ty::Option(Box::new(inner.clone()));
-                match self.unify_var(*v, &opt_ty, span) {
-                    UnifyResult::Ok(s) => {
-                        *subst = subst.compose(&s);
-                    }
-                    UnifyResult::Err(e) => {
-                        self.error(e);
-                    }
-                }
-            }
+            // Type variable: defer until resolved. The Callable constraint for
+            // the expression that produces this value will eventually bind it.
+            Ty::Var(_) => {}
 
             Ty::Error | Ty::Unknown => {}
 

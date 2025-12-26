@@ -3409,8 +3409,8 @@ mod tests {
     }
 
     #[test]
-    fn array_mixed_adds_constraints() {
-        // [1, 2.0] should unify Int with Float
+    fn array_mixed_becomes_json() {
+        // [1, 2.0] - mixed types become Json
         let mut ast = Ast::new();
         let e1 = ast
             .add_expr(Expr::Literal(Literal::Int(1)), Span::new(1, 2))
@@ -3424,13 +3424,8 @@ mod tests {
 
         let mut ctx = test_ctx(&ast);
         let ty = ctx.expr(arr);
-        // Result type is Array[Int] (first element's type)
-        // but there's an Eq constraint to unify Int with Float
-        assert_eq!(ty, Ty::Array(Box::new(Ty::Int)));
-        assert!(ctx
-            .constraints()
-            .iter()
-            .any(|c| matches!(c, Constraint::Eq(Ty::Int, Ty::Float, _))));
+        // Mixed arrays become Json
+        assert_eq!(ty, Ty::Json);
     }
 
     // Tuples
@@ -3911,7 +3906,7 @@ mod tests {
     }
 
     #[test]
-    fn field_access_var_creates_constraint() {
+    fn field_access_var_creates_has_field_constraint() {
         // x.name where x is a type variable
         let mut ast = Ast::new();
         let var = ast
@@ -3935,10 +3930,13 @@ mod tests {
         // Result should be a fresh type variable
         match ty {
             Ty::Var(_) => {
-                // Should have Eq constraint with structural object
+                // Should have HasField constraint
                 assert!(ctx.constraints().iter().any(|c| matches!(
                     c,
-                    Constraint::Eq(Ty::Var(_), Ty::Object(_), _)
+                    Constraint::HasField {
+                        base: Ty::Var(_),
+                        ..
+                    }
                 )));
             }
             _ => panic!("expected type variable, got {ty:?}"),
@@ -7197,5 +7195,75 @@ mod tests {
 
         // No errors, no changes to env
         assert!(!ctx.has_errors());
+    }
+
+    /// Test parametric struct with Option[T] field.
+    ///
+    /// This mirrors what happens in script 56_struct_types.rumps:
+    /// ```rumps
+    /// TYPE Maybe[T] = { inner: Option[T] }
+    /// LET some-val: Maybe[Int] = { inner: Option.Some(123) }
+    /// ```
+    #[test]
+    fn parametric_struct_with_option_field() {
+        use crate::parser::Parser;
+        use crate::resolve::resolve;
+        use crate::value::{TypeExprArena, ValueArena};
+
+        // Reduced test case - find the minimal failing case
+        let src = r#"
+TYPE Box[T] = { value: T }
+LET int-box: Box[Int] = { value: 42 }
+OUTPUT int-box.value
+
+TYPE Pair[L, R] = { left: L, right: R }
+LET nested: Box[Pair[Int, Bool]] = { value: { left: 99, right: true } }
+OUTPUT nested.value.left
+OUTPUT nested.value.right
+
+TYPE Maybe[T] = { inner: Option[T] }
+LET some-val: Maybe[Int] = { inner: Option.Some(123) }
+LET none-val: Maybe[Int] = { inner: Option.None }
+OUTPUT some-val.inner!
+        "#;
+
+        let mut result = Parser::parse(src).expect("parse failed");
+        let ast = &mut result.ast;
+        let stmts = &result.stmts;
+
+        let mut arena = ValueArena::new();
+        let mut type_exprs = TypeExprArena::new();
+        let mut registry =
+            TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
+
+        // Register user types (like interpreter does)
+        registry
+            .register_from_ast(ast, stmts, &mut arena, &mut type_exprs)
+            .expect("register failed");
+
+        // Resolve (like interpreter does)
+        resolve(ast, &mut arena, &registry);
+
+        let env = crate::env::Environment::new();
+        let strings = arena.interner();
+
+        // Type check
+        let mut ctx = InferCtx::new(ast, &registry, &env, strings);
+        stmts.iter().for_each(|id| ctx.stmt(*id));
+
+        let subst = ctx.solve_constraints();
+        ctx.apply_subst(&subst);
+        ctx.check_remaining_unknowns();
+
+        // Should have no errors
+        if ctx.has_errors() {
+            panic!(
+                "unexpected type errors: {:?}",
+                ctx.errors
+                    .iter()
+                    .map(|e| format!("{:?}", e))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 }
