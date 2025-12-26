@@ -1665,55 +1665,54 @@ For each of the ~46 failing test scripts:
 
 #### Audit Checklist
 
-| Script                         | Status | Category   | Notes                                                       |
-|--------------------------------|--------|------------|-------------------------------------------------------------|
-| `15_arrays_objects`            | OK     | ✓ Resolved | Object compat fix                                           |
-| `17_type_coercions`            | FAIL   | TBD        |                                                             |
-| `20_equality`                  | FAIL   | TBD        |                                                             |
-| `31_is_operator`               | FAIL   | TBD        |                                                             |
-| `33_type_mismatch`             | FAIL   | TBD        | Expected error script                                       |
-| `37_closures`                  | FAIL   | TBD        |                                                             |
-| `38_named_functions`           | FAIL   | TBD        |                                                             |
-| `39_expression_callees`        | FAIL   | TBD        |                                                             |
-| `40_function_type_errors`      | FAIL   | TBD        | Expected error script                                       |
-| `41_function_arity_error`      | FAIL   | TBD        | Expected error script                                       |
-| `42_higher_order_type_error`   | FAIL   | TBD        | Expected error script                                       |
-| `43_return_type_error`         | FAIL   | TBD        | Expected error script                                       |
-| `44_closure_type_error`        | FAIL   | TBD        | Expected error script                                       |
-| `45_pipeline`                  | FAIL   | TBD        |                                                             |
-| `46_tuples`                    | FAIL   | TBD        |                                                             |
-| `49_destructure_tuple_err`     | FAIL   | TBD        | Expected error script                                       |
-| `50_destructure_obj_err`       | FAIL   | TBD        | Expected error script                                       |
-| `51_destructure_type_err`      | FAIL   | TBD        | Expected error script                                       |
-| `53_user_sum_types`            | FAIL   | TBD        |                                                             |
-| `55_undeclared_type_param`     | FAIL   | TBD        | Expected error script                                       |
-| `56_struct_types`              | FAIL   | TBD        |                                                             |
-| `57_struct_missing_field`      | FAIL   | TBD        | Expected error script                                       |
-| `58_struct_not_object`         | FAIL   | TBD        | Expected error script                                       |
-| `59_struct_param_error`        | FAIL   | TBD        | Expected error script                                       |
-| `60_struct_field_type_error`   | FAIL   | TBD        | Expected error script                                       |
-| `61_nested_struct_field_error` | FAIL   | TBD        | Expected error script                                       |
-| `62_match`                     | FAIL   | TBD        |                                                             |
-| `63_match_nonexhaustive`       | FAIL   | TBD        | Expected error script                                       |
-| `64_match_arity_err`           | FAIL   | TBD        | Expected error script                                       |
-| `65_match_unknown_variant`     | FAIL   | TBD        | Expected error script                                       |
-| `68_unwrap_none_err`           | FAIL   | TBD        | Expected error script                                       |
-| `69_unwrap_err`                | FAIL   | TBD        | Expected error script                                       |
-| `70_unwrap_type_err`           | FAIL   | TBD        | Expected error script                                       |
-| `71_array_module`              | FAIL   | TBD        |                                                             |
-| `72_array_hetero_tagged_err`   | FAIL   | TBD        | Expected error script                                       |
-| `72_array_primitives`          | FAIL   | TBD        |                                                             |
-| `73_array_sort_types`          | FAIL   | TBD        |                                                             |
-| `76_random_module`             | FAIL   | TBD        |                                                             |
-| `77_map_module`                | FAIL   | TBD        |                                                             |
-| `78_time_module`               | FAIL   | TBD        |                                                             |
-| `80_module_constants`          | FAIL   | TBD        |                                                             |
-| `81_range`                     | FAIL   | TBD        |                                                             |
-| `83_expr_annotation_err`       | FAIL   | TBD        | Expected error script                                       |
-| `86_json`                      | OK     | ✓ Resolved | JSON fixes applied                                          |
-| `87_union_types`               | FAIL   | TBD        | Cannot be fixed until 4.14.2; contains user-defined `UNION` |
-| `88_nested_structural_types`   | FAIL   | TBD        |                                                             |
-|                                |        |            |                                                             |
+| Script                         | Status | Category      | Notes                                                       |
+|--------------------------------|--------|---------------|-------------------------------------------------------------|
+| `15_arrays_objects`            | OK     | ✓ Resolved    | Object compat fix                                           |
+| `17_type_coercions`            | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `20_equality`                  | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| `31_is_operator`               | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| `33_type_mismatch`             | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `37_closures`                  | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| `38_named_functions`           | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| `39_expression_callees`        | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| `40_function_type_errors`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `41_function_arity_error`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `42_higher_order_type_error`   | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `43_return_type_error`         | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `44_closure_type_error`        | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `45_pipeline`                  | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| `46_tuples`                    | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| `49_destructure_tuple_err`     | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `50_destructure_obj_err`       | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `51_destructure_type_err`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `53_user_sum_types`            | FAIL   | Bug           | Needs investigation                                         |
+| `55_undeclared_type_param`     | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `56_struct_types`              | FAIL   | Bug           | Needs investigation                                         |
+| `57_struct_missing_field`      | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `58_struct_not_object`         | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `59_struct_param_error`        | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `60_struct_field_type_error`   | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `61_nested_struct_field_error` | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `62_match`                     | FAIL   | Bug           | Needs investigation                                         |
+| `63_match_nonexhaustive`       | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `64_match_arity_err`           | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `65_match_unknown_variant`     | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `68_unwrap_none_err`           | OK     | ✓ Resolved    | Now passes                                                  |
+| `69_unwrap_err`                | OK     | ✓ Resolved    | Now passes                                                  |
+| `70_unwrap_type_err`           | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `71_array_module`              | OK     | ✓ Resolved    | Numeric defaulting + polymorphic type var fix               |
+| `72_array_hetero_tagged_err`   | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `72_array_primitives`          | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| `73_array_sort_types`          | FAIL   | Bug           | Needs investigation                                         |
+| `76_random_module`             | FAIL   | Bug           | Needs investigation                                         |
+| `77_map_module`                | OK     | ✓ Resolved    | Polymorphic Map type fix                                    |
+| `78_time_module`               | FAIL   | Bug           | Needs investigation                                         |
+| `80_module_constants`          | FAIL   | Bug           | Needs investigation                                         |
+| `81_range`                     | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
+| `83_expr_annotation_err`       | FAIL   | Snapshot      | Expected error; needs snapshot update                       |
+| `86_json`                      | OK     | ✓ Resolved    | JSON fixes applied                                          |
+| `87_union_types`               | FAIL   | Blocked       | Cannot be fixed until 4.14.2; contains user-defined `UNION` |
+| `88_nested_structural_types`   | OK     | ✓ Resolved    | Polymorphic type var fix                                    |
 
 #### Success Criteria
 
@@ -1783,17 +1782,37 @@ with unresolved element types don't require annotation.
 `Range` now coerces to `Array[Int]` during unification, allowing Array HOFs like
 `Array.foreach(f, 1..10)` to work without explicit conversion.
 
+#### 9. Numeric Defaulting ✓
+
+Unresolved numeric type variables now default to `Int` (like Haskell's defaulting
+rules). When `check_numeric` sees `Numeric(Ty::Var(v))` where `v` is unresolved,
+it extends the substitution with `v -> Int`. This enables inference for closures
+like `x => x + 1` passed to HOFs with polymorphic empty arrays.
+
+#### 10. Polymorphic Type Variables ✓
+
+`has_unresolved_vars` now allows:
+- `Ty::Var(_)`: Unresolved type variables are OK for polymorphic expressions
+- `Ty::Map(..)`: Empty maps are polymorphic like empty arrays
+- `Ty::Fn(..)`: Closures passed to HOFs inherit polymorphism from their context
+
+Only `Ty::Unknown` (true ambiguity) now triggers `MissingAnnotation` errors.
+This allows natural polymorphic code like `Array.map(x => Option.Some(x), [])`
+without requiring type annotations.
+
 ### Implementation Details (Completed)
 
 Key changes:
 - Added `HasField` constraint for field access on type variables
 - Added `Iterable` constraint for future iterable collection support
 - Process `Unwrappable`, `HasField`, and `Iterable` constraints in first pass (with `Eq`)
-- Allow unresolved type vars in `Option`/`Result`/`Array` types
+- Allow unresolved type vars in `Option`/`Result`/`Array`/`Map`/`Fn` types
 - Register user types in `register_from_ast` before type checking
 - Make runtime `type_decl` idempotent (skip if already registered)
 - Add `Ty::Object` and `Ty::Result` handling to `types_compatible`
 - Add Range-to-Array coercion in `unify_inner`
+- Default unresolved `Numeric` type variables to `Int` in `check_numeric`
+- Allow bare `Ty::Var` in `has_unresolved_vars` (only `Ty::Unknown` requires annotation)
 
 ---
 

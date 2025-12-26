@@ -586,7 +586,7 @@ impl<'a> InferCtx<'a> {
                 }
 
                 Constraint::Numeric(ty, span) => {
-                    self.check_numeric(&ty.apply(&subst), *span);
+                    self.check_numeric(&ty.apply(&subst), *span, &mut subst);
                 }
 
                 Constraint::Callable {
@@ -626,11 +626,16 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Check that a type is numeric (`Int` or `Float`).
-    fn check_numeric(&mut self, ty: &Ty, span: Span) {
+    ///
+    /// If the type is an unresolved type variable, defaults it to `Int` (like
+    /// Haskell's defaulting rules). This enables inference for expressions
+    /// like `x => x + 1` when passed to HOFs with polymorphic empty arrays.
+    fn check_numeric(&mut self, ty: &Ty, span: Span, subst: &mut Subst) {
         match ty {
             Ty::Int | Ty::Float => {}
-            Ty::Var(_) => {
-                // Unresolved; could be numeric. Accept for now.
+            Ty::Var(v) => {
+                // Default unresolved numeric type variables to Int
+                *subst = subst.compose(&Subst::singleton(*v, Ty::Int));
             }
             Ty::Error | Ty::Unknown => {}
             _ => {

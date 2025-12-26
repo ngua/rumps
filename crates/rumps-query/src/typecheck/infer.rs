@@ -326,13 +326,19 @@ impl<'a> InferCtx<'a> {
     /// Check if a type contains unresolved type variables that require
     /// annotation.
     ///
-    /// Polymorphic types like `Option[?t]` and `Result[?t, ?e]` are allowed
-    /// with unresolved type parameters; they represent values like `None` or
-    /// `Err` where the type parameter doesn't affect runtime behavior.
+    /// Polymorphic types like `Option[?t]`, `Result[?t, ?e]`, `Array[?t]`, and
+    /// `Fn([?t], ?u)` are allowed with unresolved type parameters; they
+    /// represent values like `None`, `Err`, `[]`, or closures passed to HOFs
+    /// where the type parameter doesn't affect runtime behavior or is
+    /// determined by the calling context.
     fn has_unresolved_vars(ty: &Ty) -> bool {
         match ty {
-            Ty::Var(_) | Ty::Unknown => true,
-            Ty::Bool
+            // Ty::Unknown indicates true ambiguity that requires annotation.
+            // Ty::Var is allowed; unresolved type variables are OK for
+            // polymorphic expressions (e.g., `id` function, HOF results).
+            Ty::Unknown => true,
+            Ty::Var(_)
+            | Ty::Bool
             | Ty::Int
             | Ty::Float
             | Ty::Char
@@ -342,19 +348,16 @@ impl<'a> InferCtx<'a> {
             | Ty::Range
             | Ty::Json
             | Ty::Error => false,
-            // Option, Result, and Array with unresolved type params are OK.
-            // These are intentionally polymorphic (e.g., `Option.None`,
-            // `Result.Err("msg")`, `[]`).
-            Ty::Option(_) | Ty::Result(_, _) | Ty::Array(_) => false,
-            Ty::Map(k, v) => {
-                Self::has_unresolved_vars(k) || Self::has_unresolved_vars(v)
-            }
+            // Option, Result, Array, Map, and Fn with unresolved type params are
+            // OK. These are intentionally polymorphic (e.g., `Option.None`,
+            // `Result.Err("msg")`, `[]`, `Map.empty()`, closures passed to HOFs).
+            Ty::Option(_)
+            | Ty::Result(_, _)
+            | Ty::Array(_)
+            | Ty::Map(..)
+            | Ty::Fn(..) => false,
             Ty::Tuple(ts) | Ty::Union(ts) => {
                 ts.iter().any(|t| Self::has_unresolved_vars(t))
-            }
-            Ty::Fn(params, ret) => {
-                params.iter().any(|t| Self::has_unresolved_vars(t))
-                    || Self::has_unresolved_vars(ret)
             }
             Ty::Object(fields) => {
                 fields.values().any(|t| Self::has_unresolved_vars(t))
