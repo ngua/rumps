@@ -233,7 +233,7 @@ impl<'a> InferCtx<'a> {
             (t, Ty::Union(members)) | (Ty::Union(members), t) => members
                 .iter()
                 .find_map(|m| match self.unify_inner(t, m, span) {
-                    UnifyResult::Ok(s) => Some(UnifyResult::Ok(s)),
+                    ok @ UnifyResult::Ok(_) => Some(ok),
                     _ => None,
                 })
                 .unwrap_or_else(|| {
@@ -258,7 +258,7 @@ impl<'a> InferCtx<'a> {
                         members
                             .iter()
                             .find_map(|m| match self.unify_inner(t, m, span) {
-                                UnifyResult::Ok(s) => Some(UnifyResult::Ok(s)),
+                                ok @ UnifyResult::Ok(_) => Some(ok),
                                 _ => None,
                             })
                             .unwrap_or_else(|| {

@@ -1643,17 +1643,14 @@ impl<'a> InferCtx<'a> {
     /// storable types, creates an anonymous union. Otherwise, unifies normally.
     fn join_types(&mut self, tys: &[Ty], span: Span) -> Ty {
         let first = tys.first().cloned().unwrap_or(Ty::Error);
-
-        // Check if all types are the same
         let all_same = tys.iter().skip(1).all(|t| *t == first);
-        if all_same {
-            first
-        } else {
-            // Only create anonymous unions for primitive storable types
-            // (Bool, Int, Float, Char, String, Json). This supports common
-            // patterns like `IF cond { 42 } ELSE { "string" }` -> Int | String.
-            // For other types (Option, Result, user structs), unify normally.
-            let all_storable_primitives = tys.iter().all(|t| {
+
+        // Only create anonymous unions for primitive storable types
+        // (Bool, Int, Float, Char, String, Json). This supports common
+        // patterns like `IF cond { 42 } ELSE { "string" }` -> Int | String.
+        // For other types (Option, Result, user structs), unify normally.
+        let all_storable = || {
+            tys.iter().all(|t| {
                 matches!(
                     t,
                     Ty::Bool
@@ -1663,22 +1660,26 @@ impl<'a> InferCtx<'a> {
                         | Ty::String
                         | Ty::Json
                 )
+            })
+        };
+
+        if all_same {
+            first
+        } else if all_storable() {
+            // Deduplicate members (O(n²) but n is small for match/if arms)
+            let members = tys.iter().fold(Vec::new(), |mut acc, t| {
+                if !acc.contains(t) {
+                    acc.push(t.clone());
+                }
+                acc
             });
-            if all_storable_primitives {
-                let mut members: Vec<Ty> = Vec::new();
-                tys.iter().for_each(|t| {
-                    if !members.contains(t) {
-                        members.push(t.clone());
-                    }
-                });
-                Ty::Union(members)
-            } else {
-                // Unify normally; mismatches will error
-                tys.iter().skip(1).for_each(|ty| {
-                    self.unify(first.clone(), ty.clone(), span);
-                });
-                first
-            }
+            Ty::Union(members)
+        } else {
+            // Unify normally; mismatches will error
+            tys.iter().skip(1).for_each(|ty| {
+                self.unify(first.clone(), ty.clone(), span);
+            });
+            first
         }
     }
 
