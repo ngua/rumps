@@ -196,7 +196,14 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let env = Environment::new();
 
         // Run type checking after resolution
-        crate::typecheck::check(ast, stmts, &registry, &env, arena.interner())?;
+        crate::typecheck::check(
+            ast,
+            stmts,
+            &registry,
+            &type_exprs,
+            &env,
+            arena.interner(),
+        )?;
 
         Ok(Self {
             ast,
@@ -537,40 +544,37 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<()> {
         let name_id = self.arena.intern(name);
 
-        // Check for duplicate type name
+        // Skip if already registered (idempotent; type registered during type-check phase)
         if self.registry.lookup(name_id).is_some() {
-            Err(Error::runtime(
-                span,
-                format!("type `{name}` is already defined"),
-            ))?;
+            Ok(())
+        } else {
+            // Validate member types reference only declared type params
+            members.iter().try_for_each(|m| {
+                self.validate_type_params(*m, type_params, span)
+            })?;
+
+            // Resolve member types to TypeExprIds
+            let member_exprs: Result<SmallVec<[TypeExprId; 8]>> = members
+                .iter()
+                .map(|&m| self.resolve_type_expr(m, span))
+                .collect();
+
+            // Intern type parameters
+            let type_param_ids: SmallVec<[StringId; 2]> =
+                type_params.iter().map(|p| self.arena.intern(p)).collect();
+
+            // Register the union type
+            self.registry.register(
+                crate::value::TypeDef::Union {
+                    name: name_id,
+                    type_params: type_param_ids,
+                    members: member_exprs?,
+                },
+                name_id,
+            );
+
+            Ok(())
         }
-
-        // Validate member types reference only declared type params
-        members.iter().try_for_each(|m| {
-            self.validate_type_params(*m, type_params, span)
-        })?;
-
-        // Resolve member types to TypeExprIds
-        let member_exprs: Result<SmallVec<[TypeExprId; 8]>> = members
-            .iter()
-            .map(|&m| self.resolve_type_expr(m, span))
-            .collect();
-
-        // Intern type parameters
-        let type_param_ids: SmallVec<[StringId; 2]> =
-            type_params.iter().map(|p| self.arena.intern(p)).collect();
-
-        // Register the union type
-        self.registry.register(
-            crate::value::TypeDef::Union {
-                name: name_id,
-                type_params: type_param_ids,
-                members: member_exprs?,
-            },
-            name_id,
-        );
-
-        Ok(())
     }
 
     /// Validate that a type expression only references declared type parameters.

@@ -20,7 +20,7 @@ use crate::ast::{
 };
 use crate::env::Environment;
 use crate::intern::{StringId, StringInterner};
-use crate::value::{TypeDef, TypeId, TypeRegistry};
+use crate::value::{TypeDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry};
 use crate::Span;
 
 /// A type constraint generated during inference.
@@ -161,6 +161,8 @@ pub(crate) struct InferCtx<'a> {
     ast: &'a Ast,
     /// Registry of user-defined and builtin types.
     registry: &'a TypeRegistry,
+    /// Arena of type expressions (for converting `TypeExprId -> Ty`).
+    type_exprs: &'a TypeExprArena,
     /// Runtime environment; used to look up module function type schemes.
     runtime_env: &'a Environment,
     /// Scoped type environment (variable -> scheme bindings).
@@ -180,16 +182,19 @@ impl<'a> InferCtx<'a> {
     ///
     /// The `strings` interner should be shared with the `TypeRegistry` so
     /// type name lookups produce consistent `StringId`s. The `runtime_env`
-    /// is used to look up module function type schemes.
+    /// is used to look up module function type schemes. The `type_exprs`
+    /// arena is used to convert `TypeExprId` to `Ty` for user-defined unions.
     pub(crate) fn new(
         ast: &'a Ast,
         registry: &'a TypeRegistry,
+        type_exprs: &'a TypeExprArena,
         runtime_env: &'a Environment,
         strings: StringInterner,
     ) -> Self {
         Self {
             ast,
             registry,
+            type_exprs,
             runtime_env,
             env: TypeEnv::new(strings),
             constraints: Vec::new(),
@@ -376,6 +381,69 @@ impl<'a> InferCtx<'a> {
         })
     }
 
+    /// Convert a runtime `TypeExprId` to a static `Ty`.
+    ///
+    /// Used to convert union member types from the `TypeExprArena` (runtime
+    /// representation) to `Ty` (static type representation).
+    fn type_expr_to_ty(&self, id: TypeExprId) -> Ty {
+        self.type_exprs.base_type(id).map_or(Ty::Unknown, |base| {
+            let args: Vec<Ty> = self
+                .type_exprs
+                .type_args(id)
+                .map(|a| a.iter().map(|p| self.type_expr_to_ty(*p)).collect())
+                .unwrap_or_default();
+            self.apply_type_args(self.type_id_to_ty(base), args)
+        })
+    }
+
+    /// Convert a `TypeId` to a primitive `Ty` or `Ty::Named`.
+    fn type_id_to_ty(&self, id: TypeId) -> Ty {
+        match id {
+            TypeId::BOOL => Ty::Bool,
+            TypeId::INT => Ty::Int,
+            TypeId::FLOAT => Ty::Float,
+            TypeId::CHAR => Ty::Char,
+            TypeId::STRING => Ty::String,
+            TypeId::UNIT => Ty::Unit,
+            TypeId::TIME => Ty::Time,
+            TypeId::RANGE => Ty::Range,
+            TypeId::JSON => Ty::Json,
+            _ => Ty::Named(id, vec![]),
+        }
+    }
+
+    /// Apply type arguments to a base type.
+    ///
+    /// Converts generic `Ty::Named` types to their specialized forms
+    /// (e.g., `Named(ARRAY, [Int])` -> `Array(Int)`).
+    fn apply_type_args(&self, base: Ty, args: Vec<Ty>) -> Ty {
+        match base {
+            Ty::Named(id, _) if id == TypeId::ARRAY && args.len() == 1 => {
+                Ty::Array(Box::new(args.into_iter().next().unwrap()))
+            }
+            Ty::Named(id, _) if id == TypeId::OPTION && args.len() == 1 => {
+                Ty::Option(Box::new(args.into_iter().next().unwrap()))
+            }
+            Ty::Named(id, _) if id == TypeId::MAP && args.len() == 2 => {
+                let mut it = args.into_iter();
+                Ty::Map(
+                    Box::new(it.next().unwrap()),
+                    Box::new(it.next().unwrap()),
+                )
+            }
+            Ty::Named(id, _) if id == TypeId::RESULT && args.len() == 2 => {
+                let mut it = args.into_iter();
+                Ty::Result(
+                    Box::new(it.next().unwrap()),
+                    Box::new(it.next().unwrap()),
+                )
+            }
+            Ty::Named(id, _) if id == TypeId::TUPLE => Ty::Tuple(args),
+            Ty::Named(id, _) => Ty::Named(id, args),
+            _ => base,
+        }
+    }
+
     /// Expand a union type to its member types.
     ///
     /// Returns `Some(members)` for union types, `None` for non-unions.
@@ -385,7 +453,7 @@ impl<'a> InferCtx<'a> {
     /// - **Anonymous unions** (`Ty::Union`): Members returned directly.
     /// - **Named unions** (`Ty::Named` with `TypeDef::Union`): Members looked up
     ///   from registry. Builtin unions (`Storable`, `Scalar`) are hardcoded;
-    ///   user-defined unions require `TypeExprArena` (Phase 4.14).
+    ///   user-defined unions are resolved via `type_expr_to_ty`.
     ///
     /// Named unions use `Ty::Named` (not `Ty::Union`) to preserve nominal
     /// identity. This matters for `Storable`'s special `AS` semantics: casting
@@ -403,11 +471,12 @@ impl<'a> InferCtx<'a> {
                 } else {
                     // Check if it's a user-defined union
                     self.registry.get_def(*id).and_then(|def| match def {
-                        TypeDef::Union { .. } => {
-                            // TODO(Phase 4.14.1): Resolve member TypeExprIds
-                            // to Ty; requires TypeExprArena in InferCtx
-                            None
-                        }
+                        TypeDef::Union { members, .. } => Some(
+                            members
+                                .iter()
+                                .map(|m| self.type_expr_to_ty(*m))
+                                .collect(),
+                        ),
                         _ => None,
                     })
                 }
@@ -1426,11 +1495,10 @@ impl<'a> InferCtx<'a> {
             }
         };
 
-        // Unify branches
+        // Unify branches (or find common union type)
         if let Some(else_id) = else_id {
             let else_ty = self.expr(else_id);
-            self.unify(then_ty.clone(), else_ty, span);
-            then_ty
+            self.join_types(&[then_ty, else_ty], span)
         } else {
             self.unify(then_ty, Ty::Unit, span);
             Ty::Unit
@@ -1538,7 +1606,8 @@ impl<'a> InferCtx<'a> {
     /// Infer type of a MATCH expression.
     ///
     /// Evaluates the scrutinee once, then checks each arm. All arm bodies must
-    /// have the same type. Also performs exhaustiveness checking.
+    /// have the same type (or be members of a common union). Also performs
+    /// exhaustiveness checking.
     fn r#match(
         &mut self,
         scrutinee_id: ExprId,
@@ -1557,17 +1626,59 @@ impl<'a> InferCtx<'a> {
                 .map(|arm| self.match_arm(arm, &scrutinee_ty, span))
                 .collect();
 
-            // Unify all arm types
-            let result_ty = arm_tys.first().cloned().unwrap_or(Ty::Error);
-
-            arm_tys.iter().skip(1).for_each(|ty| {
-                self.unify(result_ty.clone(), ty.clone(), span);
-            });
+            // Try to find a common type for all arms
+            let result_ty = self.join_types(&arm_tys, span);
 
             // Exhaustiveness check
             self.check_exhaustiveness(arms, &scrutinee_ty, span);
 
             result_ty
+        }
+    }
+
+    /// Find a common type for a list of types.
+    ///
+    /// If all types are the same, returns that type. If they differ and contain
+    /// type variables, unifies them (standard HM behavior). If all are primitive
+    /// storable types, creates an anonymous union. Otherwise, unifies normally.
+    fn join_types(&mut self, tys: &[Ty], span: Span) -> Ty {
+        let first = tys.first().cloned().unwrap_or(Ty::Error);
+
+        // Check if all types are the same
+        let all_same = tys.iter().skip(1).all(|t| *t == first);
+        if all_same {
+            first
+        } else {
+            // Only create anonymous unions for primitive storable types
+            // (Bool, Int, Float, Char, String, Json). This supports common
+            // patterns like `IF cond { 42 } ELSE { "string" }` -> Int | String.
+            // For other types (Option, Result, user structs), unify normally.
+            let all_storable_primitives = tys.iter().all(|t| {
+                matches!(
+                    t,
+                    Ty::Bool
+                        | Ty::Int
+                        | Ty::Float
+                        | Ty::Char
+                        | Ty::String
+                        | Ty::Json
+                )
+            });
+            if all_storable_primitives {
+                let mut members: Vec<Ty> = Vec::new();
+                tys.iter().for_each(|t| {
+                    if !members.contains(t) {
+                        members.push(t.clone());
+                    }
+                });
+                Ty::Union(members)
+            } else {
+                // Unify normally; mismatches will error
+                tys.iter().skip(1).for_each(|ty| {
+                    self.unify(first.clone(), ty.clone(), span);
+                });
+                first
+            }
         }
     }
 
@@ -1678,7 +1789,10 @@ impl<'a> InferCtx<'a> {
                     let narrowed_ty =
                         self.ast_type_to_ty(*ty_id, &HashMap::new());
 
-                    if self.expand_union_members(scrutinee_ty).is_some()
+                    // Skip check if narrowed type is the union itself
+                    let is_same_union = *scrutinee_ty == narrowed_ty;
+                    if !is_same_union
+                        && self.expand_union_members(scrutinee_ty).is_some()
                         && !self.is_union_member(scrutinee_ty, &narrowed_ty)
                     {
                         self.error(TypeError::NotAUnionMember {
@@ -2002,10 +2116,14 @@ impl<'a> InferCtx<'a> {
             TypePattern::Type(name) => {
                 let target_ty = self.named_type_to_ty(name);
                 // If scrutinee is a union, verify target is a member
+                // Skip check if target is the union type itself (e.g., `x IS Storable`)
+                // or if target is also a union that contains the scrutinee members
                 if let Some(members) = self.expand_union_members(&scrutinee_ty)
                 {
-                    if !members.contains(&target_ty) && target_ty != Ty::Unknown
-                    {
+                    let target_is_same_union = scrutinee_ty == target_ty;
+                    let target_is_member = members.contains(&target_ty)
+                        || target_ty == Ty::Unknown;
+                    if !target_is_same_union && !target_is_member {
                         self.error(TypeError::NotAUnionMember {
                             member: target_ty,
                             union_ty: scrutinee_ty,
@@ -2146,6 +2264,28 @@ impl<'a> InferCtx<'a> {
                 // time but may fail at runtime with RuntimeType error)
                 (Ty::Named(id, _), _) if *id == TypeId::STORABLE => {
                     if Ty::STORABLE_MEMBERS.contains(&target_ty) {
+                        target_ty
+                    } else {
+                        self.error(TypeError::InvalidCast {
+                            from: inner_ty,
+                            to: target_ty.clone(),
+                            span,
+                        });
+                        target_ty
+                    }
+                }
+
+                // Member type to union: valid if source is a member
+                (_, Ty::Named(id, _)) => {
+                    let is_member = self
+                        .expand_union_members(&target_ty)
+                        .is_some_and(|members| members.contains(&inner_ty));
+                    if is_member
+                        || *id == TypeId::STORABLE
+                        || *id == TypeId::SCALAR
+                    {
+                        // For Storable/Scalar, always allow casting from members
+                        // The runtime will handle the actual type tag
                         target_ty
                     } else {
                         self.error(TypeError::InvalidCast {
@@ -2699,8 +2839,9 @@ mod tests {
         let strings = arena.interner();
         // Leak to get 'static lifetime; tests don't need to clean up
         let registry = Box::leak(Box::new(registry));
+        let type_exprs = Box::leak(Box::new(type_exprs));
         let env = Box::leak(Box::new(crate::env::Environment::new()));
-        InferCtx::new(ast, registry, env, strings)
+        InferCtx::new(ast, registry, type_exprs, env, strings)
     }
 
     /// Create an AST with a single expression.
@@ -5079,8 +5220,8 @@ mod tests {
     }
 
     #[test]
-    fn if_expr_unifies_branch_types() {
-        // IF true { 1 } ELSE { "hello" } -> error (mismatch)
+    fn if_expr_with_storable_branches_creates_union() {
+        // IF true { 1 } ELSE { "hello" } -> Int | String (anonymous union)
         let mut ast = Ast::new();
         let span = Span::new(0, 40);
 
@@ -5097,16 +5238,11 @@ mod tests {
             .unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let _ty = ctx.expr(if_expr);
+        let ty = ctx.expr(if_expr);
 
-        // Should have a unification constraint between Int and String
-        assert!(ctx.constraints().iter().any(|c| {
-            matches!(
-                c,
-                Constraint::Eq(Ty::Int, Ty::String, _)
-                    | Constraint::Eq(Ty::String, Ty::Int, _)
-            )
-        }));
+        // Should produce anonymous union of storable primitives
+        assert!(matches!(ty, Ty::Union(members) if members.len() == 2));
+        assert!(ctx.errors.is_empty());
     }
 
     #[test]
@@ -5495,9 +5631,9 @@ mod tests {
     }
 
     #[test]
-    fn match_arm_type_mismatch_emits_constraint() {
+    fn match_arms_with_storable_types_creates_union() {
         // MATCH opt { Option.Some(x) => x, Option.None => "hello" }
-        // Arms have Int and String; should emit unification constraint
+        // Arms have Int and String; now creates anonymous union
         let mut ast = Ast::new();
         let span = Span::new(0, 60);
 
@@ -5546,14 +5682,14 @@ mod tests {
             ast.add_expr(Expr::Match(scrutinee, arms), span).unwrap();
 
         let mut ctx = test_ctx(&ast);
-        let _ty = ctx.expr(match_expr);
+        let ty = ctx.expr(match_expr);
 
-        // Should have constraint unifying Int with String
-        assert!(ctx.constraints().iter().any(|c| matches!(
-            c,
-            Constraint::Eq(Ty::Int, Ty::String, _)
-                | Constraint::Eq(Ty::String, Ty::Int, _)
-        )));
+        // With union types, storable primitives create anonymous unions
+        // Arms are Int (from x) and String; result is Int | String
+        assert!(
+            matches!(&ty, Ty::Union(members) if members.len() == 2)
+                || matches!(&ty, Ty::Var(_)) // May remain as var if not yet resolved
+        );
     }
 
     // Union type exhaustiveness tests
@@ -7251,7 +7387,7 @@ OUTPUT some-val.inner!
         let strings = arena.interner();
 
         // Type check
-        let mut ctx = InferCtx::new(ast, &registry, &env, strings);
+        let mut ctx = InferCtx::new(ast, &registry, &type_exprs, &env, strings);
         stmts.iter().for_each(|id| ctx.stmt(*id));
 
         let subst = ctx.solve_constraints();

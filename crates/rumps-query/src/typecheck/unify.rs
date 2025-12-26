@@ -244,6 +244,34 @@ impl<'a> InferCtx<'a> {
                     })
                 }),
 
+            // Named union with concrete type: expand union and check membership
+            (t, named @ Ty::Named(..)) | (named @ Ty::Named(..), t) => {
+                self.expand_union_members(named).map_or_else(
+                    || {
+                        UnifyResult::Err(TypeError::Mismatch {
+                            expected: t1.clone(),
+                            got: t2.clone(),
+                            span,
+                        })
+                    },
+                    |members| {
+                        members
+                            .iter()
+                            .find_map(|m| match self.unify_inner(t, m, span) {
+                                UnifyResult::Ok(s) => Some(UnifyResult::Ok(s)),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| {
+                                UnifyResult::Err(TypeError::Mismatch {
+                                    expected: t1.clone(),
+                                    got: t2.clone(),
+                                    span,
+                                })
+                            })
+                    },
+                )
+            }
+
             // All other combinations are type mismatches
             _ => UnifyResult::Err(TypeError::Mismatch {
                 expected: t1.clone(),
@@ -1028,8 +1056,9 @@ mod tests {
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
         let strings = arena.interner();
         let registry = Box::leak(Box::new(registry));
+        let type_exprs = Box::leak(Box::new(type_exprs));
         let env = Box::leak(Box::new(crate::env::Environment::new()));
-        InferCtx::new(ast, registry, env, strings)
+        InferCtx::new(ast, registry, type_exprs, env, strings)
     }
 
     // --- Basic unification tests ---

@@ -27,7 +27,7 @@ pub(crate) use ty::{Scheme, Subst, Ty, TyVar};
 use crate::ast::{Ast, StmtId};
 use crate::env::Environment;
 use crate::intern::StringInterner;
-use crate::value::TypeRegistry;
+use crate::value::{TypeExprArena, TypeRegistry};
 
 /// Run the type checker on an AST.
 ///
@@ -39,16 +39,19 @@ use crate::value::TypeRegistry;
 /// * `ast` - The AST after name resolution
 /// * `stmts` - Top-level statement IDs to type-check
 /// * `registry` - Type registry with builtin and user-defined types
+/// * `type_exprs` - Type expression arena for union member lookups
 /// * `runtime_env` - Runtime environment for module function type lookups
 /// * `strings` - String interner shared with the registry
 pub(crate) fn check(
     ast: &Ast,
     stmts: &[StmtId],
     registry: &TypeRegistry,
+    type_exprs: &TypeExprArena,
     runtime_env: &Environment,
     strings: StringInterner,
 ) -> crate::Result<()> {
-    let mut ctx = InferCtx::new(ast, registry, runtime_env, strings);
+    let mut ctx =
+        InferCtx::new(ast, registry, type_exprs, runtime_env, strings);
 
     // Infer types for all statements
     stmts.iter().for_each(|id| ctx.stmt(*id));
