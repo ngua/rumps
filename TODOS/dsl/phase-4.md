@@ -1841,6 +1841,114 @@ PRINT result
 
 ---
 
+## Phase 4.14.2: Test Script Audit and Fixes
+
+The type checker is producing incorrect errors on existing test scripts. This phase audits each script, identifies the root causes, and fixes them.
+
+### Known Issue Categories
+
+#### 1. `Json` Type Not Handled
+
+`Json` is a dynamic escape hatch; the type checker must treat it specially:
+
+| Operation | Type Signature |
+|-----------|----------------|
+| `json.field` | `Json -> Json` |
+| `json[idx]` | `Json -> Json` |
+| `json..field` | `Json -> Option[Scalar]` |
+| `json->(expr)` | `Json -> Json` |
+| `json->>(expr)` | `Json -> Option[Scalar]` |
+| `val AS Json` | `T -> Json` (always succeeds) |
+| `json READ T` | `Json -> Result[T, String]` |
+
+**Implementation**: In `field`, `index`, `optional_field`, `dynamic_access`, `as_cast`, and `read_convert`, detect when the base type is `Ty::Json` and apply special rules.
+
+```rust
+// In field access
+fn field(&mut self, base: &Ty, field: StringId, span: Span) -> Ty {
+    match base {
+        Ty::Json => Ty::Json,  // Json.anything -> Json
+        Ty::Object(fields) => { /* existing logic */ }
+        // ...
+    }
+}
+```
+
+#### 2. Heterogeneous Arrays
+
+Arrays with mixed element types should infer to `Json`:
+
+```rumps
+LET arr = [1, "two", TRUE]  ; Should be Json, not error
+```
+
+**Implementation**: In array inference, if element types don't unify, fall back to `Json`.
+
+#### 3. Type Annotation Required Spam
+
+Many "type annotation required" errors indicate inference isn't propagating. Common causes:
+- `READ` expressions not setting result type
+- `AS` casts not handled
+- Dynamic access operators not implemented
+
+#### 4. `IS` Operator Inference
+
+The `IS` operator should:
+- Always return `Bool`
+- Not require the checked type to be a field of the scrutinee
+
+### Audit Process
+
+For each script, run the type checker and categorize errors:
+
+| Script | Status | Issue Category | Notes |
+|--------|--------|----------------|-------|
+| `01_lex_simple` | TBD | | |
+| `02_arithmetic` | TBD | | |
+| ... | ... | ... | ... |
+| `86_json` | FAIL | Json not handled | 70+ errors |
+
+### Implementation Checklist
+
+**Json handling:**
+- [ ] `field` on `Json` returns `Json`
+- [ ] `index` on `Json` returns `Json`
+- [ ] `optional_field` (`?.`) on `Json` returns `Option[Json]`
+- [ ] Scalar extraction (`..`) on `Json` returns `Option[Scalar]`
+- [ ] Dynamic access (`->`) on `Json` returns `Json`
+- [ ] Dynamic scalar (`->>`) on `Json` returns `Option[Scalar]`
+- [ ] `AS Json` always succeeds
+- [ ] `READ T` on `Json` returns `Result[T, String]`
+
+**Heterogeneous arrays:**
+- [ ] Detect when array elements don't unify
+- [ ] Fall back to `Json` for heterogeneous arrays
+- [ ] Handle `null` literals (implicitly `Json`)
+
+**Operator inference:**
+- [ ] `IS` always returns `Bool`
+- [ ] `AS` returns target type (or `Option[T]` for fallible casts)
+
+**Per-script fixes:**
+- [ ] Audit `86_json.rumps` (Json handling)
+- [ ] Audit `15_arrays_objects.rumps`
+- [ ] Audit `19_object_access.rumps`
+- [ ] Audit `23_nested_structures.rumps`
+- [ ] Audit `30_optional_chaining.rumps`
+- [ ] Audit `31_is_operator.rumps`
+- [ ] Audit `34_as_cast.rumps`
+- [ ] Audit `35_read_convert.rumps`
+- [ ] (Continue for all ~90 scripts)
+
+### Success Criteria
+
+All existing test scripts pass with:
+1. No spurious type errors (false positives)
+2. Genuine type errors caught where expected (error scripts like `33_type_mismatch.rumps`)
+3. Snapshots updated only where the new behavior is correct
+
+---
+
 ## Phase 4.15: Error Messages and Diagnostics
 
 Improve error messages with suggestions and context.
