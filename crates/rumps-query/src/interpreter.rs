@@ -186,10 +186,12 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
         let mut registry = TypeRegistry::new(&mut arena, &mut type_exprs)?;
-        crate::resolve::resolve(ast, &mut arena, &registry);
 
-        // Register user-defined types BEFORE type checking
+        // Register user-defined types BEFORE resolution so the resolver can
+        // convert `Status.Pending` to `Expr::Variant` for user types
         registry.register_from_ast(ast, stmts, &mut arena, &mut type_exprs)?;
+
+        crate::resolve::resolve(ast, &mut arena, &registry);
 
         let env = Environment::new();
 
