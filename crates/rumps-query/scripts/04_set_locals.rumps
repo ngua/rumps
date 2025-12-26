@@ -3,11 +3,11 @@
 
 ; Simple SET without subscripts
 SET x = 100
-OUTPUT x
+OUTPUT GET x
 ; Expected: 100
 
 SET x = 200
-OUTPUT x
+OUTPUT GET x
 ; Expected: 200
 
 ; SET with single subscript

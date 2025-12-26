@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
+use smallvec::SmallVec;
 
 use super::error::TypeError;
 use super::infer::{Constraint, InferCtx};
@@ -91,6 +92,11 @@ impl<'a> InferCtx<'a> {
 
             // Array: unify element types
             (Ty::Array(a), Ty::Array(b)) => self.unify_inner(a, b, span),
+
+            // Range coerces to Array[Int] (for Array HOFs)
+            (Ty::Range, Ty::Array(elem)) | (Ty::Array(elem), Ty::Range) => {
+                self.unify_inner(elem, &Ty::Int, span)
+            }
 
             // Option: unify inner types
             (Ty::Option(a), Ty::Option(b)) => self.unify_inner(a, b, span),
@@ -222,6 +228,21 @@ impl<'a> InferCtx<'a> {
                     })
                 }
             }
+
+            // Concrete type with union: T unifies if it matches any member
+            (t, Ty::Union(members)) | (Ty::Union(members), t) => members
+                .iter()
+                .find_map(|m| match self.unify_inner(t, m, span) {
+                    UnifyResult::Ok(s) => Some(UnifyResult::Ok(s)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    UnifyResult::Err(TypeError::Mismatch {
+                        expected: t1.clone(),
+                        got: t2.clone(),
+                        span,
+                    })
+                }),
 
             // All other combinations are type mismatches
             _ => UnifyResult::Err(TypeError::Mismatch {
@@ -513,9 +534,11 @@ impl<'a> InferCtx<'a> {
         let constraints = self.take_constraints();
         let mut subst = Subst::empty();
 
-        // First pass: process all Eq constraints to build substitution
-        constraints.iter().for_each(|c| {
-            if let Constraint::Eq(t1, t2, span) = c {
+        // First pass: process Eq, Unwrappable, and HasField constraints to
+        // build substitution. Unwrappable and HasField must be processed early
+        // so type variables get resolved before they're used in other constraints.
+        constraints.iter().for_each(|c| match c {
+            Constraint::Eq(t1, t2, span) => {
                 let t1 = t1.apply(&subst);
                 let t2 = t2.apply(&subst);
                 match self.unify_types(&t1, &t2, *span) {
@@ -527,13 +550,39 @@ impl<'a> InferCtx<'a> {
                     }
                 }
             }
+            Constraint::Unwrappable { ty, inner, span } => {
+                let ty = ty.apply(&subst);
+                let inner = inner.apply(&subst);
+                self.check_unwrappable(&ty, &inner, *span, &mut subst);
+            }
+            Constraint::HasField {
+                base,
+                field,
+                field_ty,
+                span,
+            } => {
+                let base = base.apply(&subst);
+                let field_ty = field_ty.apply(&subst);
+                self.check_has_field(
+                    &base, *field, &field_ty, *span, &mut subst,
+                );
+            }
+            Constraint::Iterable { coll, elem, span } => {
+                let coll = coll.apply(&subst);
+                let elem = elem.apply(&subst);
+                self.check_iterable(&coll, &elem, *span, &mut subst);
+            }
+            _ => {}
         });
 
         // Second pass: process all other constraints with final substitution
         constraints.iter().for_each(|c| {
             match c {
-                Constraint::Eq(..) => {
-                    // Already processed
+                Constraint::Eq(..)
+                | Constraint::Unwrappable { .. }
+                | Constraint::HasField { .. }
+                | Constraint::Iterable { .. } => {
+                    // Already processed in first pass
                 }
 
                 Constraint::Numeric(ty, span) => {
@@ -569,12 +618,6 @@ impl<'a> InferCtx<'a> {
 
                 Constraint::Storable(ty, span) => {
                     self.check_storable(&ty.apply(&subst), *span);
-                }
-
-                Constraint::Unwrappable { ty, inner, span } => {
-                    let ty = ty.apply(&subst);
-                    let inner = inner.apply(&subst);
-                    self.check_unwrappable(&ty, &inner, *span, &mut subst);
                 }
             }
         });
@@ -798,6 +841,172 @@ impl<'a> InferCtx<'a> {
 
             _ => {
                 self.error(TypeError::NotUnwrappable(ty.clone(), span));
+            }
+        }
+    }
+
+    /// Check that a type has a specific field.
+    ///
+    /// Looks up the field in the resolved base type and unifies the expected
+    /// field type with the actual field type. Unlike `unify_named_with_object`,
+    /// this only checks the single accessed field, not all struct fields.
+    fn check_has_field(
+        &mut self,
+        base: &Ty,
+        field: StringId,
+        field_ty: &Ty,
+        span: Span,
+        subst: &mut Subst,
+    ) {
+        match base {
+            // Structural object: look up field directly
+            Ty::Object(fields) => match fields.get(&field) {
+                Some(actual_ty) => {
+                    match self.unify_types(field_ty, actual_ty, span) {
+                        UnifyResult::Ok(s) => {
+                            *subst = subst.compose(&s);
+                        }
+                        UnifyResult::Err(e) => {
+                            self.error(e);
+                        }
+                    }
+                }
+                None => {
+                    let name = self
+                        .env()
+                        .get_str(field)
+                        .unwrap_or("<unknown>")
+                        .to_string();
+                    self.error(TypeError::FieldNotFound {
+                        ty: base.clone(),
+                        field: name,
+                        span,
+                    });
+                }
+            },
+
+            // Named struct: look up field in struct definition
+            Ty::Named(type_id, type_args) => {
+                let def = self.registry().get_def(*type_id);
+                match def {
+                    Some(TypeDef::Struct {
+                        type_params,
+                        fields: struct_fields,
+                        ..
+                    }) => {
+                        let params: SmallVec<[StringId; 2]> =
+                            type_params.clone();
+                        let struct_fields = struct_fields.clone();
+
+                        match struct_fields.get(&field) {
+                            Some(ast_ty_id) => {
+                                let param_subst: HashMap<StringId, Ty> = params
+                                    .iter()
+                                    .zip(type_args.iter())
+                                    .map(|(p, a)| (*p, a.clone()))
+                                    .collect();
+                                let actual_ty = self
+                                    .ast_type_to_ty(*ast_ty_id, &param_subst);
+                                match self
+                                    .unify_types(field_ty, &actual_ty, span)
+                                {
+                                    UnifyResult::Ok(s) => {
+                                        *subst = subst.compose(&s);
+                                    }
+                                    UnifyResult::Err(e) => {
+                                        self.error(e);
+                                    }
+                                }
+                            }
+                            None => {
+                                let name = self
+                                    .env()
+                                    .get_str(field)
+                                    .unwrap_or("<unknown>")
+                                    .to_string();
+                                self.error(TypeError::FieldNotFound {
+                                    ty: base.clone(),
+                                    field: name,
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    _ => {
+                        self.error(TypeError::NotAnObject(base.clone(), span));
+                    }
+                }
+            }
+
+            // Json: any field access is valid and returns Json
+            Ty::Json => match self.unify_types(field_ty, &Ty::Json, span) {
+                UnifyResult::Ok(s) => {
+                    *subst = subst.compose(&s);
+                }
+                UnifyResult::Err(e) => {
+                    self.error(e);
+                }
+            },
+
+            // Type variable: defer until resolved
+            Ty::Var(_) => {
+                // Type variable not yet resolved; constraint will be checked
+                // when the variable is bound. For now, this is allowed.
+            }
+
+            Ty::Error | Ty::Unknown => {}
+
+            _ => {
+                self.error(TypeError::NotAnObject(base.clone(), span));
+            }
+        }
+    }
+
+    /// Check that a type is iterable and unify the element type.
+    ///
+    /// Iterable types are `Array[T]` (element type T) and `Range` (element
+    /// type `Int`). Used by Array HOFs like `map`, `filter`, `foreach`.
+    fn check_iterable(
+        &mut self,
+        coll: &Ty,
+        elem: &Ty,
+        span: Span,
+        subst: &mut Subst,
+    ) {
+        match coll {
+            Ty::Array(inner) => match self.unify_types(elem, inner, span) {
+                UnifyResult::Ok(s) => {
+                    *subst = subst.compose(&s);
+                }
+                UnifyResult::Err(e) => {
+                    self.error(e);
+                }
+            },
+
+            Ty::Range => {
+                // Range iterates over Int
+                match self.unify_types(elem, &Ty::Int, span) {
+                    UnifyResult::Ok(s) => {
+                        *subst = subst.compose(&s);
+                    }
+                    UnifyResult::Err(e) => {
+                        self.error(e);
+                    }
+                }
+            }
+
+            Ty::Var(_) => {
+                // Not yet resolved; defer
+            }
+
+            Ty::Error | Ty::Unknown => {}
+
+            _ => {
+                self.error(TypeError::Mismatch {
+                    expected: Ty::Array(Box::new(elem.clone())),
+                    got: coll.clone(),
+                    span,
+                });
             }
         }
     }

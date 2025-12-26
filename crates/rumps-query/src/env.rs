@@ -485,7 +485,7 @@ impl Environment {
         self.modules.insert(
             "Array".to_string(),
             Module::from_prims(&[
-                // Higher-order function placeholders
+                // Higher-order functions (Range coerces to Array[Int] in unify)
                 PrimDef {
                     name: "map",
                     f: Array::placeholder,

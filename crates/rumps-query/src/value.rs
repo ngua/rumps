@@ -19,7 +19,7 @@ use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
-use crate::ast::{AstTypeExprId, ExprId};
+use crate::ast::{Ast, AstTypeExprId, ExprId, Stmt, StmtId, TypeDefAst};
 use crate::intern::{StringId, StringInterner};
 use crate::typecheck::Ty;
 use crate::{Result, Span};
@@ -1450,6 +1450,162 @@ impl TypeRegistry {
         Ok(())
     }
 
+    /// Pre-register user-defined types from AST before type checking.
+    ///
+    /// Scans all statements for `TYPE` and `UNION` declarations and registers
+    /// them so the type checker can resolve type names.
+    pub(crate) fn register_from_ast(
+        &mut self,
+        ast: &Ast,
+        stmts: &[StmtId],
+        arena: &mut ValueArena,
+        type_exprs: &mut TypeExprArena,
+    ) -> Result<()> {
+        stmts.iter().try_for_each(|id| {
+            ast.get_stmt(*id).map_or(Ok(()), |stmt| match stmt {
+                Stmt::Type {
+                    name,
+                    type_params,
+                    def,
+                } => self.register_type(
+                    name,
+                    type_params,
+                    def,
+                    arena,
+                    ast.stmt_span(*id).unwrap_or_default(),
+                ),
+                Stmt::Union {
+                    name,
+                    type_params,
+                    members,
+                } => self.register_union(
+                    name,
+                    type_params,
+                    members,
+                    arena,
+                    type_exprs,
+                    ast,
+                    ast.stmt_span(*id).unwrap_or_default(),
+                ),
+                _ => Ok(()),
+            })
+        })
+    }
+
+    /// Register a single TYPE declaration.
+    fn register_type(
+        &mut self,
+        name: &str,
+        type_params: &[String],
+        def: &TypeDefAst,
+        arena: &mut ValueArena,
+        span: Span,
+    ) -> Result<()> {
+        let name_id = arena.intern(name);
+
+        // Check for duplicate
+        if self.lookup(name_id).is_some() {
+            Err(crate::Error::runtime(
+                span,
+                format!("type `{name}` is already defined"),
+            ))?;
+        }
+
+        let type_param_ids: SmallVec<[StringId; 2]> =
+            type_params.iter().map(|p| arena.intern(p)).collect();
+
+        match def {
+            TypeDefAst::Sum(variants) => {
+                let variant_defs: SmallVec<[VariantDef; 4]> = variants
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, v)| {
+                        let vname_id = arena.intern(&v.name);
+                        VariantDef {
+                            name: vname_id,
+                            idx: idx as u8,
+                            arity: v.payloads.len() as u8,
+                            payloads: v.payloads.clone(),
+                        }
+                    })
+                    .collect();
+
+                self.register(
+                    TypeDef::Sum {
+                        name: name_id,
+                        type_params: type_param_ids,
+                        variants: variant_defs,
+                    },
+                    name_id,
+                );
+            }
+            TypeDefAst::Struct(fields) => {
+                let field_map: IndexMap<StringId, AstTypeExprId> = fields
+                    .iter()
+                    .map(|(fname, ast_ty_id)| {
+                        let fname_id = arena.intern(fname);
+                        (fname_id, *ast_ty_id)
+                    })
+                    .collect();
+
+                self.register(
+                    TypeDef::Struct {
+                        name: name_id,
+                        type_params: type_param_ids,
+                        fields: field_map,
+                    },
+                    name_id,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Register a single UNION declaration.
+    fn register_union(
+        &mut self,
+        name: &str,
+        type_params: &[String],
+        ast_members: &[AstTypeExprId],
+        arena: &mut ValueArena,
+        type_exprs: &mut TypeExprArena,
+        ast: &Ast,
+        span: Span,
+    ) -> Result<()> {
+        let name_id = arena.intern(name);
+
+        // Check for duplicate
+        if self.lookup(name_id).is_some() {
+            Err(crate::Error::runtime(
+                span,
+                format!("union `{name}` is already defined"),
+            ))?;
+        }
+
+        let type_param_ids: SmallVec<[StringId; 2]> =
+            type_params.iter().map(|p| arena.intern(p)).collect();
+
+        // Convert AST type expressions to TypeExprIds
+        let members: SmallVec<[TypeExprId; 8]> = ast_members
+            .iter()
+            .filter_map(|m| {
+                resolve_type_expr(ast, arena, self, type_exprs, *m, span).ok()
+            })
+            .collect();
+
+        self.register(
+            TypeDef::Union {
+                name: name_id,
+                type_params: type_param_ids,
+                members,
+            },
+            name_id,
+        );
+
+        Ok(())
+    }
+
     fn len(&self) -> usize {
         self.defs.len()
     }
@@ -1457,6 +1613,109 @@ impl TypeRegistry {
     fn is_empty(&self) -> bool {
         self.defs.is_empty()
     }
+}
+
+/// Resolve an AST type expression to a `TypeExprId`.
+///
+/// Used during type registration to convert user type annotations.
+fn resolve_type_expr(
+    ast: &Ast,
+    arena: &mut ValueArena,
+    registry: &TypeRegistry,
+    type_exprs: &mut TypeExprArena,
+    id: AstTypeExprId,
+    span: Span,
+) -> Result<TypeExprId> {
+    use crate::ast::AstTypeExpr;
+
+    ast.get_type_expr(id).map_or_else(
+        || Err(crate::Error::runtime(span, "invalid type expression id")),
+        |te| match te {
+            AstTypeExpr::Named(name) => {
+                let name_id = arena.intern(name);
+                registry.lookup(name_id).map_or_else(
+                    || {
+                        Err(crate::Error::runtime(
+                            span,
+                            format!("unknown type `{name}`"),
+                        ))
+                    },
+                    |ty_id| Ok(type_exprs.named(ty_id)),
+                )
+            }
+            AstTypeExpr::App(name, args) => {
+                let name_id = arena.intern(name);
+                registry.lookup(name_id).map_or_else(
+                    || {
+                        Err(crate::Error::runtime(
+                            span,
+                            format!("unknown type `{name}`"),
+                        ))
+                    },
+                    |base| {
+                        let arg_ids: Result<SmallVec<[TypeExprId; 2]>> = args
+                            .iter()
+                            .map(|a| {
+                                resolve_type_expr(
+                                    ast, arena, registry, type_exprs, *a, span,
+                                )
+                            })
+                            .collect();
+                        Ok(type_exprs.app(base, arg_ids?))
+                    },
+                )
+            }
+            AstTypeExpr::Tuple(elems) => {
+                let elem_ids: Result<SmallVec<[TypeExprId; 4]>> = elems
+                    .iter()
+                    .map(|e| {
+                        resolve_type_expr(
+                            ast, arena, registry, type_exprs, *e, span,
+                        )
+                    })
+                    .collect();
+                Ok(type_exprs.tuple(elem_ids?))
+            }
+            AstTypeExpr::Fn(params, ret) => {
+                let param_ids: Result<SmallVec<[TypeExprId; 4]>> = params
+                    .iter()
+                    .map(|p| {
+                        resolve_type_expr(
+                            ast, arena, registry, type_exprs, *p, span,
+                        )
+                    })
+                    .collect();
+                let ret_id = resolve_type_expr(
+                    ast, arena, registry, type_exprs, *ret, span,
+                )?;
+                Ok(type_exprs.fn_type(param_ids?, ret_id))
+            }
+            AstTypeExpr::Union(members) => {
+                let member_ids: Result<SmallVec<[TypeExprId; 4]>> = members
+                    .iter()
+                    .map(|m| {
+                        resolve_type_expr(
+                            ast, arena, registry, type_exprs, *m, span,
+                        )
+                    })
+                    .collect();
+                Ok(type_exprs.union(member_ids?))
+            }
+            AstTypeExpr::Object(fields) => {
+                let field_ids: Result<IndexMap<StringId, TypeExprId>> = fields
+                    .iter()
+                    .map(|(name, ty)| {
+                        let name_id = arena.intern(name);
+                        let ty_id = resolve_type_expr(
+                            ast, arena, registry, type_exprs, *ty, span,
+                        )?;
+                        Ok((name_id, ty_id))
+                    })
+                    .collect();
+                Ok(type_exprs.object(field_ids?))
+            }
+        },
+    )
 }
 
 #[cfg(test)]

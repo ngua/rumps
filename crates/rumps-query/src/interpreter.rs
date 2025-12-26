@@ -185,8 +185,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     ) -> Result<Self> {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
-        let registry = TypeRegistry::new(&mut arena, &mut type_exprs)?;
+        let mut registry = TypeRegistry::new(&mut arena, &mut type_exprs)?;
         crate::resolve::resolve(ast, &mut arena, &registry);
+
+        // Register user-defined types BEFORE type checking
+        registry.register_from_ast(ast, stmts, &mut arena, &mut type_exprs)?;
 
         let env = Environment::new();
 
@@ -437,82 +440,82 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<()> {
         let name_id = self.arena.intern(name);
 
-        // Check for duplicate type name
-        if self.registry.lookup(name_id).is_some() {
-            Err(Error::runtime(
-                span,
-                format!("type `{name}` is already defined"),
-            ))?;
-        }
+        // Skip if already registered (from register_from_ast before type
+        // checking). This makes type registration idempotent.
+        if self.registry.lookup(name_id).is_none() {
+            match def {
+                TypeDefAst::Sum(variants) => {
+                    // Validate payload types reference only declared type params
+                    variants.iter().try_for_each(|v| {
+                        v.payloads.iter().try_for_each(|ty_id| {
+                            self.validate_type_params(*ty_id, type_params, span)
+                        })
+                    })?;
 
-        match def {
-            TypeDefAst::Sum(variants) => {
-                // Validate payload types reference only declared type params
-                variants.iter().try_for_each(|v| {
-                    v.payloads.iter().try_for_each(|ty_id| {
-                        self.validate_type_params(*ty_id, type_params, span)
-                    })
-                })?;
+                    // Build VariantDef entries
+                    let variant_defs: SmallVec<[crate::value::VariantDef; 4]> =
+                        variants
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, v)| {
+                                let vname_id = self.arena.intern(&v.name);
+                                crate::value::VariantDef {
+                                    name: vname_id,
+                                    idx: idx as u8,
+                                    arity: v.payloads.len() as u8,
+                                    payloads: v.payloads.clone(),
+                                }
+                            })
+                            .collect();
 
-                // Build VariantDef entries
-                let variant_defs: SmallVec<[crate::value::VariantDef; 4]> =
-                    variants
+                    // Intern type parameters
+                    let type_param_ids: SmallVec<[StringId; 2]> = type_params
                         .iter()
-                        .enumerate()
-                        .map(|(idx, v)| {
-                            let vname_id = self.arena.intern(&v.name);
-                            crate::value::VariantDef {
-                                name: vname_id,
-                                idx: idx as u8,
-                                arity: v.payloads.len() as u8,
-                                payloads: v.payloads.clone(),
-                            }
+                        .map(|p| self.arena.intern(p))
+                        .collect();
+
+                    // Register the type
+                    self.registry.register(
+                        crate::value::TypeDef::Sum {
+                            name: name_id,
+                            type_params: type_param_ids,
+                            variants: variant_defs,
+                        },
+                        name_id,
+                    );
+                }
+                TypeDefAst::Struct(fields) => {
+                    // Validate field types reference only declared type params
+                    fields.iter().try_for_each(|(_, ty_id)| {
+                        self.validate_type_params(*ty_id, type_params, span)
+                    })?;
+
+                    // Build field map with AST type expressions (not resolved);
+                    // resolution happens at usage site with type param substitution
+                    let field_map: IndexMap<StringId, AstTypeExprId> = fields
+                        .iter()
+                        .map(|(fname, ast_ty_id)| {
+                            let fname_id = self.arena.intern(fname);
+                            (fname_id, *ast_ty_id)
                         })
                         .collect();
 
-                // Intern type parameters
-                let type_param_ids: SmallVec<[StringId; 2]> =
-                    type_params.iter().map(|p| self.arena.intern(p)).collect();
+                    // Intern type parameters
+                    let type_param_ids: SmallVec<[StringId; 2]> = type_params
+                        .iter()
+                        .map(|p| self.arena.intern(p))
+                        .collect();
 
-                // Register the type
-                self.registry.register(
-                    crate::value::TypeDef::Sum {
-                        name: name_id,
-                        type_params: type_param_ids,
-                        variants: variant_defs,
-                    },
-                    name_id,
-                );
-            }
-            TypeDefAst::Struct(fields) => {
-                // Validate field types reference only declared type params
-                fields.iter().try_for_each(|(_, ty_id)| {
-                    self.validate_type_params(*ty_id, type_params, span)
-                })?;
-
-                // Build field map with AST type expressions (not resolved);
-                // resolution happens at usage site with type param substitution
-                let field_map: IndexMap<StringId, AstTypeExprId> = fields
-                    .iter()
-                    .map(|(fname, ast_ty_id)| {
-                        let fname_id = self.arena.intern(fname);
-                        (fname_id, *ast_ty_id)
-                    })
-                    .collect();
-
-                // Intern type parameters
-                let type_param_ids: SmallVec<[StringId; 2]> =
-                    type_params.iter().map(|p| self.arena.intern(p)).collect();
-
-                // Register the struct type
-                self.registry.register(
-                    crate::value::TypeDef::Struct {
-                        name: name_id,
-                        type_params: type_param_ids,
-                        fields: field_map,
-                    },
-                    name_id,
-                );
+                    // Register the struct type
+                    self.registry.register(
+                        crate::value::TypeDef::Struct {
+                            name: name_id,
+                            type_params: type_param_ids,
+                            fields: field_map,
+                        },
+                        name_id,
+                    );
+                }
             }
         }
 
