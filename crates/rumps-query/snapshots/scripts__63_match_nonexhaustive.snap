@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
 description: "; Non-exhaustive match error\n\nLET x = 5\n\n; This should fail because no arm matches\nLET result = MATCH x {\n  1 => { \"one\" }\n  2 => { \"two\" }\n  3 => { \"three\" }\n}\n\nOUTPUT result\n"
 ---
-ERROR: runtime error at 96..160: non-exhaustive match
+ERROR: non-exhaustive match

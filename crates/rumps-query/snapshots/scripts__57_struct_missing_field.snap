@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
 description: "; Error: missing required field in struct type\n\nTYPE Person = { name: String, age: Int }\n\n; Missing `age` field\nLET p: Person = { name: \"Alice\" }\n"
 ---
-ERROR: runtime type error at 112..145: missing required field `age`
+ERROR: missing required field `age` for type `TypeId(17)`

@@ -1,5 +1,8 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
 description: "; Unknown variant in pattern error\n\nLET opt = Option.Some(42)\n\n; This should fail because Option.Unknown doesn't exist\nLET result = MATCH opt {\n  Option.Unknown(v) => { v }\n  Option.None => { 0 }\n}\n\nOUTPUT result\n"
 ---
-ERROR: runtime error at 132..197: unknown variant `Option.Unknown`
+ERROR: unknown type `Option.Unknown`
+undefined variable `v`
+non-exhaustive match

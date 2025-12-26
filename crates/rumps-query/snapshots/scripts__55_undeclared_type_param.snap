@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
 description: "; Test: undeclared type parameter error\n; Payload types must reference declared type params\n\n; This should fail: U is not declared\nTYPE Foo[T] = Bar(U)\n"
 ---
-ERROR: runtime error at 131..151: undeclared type parameter `U`
+

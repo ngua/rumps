@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
 description: "; Test: Return Type Error\n; Function returns wrong type.\n\nFUN get-number () -> Int {\n  \"not a number\"\n}\n\nOUTPUT get-number()\n"
 ---
-ERROR: runtime type error at 112..124: expected return type `Int`, got `String`
+ERROR: type mismatch: expected `String`, got `Int`

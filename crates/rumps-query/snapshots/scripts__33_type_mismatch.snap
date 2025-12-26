@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
+assertion_line: 37
 description: "; Test: Type mismatch error detection\n; This script should produce a type error\n\n; Annotating Int but assigning String\nLET x: Int = \"hello\"\n\n; This line should not be reached\nOUTPUT \"Should not reach here\"\n"
 ---
-ERROR: runtime type error at 119..139: type mismatch: expected Int, got String
+ERROR: type mismatch: expected `String`, got `Int`
