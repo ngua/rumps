@@ -16,8 +16,9 @@ OUTPUT obj.x!
 FUN make-some (n) { Option.Some(n * 2) }
 OUTPUT make-some(25)!
 
-; Unwrap result from Object.entries (which returns Result)
-LET entries = Object.entries({ a: 1, b: 2 })!
+; Unwrap result from Map.entries (which returns Array)
+LET map = Map.from-entries([("a", 1), ("b", 2)])
+LET entries = Map.entries(map)
 OUTPUT entries
 
 ; Double unwrap (nested Option)

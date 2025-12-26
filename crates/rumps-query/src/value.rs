@@ -438,11 +438,11 @@ pub(crate) enum Value {
 
     /// A module function reference.
     ///
-    /// Created when a module path like `Object.keys` is evaluated. Can be
+    /// Created when a module path like `Array.length` is evaluated. Can be
     /// called directly or used as a first-class value (e.g., in pipelines).
     ///
     /// The path includes the full module path plus function name:
-    /// - `Object.keys` → `["Object", "keys"]`
+    /// - `Array.length` → `["Array", "length"]`
     /// - `Math.Trig.sin` → `["Math", "Trig", "sin"]`
     ModuleFn { path: SmallVec<[StringId; 4]> },
 

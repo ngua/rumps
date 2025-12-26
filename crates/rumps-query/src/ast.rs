@@ -587,9 +587,9 @@ pub(crate) enum Expr {
     /// Namespace path for module functions and constants.
     ///
     /// Created by the name resolution pass from `Field(Var(module), name)` when
-    /// `module` is a known built-in module (e.g., `Object`, `Array`, `Math`).
+    /// `module` is a known built-in module (e.g., `Array`, `String`, `Math`).
     ///
-    /// Examples: `Object.keys`, `Array.map`, `Math.PI`
+    /// Examples: `Array.length`, `String.split`, `Math.PI`
     ///
     /// When evaluated, produces a `Value::ModuleFn` that can be called directly
     /// or used as a first-class value (e.g., in pipelines).

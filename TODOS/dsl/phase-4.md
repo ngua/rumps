@@ -241,15 +241,11 @@ OUTPUT obj IS { a: Int }
 
 **Internal note**: `TypeId::OBJECT` and `Value::Object` remain for runtime representation. Only the user-facing type name is removed.
 
-### Object Module Unchanged
+### Object Module Removed
 
-The `Object` module (`Object.keys`, `Object.values`, etc.) remains available. These functions operate on any structural object type:
+The `Object` module (`Object.keys`, `Object.values`, etc.) has been removed. Dynamic field iteration is incompatible with static typing; objects have heterogeneous field types, so `Object.values` would return `Array[Unknown]` which defeats the purpose of type checking.
 
-```rumps
-LET obj: { a: Int, b: String } = { a: 1, b: "hello" }
-OUTPUT Object.keys(obj)       ; ["a", "b"]
-OUTPUT Object.values(obj)     ; [1, "hello"]
-```
+For dynamic key-value iteration, use `Map[String, V]` instead of structural objects. Structural objects are for statically-typed records with known field types.
 
 ### Implementation Notes
 
@@ -1375,29 +1371,20 @@ Register type schemes for all primitive/module functions.
 
 ```
 ; Array module (also accepts Range where Array[Int] expected)
-Array.len:    forall a. (Array[a] | Range) -> Int
-Array.map:    forall a b. (Array[a] | Range, (a) -> b) -> Array[b]
-Array.filter: forall a. (Array[a] | Range, (a) -> Bool) -> Array[a]
-Array.fold:   forall a b. (Array[a] | Range, b, (b, a) -> b) -> b
-
-; Option module
-Option.map:      forall a b. (Option[a], (a) -> b) -> Option[b]
-Option.unwrap:   forall a. (Option[a]) -> a
-Option.unwrap-or: forall a. (Option[a], a) -> a
-
-; Object module (accepts any structural object via `{ }`)
-; `{ }` means "any object with any fields" (empty structural type = wildcard)
-Object.keys:    ({ }) -> Array[String]
-Object.values:  ({ }) -> Array[Unknown]
-Object.entries: ({ }) -> Array[(String, Unknown)]
-Object.has:     ({ }, String) -> Bool
-Object.lookup:  ({ }, String) -> Option[Unknown]
+Array.len:    forall T. (Array[T] | Range) -> Int
+Array.map:    forall T U. (Array[T] | Range, (T) -> U) -> Array[U]
+Array.filter: forall T. (Array[T] | Range, (T) -> Bool) -> Array[T]
+Array.fold:   forall T U. (Array[T] | Range, U, (U, T) -> U) -> U
 
 ; Math module
 Math.abs:   (Float) -> Float
 Math.sqrt:  (Float) -> Float
 Math.floor: (Float) -> Int
+
+; Etc...
 ```
+
+**Note**: The `Object` module has been removed. Dynamic field iteration is incompatible with static typing (objects have heterogeneous field types). Use `Map[String, V]` for dynamic key-value collections.
 
 ### Checklist
 
@@ -1406,7 +1393,6 @@ Math.floor: (Float) -> Int
 - [ ] Register `Array` module functions
 - [ ] Register `Option` module functions
 - [ ] Register `Result` module functions
-- [ ] Register `Object` module functions
 - [ ] Register `String` module functions
 - [ ] Register `Math` module functions
 - [ ] Register `Time` module functions
@@ -1672,7 +1658,7 @@ macro_rules! typechecked {
 
 **Current pattern:**
 ```rust
-Self::check_arity("Object.keys", &args, 1, ctx.span)?;
+Self::check_arity("Array.length", &args, 1, ctx.span)?;
 ```
 
 **After cleanup:**
@@ -1683,7 +1669,6 @@ Self::check_arity("Object.keys", &args, 1, ctx.span)?;
 **Checklist:**
 - [ ] Remove `check_arity` function entirely
 - [ ] Remove all `check_arity` calls (~50+ sites across all module functions)
-- [ ] Object module functions (`Object.keys`, `Object.values`, etc.)
 - [ ] Array module functions (`Array.length`, `Array.map`, etc.)
 - [ ] String module functions (`String.length`, `String.split`, etc.)
 - [ ] Math module functions (`Math.abs`, `Math.floor`, etc.)
@@ -1915,15 +1900,6 @@ let Value::Array(_, elems) = ctx.arena.get(args[0]).unwrap() else {
 ```
 
 **Checklist by module:**
-
-**Object module:**
-- [ ] `Object.keys`: Remove Object type check
-- [ ] `Object.values`: Remove Object type check
-- [ ] `Object.entries`: Remove Object type check
-- [ ] `Object.has`: Remove Object type check
-- [ ] `Object.lookup`: Remove Object type check
-- [ ] `Object.insert`: Remove Object type check
-- [ ] `Object.remove`: Remove Object type check
 
 **Array module:**
 - [ ] `Array.length`: Remove Array type check

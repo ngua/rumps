@@ -12,8 +12,7 @@ use std::collections::HashMap;
 /// This is the single source of truth for which module names are recognized
 /// during resolution and registered at interpreter startup.
 pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
-    "Object", "Array", "String", "Math", "Random", "Map", "Time", "Option",
-    "Result",
+    "Array", "String", "Math", "Random", "Map", "Time", "Option", "Result",
 ];
 
 use futures::future::BoxFuture;
@@ -203,7 +202,7 @@ impl PrimCtx<'_> {
 
 /// A built-in primitive function.
 ///
-/// Primitives are callable built-in functions like `Object.keys`, `Array.map`,
+/// Primitives are callable built-in functions like `Array.map`, `String.split`,
 /// etc. They take a context and arguments, returning a future that resolves
 /// to a `ValueId`.
 ///
@@ -214,8 +213,8 @@ pub(crate) type PrimFn =
 
 /// A built-in module containing primitive functions, constants, and submodules.
 ///
-/// Modules group related functions under a namespace (e.g., `Object.keys`,
-/// `Array.map`). Supports nested modules for future extensibility
+/// Modules group related functions under a namespace (e.g., `Array.map`,
+/// `String.split`). Supports nested modules for future extensibility
 /// (e.g., `Math.Trig.sin`).
 ///
 /// Constants are module-level values (e.g., `Math.pi`, `Math.e`) that are
@@ -307,7 +306,7 @@ impl Module {
 ///
 /// Tracks:
 /// - Lexical scopes for `LET` bindings (via `Scopes`)
-/// - Built-in modules containing primitive functions (e.g., `Object`, `Array`)
+/// - Built-in modules containing primitive functions (e.g., `Array`, `String`)
 /// - Module constants (e.g., `Math.pi`, `Math.e`)
 ///
 /// Note: `SET` variables (both local and global) are stored in the `Database`,
@@ -374,7 +373,7 @@ impl Environment {
     /// and the remaining segments form the path within that module.
     ///
     /// Examples:
-    /// - `["Object", "keys"]` → `Object.keys`
+    /// - `["Array", "length"]` → `Array.length`
     /// - `["Math", "Trig", "sin"]` → `Math.Trig.sin`
     pub(crate) fn get_module_fn(&self, path: &[&str]) -> Option<&PrimFn> {
         path.split_first().and_then(|(module, rest)| {
@@ -394,7 +393,6 @@ impl Environment {
     /// Register built-in modules.
     ///
     /// Built-in modules provide primitive functions grouped by category:
-    /// - `Object`: `keys`, `values`, `entries`, `from-entries`
     /// - `Array`: `length`, `push`, `pop`, `head`, `tail`, `reverse`, `sort`,
     ///   `slice`, `contains`, `concat`, plus HoF placeholders
     /// - `String`: `length`, `upper`, `lower`, `trim`, `split`, `join`,
@@ -409,18 +407,8 @@ impl Environment {
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
         use crate::primitives::{
-            Array, Map, Math, Object, Opt, Prim, Random, Res, Str, Time, Trig,
+            Array, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
         };
-
-        self.modules.insert(
-            "Object".to_string(),
-            Module::from_fns(&[
-                ("keys", Object::keys),
-                ("values", Object::values),
-                ("entries", Object::entries),
-                ("from-entries", Object::from_entries),
-            ]),
-        );
 
         self.modules.insert(
             "Array".to_string(),
@@ -663,10 +651,6 @@ mod tests {
         let env = Environment::new();
 
         assert_eq!(env.scopes.depth(), 1);
-        // Object module is registered with functions
-        assert!(env.has_module("Object"));
-        assert!(env.get_module_fn(&["Object", "keys"]).is_some());
-        assert!(env.module_fn_exists(&["Object", "keys"]));
         // Array module is registered with placeholder functions
         assert!(env.has_module("Array"));
         assert!(env.get_module_fn(&["Array", "map"]).is_some());
@@ -769,16 +753,16 @@ mod tests {
         let env = Environment::new();
 
         // Valid paths
-        assert!(env.module_fn_exists(&["Object", "keys"]));
-        assert!(env.module_fn_exists(&["Object", "values"]));
-        assert!(env.module_fn_exists(&["Object", "entries"]));
-        assert!(env.module_fn_exists(&["Object", "from-entries"]));
+        assert!(env.module_fn_exists(&["Array", "length"]));
+        assert!(env.module_fn_exists(&["Array", "map"]));
+        assert!(env.module_fn_exists(&["String", "split"]));
+        assert!(env.module_fn_exists(&["Math", "sqrt"]));
 
         // Invalid paths
-        assert!(!env.module_fn_exists(&["Object", "unknown"]));
+        assert!(!env.module_fn_exists(&["Array", "unknown"]));
         assert!(!env.module_fn_exists(&["Unknown", "keys"]));
         assert!(!env.module_fn_exists(&[]));
-        assert!(!env.module_fn_exists(&["Object"]));
+        assert!(!env.module_fn_exists(&["Array"]));
     }
 
     #[test]
