@@ -1799,16 +1799,29 @@ impl Parser {
                 .then_ignore(Self::opt_newlines())
                 .then_ignore(just(Token::RParen));
 
+            // Variant pattern: `Type.Variant` or `Module.Type.Variant`
+            // Parse a path of at least two segments; the last is the variant,
+            // everything else (joined by `.`) is the type path.
             let variant_pat = Self::ident()
-                .then_ignore(just(Token::Dot))
-                .then(Self::ident())
+                .separated_by(just(Token::Dot))
+                .at_least(2)
                 .then(variant_args.or_not())
-                .map(|((ty, var), args)| {
-                    cst::MatchPattern::Variant(
-                        ty,
-                        var,
-                        args.unwrap_or_default(),
-                    )
+                .try_map(|(segments, args), span| {
+                    segments
+                        .split_last()
+                        .map(|(var, type_path)| {
+                            cst::MatchPattern::Variant(
+                                type_path.join("."),
+                                var.clone(),
+                                args.unwrap_or_default(),
+                            )
+                        })
+                        .ok_or_else(|| {
+                            chumsky::error::Simple::custom(
+                                span,
+                                "variant pattern requires at least Type.Variant",
+                            )
+                        })
                 });
 
             // Tuple pattern: `(pat, pat, ...)`
@@ -1970,16 +1983,20 @@ impl Parser {
                 .at_least(1)
                 .delimited_by(just(Token::LBracket), just(Token::RBracket));
 
-            // Atom: named type optionally with type params
-            let atom = Self::ident().then(type_params.or_not()).map_with_span(
-                |(name, params), span| {
+            // Atom: named type (possibly qualified: `Module.Type`) optionally with type params
+            // Parse one or more idents separated by `.` and join them into a type path
+            let atom = Self::ident()
+                .separated_by(just(Token::Dot))
+                .at_least(1)
+                .then(type_params.or_not())
+                .map_with_span(|(segments, params), span| {
+                    let name = segments.join(".");
                     let kind = match params {
                         None => cst::TypeExprKind::Named(name),
                         Some(ps) => cst::TypeExprKind::App(name, ps),
                     };
                     TypeAtomOrParams::Single(cst::TypeExpr::new(kind, span))
-                },
-            );
+                });
 
             // Parenthesized: `()`, `(T)`, `(T,)`, or `(T, U, ...)`
             // Parse as (elem ,)* [elem] to track trailing commas
@@ -2065,6 +2082,7 @@ impl Parser {
     /// Parse a type expression atom (named type with optional params).
     ///
     /// Does not parse unions or function types; used for simple contexts.
+    /// Supports qualified names like `Module.Type`.
     fn type_expr_atom(
     ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
     {
@@ -2074,15 +2092,18 @@ impl Parser {
             .at_least(1)
             .delimited_by(just(Token::LBracket), just(Token::RBracket));
 
-        Self::ident().then(type_params.or_not()).map_with_span(
-            |(name, params), span| {
+        Self::ident()
+            .separated_by(just(Token::Dot))
+            .at_least(1)
+            .then(type_params.or_not())
+            .map_with_span(|(segments, params), span| {
+                let name = segments.join(".");
                 let kind = match params {
                     None => cst::TypeExprKind::Named(name),
                     Some(ps) => cst::TypeExprKind::App(name, ps),
                 };
                 cst::TypeExpr::new(kind, span)
-            },
-        )
+            })
     }
 
     /// Build a function type, tuple type, or standalone type from parsed components.

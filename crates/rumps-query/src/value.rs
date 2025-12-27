@@ -1461,8 +1461,10 @@ impl TypeRegistry {
 
     /// Pre-register user-defined types from AST before type checking.
     ///
-    /// Scans all statements for `TYPE` and `UNION` declarations and registers
-    /// them so the type checker can resolve type names.
+    /// Scans all statements for `TYPE` and `UNION` declarations (including
+    /// those inside modules) and registers them so the type checker can
+    /// resolve type names. Module-scoped types are registered with qualified
+    /// names (e.g., `MyModule.MyType`).
     pub(crate) fn register_from_ast(
         &mut self,
         ast: &Ast,
@@ -1475,29 +1477,71 @@ impl TypeRegistry {
             type_exprs,
             ast,
         };
+        self.register_stmts_with_prefix(stmts, None, &mut ctx)
+    }
+
+    /// Register types from statements with an optional module path prefix.
+    ///
+    /// Recursively descends into modules, tracking the qualified name prefix.
+    fn register_stmts_with_prefix(
+        &mut self,
+        stmts: &[StmtId],
+        prefix: Option<&str>,
+        ctx: &mut UnionRegCtx,
+    ) -> Result<()> {
         stmts.iter().try_for_each(|id| {
             let span = ctx.ast.stmt_span(*id).unwrap_or_default();
-            ctx.ast.get_stmt(*id).map_or(Ok(()), |stmt| match stmt {
-                Stmt::Type {
-                    name,
-                    type_params,
-                    def,
-                } => {
-                    self.register_type(name, type_params, def, ctx.arena, span)
-                }
-                Stmt::Union {
-                    name,
-                    type_params,
-                    members,
-                } => self.register_union(
-                    name,
-                    type_params,
-                    members,
-                    &mut ctx,
-                    span,
-                ),
-                _ => Ok(()),
-            })
+            ctx.ast
+                .get_stmt(*id)
+                .cloned()
+                .map_or(Ok(()), |stmt| match stmt {
+                    Stmt::Type {
+                        name,
+                        type_params,
+                        def,
+                    } => {
+                        let qname = prefix.map_or_else(
+                            || name.clone(),
+                            |p| format!("{}.{}", p, name),
+                        );
+                        self.register_type(
+                            &qname,
+                            &type_params,
+                            &def,
+                            ctx.arena,
+                            span,
+                        )
+                    }
+                    Stmt::Union {
+                        name,
+                        type_params,
+                        members,
+                    } => {
+                        let qname = prefix.map_or_else(
+                            || name.clone(),
+                            |p| format!("{}.{}", p, name),
+                        );
+                        self.register_union(
+                            &qname,
+                            &type_params,
+                            &members,
+                            ctx,
+                            span,
+                        )
+                    }
+                    Stmt::Module { name, body } => {
+                        let new_prefix = prefix.map_or_else(
+                            || name.clone(),
+                            |p| format!("{}.{}", p, name),
+                        );
+                        self.register_stmts_with_prefix(
+                            &body,
+                            Some(&new_prefix),
+                            ctx,
+                        )
+                    }
+                    _ => Ok(()),
+                })
         })
     }
 

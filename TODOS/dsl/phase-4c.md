@@ -105,16 +105,23 @@ Modules should be able to contain anything the top-level can, including type and
 
 ### Implementation
 
-- [ ] Extend module AST node to include type definitions
-- [ ] Update parser to accept `TYPE` and `UNION` inside `MODULE { ... }`
-- [ ] Update resolve pass to register module-scoped types
-- [ ] Update typecheck to look up `Mod.Type` paths
-- [ ] Ensure nested modules work (if supported)
-- [ ] Add test scripts:
-  - [ ] Module with struct definition
-  - [ ] Module with enum/union definition
-  - [ ] Accessing module types from outside
-  - [ ] Error: undefined type in module
+- [x] Extend module AST node to include type definitions
+  - Parser already accepts `TYPE`/`UNION` inside `MODULE`; validated at typecheck
+- [x] Update parser to accept `TYPE` and `UNION` inside `MODULE { ... }`
+  - Added qualified type name support (`Module.Type`) in type expressions
+  - Added qualified variant patterns (`Module.Type.Variant`) in match patterns
+- [x] Update resolve pass to register module-scoped types
+  - Types are registered with qualified names (e.g., `Shapes.Shape`)
+  - Variant resolution handles `Module.Type.Variant` paths
+- [x] Update typecheck to look up `Mod.Type` paths
+  - TypeRegistry stores qualified names; lookup works transparently
+- [x] Ensure nested modules work (if supported)
+  - Nested modules work: `Outer.Inner.Type.Variant`
+- [x] Add test scripts:
+  - [x] Module with struct definition (`Users.User`)
+  - [x] Module with enum/union definition (`Shapes.Shape`, `Data.Primitive`)
+  - [x] Accessing module types from outside (all test cases)
+  - [x] Generic types in modules (`Container.Box[T]`)
 
 ---
 

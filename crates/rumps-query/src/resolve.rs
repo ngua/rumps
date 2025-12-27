@@ -122,8 +122,9 @@ fn resolve_expr(
     id: ExprId,
 ) -> Option<Expr> {
     ast.get_expr(id).and_then(|expr| match expr {
-        // Field access: `Name.field` or `A.B.C` (nested modules)
+        // Field access: `Name.field` or `A.B.C` (nested modules/types)
         // - If base is `Var(Type)` with zero-arity variant -> `Variant(Type, field, [])`
+        // - If base path is a qualified type with zero-arity variant -> `Variant`
         // - If full path starts with a module -> `Path([...])`
         // - Otherwise -> leave as Field (runtime field access)
         //
@@ -156,8 +157,25 @@ fn resolve_expr(
                     _ => None,
                 });
 
-            // If it's a type variant, use that
-            variant_expr.or_else(|| {
+            // Check for module-qualified type variant: Module.Type.Variant
+            let qualified_variant_expr = variant_expr.or_else(|| {
+                // Collect the full path and check if prefix is a qualified type
+                let base_path = collect_path_segments(ast, *base_id)?;
+                let qtype = base_path.join(".");
+                let qtype_id = arena.intern(&qtype);
+                let field_id = arena.intern(field);
+
+                registry.lookup(qtype_id).and_then(|type_id| {
+                    registry.lookup_variant(type_id, field_id).and_then(|v| {
+                        (v.arity == 0).then(|| {
+                            Expr::Variant(qtype, field.clone(), smallvec![])
+                        })
+                    })
+                })
+            });
+
+            // If it's a type variant (simple or qualified), use that
+            qualified_variant_expr.or_else(|| {
                 // Otherwise, check if this is a module path
                 let full_path = collect_path_segments(ast, id);
 
@@ -170,8 +188,9 @@ fn resolve_expr(
             })
         }
 
-        // Function calls: only resolve variant constructors
+        // Function calls: resolve variant constructors
         // `Call(Field(Var(Type), Variant), args)` -> `Variant(Type, Variant, args)`
+        // `Call(Field(Field(...), Variant), args)` -> `Variant(QualifiedType, Variant, args)`
         //
         // Module calls like `Object.keys(x)` don't need special handling:
         // the Field becomes Path (above), so it becomes `Call(Path(...), args)`
@@ -179,23 +198,43 @@ fn resolve_expr(
         Expr::Call(callee_id, args) => {
             ast.get_expr(*callee_id).and_then(|callee| match callee {
                 Expr::Field(base_id, var_name) => {
-                    ast.get_expr(*base_id).and_then(|base| match base {
-                        Expr::Var(ty_name) => {
-                            let ty_id = arena.intern(ty_name);
-                            let var_id = arena.intern(var_name);
-                            registry.lookup(ty_id).and_then(|type_id| {
-                                registry.lookup_variant(type_id, var_id).map(
-                                    |_| {
-                                        Expr::Variant(
-                                            ty_name.clone(),
-                                            var_name.clone(),
-                                            args.clone(),
-                                        )
-                                    },
+                    // First try simple Type.Variant(args) pattern
+                    let simple_variant =
+                        ast.get_expr(*base_id).and_then(|base| match base {
+                            Expr::Var(ty_name) => {
+                                let ty_id = arena.intern(ty_name);
+                                let var_id = arena.intern(var_name);
+                                registry.lookup(ty_id).and_then(|type_id| {
+                                    registry
+                                        .lookup_variant(type_id, var_id)
+                                        .map(|_| {
+                                            Expr::Variant(
+                                                ty_name.clone(),
+                                                var_name.clone(),
+                                                args.clone(),
+                                            )
+                                        })
+                                })
+                            }
+                            _ => None,
+                        });
+
+                    // Try module-qualified type: Module.Type.Variant(args)
+                    simple_variant.or_else(|| {
+                        let base_path = collect_path_segments(ast, *base_id)?;
+                        let qtype = base_path.join(".");
+                        let qtype_id = arena.intern(&qtype);
+                        let var_id = arena.intern(var_name);
+
+                        registry.lookup(qtype_id).and_then(|type_id| {
+                            registry.lookup_variant(type_id, var_id).map(|_| {
+                                Expr::Variant(
+                                    qtype,
+                                    var_name.clone(),
+                                    args.clone(),
                                 )
                             })
-                        }
-                        _ => None,
+                        })
                     })
                 }
                 _ => None,

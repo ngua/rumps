@@ -151,3 +151,105 @@ OUTPUT PolyHof.apply(s => String.length(s), "hello")  ; 5
 
 ; Compose: Int -> Int -> String
 OUTPUT PolyHof.compose(n => "result: " ++ (n as String), x => x * 2, 10)  ; result: 20
+
+; ============ Module with TYPE definitions ============
+
+MODULE Shapes {
+  TYPE Shape = Circle(Float) | Rectangle(Float, Float)
+
+  FUN area(s: Shapes.Shape) -> Float {
+    MATCH s {
+      Shapes.Shape.Circle(r) => 3.14159 * r * r
+      Shapes.Shape.Rectangle(w, h) => w * h
+    }
+  }
+
+  FUN describe(s: Shapes.Shape) -> String {
+    MATCH s {
+      Shapes.Shape.Circle(_) => "circle"
+      Shapes.Shape.Rectangle(_, _) => "rectangle"
+    }
+  }
+}
+
+LET c = Shapes.Shape.Circle(2.0)
+LET r = Shapes.Shape.Rectangle(3.0, 4.0)
+
+OUTPUT Shapes.describe(c)  ; circle
+OUTPUT Shapes.describe(r)  ; rectangle
+OUTPUT Shapes.area(c) > 12  ; true (approx 12.56)
+OUTPUT Shapes.area(r) > 11  ; true (12.0)
+
+; ============ Module with struct TYPE ============
+
+MODULE Users {
+  TYPE User = { name: String, age: Int }
+
+  FUN greet(u: Users.User) -> String {
+    "Hello, " ++ u.name
+  }
+
+  FUN is-adult(u: Users.User) -> Bool {
+    u.age >= 18
+  }
+}
+
+LET u: Users.User = { name: "Alice", age: 30 }
+OUTPUT Users.greet(u)  ; Hello, Alice
+OUTPUT Users.is-adult(u)  ; true
+
+LET child: Users.User = { name: "Bob", age: 10 }
+OUTPUT Users.is-adult(child)  ; false
+
+; ============ Module with UNION definition ============
+
+MODULE Data {
+  UNION Primitive = Bool | Int | Float | String
+
+  FUN stringify(p: Data.Primitive) -> String {
+    p as String
+  }
+}
+
+LET i: Data.Primitive = 42
+LET s: Data.Primitive = "hello"
+OUTPUT Data.stringify(i)  ; 42
+OUTPUT Data.stringify(s)  ; hello
+
+; ============ Nested module with types ============
+
+MODULE Outer2 {
+  MODULE Inner2 {
+    TYPE Status = Active | Inactive
+
+    FUN is-active(s: Outer2.Inner2.Status) -> Bool {
+      MATCH s {
+        Outer2.Inner2.Status.Active => true
+        Outer2.Inner2.Status.Inactive => false
+      }
+    }
+  }
+}
+
+LET active = Outer2.Inner2.Status.Active
+LET inactive = Outer2.Inner2.Status.Inactive
+OUTPUT Outer2.Inner2.is-active(active)  ; true
+OUTPUT Outer2.Inner2.is-active(inactive)  ; false
+
+; ============ Generic type in module ============
+
+MODULE Container {
+  TYPE Box[T] = Wrapped(T) | Empty
+
+  FUN unwrap-or[T](b: Container.Box[T], default: T) -> T {
+    MATCH b {
+      Container.Box.Wrapped(v) => v
+      Container.Box.Empty => default
+    }
+  }
+}
+
+LET box-int = Container.Box.Wrapped(42)
+LET empty-box = Container.Box.Empty
+OUTPUT Container.unwrap-or(box-int, 0)  ; 42
+OUTPUT Container.unwrap-or(empty-box, 99)  ; 99

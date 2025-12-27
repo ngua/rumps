@@ -171,12 +171,14 @@ impl InferCtx<'_> {
                     });
                 }
                 Some(Stmt::Type { .. }) => {
-                    // Type definitions inside modules will be supported in
-                    // phase 3.1 (see TODOS/dsl/phase-4c.md)
+                    // Type declarations are processed by the registry with
+                    // qualified names (e.g., `ModuleName.TypeName`); nothing
+                    // to infer here.
                 }
                 Some(Stmt::Union { .. }) => {
-                    // Union definitions inside modules will be supported in
-                    // phase 3.1 (see TODOS/dsl/phase-4c.md)
+                    // Union declarations are processed by the registry with
+                    // qualified names (e.g., `ModuleName.UnionName`); nothing
+                    // to infer here.
                 }
                 None => {}
             }

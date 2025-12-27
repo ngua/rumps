@@ -42,7 +42,6 @@
 //! - `number` becomes `Float` (JSON has no int/float distinction)
 //! - `string` becomes `String`
 //! - `array` becomes `Array` if homogeneous (all elements same JSON type);
-//!   (FIXME) heterogeneous arrays are not yet supported
 //! - `object` becomes `Object`
 //!
 //! ## Numeric Coercion
@@ -397,19 +396,21 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<()> {
         let mut module = crate::env::UserModule::default();
-        self.populate_module(body, &mut module, span).await?;
+        self.populate_module(body, &mut module, name, span).await?;
         self.env.register_user_module(name, module);
         Ok(())
     }
 
-    /// Populate a module with functions, constants, and submodules.
+    /// Populate a module with functions, constants, submodules, and types.
     ///
     /// Recursively processes statement IDs, adding items to the module.
+    /// The `mod_path` tracks the qualified module path for type registration.
     #[async_recursion]
     async fn populate_module(
         &mut self,
         ids: &[StmtId],
         module: &mut crate::env::UserModule,
+        mod_path: &str,
         span: Span,
     ) -> Result<()> {
         match ids.split_first() {
@@ -446,18 +447,53 @@ impl<I: IoContext> Interpreter<'_, I> {
                             body: sub_body,
                         } => {
                             let mut sub = crate::env::UserModule::default();
+                            let sub_path = format!("{}.{}", mod_path, sub_name);
                             self.populate_module(
-                                &sub_body, &mut sub, item_span,
+                                &sub_body, &mut sub, &sub_path, item_span,
                             )
                             .await?;
                             module.submodules.insert(sub_name, sub);
+                        }
+
+                        Stmt::Type {
+                            name: type_name,
+                            type_params,
+                            def,
+                        } => {
+                            // Types are already registered with qualified names
+                            // by register_from_ast. The idempotent type_decl
+                            // will skip if already present.
+                            let qname = format!("{}.{}", mod_path, type_name);
+                            self.type_decl(
+                                &qname,
+                                &type_params,
+                                &def,
+                                item_span,
+                            )?;
+                        }
+
+                        Stmt::Union {
+                            name: union_name,
+                            type_params,
+                            members,
+                        } => {
+                            // Unions are already registered with qualified names
+                            // by register_from_ast. The idempotent union_decl
+                            // will skip if already present.
+                            let qname = format!("{}.{}", mod_path, union_name);
+                            self.union_decl(
+                                &qname,
+                                &type_params,
+                                &members,
+                                item_span,
+                            )?;
                         }
 
                         // Other statements are rejected by the typechecker
                         _ => {}
                     }
                 }
-                self.populate_module(rest, module, span).await
+                self.populate_module(rest, module, mod_path, span).await
             }
         }
     }
