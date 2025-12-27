@@ -407,12 +407,28 @@ impl Parser {
             })
     }
 
-    /// `FUN name (params) { body }` or `FUN name (params) -> Type { body }`
+    /// `FUN name (params) { body }` or `FUN name[T](params) -> Type { body }`
     fn fun_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        // Type parameters: `[T]` or `[T, U]`
+        let type_param_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+        let type_params = just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::ident()
+                    .separated_by(type_param_sep)
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBracket))
+            .or_not()
+            .map(|ps| ps.unwrap_or_default());
+
         // Parameter: `name` or `name: Type`
         let param = Self::ident()
             .then(
@@ -446,16 +462,23 @@ impl Parser {
             .ignore_then(Self::opt_newlines())
             .ignore_then(Self::ident())
             .then_ignore(Self::opt_newlines())
+            .then(type_params)
+            .then_ignore(Self::opt_newlines())
             .then(params)
             .then(ret_ty)
             .then(body)
             .map_with_span(
-                |(((name, params_vec), ret), (stmts, blk_span)), span| {
+                |(
+                    (((name, type_params), params_vec), ret),
+                    (stmts, blk_span),
+                ),
+                 span| {
                     let params = SmallVec::from_vec(params_vec);
                     let body = Self::stmts_to_block(stmts, blk_span);
                     cst::Stmt::new(
                         cst::StmtKind::Fun {
                             name,
+                            type_params,
                             params,
                             ret,
                             body,
@@ -1607,6 +1630,7 @@ impl Parser {
                 let params = smallvec::smallvec![(name, None)];
                 cst::Expr::new(
                     cst::ExprKind::Closure {
+                        type_params: vec![],
                         params,
                         ret: None,
                         body: Box::new(body),
@@ -1625,7 +1649,24 @@ impl Parser {
             )
             .map(|(name, ty)| (name, ty));
 
-        // Multi-param closure: `(params) => expr` or `(params) -> Type => expr`
+        // Type parameters for closures: `[T]` or `[T, U]`
+        let type_param_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+        let closure_type_params = just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::ident()
+                    .separated_by(type_param_sep)
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBracket))
+            .or_not()
+            .map(|ps| ps.unwrap_or_default());
+
+        // Multi-param closure: `(params) => expr`, `(params) -> Type => expr`,
+        // or with type params: `[T](params) -> Type => expr`
         let param_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let params_or_empty =
             just(Token::RParen).to(Vec::new()).or(closure_param
@@ -1633,9 +1674,11 @@ impl Parser {
                 .allow_trailing()
                 .then_ignore(Self::opt_newlines())
                 .then_ignore(just(Token::RParen)));
-        let closure_multi = just(Token::LParen)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(params_or_empty)
+        let closure_multi = closure_type_params
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::LParen))
+            .then_ignore(Self::opt_newlines())
+            .then(params_or_empty)
             .then_ignore(Self::opt_newlines())
             .then(
                 just(Token::Arrow)
@@ -1647,10 +1690,11 @@ impl Parser {
             .then_ignore(just(Token::FatArrow))
             .then_ignore(Self::opt_newlines())
             .then(expr.clone())
-            .map_with_span(|((params_vec, ret), body), span| {
+            .map_with_span(|(((type_params, params_vec), ret), body), span| {
                 let params = SmallVec::from_vec(params_vec);
                 cst::Expr::new(
                     cst::ExprKind::Closure {
+                        type_params,
                         params,
                         ret,
                         body: Box::new(body),

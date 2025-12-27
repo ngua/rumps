@@ -2389,6 +2389,7 @@ async fn closure_creation_simple() {
     let closure = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body,
@@ -2431,6 +2432,7 @@ async fn closure_creation_with_types() {
     let closure = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), Some(int_ty))],
                 ret: Some(ret_ty),
                 body,
@@ -2477,6 +2479,7 @@ async fn closure_captures_environment() {
     let closure = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body,
@@ -2509,6 +2512,7 @@ async fn closure_display() {
     let closure = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![
                     ("x".into(), None),
                     ("y".into(), None)
@@ -2548,6 +2552,7 @@ async fn fun_definition_simple() {
         .add_stmt(
             Stmt::Fun {
                 name: "double".into(),
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body,
@@ -2587,6 +2592,7 @@ async fn fun_call_simple() {
         .add_stmt(
             Stmt::Fun {
                 name: "double".into(),
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body,
@@ -2639,6 +2645,7 @@ async fn fun_as_value() {
         .add_stmt(
             Stmt::Fun {
                 name: "square".into(),
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body,
@@ -2731,6 +2738,7 @@ async fn fun_recursive_factorial() {
         .add_stmt(
             Stmt::Fun {
                 name: "factorial".into(),
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("n".into(), None)],
                 ret: None,
                 body,
@@ -2774,6 +2782,7 @@ async fn fun_display() {
         .add_stmt(
             Stmt::Fun {
                 name: "test".into(),
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![
                     ("x".into(), None),
                     ("y".into(), None)
@@ -2817,6 +2826,7 @@ async fn call_field_closure() {
     let closure = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body,
@@ -2885,6 +2895,7 @@ async fn call_chained() {
     let closure = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body: add_expr,
@@ -2903,6 +2914,7 @@ async fn call_chained() {
         .add_stmt(
             Stmt::Fun {
                 name: "make_adder".into(),
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("n".into(), None)],
                 ret: None,
                 body,
@@ -2963,6 +2975,7 @@ async fn call_iife() {
     let closure = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body,
@@ -3022,6 +3035,7 @@ async fn type_check_param_error() {
         .add_stmt(
             Stmt::Fun {
                 name: "add".into(),
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![
                     ("a".into(), Some(int_ty)),
                     ("b".into(), Some(int_ty))
@@ -3092,6 +3106,7 @@ async fn type_check_return_error() {
         .add_stmt(
             Stmt::Fun {
                 name: "bad".into(),
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![],
                 ret: Some(int_ty),
                 body,
@@ -3141,6 +3156,7 @@ async fn pipe_with_closure() {
     let closure = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body: mul,
@@ -3182,6 +3198,7 @@ async fn pipe_with_named_function() {
         .add_stmt(
             Stmt::Fun {
                 name: "double".into(),
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body,
@@ -3229,6 +3246,7 @@ async fn pipe_chain() {
     let c1 = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body: mul,
@@ -3250,6 +3268,7 @@ async fn pipe_chain() {
     let c2 = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![("x".into(), None)],
                 ret: None,
                 body: add,
@@ -3296,6 +3315,7 @@ async fn pipe_arity_mismatch_error() {
     let closure = ast
         .add_expr(
             Expr::Closure {
+                type_params: smallvec::smallvec![],
                 params: smallvec::smallvec![
                     ("a".into(), None),
                     ("b".into(), None)

@@ -18,17 +18,17 @@ User-defined functions and closures should support type parameters, mirroring th
 
 ### Implementation
 
-- [ ] Extend AST to support type parameter lists on `fn` declarations
-- [ ] Extend parser to accept `<T, U, ...>` after function name
-- [ ] Update `resolve` pass to track type parameter scope
-- [ ] Extract common instantiation logic from `ModuleFn` handling into shared utility
-- [ ] Implement instantiation for user-defined generic functions using extracted logic
-- [ ] Support generic closures (infer type params from usage context)
-- [ ] Add test scripts covering:
-  - [ ] Simple identity function `fn id<T>(x: T) -> T`
-  - [ ] Multiple type parameters `fn pair<A, B>(a: A, b: B) -> (A, B)`
-  - [ ] Generic closures passed to higher-order functions
-  - [ ] Error cases: unused type params, constraint violations
+- [x] Extend AST to support type parameter lists on `fn` declarations
+- [x] Extend parser to accept `<T, U, ...>` after function name
+- [x] Update `resolve` pass to track type parameter scope
+- [x] Extract common instantiation logic from `ModuleFn` handling into shared utility
+- [x] Implement instantiation for user-defined generic functions using extracted logic
+- [x] Support generic closures (infer type params from usage context)
+- [x] Add test scripts covering:
+  - [x] Simple identity function `fn id<T>(x: T) -> T`
+  - [x] Multiple type parameters `fn pair<A, B>(a: A, b: B) -> (A, B)`
+  - [x] Generic closures passed to higher-order functions
+  - [x] Error cases: unused type params, constraint violations
 
 ---
 

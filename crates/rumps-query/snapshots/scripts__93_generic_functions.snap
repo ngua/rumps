@@ -1,0 +1,22 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Generic user-defined functions with explicit type parameters\n; Tests `FUN name[T](x: T) -> T` syntax\n\n; === Simple identity function with explicit type parameter ===\n\nFUN id[T](x: T) -> T { x }\n\nOUTPUT id(42)        ; 42\nOUTPUT id(\"hello\")   ; hello\nOUTPUT id(TRUE)      ; true\n\n; === Multiple type parameters ===\n\nFUN pair[A, B](a: A, b: B) -> (A, B) {\n  (a, b)\n}\n\nOUTPUT pair(1, \"hello\")  ; (1, \"hello\")\nOUTPUT pair(TRUE, 3.14)  ; (true, 3.14)\n\n; === Generic function returning parameterized type ===\n\nFUN wrap[T](x: T) -> Option[T] {\n  Option.Some(x)\n}\n\nOUTPUT wrap(42)      ; Option.Some(42)\nOUTPUT wrap(\"test\")  ; Option.Some(\"test\")\n\n; === Generic swap function ===\n\nFUN swap[A, B](p: (A, B)) -> (B, A) {\n  (p.1, p.0)\n}\n\nOUTPUT swap((1, \"x\"))    ; (\"x\", 1)\nOUTPUT swap((\"a\", TRUE)) ; (true, \"a\")\n\n; === Generic first/second accessors ===\n\nFUN fst[A, B](p: (A, B)) -> A { p.0 }\nFUN snd[A, B](p: (A, B)) -> B { p.1 }\n\nLET p = (42, \"answer\")\nOUTPUT fst(p)  ; 42\nOUTPUT snd(p)  ; answer\n\n; === Generic higher-order function ===\n\nFUN apply[A, B](f: (A) -> B, x: A) -> B {\n  f(x)\n}\n\nFUN double(n: Int) -> Int { n * 2 }\nFUN greet(s: String) -> String { \"Hello, \" ++ s }\n\nOUTPUT apply(double, 21)        ; 42\nOUTPUT apply(greet, \"World\")    ; Hello, World\n\n; === Mix of implicit and explicit generics ===\n\n; This function is implicitly generic (inferred)\nFUN implicit-id(x) { x }\n\n; This function is explicitly generic\nFUN explicit-id[T](x: T) -> T { x }\n\n; Both should work the same way\nOUTPUT implicit-id(100)   ; 100\nOUTPUT explicit-id(100)   ; 100\nOUTPUT implicit-id(\"hi\")  ; hi\nOUTPUT explicit-id(\"hi\")  ; hi\n\nOUTPUT \"Generic functions test complete\"\n"
+---
+42
+hello
+TRUE
+(1, hello)
+(TRUE, 3.14)
+Option.Some(42)
+Option.Some(test)
+(x, 1)
+(TRUE, a)
+42
+answer
+42
+Hello, World
+100
+100
+hi
+hi
+Generic functions test complete

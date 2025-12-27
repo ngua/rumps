@@ -639,12 +639,14 @@ pub(crate) enum Expr {
 
     /// Closure (anonymous function): `x => expr` or `(a, b) => expr`.
     ///
+    /// - type_params: optional type parameters (e.g., `[T]`, `[A, B]`)
     /// - params: parameter names with optional type annotations
     /// - return type annotation (optional)
     /// - body expression
     ///
     /// Closures capture their lexical environment at creation time (by value).
     Closure {
+        type_params: SmallVec<[String; 2]>,
         params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<AstTypeExprId>,
         body: ExprId,
@@ -746,6 +748,7 @@ pub(crate) enum Stmt {
     /// Named function definition: `FUN name (params) { body }`.
     ///
     /// - `name`: the function's identifier
+    /// - `type_params`: optional type parameters (e.g., `[T]`, `[A, B]`)
     /// - `params`: parameter names with optional type annotations
     /// - `ret`: optional return type annotation
     /// - `body`: the function body expression (typically a block)
@@ -753,6 +756,7 @@ pub(crate) enum Stmt {
     /// Named functions support recursion (the name is visible in the body).
     Fun {
         name: String,
+        type_params: SmallVec<[String; 2]>,
         params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<AstTypeExprId>,
         body: ExprId,

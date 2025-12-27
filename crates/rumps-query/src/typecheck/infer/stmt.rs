@@ -26,10 +26,13 @@ impl InferCtx<'_> {
         match stmt {
             Some(Stmt::Fun {
                 name,
+                type_params,
                 params,
                 ret,
                 body,
-            }) => self.fun(&name, &params, ret.as_ref(), body, span),
+            }) => {
+                self.fun(&name, &type_params, &params, ret.as_ref(), body, span)
+            }
 
             Some(Stmt::Let(pattern, ann, rhs)) => {
                 self.r#let(&pattern, ann.as_ref(), rhs, span)
@@ -64,9 +67,13 @@ impl InferCtx<'_> {
     /// Named functions support recursion: the function name is bound with a
     /// provisional type (fresh vars for params/return) before inferring the body.
     /// After inference, the type is generalized and the binding is updated.
+    ///
+    /// For generic functions (`fn foo[T](x: T) -> T`), explicit type parameters
+    /// are bound as fresh type variables before inferring parameter/return types.
     fn fun(
         &mut self,
         name: &str,
+        type_params: &SmallVec<[String; 2]>,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
         body: ExprId,
@@ -75,11 +82,22 @@ impl InferCtx<'_> {
         // Capture outer env free vars BEFORE binding function (for generalization)
         let outer_free = self.env.free_vars();
 
-        let param_tys = self.param_tys(params);
+        // Create fresh type variables for explicit type parameters
+        let type_param_subst: HashMap<_, _> = type_params
+            .iter()
+            .map(|tp| {
+                let id = self.env.intern(tp);
+                let tv = self.fresh();
+                (id, tv)
+            })
+            .collect();
+
+        // Infer parameter types (using type param substitution)
+        let param_tys = self.param_tys_with_subst(params, &type_param_subst);
 
         // Declared return type annotation (if any)
         let declared_ret =
-            ret.map(|id| self.ast_type_to_ty(*id, &HashMap::new()));
+            ret.map(|id| self.ast_type_to_ty(*id, &type_param_subst));
 
         // Fresh var for provisional return (supports recursive calls)
         let provisional_ret = self.fresh();

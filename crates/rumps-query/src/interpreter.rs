@@ -307,9 +307,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Match(scrutinee, arms) => {
                 self.r#match(scrutinee, &arms, span).await
             }
-            Expr::Closure { params, ret, body } => {
-                self.closure(&params, ret, body)
-            }
+            Expr::Closure {
+                params, ret, body, ..
+            } => self.closure(&params, ret, body),
             Expr::Unwrap(inner) => {
                 let val = self.eval(inner).await?;
                 self.unwrap(val, span)
@@ -368,6 +368,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 params,
                 ret,
                 body,
+                ..
             } => self.fun(&name, &params, ret, body, span),
             Stmt::Type {
                 name,
@@ -397,6 +398,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let name_id = self.arena.intern(name);
 
         // Resolve parameter types
+        // Use try_resolve_type_expr to handle type parameters gracefully
         let resolved_params: Result<
             SmallVec<[(StringId, Option<TypeExprId>); 4]>,
         > = params
@@ -406,20 +408,22 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let ty_id = ty
                     .map(|ast_id| {
                         let s = self.ast.type_expr_span(ast_id).unwrap_or(span);
-                        self.resolve_type_expr(ast_id, s)
+                        self.try_resolve_type_expr(ast_id, s)
                     })
-                    .transpose()?;
+                    .transpose()?
+                    .flatten();
                 Ok((pname_id, ty_id))
             })
             .collect();
 
-        // Resolve return type
+        // Resolve return type (returns None if it contains type parameters)
         let resolved_ret = ret
             .map(|ast_id| {
                 let s = self.ast.type_expr_span(ast_id).unwrap_or(span);
-                self.resolve_type_expr(ast_id, s)
+                self.try_resolve_type_expr(ast_id, s)
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
 
         // Register the function
         self.functions.insert(
@@ -652,6 +656,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let env = CapturedEnv::capture(self.env.scopes.stack());
 
         // Resolve parameter types and intern names
+        // Use try_resolve_type_expr to handle type parameters gracefully
         let resolved_params: Result<
             SmallVec<[(StringId, Option<TypeExprId>); 4]>,
         > = params
@@ -662,20 +667,22 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .map(|ast_id| {
                         let span =
                             self.ast.type_expr_span(ast_id).unwrap_or_default();
-                        self.resolve_type_expr(ast_id, span)
+                        self.try_resolve_type_expr(ast_id, span)
                     })
-                    .transpose()?;
+                    .transpose()?
+                    .flatten();
                 Ok((name_id, ty_id))
             })
             .collect();
 
-        // Resolve return type
+        // Resolve return type (returns None if it contains type parameters)
         let resolved_ret = ret
             .map(|ast_id| {
                 let span = self.ast.type_expr_span(ast_id).unwrap_or_default();
-                self.resolve_type_expr(ast_id, span)
+                self.try_resolve_type_expr(ast_id, span)
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
 
         Ok(Value::Closure {
             params: resolved_params?,

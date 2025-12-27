@@ -98,6 +98,24 @@ impl<I: IoContext> Interpreter<'_, I> {
         ast_id: AstTypeExprId,
         span: Span,
     ) -> Result<TypeExprId> {
+        self.try_resolve_type_expr(ast_id, span)?.ok_or_else(|| {
+            Error::runtime_type(span, "unresolved type parameter")
+        })
+    }
+
+    /// Try to resolve an AST type expression to a runtime `TypeExprId`.
+    ///
+    /// Returns `Ok(None)` if the type contains unresolved type parameters
+    /// (e.g., `T` in a generic function). This is expected behavior, not an
+    /// error: the typechecker has already validated that type parameters are
+    /// used correctly at compile time. At runtime, the interpreter doesn't
+    /// need concrete types for these annotations; it only needs runtime types
+    /// for actual values being manipulated.
+    pub(super) fn try_resolve_type_expr(
+        &mut self,
+        ast_id: AstTypeExprId,
+        span: Span,
+    ) -> Result<Option<TypeExprId>> {
         let ast_ty =
             self.ast.get_type_expr(ast_id).cloned().ok_or_else(|| {
                 Error::runtime(span, "invalid type expression id")
@@ -106,60 +124,69 @@ impl<I: IoContext> Interpreter<'_, I> {
         match ast_ty {
             AstTypeExpr::Named(name) => {
                 let name_id = self.arena.intern(&name);
-                let ty_id = self.registry.lookup(name_id).ok_or_else(|| {
-                    Error::runtime_type(span, format!("unknown type: {name}"))
-                })?;
-                Ok(self.type_exprs.named(ty_id))
+                // If the type is not in the registry, it's likely a type parameter
+                // from a generic function; return None to indicate unresolved
+                Ok(self
+                    .registry
+                    .lookup(name_id)
+                    .map(|ty_id| self.type_exprs.named(ty_id)))
             }
             AstTypeExpr::App(name, params) => {
                 let name_id = self.arena.intern(&name);
-                let ty_id = self.registry.lookup(name_id).ok_or_else(|| {
-                    Error::runtime_type(span, format!("unknown type: {name}"))
-                })?;
-                // Recursively resolve type parameters
-                let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
+                // If base type is not in registry, it's a type parameter
+                let ty_id = match self.registry.lookup(name_id) {
+                    Some(id) => id,
+                    None => {
+                        // Unresolved type param in App position
+                        return Ok(None);
+                    }
+                };
+                // Recursively resolve type parameters; if any is None, return None
+                let resolved: Option<SmallVec<[TypeExprId; 2]>> = params
                     .iter()
-                    .map(|&p| self.resolve_type_expr(p, span))
-                    .collect();
-                Ok(self.type_exprs.app(ty_id, resolved?))
+                    .map(|&p| self.try_resolve_type_expr(p, span))
+                    .collect::<Result<Option<SmallVec<_>>>>()?;
+                Ok(resolved.map(|r| self.type_exprs.app(ty_id, r)))
             }
             AstTypeExpr::Fn(params, ret) => {
-                // Recursively resolve param types
-                let resolved_params: Result<SmallVec<[TypeExprId; 4]>> = params
+                // Recursively resolve param types; if any is None, return None
+                let resolved_params: Option<SmallVec<[TypeExprId; 4]>> = params
                     .iter()
-                    .map(|&p| self.resolve_type_expr(p, span))
-                    .collect();
+                    .map(|&p| self.try_resolve_type_expr(p, span))
+                    .collect::<Result<Option<SmallVec<_>>>>()?;
                 // Resolve return type
-                let resolved_ret = self.resolve_type_expr(ret, span)?;
-                Ok(self.type_exprs.fn_type(resolved_params?, resolved_ret))
+                let resolved_ret = self.try_resolve_type_expr(ret, span)?;
+                Ok(resolved_params.and_then(|ps| {
+                    resolved_ret.map(|r| self.type_exprs.fn_type(ps, r))
+                }))
             }
             AstTypeExpr::Tuple(elems) => {
-                // Recursively resolve element types
-                let resolved: Result<SmallVec<[TypeExprId; 4]>> = elems
+                // Recursively resolve element types; if any is None, return None
+                let resolved: Option<SmallVec<[TypeExprId; 4]>> = elems
                     .iter()
-                    .map(|&e| self.resolve_type_expr(e, span))
-                    .collect();
-                Ok(self.type_exprs.tuple(resolved?))
+                    .map(|&e| self.try_resolve_type_expr(e, span))
+                    .collect::<Result<Option<SmallVec<_>>>>()?;
+                Ok(resolved.map(|r| self.type_exprs.tuple(r)))
             }
             AstTypeExpr::Union(members) => {
-                // Recursively resolve member types
-                let resolved: Result<SmallVec<[TypeExprId; 4]>> = members
+                // Recursively resolve member types; if any is None, return None
+                let resolved: Option<SmallVec<[TypeExprId; 4]>> = members
                     .iter()
-                    .map(|&m| self.resolve_type_expr(m, span))
-                    .collect();
-                Ok(self.type_exprs.union(resolved?))
+                    .map(|&m| self.try_resolve_type_expr(m, span))
+                    .collect::<Result<Option<SmallVec<_>>>>()?;
+                Ok(resolved.map(|r| self.type_exprs.union(r)))
             }
             AstTypeExpr::Object(fields) => {
-                // Resolve each field's type and intern field names
-                let resolved: Result<IndexMap<StringId, TypeExprId>> = fields
+                // Resolve each field's type and intern field names; if any is None, return None
+                let resolved: Option<IndexMap<StringId, TypeExprId>> = fields
                     .iter()
                     .map(|(name, ty_id)| {
                         let name_id = self.arena.intern(name);
-                        self.resolve_type_expr(*ty_id, span)
-                            .map(|ty| (name_id, ty))
+                        self.try_resolve_type_expr(*ty_id, span)
+                            .map(|opt| opt.map(|ty| (name_id, ty)))
                     })
-                    .collect();
-                Ok(self.type_exprs.object(resolved?))
+                    .collect::<Result<Option<IndexMap<_, _>>>>()?;
+                Ok(resolved.map(|r| self.type_exprs.object(r)))
             }
         }
     }

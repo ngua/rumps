@@ -1,0 +1,74 @@
+; Test: Generic user-defined functions with explicit type parameters
+; Tests `FUN name[T](x: T) -> T` syntax
+
+; === Simple identity function with explicit type parameter ===
+
+FUN id[T](x: T) -> T { x }
+
+OUTPUT id(42)        ; 42
+OUTPUT id("hello")   ; hello
+OUTPUT id(TRUE)      ; true
+
+; === Multiple type parameters ===
+
+FUN pair[A, B](a: A, b: B) -> (A, B) {
+  (a, b)
+}
+
+OUTPUT pair(1, "hello")  ; (1, "hello")
+OUTPUT pair(TRUE, 3.14)  ; (true, 3.14)
+
+; === Generic function returning parameterized type ===
+
+FUN wrap[T](x: T) -> Option[T] {
+  Option.Some(x)
+}
+
+OUTPUT wrap(42)      ; Option.Some(42)
+OUTPUT wrap("test")  ; Option.Some("test")
+
+; === Generic swap function ===
+
+FUN swap[A, B](p: (A, B)) -> (B, A) {
+  (p.1, p.0)
+}
+
+OUTPUT swap((1, "x"))    ; ("x", 1)
+OUTPUT swap(("a", TRUE)) ; (true, "a")
+
+; === Generic first/second accessors ===
+
+FUN fst[A, B](p: (A, B)) -> A { p.0 }
+FUN snd[A, B](p: (A, B)) -> B { p.1 }
+
+LET p = (42, "answer")
+OUTPUT fst(p)  ; 42
+OUTPUT snd(p)  ; answer
+
+; === Generic higher-order function ===
+
+FUN apply[A, B](f: (A) -> B, x: A) -> B {
+  f(x)
+}
+
+FUN double(n: Int) -> Int { n * 2 }
+FUN greet(s: String) -> String { "Hello, " ++ s }
+
+OUTPUT apply(double, 21)        ; 42
+OUTPUT apply(greet, "World")    ; Hello, World
+
+; === Mix of implicit and explicit generics ===
+
+; This function is implicitly generic (inferred)
+FUN implicit-id(x) { x }
+
+; This function is explicitly generic
+FUN explicit-id[T](x: T) -> T { x }
+
+; Both should work the same way
+OUTPUT implicit-id(100)   ; 100
+OUTPUT explicit-id(100)   ; 100
+OUTPUT implicit-id("hi")  ; hi
+OUTPUT explicit-id("hi")  ; hi
+
+OUTPUT "Generic functions test complete"

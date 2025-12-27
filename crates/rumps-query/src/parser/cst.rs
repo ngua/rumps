@@ -169,6 +169,7 @@ pub(crate) enum ExprKind {
 
     /// Closure.
     Closure {
+        type_params: Vec<String>,
         params: SmallVec<[(String, Option<TypeExpr>); 4]>,
         ret: Option<TypeExpr>,
         body: Box<Expr>,
@@ -287,6 +288,7 @@ pub(crate) enum StmtKind {
     /// Named function definition.
     Fun {
         name: String,
+        type_params: Vec<String>,
         params: SmallVec<[(String, Option<TypeExpr>); 4]>,
         ret: Option<TypeExpr>,
         body: Expr,

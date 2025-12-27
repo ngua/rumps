@@ -53,6 +53,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
         }
         cst::StmtKind::Fun {
             name,
+            type_params,
             params,
             ret,
             body,
@@ -69,6 +70,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
             let body_id = lower_expr(ast, body)?;
             Stmt::Fun {
                 name,
+                type_params: SmallVec::from_vec(type_params),
                 params: params_lowered,
                 ret: ret_id,
                 body: body_id,
@@ -220,7 +222,12 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let else_id = else_br.map(|e| lower_expr(ast, *e)).transpose()?;
             Expr::If(cond_id, then_id, else_id)
         }
-        cst::ExprKind::Closure { params, ret, body } => {
+        cst::ExprKind::Closure {
+            type_params,
+            params,
+            ret,
+            body,
+        } => {
             let params_lowered = params
                 .into_iter()
                 .map(|(n, t)| {
@@ -232,6 +239,7 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let ret_id = ret.map(|t| lower_type_expr(ast, t)).transpose()?;
             let body_id = lower_expr(ast, *body)?;
             Expr::Closure {
+                type_params: SmallVec::from_vec(type_params),
                 params: params_lowered,
                 ret: ret_id,
                 body: body_id,

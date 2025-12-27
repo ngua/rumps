@@ -12,6 +12,7 @@ use crate::ast::{
     AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey, JsonAccessKind, Literal,
     MatchArm, StmtId, TypePattern, UnOp,
 };
+use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty};
 use crate::value::{TypeDef, TypeId};
@@ -96,10 +97,13 @@ impl InferCtx<'_> {
             // JSON literals
             Expr::Json(_) => Ty::Json,
 
-            // Closures: (x, y) => body
-            Expr::Closure { params, ret, body } => {
-                self.closure(params, ret.as_ref(), *body, span)
-            }
+            // Closures: (x, y) => body or [T](x: T) -> T => body
+            Expr::Closure {
+                type_params,
+                params,
+                ret,
+                body,
+            } => self.closure(type_params, params, ret.as_ref(), *body, span),
 
             // Function calls: f(args...)
             Expr::Call(callee, args) => self.call(*callee, args, span),
@@ -593,10 +597,22 @@ impl InferCtx<'_> {
         &mut self,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
     ) -> Vec<Ty> {
+        self.param_tys_with_subst(params, &HashMap::new())
+    }
+
+    /// Infer types for function/closure parameters with type param substitution.
+    ///
+    /// For generic functions, the `subst` map provides fresh type variables for
+    /// explicit type parameters (e.g., `T` in `fn foo[T](x: T)`).
+    pub(super) fn param_tys_with_subst(
+        &mut self,
+        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        subst: &HashMap<StringId, Ty>,
+    ) -> Vec<Ty> {
         params
             .iter()
             .map(|(_, ann)| match ann {
-                Some(id) => self.ast_type_to_ty(*id, &HashMap::new()),
+                Some(id) => self.ast_type_to_ty(*id, subst),
                 None => self.fresh(),
             })
             .collect()
@@ -618,14 +634,28 @@ impl InferCtx<'_> {
     /// For each parameter: uses annotation if present, otherwise fresh type var.
     /// Binds parameters in a new scope, infers body, then pops scope.
     /// If return annotation present, unifies body type with it.
+    ///
+    /// For generic closures (`[T](x: T) -> T => x`), type parameters are bound
+    /// as fresh type variables before inferring parameter/return types.
     fn closure(
         &mut self,
+        type_params: &SmallVec<[String; 2]>,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
         body: ExprId,
         span: Span,
     ) -> Ty {
-        let param_tys = self.param_tys(params);
+        // Create fresh type variables for explicit type parameters
+        let type_param_subst: HashMap<_, _> = type_params
+            .iter()
+            .map(|tp| {
+                let id = self.env.intern(tp);
+                let tv = self.fresh();
+                (id, tv)
+            })
+            .collect();
+
+        let param_tys = self.param_tys_with_subst(params, &type_param_subst);
 
         self.env.push_scope();
         self.bind_params(params, &param_tys);
@@ -636,7 +666,7 @@ impl InferCtx<'_> {
         // If return annotation present, unify body with it
         let ret_ty = match ret {
             Some(ret_id) => {
-                let expected = self.ast_type_to_ty(*ret_id, &HashMap::new());
+                let expected = self.ast_type_to_ty(*ret_id, &type_param_subst);
                 self.unify(body_ty.clone(), expected.clone(), span);
                 expected
             }
