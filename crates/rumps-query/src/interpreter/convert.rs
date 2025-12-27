@@ -102,7 +102,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .map(|v| self.stringify(v))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({items})")
+                // Single-element tuples need trailing comma to distinguish from
+                // parenthesized expressions
+                let trail = if elems.len() == 1 { "," } else { "" };
+                format!("({items}{trail})")
             }
             Value::Object(obj) => {
                 let fields = obj

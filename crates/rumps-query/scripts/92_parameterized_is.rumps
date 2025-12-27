@@ -88,4 +88,32 @@ OUTPUT box-int IS Box[String]
 OUTPUT box-int IS Box[Float]
 ; FALSE
 
+; === Tuple type checks ===
+
+OUTPUT (1, 'a') IS (Int, Char)
+; TRUE
+
+OUTPUT (1, 'a') IS (Char, Int)
+; FALSE - order matters
+
+OUTPUT (1, 2) IS (Int, Int)
+; TRUE
+
+OUTPUT (1, 2, 3) IS (Int, Int, Int)
+; TRUE
+
+; Single-element tuples
+LET single: (Int,) = (42,)
+OUTPUT single IS (Int,)
+; TRUE
+
+; Single-element tuple in closure annotations
+LET f = (x: (Int,)) -> (Int,) => x
+OUTPUT f((1,))
+; (1,)
+
+; Empty tuple
+OUTPUT () IS ()
+; TRUE
+
 OUTPUT "parameterized IS tests complete"

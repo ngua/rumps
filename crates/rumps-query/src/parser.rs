@@ -874,9 +874,10 @@ impl Parser {
 
     /// Simplified type expression parser for use in type patterns.
     ///
-    /// Supports named types and one level of type application (e.g., `Int`,
-    /// `Array[String]`). Does not support nested type params like `Map[K, V]`
-    /// where K or V are themselves parameterized.
+    /// Supports named types, one level of type application (e.g., `Int`,
+    /// `Array[String]`), and tuple types (e.g., `(Int, String)`). Does not
+    /// support nested type params like `Map[K, V]` where K or V are themselves
+    /// parameterized.
     ///
     /// This is intentionally non-recursive to avoid stack overflow issues
     /// when combined with the expression parser's recursive structure.
@@ -890,12 +891,13 @@ impl Parser {
 
         // Type parameters: `[T]` or `[T, E]` (one level only)
         let type_params = inner_ty
+            .clone()
             .separated_by(just(Token::Comma))
             .at_least(1)
             .delimited_by(just(Token::LBracket), just(Token::RBracket));
 
         // Named type optionally with type params
-        Self::ident().then(type_params.or_not()).map_with_span(
+        let named = Self::ident().then(type_params.or_not()).map_with_span(
             |(name, params), span| {
                 let kind = match params {
                     None => cst::TypeExprKind::Named(name),
@@ -903,7 +905,38 @@ impl Parser {
                 };
                 cst::TypeExpr::new(kind, span)
             },
-        )
+        );
+
+        // Tuple types: `()`, `(T,)`, `(T, U, ...)`
+        // Parse as (elem ,)* [elem] to track trailing commas
+        let sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        let elem_comma = inner_ty.clone().then_ignore(sep);
+        let tuple = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(elem_comma.repeated().then(inner_ty.or_not()))
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+            .try_map(|(with_comma, final_), span| {
+                let mut elems: Vec<_> = with_comma;
+                let trailing = final_.is_none() && !elems.is_empty();
+                if let Some(f) = final_ {
+                    elems.push(f);
+                }
+                // `(T)` without trailing comma is just parenthesized, not tuple
+                if elems.len() == 1 && !trailing {
+                    elems.into_iter().next().ok_or_else(|| {
+                        Simple::custom(span.clone(), "internal: expected type")
+                    })
+                } else {
+                    // `()`, `(T,)`, or `(T, U, ...)` are tuples
+                    Ok(cst::TypeExpr::new(
+                        cst::TypeExprKind::Tuple(elems),
+                        span,
+                    ))
+                }
+            });
+
+        tuple.or(named)
     }
 
     /// Type cast: `expr AS Type`
@@ -1874,19 +1907,24 @@ impl Parser {
             );
 
             // Parenthesized: `()`, `(T)`, `(T,)`, or `(T, U, ...)`
+            // Parse as (elem ,)* [elem] to track trailing commas
             let sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+            let elem_comma =
+                ty.clone().then_ignore(sep.clone()).map(|t| (t, true));
+            let final_elem = ty.clone().map(|t| (t, false));
             let paren = just(Token::LParen)
                 .ignore_then(Self::opt_newlines())
-                .ignore_then(
-                    ty.clone()
-                        .separated_by(sep.clone())
-                        .allow_trailing()
-                        .then(just(Token::Comma).or_not()),
-                )
+                .ignore_then(elem_comma.repeated().then(final_elem.or_not()))
                 .then_ignore(Self::opt_newlines())
                 .then_ignore(just(Token::RParen))
-                .map_with_span(|(types, trailing), span| {
-                    TypeAtomOrParams::Params(types, span, trailing.is_some())
+                .map_with_span(|(with_comma, final_), span| {
+                    let mut elems: Vec<_> =
+                        with_comma.into_iter().map(|(t, _)| t).collect();
+                    let trailing = final_.is_none() && !elems.is_empty();
+                    if let Some((f, _)) = final_ {
+                        elems.push(f);
+                    }
+                    TypeAtomOrParams::Params(elems, span, trailing)
                 });
 
             // Structural object type: `{ field: Type, ... }`
