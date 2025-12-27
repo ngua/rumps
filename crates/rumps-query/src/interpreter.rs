@@ -787,7 +787,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Coalesce: unwrap Option.Some/Result.Ok, or evaluate right for None/Err
             BinOp::Coalesce => {
                 let left = self.eval(lhs).await?;
-                self.coalesce(left, rhs, span).await
+                self.coalesce(left, rhs).await
             }
             // Pipeline: both sides evaluated, but requires async function call
             BinOp::Pipe => {
@@ -810,10 +810,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         op: UnOp,
         operand: ExprId,
-        span: Span,
+        _span: Span,
     ) -> Result<Value> {
         let val = self.eval(operand).await?;
-        self.apply_unop(op, &val, span)
+        Ok(self.apply_unop(op, &val))
     }
 
     /// Evaluate a type check: `expr is Pattern`.

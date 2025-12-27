@@ -13,10 +13,39 @@
 //! // Prints: 3
 //! ```
 
+// NOTE: We don't really care about the large error types; they are
+// only relevant in program termination, not the happy-path interpreter, so
+// we silence them here.
 #![allow(clippy::result_large_err)]
-/// NOTE: We don't really care about the large error types; they are
-/// only relevant in program termination, not the happy-path interpreter, so
-/// we silence them here.
+
+/// Marks a branch as unreachable due to static type checking.
+///
+/// Use instead of `unreachable!` when the type checker guarantees a constraint.
+/// Provides consistent error messages if the "impossible" case is somehow reached.
+///
+/// # When to Use
+///
+/// Use `typechecked!` for code paths that:
+/// - Cannot be reached if the static type checker is correct
+/// - Previously had runtime type/arity checks that are now redundant
+///
+/// # When NOT to Use (Keep Runtime Checks)
+///
+/// Keep runtime checks and do NOT use this macro for:
+/// - `AS` casts on `Storable` union (runtime narrowing)
+/// - `READ` conversions (parsing can fail)
+/// - Database operations returning `Storable` (need `IS`/`AS` for narrowing)
+/// - Index bounds checks (not type-level)
+/// - Division by zero (not type-level)
+macro_rules! typechecked {
+    ($op:expr, $constraint:expr) => {
+        unreachable!(
+            "type checker guarantees `{}` satisfies `{}`",
+            $op, $constraint
+        )
+    };
+}
+
 mod ast;
 mod env;
 mod error;

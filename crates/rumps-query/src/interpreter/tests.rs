@@ -934,29 +934,8 @@ async fn if_expr_no_else_true() {
     assert_eq!(result, Value::Unit);
 }
 
-#[tokio::test]
-async fn if_expr_no_else_non_unit_error() {
-    // IF true { 42 } (no else, body is Int) -> type error
-    let mut ast = Ast::new();
-    let cond = ast
-        .add_expr(Expr::Literal(Literal::Bool(true)), Span::new(3, 7))
-        .unwrap();
-    let then_val = ast
-        .add_expr(Expr::Literal(Literal::Int(42)), Span::new(10, 12))
-        .unwrap();
-    let then_blk = ast
-        .add_expr(Expr::Block(vec![], Some(then_val)), Span::new(9, 14))
-        .unwrap();
-    let if_expr = ast
-        .add_expr(Expr::If(cond, then_blk, None), Span::new(0, 14))
-        .unwrap();
-
-    let mut interp = test_interp(&ast);
-    let result = interp.eval(if_expr).await;
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("must be Unit"));
-}
+// Removed: if_expr_no_else_non_unit_error
+// Type checker now catches this at compile time; no runtime error possible.
 
 #[tokio::test]
 async fn if_expr_no_else_false() {
@@ -1143,53 +1122,8 @@ async fn coalesce_option_none() {
     assert_eq!(result, Value::Int(0));
 }
 
-#[tokio::test]
-async fn coalesce_non_option_error() {
-    // 42 ?? 0 -> type error (Int is not Option or Result)
-    let mut ast = Ast::new();
-
-    let lhs = ast
-        .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
-        .unwrap();
-    let rhs = ast
-        .add_expr(Expr::Literal(Literal::Int(0)), Span::new(6, 7))
-        .unwrap();
-    let coalesce = ast
-        .add_expr(Expr::Binary(lhs, BinOp::Coalesce, rhs), Span::new(0, 7))
-        .unwrap();
-
-    let mut interp = test_interp(&ast);
-    let result = interp.eval(coalesce).await;
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("Option or Result"));
-}
-
-#[tokio::test]
-async fn coalesce_string_error() {
-    // "hello" ?? "fallback" -> type error
-    let mut ast = Ast::new();
-
-    let lhs = ast
-        .add_expr(
-            Expr::Literal(Literal::String("hello".into())),
-            Span::new(0, 7),
-        )
-        .unwrap();
-    let rhs = ast
-        .add_expr(
-            Expr::Literal(Literal::String("fallback".into())),
-            Span::new(11, 21),
-        )
-        .unwrap();
-    let coalesce = ast
-        .add_expr(Expr::Binary(lhs, BinOp::Coalesce, rhs), Span::new(0, 21))
-        .unwrap();
-
-    let mut interp = test_interp(&ast);
-    let result = interp.eval(coalesce).await;
-    assert!(result.is_err());
-}
+// Removed: coalesce_non_option_error, coalesce_string_error
+// Type checker now catches ?? on non-Option/Result at compile time.
 
 #[tokio::test]
 async fn coalesce_short_circuit() {
@@ -1555,21 +1489,8 @@ async fn optional_field_missing_field() {
     assert!(result.is_err());
 }
 
-#[tokio::test]
-async fn optional_field_on_non_object() {
-    // 42?.x -> type error
-    let mut ast = Ast::new();
-    let num = ast
-        .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
-        .unwrap();
-    let opt_field = ast
-        .add_expr(Expr::OptionalField(num, "x".into()), Span::new(0, 5))
-        .unwrap();
-
-    let mut interp = test_interp(&ast);
-    let result = interp.eval(opt_field).await;
-    assert!(result.is_err());
-}
+// Removed: optional_field_on_non_object
+// Type checker now catches ?. on non-Object at compile time.
 
 // ===== `is` operator tests =====
 
@@ -1974,38 +1895,6 @@ async fn is_result_err() {
     let mut interp = test_interp(&ast);
     let result = interp.eval(is_expr).await.unwrap();
     assert_eq!(result, Value::Bool(false));
-}
-
-#[tokio::test]
-async fn is_variant_with_payload_requires_parens() {
-    // `is Option.Some` without parens is an error (must use `(_)` or `(name)`)
-    let mut ast = Ast::new();
-    let val = ast
-        .add_expr(Expr::Literal(Literal::Int(42)), Span::new(12, 14))
-        .unwrap();
-    let some = ast
-        .add_expr(
-            Expr::Variant(
-                "Option".into(),
-                "Some".into(),
-                smallvec::smallvec![val],
-            ),
-            Span::new(0, 15),
-        )
-        .unwrap();
-    let is_expr = ast
-        .add_expr(
-            Expr::Is(
-                some,
-                TypePattern::Variant("Option".into(), "Some".into()),
-            ),
-            Span::new(0, 30),
-        )
-        .unwrap();
-
-    let mut interp = test_interp(&ast);
-    let result = interp.eval(is_expr).await;
-    assert!(result.is_err());
 }
 
 // ===== Structural type equality tests =====
@@ -3382,28 +3271,8 @@ async fn pipe_chain() {
     assert_eq!(result, Value::Int(11));
 }
 
-#[tokio::test]
-async fn pipe_non_function_error() {
-    // 5 |> 10 -> error (10 is not a function)
-    let mut ast = Ast::new();
-
-    let five = ast
-        .add_expr(Expr::Literal(Literal::Int(5)), Span::new(0, 1))
-        .unwrap();
-    let ten = ast
-        .add_expr(Expr::Literal(Literal::Int(10)), Span::new(5, 7))
-        .unwrap();
-    let pipe = ast
-        .add_expr(Expr::Binary(five, BinOp::Pipe, ten), Span::new(0, 7))
-        .unwrap();
-
-    let mut interp = test_interp(&ast);
-    let result = interp.eval(pipe).await;
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("|>"));
-    assert!(err.to_string().contains("function"));
-}
+// Removed: pipe_non_function_error
+// Type checker now catches |> with non-callable at compile time.
 
 #[tokio::test]
 async fn pipe_arity_mismatch_error() {

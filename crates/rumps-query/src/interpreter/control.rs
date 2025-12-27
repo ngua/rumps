@@ -14,6 +14,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Extracts the payload from `Option.Some` or `Result.Ok`; produces a
     /// runtime error for `Option.None` or `Result.Err(e)`.
+    ///
+    /// Type checker guarantees operand is `Option` or `Result`.
+    /// `None`/`Err` remain runtime errors (value-level, not type-level).
     pub(super) fn unwrap(&self, val: Value, span: Span) -> Result<Value> {
         let is_option = |ty_expr| {
             self.type_exprs
@@ -36,7 +39,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         Error::runtime(span, "Option.Some missing payload")
                     })
             }
-            // Option.None -> error
+            // Option.None -> runtime error (not type error)
             Value::Tagged(ty_expr, 0, _) if is_option(*ty_expr) => {
                 Err(Error::runtime(span, "cannot unwrap Option.None"))
             }
@@ -49,7 +52,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         Error::runtime(span, "Result.Ok missing payload")
                     })
             }
-            // Result.Err(e) -> error with stringified e
+            // Result.Err(e) -> runtime error with stringified e
             Value::Tagged(ty_expr, 1, payload) if is_result(*ty_expr) => {
                 let err_msg = payload
                     .first()
@@ -58,18 +61,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| "unknown error".into());
                 Err(Error::runtime(span, format!("unwrap failed: {err_msg}")))
             }
-            // Other types -> type error
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "`!` (unwrap) requires Option or Result; got {}",
-                    val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees Option or Result
+            _ => typechecked!("!", "Unwrappable"),
         }
     }
 
@@ -80,13 +73,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// - `Option.None` -> evaluate and return rhs
     /// - `Result.Ok(v)` -> `v` (unwrapped)
     /// - `Result.Err(_)` -> evaluate and return rhs (error discarded)
-    /// - Other types -> type error
+    ///
+    /// Type checker guarantees operand is `Option` or `Result`.
     #[async_recursion]
     pub(super) async fn coalesce(
         &mut self,
         left: Value,
         rhs: ExprId,
-        span: Span,
     ) -> Result<Value> {
         // Helper to check if type expression has a given base type
         let is_option = |ty_expr| {
@@ -103,12 +96,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         match &left {
             // Option.Some(v) -> unwrap to v
             Value::Tagged(ty_expr, 1, payload) if is_option(*ty_expr) => {
-                payload
+                Ok(payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(span, "Option.Some missing payload")
-                    })
+                    // Payload should always exist for Some
+                    .unwrap_or(Value::Unit))
             }
             // Option.None -> evaluate rhs
             Value::Tagged(ty_expr, 0, _) if is_option(*ty_expr) => {
@@ -116,29 +108,18 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Result.Ok(v) -> unwrap to v
             Value::Tagged(ty_expr, 0, payload) if is_result(*ty_expr) => {
-                payload
+                Ok(payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(span, "Result.Ok missing payload")
-                    })
+                    // Payload should always exist for Ok
+                    .unwrap_or(Value::Unit))
             }
             // Result.Err(_) -> evaluate rhs (error discarded)
             Value::Tagged(ty_expr, 1, _) if is_result(*ty_expr) => {
                 self.eval(rhs).await
             }
-            // Other types -> type error
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "`??` requires Option or Result; got {}",
-                    left.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees Option or Result
+            _ => typechecked!("??", "Unwrappable"),
         }
     }
 
@@ -225,15 +206,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                         }
                     }
                     None => {
-                        // Single-arm IF: body must be Unit (side-effect only)
-                        // Only evaluate if condition is true; type check when evaluated.
+                        // Single-arm IF: body must be Unit (side-effect only).
+                        // Type checker guarantees body is Unit.
                         if cond_true {
-                            let then_val = self.eval(then_br).await?;
-                            self.check_unit(
-                                &then_val,
-                                then_br,
-                                Span::default(),
-                            )?;
+                            self.eval(then_br).await?;
                         }
                         Ok(Value::Unit)
                     }
@@ -275,14 +251,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             }
             None => {
-                // Single-arm IF with bindings: body must be Unit
+                // Single-arm IF with bindings: body must be Unit.
+                // Type checker guarantees body is Unit.
                 if matched {
-                    let then_val = self
-                        .eval_with_variant_bindings(
-                            &val, ty_name, var_name, names, then_br, span,
-                        )
-                        .await?;
-                    self.check_unit(&then_val, then_br, span)?;
+                    self.eval_with_variant_bindings(
+                        &val, ty_name, var_name, names, then_br, span,
+                    )
+                    .await?;
                 }
                 Ok(Value::Unit)
             }
@@ -327,28 +302,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         let result = self.eval(body).await;
         self.env.scopes.pop();
         result
-    }
-
-    /// Check that a value is `Unit`; error otherwise.
-    fn check_unit(
-        &mut self,
-        val: &Value,
-        expr: ExprId,
-        fallback_span: Span,
-    ) -> Result<()> {
-        let ty = self.value_type_expr(val);
-        let unit_ty = self.type_exprs.named(TypeId::UNIT);
-        if self.type_exprs.eq(ty, unit_ty) {
-            Ok(())
-        } else {
-            let span = self.ast.expr_span(expr).unwrap_or(fallback_span);
-            let ty_name =
-                val.type_name(&self.registry, &self.type_exprs, &self.arena);
-            Err(Error::runtime_type(
-                span,
-                format!("single-arm IF body must be Unit; got {ty_name}"),
-            ))
-        }
     }
 
     /// Evaluate a `MATCH` expression.
@@ -425,46 +378,27 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a range expression.
     ///
     /// Creates a lazy `Value::Range` from start and end expressions.
-    /// Both must evaluate to integers.
+    ///
+    /// Type checker guarantees both bounds are `Int`.
     #[async_recursion]
     pub(super) async fn range(
         &mut self,
         start_id: ExprId,
         end_id: ExprId,
         inclusive: bool,
-        span: Span,
+        _span: Span,
     ) -> Result<Value> {
         let start_val = self.eval(start_id).await?;
         let end_val = self.eval(end_id).await?;
 
         let start = match &start_val {
             Value::Int(n) => *n,
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "range start must be Int; got {}",
-                    start_val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            ))?,
+            _ => typechecked!("..", "Int"),
         };
 
         let end = match &end_val {
             Value::Int(n) => *n,
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "range end must be Int; got {}",
-                    end_val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            ))?,
+            _ => typechecked!("..", "Int"),
         };
 
         Ok(Value::Range {

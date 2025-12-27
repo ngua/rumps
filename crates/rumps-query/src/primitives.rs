@@ -54,7 +54,7 @@ use crate::Error;
 /// Shared utilities for primitive function implementations.
 ///
 /// Module types ([`Array`], [`Str`], etc.) implement this trait to gain
-/// access to common helpers like arity checking and the HoF placeholder.
+/// access to common helpers like the HoF placeholder.
 ///
 /// # Why a trait with associated functions?
 ///
@@ -64,6 +64,16 @@ use crate::Error;
 /// parameter to the struct's lifetime, which doesn't satisfy the HRTB
 /// `for<'a>` requirement. Associated functions on separate types sidestep
 /// this by not binding the lifetime in the impl block.
+///
+/// # Note on Type Safety
+///
+/// Prior to the static type checker, primitives needed runtime arity and type
+/// checks. The type checker now guarantees these constraints at compile time:
+/// - Arity is enforced by the `Callable` constraint
+/// - Argument types are enforced by function type signatures
+///
+/// Primitives can now directly index `args[i]` and pattern-match on values
+/// without runtime checks. Use `typechecked!` for impossible branches.
 pub(crate) trait Prim {
     /// Placeholder for higher-order functions (`Array.map`, `Array.filter`, etc.).
     ///
@@ -82,63 +92,31 @@ pub(crate) trait Prim {
         })
     }
 
-    /// Arity check helper; returns `Err` if wrong number of arguments.
-    ///
-    /// After this check passes, direct indexing `args[i]` for `i < expected`
-    /// is safe. This is an intentional exception to the general "no indexing"
-    /// rule since arity is statically validated.
-    fn check_arity(
-        name: &str,
-        args: &SmallVec<[ValueId; 4]>,
-        expected: usize,
-        span: crate::Span,
-    ) -> crate::Result<()> {
-        if args.len() == expected {
-            Ok(())
-        } else {
-            Err(Error::runtime(
-                span,
-                format!(
-                    "`{name}` expects {expected} argument(s), got {}",
-                    args.len()
-                ),
-            ))
-        }
-    }
-
     /// Convert a value to `f64`, accepting `Int` or `Float`.
-    fn to_float(
-        ctx: &PrimCtx<'_>,
-        id: ValueId,
-        fn_name: &str,
-    ) -> crate::Result<f64> {
-        ctx.arena
-            .get(id)
-            .ok_or_else(|| {
-                ctx.runtime_error(format!("{fn_name}: invalid value"))
-            })
-            .and_then(|v| match v {
-                Value::Int(n) => Ok(*n as f64),
-                Value::Float(f) => Ok(f.0),
-                _ => Err(ctx.runtime_type_error(fn_name, "Int or Float")),
-            })
+    ///
+    /// Type checker guarantees value is numeric.
+    fn to_float(ctx: &PrimCtx<'_>, id: ValueId) -> f64 {
+        ctx.arena.get(id).map_or_else(
+            || typechecked!("to_float", "ValueId"),
+            |v| match v {
+                Value::Int(n) => *n as f64,
+                Value::Float(f) => f.0,
+                _ => typechecked!("to_float", "Numeric"),
+            },
+        )
     }
 
     /// Convert a value to `i64`, accepting `Int` only.
-    fn to_int(
-        ctx: &PrimCtx<'_>,
-        id: ValueId,
-        fn_name: &str,
-    ) -> crate::Result<i64> {
-        ctx.arena
-            .get(id)
-            .ok_or_else(|| {
-                ctx.runtime_error(format!("{fn_name}: invalid value"))
-            })
-            .and_then(|v| match v {
-                Value::Int(n) => Ok(*n),
-                _ => Err(ctx.runtime_type_error(fn_name, "Int")),
-            })
+    ///
+    /// Type checker guarantees value is `Int`.
+    fn to_int(ctx: &PrimCtx<'_>, id: ValueId) -> i64 {
+        ctx.arena.get(id).map_or_else(
+            || typechecked!("to_int", "ValueId"),
+            |v| match v {
+                Value::Int(n) => *n,
+                _ => typechecked!("to_int", "Int"),
+            },
+        )
     }
 }
 
@@ -163,11 +141,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.length", &args, 1, ctx.span)?;
-
-            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("Array.length", "Array")
-            })?;
+            let (_, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Array.length", "Array"));
 
             Ok(ctx.arena.add(Value::Int(elems.len() as i64), ctx.span))
         })
@@ -181,12 +158,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.push", &args, 2, ctx.span)?;
-
             let (ty, mut elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Array.push", "Array"))?;
+                .unwrap_or_else(|| typechecked!("Array.push", "Array"));
 
             elems.push(args[1]);
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
@@ -202,12 +177,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.pop", &args, 1, ctx.span)?;
-
             let (ty, mut elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Array.pop", "Array"))?;
+                .unwrap_or_else(|| typechecked!("Array.pop", "Array"));
 
             elems.pop();
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
@@ -223,12 +196,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.head", &args, 1, ctx.span)?;
-
             let (_, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Array.head", "Array"))?;
+                .unwrap_or_else(|| typechecked!("Array.head", "Array"));
 
             Ok(match elems.first() {
                 Some(first) => ctx.option_some(*first),
@@ -246,12 +217,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.tail", &args, 1, ctx.span)?;
-
             let (ty, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Array.tail", "Array"))?;
+                .unwrap_or_else(|| typechecked!("Array.tail", "Array"));
 
             let tail: SmallVec<[ValueId; 4]> =
                 elems.get(1..).map(SmallVec::from_slice).unwrap_or_default();
@@ -267,12 +236,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.reverse", &args, 1, ctx.span)?;
-
-            let (ty, elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    ctx.runtime_type_error("Array.reverse", "Array")
-                })?;
+            let (ty, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Array.reverse", "Array"));
 
             let reversed: SmallVec<[ValueId; 4]> =
                 elems.iter().rev().copied().collect();
@@ -416,31 +383,31 @@ impl Array {
         }
 
         Box::pin(async move {
-            Self::check_arity("Array.sort", &args, 1, ctx.span)?;
-
             let (ty, elems) = ctx
                 .arena
                 .get_array(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Array.sort", "Array"))?;
+                .unwrap_or_else(|| typechecked!("Array.sort", "Array"));
 
             // Collect (ValueId, sortable key) pairs
             let mut pairs: Vec<(ValueId, SortKey)> = elems
                 .iter()
                 .map(|vid| {
+                    // Type checker guarantees array elements are comparable
                     ctx.arena
                         .get(*vid)
                         .ok_or_else(|| {
                             ctx.runtime_error("Array.sort: invalid element")
                         })
-                        .and_then(|v| {
-                            SortKey::from_value(v, ctx.arena, ctx.type_exprs)
-                                .ok_or_else(|| {
-                                    ctx.runtime_type_error_msg(
-                                        "Array.sort",
-                                        "element not comparable",
-                                    )
-                                })
-                                .map(|k| (*vid, k))
+                        .map(|v| {
+                            let k = SortKey::from_value(
+                                v,
+                                ctx.arena,
+                                ctx.type_exprs,
+                            )
+                            .unwrap_or_else(|| {
+                                typechecked!("Array.sort", "Comparable")
+                            });
+                            (*vid, k)
                         })
                 })
                 .collect::<crate::Result<Vec<_>>>()?;
@@ -462,12 +429,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.slice", &args, 3, ctx.span)?;
-
-            let (ty, elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    ctx.runtime_type_error("Array.slice", "Array")
-                })?;
+            let (ty, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Array.slice", "Array"));
 
             let start = ctx
                 .arena
@@ -476,12 +441,9 @@ impl Array {
                     Value::Int(n) => Some(*n),
                     _ => None,
                 })
-                .ok_or_else(|| {
-                    ctx.runtime_type_error_msg(
-                        "Array.slice",
-                        "start must be Int",
-                    )
-                })?;
+                .unwrap_or_else(|| {
+                    typechecked!("Array.slice", "start must be Int")
+                });
 
             let end = ctx
                 .arena
@@ -490,9 +452,7 @@ impl Array {
                     Value::Int(n) => Some(*n),
                     _ => None,
                 })
-                .ok_or_else(|| {
-                    ctx.runtime_type_error_msg("Array.slice", "end must be Int")
-                })?;
+                .unwrap_or_else(|| typechecked!("Array.slice", "Int"));
 
             let len = elems.len() as i64;
             let start_idx = start.max(0).min(len) as usize;
@@ -515,11 +475,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.contains", &args, 2, ctx.span)?;
-
-            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("Array.contains", "Array")
-            })?;
+            let (_, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Array.contains", "Array"));
 
             let needle = ctx.arena.get(args[1]).ok_or_else(|| {
                 ctx.runtime_error("Array.contains: invalid value")
@@ -542,29 +501,20 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Array.concat", &args, 2, ctx.span)?;
+            let (ty_a, elems_a) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Array.concat", "Array"));
 
-            let (ty_a, elems_a) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    ctx.runtime_type_error("Array.concat", "Array")
-                })?;
+            let (_, elems_b) = ctx
+                .arena
+                .get_array(args[1])
+                .unwrap_or_else(|| typechecked!("Array.concat", "Array"));
 
-            let (ty_b, elems_b) =
-                ctx.arena.get_array(args[1]).ok_or_else(|| {
-                    ctx.runtime_type_error("Array.concat", "Array")
-                })?;
-
-            // Check element types match using the stored TypeExprId
-            if ctx.type_exprs.eq(ty_a, ty_b) {
-                let mut combined = elems_a;
-                combined.extend(elems_b);
-                Ok(ctx.arena.add(Value::Array(ty_a, combined), ctx.span))
-            } else {
-                Err(ctx.runtime_type_error_msg(
-                    "Array.concat",
-                    "element types differ",
-                ))
-            }
+            // Type checker guarantees both arrays have matching element types
+            let mut combined = elems_a;
+            combined.extend(elems_b);
+            Ok(ctx.arena.add(Value::Array(ty_a, combined), ctx.span))
         })
     }
 }
@@ -585,11 +535,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("String.length", &args, 1, ctx.span)?;
-
-            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("String.length", "String")
-            })?;
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("String.length", "String"));
 
             let s = ctx.arena.get_str(sid).ok_or_else(|| {
                 ctx.runtime_error("String.length: invalid string")
@@ -608,11 +557,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("String.upper", &args, 1, ctx.span)?;
-
-            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("String.upper", "String")
-            })?;
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("String.upper", "String"));
 
             let s = ctx.arena.get_str(sid).ok_or_else(|| {
                 ctx.runtime_error("String.upper: invalid string")
@@ -632,11 +580,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("String.lower", &args, 1, ctx.span)?;
-
-            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("String.lower", "String")
-            })?;
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("String.lower", "String"));
 
             let s = ctx.arena.get_str(sid).ok_or_else(|| {
                 ctx.runtime_error("String.lower: invalid string")
@@ -656,11 +603,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("String.trim", &args, 1, ctx.span)?;
-
-            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("String.trim", "String")
-            })?;
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("String.trim", "String"));
 
             // Copy to owned String to release borrow before interning
             let trimmed = ctx
@@ -685,18 +631,14 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("String.split", &args, 2, ctx.span)?;
+            let s_sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("String.split", "String"));
 
-            let s_sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("String.split", "String")
-            })?;
-
-            let d_sid = ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                ctx.runtime_type_error_msg(
-                    "String.split",
-                    "delimiter must be String",
-                )
-            })?;
+            let d_sid = ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
+                typechecked!("String.split", "delimiter must be String")
+            });
 
             // Copy strings to owned values to release borrow before iteration
             let s = ctx
@@ -737,32 +679,26 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("String.join", &args, 2, ctx.span)?;
-
-            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("String.join", "Array")
-            })?;
+            let (_, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("String.join", "Array"));
             let elems = elems.clone();
 
-            let d_sid = ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                ctx.runtime_type_error_msg(
-                    "String.join",
-                    "delimiter must be String",
-                )
-            })?;
+            let d_sid = ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
+                typechecked!("String.join", "delimiter must be String")
+            });
 
             // Collect string slices from array elements
-            let parts: crate::Result<Vec<&str>> = elems
+            // Type checker guarantees elements are String
+            let parts: Vec<&str> = elems
                 .iter()
                 .map(|id| {
                     ctx.arena
                         .get_string_id(*id)
                         .and_then(|sid| ctx.arena.get_str(sid))
-                        .ok_or_else(|| {
-                            ctx.runtime_type_error(
-                                "String.join",
-                                "Array[String]",
-                            )
+                        .unwrap_or_else(|| {
+                            typechecked!("String.join", "Array[String]")
                         })
                 })
                 .collect();
@@ -771,7 +707,7 @@ impl Str {
                 ctx.runtime_error("String.join: invalid delimiter")
             })?;
 
-            let joined = parts?.into_iter().join(d);
+            let joined = parts.into_iter().join(d);
             let new_sid = ctx.arena.intern(&joined);
             Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
         })
@@ -786,11 +722,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("String.slice", &args, 3, ctx.span)?;
-
-            let sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("String.slice", "String")
-            })?;
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("String.slice", "String"));
 
             let start = ctx
                 .arena
@@ -799,12 +734,9 @@ impl Str {
                     Value::Int(n) => Some(*n),
                     _ => None,
                 })
-                .ok_or_else(|| {
-                    ctx.runtime_type_error_msg(
-                        "String.slice",
-                        "start must be Int",
-                    )
-                })?;
+                .unwrap_or_else(|| {
+                    typechecked!("String.slice", "start must be Int")
+                });
 
             let end = ctx
                 .arena
@@ -813,12 +745,9 @@ impl Str {
                     Value::Int(n) => Some(*n),
                     _ => None,
                 })
-                .ok_or_else(|| {
-                    ctx.runtime_type_error_msg(
-                        "String.slice",
-                        "end must be Int",
-                    )
-                })?;
+                .unwrap_or_else(|| {
+                    typechecked!("String.slice", "end must be Int")
+                });
 
             let s = ctx.arena.get_str(sid).ok_or_else(|| {
                 ctx.runtime_error("String.slice: invalid string")
@@ -846,19 +775,15 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("String.contains", &args, 2, ctx.span)?;
-
-            let s_sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("String.contains", "String")
-            })?;
+            let s_sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("String.contains", "String"));
 
             let sub_sid =
-                ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                    ctx.runtime_type_error_msg(
-                        "String.contains",
-                        "substring must be String",
-                    )
-                })?;
+                ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
+                    typechecked!("String.contains", "substring must be String")
+                });
 
             let s = ctx.arena.get_str(s_sid).ok_or_else(|| {
                 ctx.runtime_error("String.contains: invalid string")
@@ -880,27 +805,20 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("String.replace", &args, 3, ctx.span)?;
-
-            let s_sid = ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("String.replace", "String")
-            })?;
+            let s_sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("String.replace", "String"));
 
             let old_sid =
-                ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                    ctx.runtime_type_error_msg(
-                        "String.replace",
-                        "pattern must be String",
-                    )
-                })?;
+                ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
+                    typechecked!("String.replace", "pattern must be String")
+                });
 
             let new_sid =
-                ctx.arena.get_string_id(args[2]).ok_or_else(|| {
-                    ctx.runtime_type_error_msg(
-                        "String.replace",
-                        "replacement must be String",
-                    )
-                })?;
+                ctx.arena.get_string_id(args[2]).unwrap_or_else(|| {
+                    typechecked!("String.replace", "replacement must be String")
+                });
 
             let s = ctx.arena.get_str(s_sid).ok_or_else(|| {
                 ctx.runtime_error("String.replace: invalid string")
@@ -935,8 +853,6 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.abs", &args, 1, ctx.span)?;
-
             let v = ctx
                 .arena
                 .get(args[0])
@@ -945,7 +861,7 @@ impl Math {
             let result = match v {
                 Value::Int(n) => Value::Int(n.abs()),
                 Value::Float(f) => Value::Float(OrderedFloat(f.0.abs())),
-                _ => Err(ctx.runtime_type_error("Math.abs", "Int or Float"))?,
+                _ => typechecked!("Math.abs", "Int or Float"),
             };
 
             Ok(ctx.arena.add(result, ctx.span))
@@ -960,16 +876,14 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.min", &args, 2, ctx.span)?;
-
             let result = match (ctx.arena.get(args[0]), ctx.arena.get(args[1]))
             {
                 (Some(Value::Int(x)), Some(Value::Int(y))) => {
                     Value::Int((*x).min(*y))
                 }
                 _ => {
-                    let x = Self::to_float(ctx, args[0], "Math.min")?;
-                    let y = Self::to_float(ctx, args[1], "Math.min")?;
+                    let x = Self::to_float(ctx, args[0]);
+                    let y = Self::to_float(ctx, args[1]);
                     Value::Float(OrderedFloat(x.min(y)))
                 }
             };
@@ -986,16 +900,14 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.max", &args, 2, ctx.span)?;
-
             let result = match (ctx.arena.get(args[0]), ctx.arena.get(args[1]))
             {
                 (Some(Value::Int(x)), Some(Value::Int(y))) => {
                     Value::Int((*x).max(*y))
                 }
                 _ => {
-                    let x = Self::to_float(ctx, args[0], "Math.max")?;
-                    let y = Self::to_float(ctx, args[1], "Math.max")?;
+                    let x = Self::to_float(ctx, args[0]);
+                    let y = Self::to_float(ctx, args[1]);
                     Value::Float(OrderedFloat(x.max(y)))
                 }
             };
@@ -1012,9 +924,7 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.floor", &args, 1, ctx.span)?;
-
-            let n = Self::to_float(ctx, args[0], "Math.floor")?;
+            let n = Self::to_float(ctx, args[0]);
             Ok(ctx.arena.add(Value::Int(n.floor() as i64), ctx.span))
         })
     }
@@ -1027,9 +937,7 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.ceil", &args, 1, ctx.span)?;
-
-            let n = Self::to_float(ctx, args[0], "Math.ceil")?;
+            let n = Self::to_float(ctx, args[0]);
             Ok(ctx.arena.add(Value::Int(n.ceil() as i64), ctx.span))
         })
     }
@@ -1042,9 +950,7 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.round", &args, 1, ctx.span)?;
-
-            let n = Self::to_float(ctx, args[0], "Math.round")?;
+            let n = Self::to_float(ctx, args[0]);
             Ok(ctx.arena.add(Value::Int(n.round() as i64), ctx.span))
         })
     }
@@ -1057,9 +963,7 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.sqrt", &args, 1, ctx.span)?;
-
-            let n = Self::to_float(ctx, args[0], "Math.sqrt")?;
+            let n = Self::to_float(ctx, args[0]);
             Ok(ctx
                 .arena
                 .add(Value::Float(OrderedFloat(n.sqrt())), ctx.span))
@@ -1074,9 +978,7 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.log", &args, 1, ctx.span)?;
-
-            let n = Self::to_float(ctx, args[0], "Math.log")?;
+            let n = Self::to_float(ctx, args[0]);
             Ok(ctx.arena.add(Value::Float(OrderedFloat(n.ln())), ctx.span))
         })
     }
@@ -1096,8 +998,7 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.Trig.sin", &args, 1, ctx.span)?;
-            let n = Math::to_float(ctx, args[0], "Math.Trig.sin")?;
+            let n = Math::to_float(ctx, args[0]);
             Ok(ctx.arena.add(Value::Float(OrderedFloat(n.sin())), ctx.span))
         })
     }
@@ -1110,8 +1011,7 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.Trig.cos", &args, 1, ctx.span)?;
-            let n = Math::to_float(ctx, args[0], "Math.Trig.cos")?;
+            let n = Math::to_float(ctx, args[0]);
             Ok(ctx.arena.add(Value::Float(OrderedFloat(n.cos())), ctx.span))
         })
     }
@@ -1124,8 +1024,7 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.Trig.tan", &args, 1, ctx.span)?;
-            let n = Math::to_float(ctx, args[0], "Math.Trig.tan")?;
+            let n = Math::to_float(ctx, args[0]);
             Ok(ctx.arena.add(Value::Float(OrderedFloat(n.tan())), ctx.span))
         })
     }
@@ -1138,8 +1037,7 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.Trig.asin", &args, 1, ctx.span)?;
-            let n = Math::to_float(ctx, args[0], "Math.Trig.asin")?;
+            let n = Math::to_float(ctx, args[0]);
             Ok(ctx
                 .arena
                 .add(Value::Float(OrderedFloat(n.asin())), ctx.span))
@@ -1154,8 +1052,7 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.Trig.acos", &args, 1, ctx.span)?;
-            let n = Math::to_float(ctx, args[0], "Math.Trig.acos")?;
+            let n = Math::to_float(ctx, args[0]);
             Ok(ctx
                 .arena
                 .add(Value::Float(OrderedFloat(n.acos())), ctx.span))
@@ -1170,8 +1067,7 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.Trig.atan", &args, 1, ctx.span)?;
-            let n = Math::to_float(ctx, args[0], "Math.Trig.atan")?;
+            let n = Math::to_float(ctx, args[0]);
             Ok(ctx
                 .arena
                 .add(Value::Float(OrderedFloat(n.atan())), ctx.span))
@@ -1187,9 +1083,8 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Math.Trig.atan2", &args, 2, ctx.span)?;
-            let y = Math::to_float(ctx, args[0], "Math.Trig.atan2")?;
-            let x = Math::to_float(ctx, args[1], "Math.Trig.atan2")?;
+            let y = Math::to_float(ctx, args[0]);
+            let x = Math::to_float(ctx, args[1]);
             Ok(ctx
                 .arena
                 .add(Value::Float(OrderedFloat(y.atan2(x))), ctx.span))
@@ -1208,11 +1103,9 @@ impl Random {
     /// Returns a random float in the range `[0, 1)`.
     pub(crate) fn random<'a>(
         ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
+        _: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Random.random", &args, 0, ctx.span)?;
-
             let n: f64 = rand::thread_rng().gen();
             Ok(ctx.arena.add(Value::Float(OrderedFloat(n)), ctx.span))
         })
@@ -1226,10 +1119,8 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Random.range", &args, 2, ctx.span)?;
-
-            let min = Self::to_float(ctx, args[0], "Random.range")?;
-            let max = Self::to_float(ctx, args[1], "Random.range")?;
+            let min = Self::to_float(ctx, args[0]);
+            let max = Self::to_float(ctx, args[1]);
 
             let n: f64 = rand::thread_rng().gen_range(min..max);
             Ok(ctx.arena.add(Value::Float(OrderedFloat(n)), ctx.span))
@@ -1244,10 +1135,8 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Random.int", &args, 2, ctx.span)?;
-
-            let min = Self::to_int(ctx, args[0], "Random.int")?;
-            let max = Self::to_int(ctx, args[1], "Random.int")?;
+            let min = Self::to_int(ctx, args[0]);
+            let max = Self::to_int(ctx, args[1]);
 
             let n: i64 = rand::thread_rng().gen_range(min..=max);
             Ok(ctx.arena.add(Value::Int(n), ctx.span))
@@ -1259,11 +1148,9 @@ impl Random {
     /// Returns a random boolean.
     pub(crate) fn bool<'a>(
         ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
+        _: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Random.bool", &args, 0, ctx.span)?;
-
             let b: bool = rand::thread_rng().gen();
             Ok(ctx.arena.add(Value::Bool(b), ctx.span))
         })
@@ -1277,11 +1164,10 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Random.choice", &args, 1, ctx.span)?;
-
-            let (_, elems) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("Random.choice", "Array")
-            })?;
+            let (_, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Random.choice", "Array"));
 
             let result = elems
                 .choose(&mut rand::thread_rng())
@@ -1301,12 +1187,10 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Random.shuffle", &args, 1, ctx.span)?;
-
-            let (ty, mut elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    ctx.runtime_type_error("Random.shuffle", "Array")
-                })?;
+            let (ty, mut elems) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Random.shuffle", "Array"));
 
             elems.shuffle(&mut rand::thread_rng());
             Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
@@ -1322,14 +1206,12 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Random.sample", &args, 2, ctx.span)?;
+            let (ty, elems) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Random.sample", "Array"));
 
-            let (ty, elems) =
-                ctx.arena.get_array(args[0]).ok_or_else(|| {
-                    ctx.runtime_type_error("Random.sample", "Array")
-                })?;
-
-            let n = Self::to_int(ctx, args[1], "Random.sample")? as usize;
+            let n = Self::to_int(ctx, args[1]) as usize;
 
             if n > elems.len() {
                 let msg_str = format!(
@@ -1355,11 +1237,9 @@ impl Random {
     /// Generates a random UUID v4 string.
     pub(crate) fn uuid<'a>(
         ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
+        _: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Random.uuid", &args, 0, ctx.span)?;
-
             let id = uuid::Uuid::new_v4().to_string();
             let sid = ctx.arena.intern(&id);
             Ok(ctx.arena.add(Value::String(sid), ctx.span))
@@ -1378,11 +1258,9 @@ impl Map {
     /// Creates an empty map.
     pub(crate) fn empty<'a>(
         ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
+        _: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.empty", &args, 0, ctx.span)?;
-
             let k_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
             let v_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
             let map = Value::Map(k_ty, v_ty, IndexMap::new());
@@ -1398,12 +1276,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.length", &args, 1, ctx.span)?;
-
             let (_, _, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Map.length", "Map"))?;
+                .unwrap_or_else(|| typechecked!("Map.length", "Map"));
 
             Ok(ctx.arena.add(Value::Int(entries.len() as i64), ctx.span))
         })
@@ -1417,12 +1293,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.keys", &args, 1, ctx.span)?;
-
             let (k_ty, _, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Map.keys", "Map"))?;
+                .unwrap_or_else(|| typechecked!("Map.keys", "Map"));
 
             // Collect keys before mutating arena
             let key_vals: SmallVec<[MapKey; 8]> =
@@ -1445,12 +1319,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.values", &args, 1, ctx.span)?;
-
             let (_, v_ty, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Map.values", "Map"))?;
+                .unwrap_or_else(|| typechecked!("Map.values", "Map"));
 
             let vals: SmallVec<[ValueId; 4]> =
                 entries.values().copied().collect();
@@ -1466,12 +1338,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.entries", &args, 1, ctx.span)?;
-
             let (k_ty, v_ty, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Map.entries", "Map"))?;
+                .unwrap_or_else(|| typechecked!("Map.entries", "Map"));
 
             // Collect entries before mutating arena
             let entry_pairs: SmallVec<[(MapKey, ValueId); 8]> =
@@ -1500,24 +1370,22 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.has", &args, 2, ctx.span)?;
-
             let key = ctx
                 .arena
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = MapKey::from_value(key).ok_or_else(|| {
-                ctx.runtime_type_error_msg(
+            let map_key = MapKey::from_value(key).unwrap_or_else(|| {
+                typechecked!(
                     "Map.has",
-                    "key must be scalar (Bool, Int, Float, Char, String)",
+                    "key must be scalar (Bool, Int, Float, Char, String)"
                 )
-            })?;
+            });
 
             let (_, _, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Map.has", "Map"))?;
+                .unwrap_or_else(|| typechecked!("Map.has", "Map"));
 
             let exists = entries.contains_key(&map_key);
             Ok(ctx.arena.add(Value::Bool(exists), ctx.span))
@@ -1532,24 +1400,22 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.lookup", &args, 2, ctx.span)?;
-
             let key = ctx
                 .arena
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = MapKey::from_value(key).ok_or_else(|| {
-                ctx.runtime_type_error_msg(
+            let map_key = MapKey::from_value(key).unwrap_or_else(|| {
+                typechecked!(
                     "Map.lookup",
-                    "key must be scalar (Bool, Int, Float, Char, String)",
+                    "key must be scalar (Bool, Int, Float, Char, String)"
                 )
-            })?;
+            });
 
             let (_, _, entries) = ctx
                 .arena
                 .get_map_ref(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Map.lookup", "Map"))?;
+                .unwrap_or_else(|| typechecked!("Map.lookup", "Map"));
 
             match entries.get(&map_key) {
                 Some(v_id) => Ok(ctx.option_some(*v_id)),
@@ -1567,79 +1433,28 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.insert", &args, 3, ctx.span)?;
-
             // Get key value and convert to MapKey first
             let key = ctx
                 .arena
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = MapKey::from_value(key).ok_or_else(|| {
-                ctx.runtime_type_error_msg(
+            let map_key = MapKey::from_value(key).unwrap_or_else(|| {
+                typechecked!(
                     "Map.insert",
-                    "key must be scalar (Bool, Int, Float, Char, String)",
+                    "key must be scalar (Bool, Int, Float, Char, String)"
                 )
-            })?;
+            });
 
-            // Get value type for checking
-            let new_v_ty = ctx
-                .arena
-                .base_type_of(args[2], ctx.type_exprs)
-                .unwrap_or(TypeId::UNKNOWN);
-
-            // Now get the map (cloning for mutation)
+            // Type checker guarantees key/value types match the map type
             let (k_ty, v_ty, mut entries) = ctx
                 .arena
                 .get_map(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Map.insert", "Map"))?;
-
-            // Type check key (if map has known key type)
-            let expected_k_ty = ctx.type_exprs.base_type(k_ty);
-            let new_k_ty = map_key.type_id();
-            if expected_k_ty != Some(TypeId::UNKNOWN)
-                && expected_k_ty != Some(new_k_ty)
-            {
-                Err(ctx.runtime_type_error_msg(
-                    "Map.insert",
-                    &format!(
-                        "key type mismatch: map has {:?}, got {:?}",
-                        expected_k_ty, new_k_ty
-                    ),
-                ))?;
-            }
-
-            // Type check value (if map has known value type)
-            let expected_v_ty = ctx.type_exprs.base_type(v_ty);
-            if expected_v_ty != Some(TypeId::UNKNOWN)
-                && expected_v_ty != Some(new_v_ty)
-            {
-                Err(ctx.runtime_type_error_msg(
-                    "Map.insert",
-                    &format!(
-                        "value type mismatch: map has {:?}, got {:?}",
-                        expected_v_ty, new_v_ty
-                    ),
-                ))?;
-            }
+                .unwrap_or_else(|| typechecked!("Map.insert", "Map"));
 
             entries.insert(map_key, args[2]);
 
-            // Update types if map was empty (UNKNOWN)
-            let final_k_ty = if expected_k_ty == Some(TypeId::UNKNOWN) {
-                ctx.type_exprs.named(new_k_ty)
-            } else {
-                k_ty
-            };
-            let final_v_ty = if expected_v_ty == Some(TypeId::UNKNOWN) {
-                ctx.type_exprs.named(new_v_ty)
-            } else {
-                v_ty
-            };
-
-            Ok(ctx
-                .arena
-                .add(Value::Map(final_k_ty, final_v_ty, entries), ctx.span))
+            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
         })
     }
 
@@ -1651,24 +1466,22 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.remove", &args, 2, ctx.span)?;
-
             let key = ctx
                 .arena
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = MapKey::from_value(key).ok_or_else(|| {
-                ctx.runtime_type_error_msg(
+            let map_key = MapKey::from_value(key).unwrap_or_else(|| {
+                typechecked!(
                     "Map.remove",
-                    "key must be scalar (Bool, Int, Float, Char, String)",
+                    "key must be scalar (Bool, Int, Float, Char, String)"
                 )
-            })?;
+            });
 
             let (k_ty, v_ty, mut entries) = ctx
                 .arena
                 .get_map(args[0])
-                .ok_or_else(|| ctx.runtime_type_error("Map.remove", "Map"))?;
+                .unwrap_or_else(|| typechecked!("Map.remove", "Map"));
 
             entries.shift_remove(&map_key);
 
@@ -1679,71 +1492,28 @@ impl Map {
     /// `Map.merge(a, b) -> Map[K, V]`
     ///
     /// Returns a new map with entries from both maps (b overrides a).
-    /// Validates that both maps have compatible key and value types.
+    ///
+    /// Type checker guarantees both maps have compatible key/value types.
     pub(crate) fn merge<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.merge", &args, 2, ctx.span)?;
+            let (k_ty, v_ty, mut entries_a) =
+                ctx.arena.get_map(args[0]).unwrap_or_else(|| {
+                    typechecked!("Map.merge", "Map (first arg)")
+                });
 
-            let (k_ty_a, v_ty_a, mut entries_a) =
-                ctx.arena.get_map(args[0]).ok_or_else(|| {
-                    ctx.runtime_type_error("Map.merge", "Map (first arg)")
-                })?;
+            let (_, _, entries_b) =
+                ctx.arena.get_map(args[1]).unwrap_or_else(|| {
+                    typechecked!("Map.merge", "Map (second arg)")
+                });
 
-            let (k_ty_b, v_ty_b, entries_b) =
-                ctx.arena.get_map(args[1]).ok_or_else(|| {
-                    ctx.runtime_type_error("Map.merge", "Map (second arg)")
-                })?;
-
-            // Type check: both maps must have compatible types
-            let base_k_a = ctx.type_exprs.base_type(k_ty_a);
-            let base_k_b = ctx.type_exprs.base_type(k_ty_b);
-            let base_v_a = ctx.type_exprs.base_type(v_ty_a);
-            let base_v_b = ctx.type_exprs.base_type(v_ty_b);
-
-            // Check key types (allow UNKNOWN to match anything)
-            if base_k_a != Some(TypeId::UNKNOWN)
-                && base_k_b != Some(TypeId::UNKNOWN)
-                && base_k_a != base_k_b
-            {
-                Err(ctx.runtime_type_error_msg(
-                    "Map.merge",
-                    &format!(
-                        "key type mismatch: first map has {:?}, second has {:?}",
-                        base_k_a, base_k_b
-                    ),
-                ))?;
-            }
-
-            // Check value types
-            if base_v_a != Some(TypeId::UNKNOWN)
-                && base_v_b != Some(TypeId::UNKNOWN)
-                && base_v_a != base_v_b
-            {
-                Err(ctx.runtime_type_error_msg(
-                    "Map.merge",
-                    &format!(
-                        "value type mismatch: first map has {:?}, second has {:?}",
-                        base_v_a, base_v_b
-                    ),
-                ))?;
-            }
-
+            // Type checker guarantees compatible map types
             entries_a.extend(entries_b);
 
-            // Use the more specific type (prefer non-UNKNOWN)
-            let final_k_ty = if base_k_a == Some(TypeId::UNKNOWN) {
-                k_ty_b
-            } else {
-                k_ty_a
-            };
-            let final_v_ty = if base_v_a == Some(TypeId::UNKNOWN) {
-                v_ty_b
-            } else {
-                v_ty_a
-            };
+            let final_k_ty = k_ty;
+            let final_v_ty = v_ty;
 
             Ok(ctx
                 .arena
@@ -1759,11 +1529,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Map.from-entries", &args, 1, ctx.span)?;
-
-            let (_, arr) = ctx.arena.get_array(args[0]).ok_or_else(|| {
-                ctx.runtime_type_error("Map.from-entries", "Array")
-            })?;
+            let (_, arr) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Map.from-entries", "Array"));
 
             // Infer types from first entry
             let first_entry = arr.first().and_then(|id| ctx.arena.get(*id));
@@ -1798,34 +1567,30 @@ impl Map {
 
             let mut entries = IndexMap::new();
 
-            arr.iter().try_for_each(|id| {
-                let val = ctx
-                    .arena
-                    .get(*id)
-                    .ok_or_else(|| ctx.runtime_error("invalid entry id"))?;
+            // Type checker guarantees array elements are 2-tuples
+            arr.iter().for_each(|id| {
+                let val = ctx.arena.get(*id).unwrap_or_else(|| {
+                    typechecked!("Map.from-entries", "ValueId")
+                });
 
                 match val {
                     Value::Tuple(_, elems) if elems.len() == 2 => {
                         let k_val =
-                            ctx.arena.get(elems[0]).ok_or_else(|| {
-                                ctx.runtime_error("invalid key id")
-                            })?;
+                            ctx.arena.get(elems[0]).unwrap_or_else(|| {
+                                typechecked!("Map.from-entries", "key ValueId")
+                            });
                         let map_key =
-                            MapKey::from_value(k_val).ok_or_else(|| {
-                                ctx.runtime_type_error_msg(
+                            MapKey::from_value(k_val).unwrap_or_else(|| {
+                                typechecked!(
                                     "Map.from-entries",
-                                    "key must be scalar",
+                                    "key must be scalar"
                                 )
-                            })?;
+                            });
                         entries.insert(map_key, elems[1]);
-                        Ok(())
                     }
-                    _ => Err(ctx.runtime_type_error_msg(
-                        "Map.from-entries",
-                        "array elements must be 2-tuples",
-                    )),
+                    _ => typechecked!("Map.from-entries", "Array[(K, V)]"),
                 }
-            })?;
+            });
 
             Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
         })
@@ -1843,11 +1608,9 @@ impl Time {
     /// Returns the current UTC time.
     pub(crate) fn now<'a>(
         ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
+        _: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.now", &args, 0, ctx.span)?;
-
             let now = Utc::now();
             Ok(ctx.arena.add(Value::Time(now), ctx.span))
         })
@@ -1858,11 +1621,9 @@ impl Time {
     /// Returns the Unix epoch (1970-01-01 00:00:00 UTC).
     pub(crate) fn epoch<'a>(
         ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
+        _: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.epoch", &args, 0, ctx.span)?;
-
             let epoch = Utc
                 .with_ymd_and_hms(1970, 1, 1, 0, 0, 0)
                 .single()
@@ -1879,20 +1640,18 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.parse", &args, 2, ctx.span)?;
-
             let fmt_sid =
-                ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                    ctx.runtime_type_error("Time.parse", "String (format)")
-                })?;
+                ctx.arena.get_string_id(args[0]).unwrap_or_else(|| {
+                    typechecked!("Time.parse", "String (format)")
+                });
             let fmt = ctx
                 .arena
                 .get_str(fmt_sid)
                 .ok_or_else(|| ctx.runtime_error("invalid format string"))?;
 
-            let s_sid = ctx.arena.get_string_id(args[1]).ok_or_else(|| {
-                ctx.runtime_type_error("Time.parse", "String (input)")
-            })?;
+            let s_sid = ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
+                typechecked!("Time.parse", "String (input)")
+            });
             let s = ctx
                 .arena
                 .get_str(s_sid)
@@ -1922,18 +1681,16 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.format", &args, 2, ctx.span)?;
-
             let fmt_sid =
-                ctx.arena.get_string_id(args[0]).ok_or_else(|| {
-                    ctx.runtime_type_error("Time.format", "String (format)")
-                })?;
+                ctx.arena.get_string_id(args[0]).unwrap_or_else(|| {
+                    typechecked!("Time.format", "String (format)")
+                });
             let fmt = ctx
                 .arena
                 .get_str(fmt_sid)
                 .ok_or_else(|| ctx.runtime_error("invalid format string"))?;
 
-            let t = Self::get_time(ctx, args[1], "Time.format")?;
+            let t = Self::get_time(ctx, args[1], "Time");
 
             let formatted = t.format(fmt).to_string();
             let sid = ctx.arena.intern(&formatted);
@@ -1949,10 +1706,8 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.add-seconds", &args, 2, ctx.span)?;
-
-            let t = Self::get_time(ctx, args[0], "Time.add-seconds")?;
-            let secs = Self::get_float(ctx, args[1], "Time.add-seconds")?;
+            let t = Self::get_time(ctx, args[0], "Time");
+            let secs = Self::get_float(ctx, args[1]);
 
             let duration =
                 chrono::Duration::milliseconds((secs * 1000.0) as i64);
@@ -1970,10 +1725,8 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.diff-seconds", &args, 2, ctx.span)?;
-
-            let a = Self::get_time(ctx, args[0], "Time.diff-seconds (first)")?;
-            let b = Self::get_time(ctx, args[1], "Time.diff-seconds (second)")?;
+            let a = Self::get_time(ctx, args[0], "Time");
+            let b = Self::get_time(ctx, args[1], "Time");
 
             let diff = (a - b).num_milliseconds() as f64 / 1000.0;
             Ok(ctx.arena.add(Value::Float(OrderedFloat(diff)), ctx.span))
@@ -1986,8 +1739,7 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.year", &args, 1, ctx.span)?;
-            let t = Self::get_time(ctx, args[0], "Time.year")?;
+            let t = Self::get_time(ctx, args[0], "Time");
             Ok(ctx.arena.add(Value::Int(t.year() as i64), ctx.span))
         })
     }
@@ -1998,8 +1750,7 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.month", &args, 1, ctx.span)?;
-            let t = Self::get_time(ctx, args[0], "Time.month")?;
+            let t = Self::get_time(ctx, args[0], "Time");
             Ok(ctx.arena.add(Value::Int(t.month() as i64), ctx.span))
         })
     }
@@ -2010,8 +1761,7 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.day", &args, 1, ctx.span)?;
-            let t = Self::get_time(ctx, args[0], "Time.day")?;
+            let t = Self::get_time(ctx, args[0], "Time");
             Ok(ctx.arena.add(Value::Int(t.day() as i64), ctx.span))
         })
     }
@@ -2022,8 +1772,7 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.hour", &args, 1, ctx.span)?;
-            let t = Self::get_time(ctx, args[0], "Time.hour")?;
+            let t = Self::get_time(ctx, args[0], "Time");
             Ok(ctx.arena.add(Value::Int(t.hour() as i64), ctx.span))
         })
     }
@@ -2034,8 +1783,7 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.minute", &args, 1, ctx.span)?;
-            let t = Self::get_time(ctx, args[0], "Time.minute")?;
+            let t = Self::get_time(ctx, args[0], "Time");
             Ok(ctx.arena.add(Value::Int(t.minute() as i64), ctx.span))
         })
     }
@@ -2046,8 +1794,7 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Time.second", &args, 1, ctx.span)?;
-            let t = Self::get_time(ctx, args[0], "Time.second")?;
+            let t = Self::get_time(ctx, args[0], "Time");
             Ok(ctx.arena.add(Value::Int(t.second() as i64), ctx.span))
         })
     }
@@ -2057,22 +1804,21 @@ impl Time {
         ctx: &PrimCtx<'_>,
         id: ValueId,
         fn_name: &str,
-    ) -> crate::Result<DateTime<Utc>> {
+    ) -> DateTime<Utc> {
+        // Type checker guarantees value is Time
         ctx.arena
             .get(id)
             .and_then(|v| match v {
                 Value::Time(t) => Some(*t),
                 _ => None,
             })
-            .ok_or_else(|| ctx.runtime_type_error(fn_name, "Time"))
+            .unwrap_or_else(|| typechecked!(fn_name, "Time"))
     }
 
     /// Helper to extract a `Float` value from an argument (accepts Int too).
-    fn get_float(
-        ctx: &PrimCtx<'_>,
-        id: ValueId,
-        fn_name: &str,
-    ) -> crate::Result<f64> {
+    ///
+    /// Type checker guarantees value is numeric.
+    fn get_float(ctx: &PrimCtx<'_>, id: ValueId) -> f64 {
         ctx.arena
             .get(id)
             .and_then(|v| match v {
@@ -2080,7 +1826,7 @@ impl Time {
                 Value::Int(n) => Some(*n as f64),
                 _ => None,
             })
-            .ok_or_else(|| ctx.runtime_type_error(fn_name, "Float or Int"))
+            .unwrap_or_else(|| typechecked!("get_float", "Numeric"))
     }
 }
 
@@ -2101,8 +1847,6 @@ impl Opt {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Option.unwrap-or", &args, 2, ctx.span)?;
-
             let opt = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Option.unwrap-or: invalid value")
             })?;
@@ -2130,7 +1874,7 @@ impl Opt {
                     // Option.None - return the default
                     Ok(args[1])
                 }
-                _ => Err(ctx.runtime_type_error("Option.unwrap-or", "Option")),
+                _ => typechecked!("Option.unwrap-or", "Option"),
             }
         })
     }
@@ -2153,8 +1897,6 @@ impl Res {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            Self::check_arity("Result.unwrap-or", &args, 2, ctx.span)?;
-
             let res = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Result.unwrap-or: invalid value")
             })?;
@@ -2182,7 +1924,7 @@ impl Res {
                     // Result.Err - return the default
                     Ok(args[1])
                 }
-                _ => Err(ctx.runtime_type_error("Result.unwrap-or", "Result")),
+                _ => typechecked!("Result.unwrap-or", "Result"),
             }
         })
     }
@@ -2504,31 +2246,8 @@ mod tests {
         assert_eq!(elems.len(), 6);
     }
 
-    #[tokio::test]
-    async fn array_concat_type_mismatch() {
-        let mut arena = crate::value::ValueArena::new();
-        let mut type_exprs = TypeExprArena::new();
-
-        // Array of ints
-        let arr_a = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3]);
-
-        // Array of strings
-        let str_ty = type_exprs.named(TypeId::STRING);
-        let s = arena.intern("hello");
-        let str_val = arena.add(Value::String(s), span());
-        let arr_b = arena.add(Value::Array(str_ty, smallvec![str_val]), span());
-
-        let result = {
-            let mut ctx = PrimCtx {
-                arena: &mut arena,
-                type_exprs: &mut type_exprs,
-                span: span(),
-            };
-            Array::concat(&mut ctx, smallvec![arr_a, arr_b]).await
-        };
-
-        assert!(result.is_err());
-    }
+    // Removed: array_concat_type_mismatch
+    // Type checker now catches Array.concat type mismatch at compile time.
 
     fn make_string(arena: &mut crate::value::ValueArena, s: &str) -> ValueId {
         let sid = arena.intern(s);

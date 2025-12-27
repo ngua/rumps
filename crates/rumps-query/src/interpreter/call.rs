@@ -45,17 +45,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ModuleFn { path } => {
                 self.invoke_module_fn(&path, &[arg_id], span).await
             }
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "`|>` requires function on right side; got {}",
-                    right.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees rhs is callable
+            _ => typechecked!("|>", "Callable"),
         }
     }
 
@@ -351,17 +342,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 end,
                 inclusive,
             }) => self.range_map(fn_id, *start, *end, *inclusive, span).await,
-            Some(other) => Err(Error::runtime_type(
-                span,
-                format!(
-                    "Array.map expects Array or Range; got {}",
-                    other.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees iterable is Array or Range
+            Some(_) => typechecked!("Array.map", "Iterable"),
             None => Err(Error::runtime(span, "Array.map: invalid iterable")),
         }
     }
@@ -388,6 +370,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         .await
     }
 
+    /// Type checker guarantees mapper function produces homogeneous results.
     #[async_recursion]
     async fn range_map_rec(
         &mut self,
@@ -404,7 +387,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
             Ok(Value::Array(elem_ty, acc))
         } else {
-            // Create the integer value for this iteration
             let int_val = Value::Int(current);
             let int_id = self.arena.add(int_val, span);
 
@@ -412,25 +394,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             let result_ty = self
                 .arena
                 .base_type_of(result, &self.type_exprs)
-                .ok_or_else(|| {
-                Error::runtime(span, "Array.map: invalid result")
-            })?;
-
-            // Check homogeneity
-            let checked_ty = first_ty.map_or_else(
-                || Ok(result_ty),
-                |fty| {
-                    if fty == result_ty {
-                        Ok(fty)
-                    } else {
-                        Err(Error::runtime(
-                            span,
-                            "Array.map: function produces heterogeneous \
-                             results; all elements must have the same type",
-                        ))
-                    }
-                },
-            )?;
+                .unwrap_or(TypeId::UNKNOWN);
 
             let mut new_acc = acc;
             new_acc.push(result);
@@ -439,7 +403,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 current + 1,
                 end,
                 new_acc,
-                Some(checked_ty),
+                first_ty.or(Some(result_ty)),
                 span,
             )
             .await
@@ -447,6 +411,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Recursive helper for `Array.map`.
+    ///
+    /// Type checker guarantees mapper function produces homogeneous results.
     #[async_recursion]
     async fn array_map_rec(
         &mut self,
@@ -469,30 +435,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let result_ty = self
                     .arena
                     .base_type_of(result, &self.type_exprs)
-                    .ok_or_else(|| {
-                        Error::runtime(span, "Array.map: invalid result")
-                    })?;
-
-                // Check homogeneity
-                let checked_ty = first_ty.map_or_else(
-                    || Ok(result_ty),
-                    |fty| {
-                        if fty == result_ty {
-                            Ok(fty)
-                        } else {
-                            Err(Error::runtime(
-                                span,
-                                "Array.map: function produces heterogeneous \
-                                 results; all elements must have the same type",
-                            ))
-                        }
-                    },
-                )?;
+                    .unwrap_or(TypeId::UNKNOWN);
 
                 let mut new_acc = acc;
                 new_acc.push(result);
-                self.array_map_rec(fn_id, tail, new_acc, Some(checked_ty), span)
-                    .await
+                self.array_map_rec(
+                    fn_id,
+                    tail,
+                    new_acc,
+                    first_ty.or(Some(result_ty)),
+                    span,
+                )
+                .await
             }
         }
     }
@@ -542,17 +496,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.range_filter(pred_id, *start, *end, *inclusive, span)
                     .await
             }
-            Some(other) => Err(Error::runtime_type(
-                span,
-                format!(
-                    "Array.filter expects Array or Range; got {}",
-                    other.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees iterable is Array or Range
+            Some(_) => typechecked!("Array.filter", "Iterable"),
             None => Err(Error::runtime(span, "Array.filter: invalid iterable")),
         }
     }
@@ -580,6 +525,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         .await
     }
 
+    /// Type checker guarantees predicate returns `Bool`.
     #[async_recursion]
     async fn range_filter_rec(
         &mut self,
@@ -604,10 +550,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             let keep = match result_val {
                 Value::Bool(b) => b,
-                _ => Err(Error::runtime_type(
-                    span,
-                    "Array.filter predicate must return Bool",
-                ))?,
+                _ => typechecked!("Array.filter predicate", "Bool"),
             };
             let mut new_acc = acc;
             if keep {
@@ -626,6 +569,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Recursive helper for `Array.filter`.
+    ///
+    /// Type checker guarantees predicate returns `Bool`.
     #[async_recursion]
     async fn array_filter_rec(
         &mut self,
@@ -647,10 +592,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
                 let keep = match result_val {
                     Value::Bool(b) => b,
-                    _ => Err(Error::runtime_type(
-                        span,
-                        "Array.filter predicate must return Bool",
-                    ))?,
+                    _ => typechecked!("Array.filter predicate", "Bool"),
                 };
                 let mut new_acc = acc;
                 if keep {
@@ -706,17 +648,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 )
                 .await
             }
-            Some(other) => Err(Error::runtime_type(
-                span,
-                format!(
-                    "Array.reduce expects Array or Range; got {}",
-                    other.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees iterable is Array or Range
+            Some(_) => typechecked!("Array.reduce", "Iterable"),
             None => Err(Error::runtime(span, "Array.reduce: invalid iterable")),
         }
     }
@@ -824,17 +757,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.range_foreach(fn_id, *start, *end, *inclusive, span)
                     .await
             }
-            Some(other) => Err(Error::runtime_type(
-                span,
-                format!(
-                    "Array.foreach expects Array or Range; got {}",
-                    other.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees iterable is Array or Range
+            Some(_) => typechecked!("Array.foreach", "Iterable"),
             None => {
                 Err(Error::runtime(span, "Array.foreach: invalid iterable"))
             }
@@ -963,7 +887,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.type_exprs.app(TypeId::OPTION, smallvec![unknown]);
                 Ok(Value::none(opt_ty))
             }
-            _ => Err(Error::runtime_type(span, "Option.map: expected Option")),
+            // Type checker guarantees arg is Option
+            _ => typechecked!("Option.map", "Option"),
         }
     }
 
@@ -1039,7 +964,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Result.Err(e) - return unchanged (clone needed for passthrough)
                 Ok(res.clone())
             }
-            _ => Err(Error::runtime_type(span, "Result.map: expected Result")),
+            // Type checker guarantees arg is Result
+            _ => typechecked!("Result.map", "Result"),
         }
     }
 
@@ -1117,10 +1043,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .app(TypeId::RESULT, smallvec![unknown, err_ty]);
                 Ok(Value::err(res_ty, result_id))
             }
-            _ => Err(Error::runtime_type(
-                span,
-                "Result.map-err: expected Result",
-            )),
+            // Type checker guarantees arg is Result
+            _ => typechecked!("Result.map-err", "Result"),
         }
     }
 
@@ -1164,17 +1088,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let result = self.invoke_module_fn(&path, args, span).await?;
                 Ok(self.arena.add(result, span))
             }
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "expected function, got {}",
-                    callee.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees callee is callable
+            _ => typechecked!("invoke_callable", "Callable"),
         }
     }
 
@@ -1225,17 +1140,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let vals = self.eval_args(args).await?;
                 self.invoke_module_fn(&path, &vals, span).await
             }
-            _ => Err(Error::runtime(
-                span,
-                format!(
-                    "cannot call non-function value of type {}",
-                    callee.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees callee is callable
+            _ => typechecked!("call", "Callable"),
         }
     }
 

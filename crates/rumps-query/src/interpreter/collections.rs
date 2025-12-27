@@ -223,7 +223,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(Value::Map(k_ty, v_ty, IndexMap::new()))
             }
             Some(((k_expr, v_expr), rest)) => {
-                let k_span = self.ast.expr_span(*k_expr).unwrap_or(span);
                 let v_span = self.ast.expr_span(*v_expr).unwrap_or(span);
 
                 let k_val = self.eval(*k_expr).await?;
@@ -232,19 +231,20 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let k_ty = self.value_type_expr(&k_val);
                 let v_ty = self.value_type_expr(&v_val);
 
-                let map_key = self.value_to_map_key(&k_val, k_span)?;
+                let map_key = self.value_to_map_key(&k_val);
                 let v_id = self.arena.add(v_val, v_span);
 
                 let mut acc = IndexMap::new();
                 acc.insert(map_key, v_id);
 
-                self.map_lit_entries(rest, k_ty, v_ty, acc, k_span, span)
-                    .await
+                self.map_lit_entries(rest, k_ty, v_ty, acc, span).await
             }
         }
     }
 
     /// Recursively evaluate and type-check map entries.
+    ///
+    /// Type checker guarantees key/value type homogeneity.
     #[async_recursion]
     async fn map_lit_entries(
         &mut self,
@@ -252,72 +252,37 @@ impl<I: IoContext> Interpreter<'_, I> {
         k_ty: TypeExprId,
         v_ty: TypeExprId,
         mut acc: IndexMap<MapKey, ValueId>,
-        first_k_span: Span,
         span: Span,
     ) -> Result<Value> {
         match entries.split_first() {
             None => Ok(Value::Map(k_ty, v_ty, acc)),
             Some(((k_expr, v_expr), tail)) => {
-                let k_span = self.ast.expr_span(*k_expr).unwrap_or(span);
                 let v_span = self.ast.expr_span(*v_expr).unwrap_or(span);
 
                 let k_val = self.eval(*k_expr).await?;
                 let v_val = self.eval(*v_expr).await?;
 
-                let this_k_ty = self.value_type_expr(&k_val);
-                let this_v_ty = self.value_type_expr(&v_val);
-
-                // Check key type homogeneity
-                if !self.type_exprs.eq(k_ty, this_k_ty) {
-                    let expected = self.type_expr_name(k_ty);
-                    let got = self.type_expr_name(this_k_ty);
-                    Err(Error::runtime_type(
-                        k_span,
-                        format!(
-                            "map key type mismatch: expected {expected} \
-                             (from {}..{}), got {got}",
-                            first_k_span.start, first_k_span.end
-                        ),
-                    ))?;
-                }
-
-                // Check value type homogeneity
-                if !self.type_exprs.eq(v_ty, this_v_ty) {
-                    let expected = self.type_expr_name(v_ty);
-                    let got = self.type_expr_name(this_v_ty);
-                    Err(Error::runtime_type(
-                        v_span,
-                        format!(
-                            "map value type mismatch: expected {expected}, got {got}"
-                        ),
-                    ))?;
-                }
-
-                let map_key = self.value_to_map_key(&k_val, k_span)?;
+                // Type checker guarantees key/value homogeneity
+                let map_key = self.value_to_map_key(&k_val);
                 let v_id = self.arena.add(v_val, v_span);
                 acc.insert(map_key, v_id);
 
-                self.map_lit_entries(tail, k_ty, v_ty, acc, first_k_span, span)
-                    .await
+                self.map_lit_entries(tail, k_ty, v_ty, acc, span).await
             }
         }
     }
 
-    /// Convert a value to a `MapKey`, or error if not a scalar.
-    fn value_to_map_key(&self, v: &Value, span: Span) -> Result<MapKey> {
-        MapKey::from_value(v).ok_or_else(|| {
-            Error::runtime_type(
-                span,
-                format!(
-                    "map keys must be scalar (Bool, Int, Float, Char, String); \
-                     got {}",
-                    v.type_name(&self.registry, &self.type_exprs, &self.arena)
-                ),
-            )
-        })
+    /// Convert a value to a `MapKey`.
+    ///
+    /// Type checker guarantees map keys are scalar types.
+    fn value_to_map_key(&self, v: &Value) -> MapKey {
+        MapKey::from_value(v)
+            .unwrap_or_else(|| typechecked!("map key", "Scalar"))
     }
 
     /// Evaluate tuple index access: `tuple.0`, `tuple.1`, etc.
+    ///
+    /// Type checker guarantees base is a tuple and index is in bounds.
     #[async_recursion]
     pub(super) async fn tuple_index(
         &mut self,
@@ -332,6 +297,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get(idx as usize)
                 .and_then(|id| self.arena.get(*id).cloned())
                 .ok_or_else(|| {
+                    // Type checker should catch out-of-bounds, but keep as runtime
+                    // error in case of dynamic scenarios
                     Error::runtime(
                         span,
                         format!(
@@ -340,17 +307,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                         ),
                     )
                 }),
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "cannot index `{}` with `.{idx}`; expected tuple",
-                    base_val.type_name(&self.registry, &self.type_exprs, &self.arena)
-                ),
-            )),
+            _ => typechecked!(".N", "Tuple"),
         }
     }
 
     /// Evaluate index access (array, map, or string).
+    ///
+    /// Type checker guarantees base/index types are compatible.
+    /// Index out of bounds and key not found remain runtime errors.
     #[async_recursion]
     pub(super) async fn index(
         &mut self,
@@ -380,11 +344,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
             }
             (Value::Map(_, _, entries), key) => {
-                let map_key = self.value_to_map_key(key, span)?;
+                let map_key = self.value_to_map_key(key);
                 entries
                     .get(&map_key)
                     .and_then(|id| self.arena.get(*id).cloned())
                     .ok_or_else(|| {
+                        // Key not found is a runtime error (not type error)
                         Error::runtime(span, "key not found in map".to_string())
                     })
             }
@@ -401,22 +366,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     },
                 )
             }
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "cannot index {} with {}",
-                    base_val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    ),
-                    idx_val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            _ => typechecked!("[]", "Indexable"),
         }
     }
 
@@ -473,17 +423,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Value::Json(j) => Ok(Value::Json(
                     j.get(field).cloned().unwrap_or(serde_json::Value::Null),
                 )),
-                _ => Err(Error::runtime_type(
-                    span,
-                    format!(
-                        "cannot access field on {}",
-                        base_val.type_name(
-                            &self.registry,
-                            &self.type_exprs,
-                            &self.arena
-                        )
-                    ),
-                )),
+                // Type checker guarantees field access is on Object or Json
+                _ => typechecked!(".field", "Object | Json"),
             }
         }
     }
@@ -539,6 +480,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Helper for field access on a value (without wrapping in Option).
+    ///
+    /// Type checker guarantees val is Object. Field not found remains
+    /// a runtime error since field presence isn't always statically known.
     pub(super) fn field_access(
         &mut self,
         val: &Value,
@@ -551,23 +495,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 obj.get(&field_id)
                     .and_then(|id| self.arena.get(*id).cloned())
                     .ok_or_else(|| {
+                        // Field not found is a runtime error (not type error)
                         Error::runtime(
                             span,
                             format!("field `{field}` not found"),
                         )
                     })
             }
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "cannot access field on {}",
-                    val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees field access is on Object
+            _ => typechecked!("?.field", "Object"),
         }
     }
 }

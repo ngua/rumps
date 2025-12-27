@@ -655,7 +655,7 @@ if fty == result_ty {
 
 **After cleanup:**
 ```rust
-// Type checker infers Array.map : (Array[A], (A) -> B) -> Array[B]
+// Type checker infers Array.map : forall A B. (Array[A], (A) -> B) -> Array[B]
 // Result homogeneity is guaranteed statically
 ```
 
@@ -1018,6 +1018,87 @@ Once the type-checker reliably catches the error, remove the corresponding runti
 - Faster execution (no redundant checks)
 - Cleaner code (pattern matches without error branches)
 - Confidence: each removed check has a test proving the type-checker catches it
+
+---
+
+## Phase 4.18: Type Checker Cleanup and Module Reorganization
+
+Remove development-time `#[allow(...)]` annotations and split the monolithic `infer.rs` (7400+ lines) into focused submodules.
+
+### 4.18.1: Remove `#[allow(...)]` Annotations
+
+**Current state:**
+```rust
+// crates/rumps-query/src/typecheck/infer.rs:7
+#![allow(clippy::large_enum_variant, dead_code)]
+```
+
+**Checklist:**
+- [ ] Remove `#![allow(clippy::large_enum_variant, dead_code)]` from `infer.rs`
+- [ ] Fix or remove any resulting dead code warnings
+- [ ] Address `large_enum_variant` if clippy flags it (consider `Box`ing large variants)
+- [ ] Audit other typecheck modules for stray `#[allow(...)]` annotations
+
+---
+
+### 4.18.2: Split `infer.rs` into Submodules
+
+The `infer.rs` file is ~7400 lines with tests comprising nearly two-thirds. Split into focused modules using the modern `module.rs` pattern (NOT `mod.rs`).
+
+**Target structure:**
+```
+crates/rumps-query/src/typecheck/
+├── infer.rs          # Re-exports, Constraint enum, InferCtx struct definition
+├── infer/
+│   ├── expr.rs       # Expression inference (literals, binary/unary, collections, access)
+│   ├── stmt.rs       # Statement inference (let, fun, set, kill, output)
+│   ├── pattern.rs    # Pattern matching, exhaustiveness checking, bind_pattern
+│   ├── convert.rs    # Type conversions (ast_type_to_ty, type_expr_to_ty, etc.)
+│   └── tests.rs      # All unit tests (~4700 lines)
+├── env.rs
+├── error.rs
+├── ty.rs
+└── unify.rs
+```
+
+**Module contents:**
+
+| Module       | Contents                                                                                  | ~Lines |
+|--------------|-------------------------------------------------------------------------------------------|--------|
+| `infer.rs`   | `Constraint` enum, `InferCtx` struct, `new()`, `infer()`, `stmt()`, re-exports            | ~400   |
+| `expr.rs`    | `expr_inner`, `literal`, `var`, `binary`, `unary`, `array`, `tuple`, `object`, `map_lit`, `field`, `optional_field`, `tuple_index`, `index`, `json_access`, `closure`, `call`, `r#if`, `block`, `r#match`, `match_arm`, `join_types`, `variant`, `unwrap`, `is_check`, `as_cast`, `read_conv`, `get`, `annotate` | ~1800 |
+| `stmt.rs`    | `fun`, `r#let`, `bind_pattern`, `set`, `kill`, `output`                                   | ~200   |
+| `pattern.rs` | `pattern_bindings`, `check_exhaustiveness`, `is_irrefutable_pattern`, `variant_payload_types`, `expand_union_members`, `is_union_member` | ~400   |
+| `convert.rs` | `ast_type_to_ty`, `type_expr_to_ty`, `type_id_to_ty`, `apply_type_args`, `named_type_to_ty`, `parameterized_type_to_ty`, `field_type`, `types_compatible`, `has_unresolved_vars` | ~350 |
+| `tests.rs`   | All `#[cfg(test)] mod tests { ... }`                                                      | ~4700  |
+
+**Note on tests:** The current unit tests use a limited `TestState` struct that manually constructs partial AST nodes and doesn't exercise real behavior. These tests should be rewritten to use the full pipeline: `parse -> CST -> AST -> typecheck`. This ensures tests validate actual type inference on real source code rather than synthetic AST fragments. Consider:
+- Replacing `TestState` with a helper that parses source strings
+- Using integration-style tests that mirror the `scripts/*.rumps` approach
+- Removing tests that only verify internal implementation details
+
+**Implementation approach:**
+
+1. Create `infer/` directory and submodule files
+2. Move `#[cfg(test)] mod tests` to `infer/tests.rs`
+3. Extract type conversion methods to `infer/convert.rs`
+4. Extract pattern matching logic to `infer/pattern.rs`
+5. Extract statement inference to `infer/stmt.rs`
+6. Extract expression inference to `infer/expr.rs`
+7. Keep `Constraint`, `InferCtx` struct definition, and dispatch methods in `infer.rs`
+8. Use `impl InferCtx<'_>` blocks in each submodule (Rust allows multiple impl blocks)
+
+**Checklist:**
+- [ ] Create `crates/rumps-query/src/typecheck/infer/` directory
+- [ ] Create `infer/tests.rs`; move all test code
+- [ ] Create `infer/convert.rs`; move type conversion methods
+- [ ] Create `infer/pattern.rs`; move pattern matching logic
+- [ ] Create `infer/stmt.rs`; move statement inference
+- [ ] Create `infer/expr.rs`; move expression inference
+- [ ] Update `infer.rs` to declare submodules: `mod convert; mod expr; mod pattern; mod stmt;`
+- [ ] Add `#[cfg(test)] mod tests;` to `infer.rs`
+- [ ] Verify `cargo test` passes
+- [ ] Verify `cargo clippy` passes with no new warnings
 
 ---
 

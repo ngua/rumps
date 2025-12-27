@@ -86,16 +86,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         let (type_id, var_def) =
             self.lookup_variant(ty_name, var_name, span)?;
 
-        // Enforce zero-arity for bare variant patterns
-        (var_def.arity == 0).then_some(()).ok_or_else(|| {
-            Error::runtime(
-                span,
-                format!(
-                    "`{ty_name}.{var_name}` has {} payload(s); use `{ty_name}.{var_name}(_)` or bind with `{ty_name}.{var_name}(name)`",
-                    var_def.arity
-                ),
-            )
-        })?;
+        // Type checker guarantees bare variant patterns match zero-arity variants
+        if var_def.arity != 0 {
+            typechecked!("is Type.Variant", "zero-arity");
+        }
 
         Ok(match val {
             Value::Tagged(ty_expr, idx, _) => {
@@ -262,20 +256,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let variant_matches = *idx == var_def.idx;
 
                 if type_matches && variant_matches {
-                    // Check arity
+                    // Type checker guarantees pattern arity matches variant arity
                     if payloads.len() != sub_pats.len() {
-                        Err(Error::runtime(
-                            span,
-                            format!(
-                                "`{ty_name}.{var_name}` has {} payload(s), but {} pattern(s) provided",
-                                payloads.len(),
-                                sub_pats.len()
-                            ),
-                        ))
-                    } else {
-                        // Recursively match sub-patterns against payloads
-                        self.try_match_all(sub_pats, payloads, span)
+                        typechecked!("match variant", "matching arity");
                     }
+                    // Recursively match sub-patterns against payloads
+                    self.try_match_all(sub_pats, payloads, span)
                 } else {
                     Ok(None)
                 }
@@ -419,6 +405,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Destructure a tuple value.
+    ///
+    /// Type checker guarantees pattern and value have matching sizes.
     fn destructure_tuple(
         &mut self,
         pats: &[BindingPattern],
@@ -427,48 +415,26 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<()> {
         match val {
             Value::Tuple(_, elems) => {
+                // Type checker guarantees pattern and value have matching sizes
                 if elems.len() != pats.len() {
-                    Err(Error::runtime(
-                        span,
-                        format!(
-                            "tuple size mismatch: pattern has {} elements, \
-                             value has {}",
-                            pats.len(),
-                            elems.len()
-                        ),
-                    ))
-                } else {
-                    pats.iter().zip(elems.iter()).try_for_each(
-                        |(p, elem_id)| {
-                            let elem =
-                                self.arena.get(*elem_id).cloned().ok_or_else(
-                                    || {
-                                        Error::runtime(
-                                            span,
-                                            "invalid tuple element",
-                                        )
-                                    },
-                                )?;
-                            self.destructure(p, &elem, span)
-                        },
-                    )
+                    typechecked!("destructure tuple", "matching size");
                 }
+                pats.iter().zip(elems.iter()).try_for_each(|(p, elem_id)| {
+                    let elem =
+                        self.arena.get(*elem_id).cloned().unwrap_or_else(
+                            || typechecked!("tuple elem", "ValueId"),
+                        );
+                    self.destructure(p, &elem, span)
+                })
             }
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "cannot destructure {} as tuple",
-                    val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees destructure target is a Tuple
+            _ => typechecked!("destructure", "Tuple"),
         }
     }
 
     /// Destructure an object value.
+    ///
+    /// Type checker guarantees pattern fields exist in the object.
     fn destructure_object(
         &mut self,
         fields: &[(String, BindingPattern)],
@@ -477,37 +443,25 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<()> {
         match val {
             Value::Object(obj) => fields.iter().try_for_each(|(name, pat)| {
-                let field_name_id = self.arena.intern(name);
-                obj.get(&field_name_id)
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!("object missing field `{name}`"),
-                        )
-                    })
-                    .and_then(|val_id| {
-                        let field_val =
-                            self.arena.get(*val_id).cloned().ok_or_else(
-                                || Error::runtime(span, "invalid field value"),
-                            )?;
-                        self.destructure(pat, &field_val, span)
-                    })
+                let fid = self.arena.intern(name);
+                // Type checker guarantees field exists
+                let val_id = obj.get(&fid).copied().unwrap_or_else(|| {
+                    typechecked!("destructure object", "field")
+                });
+                let field_val =
+                    self.arena.get(val_id).cloned().unwrap_or_else(|| {
+                        typechecked!("field value", "ValueId")
+                    });
+                self.destructure(pat, &field_val, span)
             }),
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "cannot destructure {} as object",
-                    val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees destructure target is an Object
+            _ => typechecked!("destructure", "Object"),
         }
     }
 
     /// Destructure an array value.
+    ///
+    /// Size constraints are runtime checks (array length is not in the type).
     fn destructure_array(
         &mut self,
         pats: &[BindingPattern],
@@ -517,8 +471,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<()> {
         match val {
             Value::Array(ty_id, elems) => {
-                // Without rest: require exact length
-                // With rest (Ignore or Bind): require at least `pats.len()` elements
+                // Array length is runtime-only; size mismatches are runtime errors
                 if rest.is_none() && elems.len() != pats.len() {
                     Err(Error::runtime(
                         span,
@@ -528,8 +481,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                             pats.len(),
                             elems.len()
                         ),
-                    ))
-                } else if rest.is_some() && elems.len() < pats.len() {
+                    ))?;
+                }
+                if rest.is_some() && elems.len() < pats.len() {
                     Err(Error::runtime(
                         span,
                         format!(
@@ -538,54 +492,37 @@ impl<I: IoContext> Interpreter<'_, I> {
                             pats.len(),
                             elems.len()
                         ),
-                    ))
-                } else {
-                    // Bind prefix elements
-                    pats.iter()
-                        .zip(elems.iter().take(pats.len()))
-                        .try_for_each(|(p, elem_id)| {
-                            let elem =
-                                self.arena.get(*elem_id).cloned().ok_or_else(
-                                    || {
-                                        Error::runtime(
-                                            span,
-                                            "invalid array element",
-                                        )
-                                    },
-                                )?;
-                            self.destructure(p, &elem, span)
-                        })?;
+                    ))?;
+                }
 
-                    // Handle rest pattern
-                    match rest {
-                        None => Ok(()), // exact match, already validated
-                        Some(RestPattern::Ignore) => Ok(()), // discard rest
-                        Some(RestPattern::Bind(name)) => {
-                            let rest_elems: SmallVec<_> = elems
-                                .iter()
-                                .skip(pats.len())
-                                .copied()
-                                .collect();
-                            let rest_arr = Value::Array(*ty_id, rest_elems);
-                            let name_id = self.arena.intern(name);
-                            let val_id = self.arena.add(rest_arr, span);
-                            self.env.scopes.bind(name_id, val_id);
-                            Ok(())
-                        }
+                // Bind prefix elements
+                pats.iter()
+                    .zip(elems.iter().take(pats.len()))
+                    .try_for_each(|(p, elem_id)| {
+                        let elem =
+                            self.arena.get(*elem_id).cloned().unwrap_or_else(
+                                || typechecked!("array elem", "ValueId"),
+                            );
+                        self.destructure(p, &elem, span)
+                    })?;
+
+                // Handle rest pattern
+                match rest {
+                    None => Ok(()),
+                    Some(RestPattern::Ignore) => Ok(()),
+                    Some(RestPattern::Bind(name)) => {
+                        let rest_elems: SmallVec<_> =
+                            elems.iter().skip(pats.len()).copied().collect();
+                        let rest_arr = Value::Array(*ty_id, rest_elems);
+                        let name_id = self.arena.intern(name);
+                        let val_id = self.arena.add(rest_arr, span);
+                        self.env.scopes.bind(name_id, val_id);
+                        Ok(())
                     }
                 }
             }
-            _ => Err(Error::runtime_type(
-                span,
-                format!(
-                    "cannot destructure {} as array",
-                    val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena
-                    )
-                ),
-            )),
+            // Type checker guarantees destructure target is an Array
+            _ => typechecked!("destructure", "Array"),
         }
     }
 }
