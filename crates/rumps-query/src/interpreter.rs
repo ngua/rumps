@@ -907,7 +907,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let val = self.eval(expr).await?;
         let expected_ty = self.resolve_type_expr(ast_ty, span)?;
         self.validate_type(&val, expected_ty, span)?;
-        Ok(val)
+        Ok(self.refine_type(val, expected_ty))
     }
 
     /// Execute a `LET` binding with destructuring.
@@ -925,12 +925,66 @@ impl<I: IoContext> Interpreter<'_, I> {
         let val = self.eval(expr_id).await?;
 
         // Check type annotation if present (applies to the entire value)
-        if let Some(ast_ty_id) = ty_ann {
-            let expected_ty = self.resolve_type_expr(ast_ty_id, span)?;
-            self.validate_type(&val, expected_ty, span)?;
-        }
+        // Also refine UNKNOWN type parameters (e.g., empty array gets concrete element type)
+        let val = match ty_ann {
+            Some(ast_ty_id) => {
+                let expected_ty = self.resolve_type_expr(ast_ty_id, span)?;
+                self.validate_type(&val, expected_ty, span)?;
+                self.refine_type(val, expected_ty)
+            }
+            None => val,
+        };
 
         self.destructure(pat, &val, span)
+    }
+
+    /// Refine a value's internal type to match an annotation.
+    ///
+    /// For parameterized types like `Array` and `Map`, if the value has `UNKNOWN`
+    /// type parameters (e.g., empty array), replaces them with concrete types
+    /// from the annotation.
+    fn refine_type(&self, val: Value, expected: TypeExprId) -> Value {
+        let args = self.type_exprs.type_args(expected).map(SmallVec::as_slice);
+        match (&val, self.type_exprs.base_type(expected), args) {
+            (
+                Value::Array(elem_ty, elems),
+                Some(TypeId::ARRAY),
+                Some(&[ann_elem]),
+            ) => {
+                if self.type_exprs.base_type(*elem_ty) == Some(TypeId::UNKNOWN)
+                {
+                    Value::Array(ann_elem, elems.clone())
+                } else {
+                    val
+                }
+            }
+            (
+                Value::Map(k_ty, v_ty, entries),
+                Some(TypeId::MAP),
+                Some(&[ann_k, ann_v]),
+            ) => {
+                let k = if self.type_exprs.base_type(*k_ty)
+                    == Some(TypeId::UNKNOWN)
+                {
+                    ann_k
+                } else {
+                    *k_ty
+                };
+                let v = if self.type_exprs.base_type(*v_ty)
+                    == Some(TypeId::UNKNOWN)
+                {
+                    ann_v
+                } else {
+                    *v_ty
+                };
+                if k != *k_ty || v != *v_ty {
+                    Value::Map(k, v, entries.clone())
+                } else {
+                    val
+                }
+            }
+            _ => val,
+        }
     }
 
     /// Execute an `OUTPUT` statement.

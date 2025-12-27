@@ -1,0 +1,26 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; IS operator with parameterized types (Array[T], Map[K, V])\n; Tests that element/key/value types are checked, not just the container type\n\n; === Array element type checks ===\n\nLET floats = [1.0, 2.0, 3.0]\nOUTPUT floats IS Array[Float]\n; TRUE\n\nOUTPUT floats IS Array[Int]\n; FALSE - floats are not ints\n\nOUTPUT floats IS Array[Char]\n; FALSE\n\nLET ints = [1, 2, 3]\nOUTPUT ints IS Array[Int]\n; TRUE\n\nOUTPUT ints IS Array[Float]\n; FALSE\n\nOUTPUT ints IS Array[String]\n; FALSE\n\n; === Empty array with annotation ===\n\n; Empty array without annotation is polymorphic (UNKNOWN element type)\nLET empty = []\nOUTPUT empty IS Array[Int]\n; TRUE - UNKNOWN matches anything\n\nOUTPUT empty IS Array[String]\n; TRUE - UNKNOWN matches anything\n\n; Empty array WITH annotation has concrete element type\nLET empty-bool: Array[Bool] = []\nOUTPUT empty-bool IS Array[Bool]\n; TRUE\n\nOUTPUT empty-bool IS Array[Int]\n; FALSE - annotated as Bool, not Int\n\nOUTPUT empty-bool IS Array[String]\n; FALSE\n\n; === Map key/value type checks ===\n\nLET str-to-int = { \"a\" => 1, \"b\" => 2 }\nOUTPUT str-to-int IS Map[String, Int]\n; TRUE\n\nOUTPUT str-to-int IS Map[String, String]\n; FALSE - values are Int, not String\n\nOUTPUT str-to-int IS Map[Int, Int]\n; FALSE - keys are String, not Int\n\n; Empty map with annotation\nLET empty-map: Map[Int, Bool] = Map.empty()\nOUTPUT empty-map IS Map[Int, Bool]\n; TRUE\n\nOUTPUT empty-map IS Map[String, Int]\n; FALSE - annotated as Map[Int, Bool]\n\n; === Inline annotation syntax ===\n\n; Verify inline annotations also refine types\nLET inline-arr = ([]) : Array[Char]\nOUTPUT inline-arr IS Array[Char]\n; TRUE\n\nOUTPUT inline-arr IS Array[Int]\n; FALSE - inline annotation makes it concrete\n\n; === User-defined parameterized types ===\n\nTYPE Box[T] = { inner: T }\n\nLET box-int = { inner: 42 }\nOUTPUT box-int IS Box[Int]\n; TRUE\n\nOUTPUT box-int IS Box[String]\n; FALSE\n\nOUTPUT box-int IS Box[Float]\n; FALSE\n\nOUTPUT \"parameterized IS tests complete\"\n"
+---
+TRUE
+FALSE
+FALSE
+TRUE
+FALSE
+FALSE
+TRUE
+TRUE
+TRUE
+FALSE
+FALSE
+TRUE
+FALSE
+FALSE
+TRUE
+FALSE
+TRUE
+FALSE
+TRUE
+FALSE
+FALSE
+parameterized IS tests complete

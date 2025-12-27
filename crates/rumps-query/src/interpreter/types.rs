@@ -946,8 +946,26 @@ impl<I: IoContext> Interpreter<'_, I> {
             let params = params.clone();
             self.fn_value_matches(val, &params, ret)
         } else if let Some(type_id) = self.type_exprs.base_type(ty) {
-            // Simple type
-            self.value_matches_type(val, type_id)
+            // Parameterized types: compare stored type args with expected
+            match (
+                type_id,
+                self.type_exprs.type_args(ty).map(SmallVec::as_slice),
+            ) {
+                (TypeId::ARRAY, Some(&[expected_elem])) => match val {
+                    Value::Array(actual_elem, _) => {
+                        self.type_exprs.eq(*actual_elem, expected_elem)
+                    }
+                    _ => false,
+                },
+                (TypeId::MAP, Some(&[expected_k, expected_v])) => match val {
+                    Value::Map(actual_k, actual_v, _) => {
+                        self.type_exprs.eq(*actual_k, expected_k)
+                            && self.type_exprs.eq(*actual_v, expected_v)
+                    }
+                    _ => false,
+                },
+                _ => self.value_matches_type(val, type_id),
+            }
         } else {
             false
         }

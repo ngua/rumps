@@ -1,0 +1,91 @@
+; IS operator with parameterized types (Array[T], Map[K, V])
+; Tests that element/key/value types are checked, not just the container type
+
+; === Array element type checks ===
+
+LET floats = [1.0, 2.0, 3.0]
+OUTPUT floats IS Array[Float]
+; TRUE
+
+OUTPUT floats IS Array[Int]
+; FALSE - floats are not ints
+
+OUTPUT floats IS Array[Char]
+; FALSE
+
+LET ints = [1, 2, 3]
+OUTPUT ints IS Array[Int]
+; TRUE
+
+OUTPUT ints IS Array[Float]
+; FALSE
+
+OUTPUT ints IS Array[String]
+; FALSE
+
+; === Empty array with annotation ===
+
+; Empty array without annotation is polymorphic (UNKNOWN element type)
+LET empty = []
+OUTPUT empty IS Array[Int]
+; TRUE - UNKNOWN matches anything
+
+OUTPUT empty IS Array[String]
+; TRUE - UNKNOWN matches anything
+
+; Empty array WITH annotation has concrete element type
+LET empty-bool: Array[Bool] = []
+OUTPUT empty-bool IS Array[Bool]
+; TRUE
+
+OUTPUT empty-bool IS Array[Int]
+; FALSE - annotated as Bool, not Int
+
+OUTPUT empty-bool IS Array[String]
+; FALSE
+
+; === Map key/value type checks ===
+
+LET str-to-int = { "a" => 1, "b" => 2 }
+OUTPUT str-to-int IS Map[String, Int]
+; TRUE
+
+OUTPUT str-to-int IS Map[String, String]
+; FALSE - values are Int, not String
+
+OUTPUT str-to-int IS Map[Int, Int]
+; FALSE - keys are String, not Int
+
+; Empty map with annotation
+LET empty-map: Map[Int, Bool] = Map.empty()
+OUTPUT empty-map IS Map[Int, Bool]
+; TRUE
+
+OUTPUT empty-map IS Map[String, Int]
+; FALSE - annotated as Map[Int, Bool]
+
+; === Inline annotation syntax ===
+
+; Verify inline annotations also refine types
+LET inline-arr = ([]) : Array[Char]
+OUTPUT inline-arr IS Array[Char]
+; TRUE
+
+OUTPUT inline-arr IS Array[Int]
+; FALSE - inline annotation makes it concrete
+
+; === User-defined parameterized types ===
+
+TYPE Box[T] = { inner: T }
+
+LET box-int = { inner: 42 }
+OUTPUT box-int IS Box[Int]
+; TRUE
+
+OUTPUT box-int IS Box[String]
+; FALSE
+
+OUTPUT box-int IS Box[Float]
+; FALSE
+
+OUTPUT "parameterized IS tests complete"
