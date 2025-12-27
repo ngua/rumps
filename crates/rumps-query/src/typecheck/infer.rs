@@ -3,14 +3,28 @@
 //! The inference context tracks type information during type checking:
 //! expression types, type variable generation, and constraint collection.
 //! Constraints are solved later via unification.
+//!
+//! # Testing Philosophy
+//!
+//! This module has no unit tests. The type checker requires the full pipeline
+//! (source -> lex -> parse -> CST -> AST -> resolve -> typecheck) to function,
+//! making isolated unit tests impractical and misleading. Previous unit tests
+//! that constructed synthetic AST nodes:
+//!
+//! 1. Failed to catch real bugs (which were only caught by integration tests)
+//! 2. Tested implementation details (e.g., "should have 2 Eq constraints")
+//! 3. Required fragile manual AST construction
+//! 4. Provided false confidence in test coverage
+//!
+//! All type checker behavior is tested through the integration test scripts in
+//! `scripts/*.rumps`, which exercise the complete pipeline and use snapshot
+//! testing for regression detection. This approach has proven far more effective
+//! at catching bugs in practice.
 
 mod convert;
 mod expr;
 mod pattern;
 mod stmt;
-
-#[cfg(test)]
-mod tests;
 
 use std::collections::HashMap;
 
