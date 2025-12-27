@@ -436,24 +436,24 @@ impl<'a> InferCtx<'a> {
     /// (e.g., `Named(ARRAY, [Int])` -> `Array(Int)`).
     fn apply_type_args(&self, base: Ty, args: Vec<Ty>) -> Ty {
         match base {
-            Ty::Named(id, _) if id == TypeId::ARRAY && args.len() == 1 => {
-                Ty::Array(Box::new(args.into_iter().next().unwrap()))
-            }
-            Ty::Named(id, _) if id == TypeId::OPTION && args.len() == 1 => {
-                Ty::Option(Box::new(args.into_iter().next().unwrap()))
-            }
-            Ty::Named(id, _) if id == TypeId::MAP && args.len() == 2 => {
-                let mut it = args.into_iter();
-                Ty::Map(
-                    Box::new(it.next().unwrap()),
-                    Box::new(it.next().unwrap()),
-                )
-            }
-            Ty::Named(id, _) if id == TypeId::RESULT && args.len() == 2 => {
-                let mut it = args.into_iter();
-                Ty::Result(
-                    Box::new(it.next().unwrap()),
-                    Box::new(it.next().unwrap()),
+            Ty::Named(id, _) if id == TypeId::ARRAY => <[_; 1]>::try_from(args)
+                .map_or_else(
+                    |v| Ty::Named(id, v),
+                    |[e]| Ty::Array(Box::new(e)),
+                ),
+            Ty::Named(id, _) if id == TypeId::OPTION => <[_; 1]>::try_from(
+                args,
+            )
+            .map_or_else(|v| Ty::Named(id, v), |[e]| Ty::Option(Box::new(e))),
+            Ty::Named(id, _) if id == TypeId::MAP => <[_; 2]>::try_from(args)
+                .map_or_else(
+                    |v| Ty::Named(id, v),
+                    |[k, v]| Ty::Map(Box::new(k), Box::new(v)),
+                ),
+            Ty::Named(id, _) if id == TypeId::RESULT => {
+                <[_; 2]>::try_from(args).map_or_else(
+                    |v| Ty::Named(id, v),
+                    |[ok, err]| Ty::Result(Box::new(ok), Box::new(err)),
                 )
             }
             Ty::Named(id, _) if id == TypeId::TUPLE => Ty::Tuple(args),
