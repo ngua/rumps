@@ -703,77 +703,6 @@ macro_rules! typechecked {
 
 ---
 
-### 4.17.12: Test-Driven Removal Strategy
-
-For each category of runtime checks, follow this process:
-
-**Step 1: Write a failing test**
-```rumps
-; scripts/err_array_heterogeneous.rumps
-; This should be caught by the type checker
-LET arr: Array[Int] = [1, "two", 3]  ; ERROR: array elements must have same type
-```
-
-**Step 2: Create expected snapshot**
-Via `cargo insta`; `miette` will produce a nice error, this is just for example
-
-```
-; snapshots/scripts__err_array_heterogeneous.snap
-error: type mismatch
-  --> err_array_heterogeneous.rumps:2:15
-   |
- 2 | LET arr: Array[Int] = [1, "two", 3]
-   |                           ^^^^^ expected Int, got String
-```
-
-**Step 3: Run test**
-- If type-checker catches it (test passes with static error): go immediately to Step 4 below
-- If type-checker misses it (runtime error or no error): fix type-checker, repeat; then go to Step 4 once fixed
-
-**Step 4: Remove runtime check**
-Once the type-checker reliably catches the error, remove the corresponding runtime check code.
-
----
-
-**Checklist for each check category:**
-
-**Arity checks:**
-- [ ] Write test: `Array.map(arr)` (missing second arg)
-- [ ] Verify type-checker catches `ArityMismatch`
-- [ ] Remove `check_arity` calls
-
-**Array homogeneity:**
-- [ ] Write test: `[1, "two", 3]`
-- [ ] Verify type-checker catches `Mismatch`
-- [ ] Remove `array_elems` type equality check
-
-**Binary operators:**
-- [ ] Write test: `"hello" + 5`
-- [ ] Verify type-checker catches `NotNumeric` or `Mismatch`
-- [ ] Remove operator error branches
-
-**IF/Unit:**
-- [ ] Write test: `LET x = IF TRUE { 42 }` (no ELSE, body not Unit)
-- [ ] Verify type-checker catches the constraint
-- [ ] Remove `check_unit` function
-
-**Unwrap:**
-- [ ] Write test: `42!` (unwrap on non-Option/Result)
-- [ ] Verify type-checker catches `Mismatch`
-- [ ] Remove unwrap type checks
-
-**Range:**
-- [ ] Write test: `"a" .. "z"` (non-Int range bounds)
-- [ ] Verify type-checker catches `Mismatch`
-- [ ] Remove range type checks
-
-**Module functions:**
-- [ ] Write test for each module: e.g., `Array.length("not an array")`
-- [ ] Verify type-checker catches `Mismatch`
-- [ ] Remove `.ok_or_else(|| ctx.type_error(...))` patterns
-
----
-
 **Expected benefits:**
 - Smaller binary size (less error handling code)
 - Faster execution (no redundant checks)
@@ -850,16 +779,16 @@ crates/rumps-query/src/typecheck/
 8. Use `impl InferCtx<'_>` blocks in each submodule (Rust allows multiple impl blocks)
 
 **Checklist:**
-- [ ] Create `crates/rumps-query/src/typecheck/infer/` directory
-- [ ] Create `infer/tests.rs`; move all test code
-- [ ] Create `infer/convert.rs`; move type conversion methods
-- [ ] Create `infer/pattern.rs`; move pattern matching logic
-- [ ] Create `infer/stmt.rs`; move statement inference
-- [ ] Create `infer/expr.rs`; move expression inference
-- [ ] Update `infer.rs` to declare submodules: `mod convert; mod expr; mod pattern; mod stmt;`
-- [ ] Add `#[cfg(test)] mod tests;` to `infer.rs`
-- [ ] Verify `cargo test` passes
-- [ ] Verify `cargo clippy` passes with no new warnings
+- [x] Create `crates/rumps-query/src/typecheck/infer/` directory
+- [x] Create `infer/tests.rs`; move all test code
+- [x] Create `infer/convert.rs`; move type conversion methods
+- [x] Create `infer/pattern.rs`; move pattern matching logic
+- [x] Create `infer/stmt.rs`; move statement inference
+- [x] Create `infer/expr.rs`; move expression inference
+- [x] Update `infer.rs` to declare submodules: `mod convert; mod expr; mod pattern; mod stmt;`
+- [x] Add `#[cfg(test)] mod tests;` to `infer.rs`
+- [x] Verify `cargo test` passes
+- [x] Verify `cargo clippy` passes with no new warnings
 
 ---
 

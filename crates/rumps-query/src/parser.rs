@@ -925,7 +925,7 @@ impl Parser {
                 // `(T)` without trailing comma is just parenthesized, not tuple
                 if elems.len() == 1 && !trailing {
                     elems.into_iter().next().ok_or_else(|| {
-                        Simple::custom(span.clone(), "internal: expected type")
+                        Simple::custom(span, "internal: expected type")
                     })
                 } else {
                     // `()`, `(T,)`, or `(T, U, ...)` are tuples

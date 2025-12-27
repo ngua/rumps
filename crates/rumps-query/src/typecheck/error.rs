@@ -133,15 +133,6 @@ impl<'a> TyPrinter<'a> {
             .map(str::to_owned)
             .unwrap_or_else(|| "<unknown type>".to_owned())
     }
-
-    /// Resolve a `StringId` to its string value.
-    #[allow(dead_code)]
-    pub(crate) fn string(&self, id: StringId) -> String {
-        self.strings
-            .get(id)
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("<string #{}>", id.idx()))
-    }
 }
 
 /// Helper for assigning readable names to type variables.
@@ -234,8 +225,6 @@ pub(crate) enum TypeError {
     /// Struct field has wrong type.
     #[error("field `{field}` has type `{got}`, expected `{expected}`")]
     FieldTypeMismatch {
-        #[allow(dead_code)]
-        ty: TypeId,
         field: String,
         expected: Ty,
         got: Ty,
