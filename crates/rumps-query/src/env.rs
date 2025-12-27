@@ -211,56 +211,27 @@ pub(crate) struct PrimDef {
 /// modules will be supported in a future phase.
 #[derive(Default)]
 pub(crate) struct Module {
-    /// Functions in this module, keyed by function name.
-    functions: HashMap<String, PrimFn>,
+    /// Functions in this module: `(primitive_fn, type_scheme)`.
+    functions: HashMap<String, (PrimFn, Scheme)>,
 
-    /// Type schemes for functions, keyed by function name.
-    types: HashMap<String, Scheme>,
-
-    /// Constants in this module, keyed by constant name.
+    /// Constants in this module: `(value_id, type)`.
     /// `ValueId`s index into `Environment::consts`.
-    constants: HashMap<String, ValueId>,
-
-    /// Types for constants, keyed by constant name.
-    const_types: HashMap<String, Ty>,
+    constants: HashMap<String, (ValueId, Ty)>,
 
     /// Submodules, keyed by submodule name.
     submodules: HashMap<String, Self>,
 }
 
 impl Module {
-    /// Create a module from a list of `(name, function)` pairs.
-    ///
-    /// **Deprecated**: Use [`from_prims`] to register functions with their types.
-    pub(crate) fn from_fns(fns: &[(&str, PrimFn)]) -> Self {
-        let functions = fns
+    /// Create a module from primitive definitions.
+    pub(crate) fn from_prims(prims: &[PrimDef]) -> Self {
+        let functions = prims
             .iter()
-            .map(|(name, f)| ((*name).to_string(), *f))
+            .map(|p| (p.name.to_string(), (p.f, p.ty.clone())))
             .collect();
         Self {
             functions,
-            types: HashMap::new(),
             constants: HashMap::new(),
-            const_types: HashMap::new(),
-            submodules: HashMap::new(),
-        }
-    }
-
-    /// Create a module from primitive definitions (function + type together).
-    pub(crate) fn from_prims(prims: &[PrimDef]) -> Self {
-        let (functions, types) = prims.iter().fold(
-            (HashMap::new(), HashMap::new()),
-            |(mut fns, mut tys), p| {
-                fns.insert(p.name.to_string(), p.f);
-                tys.insert(p.name.to_string(), p.ty.clone());
-                (fns, tys)
-            },
-        );
-        Self {
-            functions,
-            types,
-            constants: HashMap::new(),
-            const_types: HashMap::new(),
             submodules: HashMap::new(),
         }
     }
@@ -278,15 +249,13 @@ impl Module {
         id: ValueId,
         ty: Ty,
     ) -> Self {
-        self.constants.insert(name.to_string(), id);
-        self.const_types.insert(name.to_string(), ty);
+        self.constants.insert(name.to_string(), (id, ty));
         self
     }
 
     /// Mutably add a constant with its type.
     pub(crate) fn add_const(&mut self, name: &str, id: ValueId, ty: Ty) {
-        self.constants.insert(name.to_string(), id);
-        self.const_types.insert(name.to_string(), ty);
+        self.constants.insert(name.to_string(), (id, ty));
     }
 
     /// Look up a function by path within this module.
@@ -296,7 +265,7 @@ impl Module {
     pub(crate) fn get_fn(&self, path: &[&str]) -> Option<&PrimFn> {
         match path {
             [] => None,
-            [name] => self.functions.get(*name),
+            [name] => self.functions.get(*name).map(|(f, _)| f),
             [first, rest @ ..] => {
                 self.submodules.get(*first).and_then(|m| m.get_fn(rest))
             }
@@ -307,7 +276,7 @@ impl Module {
     pub(crate) fn get_fn_type(&self, path: &[&str]) -> Option<&Scheme> {
         match path {
             [] => None,
-            [name] => self.types.get(*name),
+            [name] => self.functions.get(*name).map(|(_, ty)| ty),
             [first, rest @ ..] => self
                 .submodules
                 .get(*first)
@@ -319,7 +288,7 @@ impl Module {
     pub(crate) fn get_const(&self, path: &[&str]) -> Option<ValueId> {
         match path {
             [] => None,
-            [name] => self.constants.get(*name).copied(),
+            [name] => self.constants.get(*name).map(|(id, _)| *id),
             [first, rest @ ..] => {
                 self.submodules.get(*first).and_then(|m| m.get_const(rest))
             }
@@ -330,7 +299,7 @@ impl Module {
     pub(crate) fn get_const_type(&self, path: &[&str]) -> Option<&Ty> {
         match path {
             [] => None,
-            [name] => self.const_types.get(*name),
+            [name] => self.constants.get(*name).map(|(_, ty)| ty),
             [first, rest @ ..] => self
                 .submodules
                 .get(*first)
@@ -464,9 +433,7 @@ impl Environment {
         &mut self,
         name: &str,
     ) -> &mut UserModule {
-        self.user_modules
-            .entry(name.to_string())
-            .or_insert_with(UserModule::default)
+        self.user_modules.entry(name.to_string()).or_default()
     }
 
     /// Look up a user module function by path.
@@ -1307,15 +1274,21 @@ mod tests {
         Box::pin(async move { Ok(ctx.arena.add(Value::Int(42), ctx.span)) })
     }
 
+    fn dummy_def(name: &'static str) -> PrimDef {
+        PrimDef {
+            name,
+            f: dummy_prim,
+            ty: Scheme::mono(Ty::Int),
+        }
+    }
+
     #[test]
     fn module_submodule_lookup() {
         // Create a module with a submodule: Math.Trig.sin
-        let trig =
-            Module::from_fns(&[("sin", dummy_prim), ("cos", dummy_prim)]);
+        let trig = Module::from_prims(&[dummy_def("sin"), dummy_def("cos")]);
 
-        let math =
-            Module::from_fns(&[("sqrt", dummy_prim), ("abs", dummy_prim)])
-                .with_submodule("Trig", trig);
+        let math = Module::from_prims(&[dummy_def("sqrt"), dummy_def("abs")])
+            .with_submodule("Trig", trig);
 
         // Direct function lookup
         assert!(math.get_fn(&["sqrt"]).is_some());
@@ -1337,7 +1310,7 @@ mod tests {
     #[test]
     fn module_deeply_nested_lookup() {
         // Create deeply nested: A.B.C.fn
-        let c = Module::from_fns(&[("fn", dummy_prim)]);
+        let c = Module::from_prims(&[dummy_def("fn")]);
         let b = Module::default().with_submodule("C", c);
         let a = Module::default().with_submodule("B", b);
 
@@ -1380,7 +1353,7 @@ mod tests {
         let pi = arena.add(Value::Int(314), span);
         let e = arena.add(Value::Int(271), span);
 
-        let math = Module::from_fns(&[("sqrt", dummy_prim)])
+        let math = Module::from_prims(&[dummy_def("sqrt")])
             .with_const("pi", pi, Ty::Int)
             .with_const("e", e, Ty::Int);
 
