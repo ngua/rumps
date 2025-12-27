@@ -625,6 +625,32 @@ impl Environment {
                     f: Array::concat,
                     ty: scheme!(forall T. (Array[T], Array[T]) -> Array[T]),
                 },
+                // New array utilities
+                PrimDef {
+                    name: "sort-by",
+                    f: Array::placeholder,
+                    ty: scheme!(forall T. ((T, T) -> Ordering, Array[T]) -> Array[T]),
+                },
+                PrimDef {
+                    name: "zip",
+                    f: Array::zip,
+                    ty: scheme!(forall T U. (Array[T], Array[U]) -> Array[(T, U)]),
+                },
+                PrimDef {
+                    name: "zip-with",
+                    f: Array::placeholder,
+                    ty: scheme!(forall T U V. ((T, U) -> V, Array[T], Array[U]) -> Array[V]),
+                },
+                PrimDef {
+                    name: "unzip",
+                    f: Array::unzip,
+                    ty: scheme!(forall T U. (Array[(T, U)]) -> (Array[T], Array[U])),
+                },
+                PrimDef {
+                    name: "intersperse",
+                    f: Array::intersperse,
+                    ty: scheme!(forall T. (T, Array[T]) -> Array[T]),
+                },
             ]),
         );
 

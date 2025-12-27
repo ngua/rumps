@@ -182,7 +182,7 @@ impl TyExpr {
 /// Primitive type names.
 const PRIMITIVES: &[&str] = &[
     "Bool", "Int", "Float", "Char", "String", "Unit", "Time", "Range", "Json",
-    "Unknown", "Error",
+    "Unknown", "Error", "Ordering",
 ];
 
 /// Parameterized type names (require `[...]` args).

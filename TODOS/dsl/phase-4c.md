@@ -151,26 +151,24 @@ Extend `Array` module with additional functional utilities.
 
 ### New Functions
 
-| Function      | Signature                          | Description                                             |
-|---------------|------------------------------------|---------------------------------------------------------|
-| `sort-by`     | `((T, T) -> Ordering, [T]) -> [T]` | Sort array using comparator                             |
-| `zip`         | `([A], [B]) -> [(A, B)]`           | Pair elements from two arrays                           |
-| `zip-with`    | `((A, B) -> C, [A], [B]) -> [C]`   | Zip with combining function                             |
-| `unzip`       | `[(A, B)] -> ([A], [B])`           | Split array of pairs                                    |
-| `sort`        | `[T] -> [T]`                       | Sort using default ordering (requires `Ord` or similar) |
-| `reverse`     | `[T] -> [T]`                       | Reverse array order                                     |
-| `intersperse` | `(T, [T]) -> [T]`                  | Insert element between each pair                        |
+| Function      | Signature                                                     | Description                                             |
+|---------------|---------------------------------------------------------------|---------------------------------------------------------|
+| `sort-by`     | `forall T. ((T, T) -> Ordering, Array[T]) -> Array[T]`        | Sort array using comparator                             |
+| `zip`         | `forall T U. (Array[T], Array[U]) -> Array[(T, U)]`           | Pair elements from two arrays                           |
+| `zip-with`    | `forall T U V. ((T, U) -> V, Array[T], Array[U]) -> Array[V]` | Zip with combining function                             |
+| `unzip`       | `forall T U. Array[(T, U)] -> (Array[T], Array[U])`           | Split array of pairs                                    |
+| `sort`        | `forall T. Array[T] -> Array[T]`                              | Sort using default ordering (requires `Ord` or similar) |
+| `reverse`     | `forall T. Array[T] -> Array[T]`                              | Reverse array order                                     |
+| `intersperse` | `forall T. (T, Array[T]) -> Array[T]`                         | Insert element between each pair                        |
 
 ### Implementation
 
-- [ ] Implement `sort-by` (requires `Ordering` type first)
-- [ ] Implement `zip`
-- [ ] Implement `zip-with`
-- [ ] Implement `unzip`
-- [ ] Implement `reverse`
-- [ ] Implement `intersperse`
-- [ ] Consider `sort` with default ordering (may need traits/constraints)
-- [ ] Add test scripts for each function
+- [x] Implement `sort-by`
+- [x] Implement `zip`
+- [x] Implement `zip-with`
+- [x] Implement `unzip`
+- [x] Implement `reverse` (already existed)
+- [x] Implement `intersperse`
 
 ---
 

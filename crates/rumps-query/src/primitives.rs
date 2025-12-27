@@ -517,6 +517,130 @@ impl Array {
             Ok(ctx.arena.add(Value::Array(ty_a, combined), ctx.span))
         })
     }
+
+    /// `Array.zip(a, b) -> Array[(T, U)]`
+    ///
+    /// Pairs elements from two arrays. Result length is the shorter array.
+    pub(crate) fn zip<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let (ty_a, elems_a) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Array.zip", "Array"));
+
+            let (ty_b, elems_b) = ctx
+                .arena
+                .get_array(args[1])
+                .unwrap_or_else(|| typechecked!("Array.zip", "Array"));
+
+            let pairs: SmallVec<[ValueId; 4]> = elems_a
+                .iter()
+                .zip(elems_b.iter())
+                .map(|(a, b)| {
+                    let tup_ty = ctx.type_exprs.tuple(smallvec![ty_a, ty_b]);
+                    let tup = Value::Tuple(tup_ty, smallvec![*a, *b]);
+                    ctx.arena.add(tup, ctx.span)
+                })
+                .collect();
+
+            let elem_ty = ctx.type_exprs.tuple(smallvec![ty_a, ty_b]);
+            Ok(ctx.arena.add(Value::Array(elem_ty, pairs), ctx.span))
+        })
+    }
+
+    /// `Array.unzip(arr) -> (Array[T], Array[U])`
+    ///
+    /// Splits an array of pairs into a pair of arrays.
+    pub(crate) fn unzip<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let (_, pairs) = ctx
+                .arena
+                .get_array(args[0])
+                .unwrap_or_else(|| typechecked!("Array.unzip", "Array"));
+
+            // Extract element types from first pair
+            let (ty_a, ty_b) = pairs
+                .first()
+                .and_then(|id| ctx.arena.get(*id))
+                .and_then(|v| match v {
+                    Value::Tuple(tup_ty, _) => {
+                        ctx.type_exprs.tuple_elems(*tup_ty)
+                    }
+                    _ => None,
+                })
+                .and_then(|tys| Some((*tys.first()?, *tys.get(1)?)))
+                .unwrap_or_else(|| {
+                    // Empty array; types don't matter
+                    let unk = ctx.type_exprs.named(TypeId::UNKNOWN);
+                    (unk, unk)
+                });
+
+            // Map pairs to (a, b) and unzip
+            let (firsts, seconds): (
+                SmallVec<[ValueId; 4]>,
+                SmallVec<[ValueId; 4]>,
+            ) = pairs
+                .iter()
+                .map(|id| {
+                    ctx.arena.get(*id).unwrap_or_else(|| {
+                        typechecked!("Array.unzip", "valid id")
+                    })
+                })
+                .map(|v| match v {
+                    Value::Tuple(_, elems) => (elems[0], elems[1]),
+                    _ => typechecked!("Array.unzip", "(T, U)"),
+                })
+                .unzip();
+
+            let arr_a_id = ctx.arena.add(Value::Array(ty_a, firsts), ctx.span);
+            let arr_b_id = ctx.arena.add(Value::Array(ty_b, seconds), ctx.span);
+
+            let arr_ty_a = ctx.type_exprs.app(TypeId::ARRAY, smallvec![ty_a]);
+            let arr_ty_b = ctx.type_exprs.app(TypeId::ARRAY, smallvec![ty_b]);
+            let tup_ty = ctx.type_exprs.tuple(smallvec![arr_ty_a, arr_ty_b]);
+
+            Ok(ctx.arena.add(
+                Value::Tuple(tup_ty, smallvec![arr_a_id, arr_b_id]),
+                ctx.span,
+            ))
+        })
+    }
+
+    /// `Array.intersperse(sep, arr) -> Array[T]`
+    ///
+    /// Inserts `sep` between each pair of elements.
+    pub(crate) fn intersperse<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let sep = args[0];
+            let (ty, elems) = ctx
+                .arena
+                .get_array(args[1])
+                .unwrap_or_else(|| typechecked!("Array.intersperse", "Array"));
+
+            let result: SmallVec<[ValueId; 4]> = elems
+                .iter()
+                .enumerate()
+                .flat_map(|(i, elem)| -> SmallVec<[ValueId; 2]> {
+                    if i == 0 {
+                        smallvec![*elem]
+                    } else {
+                        smallvec![sep, *elem]
+                    }
+                })
+                .collect();
+
+            Ok(ctx.arena.add(Value::Array(ty, result), ctx.span))
+        })
+    }
 }
 
 /// Primitives for the `String` module.

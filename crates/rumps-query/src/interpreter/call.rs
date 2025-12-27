@@ -286,6 +286,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             ["Array", "filter"] => self.array_filter(args, span).await,
             ["Array", "reduce"] => self.array_reduce(args, span).await,
             ["Array", "foreach"] => self.array_foreach(args, span).await,
+            ["Array", "sort-by"] => self.array_sort_by(args, span).await,
+            ["Array", "zip-with"] => self.array_zip_with(args, span).await,
             ["Option", "map"] => self.option_map(args, span).await,
             ["Result", "map"] => self.result_map(args, span).await,
             ["Result", "map-err"] => self.result_map_err(args, span).await,
@@ -810,6 +812,178 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some((head, tail)) => {
                 self.invoke_callable(fn_id, &[*head], span).await?;
                 self.array_foreach_rec(fn_id, tail, span).await
+            }
+        }
+    }
+
+    /// `Array.sort-by(cmp, arr) -> Array[T]`
+    ///
+    /// Sorts array using a comparator function that returns `Ordering`.
+    #[async_recursion]
+    async fn array_sort_by(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        let cmp_fn = args[0];
+        let arr_id = args[1];
+
+        let (elem_ty, elems) = self
+            .arena
+            .get_array(arr_id)
+            .unwrap_or_else(|| typechecked!("Array.sort-by", "Array"));
+
+        let vals: Vec<ValueId> = elems.iter().copied().collect();
+
+        // Recursive merge sort to allow async comparisons
+        let result = self.array_sort_by_rec(cmp_fn, &vals, span).await?;
+
+        Ok(Value::Array(elem_ty, result))
+    }
+
+    /// `Array.zip-with(f, a, b) -> Array[V]`
+    ///
+    /// Combines two arrays with a function.
+    #[async_recursion]
+    async fn array_zip_with(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        let fn_id = args[0];
+        let arr_a_id = args[1];
+        let arr_b_id = args[2];
+
+        let (_, elems_a) = self
+            .arena
+            .get_array(arr_a_id)
+            .unwrap_or_else(|| typechecked!("Array.zip-with", "Array"));
+
+        let (_, elems_b) = self
+            .arena
+            .get_array(arr_b_id)
+            .unwrap_or_else(|| typechecked!("Array.zip-with", "Array"));
+
+        // Zip and apply function
+        let pairs: Vec<(ValueId, ValueId)> = elems_a
+            .iter()
+            .zip(elems_b.iter())
+            .map(|(a, b)| (*a, *b))
+            .collect();
+
+        self.array_zip_with_rec(fn_id, &pairs, SmallVec::new(), None, span)
+            .await
+    }
+
+    /// Recursive helper for `Array.zip-with`.
+    #[async_recursion]
+    async fn array_zip_with_rec(
+        &mut self,
+        fn_id: ValueId,
+        pairs: &[(ValueId, ValueId)],
+        acc: SmallVec<[ValueId; 4]>,
+        first_ty: Option<TypeId>,
+        span: Span,
+    ) -> Result<Value> {
+        match pairs.split_first() {
+            None => {
+                let elem_ty = first_ty
+                    .map(|ty| self.type_exprs.named(ty))
+                    .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
+                Ok(Value::Array(elem_ty, acc))
+            }
+            Some(((a, b), tail)) => {
+                let result =
+                    self.invoke_callable(fn_id, &[*a, *b], span).await?;
+                let result_ty = self
+                    .arena
+                    .base_type_of(result, &self.type_exprs)
+                    .unwrap_or(TypeId::UNKNOWN);
+
+                let mut new_acc = acc;
+                new_acc.push(result);
+                self.array_zip_with_rec(
+                    fn_id,
+                    tail,
+                    new_acc,
+                    first_ty.or(Some(result_ty)),
+                    span,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Recursive merge sort for `Array.sort-by`.
+    #[async_recursion]
+    async fn array_sort_by_rec(
+        &mut self,
+        cmp_fn: ValueId,
+        vals: &[ValueId],
+        span: Span,
+    ) -> Result<SmallVec<[ValueId; 4]>> {
+        if vals.len() <= 1 {
+            Ok(vals.iter().copied().collect())
+        } else {
+            let mid = vals.len() / 2;
+            let (left, right) = vals.split_at(mid);
+            let sorted_left =
+                self.array_sort_by_rec(cmp_fn, left, span).await?;
+            let sorted_right =
+                self.array_sort_by_rec(cmp_fn, right, span).await?;
+            self.array_merge_sorted(cmp_fn, &sorted_left, &sorted_right, span)
+                .await
+        }
+    }
+
+    /// Merge two sorted slices using async comparator.
+    #[async_recursion]
+    async fn array_merge_sorted(
+        &mut self,
+        cmp_fn: ValueId,
+        left: &[ValueId],
+        right: &[ValueId],
+        span: Span,
+    ) -> Result<SmallVec<[ValueId; 4]>> {
+        match (left.split_first(), right.split_first()) {
+            (None, None) => Ok(SmallVec::new()),
+            (Some((l, ls)), None) => {
+                let mut result: SmallVec<[ValueId; 4]> =
+                    ls.iter().copied().collect();
+                result.insert(0, *l);
+                Ok(result)
+            }
+            (None, Some((r, rs))) => {
+                let mut result: SmallVec<[ValueId; 4]> =
+                    rs.iter().copied().collect();
+                result.insert(0, *r);
+                Ok(result)
+            }
+            (Some((l, ls)), Some((r, rs))) => {
+                let ord = self.invoke_callable(cmp_fn, &[*l, *r], span).await?;
+                let ord_val = self.arena.get(ord).ok_or_else(|| {
+                    Error::runtime(
+                        span,
+                        "Array.sort-by: invalid comparison result",
+                    )
+                })?;
+
+                // Check if it's Ordering.Gt (take right first if left > right)
+                let is_gt = matches!(ord_val, Value::Tagged(ty, 2, _)
+                    if self.type_exprs.base_type(*ty).is_some_and(|t| t == TypeId::ORDERING));
+
+                if is_gt {
+                    let mut rest =
+                        self.array_merge_sorted(cmp_fn, left, rs, span).await?;
+                    rest.insert(0, *r);
+                    Ok(rest)
+                } else {
+                    let mut rest = self
+                        .array_merge_sorted(cmp_fn, ls, right, span)
+                        .await?;
+                    rest.insert(0, *l);
+                    Ok(rest)
+                }
             }
         }
     }
