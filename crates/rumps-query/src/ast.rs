@@ -360,8 +360,8 @@ impl From<String> for BindingPattern {
 /// Used for runtime type checking and variant matching with optional binding.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum TypePattern {
-    /// Simple type check: `is Int`, `is String`.
-    Type(String),
+    /// Type check: `is Int`, `is Array[String]`, `is Map[Int, String]`.
+    Type(AstTypeExprId),
 
     /// Variant check without payload: `is Option.None`.
     Variant(String, String),

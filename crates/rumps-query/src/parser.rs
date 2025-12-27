@@ -866,8 +866,8 @@ impl Parser {
             .then_ignore(just(Token::RBrace))
             .map(TypePattern::Object);
 
-        // Simple type pattern
-        let simple_type = Self::ident().map(TypePattern::Type);
+        // Simple type pattern: `Int`, `Array[String]`, `Map[Int, String]`
+        let simple_type = Self::simple_type_expr().map(TypePattern::Type);
 
         variant_pattern.or(struct_pat).or(simple_type)
     }
@@ -2371,10 +2371,38 @@ mod tests {
     fn parse_is_pattern() {
         let (ast, id) = parse_expr_ok("x is Int");
         match ast.get_expr(id) {
-            Some(Expr::Is(_, crate::ast::TypePattern::Type(ty))) => {
-                assert_eq!(ty, "Int");
+            Some(Expr::Is(_, crate::ast::TypePattern::Type(ty_id))) => {
+                match ast.get_type_expr(*ty_id) {
+                    Some(crate::ast::AstTypeExpr::Named(name)) => {
+                        assert_eq!(name, "Int");
+                    }
+                    _ => panic!("expected Named type"),
+                }
             }
             _ => panic!("expected Is with Type pattern"),
+        }
+    }
+
+    #[test]
+    fn parse_is_parameterized_type() {
+        let (ast, id) = parse_expr_ok("x is Array[Int]");
+        match ast.get_expr(id) {
+            Some(Expr::Is(_, crate::ast::TypePattern::Type(ty_id))) => {
+                match ast.get_type_expr(*ty_id) {
+                    Some(crate::ast::AstTypeExpr::App(name, args)) => {
+                        assert_eq!(name, "Array");
+                        assert_eq!(args.len(), 1);
+                    }
+                    _ => panic!(
+                        "expected App type, got {:?}",
+                        ast.get_type_expr(*ty_id)
+                    ),
+                }
+            }
+            _ => panic!(
+                "expected Is with Type pattern, got {:?}",
+                ast.get_expr(id)
+            ),
         }
     }
 

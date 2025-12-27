@@ -54,8 +54,8 @@ use crate::Span;
 /// CST `TypeExpr` fields are converted to `AstTypeExprId`.
 #[derive(Clone, Debug)]
 pub(crate) enum TypePattern {
-    /// Simple type check: `is Int`, `is String`.
-    Type(String),
+    /// Type check: `is Int`, `is Array[String]`, `is Map[Int, String]`.
+    Type(TypeExpr),
 
     /// Variant check without payload: `is Option.None`.
     Variant(String, String),

@@ -2132,8 +2132,8 @@ impl<'a> InferCtx<'a> {
         let scrutinee_ty = self.expr(scrutinee_id);
 
         match pattern {
-            TypePattern::Type(name) => {
-                let target_ty = self.named_type_to_ty(name);
+            TypePattern::Type(ty_id) => {
+                let target_ty = self.ast_type_to_ty(*ty_id, &HashMap::new());
                 // If scrutinee is a union, verify target is a member
                 // Skip check if target is the union type itself (e.g., `x IS Storable`)
                 // or if target is also a union that contains the scrutinee members
@@ -6604,8 +6604,11 @@ mod tests {
         let span = Span::new(0, 10);
 
         let x_var = ast.add_expr(Expr::Var("x".into()), span).unwrap();
+        let ty_id = ast
+            .add_type_expr(AstTypeExpr::Named("Int".into()), span)
+            .unwrap();
         let is_expr = ast
-            .add_expr(Expr::Is(x_var, TypePattern::Type("Int".into())), span)
+            .add_expr(Expr::Is(x_var, TypePattern::Type(ty_id)), span)
             .unwrap();
 
         let mut ctx = test_ctx(&ast);

@@ -20,18 +20,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<bool> {
         match pattern {
-            TypePattern::Type(ty_name) => {
-                // Simple type check: `is Int`, `is String`, etc.
-                let ty_id = self.arena.lookup_string(ty_name);
-                let type_id = ty_id.and_then(|id| self.registry.lookup(id));
-                if let Some(tid) = type_id {
-                    Ok(self.value_matches_type(val, tid))
-                } else {
-                    Err(Error::runtime(
-                        span,
-                        format!("unknown type `{ty_name}`"),
-                    ))
-                }
+            TypePattern::Type(ast_ty_id) => {
+                // Type check: `is Int`, `is Array[String]`, `is Map[K, V]`
+                let ty_expr = self.resolve_type_expr(*ast_ty_id, span)?;
+                Ok(self.value_matches_type_expr(val, ty_expr))
             }
             TypePattern::Variant(ty_name, var_name) => {
                 // Variant check (zero-arity only): `is Option.None`

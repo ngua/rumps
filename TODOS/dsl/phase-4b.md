@@ -573,15 +573,6 @@ macro_rules! typechecked {
 }
 ```
 
-**Usage examples:**
-
-| Call                                                                                                                   | Expands to                                                              |
-|------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| `typechecked!("+", "Numeric")`                                                                                         | `unreachable!("type checker guarantees \`+\` satisfies \`Numeric\`")` | |
-| | `typechecked!("!", "Unwrappable")` | `unreachable!("type checker guarantees \`!\` satisfies \`Unwrappable\`")` |     |                                                                         |
-| | `typechecked!("Array.map", "Array")` | `unreachable!("type checker guarantees \`Array.map\` satisfies \`Array\`")` | |                                                                         |
-| | `typechecked!("..", "Int")` | `unreachable!("type checker guarantees \`..\` satisfies \`Int\`")`                     |                                                                         |
-
 **Benefits:**
 - Consistent error messages across the codebase
 - Easy to grep for all type-checker-guaranteed branches
@@ -590,341 +581,111 @@ macro_rules! typechecked {
 
 **Placement:** Define in `crates/rumps-query/src/interpreter/mod.rs` or a shared `macros.rs` module.
 
----
+### Checklist
 
-### 4.17.1: Remove Arity Checks (`primitives.rs`)
+- [x] Remove `check_arity` function entirely
+- [x] Remove all `check_arity` calls (~50+ sites across all module functions)
+- [x] Array module functions (`Array.length`, `Array.map`, etc.)
+- [x] String module functions (`String.length`, `String.split`, etc.)
+- [x] Math module functions (`Math.abs`, `Math.floor`, etc.)
+- [x] Map module functions (`Map.length`, `Map.keys`, etc.)
+- [x] Time module functions (`Time.now`, `Time.parse`, etc.)
+- [x] Random module functions (`Random.int`, `Random.choice`, etc.)
+- [x] Option/Result module functions (`Option.unwrap-or`, `Result.map`, etc.)
+- [x] `array_elems()`: Remove type equality check
+- [x] `map_lit_entries()`: Remove key type homogeneity check
+- [x] `map_lit_entries()`: Remove value type homogeneity check
+- [x] `array_map_rec()`: Remove result type homogeneity check
+- [x] `range_map_rec()`: Remove result type homogeneity check
+- [x] `array_filter_rec()`: Remove similar checks if present
+- [x] `array_reduce()`: Verify no type checks needed
+- [x] `apply_unop()`: Remove error branches for `-` and `!`
+- [x] `binop_add()`: Remove error branch
+- [x] `binop_sub()`: Remove error branch
+- [x] `binop_mul()`: Remove error branch
+- [x] `binop_div()`: Remove error branch
+- [x] `binop_floor_div()`: Remove error branch
+- [x] `binop_mod()`: Remove error branch
+- [x] `binop_pow()`: Remove error branch
+- [x] `binop_cmp()`: Remove error branch for comparison operators
+- [x] Change return types from `Result<Value>` to `Value` where possible
+- [x] Remove `check_unit()` function entirely
+- [x] `r#if`: Remove `check_unit` call
+- [x] `if_with_bindings`: Remove `check_unit` call
+- [x] `r#if`: Remove `Bool` check on condition (type checker guarantees `Bool`)
+- [x] `r#match`:
+  - [x] Remove all exhaustiveness checking (already statically guaranteed)
+  - [x] `try_match_arms`: Remove `Bool` check on guard (type checker guarantees `Bool`)
+- [x] `array_filter_rec`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
+- [x] `range_filter_rec`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
+- [x] `coalesce()`: Remove type error branch
+- [x] `range()`: Remove start type check
+- [x] `range()`: Remove end type check
+- [x] `to_float()`: Remove error branch, change return to `f64`
+- [x] `to_int()`: Remove error branch, change return to `i64`
+- [x] Update all call sites of `to_float`/`to_int` to remove `?`
 
-**Current pattern:**
-```rust
-Self::check_arity("Array.length", &args, 1, ctx.span)?;
-```
 
-**After cleanup:**
-```rust
-// Arity validated by Callable constraint at compile-time; no check needed
-```
-
-**Checklist:**
-- [ ] Remove `check_arity` function entirely
-- [ ] Remove all `check_arity` calls (~50+ sites across all module functions)
-- [ ] Array module functions (`Array.length`, `Array.map`, etc.)
-- [ ] String module functions (`String.length`, `String.split`, etc.)
-- [ ] Math module functions (`Math.abs`, `Math.floor`, etc.)
-- [ ] Map module functions (`Map.length`, `Map.keys`, etc.)
-- [ ] Time module functions (`Time.now`, `Time.parse`, etc.)
-- [ ] Random module functions (`Random.int`, `Random.choice`, etc.)
-- [ ] Option/Result module functions (`Option.unwrap-or`, `Result.map`, etc.)
-
----
-
-### 4.17.2: Remove Array Homogeneity Checks (`collections.rs`)
-
-**Current pattern in `array_elems()`:**
-```rust
-if self.type_exprs.eq(elem_ty, val_ty) {
-    // ok
-} else {
-    Err(Error::type_err(span, "array elements must have the same type"))
-}
-```
-
-**After cleanup:**
-```rust
-// Type checker ensures Array[T] elements are all T; no runtime check
-```
-
-**Checklist:**
-- [ ] `array_elems()`: Remove type equality check
-- [ ] `map_lit_entries()`: Remove key type homogeneity check
-- [ ] `map_lit_entries()`: Remove value type homogeneity check
-- [ ] Remove `TypeExprArena` tracking from `Value::Array` if no longer needed
-
----
-
-### 4.17.3: Remove Array.map/filter Homogeneity Checks (`call.rs`)
-
-**Current pattern in `array_map_rec()`:**
-```rust
-if fty == result_ty {
-    // ok
-} else {
-    Err(Error::type_err(span,
-        "Array.map: function produces heterogeneous results"))
-}
-```
-
-**After cleanup:**
-```rust
-// Type checker infers Array.map : forall A B. (Array[A], (A) -> B) -> Array[B]
-// Result homogeneity is guaranteed statically
-```
-
-**Checklist:**
-- [ ] `array_map_rec()`: Remove result type homogeneity check
-- [ ] `range_map_rec()`: Remove result type homogeneity check
-- [ ] `array_filter_rec()`: Remove similar checks if present
-- [ ] `array_reduce()`: Verify no type checks needed
-
----
-
-### 4.17.4: Remove Binary Operator Type Checks (`ops.rs`)
-
-**Current pattern:**
-```rust
-fn binop_add(&mut self, lhs: ValueId, rhs: ValueId, span: Span) -> Result<Value> {
-    match (self.arena.get(lhs), self.arena.get(rhs)) {
-        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-        // ... more cases ...
-        _ => Err(Error::type_err(span, "cannot add these types"))
-    }
-}
-```
-
-**After cleanup:**
-```rust
-fn binop_add(&mut self, lhs: ValueId, rhs: ValueId) -> Value {
-    match (self.arena.get(lhs), self.arena.get(rhs)) {
-        (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
-        (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-        (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b.0),
-        (Value::Float(a), Value::Int(b)) => Value::Float(a.0 + *b as f64),
-        _ => typechecked!("+", "Numeric")
-    }
-}
-```
-
-**Checklist:**
-- [ ] `apply_unop()`: Remove error branches for `-` and `!`
-- [ ] `binop_add()`: Remove error branch
-- [ ] `binop_sub()`: Remove error branch
-- [ ] `binop_mul()`: Remove error branch
-- [ ] `binop_div()`: Remove error branch
-- [ ] `binop_floor_div()`: Remove error branch
-- [ ] `binop_mod()`: Remove error branch
-- [ ] `binop_pow()`: Remove error branch
-- [ ] `binop_cmp()`: Remove error branch for comparison operators
-- [ ] Change return types from `Result<Value>` to `Value` where possible
-
----
-
-### 4.17.5: Remove IF/Unit Checks (`control.rs`)
-
-**Current pattern in `check_unit()`:**
-```rust
-fn check_unit(&self, val: ValueId, span: Span) -> Result<()> {
-    let ty = self.type_of(val);
-    if self.type_exprs.eq(ty, unit_ty) {
-        Ok(())
-    } else {
-        Err(Error::type_err(span, "single-arm IF body must be Unit"))
-    }
-}
-```
-
-**After cleanup:**
-```rust
-// Type checker enforces: IF without ELSE must have body : Unit
-// No runtime check needed
-```
-
-**Checklist:**
-- [ ] Remove `check_unit()` function entirely
-- [ ] `r#if`: Remove `check_unit` call
-- [ ] `if_with_bindings`: Remove `check_unit` call
-- [ ] `r#if`: Remove `Bool` check on condition (type checker guarantees `Bool`)
-- [ ] `r#match`:
-  - [ ] Remove all exhaustiveness checking (already statically guaranteed)
-  - [ ] `try_match_arms`: Remove `Bool` check on guard (type checker guarantees `Bool`)
-- [ ] `array_filter_rec`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
-- [ ] `range_filter_rec`: Remove `Bool` check on predicate result (type checker guarantees `Bool`)
-
----
-
-### 4.17.6: Remove Unwrap/Coalesce Type Checks (`control.rs`)
-
-**Current pattern in `unwrap()`:**
-```rust
-let is_option = |ty| base_type(ty) == Some(TypeId::OPTION);
-let is_result = |ty| base_type(ty) == Some(TypeId::RESULT);
-
-match val {
-    Value::Tagged(ty, idx, _) if is_option(ty) => { ... }
-    Value::Tagged(ty, idx, _) if is_result(ty) => { ... }
-    _ => Err(Error::type_err(span, "can only unwrap Option or Result"))
-}
-```
-
-**After cleanup:**
-```rust
-let Value::Tagged(_, idx, payloads) = val else {
-    typechecked!("!", "Unwrappable")
-};
-```
-
-**Checklist:**
-- [ ] `unwrap()`: Remove `is_option`/`is_result` helper closures
-- [ ] `unwrap()`: Remove type error branch
-- [ ] `coalesce()`: Remove similar type checking logic
-- [ ] Simplify to direct pattern matching on `Value::Tagged`
-
----
-
-### 4.17.7: Remove Range Type Checks (`control.rs`)
-
-**Current pattern in `range()`:**
-```rust
-let start = match self.arena.get(start_id) {
-    Value::Int(n) => *n,
-    _ => Err(Error::type_err(span, "range start must be Int"))?
-};
-```
-
-**After cleanup:**
-```rust
-let Value::Int(start) = self.arena.get(start_id) else {
-    typechecked!("..", "Int")
-};
-```
-
-**Checklist:**
-- [ ] `range()`: Remove start type check
-- [ ] `range()`: Remove end type check
-
----
-
-### 4.17.8: Remove Type Coercion Error Branches (`primitives.rs`, `types.rs`)
-
-**Current pattern in `to_float()`:**
-```rust
-fn to_float(v: &Value) -> Result<f64> {
-    match v {
-        Value::Int(n) => Ok(*n as f64),
-        Value::Float(f) => Ok(f.0),
-        _ => Err(Error::type_err(span, "expected numeric"))
-    }
-}
-```
-
-**After cleanup:**
-```rust
-fn to_float(v: &Value) -> f64 {
-    match v {
-        Value::Int(n) => *n as f64,
-        Value::Float(f) => f.0,
-        _ => typechecked!("to_float", "Numeric")
-    }
-}
-```
-
-**Checklist:**
-- [ ] `to_float()`: Remove error branch, change return to `f64`
-- [ ] `to_int()`: Remove error branch, change return to `i64`
-- [ ] Update all call sites of `to_float`/`to_int` to remove `?`
-
----
-
-### 4.17.9: Remove Module Function Type Checks (`primitives.rs`)
-
-**Current pattern (100+ occurrences):**
-```rust
-let arr = ctx.arena.get_array(args[0])
-    .ok_or_else(|| ctx.type_error("Array.length", "Array"))?;
-```
-
-**After cleanup:**
-```rust
-let Value::Array(_, elems) = ctx.arena.get(args[0]).unwrap() else {
-    typechecked!("Array.length", "Array")
-};
-```
-
-**Checklist by module:**
-
-**Array module:**
-- [ ] `Array.length`: Remove Array type check
-- [ ] `Array.head`: Remove Array type check
-- [ ] `Array.tail`: Remove Array type check
-- [ ] `Array.last`: Remove Array type check
-- [ ] `Array.init`: Remove Array type check
-- [ ] `Array.nth`: Remove Array type check
-- [ ] `Array.reverse`: Remove Array type check
-- [ ] `Array.concat`: Remove Array type checks
-- [ ] `Array.contains`: Remove Array type check
-- [ ] `Array.map`: Remove Array/closure type checks
-- [ ] `Array.filter`: Remove Array/closure type checks
-- [ ] `Array.reduce`: Remove Array/closure type checks
-- [ ] `Array.find`: Remove type checks
-- [ ] `Array.any`: Remove type checks
-- [ ] `Array.all`: Remove type checks
-- [ ] `Array.sort`: Remove type checks
-- [ ] `Array.sort-by`: Remove type checks
-
-**String module:**
-- [ ] `String.length`: Remove String type check
-- [ ] `String.chars`: Remove String type check
-- [ ] `String.split`: Remove String type checks
-- [ ] `String.join`: Remove Array/String type checks
-- [ ] `String.trim`: Remove String type check
-- [ ] `String.starts-with`: Remove String type checks
-- [ ] `String.ends-with`: Remove String type checks
-- [ ] `String.contains`: Remove String type checks
-- [ ] `String.replace`: Remove String type checks
-- [ ] `String.to-upper`: Remove String type check
-- [ ] `String.to-lower`: Remove String type check
-- [ ] `String.pad-left`: Remove type checks
-- [ ] `String.pad-right`: Remove type checks
-
-**Math module:**
-- [ ] All Math functions: Remove Float type checks
-- [ ] `Math.abs`, `Math.floor`, `Math.ceil`, `Math.round`, etc.
-
-**Map module:**
-- [ ] `Map.length`: Remove Map type check
-- [ ] `Map.keys`: Remove Map type check
-- [ ] `Map.values`: Remove Map type check
-- [ ] `Map.entries`: Remove Map type check
-- [ ] `Map.has`: Remove Map type check
-- [ ] `Map.lookup`: Remove Map type check
-- [ ] `Map.insert`: Remove Map type check
-- [ ] `Map.remove`: Remove Map type check
-- [ ] `Map.merge`: Remove Map type checks
-- [ ] `Map.from-entries`: Remove Array type check
-
-**Time module:**
-- [ ] `Time.now`: No type checks needed
-- [ ] `Time.parse`: Remove String type check
-- [ ] `Time.format`: Remove Time/String type checks
-- [ ] `Time.add-*`: Remove Time/Int type checks
-- [ ] `Time.diff-*`: Remove Time type checks
-
-**Random module:**
-- [ ] `Random.int`: Remove Int type checks
-- [ ] `Random.float`: Remove Float type checks
-- [ ] `Random.choice`: Remove Array type check
-- [ ] `Random.shuffle`: Remove Array type check
-
-**Option/Result module:**
-- [ ] `Option.unwrap-or`: Remove Option type check
-- [ ] `Result.unwrap-or`: Remove Result type check
-- [ ] `Option.map`: Remove type checks
-- [ ] `Result.map`: Remove type checks
-- [ ] `Result.map-err`: Remove type checks
-
----
-
-### 4.17.10: Simplify Pattern Matching (`pattern.rs`)
-
-**Checklist:**
-- [ ] `check_variant_zero_arity()`: Remove runtime arity validation
-- [ ] `check_variant()`: Simplify type/variant matching
-- [ ] Pattern exhaustiveness is checked statically; remove runtime fallbacks
-
----
-
-### 4.17.11: Simplify Type Coercion (`types.rs`)
-
-**Checklist:**
+**RUMPS Primitives by Module:**
+- [x] `Array.length`: Remove Array type check
+- [x] `Array.head`: Remove Array type check
+- [x] `Array.tail`: Remove Array type check
+- [x] `Array.last`: Remove Array type check
+- [x] `Array.init`: Remove Array type check
+- [x] `Array.nth`: Remove Array type check
+- [x] `Array.reverse`: Remove Array type check
+- [x] `Array.concat`: Remove Array type checks
+- [x] `Array.contains`: Remove Array type check
+- [x] `Array.map`: Remove Array/closure type checks
+- [x] `Array.filter`: Remove Array/closure type checks
+- [x] `Array.reduce`: Remove Array/closure type checks
+- [x] `Array.find`: Remove type checks
+- [x] `Array.any`: Remove type checks
+- [x] `Array.all`: Remove type checks
+- [x] `Array.sort`: Remove type checks
+- [x] `Array.sort-by`: Remove type checks
+- [x] `String.length`: Remove String type check
+- [x] `String.chars`: Remove String type check
+- [x] `String.split`: Remove String type checks
+- [x] `String.join`: Remove Array/String type checks
+- [x] `String.trim`: Remove String type check
+- [x] `String.starts-with`: Remove String type checks
+- [x] `String.ends-with`: Remove String type checks
+- [x] `String.contains`: Remove String type checks
+- [x] `String.replace`: Remove String type checks
+- [x] `String.to-upper`: Remove String type check
+- [x] `String.to-lower`: Remove String type check
+- [x] `String.pad-left`: Remove type checks
+- [x] `String.pad-right`: Remove type checks
+- [x] All Math functions: Remove Float type checks
+- [x] `Math.abs`, `Math.floor`, `Math.ceil`, `Math.round`, etc.
+- [x] `Map.length`: Remove Map type check
+- [x] `Map.keys`: Remove Map type check
+- [x] `Map.values`: Remove Map type check
+- [x] `Map.entries`: Remove Map type check
+- [x] `Map.has`: Remove Map type check
+- [x] `Map.lookup`: Remove Map type check
+- [x] `Map.insert`: Remove Map type check
+- [x] `Map.remove`: Remove Map type check
+- [x] `Map.merge`: Remove Map type checks
+- [x] `Map.from-entries`: Remove Array type check
+- [x] `Time.now`: No type checks needed
+- [x] `Time.parse`: Remove String type check
+- [x] `Time.format`: Remove Time/String type checks
+- [x] `Time.add-*`: Remove Time/Int type checks
+- [x] `Time.diff-*`: Remove Time type checks
+- [x] `Random.int`: Remove Int type checks
+- [x] `Random.float`: Remove Float type checks
+- [x] `Random.choice`: Remove Array type check
+- [x] `Random.shuffle`: Remove Array type check
+- [x] `Option.unwrap-or`: Remove Option type check
+- [x] `Result.unwrap-or`: Remove Result type check
+- [x] `Option.map`: Remove type checks
+- [x] `Result.map`: Remove type checks
+- [x] `Result.map-err`: Remove type checks
+- [x] `check_variant_zero_arity()`: Remove runtime arity validation
+- [x] `check_variant()`: Simplify type/variant matching
+- [x] Pattern exhaustiveness is checked statically; remove runtime fallbacks
 - [ ] `coerce()`: Remove unsupported cast error branch
   - Keep: `AS` on `Storable` union remains fallible at runtime
 - [ ] `try_convert()`: Remove unsupported conversion error branch

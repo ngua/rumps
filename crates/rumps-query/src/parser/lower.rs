@@ -346,7 +346,9 @@ fn lower_type_pattern(
     pat: cst::TypePattern,
 ) -> Result<TypePattern> {
     Ok(match pat {
-        cst::TypePattern::Type(name) => TypePattern::Type(name),
+        cst::TypePattern::Type(ty) => {
+            TypePattern::Type(lower_type_expr(ast, ty)?)
+        }
         cst::TypePattern::Variant(ty, var) => TypePattern::Variant(ty, var),
         cst::TypePattern::VariantWildcard(ty, var) => {
             TypePattern::VariantWildcard(ty, var)

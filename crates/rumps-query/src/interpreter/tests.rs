@@ -1501,11 +1501,11 @@ async fn is_simple_type_int() {
     let val = ast
         .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
         .unwrap();
+    let ty_id = ast
+        .add_type_expr(AstTypeExpr::Named("Int".into()), Span::new(3, 6))
+        .unwrap();
     let is_expr = ast
-        .add_expr(
-            Expr::Is(val, TypePattern::Type("Int".into())),
-            Span::new(0, 8),
-        )
+        .add_expr(Expr::Is(val, TypePattern::Type(ty_id)), Span::new(0, 8))
         .unwrap();
 
     let mut interp = test_interp(&ast);
@@ -1520,11 +1520,11 @@ async fn is_simple_type_mismatch() {
     let val = ast
         .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
         .unwrap();
+    let ty_id = ast
+        .add_type_expr(AstTypeExpr::Named("String".into()), Span::new(3, 9))
+        .unwrap();
     let is_expr = ast
-        .add_expr(
-            Expr::Is(val, TypePattern::Type("String".into())),
-            Span::new(0, 11),
-        )
+        .add_expr(Expr::Is(val, TypePattern::Type(ty_id)), Span::new(0, 11))
         .unwrap();
 
     let mut interp = test_interp(&ast);
@@ -1818,11 +1818,11 @@ async fn is_unknown_type_error() {
     let val = ast
         .add_expr(Expr::Literal(Literal::Int(42)), Span::new(0, 2))
         .unwrap();
+    let ty_id = ast
+        .add_type_expr(AstTypeExpr::Named("Unknown".into()), Span::new(3, 10))
+        .unwrap();
     let is_expr = ast
-        .add_expr(
-            Expr::Is(val, TypePattern::Type("Unknown".into())),
-            Span::new(0, 12),
-        )
+        .add_expr(Expr::Is(val, TypePattern::Type(ty_id)), Span::new(0, 12))
         .unwrap();
 
     let mut interp = test_interp(&ast);
