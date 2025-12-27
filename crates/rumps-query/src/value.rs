@@ -129,6 +129,10 @@ impl TypeId {
     ///
     /// Used as return type for `->>`  JSON scalar extraction.
     pub(crate) const SCALAR: Self = Self(16);
+    /// Builtin enum: `Ordering = Lt | Eq | Gt`.
+    ///
+    /// Used for comparison results in `sort-by` and similar operations.
+    pub(crate) const ORDERING: Self = Self(17);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -544,6 +548,21 @@ impl Value {
     /// Create a `Result.Err(e)` value with the given type expression.
     pub(crate) fn err(ty_expr: TypeExprId, e: ValueId) -> Self {
         Self::Tagged(ty_expr, 1, smallvec::smallvec![e])
+    }
+
+    /// Create an `Ordering.Lt` value with the given type expression.
+    pub(crate) fn lt(ty_expr: TypeExprId) -> Self {
+        Self::Tagged(ty_expr, 0, SmallVec::new())
+    }
+
+    /// Create an `Ordering.Eq` value with the given type expression.
+    pub(crate) fn eq_ord(ty_expr: TypeExprId) -> Self {
+        Self::Tagged(ty_expr, 1, SmallVec::new())
+    }
+
+    /// Create an `Ordering.Gt` value with the given type expression.
+    pub(crate) fn gt(ty_expr: TypeExprId) -> Self {
+        Self::Tagged(ty_expr, 2, SmallVec::new())
     }
 
     /// Check if this is `Option.None`.
@@ -1060,6 +1079,7 @@ impl TypeExprArena {
             Ty::Time => self.named(TypeId::TIME),
             Ty::Range => self.named(TypeId::RANGE),
             Ty::Json => self.named(TypeId::JSON),
+            Ty::Ordering => self.named(TypeId::ORDERING),
             Ty::Array(elem) => {
                 let elem_id = self.intern_ty(elem);
                 self.app(TypeId::ARRAY, smallvec![elem_id])
@@ -1456,6 +1476,49 @@ impl TypeRegistry {
             ))
         })?;
 
+        // Ordering at index 17
+        let ordering_name = arena.intern("Ordering");
+        let lt_name = arena.intern("Lt");
+        let eq_name = arena.intern("Eq");
+        let gt_name = arena.intern("Gt");
+
+        let ordering = self.register(
+            TypeDef::Sum {
+                name: ordering_name,
+                type_params: SmallVec::new(),
+                variants: smallvec::smallvec![
+                    VariantDef {
+                        name: lt_name,
+                        idx: 0,
+                        arity: 0,
+                        payloads: SmallVec::new(),
+                    },
+                    VariantDef {
+                        name: eq_name,
+                        idx: 1,
+                        arity: 0,
+                        payloads: SmallVec::new(),
+                    },
+                    VariantDef {
+                        name: gt_name,
+                        idx: 2,
+                        arity: 0,
+                        payloads: SmallVec::new(),
+                    },
+                ],
+            },
+            ordering_name,
+        );
+        (ordering == TypeId::ORDERING)
+            .then_some(())
+            .ok_or_else(|| {
+                crate::Error::runtime_no_span(format!(
+                    "Ordering at index {}, expected {}",
+                    ordering.0,
+                    TypeId::ORDERING.0
+                ))
+            })?;
+
         Ok(())
     }
 
@@ -1836,8 +1899,8 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
         let reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
 
-        // 13 primitives + Option + Result + Storable + Scalar = 17
-        assert_eq!(reg.len(), 17);
+        // 13 primitives + Option + Result + Storable + Scalar + Ordering = 18
+        assert_eq!(reg.len(), 18);
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

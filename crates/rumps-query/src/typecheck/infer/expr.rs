@@ -969,6 +969,9 @@ impl InferCtx<'_> {
                         }
                         _ => Ty::Error,
                     }
+                } else if type_id == TypeId::ORDERING {
+                    // Ordering has no type parameters; all variants are nullary
+                    Ty::Ordering
                 } else {
                     match self.registry.get_def(type_id) {
                         Some(TypeDef::Sum { type_params, .. }) => {

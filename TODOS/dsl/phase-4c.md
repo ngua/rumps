@@ -132,16 +132,16 @@ Add a builtin `Ordering` enum for comparison results, enabling proper `sort-by` 
 ### Definition
 
 ```rumps
-enum Ordering { Lt, Eq, Gt }
+TYPE Ordering = Lt | Eq | Gt
 ```
 
 ### Implementation
 
-- [ ] Add `Ordering` as builtin enum type
-- [ ] Register `Ordering`, `Lt`, `Eq`, `Gt` in global type/value environment
-- [ ] Ensure pattern matching on `Ordering` works
+- [x] Add `Ordering` as builtin enum type
+- [x] Register `Ordering`, `Lt`, `Eq`, `Gt` in global type/value environment
+- [x] Ensure pattern matching on `Ordering` works
 - [ ] Add `compare` primitives or method if needed (e.g., `Int.compare`)
-- [ ] Add test script demonstrating usage
+- [x] Add test script demonstrating usage
 
 ---
 

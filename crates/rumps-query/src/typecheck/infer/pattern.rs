@@ -307,6 +307,27 @@ impl InferCtx<'_> {
                     }
                 }
 
+                Ty::Ordering => {
+                    let has_lt = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Ordering" && var == "Lt")
+                        })
+                    });
+                    let has_eq = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Ordering" && var == "Eq")
+                        })
+                    });
+                    let has_gt = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Ordering" && var == "Gt")
+                        })
+                    });
+                    if !has_lt || !has_eq || !has_gt {
+                        self.error(TypeError::NonExhaustiveMatch(span));
+                    }
+                }
+
                 Ty::Union(members) => {
                     // Collect covered types (small N, Vec is fine)
                     let covered: Vec<Ty> = unguarded

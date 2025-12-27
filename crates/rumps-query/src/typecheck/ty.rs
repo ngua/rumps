@@ -45,6 +45,7 @@ pub(crate) enum Ty {
     Time,
     Range,
     Json,
+    Ordering,
 
     // Parameterized builtins
     Array(Box<Self>),
@@ -135,6 +136,7 @@ impl Ty {
             | Self::Time
             | Self::Range
             | Self::Json
+            | Self::Ordering
             | Self::Unknown
             | Self::Error => {}
             Self::Array(t) | Self::Option(t) => t.collect_free_vars(acc),
@@ -176,6 +178,7 @@ impl Ty {
             | Self::Time
             | Self::Range
             | Self::Json
+            | Self::Ordering
             | Self::Unknown
             | Self::Error => false,
             Self::Array(t) | Self::Option(t) => t.occurs(v),
@@ -207,6 +210,7 @@ impl Ty {
             Self::Time => Self::Time,
             Self::Range => Self::Range,
             Self::Json => Self::Json,
+            Self::Ordering => Self::Ordering,
             Self::Unknown => Self::Unknown,
             Self::Error => Self::Error,
             Self::Array(t) => Self::Array(Box::new(t.apply(subst))),
