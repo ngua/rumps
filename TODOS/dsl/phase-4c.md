@@ -56,20 +56,57 @@ let y = ?foo.bar   // Some(foo.bar)
 
 ---
 
-## 3. Modules Containing Type Definitions
+## 3. Modules
+
+### 3.0. Modules Definitions
+
+We need to allow users to define modules. Currently, we have several builtin modules (e.g. `Array`, `Map`, `Time`, etc...) that use the `Module` type. 
+
+We need a way to allow _users_ to define modules. **NOTE**: modules can be recursive! I.e. contain submodules. See `Module` type, crates/rumps-query/src/env.rs:213
+
+Syntax:
+
+```
+MODULE M {
+  ; Any `FUN` (function) definition is registered as
+  ; `Module.functions` and `Modules.types` (i.e the function and its type)
+  ; NOTE: There MUST be a corresponding type for a `ModuleFn`
+  FUN f(x: Int) -> Int { 
+    x ** 2
+  }
+  
+  ; Any `LET` bindings are registered in `Modules.constants` and `Module.const_types`
+  ; NOTE: There MUST be a corresponding type for module constants
+  LET x = 10
+  
+  ; Nested modules are supported; these go into `Module.submodules`
+  ; and follow the same rules above regarding top-level modules
+  Module N {
+    ; ...
+  }
+  
+  
+}
+```
+
+This is largely a lexing (e.g. `Token::Module`), parsing, and environment/interpreter change.
+
+Add a RUMPS integration test script when done that creates and accesses user-defined modules.
+
+### 3.1 Modules Containing Type Definitions
 
 Modules should be able to contain anything the top-level can, including type and struct definitions.
 
 ### Goals
 
-- `module Foo { type Bar = ... }` works
+- `MODULE Foo { TYPE Bar = ... }` works
 - Types are accessible as `Foo.Bar`
 - Structs, enums, unions all supported inside modules
 
 ### Implementation
 
 - [ ] Extend module AST node to include type definitions
-- [ ] Update parser to accept `type`, `struct`, `enum` inside `module { ... }`
+- [ ] Update parser to accept `TYPE` and `UNION` inside `MODULE { ... }`
 - [ ] Update resolve pass to register module-scoped types
 - [ ] Update typecheck to look up `Mod.Type` paths
 - [ ] Ensure nested modules work (if supported)

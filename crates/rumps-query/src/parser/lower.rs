@@ -103,6 +103,16 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 members: member_ids,
             }
         }
+        cst::StmtKind::Module { name, body } => {
+            let body_ids = body
+                .into_iter()
+                .map(|s| lower_stmt(ast, s))
+                .collect::<Result<Vec<_>>>()?;
+            Stmt::Module {
+                name,
+                body: body_ids,
+            }
+        }
     };
     ast.add_stmt(s, span)
 }

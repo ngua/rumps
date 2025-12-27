@@ -29,6 +29,7 @@ pub(crate) enum Token {
     Type,
     Match,
     Union,
+    Module,
 
     // Literals
     Int(i64),
@@ -135,6 +136,7 @@ impl Token {
                 "TYPE" => Some(Self::Type),
                 "MATCH" => Some(Self::Match),
                 "UNION" => Some(Self::Union),
+                "MODULE" => Some(Self::Module),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -165,6 +167,7 @@ impl fmt::Display for Token {
             Self::Type => write!(f, "TYPE"),
             Self::Match => write!(f, "MATCH"),
             Self::Union => write!(f, "UNION"),
+            Self::Module => write!(f, "MODULE"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),
@@ -257,6 +260,7 @@ mod tests {
         assert_eq!(Token::keyword("FUN"), Some(Token::Fun));
         assert_eq!(Token::keyword("MATCH"), Some(Token::Match));
         assert_eq!(Token::keyword("UNION"), Some(Token::Union));
+        assert_eq!(Token::keyword("MODULE"), Some(Token::Module));
         // Case-sensitive: null
         assert_eq!(Token::keyword("null"), Some(Token::Null));
     }

@@ -27,17 +27,40 @@
 //!                         this pass
 //! ```
 
+use std::collections::HashSet;
+
 use smallvec::{smallvec, SmallVec};
 
-use crate::ast::{Ast, Expr, ExprId};
+use crate::ast::{Ast, Expr, ExprId, Stmt};
 use crate::env::BUILTIN_MODULE_NAMES;
 #[cfg(test)]
 use crate::value::TypeExprArena;
 use crate::value::{TypeRegistry, ValueArena};
 
-/// Check if a name is a built-in module.
-fn is_builtin_module(name: &str) -> bool {
-    BUILTIN_MODULE_NAMES.contains(&name)
+/// Check if a name is a known module (builtin or user-defined).
+fn is_known_module(name: &str, user_modules: &HashSet<String>) -> bool {
+    BUILTIN_MODULE_NAMES.contains(&name) || user_modules.contains(name)
+}
+
+/// Collect all user-defined module names from the AST.
+///
+/// Recursively finds `Stmt::Module` statements and extracts their names.
+fn collect_user_module_names(ast: &Ast) -> HashSet<String> {
+    fn collect_from_stmt(ast: &Ast, stmt: &Stmt, names: &mut HashSet<String>) {
+        if let Stmt::Module { name, body } = stmt {
+            names.insert(name.clone());
+            // Also collect nested modules
+            body.iter()
+                .filter_map(|&id| ast.get_stmt(id))
+                .for_each(|s| collect_from_stmt(ast, s, names));
+        }
+    }
+
+    let mut names = HashSet::new();
+    ast.stmt_ids()
+        .filter_map(|id| ast.get_stmt(id))
+        .for_each(|stmt| collect_from_stmt(ast, stmt, &mut names));
+    names
 }
 
 /// Collect path segments from a chain of `Field` expressions.
@@ -65,16 +88,21 @@ fn collect_path_segments(
 /// - `Expr::Field(Var(type), variant)` to `Expr::Variant` for zero-arity variants
 /// - `Expr::Call(Field(Var(type), variant), args)` to `Expr::Variant` for
 ///   variant constructors with arguments
+/// - Module paths (builtin and user-defined) to `Expr::Path`
 pub(crate) fn resolve(
     ast: &mut Ast,
     arena: &mut ValueArena,
     registry: &TypeRegistry,
 ) {
+    // First, collect user-defined module names from MODULE statements
+    let user_modules = collect_user_module_names(ast);
+
     // Collect replacements first to avoid borrowing issues
     let replacements: Vec<(ExprId, Expr)> = ast
         .expr_ids()
         .filter_map(|id| {
-            resolve_expr(ast, arena, registry, id).map(|e| (id, e))
+            resolve_expr(ast, arena, registry, &user_modules, id)
+                .map(|e| (id, e))
         })
         .collect();
 
@@ -90,6 +118,7 @@ fn resolve_expr(
     ast: &Ast,
     arena: &mut ValueArena,
     registry: &TypeRegistry,
+    user_modules: &HashSet<String>,
     id: ExprId,
 ) -> Option<Expr> {
     ast.get_expr(id).and_then(|expr| match expr {
@@ -135,7 +164,7 @@ fn resolve_expr(
                 let is_module_path = full_path
                     .as_ref()
                     .and_then(|segs: &SmallVec<[String; 4]>| segs.first())
-                    .is_some_and(|first| is_builtin_module(first));
+                    .is_some_and(|first| is_known_module(first, user_modules));
 
                 is_module_path.then(|| full_path.map(Expr::Path)).flatten()
             })

@@ -1,0 +1,153 @@
+; User-defined modules
+; Tests MODULE definition, functions, constants, and nested modules
+
+; ============ Basic module with functions ============
+
+MODULE Counter {
+  FUN new() -> Int { 0 }
+  FUN inc(x: Int) -> Int { x + 1 }
+  FUN add(x: Int, y: Int) -> Int { x + y }
+}
+
+LET c = Counter.new()
+OUTPUT c  ; 0
+
+LET c1 = Counter.inc(c)
+OUTPUT c1  ; 1
+
+LET c2 = Counter.add(c1, 10)
+OUTPUT c2  ; 11
+
+; ============ Module with constants ============
+
+MODULE Config {
+  LET max-size = 1000
+  LET default-name = "unnamed"
+  LET ratio = 3.14
+}
+
+OUTPUT Config.max-size  ; 1000
+OUTPUT Config.default-name  ; unnamed
+OUTPUT Config.ratio > 3  ; true
+
+; Use constants in expressions
+LET scaled = Config.max-size * 2
+OUTPUT scaled  ; 2000
+
+; ============ Module with both functions and constants ============
+
+MODULE Geometry {
+  LET pi = 3.14159
+
+  FUN area(r: Float) -> Float {
+    Geometry.pi * r * r
+  }
+
+  FUN circumference(r: Float) -> Float {
+    2.0 * Geometry.pi * r
+  }
+}
+
+OUTPUT Geometry.pi > 3  ; true
+
+LET a = Geometry.area(2.0)
+OUTPUT a > 12  ; true
+
+LET circ = Geometry.circumference(1.0)
+OUTPUT circ > 6  ; true
+
+; ============ Nested modules ============
+
+MODULE Outer {
+  LET val = 100
+
+  FUN value() -> Int { Outer.val }
+
+  MODULE Inner {
+    LET secret = 42
+
+    FUN get-secret() -> Int { Outer.Inner.secret }
+    FUN combined() -> Int { Outer.val + Outer.Inner.secret }
+  }
+}
+
+OUTPUT Outer.val  ; 100
+OUTPUT Outer.value()  ; 100
+OUTPUT Outer.Inner.secret  ; 42
+OUTPUT Outer.Inner.get-secret()  ; 42
+OUTPUT Outer.Inner.combined()  ; 142
+
+; ============ Generic functions in modules ============
+
+MODULE Utils {
+  FUN identity[T](x: T) -> T { x }
+  FUN pair[A, B](a: A, b: B) -> (A, B) { (a, b) }
+}
+
+LET id-int = Utils.identity(42)
+OUTPUT id-int  ; 42
+
+LET id-str = Utils.identity("hello")
+OUTPUT id-str  ; hello
+
+LET p = Utils.pair(1, "one")
+OUTPUT p  ; (1, one)
+
+; ============ Module function as value ============
+
+LET inc-fn = Counter.inc
+LET result = inc-fn(5)
+OUTPUT result  ; 6
+
+; ============ Module with closures ============
+
+MODULE Adder {
+  FUN make(n: Int) -> (Int) -> Int {
+    x => x + n
+  }
+}
+
+LET add5 = Adder.make(5)
+OUTPUT add5(10)  ; 15
+
+LET add10 = Adder.make(10)
+OUTPUT add10(7)  ; 17
+
+; ============ Monomorphic higher-order functions ============
+
+MODULE MonoHof {
+  FUN apply(f: (Int) -> Int, x: Int) -> Int {
+    f(x)
+  }
+
+  FUN map-twice(f: (Int) -> Int, x: Int) -> Int {
+    f(f(x))
+  }
+}
+
+OUTPUT MonoHof.apply(n => n + 1, 5)  ; 6
+OUTPUT MonoHof.map-twice(n => n * 2, 3)  ; 12
+
+; ============ Polymorphic higher-order functions ============
+
+MODULE PolyHof {
+  FUN apply[T, U](f: (T) -> U, x: T) -> U {
+    f(x)
+  }
+
+  FUN compose[A, B, C](f: (B) -> C, g: (A) -> B, x: A) -> C {
+    f(g(x))
+  }
+}
+
+; Int -> Int
+OUTPUT PolyHof.apply(n => n + 1, 5)  ; 6
+
+; Int -> String
+OUTPUT PolyHof.apply(n => "num: " ++ (n as String), 42)  ; num: 42
+
+; String -> Int
+OUTPUT PolyHof.apply(s => String.length(s), "hello")  ; 5
+
+; Compose: Int -> Int -> String
+OUTPUT PolyHof.compose(n => "result: " ++ (n as String), x => x * 2, 10)  ; result: 20

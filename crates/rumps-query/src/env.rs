@@ -349,11 +349,64 @@ impl Module {
     }
 }
 
+/// A user-defined module containing functions and constants.
+///
+/// Unlike builtin `Module`s which use `PrimFn`, user modules store:
+/// - Functions as `ValueId`s pointing to closure values
+/// - Constants as `ValueId`s pointing to evaluated values
+#[derive(Default, Clone)]
+pub(crate) struct UserModule {
+    /// Functions in this module, keyed by function name.
+    /// `ValueId`s point to closure values in a `ValueArena`.
+    pub(crate) functions: HashMap<String, ValueId>,
+
+    /// Constants in this module, keyed by constant name.
+    pub(crate) constants: HashMap<String, ValueId>,
+
+    /// Submodules, keyed by submodule name.
+    pub(crate) submodules: HashMap<String, Self>,
+}
+
+impl UserModule {
+    /// Look up a function by path within this module.
+    pub(crate) fn get_fn(&self, path: &[&str]) -> Option<ValueId> {
+        match path {
+            [] => None,
+            [name] => self.functions.get(*name).copied(),
+            [first, rest @ ..] => {
+                self.submodules.get(*first).and_then(|m| m.get_fn(rest))
+            }
+        }
+    }
+
+    /// Look up a constant by path within this module.
+    pub(crate) fn get_const(&self, path: &[&str]) -> Option<ValueId> {
+        match path {
+            [] => None,
+            [name] => self.constants.get(*name).copied(),
+            [first, rest @ ..] => {
+                self.submodules.get(*first).and_then(|m| m.get_const(rest))
+            }
+        }
+    }
+
+    /// Check if a path resolves to a function within this module.
+    pub(crate) fn contains_fn(&self, path: &[&str]) -> bool {
+        self.get_fn(path).is_some()
+    }
+
+    /// Check if a path resolves to a constant within this module.
+    pub(crate) fn contains_const(&self, path: &[&str]) -> bool {
+        self.get_const(path).is_some()
+    }
+}
+
 /// Variable environment for the interpreter.
 ///
 /// Tracks:
 /// - Lexical scopes for `LET` bindings (via `Scopes`)
 /// - Built-in modules containing primitive functions (e.g., `Array`, `String`)
+/// - User-defined modules containing closures and constants
 /// - Module constants (e.g., `Math.pi`, `Math.e`)
 ///
 /// Note: `SET` variables (both local and global) are stored in the `Database`,
@@ -365,6 +418,9 @@ pub(crate) struct Environment {
 
     /// Built-in modules (e.g., `Object`, `Array`).
     modules: HashMap<String, Module>,
+
+    /// User-defined modules.
+    user_modules: HashMap<String, UserModule>,
 
     /// Arena backing module constant `ValueId`s.
     pub(crate) consts: ValueArena,
@@ -382,15 +438,64 @@ impl Environment {
         let mut env = Self {
             scopes: Scopes::new(),
             modules: HashMap::new(),
+            user_modules: HashMap::new(),
             consts: ValueArena::new(),
         };
         env.register_builtins();
         env
     }
 
-    /// Check if a top-level module exists.
+    /// Check if a top-level module exists (builtin or user-defined).
     pub(crate) fn has_module(&self, name: &str) -> bool {
-        self.modules.contains_key(name)
+        self.modules.contains_key(name) || self.user_modules.contains_key(name)
+    }
+
+    /// Register a user-defined module.
+    pub(crate) fn register_user_module(
+        &mut self,
+        name: &str,
+        module: UserModule,
+    ) {
+        self.user_modules.insert(name.to_string(), module);
+    }
+
+    /// Get a mutable reference to a user module, creating it if it doesn't exist.
+    pub(crate) fn get_or_create_user_module(
+        &mut self,
+        name: &str,
+    ) -> &mut UserModule {
+        self.user_modules
+            .entry(name.to_string())
+            .or_insert_with(UserModule::default)
+    }
+
+    /// Look up a user module function by path.
+    pub(crate) fn get_user_module_fn(&self, path: &[&str]) -> Option<ValueId> {
+        path.split_first().and_then(|(module, rest)| {
+            self.user_modules.get(*module).and_then(|m| m.get_fn(rest))
+        })
+    }
+
+    /// Look up a user module constant by path.
+    pub(crate) fn get_user_module_const(
+        &self,
+        path: &[&str],
+    ) -> Option<ValueId> {
+        path.split_first().and_then(|(module, rest)| {
+            self.user_modules
+                .get(*module)
+                .and_then(|m| m.get_const(rest))
+        })
+    }
+
+    /// Check if a path resolves to a user module function.
+    pub(crate) fn user_module_fn_exists(&self, path: &[&str]) -> bool {
+        self.get_user_module_fn(path).is_some()
+    }
+
+    /// Check if a path resolves to a user module constant.
+    pub(crate) fn user_module_const_exists(&self, path: &[&str]) -> bool {
+        self.get_user_module_const(path).is_some()
     }
 
     /// Check if a path resolves to a module function.

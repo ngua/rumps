@@ -293,6 +293,12 @@ pub(crate) enum TypeError {
     /// like `READ` for fallible conversion or `MATCH`/`IS` for narrowing.
     #[error("cannot cast `{from}` to `{to}`; use `READ` for fallible conversion or `MATCH`/`IS` for narrowing")]
     InvalidCast { from: Ty, to: Ty, span: Span },
+
+    /// Custom error with a message.
+    ///
+    /// Used for errors that don't fit into the other categories.
+    #[error("{msg}")]
+    Custom { msg: String, span: Span },
 }
 
 impl TypeError {
@@ -322,7 +328,8 @@ impl TypeError {
             | Self::NotJson(_, span)
             | Self::EmptyUnion(span)
             | Self::NotAUnionMember { span, .. }
-            | Self::InvalidCast { span, .. } => *span,
+            | Self::InvalidCast { span, .. }
+            | Self::Custom { span, .. } => *span,
         }
     }
 
@@ -465,6 +472,7 @@ impl TypeError {
                 ),
                 Some("use `READ` for fallible conversion or `MATCH`/`IS` for narrowing".to_owned()),
             ),
+            Self::Custom { msg, .. } => (msg.clone(), None),
         };
 
         FormattedTypeError {

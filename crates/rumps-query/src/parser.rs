@@ -153,6 +153,7 @@ impl Parser {
             let fun_stmt = Self::fun_stmt(stmt.clone());
             let type_stmt = Self::type_stmt();
             let union_stmt = Self::union_stmt();
+            let module_stmt = Self::module_stmt(stmt.clone());
             let expr_stmt = Self::expr_stmt(stmt);
 
             choice((
@@ -163,6 +164,7 @@ impl Parser {
                 fun_stmt,
                 type_stmt,
                 union_stmt,
+                module_stmt,
                 expr_stmt,
             ))
         })
@@ -634,6 +636,34 @@ impl Parser {
                     },
                     span,
                 )
+            })
+    }
+
+    /// `MODULE Name { ... }`
+    ///
+    /// User-defined module containing functions, constants, and nested modules.
+    /// Accepts any statement inside; invalid statements (anything other than
+    /// `FUN`, `LET`, or `MODULE`) are rejected during typechecking.
+    fn module_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        just(Token::Module)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then_ignore(Self::opt_newlines())
+            .then(
+                just(Token::LBrace)
+                    .ignore_then(Self::opt_newlines())
+                    .ignore_then(
+                        stmt.separated_by(Self::newlines()).allow_trailing(),
+                    )
+                    .then_ignore(Self::opt_newlines())
+                    .then_ignore(just(Token::RBrace)),
+            )
+            .map_with_span(|(name, body), span| {
+                cst::Stmt::new(cst::StmtKind::Module { name, body }, span)
             })
     }
 

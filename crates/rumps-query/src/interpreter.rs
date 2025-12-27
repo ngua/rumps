@@ -380,6 +380,85 @@ impl<I: IoContext> Interpreter<'_, I> {
                 type_params,
                 members,
             } => self.union_decl(&name, &type_params, &members, span),
+            Stmt::Module { name, body } => {
+                self.user_module(&name, &body, span).await
+            }
+        }
+    }
+
+    /// Define a user module.
+    ///
+    /// Processes the module body, registering functions and constants in a
+    /// `UserModule` structure. Nested modules are supported via recursion.
+    async fn user_module(
+        &mut self,
+        name: &str,
+        body: &[StmtId],
+        span: Span,
+    ) -> Result<()> {
+        let mut module = crate::env::UserModule::default();
+        self.populate_module(body, &mut module, span).await?;
+        self.env.register_user_module(name, module);
+        Ok(())
+    }
+
+    /// Populate a module with functions, constants, and submodules.
+    ///
+    /// Recursively processes statement IDs, adding items to the module.
+    #[async_recursion]
+    async fn populate_module(
+        &mut self,
+        ids: &[StmtId],
+        module: &mut crate::env::UserModule,
+        span: Span,
+    ) -> Result<()> {
+        match ids.split_first() {
+            None => Ok(()),
+            Some((&id, rest)) => {
+                let item_span = self.ast.stmt_span(id).unwrap_or(span);
+                if let Some(stmt) = self.ast.get_stmt(id).cloned() {
+                    match stmt {
+                        Stmt::Fun {
+                            name: fn_name,
+                            params,
+                            ret,
+                            body: fn_body,
+                            ..
+                        } => {
+                            let closure =
+                                self.closure(&params, ret, fn_body)?;
+                            let val_id = self.arena.add(closure, item_span);
+                            module.functions.insert(fn_name, val_id);
+                        }
+
+                        Stmt::Let(ref pat, _, expr_id) => {
+                            let val = self.eval(expr_id).await?;
+                            let val_id = self.arena.add(val, item_span);
+                            if let BindingPattern::Var(ref const_name) = pat {
+                                module
+                                    .constants
+                                    .insert(const_name.clone(), val_id);
+                            }
+                        }
+
+                        Stmt::Module {
+                            name: sub_name,
+                            body: sub_body,
+                        } => {
+                            let mut sub = crate::env::UserModule::default();
+                            self.populate_module(
+                                &sub_body, &mut sub, item_span,
+                            )
+                            .await?;
+                            module.submodules.insert(sub_name, sub);
+                        }
+
+                        // Other statements are rejected by the typechecker
+                        _ => {}
+                    }
+                }
+                self.populate_module(rest, module, span).await
+            }
         }
     }
 

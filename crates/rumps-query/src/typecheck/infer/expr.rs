@@ -160,11 +160,19 @@ impl InferCtx<'_> {
                 // first check constants, then functions
                 let path: SmallVec<[&str; 4]> =
                     segments.iter().map(String::as_str).collect();
+
+                // Check builtin modules first
                 self.runtime_env
                     .get_module_const_type(&path)
                     .cloned()
                     .or_else(|| {
                         self.runtime_env.get_module_fn_type(&path).map(
+                            |scheme| scheme.instantiate(&mut self.next_var),
+                        )
+                    })
+                    // Then check user-defined modules
+                    .or_else(|| {
+                        self.env.lookup_user_module_member(&path).map(
                             |scheme| scheme.instantiate(&mut self.next_var),
                         )
                     })

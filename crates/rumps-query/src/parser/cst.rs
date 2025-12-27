@@ -310,6 +310,18 @@ pub(crate) enum StmtKind {
         type_params: Vec<String>,
         members: Vec<TypeExpr>,
     },
+
+    /// User-defined module declaration: `MODULE Name { ... }`.
+    ///
+    /// Modules group related functions, constants, and nested modules.
+    /// Contents can include:
+    /// - `FUN` definitions (registered as module functions)
+    /// - `LET` bindings (registered as module constants)
+    /// - Nested `MODULE` definitions (registered as submodules)
+    ///
+    /// The body contains `Stmt`s; only `Fun`, `Let`, and `Module` are valid.
+    /// This is enforced during parsing.
+    Module { name: String, body: Vec<Stmt> },
 }
 
 /// A CST type expression with inline span.

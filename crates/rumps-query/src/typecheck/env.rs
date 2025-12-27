@@ -14,6 +14,10 @@ use crate::intern::{StringId, StringInterner};
 pub(crate) struct TypeEnv {
     scopes: Vec<HashMap<StringId, Scheme>>,
     pub(super) strings: StringInterner,
+    /// User-defined module names registered during typechecking.
+    user_modules: HashSet<String>,
+    /// User module member types: `module_name -> member_name -> Scheme`.
+    user_module_members: HashMap<String, HashMap<String, Scheme>>,
 }
 
 impl TypeEnv {
@@ -25,7 +29,55 @@ impl TypeEnv {
         Self {
             scopes: vec![HashMap::new()],
             strings,
+            user_modules: HashSet::new(),
+            user_module_members: HashMap::new(),
         }
+    }
+
+    /// Register a user-defined module name.
+    ///
+    /// This tracks that a module with this name has been defined so that
+    /// paths like `ModuleName.fn` can be resolved.
+    pub(crate) fn register_user_module(&mut self, name: &str) {
+        self.user_modules.insert(name.to_string());
+    }
+
+    /// Check if a name is a registered user module.
+    pub(crate) fn is_user_module(&self, name: &str) -> bool {
+        self.user_modules.contains(name)
+    }
+
+    /// Register a member (function or constant) of a user module.
+    ///
+    /// Called when typechecking `FUN` and `LET` inside a `MODULE` block.
+    pub(crate) fn register_user_module_member(
+        &mut self,
+        module: &str,
+        member: &str,
+        scheme: Scheme,
+    ) {
+        self.user_module_members
+            .entry(module.to_string())
+            .or_default()
+            .insert(member.to_string(), scheme);
+    }
+
+    /// Look up a user module member type by path.
+    ///
+    /// Path should be like `["Counter", "new"]` for `Counter.new`, or
+    /// `["Outer", "Inner", "fn"]` for `Outer.Inner.fn`.
+    pub(crate) fn lookup_user_module_member(
+        &self,
+        path: &[&str],
+    ) -> Option<&Scheme> {
+        // Split into module path (all but last) and member (last)
+        path.split_last().and_then(|(member, mod_path)| {
+            // Join module path with dots (e.g., `["Outer", "Inner"]` -> `"Outer.Inner"`)
+            let mod_key = mod_path.join(".");
+            self.user_module_members
+                .get(&mod_key)
+                .and_then(|m| m.get(*member))
+        })
     }
 
     /// Push a new scope (e.g., entering a function body or block).

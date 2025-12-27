@@ -199,6 +199,11 @@ impl Ast {
         (0..self.exprs.len()).map(ExprId)
     }
 
+    /// Iterate over all statement IDs.
+    pub(crate) fn stmt_ids(&self) -> impl Iterator<Item = StmtId> {
+        (0..self.stmts.len()).map(StmtId)
+    }
+
     /// Get the span of a type expression.
     pub(crate) fn type_expr_span(&self, id: AstTypeExprId) -> Option<Span> {
         self.type_exprs.span(id.0)
@@ -798,6 +803,18 @@ pub(crate) enum Stmt {
         type_params: SmallVec<[String; 2]>,
         members: SmallVec<[AstTypeExprId; 4]>,
     },
+
+    /// User-defined module: `MODULE Name { ... }`.
+    ///
+    /// Modules group related functions, constants, and nested modules.
+    /// Contents can include:
+    /// - `FUN` definitions (registered as module functions)
+    /// - `LET` bindings (registered as module constants)
+    /// - Nested `MODULE` definitions (registered as submodules)
+    ///
+    /// The body contains `StmtId`s; only `Fun`, `Let`, and `Module` are valid.
+    /// This is enforced during parsing.
+    Module { name: String, body: Vec<StmtId> },
 }
 
 #[cfg(test)]

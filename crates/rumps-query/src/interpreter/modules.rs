@@ -66,6 +66,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// The path must have at least two segments. The last segment is the
     /// function/constant name; all preceding segments form the module path.
+    /// Checks both builtin and user-defined modules.
     fn module_path(
         &mut self,
         segments: &[String],
@@ -74,20 +75,34 @@ impl<I: IoContext> Interpreter<'_, I> {
         let path_strs: SmallVec<[&str; 4]> =
             segments.iter().map(String::as_str).collect();
 
-        // Check for module function first
+        // Check for builtin module function first
         if self.env.module_fn_exists(&path_strs) {
             let path: SmallVec<[StringId; 4]> =
                 segments.iter().map(|s| self.arena.intern(s)).collect();
             Ok(Value::ModuleFn { path })
         }
-        // Check for module constant
+        // Check for builtin module constant
         else if let Some(const_id) = self.env.get_module_const(&path_strs) {
-            // Clone value from env's consts arena
             self.env.consts.get(const_id).cloned().ok_or_else(|| {
                 Error::runtime(span, "internal: missing constant")
             })
+        }
+        // Check for user module function
+        else if let Some(fn_id) = self.env.get_user_module_fn(&path_strs) {
+            // Get the closure value and clone it
+            self.arena.get(fn_id).cloned().ok_or_else(|| {
+                Error::runtime(span, "internal: missing user module function")
+            })
+        }
+        // Check for user module constant
+        else if let Some(const_id) =
+            self.env.get_user_module_const(&path_strs)
+        {
+            self.arena.get(const_id).cloned().ok_or_else(|| {
+                Error::runtime(span, "internal: missing user module constant")
+            })
         } else {
-            // Path starts with a module but doesn't resolve to function or constant
+            // Path starts with a module but doesn't resolve
             let path_str = segments.join(".");
             Err(Error::runtime(
                 span,

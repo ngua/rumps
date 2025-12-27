@@ -58,8 +58,129 @@ impl InferCtx<'_> {
                 // infer here. The unions are registered before type checking.
             }
 
+            Some(Stmt::Module { name, body }) => {
+                self.user_module_with_path(&name, &body, span)
+            }
+
             None => {}
         }
+    }
+
+    /// Infer types for a top-level user-defined module.
+    ///
+    /// Delegates to `user_module` with an empty path prefix.
+    fn user_module_with_path(
+        &mut self,
+        mod_name: &str,
+        body: &[StmtId],
+        span: Span,
+    ) {
+        self.user_module(mod_name, body, span)
+    }
+
+    /// Infer types for a user-defined module.
+    ///
+    /// Validates that only `FUN`, `LET`, and nested `MODULE` statements appear
+    /// inside, typechecks each item, and registers the module's types so they
+    /// can be accessed via `ModuleName.fn(...)` or `ModuleName.const`.
+    ///
+    /// The `mod_path` is the fully-qualified module path (e.g., `"Outer.Inner"`
+    /// for a nested module).
+    fn user_module(&mut self, mod_path: &str, body: &[StmtId], span: Span) {
+        // Register the module name FIRST so self-references like
+        // `Geometry.pi` from within `Geometry.area` resolve correctly.
+        self.env.register_user_module(mod_path);
+
+        // Typecheck each statement and validate it's an allowed item type.
+        // We also collect type information for registration.
+        body.iter().for_each(|&id| {
+            let item_span = self.ast.stmt_span(id).unwrap_or(span);
+            let item = self.ast.get_stmt(id).cloned();
+
+            match item {
+                Some(Stmt::Fun { ref name, .. }) => {
+                    // Typecheck the function (binds it in current scope)
+                    self.stmt(id);
+                    // Register as module member
+                    if let Some(scheme) = self.env.lookup(name).cloned() {
+                        self.env.register_user_module_member(
+                            mod_path, name, scheme,
+                        );
+                    }
+                }
+
+                Some(Stmt::Let(ref pat, ..)) => {
+                    // Module constants must be simple bindings (not destructuring)
+                    match pat {
+                        BindingPattern::Var(ref const_name) => {
+                            self.stmt(id);
+                            // Register as module member
+                            if let Some(scheme) =
+                                self.env.lookup(const_name).cloned()
+                            {
+                                self.env.register_user_module_member(
+                                    mod_path, const_name, scheme,
+                                );
+                            }
+                        }
+                        _ => {
+                            self.error(TypeError::Custom {
+                                msg:
+                                    "module constants must be simple bindings, \
+                                     not destructuring patterns"
+                                        .to_string(),
+                                span: item_span,
+                            });
+                        }
+                    }
+                }
+
+                Some(Stmt::Module { ref name, ref body }) => {
+                    // Nested module; recurse with qualified path
+                    let nested_path = format!("{}.{}", mod_path, name);
+                    self.user_module(&nested_path, body, item_span);
+                }
+
+                // Invalid statements inside a module
+                Some(Stmt::Set(..)) => {
+                    self.error(TypeError::Custom {
+                        msg: "`SET` is not allowed inside a module".to_string(),
+                        span: item_span,
+                    });
+                }
+                Some(Stmt::Kill(..)) => {
+                    self.error(TypeError::Custom {
+                        msg: "`KILL` is not allowed inside a module"
+                            .to_string(),
+                        span: item_span,
+                    });
+                }
+                Some(Stmt::Output(..)) => {
+                    self.error(TypeError::Custom {
+                        msg: "`OUTPUT` is not allowed inside a module"
+                            .to_string(),
+                        span: item_span,
+                    });
+                }
+                Some(Stmt::Expr(..)) => {
+                    self.error(TypeError::Custom {
+                        msg: "expression statements are not allowed inside a \
+                              module"
+                            .to_string(),
+                        span: item_span,
+                    });
+                }
+                Some(Stmt::Type { .. }) => {
+                    // Type definitions inside modules will be supported in
+                    // phase 3.1 (see TODOS/dsl/phase-4c.md)
+                }
+                Some(Stmt::Union { .. }) => {
+                    // Union definitions inside modules will be supported in
+                    // phase 3.1 (see TODOS/dsl/phase-4c.md)
+                }
+                None => {}
+            }
+        });
     }
 
     /// Infer type of a named function definition.
