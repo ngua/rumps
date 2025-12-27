@@ -1479,6 +1479,7 @@ dependencies = [
  "nonempty",
  "ordered-float",
  "rand",
+ "rumps-query-macros",
  "rumps-storage",
  "rumps-types",
  "serde_json",
@@ -1488,6 +1489,15 @@ dependencies = [
  "tokio-test",
  "unicode-segmentation",
  "uuid",
+]
+
+[[package]]
+name = "rumps-query-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

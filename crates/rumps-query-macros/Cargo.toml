@@ -1,6 +1,6 @@
 [package]
-name = "rumps-derive"
-version = "0.0.1"
+name = "rumps-query-macros"
+version = "0.1.0"
 edition = "2021"
 
 [lib]
@@ -11,12 +11,8 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 
-[dev-dependencies]
-rumps-types = { path = "../rumps-types" }
-
 [lints.clippy]
 obfuscated_if_else = "allow"
-option_map_unit_fn = "allow"
 type_complexity = "allow"
 use_self = "warn"
 unwrap_used = "deny"

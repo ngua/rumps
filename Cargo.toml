@@ -22,3 +22,6 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["fs"] }
 tokio-util = "0.7.9"
 nonempty = "0.10"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits", "parsing"] }

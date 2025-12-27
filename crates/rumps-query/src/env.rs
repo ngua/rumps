@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+use rumps_query_macros::scheme;
+
 use crate::typecheck::{Scheme, Ty};
 
 /// Names of built-in modules.
@@ -548,20 +550,6 @@ impl Environment {
             Array, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
         };
 
-        // Type shorthands for readability
-        fn arr(t: Ty) -> Ty {
-            Ty::Array(Box::new(t))
-        }
-        fn opt(t: Ty) -> Ty {
-            Ty::Option(Box::new(t))
-        }
-        fn res(t: Ty, e: Ty) -> Ty {
-            Ty::Result(Box::new(t), Box::new(e))
-        }
-        fn map(k: Ty, v: Ty) -> Ty {
-            Ty::Map(Box::new(k), Box::new(v))
-        }
-
         self.modules.insert(
             "Array".to_string(),
             Module::from_prims(&[
@@ -569,105 +557,73 @@ impl Environment {
                 PrimDef {
                     name: "map",
                     f: Array::placeholder,
-                    ty: Scheme::poly2(|t, u| {
-                        Ty::func(
-                            [Ty::func([t.clone()], u.clone()), arr(t)],
-                            arr(u),
-                        )
-                    }),
+                    ty: scheme!(forall T U. ((T) -> U, Array[T]) -> Array[U]),
                 },
                 PrimDef {
                     name: "filter",
                     f: Array::placeholder,
-                    ty: Scheme::poly(|t| {
-                        Ty::func(
-                            [Ty::func([t.clone()], Ty::Bool), arr(t.clone())],
-                            arr(t),
-                        )
-                    }),
+                    ty: scheme!(forall T. ((T) -> Bool, Array[T]) -> Array[T]),
                 },
                 PrimDef {
                     name: "reduce",
                     f: Array::placeholder,
-                    ty: Scheme::poly2(|t, u| {
-                        Ty::func(
-                            [
-                                Ty::func([u.clone(), t.clone()], u.clone()),
-                                u.clone(),
-                                arr(t),
-                            ],
-                            u,
-                        )
-                    }),
+                    ty: scheme!(forall T U. ((U, T) -> U, U, Array[T]) -> U),
                 },
                 PrimDef {
                     name: "foreach",
                     f: Array::placeholder,
-                    ty: Scheme::poly(|t| {
-                        Ty::func(
-                            [Ty::func([t.clone()], Ty::Unit), arr(t)],
-                            Ty::Unit,
-                        )
-                    }),
+                    ty: scheme!(forall T. ((T) -> Unit, Array[T]) -> Unit),
                 },
                 // Regular primitives
                 PrimDef {
                     name: "length",
                     f: Array::length,
-                    ty: Scheme::poly(|t| Ty::func([arr(t)], Ty::Int)),
+                    ty: scheme!(forall T. (Array[T]) -> Int),
                 },
                 PrimDef {
                     name: "push",
                     f: Array::push,
-                    ty: Scheme::poly(|t| {
-                        Ty::func([arr(t.clone()), t.clone()], arr(t))
-                    }),
+                    ty: scheme!(forall T. (Array[T], T) -> Array[T]),
                 },
                 PrimDef {
                     name: "pop",
                     f: Array::pop,
-                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
                 },
                 PrimDef {
                     name: "head",
                     f: Array::head,
-                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], opt(t))),
+                    ty: scheme!(forall T. (Array[T]) -> Option[T]),
                 },
                 PrimDef {
                     name: "tail",
                     f: Array::tail,
-                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
                 },
                 PrimDef {
                     name: "reverse",
                     f: Array::reverse,
-                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
                 },
                 PrimDef {
                     name: "sort",
                     f: Array::sort,
-                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
                 },
                 PrimDef {
                     name: "slice",
                     f: Array::slice,
-                    ty: Scheme::poly(|t| {
-                        Ty::func([arr(t.clone()), Ty::Int, Ty::Int], arr(t))
-                    }),
+                    ty: scheme!(forall T. (Array[T], Int, Int) -> Array[T]),
                 },
                 PrimDef {
                     name: "contains",
                     f: Array::contains,
-                    ty: Scheme::poly(|t| {
-                        Ty::func([arr(t.clone()), t], Ty::Bool)
-                    }),
+                    ty: scheme!(forall T. (Array[T], T) -> Bool),
                 },
                 PrimDef {
                     name: "concat",
                     f: Array::concat,
-                    ty: Scheme::poly(|t| {
-                        Ty::func([arr(t.clone()), arr(t.clone())], arr(t))
-                    }),
+                    ty: scheme!(forall T. (Array[T], Array[T]) -> Array[T]),
                 },
             ]),
         );
@@ -678,62 +634,47 @@ impl Environment {
                 PrimDef {
                     name: "length",
                     f: Str::length,
-                    ty: Scheme::mono(Ty::func([Ty::String], Ty::Int)),
+                    ty: scheme!((String) -> Int),
                 },
                 PrimDef {
                     name: "upper",
                     f: Str::upper,
-                    ty: Scheme::mono(Ty::func([Ty::String], Ty::String)),
+                    ty: scheme!((String) -> String),
                 },
                 PrimDef {
                     name: "lower",
                     f: Str::lower,
-                    ty: Scheme::mono(Ty::func([Ty::String], Ty::String)),
+                    ty: scheme!((String) -> String),
                 },
                 PrimDef {
                     name: "trim",
                     f: Str::trim,
-                    ty: Scheme::mono(Ty::func([Ty::String], Ty::String)),
+                    ty: scheme!((String) -> String),
                 },
                 PrimDef {
                     name: "split",
                     f: Str::split,
-                    ty: Scheme::mono(Ty::func(
-                        [Ty::String, Ty::String],
-                        arr(Ty::String),
-                    )),
+                    ty: scheme!((String, String) -> Array[String]),
                 },
                 PrimDef {
                     name: "join",
                     f: Str::join,
-                    ty: Scheme::mono(Ty::func(
-                        [arr(Ty::String), Ty::String],
-                        Ty::String,
-                    )),
+                    ty: scheme!((Array[String], String) -> String),
                 },
                 PrimDef {
                     name: "slice",
                     f: Str::slice,
-                    ty: Scheme::mono(Ty::func(
-                        [Ty::String, Ty::Int, Ty::Int],
-                        Ty::String,
-                    )),
+                    ty: scheme!((String, Int, Int) -> String),
                 },
                 PrimDef {
                     name: "contains",
                     f: Str::contains,
-                    ty: Scheme::mono(Ty::func(
-                        [Ty::String, Ty::String],
-                        Ty::Bool,
-                    )),
+                    ty: scheme!((String, String) -> Bool),
                 },
                 PrimDef {
                     name: "replace",
                     f: Str::replace,
-                    ty: Scheme::mono(Ty::func(
-                        [Ty::String, Ty::String, Ty::String],
-                        Ty::String,
-                    )),
+                    ty: scheme!((String, String, String) -> String),
                 },
             ]),
         );
@@ -743,42 +684,42 @@ impl Environment {
             PrimDef {
                 name: "abs",
                 f: Math::abs,
-                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                ty: scheme!((Float) -> Float),
             },
             PrimDef {
                 name: "min",
                 f: Math::min,
-                ty: Scheme::mono(Ty::func([Ty::Float, Ty::Float], Ty::Float)),
+                ty: scheme!((Float, Float) -> Float),
             },
             PrimDef {
                 name: "max",
                 f: Math::max,
-                ty: Scheme::mono(Ty::func([Ty::Float, Ty::Float], Ty::Float)),
+                ty: scheme!((Float, Float) -> Float),
             },
             PrimDef {
                 name: "floor",
                 f: Math::floor,
-                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Int)),
+                ty: scheme!((Float) -> Int),
             },
             PrimDef {
                 name: "ceil",
                 f: Math::ceil,
-                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Int)),
+                ty: scheme!((Float) -> Int),
             },
             PrimDef {
                 name: "round",
                 f: Math::round,
-                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Int)),
+                ty: scheme!((Float) -> Int),
             },
             PrimDef {
                 name: "sqrt",
                 f: Math::sqrt,
-                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                ty: scheme!((Float) -> Float),
             },
             PrimDef {
                 name: "log",
                 f: Math::log,
-                ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                ty: scheme!((Float) -> Float),
             },
         ]);
 
@@ -807,40 +748,37 @@ impl Environment {
                     PrimDef {
                         name: "sin",
                         f: Trig::sin,
-                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                        ty: scheme!((Float) -> Float),
                     },
                     PrimDef {
                         name: "cos",
                         f: Trig::cos,
-                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                        ty: scheme!((Float) -> Float),
                     },
                     PrimDef {
                         name: "tan",
                         f: Trig::tan,
-                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                        ty: scheme!((Float) -> Float),
                     },
                     PrimDef {
                         name: "asin",
                         f: Trig::asin,
-                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                        ty: scheme!((Float) -> Float),
                     },
                     PrimDef {
                         name: "acos",
                         f: Trig::acos,
-                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                        ty: scheme!((Float) -> Float),
                     },
                     PrimDef {
                         name: "atan",
                         f: Trig::atan,
-                        ty: Scheme::mono(Ty::func([Ty::Float], Ty::Float)),
+                        ty: scheme!((Float) -> Float),
                     },
                     PrimDef {
                         name: "atan2",
                         f: Trig::atan2,
-                        ty: Scheme::mono(Ty::func(
-                            [Ty::Float, Ty::Float],
-                            Ty::Float,
-                        )),
+                        ty: scheme!((Float, Float) -> Float),
                     },
                 ]),
             ),
@@ -852,50 +790,42 @@ impl Environment {
                 PrimDef {
                     name: "random",
                     f: Random::random,
-                    ty: Scheme::mono(Ty::func([], Ty::Float)),
+                    ty: scheme!(() -> Float),
                 },
                 PrimDef {
                     name: "range",
                     f: Random::range,
-                    ty: Scheme::mono(Ty::func(
-                        [Ty::Float, Ty::Float],
-                        Ty::Float,
-                    )),
+                    ty: scheme!((Float, Float) -> Float),
                 },
                 PrimDef {
                     name: "int",
                     f: Random::int,
-                    ty: Scheme::mono(Ty::func([Ty::Int, Ty::Int], Ty::Int)),
+                    ty: scheme!((Int, Int) -> Int),
                 },
                 PrimDef {
                     name: "bool",
                     f: Random::bool,
-                    ty: Scheme::mono(Ty::func([], Ty::Bool)),
+                    ty: scheme!(() -> Bool),
                 },
                 PrimDef {
                     name: "choice",
                     f: Random::choice,
-                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], opt(t))),
+                    ty: scheme!(forall T. (Array[T]) -> Option[T]),
                 },
                 PrimDef {
                     name: "shuffle",
                     f: Random::shuffle,
-                    ty: Scheme::poly(|t| Ty::func([arr(t.clone())], arr(t))),
+                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
                 },
                 PrimDef {
                     name: "sample",
                     f: Random::sample,
-                    ty: Scheme::poly(|t| {
-                        Ty::func(
-                            [arr(t.clone()), Ty::Int],
-                            res(arr(t), Ty::String),
-                        )
-                    }),
+                    ty: scheme!(forall T. (Array[T], Int) -> Result[Array[T], String]),
                 },
                 PrimDef {
                     name: "uuid",
                     f: Random::uuid,
-                    ty: Scheme::mono(Ty::func([], Ty::String)),
+                    ty: scheme!(() -> String),
                 },
             ]),
         );
@@ -906,93 +836,57 @@ impl Environment {
                 PrimDef {
                     name: "empty",
                     f: Map::empty,
-                    ty: Scheme::poly2(|k, v| Ty::func([], map(k, v))),
+                    ty: scheme!(forall K V. () -> Map[K, V]),
                 },
                 PrimDef {
                     name: "length",
                     f: Map::length,
-                    ty: Scheme::poly2(|k, v| Ty::func([map(k, v)], Ty::Int)),
+                    ty: scheme!(forall K V. (Map[K, V]) -> Int),
                 },
                 PrimDef {
                     name: "keys",
                     f: Map::keys,
-                    ty: Scheme::poly2(|k, v| {
-                        Ty::func([map(k.clone(), v)], arr(k))
-                    }),
+                    ty: scheme!(forall K V. (Map[K, V]) -> Array[K]),
                 },
                 PrimDef {
                     name: "values",
                     f: Map::values,
-                    ty: Scheme::poly2(|k, v| {
-                        Ty::func([map(k, v.clone())], arr(v))
-                    }),
+                    ty: scheme!(forall K V. (Map[K, V]) -> Array[V]),
                 },
                 PrimDef {
                     name: "entries",
                     f: Map::entries,
-                    ty: Scheme::poly2(|k, v| {
-                        Ty::func(
-                            [map(k.clone(), v.clone())],
-                            arr(Ty::Tuple(vec![k, v])),
-                        )
-                    }),
+                    ty: scheme!(forall K V. (Map[K, V]) -> Array[(K, V)]),
                 },
                 PrimDef {
                     name: "has",
                     f: Map::has,
-                    ty: Scheme::poly2(|k, v| {
-                        Ty::func([map(k.clone(), v), k], Ty::Bool)
-                    }),
+                    ty: scheme!(forall K V. (Map[K, V], K) -> Bool),
                 },
                 PrimDef {
                     name: "lookup",
                     f: Map::get,
-                    ty: Scheme::poly2(|k, v| {
-                        Ty::func([map(k.clone(), v.clone()), k], opt(v))
-                    }),
+                    ty: scheme!(forall K V. (Map[K, V], K) -> Option[V]),
                 },
                 PrimDef {
                     name: "insert",
                     f: Map::set,
-                    ty: Scheme::poly2(|k, v| {
-                        Ty::func(
-                            [map(k.clone(), v.clone()), k.clone(), v.clone()],
-                            map(k, v),
-                        )
-                    }),
+                    ty: scheme!(forall K V. (Map[K, V], K, V) -> Map[K, V]),
                 },
                 PrimDef {
                     name: "remove",
                     f: Map::remove,
-                    ty: Scheme::poly2(|k, v| {
-                        Ty::func(
-                            [map(k.clone(), v.clone()), k.clone()],
-                            map(k, v),
-                        )
-                    }),
+                    ty: scheme!(forall K V. (Map[K, V], K) -> Map[K, V]),
                 },
                 PrimDef {
                     name: "merge",
                     f: Map::merge,
-                    ty: Scheme::poly2(|k, v| {
-                        Ty::func(
-                            [
-                                map(k.clone(), v.clone()),
-                                map(k.clone(), v.clone()),
-                            ],
-                            map(k, v),
-                        )
-                    }),
+                    ty: scheme!(forall K V. (Map[K, V], Map[K, V]) -> Map[K, V]),
                 },
                 PrimDef {
                     name: "from-entries",
                     f: Map::from_entries,
-                    ty: Scheme::poly2(|k, v| {
-                        Ty::func(
-                            [arr(Ty::Tuple(vec![k.clone(), v.clone()]))],
-                            map(k, v),
-                        )
-                    }),
+                    ty: scheme!(forall K V. (Array[(K, V)]) -> Map[K, V]),
                 },
             ]),
         );
@@ -1003,68 +897,62 @@ impl Environment {
                 PrimDef {
                     name: "now",
                     f: Time::now,
-                    ty: Scheme::mono(Ty::func([], Ty::Time)),
+                    ty: scheme!(() -> Time),
                 },
                 PrimDef {
                     name: "epoch",
                     f: Time::epoch,
-                    ty: Scheme::mono(Ty::func([], Ty::Time)),
+                    ty: scheme!(() -> Time),
                 },
                 PrimDef {
                     name: "parse",
                     f: Time::parse,
-                    ty: Scheme::mono(Ty::func(
-                        [Ty::String, Ty::String],
-                        res(Ty::Time, Ty::String),
-                    )),
+                    ty: scheme!((String, String) -> Result[Time, String]),
                 },
                 PrimDef {
                     name: "format",
                     f: Time::format,
-                    ty: Scheme::mono(Ty::func(
-                        [Ty::String, Ty::Time],
-                        Ty::String,
-                    )),
+                    ty: scheme!((String, Time) -> String),
                 },
                 PrimDef {
                     name: "add-seconds",
                     f: Time::add_seconds,
-                    ty: Scheme::mono(Ty::func([Ty::Time, Ty::Int], Ty::Time)),
+                    ty: scheme!((Time, Int) -> Time),
                 },
                 PrimDef {
                     name: "diff-seconds",
                     f: Time::diff_seconds,
-                    ty: Scheme::mono(Ty::func([Ty::Time, Ty::Time], Ty::Float)),
+                    ty: scheme!((Time, Time) -> Float),
                 },
                 PrimDef {
                     name: "year",
                     f: Time::year,
-                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                    ty: scheme!((Time) -> Int),
                 },
                 PrimDef {
                     name: "month",
                     f: Time::month,
-                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                    ty: scheme!((Time) -> Int),
                 },
                 PrimDef {
                     name: "day",
                     f: Time::day,
-                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                    ty: scheme!((Time) -> Int),
                 },
                 PrimDef {
                     name: "hour",
                     f: Time::hour,
-                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                    ty: scheme!((Time) -> Int),
                 },
                 PrimDef {
                     name: "minute",
                     f: Time::minute,
-                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                    ty: scheme!((Time) -> Int),
                 },
                 PrimDef {
                     name: "second",
                     f: Time::second,
-                    ty: Scheme::mono(Ty::func([Ty::Time], Ty::Int)),
+                    ty: scheme!((Time) -> Int),
                 },
             ]),
         );
@@ -1076,20 +964,13 @@ impl Environment {
                 PrimDef {
                     name: "map",
                     f: Opt::placeholder,
-                    ty: Scheme::poly2(|t, u| {
-                        Ty::func(
-                            [opt(t.clone()), Ty::func([t], u.clone())],
-                            opt(u),
-                        )
-                    }),
+                    ty: scheme!(forall T U. (Option[T], (T) -> U) -> Option[U]),
                 },
                 // Regular primitives
                 PrimDef {
                     name: "unwrap-or",
                     f: Opt::unwrap_or,
-                    ty: Scheme::poly(|t| {
-                        Ty::func([opt(t.clone()), t.clone()], t)
-                    }),
+                    ty: scheme!(forall T. (Option[T], T) -> T),
                 },
             ]),
         );
@@ -1101,36 +982,18 @@ impl Environment {
                 PrimDef {
                     name: "map",
                     f: Res::placeholder,
-                    ty: Scheme::poly3(|t, u, e| {
-                        Ty::func(
-                            [
-                                res(t.clone(), e.clone()),
-                                Ty::func([t], u.clone()),
-                            ],
-                            res(u, e),
-                        )
-                    }),
+                    ty: scheme!(forall T U E. (Result[T, E], (T) -> U) -> Result[U, E]),
                 },
                 PrimDef {
                     name: "map-err",
                     f: Res::placeholder,
-                    ty: Scheme::poly3(|t, e, f| {
-                        Ty::func(
-                            [
-                                res(t.clone(), e.clone()),
-                                Ty::func([e], f.clone()),
-                            ],
-                            res(t, f),
-                        )
-                    }),
+                    ty: scheme!(forall T E F. (Result[T, E], (E) -> F) -> Result[T, F]),
                 },
                 // Regular primitives
                 PrimDef {
                     name: "unwrap-or",
                     f: Res::unwrap_or,
-                    ty: Scheme::poly2(|t, e| {
-                        Ty::func([res(t.clone(), e), t.clone()], t)
-                    }),
+                    ty: scheme!(forall T E. (Result[T, E], T) -> T),
                 },
             ]),
         );
