@@ -59,17 +59,27 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Type checker guarantees:
     /// - `-` is only applied to `Int` or `Float`
     /// - `!` is only applied to `Bool`
-    pub(super) fn apply_unop(&self, op: UnOp, v: &Value) -> Value {
+    /// - `?` can wrap any value in `Option.Some`
+    pub(super) fn apply_unop(
+        &mut self,
+        op: UnOp,
+        v: Value,
+        span: Span,
+    ) -> Value {
         match op {
-            UnOp::Neg => match v {
+            UnOp::Neg => match &v {
                 Value::Int(n) => Value::Int(-n),
                 Value::Float(f) => Value::Float(OrderedFloat(-f.0)),
                 _ => typechecked!("-", "Numeric"),
             },
-            UnOp::Not => match v {
+            UnOp::Not => match &v {
                 Value::Bool(b) => Value::Bool(!b),
                 _ => typechecked!("!", "Bool"),
             },
+            UnOp::Wrap => {
+                let inner_id = self.arena.add(v, span);
+                self.make_some(inner_id)
+            }
         }
     }
 

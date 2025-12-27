@@ -56,4 +56,55 @@ OUTPUT Option.Some(42) ?? 0
 OUTPUT Option.None ?? "fallback"
 ; Expected: fallback
 
+; === Prefix `?` for Some wrapping ===
+
+; Basic usage: wrap a value in Some
+LET wrapped = ?42
+OUTPUT wrapped
+; Expected: Option.Some(42)
+
+; Unwrap with coalesce
+OUTPUT ?100 ?? 0
+; Expected: 100
+
+; Wrap a string
+OUTPUT ?"hello"
+; Expected: Option.Some(hello)
+
+; Nested `?` produces Option.Some(Option.Some(v))
+; Note: `??` is the coalesce operator, so use `?(?x)` for nesting
+LET nested = ?(?10)
+OUTPUT nested
+; Expected: Option.Some(Option.Some(10))
+
+; Unwrap outer layer
+OUTPUT nested!
+; Expected: Option.Some(10)
+
+; Fully unwrap nested
+OUTPUT nested!!
+; Expected: 10
+
+; Function that expects an Option argument
+FUN maybe-double(x: Option[Int]) -> Int {
+  (x ?? 0) * 2
+}
+
+; Call with explicit Some
+OUTPUT maybe-double(Option.Some(5))
+; Expected: 10
+
+; Call with `?` wrap syntax
+OUTPUT maybe-double(?7)
+; Expected: 14
+
+; Call with None
+OUTPUT maybe-double(Option.None)
+; Expected: 0
+
+; Wrap an expression
+LET expr-result = ?(3 + 4)
+OUTPUT expr-result
+; Expected: Option.Some(7)
+
 OUTPUT "Unit and Option test complete"

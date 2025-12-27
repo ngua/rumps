@@ -1167,6 +1167,7 @@ impl Parser {
             just(Token::Not).to(UnOp::Not),
             just(Token::Bang).to(UnOp::Not),
             just(Token::Minus).to(UnOp::Neg),
+            just(Token::Question).to(UnOp::Wrap),
         ));
 
         recursive(move |unary| {

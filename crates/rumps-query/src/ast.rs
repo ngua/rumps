@@ -304,6 +304,12 @@ pub(crate) enum BinOp {
 pub(crate) enum UnOp {
     Neg, // `-`
     Not, // `NOT` or `!`
+    /// Prefix `?` wraps a value in `Option.Some`.
+    ///
+    /// `?x` produces `Option.Some(x)`. For nested wrapping, use parens:
+    /// `?(?x)` produces `Option.Some(Option.Some(x))`. Note that `??x`
+    /// is parsed as the coalesce operator, not nested wrap.
+    Wrap,
 }
 
 /// Rest pattern for array destructuring.

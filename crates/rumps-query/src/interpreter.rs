@@ -817,10 +817,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         op: UnOp,
         operand: ExprId,
-        _span: Span,
+        span: Span,
     ) -> Result<Value> {
         let val = self.eval(operand).await?;
-        Ok(self.apply_unop(op, &val))
+        Ok(self.apply_unop(op, val, span))
     }
 
     /// Evaluate a type check: `expr is Pattern`.

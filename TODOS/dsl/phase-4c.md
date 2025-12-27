@@ -45,12 +45,14 @@ let y = ?foo.bar   // Some(foo.bar)
 
 ### Implementation
 
-- [ ] Add `PrefixQuestion` token to lexer
-- [ ] Add `Wrap` (or similar) variant to AST expression types
-- [ ] Update parser to handle prefix `?`
-- [ ] Typecheck: infer `?e : T?` when `e : T`
-- [ ] Interpreter: wrap value in `Value::Some(_)`
-- [ ] Add test scripts for basic usage and nested `??x` if desired
+- [x] Add `Token::Question` to lexer
+- [x] Add `UnOp::Wrap` variant to AST
+- [x] Update parser to handle prefix `?`
+- [x] Typecheck: infer `?e : Option[T]` when `e : T`
+- [x] Interpreter: wrap value in `Value::Some(_)` via `make_some`
+- [x] Add test cases in `25_option_values.rumps`
+
+**Note**: `??x` is lexed as the coalesce operator (`??`) followed by `x`, not as nested wrap. For nested wrapping, use explicit parentheses: `?(?x)`.
 
 ---
 

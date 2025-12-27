@@ -89,9 +89,13 @@ pub(crate) enum Token {
     ArrowArrow,       // ->>
     QuestionQuestion, // ??
     QuestionDot,      // ?.
-    FatArrow,         // =>
-    Pipe,             // |>
-    SinglePipe,       // | (variant separator)
+    /// Prefix `?` wraps a value in `Option.Some`.
+    /// Note: `??x` is lexed as coalesce (`??`) + `x`, not `?(?x)`.
+    /// For nested wrapping, use explicit parens: `?(?x)`.
+    Question,
+    FatArrow,   // =>
+    Pipe,       // |>
+    SinglePipe, // | (variant separator)
 
     // Special
     Newline,
@@ -203,6 +207,7 @@ impl fmt::Display for Token {
             Self::ArrowArrow => write!(f, "->>"),
             Self::QuestionQuestion => write!(f, "??"),
             Self::QuestionDot => write!(f, "?."),
+            Self::Question => write!(f, "?"),
             Self::FatArrow => write!(f, "=>"),
             Self::Pipe => write!(f, "|>"),
             Self::SinglePipe => write!(f, "|"),

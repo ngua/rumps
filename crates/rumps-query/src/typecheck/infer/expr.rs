@@ -332,6 +332,9 @@ impl InferCtx<'_> {
                 self.unify(operand_ty, Ty::Bool, span);
                 Ty::Bool
             }
+
+            // Wrap: `?e` where `e : T` produces `Option[T]`
+            UnOp::Wrap => Ty::Option(Box::new(operand_ty)),
         }
     }
 
