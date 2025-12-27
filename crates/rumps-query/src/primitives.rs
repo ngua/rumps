@@ -2054,6 +2054,176 @@ impl Res {
     }
 }
 
+/// Primitives for the `Io` module.
+///
+/// Provides effectful I/O operations using `tokio` for async stdin/stdout/stderr.
+pub(crate) struct Io;
+
+impl Prim for Io {}
+
+impl Io {
+    /// `Io.get-line() -> String`
+    ///
+    /// Reads a line from stdin (blocking until newline). Returns the line
+    /// without the trailing newline character.
+    pub(crate) fn get_line<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        _: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            use tokio::io::AsyncBufReadExt;
+
+            let stdin = tokio::io::stdin();
+            let mut reader = tokio::io::BufReader::new(stdin);
+            let mut line = String::new();
+
+            reader
+                .read_line(&mut line)
+                .await
+                .map_err(|e| ctx.runtime_error(format!("Io.get-line: {e}")))?;
+
+            // Remove trailing newline
+            line.truncate(line.trim_end_matches(['\n', '\r']).len());
+
+            let sid = ctx.arena.intern(&line);
+            Ok(ctx.arena.add(Value::String(sid), ctx.span))
+        })
+    }
+
+    /// `Io.print(s) -> Unit`
+    ///
+    /// Prints a string to stdout without a trailing newline.
+    pub(crate) fn print<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            use tokio::io::AsyncWriteExt;
+
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("Io.print", "String"));
+            let s = ctx
+                .arena
+                .get_str(sid)
+                .ok_or_else(|| ctx.runtime_error("Io.print: invalid string"))?;
+
+            let mut stdout = tokio::io::stdout();
+            stdout
+                .write_all(s.as_bytes())
+                .await
+                .map_err(|e| ctx.runtime_error(format!("Io.print: {e}")))?;
+            stdout.flush().await.map_err(|e| {
+                ctx.runtime_error(format!("Io.print: flush: {e}"))
+            })?;
+
+            Ok(ctx.arena.add(Value::Unit, ctx.span))
+        })
+    }
+
+    /// `Io.println(s) -> Unit`
+    ///
+    /// Prints a string to stdout with a trailing newline.
+    pub(crate) fn println<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            use tokio::io::AsyncWriteExt;
+
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("Io.println", "String"));
+            let s = ctx.arena.get_str(sid).ok_or_else(|| {
+                ctx.runtime_error("Io.println: invalid string")
+            })?;
+
+            let mut stdout = tokio::io::stdout();
+            stdout
+                .write_all(s.as_bytes())
+                .await
+                .map_err(|e| ctx.runtime_error(format!("Io.println: {e}")))?;
+            stdout
+                .write_all(b"\n")
+                .await
+                .map_err(|e| ctx.runtime_error(format!("Io.println: {e}")))?;
+            stdout.flush().await.map_err(|e| {
+                ctx.runtime_error(format!("Io.println: flush: {e}"))
+            })?;
+
+            Ok(ctx.arena.add(Value::Unit, ctx.span))
+        })
+    }
+
+    /// `Io.eprint(s) -> Unit`
+    ///
+    /// Prints a string to stderr without a trailing newline.
+    pub(crate) fn eprint<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            use tokio::io::AsyncWriteExt;
+
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("Io.eprint", "String"));
+            let s = ctx.arena.get_str(sid).ok_or_else(|| {
+                ctx.runtime_error("Io.eprint: invalid string")
+            })?;
+
+            let mut stderr = tokio::io::stderr();
+            stderr
+                .write_all(s.as_bytes())
+                .await
+                .map_err(|e| ctx.runtime_error(format!("Io.eprint: {e}")))?;
+            stderr.flush().await.map_err(|e| {
+                ctx.runtime_error(format!("Io.eprint: flush: {e}"))
+            })?;
+
+            Ok(ctx.arena.add(Value::Unit, ctx.span))
+        })
+    }
+
+    /// `Io.eprintln(s) -> Unit`
+    ///
+    /// Prints a string to stderr with a trailing newline.
+    pub(crate) fn eprintln<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            use tokio::io::AsyncWriteExt;
+
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("Io.eprintln", "String"));
+            let s = ctx.arena.get_str(sid).ok_or_else(|| {
+                ctx.runtime_error("Io.eprintln: invalid string")
+            })?;
+
+            let mut stderr = tokio::io::stderr();
+            stderr
+                .write_all(s.as_bytes())
+                .await
+                .map_err(|e| ctx.runtime_error(format!("Io.eprintln: {e}")))?;
+            stderr
+                .write_all(b"\n")
+                .await
+                .map_err(|e| ctx.runtime_error(format!("Io.eprintln: {e}")))?;
+            stderr.flush().await.map_err(|e| {
+                ctx.runtime_error(format!("Io.eprintln: flush: {e}"))
+            })?;
+
+            Ok(ctx.arena.add(Value::Unit, ctx.span))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

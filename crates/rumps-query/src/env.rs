@@ -17,6 +17,7 @@ use crate::typecheck::{Scheme, Ty};
 /// during resolution and registered at interpreter startup.
 pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
     "Array", "String", "Math", "Random", "Map", "Time", "Option", "Result",
+    "Io",
 ];
 
 use futures::future::BoxFuture;
@@ -547,7 +548,7 @@ impl Environment {
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
         use crate::primitives::{
-            Array, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
+            Array, Io, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
         };
 
         self.modules.insert(
@@ -1023,6 +1024,37 @@ impl Environment {
                 },
             ]),
         );
+
+        self.modules.insert(
+            "Io".to_string(),
+            Module::from_prims(&[
+                PrimDef {
+                    name: "get-line",
+                    f: Io::get_line,
+                    ty: scheme!(() -> String),
+                },
+                PrimDef {
+                    name: "print",
+                    f: Io::print,
+                    ty: scheme!((String) -> Unit),
+                },
+                PrimDef {
+                    name: "println",
+                    f: Io::println,
+                    ty: scheme!((String) -> Unit),
+                },
+                PrimDef {
+                    name: "eprint",
+                    f: Io::eprint,
+                    ty: scheme!((String) -> Unit),
+                },
+                PrimDef {
+                    name: "eprintln",
+                    f: Io::eprintln,
+                    ty: scheme!((String) -> Unit),
+                },
+            ]),
+        );
     }
 }
 
@@ -1141,6 +1173,13 @@ mod tests {
         assert!(env.module_fn_exists(&["Random", "int"]));
         assert!(env.module_fn_exists(&["Random", "choice"]));
         assert!(env.module_fn_exists(&["Random", "uuid"]));
+        // Io module is registered with functions
+        assert!(env.has_module("Io"));
+        assert!(env.module_fn_exists(&["Io", "get-line"]));
+        assert!(env.module_fn_exists(&["Io", "print"]));
+        assert!(env.module_fn_exists(&["Io", "println"]));
+        assert!(env.module_fn_exists(&["Io", "eprint"]));
+        assert!(env.module_fn_exists(&["Io", "eprintln"]));
     }
 
     #[test]

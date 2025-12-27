@@ -178,22 +178,22 @@ Add an `Io` module for effectful operations. All actual I/O should use `tokio` u
 
 ### Core Functions
 
-| Function   | Signature        | Description                  |
-|------------|------------------|------------------------------|
-| `get-line` | `() -> String`   | Read line from stdin         |
-| `print`    | `(String) -> ()` | Print to stdout (no newline) |
-| `println`  | `(String) -> ()` | Print to stdout with newline |
-| `eprint`   | `(String) -> ()` | Print to stderr              |
-| `eprintln` | `(String) -> ()` | Print to stderr with newline |
+| Function   | Signature          | Description                  |
+|------------|--------------------|------------------------------|
+| `get-line` | `Unit -> String`   | Read line from stdin         |
+| `print`    | `(String) -> Unit` | Print to stdout (no newline) |
+| `println`  | `(String) -> Unit` | Print to stdout with newline |
+| `eprint`   | `(String) -> Unit` | Print to stderr              |
+| `eprintln` | `(String) -> Unit` | Print to stderr with newline |
 
 ### Implementation
 
-- [ ] Create `Io` module structure
-- [ ] Implement `get-line` using `tokio::io::stdin`
-- [ ] Implement `print` / `println`
-- [ ] Implement `eprint` / `eprintln`
-- [ ] Ensure interpreter supports async primitives properly
-- [ ] Add test scripts (may need special test harness for I/O)
+**NOTE**: Use `tokio` for everything!
+
+- [x] Create `Io` module structure
+- [x] Implement `get-line` using `tokio::io::stdin`
+- [x] Implement `print` / `println`
+- [x] Implement `eprint` / `eprintln`
 
 ---
 
@@ -220,45 +220,42 @@ let p: FilePath = "/some/path"
 A tagged sum type representing a filesystem entry. Must be an enum (not an untagged union) because both variants wrap `FilePath`; the tag carries runtime-discovered information about whether the path is a file or directory.
 
 ```rumps
-enum Path { File(FilePath), Dir(FilePath) }
-```
-
-Usage:
-
-```rumps
-Io.Directory.list-dir(dir) |> Array.each(|entry| {
-  match entry {
-    File(fp) => Io.println("file: " ++ fp.to-string)
-    Dir(fp)  => Io.println("dir: " ++ fp.to-string)
-  }
-})
+TYPE Path = File(FilePath) | Dir(FilePath)
 ```
 
 ### Functions
 
-| Function          | Signature                                      | Description                    |
-|-------------------|------------------------------------------------|--------------------------------|
-| `list-dir`        | `(FilePath) -> [Path]`                         | List directory contents        |
-| `move-path`       | `({ src: FilePath, dest: FilePath }) -> ()`    | Move/rename path               |
-| `copy-path`       | `({ src: FilePath, dest: FilePath }) -> ()`    | Copy path                      |
-| `remove`          | `(FilePath) -> ()`                             | Remove file or empty directory |
-| `remove-all`      | `(FilePath) -> ()`                             | Remove recursively             |
-| `exists`          | `(FilePath) -> Bool`                           | Check if path exists           |
-| `is-file`         | `(FilePath) -> Bool`                           | Check if path is a file        |
-| `is-dir`          | `(FilePath) -> Bool`                           | Check if path is a directory   |
-| `read-file`       | `(FilePath) -> String`                         | Read entire file as string     |
-| `write-file`      | `({ path: FilePath, contents: String }) -> ()` | Write string to file           |
-| `append-file`     | `({ path: FilePath, contents: String }) -> ()` | Append string to file          |
-| `create-dir`      | `(FilePath) -> ()`                             | Create directory               |
-| `create-dir-all`  | `(FilePath) -> ()`                             | Create directory and parents   |
-| `current-dir`     | `() -> FilePath`                               | Get current working directory  |
-| `set-current-dir` | `(FilePath) -> ()`                             | Change working directory       |
+| Function         | Signature                                        | Description                    |
+|------------------|--------------------------------------------------|--------------------------------|
+| `list-dir`       | `(FilePath) -> [Path]`                           | List directory contents        |
+| `move-path`      | `({ src: FilePath, dest: FilePath }) -> Unit`    | Move/rename path               |
+| `copy-path`      | `({ src: FilePath, dest: FilePath }) -> Unit`    | Copy path                      |
+| `remove`         | `(FilePath) -> Unit`                             | Remove file or empty directory |
+| `remove-all`     | `(FilePath) -> Unit`                             | Remove recursively             |
+| `exists`         | `(FilePath) -> Bool`                             | Check if path exists           |
+| `is-file`        | `(FilePath) -> Bool`                             | Check if path is a file        |
+| `is-dir`         | `(FilePath) -> Bool`                             | Check if path is a directory   |
+| `read-file`      | `(FilePath) -> String`                           | Read entire file as string     |
+| `write-file`     | `({ path: FilePath, contents: String }) -> Unit` | Write string to file           |
+| `append-file`    | `({ path: FilePath, contents: String }) -> Unit` | Append string to file          |
+| `create-dir`     | `(FilePath) -> Unit`                             | Create directory               |
+| `create-dir-all` | `(FilePath) -> Unit`                             | Create directory and parents   |
+| `pwd`            | `Unit -> FilePath`                               | Get current working directory  |
+| `set-pwd`        | `(FilePath) -> Unit`                             | Change working directory       |
+| `get-env`        | `(String) -> Option[String]`                     | Get env var (if any)           |
+| `set-env`        | `(String) -> Unit`                               | Set env var                    |
+|                  |                                                  |                                |
 
 ### Implementation
+
+**NOTE**: Use `tokio` for everything!
+**NOTE**: Make sure to register the `Io.Directory` submodule under the existing `Io` module! See e.g. `Math.Trig` on how to do this (`with_submodule` pattern)
 
 - [ ] Add `FilePath` as opaque builtin type
 - [ ] Implement `String -> FilePath` coercion
 - [ ] Add `Path` enum type as builtin
+  - [ ] **NOTE**: Make sure `InferCtx::types_compatible` evaluates to `true`, otherwise `Array[FilePath]` will be inferred as `Json`!
+    - Current location to add `true` along with other types: crates/rumps-query/src/typecheck/infer/convert.rs:188
 - [ ] Create `Io.Directory` submodule structure
 - [ ] Implement core functions using `tokio::fs`:
   - [ ] `list-dir`
@@ -477,7 +474,7 @@ High-level tracking:
 - [ ] `Ordering` builtin type
 - [ ] `Array.sort-by`
 - [ ] `Array.zip` family
-- [ ] `Io` module (stdin/stdout)
+- [x] `Io` module (stdin/stdout)
 - [ ] `Io.Directory` module (file system)
 - [ ] `FilePath` opaque type
 - [ ] Spread operators (`...`)
