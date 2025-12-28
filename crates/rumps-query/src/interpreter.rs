@@ -113,8 +113,8 @@ use smallvec::SmallVec;
 
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
-    JsonAccessKey, JsonAccessKind, Literal, Stmt, StmtId, TypeDefAst,
-    TypePattern, UnOp,
+    JsonAccessKey, JsonAccessKind, Literal, OutputFormat, OutputStmt,
+    OutputTarget, Stmt, StmtId, TypeDefAst, TypePattern, UnOp,
 };
 use crate::env::Environment;
 use crate::intern::StringId;
@@ -378,7 +378,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Stmt::Set(target, expr_id) => self.set(target, expr_id, span).await,
             Stmt::Kill(target) => self.kill(target, span).await,
-            Stmt::Output(expr_id) => self.output(expr_id).await,
+            Stmt::Output(output) => self.output(&output).await,
             Stmt::Expr(expr_id) => {
                 // Evaluate for side effects, discard result
                 self.eval(expr_id).await.map(|_| ())
@@ -1132,15 +1132,37 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Execute an `OUTPUT` statement.
     ///
-    /// Writes to stdout via the I/O context.
-    ///
-    /// TODO Add more targets; stderr, file, etc...
+    /// Writes to stdout, stderr, or a file via the I/O context, with optional
+    /// JSON formatting.
     #[async_recursion]
-    async fn output(&mut self, expr_id: ExprId) -> Result<()> {
-        let span = self.ast.expr_span(expr_id).unwrap_or_default();
-        let val = self.eval(expr_id).await?;
-        let s = self.display(&val);
-        self.io.stdout(&s, span).await
+    async fn output(&mut self, output: &OutputStmt) -> Result<()> {
+        let span = self.ast.expr_span(output.expr).unwrap_or_default();
+        let val = self.eval(output.expr).await?;
+
+        // Apply format
+        let text = match output.format {
+            OutputFormat::Default => self.display(&val),
+            OutputFormat::Json => {
+                let json = self.jsonify(&val)?;
+                serde_json::to_string_pretty(&json).map_err(|e| {
+                    Error::runtime(
+                        span,
+                        format!("JSON serialization failed: {e}"),
+                    )
+                })?
+            }
+        };
+
+        // Write to target
+        match output.target {
+            OutputTarget::Stdout => self.io.stdout(&text, span).await,
+            OutputTarget::Stderr => self.io.stderr(&text, span).await,
+            OutputTarget::File(path_expr) => {
+                let path_val = self.eval(path_expr).await?;
+                let path = self.to_file_path(&path_val, span)?;
+                self.io.write(&path, &text, span).await
+            }
+        }
     }
 
     /// Evaluate a JSON object literal.

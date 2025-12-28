@@ -76,33 +76,7 @@ No changes required. `TO`, `JSON`, `ERROR`, `FILE` remain as regular identifiers
 Add to `parser/cst.rs`:
 
 ```rust
-/// Output format modifier.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum OutputFormat {
-    /// Default: stringify the value.
-    Default,
-    /// Convert to JSON before output.
-    Json,
-}
-
-/// Output target.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum OutputTarget {
-    /// Default: stdout.
-    Stdout,
-    /// Write to stderr.
-    Stderr,
-    /// Write to a file (path expression).
-    File(Expr),
-}
-
-/// Extended output statement.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OutputStmt {
-    pub(crate) expr: Expr,
-    pub(crate) format: OutputFormat,
-    pub(crate) target: OutputTarget,
-}
+/// Implemented
 ```
 
 ##### 5.1.4.2 Update StmtKind
@@ -116,50 +90,7 @@ Change `StmtKind::Output(Expr)` to `StmtKind::Output(OutputStmt)`.
 Update `output_stmt` in `parser.rs`:
 
 ```rust
-/// Parse contextual identifier (case-insensitive match).
-fn ctx_ident(expected: &'static str) -> impl Parser<Token, (), Error = ParseErr> + Clone {
-    filter_map(move |span, tok| match &tok {
-        Token::Ident(s) if s.eq_ignore_ascii_case(expected) => Ok(()),
-        _ => Err(Simple::expected_input_found(
-            span,
-            Some(Some(Token::Ident(expected.to_string()))),
-            Some(tok),
-        )),
-    })
-}
-
-/// `OUTPUT expr [JSON] [TO ERROR | TO FILE expr]`
-fn output_stmt(
-    stmt: impl Parser<Token, cst::Stmt, Error = ParseErr> + Clone + 'static,
-) -> impl Parser<Token, cst::Stmt, Error = ParseErr> {
-    let format = ctx_ident("JSON")
-        .to(cst::OutputFormat::Json)
-        .or_not()
-        .map(|f| f.unwrap_or(cst::OutputFormat::Default));
-
-    let to_error = ctx_ident("TO")
-        .ignore_then(ctx_ident("ERROR"))
-        .to(cst::OutputTarget::Stderr);
-
-    let to_file = ctx_ident("TO")
-        .ignore_then(ctx_ident("FILE"))
-        .ignore_then(Self::expr(stmt.clone()))
-        .map(cst::OutputTarget::File);
-
-    let target = to_error
-        .or(to_file)
-        .or_not()
-        .map(|t| t.unwrap_or(cst::OutputTarget::Stdout));
-
-    just(Token::Output)
-        .ignore_then(Self::expr(stmt))
-        .then(format)
-        .then(target)
-        .map_with_span(|((expr, format), target), span| {
-            let output = cst::OutputStmt { expr, format, target };
-            cst::Stmt::new(cst::StmtKind::Output(output), span)
-        })
-}
+/// Implemented
 ```
 
 **Parsing order matters**: The format (`JSON`) must come before the target (`TO ...`) to avoid ambiguity. `OUTPUT x TO ERROR` should not try to parse `TO` as a format.
@@ -171,33 +102,7 @@ fn output_stmt(
 Add to `ast.rs`:
 
 ```rust
-/// Output format modifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OutputFormat {
-    /// Default: stringify the value.
-    Default,
-    /// Convert to JSON before output.
-    Json,
-}
-
-/// Output target.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum OutputTarget {
-    /// Default: stdout.
-    Stdout,
-    /// Write to stderr.
-    Stderr,
-    /// Write to a file (path expression).
-    File(ExprId),
-}
-
-/// Extended output statement.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OutputStmt {
-    pub(crate) expr: ExprId,
-    pub(crate) format: OutputFormat,
-    pub(crate) target: OutputTarget,
-}
+/// Implemented
 ```
 
 ##### 5.1.5.2 Update Stmt Enum
@@ -209,22 +114,7 @@ Change `Stmt::Output(ExprId)` to `Stmt::Output(OutputStmt)`.
 Update `parser/lower.rs` to convert `cst::OutputStmt` to `ast::OutputStmt`:
 
 ```rust
-cst::StmtKind::Output(output) => {
-    let expr_id = lower_expr(ast, output.expr)?;
-    let format = match output.format {
-        cst::OutputFormat::Default => ast::OutputFormat::Default,
-        cst::OutputFormat::Json => ast::OutputFormat::Json,
-    };
-    let target = match output.target {
-        cst::OutputTarget::Stdout => ast::OutputTarget::Stdout,
-        cst::OutputTarget::Stderr => ast::OutputTarget::Stderr,
-        cst::OutputTarget::File(path_expr) => {
-            let path_id = lower_expr(ast, path_expr)?;
-            ast::OutputTarget::File(path_id)
-        }
-    };
-    Stmt::Output(ast::OutputStmt { expr: expr_id, format, target })
-}
+/// Implemented
 ```
 
 #### 5.1.7 Typechecker
@@ -232,35 +122,7 @@ cst::StmtKind::Output(output) => {
 Update `typecheck/infer/stmt.rs`:
 
 ```rust
-fn output(&mut self, output: &OutputStmt, span: Span) {
-    let expr_ty = self.expr(output.expr);
-
-    // Format constraint
-    match output.format {
-        OutputFormat::Default => {
-            // All types are stringable
-            self.constrain(Constraint::Stringable(expr_ty, span));
-        }
-        OutputFormat::Json => {
-            // Must be JSON-convertible (not closures, etc.)
-            self.constrain(Constraint::Jsonable(expr_ty, span));
-        }
-    }
-
-    // Target constraint
-    match &output.target {
-        OutputTarget::Stdout | OutputTarget::Stderr => {}
-        OutputTarget::File(path_expr) => {
-            // Path must be FilePath or String (coercible to FilePath)
-            let path_ty = self.expr(*path_expr);
-            let file_path_ty = Ty::Named(TypeId::FILE_PATH, vec![]);
-            let string_ty = Ty::String;
-            // Either FilePath or String is acceptable
-            let union_ty = Ty::Union(vec![file_path_ty, string_ty]);
-            self.unify(path_ty, union_ty, span);
-        }
-    }
-}
+// Implemented
 ```
 
 #### 5.1.8 Interpreter
@@ -268,31 +130,7 @@ fn output(&mut self, output: &OutputStmt, span: Span) {
 Update `interpreter.rs`:
 
 ```rust
-async fn output(&mut self, output: &OutputStmt) -> Result<()> {
-    let span = self.ast.expr_span(output.expr).unwrap_or_default();
-    let val = self.eval(output.expr).await?;
-
-    // Apply format
-    let text = match output.format {
-        OutputFormat::Default => self.display(&val),
-        OutputFormat::Json => {
-            let json = self.jsonify(&val, span)?;
-            serde_json::to_string_pretty(&json)
-                .map_err(|e| Error::runtime(format!("JSON serialization failed: {e}"), span))?
-        }
-    };
-
-    // Write to target
-    match &output.target {
-        OutputTarget::Stdout => self.io.stdout(&text, span).await,
-        OutputTarget::Stderr => self.io.stderr(&text, span).await,
-        OutputTarget::File(path_expr) => {
-            let path_val = self.eval(*path_expr).await?;
-            let path = self.to_file_path(&path_val, span)?;
-            self.io.write_file(&path, &text, span).await
-        }
-    }
-}
+// Implemented
 ```
 
 ##### 5.1.8.1 IoContext Extensions
@@ -304,42 +142,28 @@ The `IoContext` trait needs `stderr` and `write_file` methods.
 - `write_file`: use `tokio::fs::write()` or `tokio::fs::File`
 
 ```rust
-#[async_trait]
-pub trait IoContext {
-    // Existing
-    async fn stdout(&mut self, s: &str, span: Span) -> Result<()>;
-
-    // New
-    async fn stderr(&mut self, s: &str, span: Span) -> Result<()>;
-    async fn write(&mut self, path: &Path, content: &str, span: Span) -> Result<()>;
-}
+// Implemented
 ```
 
 #### 5.1.9 Tests
 
-- [ ] Parser tests for all syntax variants
-- [ ] Typechecker tests for format/target constraints
-- [ ] Interpreter tests for stdout/stderr/file output
-- [ ] Integration test script (`101_output_extended.rumps`)
+- [x] Integration test script (`100_output_extended.rumps`)
 
 #### 5.1.10 Implementation Checklist
 
-- [ ] **CST**: Add `OutputFormat`, `OutputTarget`, `OutputStmt` types
-- [ ] **CST**: Update `StmtKind::Output` to use `OutputStmt`
-- [ ] **Parser**: Implement contextual identifier matching (`ctx_ident`)
-- [ ] **Parser**: Update `output_stmt` to parse format and target
-- [ ] **AST**: Add `OutputFormat`, `OutputTarget`, `OutputStmt` types
-- [ ] **AST**: Update `Stmt::Output` to use `OutputStmt`
-- [ ] **Lowering**: Update CST->AST conversion for `Output`
-- [ ] **Typechecker**: Add format (`Jsonable`) and target (`FilePath | String`) constraints
-- [ ] **Interpreter**: Implement format application (stringify vs JSON)
-- [ ] **Interpreter**: Implement target routing (stdout/stderr/file)
-- [ ] **IoContext**: Add `stderr` method
-- [ ] **IoContext**: Add `write_file` method (or reuse `Io.Directory.write-file` logic)
-- [ ] **Tests**: Parser unit tests
-- [ ] **Tests**: Typechecker unit tests
-- [ ] **Tests**: Interpreter unit tests
-- [ ] **Tests**: Integration test script
+- [x] **CST**: Add `OutputFormat`, `OutputTarget`, `OutputStmt` types
+- [x] **CST**: Update `StmtKind::Output` to use `OutputStmt`
+- [x] **Parser**: Implement contextual identifier matching (`ctx_ident`)
+- [x] **Parser**: Update `output_stmt` to parse format and target
+- [x] **AST**: Add `OutputFormat`, `OutputTarget`, `OutputStmt` types
+- [x] **AST**: Update `Stmt::Output` to use `OutputStmt`
+- [x] **Lowering**: Update CST->AST conversion for `Output`
+- [x] **Typechecker**: Add format (`Jsonable`) and target (`FilePath | String`) constraints
+- [x] **Interpreter**: Implement format application (stringify vs JSON)
+- [x] **Interpreter**: Implement target routing (stdout/stderr/file)
+- [x] **IoContext**: Add `stderr` method
+- [x] **IoContext**: Add `write_file` method
+- [x] **Tests**: Integration test script (`100_output_extended.rumps`)
 
 ---
 
@@ -368,3 +192,366 @@ This is straightforward with chumsky's combinators and `filter_map`.
 #### Alternative: Special Tokens
 
 An alternative would be to add `Token::Json`, `Token::To`, etc., and make them "soft keywords" that the lexer emits only in certain states. This is more complex and not necessary for our use case.
+
+---
+
+## 5.2: DATA Primitive
+
+The `DATA` primitive queries the existence status of a node in a global or local variable. It wraps `Database::data` and `Transaction::data`.
+
+**Prerequisites**: Phase 4 (type system) complete.
+
+---
+
+### 5.2.1 Syntax
+
+```rumps
+; Query data status of a global
+DATA ^PATIENT(123)
+
+; Query data status of a local
+DATA patients(123)
+
+; Use in expressions
+MATCH DATA patients(123) {
+  NoData => { ... }
+  HasValue => { ... }
+  HasDescendants => { ... }
+  Both => { ... }
+}
+
+LET status = DATA patients(123)
+IF (DATA ^PATIENT(123)) AS Int > 0 {
+    OUTPUT "Node exists"
+}
+
+```
+
+### 5.2.2 DataStatus Builtin Type
+
+Add a builtin enum type `DataStatus` with variants matching the Rust `rumps_types::DataStatus`:
+
+```rumps
+TYPE DataStatus = NoData | HasValue | HasDescendants | Both
+```
+
+| Variant         | Int Value | Meaning                          |
+|-----------------|-----------|----------------------------------|
+| `NoData`        | `0`       | No value, no descendants         |
+| `HasValue`      | `1`       | Has value only                   |
+| `HasDescendants`| `10`      | Has descendants only             |
+| `Both`          | `11`      | Has both value and descendants   |
+
+The integer values match MUMPS `$DATA` semantics:
+- `0`: Node does not exist
+- `1`: Node has a value but no descendants
+- `10`: Node has descendants but no value
+- `11`: Node has both value and descendants
+
+### 5.2.3 Infallible Conversion to Int
+
+`DataStatus` must support infallible conversion via `AS Int`:
+
+```rumps
+LET status = DATA ^PATIENT(123)
+LET n: Int = status AS Int   ; Always succeeds
+
+```
+
+This mirrors the Rust `#[repr(u8)]` on `DataStatus`.
+
+**NOTE**: `(x: Int) READ DataStatus` must be supported as well (inverse). This is **fallible**.
+
+### 5.2.4 Lexer
+
+Add `DATA` keyword to the lexer:
+
+```rust
+Token::Data  // new keyword
+```
+
+### 5.2.5 Parser / CST
+
+##### 5.2.5.1 Add Data Expression
+
+Add to `parser/cst.rs`:
+
+```rust
+/// Data query expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DataExpr {
+    pub(crate) var: VarRef,
+}
+```
+
+##### 5.2.5.2 Update ExprKind
+
+Add `ExprKind::Data(DataExpr)` variant.
+
+##### 5.2.5.3 Parser Implementation
+
+```rust
+/// `DATA var_ref`
+fn data_expr(
+    stmt: impl Parser<Token, cst::Stmt, Error = ParseErr> + Clone + 'static,
+) -> impl Parser<Token, cst::Expr, Error = ParseErr> {
+    just(Token::Data)
+        .ignore_then(Self::var_ref(stmt))
+        .map_with_span(|var, span| {
+            cst::Expr::new(cst::ExprKind::Data(cst::DataExpr { var }), span)
+        })
+}
+```
+
+### 5.2.6 AST
+
+##### 5.2.6.1 Add AST Type
+
+Add to `ast.rs`:
+
+```rust
+/// Data query expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DataExpr {
+    pub(crate) var: VarRef,
+}
+```
+
+##### 5.2.6.2 Update Expr Enum
+
+Add `Expr::Data(DataExpr)` variant.
+
+### 5.2.7 Lowering (CST -> AST)
+
+```rust
+cst::ExprKind::Data(data) => {
+    let var = lower_var_ref(ast, data.var)?;
+    Expr::Data(ast::DataExpr { var })
+}
+```
+
+### 5.2.8 Builtin Type Registration
+
+Follow the same pattern as `Ordering`. Register `DataStatus` as a builtin sum type:
+
+##### 5.2.8.1 Type System (`typecheck/ty.rs`)
+
+Add `Ty::DataStatus` variant to the `Ty` enum alongside other primitives:
+
+```rust
+pub(crate) enum Ty {
+    // ... existing primitives ...
+    Ordering,
+    DataStatus,  // NEW
+    FilePath,
+    // ...
+}
+```
+
+Update all match arms in `Ty` methods (`free_vars`, `occurs`, `apply`) to handle `DataStatus` same as other primitives.
+
+##### 5.2.8.2 TypeId Constant (`value.rs`)
+
+Add constant for the type ID:
+
+```rust
+impl TypeId {
+    // ... existing constants ...
+    pub(crate) const ORDERING: Self = Self(17);
+    pub(crate) const DATA_STATUS: Self = Self(21);  // next available after REGEX(20)
+    // ...
+}
+```
+
+##### 5.2.8.3 Type Registry (`value.rs`, `register_builtins`)
+
+Register as `TypeDef::Sum` with four nullary variants:
+
+```rust
+// DataStatus at index 21
+let data_status_name = arena.intern("DataStatus");
+let no_data = arena.intern("NoData");
+let has_value = arena.intern("HasValue");
+let has_descendants = arena.intern("HasDescendants");
+let both = arena.intern("Both");
+
+let data_status = self.register(
+    TypeDef::Sum {
+        name: data_status_name,
+        type_params: SmallVec::new(),
+        variants: smallvec::smallvec![
+            VariantDef { name: no_data, idx: 0, arity: 0, payloads: SmallVec::new() },
+            VariantDef { name: has_value, idx: 1, arity: 0, payloads: SmallVec::new() },
+            VariantDef { name: has_descendants, idx: 2, arity: 0, payloads: SmallVec::new() },
+            VariantDef { name: both, idx: 3, arity: 0, payloads: SmallVec::new() },
+        ],
+    },
+    data_status_name,
+);
+(data_status == TypeId::DATA_STATUS).then_some(()).ok_or_else(|| ...)?;
+```
+
+**Note**: The variant `idx` values (`0`, `1`, `2`, `3`) are internal indices, NOT the MUMPS integer values. The `AS Int` conversion maps variant indices to MUMPS values (`0`, `1`, `10`, `11`).
+
+##### 5.2.8.4 Interning (`value.rs`, `intern_ty`)
+
+Add case for `Ty::DataStatus`:
+
+```rust
+Ty::DataStatus => self.named(TypeId::DATA_STATUS),
+```
+
+##### 5.2.8.5 Type Name Resolution (`typecheck/infer/convert.rs`)
+
+Add to `parse_ty_name`:
+
+```rust
+"DataStatus" => Ty::DataStatus,
+```
+
+### 5.2.9 Typechecker
+
+##### 5.2.9.1 DATA Expression
+
+The `DATA` expression always returns `DataStatus`:
+
+```rust
+fn data(&mut self, data: &DataExpr, span: Span) -> TyId {
+    // Typecheck the variable reference (any subscripted var is valid)
+    self.var_ref(&data.var, span);
+
+    // Always returns DataStatus
+    self.ty(Ty::DataStatus)
+}
+```
+
+##### 5.2.9.2 Unification (`typecheck/unify.rs`)
+
+Add `DataStatus` to the trivial unification cases:
+
+```rust
+| (Ty::Ordering, Ty::Ordering)
+| (Ty::DataStatus, Ty::DataStatus)  // NEW
+| (Ty::FilePath, Ty::FilePath)
+```
+
+##### 5.2.9.3 Infallible AS Int Coercion
+
+Register infallible coercion from `DataStatus` to `Int`. In `typecheck/infer/convert.rs`:
+
+```rust
+// DataStatus -> Int is infallible
+(Ty::DataStatus, Ty::Int) => true,
+```
+
+This allows `status AS Int` without `?` or error handling.
+
+##### 5.2.9.4 Fallible Int -> DataStatus (READ)
+
+The inverse `(x: Int) READ DataStatus` is **fallible** since only `0`, `1`, `10`, `11` are valid:
+
+```rust
+// Int -> DataStatus is fallible (only 0, 1, 10, 11 valid)
+(Ty::Int, Ty::DataStatus) => /* fallible, requires ? */
+```
+
+### 5.2.10 Interpreter
+
+##### 5.2.10.1 Value Representation
+
+Add `DataStatus` variant to runtime values:
+
+```rust
+pub enum Value {
+    // ... existing variants ...
+    DataStatus(rumps_types::DataStatus),
+}
+```
+
+##### 5.2.10.2 DATA Evaluation
+
+```rust
+async fn data(&mut self, data: &DataExpr) -> Result<Value> {
+    let (name, key) = self.resolve_var_ref(&data.var).await?;
+
+    let status = match &self.txn {
+        Some(txn) => txn.data(&name, &key).await?,
+        None => self.db.data(&name, &key).await?,
+    };
+
+    Ok(Value::DataStatus(status))
+}
+```
+
+##### 5.2.10.3 AS Int Conversion
+
+```rust
+fn coerce_as(&self, val: Value, target: &Ty, span: Span) -> Result<Value> {
+    match (val, target) {
+        // ... existing coercions ...
+        (Value::DataStatus(s), Ty::Int) => Ok(Value::Int(s as i64)),
+        // ...
+    }
+}
+```
+
+### 5.2.11 Tests
+
+**NOTE**: Integration tests must use **locals** only; globals require `TRANSACTION` blocks which are not yet supported in RUMPS scripts.
+
+- [ ] Parser tests for `DATA ^var` and `DATA local`
+- [ ] Typechecker tests for `DataStatus` return type
+- [ ] Typechecker tests for `AS Int` coercion
+- [ ] Typechecker tests for `READ DataStatus` (fallible)
+- [ ] Interpreter tests for all four status values
+- [ ] Integration test script (`101_data_primitive.rumps`) using locals
+
+### 5.2.12 Implementation Checklist
+
+- [ ] **Lexer**: Add `Token::Data` keyword
+- [ ] **CST**: Add `DataExpr` type
+- [ ] **CST**: Add `ExprKind::Data` variant
+- [ ] **Parser**: Implement `data_expr` parser
+- [ ] **AST**: Add `DataExpr` type
+- [ ] **AST**: Add `Expr::Data` variant
+- [ ] **Lowering**: Convert `cst::DataExpr` to `ast::DataExpr`
+- [ ] **Ty enum**: Add `Ty::DataStatus` variant to `typecheck/ty.rs`
+- [ ] **Ty methods**: Update `free_vars`, `occurs`, `apply` for `DataStatus`
+- [ ] **TypeId**: Add `TypeId::DATA_STATUS` constant
+- [ ] **Type Registry**: Register `DataStatus` as `TypeDef::Sum` with 4 variants
+- [ ] **Interning**: Add `Ty::DataStatus` case in `intern_ty`
+- [ ] **Type Names**: Add `"DataStatus"` to `parse_ty_name`
+- [ ] **Unification**: Add `(Ty::DataStatus, Ty::DataStatus)` case
+- [ ] **Typechecker**: Infer `Ty::DataStatus` for `DATA` expressions
+- [ ] **Coercion**: Register infallible `DataStatus -> Int` (`AS Int`)
+- [ ] **Coercion**: Register fallible `Int -> DataStatus` (`READ DataStatus`)
+- [ ] **Interpreter**: Add `Value::DataStatus(rumps_types::DataStatus)` variant
+- [ ] **Interpreter**: Implement `DATA` evaluation via `Database::data`/`Transaction::data`
+- [ ] **Interpreter**: Implement `AS Int` mapping variant idx to MUMPS values
+- [ ] **Interpreter**: Implement `READ DataStatus` from Int
+- [ ] **Tests**: Integration test script (`101_data_primitive.rumps`)
+
+---
+
+### Design Notes
+
+#### Why a Builtin Enum?
+
+Making `DataStatus` a proper enum type rather than just an integer provides:
+1. **Type safety**: Can't accidentally mix with other integers
+2. **Pattern matching**: `MATCH status { NoData => ..., HasValue => ..., ... }`
+3. **Self-documenting**: Code reads clearly without magic numbers
+4. **IDE support**: Autocomplete for variants
+
+#### Infallible AS Int
+
+The `AS Int` coercion is infallible (no `?` needed) because:
+1. Every `DataStatus` variant has a defined integer value
+2. The conversion cannot fail at runtime
+3. This matches the Rust `#[repr(u8)]` semantics
+
+#### Compatibility with MUMPS $DATA
+
+The integer values (`0`, `1`, `10`, `11`) match traditional MUMPS `$DATA` semantics, allowing:
+- Existing MUMPS patterns like `IF $DATA(x)>0` translate directly
+- The "tens digit" represents descendants, "ones digit" represents value

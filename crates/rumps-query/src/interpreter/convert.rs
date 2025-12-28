@@ -449,6 +449,27 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .unwrap_or_else(|| "\"?\"".to_owned()),
         }
     }
+
+    /// Convert a value to a file path string.
+    ///
+    /// Accepts `FilePath` or `String` values; returns the path as a `String`.
+    pub(super) fn to_file_path(
+        &self,
+        val: &Value,
+        span: Span,
+    ) -> Result<String> {
+        match val {
+            Value::FilePath(id) | Value::String(id) => self
+                .arena
+                .get_str(*id)
+                .map(|s| s.to_owned())
+                .ok_or_else(|| Error::runtime(span, "invalid string id")),
+            _ => Err(Error::runtime_type(
+                span,
+                "expected FilePath or String for file path",
+            )),
+        }
+    }
 }
 
 /// Get a discriminant tag for JSON value type (for homogeneity checks).

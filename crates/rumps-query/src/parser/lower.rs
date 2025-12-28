@@ -10,7 +10,8 @@ use super::cst;
 use crate::ast::{
     ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId,
     JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, ObjectEntry,
-    RestPattern, Stmt, StmtId, TypeDefAst, TypePattern, VariantAst,
+    OutputFormat, OutputStmt, OutputTarget, RestPattern, Stmt, StmtId,
+    TypeDefAst, TypePattern, VariantAst,
 };
 use crate::Result;
 
@@ -43,9 +44,25 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
             let target_id = lower_expr(ast, target)?;
             Stmt::Kill(target_id)
         }
-        cst::StmtKind::Output(expr) => {
-            let expr_id = lower_expr(ast, expr)?;
-            Stmt::Output(expr_id)
+        cst::StmtKind::Output(output) => {
+            let expr_id = lower_expr(ast, output.expr)?;
+            let format = match output.format {
+                cst::OutputFormat::Default => OutputFormat::Default,
+                cst::OutputFormat::Json => OutputFormat::Json,
+            };
+            let target = match output.target {
+                cst::OutputTarget::Stdout => OutputTarget::Stdout,
+                cst::OutputTarget::Stderr => OutputTarget::Stderr,
+                cst::OutputTarget::File(path_expr) => {
+                    let path_id = lower_expr(ast, path_expr)?;
+                    OutputTarget::File(path_id)
+                }
+            };
+            Stmt::Output(OutputStmt {
+                expr: expr_id,
+                format,
+                target,
+            })
         }
         cst::StmtKind::Expr(expr) => {
             let expr_id = lower_expr(ast, expr)?;

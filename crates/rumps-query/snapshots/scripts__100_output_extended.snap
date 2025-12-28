@@ -1,0 +1,30 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Extended OUTPUT statement\n; Tests OUTPUT with JSON format and TO ERROR/FILE targets\n\n; === Basic OUTPUT (unchanged behavior) ===\nOUTPUT \"Hello, World!\"\n; Expected: Hello, World!\n\nLET x = 42\nOUTPUT x\n; Expected: 42\n\nLET obj = { name: \"Alice\", age: 30 }\nOUTPUT obj\n; Expected: { name: Alice, age: 30 }\n\n; === OUTPUT JSON (format modifier) ===\nOUTPUT \"Test JSON format\" JSON\n; Expected: \"Test JSON format\"\n\nOUTPUT 42 JSON\n; Expected: 42\n\nOUTPUT TRUE JSON\n; Expected: true\n\nLET arr = [1, 2, 3]\nOUTPUT arr JSON\n; Expected: [1, 2, 3] (or pretty-printed)\n\nLET data = { name: \"Bob\", scores: [90, 85, 95] }\nOUTPUT data JSON\n; Expected: pretty-printed JSON object\n\n; === OUTPUT TO ERROR (target modifier) ===\nOUTPUT \"This goes to stderr\" TO ERROR\n; Expected: (on stderr) This goes to stderr\n\nOUTPUT 123 TO ERROR\n; Expected: (on stderr) 123\n\n; === OUTPUT JSON TO ERROR (format + target) ===\nOUTPUT { status: \"error\", code: 500 } JSON TO ERROR\n; Expected: (on stderr) pretty-printed JSON\n\n; === Contextual identifiers as variable names ===\n; These must work as regular identifiers\nLET json = \"my json var\"\nOUTPUT json\n; Expected: my json var\n\nLET to = 10\nOUTPUT to\n; Expected: 10\n\nLET error = \"an error message\"\nOUTPUT error\n; Expected: an error message\n\nLET file = \"/path/to/file\"\nOUTPUT file\n; Expected: /path/to/file\n\n; === Verify case-insensitivity of modifiers ===\nOUTPUT \"lowercase json\" json\n; Expected: \"lowercase json\"\n\nOUTPUT \"mixed case\" Json\n; Expected: \"mixed case\"\n\nOUTPUT \"uppercase error\" TO error\n; Expected: (on stderr) uppercase error\n\nOUTPUT \"Complete!\"\n"
+---
+Hello, World!
+42
+{ name: Alice, age: 30 }
+"Test JSON format"
+42
+true
+[
+  1,
+  2,
+  3
+]
+{
+  "name": "Bob",
+  "scores": [
+    90,
+    85,
+    95
+  ]
+}
+my json var
+10
+an error message
+/path/to/file
+"lowercase json"
+"mixed case"
+Complete!

@@ -396,16 +396,50 @@ impl Parser {
         global_kill.or(local_kill)
     }
 
-    /// `OUTPUT expr`
+    /// Parse a contextual identifier (case-insensitive match).
+    ///
+    /// Used for OUTPUT modifiers (`JSON`, `TO`, `ERROR`, `FILE`) which are not
+    /// keywords but recognized contextually after `OUTPUT expr`.
+    fn ctx_ident(
+        expected: &'static str,
+    ) -> impl chumsky::Parser<Token, (), Error = ParseErr> + Clone {
+        select! { Token::Ident(s) if s.eq_ignore_ascii_case(expected) => () }
+    }
+
+    /// `OUTPUT expr [JSON] [TO ERROR | TO FILE expr]`
     fn output_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        let format = Self::ctx_ident("JSON")
+            .to(cst::OutputFormat::Json)
+            .or_not()
+            .map(|f| f.unwrap_or_default());
+
+        let to_error = Self::ctx_ident("TO")
+            .ignore_then(Self::ctx_ident("ERROR"))
+            .to(cst::OutputTarget::Stderr);
+
+        let to_file = Self::ctx_ident("TO")
+            .ignore_then(Self::ctx_ident("FILE"))
+            .ignore_then(Self::expr(stmt.clone()))
+            .map(cst::OutputTarget::File);
+
+        let target =
+            to_error.or(to_file).or_not().map(|t| t.unwrap_or_default());
+
         just(Token::Output)
             .ignore_then(Self::expr(stmt))
-            .map_with_span(|expr, span| {
-                cst::Stmt::new(cst::StmtKind::Output(expr), span)
+            .then(format)
+            .then(target)
+            .map_with_span(|((expr, format), target), span| {
+                let output = cst::OutputStmt {
+                    expr,
+                    format,
+                    target,
+                };
+                cst::Stmt::new(cst::StmtKind::Output(output), span)
             })
     }
 

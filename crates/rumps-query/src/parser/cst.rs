@@ -308,8 +308,8 @@ pub(crate) enum StmtKind {
     /// Delete a variable or subtree.
     Kill(Expr),
 
-    /// Output a value.
-    Output(Expr),
+    /// Output a value with optional format and target.
+    Output(OutputStmt),
 
     /// An expression used as a statement.
     Expr(Expr),
@@ -445,4 +445,34 @@ pub(crate) struct MatchArm {
     pub(crate) pattern: MatchPattern,
     pub(crate) guard: Option<Expr>,
     pub(crate) body: Expr,
+}
+
+/// Output format modifier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OutputFormat {
+    /// Default: stringify the value.
+    #[default]
+    Default,
+    /// Convert to JSON before output.
+    Json,
+}
+
+/// Output target.
+#[derive(Clone, Debug, Default)]
+pub(crate) enum OutputTarget {
+    /// Default: stdout.
+    #[default]
+    Stdout,
+    /// Write to stderr.
+    Stderr,
+    /// Write to a file (path expression).
+    File(Expr),
+}
+
+/// Extended output statement.
+#[derive(Clone, Debug)]
+pub(crate) struct OutputStmt {
+    pub(crate) expr: Expr,
+    pub(crate) format: OutputFormat,
+    pub(crate) target: OutputTarget,
 }

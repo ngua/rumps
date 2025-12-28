@@ -765,6 +765,36 @@ pub(crate) enum JsonAccessKey {
     Expr(ExprId),
 }
 
+/// Output format modifier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OutputFormat {
+    /// Default: stringify the value.
+    #[default]
+    Default,
+    /// Convert to JSON before output.
+    Json,
+}
+
+/// Output target.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OutputTarget {
+    /// Default: stdout.
+    #[default]
+    Stdout,
+    /// Write to stderr.
+    Stderr,
+    /// Write to a file (path expression).
+    File(ExprId),
+}
+
+/// Extended output statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutputStmt {
+    pub(crate) expr: ExprId,
+    pub(crate) format: OutputFormat,
+    pub(crate) target: OutputTarget,
+}
+
 /// A statement node.
 ///
 /// All recursive references use `ExprId`/`StmtId` indices into the `Ast` arena.
@@ -791,8 +821,10 @@ pub(crate) enum Stmt {
     /// The `ExprId` must be a `Local` or `Global` expression.
     Kill(ExprId),
 
-    /// Output a value: `OUTPUT expr`.
-    Output(ExprId),
+    /// Output a value with optional format and target.
+    ///
+    /// Extended syntax: `OUTPUT expr [JSON] [TO ERROR | TO FILE path]`.
+    Output(OutputStmt),
 
     /// An expression used as a statement (for side effects).
     ///

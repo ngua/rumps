@@ -8,7 +8,10 @@ use std::collections::HashMap;
 use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
-use crate::ast::{AstTypeExprId, BindingPattern, Expr, ExprId, Stmt, StmtId};
+use crate::ast::{
+    AstTypeExprId, BindingPattern, Expr, ExprId, OutputFormat, OutputStmt,
+    OutputTarget, Stmt, StmtId,
+};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty};
 use crate::value::TypeDef;
@@ -42,7 +45,7 @@ impl InferCtx<'_> {
 
             Some(Stmt::Kill(target)) => self.kill(target, span),
 
-            Some(Stmt::Output(expr)) => self.output(expr, span),
+            Some(Stmt::Output(output)) => self.output(&output, span),
 
             Some(Stmt::Expr(expr)) => {
                 self.expr(expr);
@@ -437,9 +440,34 @@ impl InferCtx<'_> {
 
     /// Infer types for an `OUTPUT` statement.
     ///
-    /// Type-checks the expression and adds a `Stringable` constraint.
-    fn output(&mut self, expr: ExprId, span: Span) {
-        let ty = self.expr(expr);
-        self.constrain(Constraint::Stringable(ty, span));
+    /// Type-checks the expression and adds constraints based on format and target:
+    /// - `Stringable` for default format
+    /// - `Jsonable` for JSON format
+    /// - `FilePath | String` for file target path
+    fn output(&mut self, output: &OutputStmt, span: Span) {
+        let expr_ty = self.expr(output.expr);
+
+        // Format constraint
+        match output.format {
+            OutputFormat::Default => {
+                // All types are stringable
+                self.constrain(Constraint::Stringable(expr_ty, span));
+            }
+            OutputFormat::Json => {
+                // Must be JSON-convertible (not closures, etc.)
+                self.constrain(Constraint::Jsonable(expr_ty, span));
+            }
+        }
+
+        // Target constraint
+        match output.target {
+            OutputTarget::Stdout | OutputTarget::Stderr => {}
+            OutputTarget::File(path_expr) => {
+                // Path must be FilePath or String
+                let path_ty = self.expr(path_expr);
+                let union_ty = Ty::Union(vec![Ty::FilePath, Ty::String]);
+                self.unify(path_ty, union_ty, span);
+            }
+        }
     }
 }
