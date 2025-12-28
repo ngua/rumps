@@ -8,6 +8,7 @@ rumps-types = { path = "../rumps-types" }
 rumps-storage = { path = "../rumps-storage" }
 rumps-query-macros = { path = "../rumps-query-macros" }
 async-recursion = { workspace = true }
+async-trait = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 chumsky = "0.9"
 miette = { workspace = true }
