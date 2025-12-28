@@ -308,15 +308,16 @@ LET config = { ...defaults, ...user }  ; { color: "red", size: "large" }
 
 ### 8.2 AST
 
-- [ ] Add `Expr::Spread(ExprId)` for spread expressions
-- [ ] Modify `Expr::Array` to allow spread elements
-- [ ] Modify `Expr::Object` to allow spread entries
+- [x] Add `ArrayElem` enum with `Elem(ExprId)` and `Spread(ExprId)` variants
+- [x] Add `ObjectEntry` enum with `Field(String, ExprId)` and `Spread(ExprId)` variants
+- [x] Modify `Expr::Array` to use `Vec<ArrayElem>`
+- [x] Modify `Expr::Object` to use `Vec<ObjectEntry>`
 
 ### 8.3 Parser
 
-- [ ] Parse `...expr` inside array literals
-- [ ] Parse `...expr` inside object literals
-- [ ] Spread only valid inside array/object literals (not standalone)
+- [x] Parse `...expr` inside array literals
+- [x] Parse `...expr` inside object literals
+- [x] Spread only valid inside array/object literals (not standalone)
 
 ### 8.4 Typechecking
 
@@ -324,15 +325,15 @@ Array spread is straightforward; object spread requires care with structs vs ano
 
 #### 8.4.1 Array Spread
 
-- [ ] `[...a, ...b]` where `a: [T]` and `b: [U]` requires `T` and `U` unifiable
-- [ ] Result type is `[unify(T, U)]`
-- [ ] Mixed elements and spreads: `[x, ...arr, y]` unifies `typeof(x)`, element type of `arr`, and `typeof(y)`
+- [x] `[...a, ...b]` where `a: [T]` and `b: [U]` requires `T` and `U` unifiable
+- [x] Result type is `[unify(T, U)]`
+- [x] Mixed elements and spreads: `[x, ...arr, y]` unifies `typeof(x)`, element type of `arr`, and `typeof(y)`
 
 #### 8.4.2 Object Spread (Anonymous Objects)
 
-- [ ] `{ ...a, ...b }` merges field sets; later fields override earlier
-- [ ] For overridden fields, result type is the later field's type
-- [ ] Result is an anonymous object with union of all fields
+- [x] `{ ...a, ...b }` merges field sets; later fields override earlier
+- [x] For overridden fields, result type is the later field's type
+- [x] Result is an anonymous object with union of all fields
 
 #### 8.4.3 Object Spread with Structs
 
@@ -349,26 +350,26 @@ Options:
 2. **Preserve struct when compatible**: If all fields match and no extra fields added, preserve the struct type
 3. **Explicit annotation required**: `LET updated: Person = { ...p, age: 31 }`
 
-Recommended approach: Option 1 (always anonymous) with Option 3 (explicit annotation validates compatibility). This is simplest and most predictable.
+**Implemented approach**: Option 2 (preserve struct when compatible). This works well with RUMPS's extensible-record semantics, where structs only require their declared fields but can have additional fields. When the first spread is a struct and no conflicting fields exist before it, the struct type is preserved. Adding extra fields produces an anonymous object (which is still compatible with the original struct due to extensible records).
 
-- [ ] Spread of struct produces anonymous object with same fields
-- [ ] Explicit type annotation on `LET` validates struct compatibility
-- [ ] Error if spread result doesn't match annotated struct type
+- [x] Spread of struct preserves struct type when first spread and no prior fields
+- [x] Explicit type annotation on `LET` validates struct compatibility
+- [x] Adding extra fields to spread produces anonymous object (compatible via extensible records)
 
 ### 8.5 Interpreter
 
-- [ ] Array spread: iterate source array, append elements to result
-- [ ] Object spread: iterate source object entries, insert into result
-- [ ] Later entries override earlier ones for objects
+- [x] Array spread: iterate source array, append elements to result
+- [x] Object spread: iterate source object entries, insert into result
+- [x] Later entries override earlier ones for objects
 
 ### 8.6 Tests
 
-- [ ] Add parser tests for spread in arrays and objects
-- [ ] Add typecheck tests for array spread unification
-- [ ] Add typecheck tests for object spread (anonymous)
-- [ ] Add typecheck tests for struct spread with/without annotation
-- [ ] Add interpreter tests
-- [ ] Add integration test script (`XX_spread.rumps`)
+- [x] Add parser tests for spread in arrays and objects
+- [x] Add typecheck tests for array spread unification
+- [x] Add typecheck tests for object spread (anonymous)
+- [x] Add typecheck tests for struct spread with/without annotation
+- [x] Add interpreter tests
+- [x] Add integration test script (`98_spread.rumps`)
 
 ---
 

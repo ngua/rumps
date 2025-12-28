@@ -5,49 +5,76 @@ use indexmap::IndexMap;
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{Expr, ExprId};
+use crate::ast::{ArrayElem, Expr, ExprId, ObjectEntry};
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::value::{MapKey, TypeExprId, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
-    /// Evaluate an object literal.
+    /// Evaluate an object literal with potential spread entries.
+    ///
+    /// Type checker guarantees spreads are on object/struct types.
     #[async_recursion]
     pub(super) async fn object(
         &mut self,
-        fields: &[(String, ExprId)],
+        entries: &[ObjectEntry],
+        span: Span,
     ) -> Result<Value> {
-        let map = self.object_fields(fields, IndexMap::new()).await?;
+        let map = self.object_entries(entries, IndexMap::new(), span).await?;
         Ok(Value::Object(map))
     }
 
-    /// Recursively evaluate object fields.
+    /// Recursively evaluate object entries (fields and spreads).
     #[async_recursion]
-    async fn object_fields(
+    async fn object_entries(
         &mut self,
-        fields: &[(String, ExprId)],
+        entries: &[ObjectEntry],
         mut acc: IndexMap<StringId, ValueId>,
+        span: Span,
     ) -> Result<IndexMap<StringId, ValueId>> {
-        match fields.split_first() {
+        match entries.split_first() {
             None => Ok(acc),
-            Some(((key, expr_id), tail)) => {
-                let span = self.ast.expr_span(*expr_id).unwrap_or_default();
-                let val = self.eval(*expr_id).await?;
-                let key_id = self.arena.intern(key);
-                let val_id = self.arena.add(val, span);
-                acc.insert(key_id, val_id);
-                self.object_fields(tail, acc).await
+            Some((entry, tail)) => {
+                match entry {
+                    ObjectEntry::Field(key, expr_id) => {
+                        let expr_span =
+                            self.ast.expr_span(*expr_id).unwrap_or(span);
+                        let val = self.eval(*expr_id).await?;
+                        let key_id = self.arena.intern(key);
+                        let val_id = self.arena.add(val, expr_span);
+                        acc.insert(key_id, val_id);
+                    }
+                    ObjectEntry::Spread(expr_id) => {
+                        let val = self.eval(*expr_id).await?;
+                        // Type checker guarantees this is an Object
+                        match val {
+                            Value::Object(fields) => {
+                                // Merge fields from spread object
+                                fields.into_iter().for_each(|(k, v)| {
+                                    acc.insert(k, v);
+                                });
+                            }
+                            _ => typechecked!("...spread", "Object"),
+                        }
+                    }
+                }
+                self.object_entries(tail, acc, span).await
             }
         }
     }
 
-    /// Evaluate an array literal, enforcing homogeneous element types.
+    /// Evaluate an array literal with potential spread elements.
     ///
     /// Arrays containing `Json` values (including `null`) immediately become
     /// JSON arrays, since `Json` is not a native RUMPS type.
+    /// Type checker guarantees spreads are on array types.
     #[async_recursion]
-    pub(super) async fn array(&mut self, elems: &[ExprId]) -> Result<Value> {
+    pub(super) async fn array(
+        &mut self,
+        elems: &[ArrayElem],
+        span: Span,
+    ) -> Result<Value> {
         match elems.split_first() {
             None => {
                 // Empty array has element type `UNKNOWN`
@@ -55,115 +82,198 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(Value::Array(elem_ty, SmallVec::new()))
             }
             Some((first, rest)) => {
-                let first_span = self.ast.expr_span(*first).unwrap_or_default();
-                let first_val = self.eval(*first).await?;
+                // Get first value(s) from first element or spread
+                let (first_vals, first_span) = match first {
+                    ArrayElem::Elem(id) => {
+                        let s = self.ast.expr_span(*id).unwrap_or(span);
+                        let v = self.eval(*id).await?;
+                        (smallvec::smallvec![v], s)
+                    }
+                    ArrayElem::Spread(id) => {
+                        let s = self.ast.expr_span(*id).unwrap_or(span);
+                        let v = self.eval(*id).await?;
+                        // Type checker guarantees this is an Array
+                        match v {
+                            Value::Array(_, elems) => {
+                                let vals: SmallVec<[Value; 4]> = elems
+                                    .iter()
+                                    .filter_map(|vid| {
+                                        self.arena.get(*vid).cloned()
+                                    })
+                                    .collect();
+                                (vals, s)
+                            }
+                            _ => typechecked!("...spread", "Array"),
+                        }
+                    }
+                };
 
-                // If first element is Json, entire array becomes Json
-                if matches!(&first_val, Value::Json(_)) {
-                    self.array_elems_json_start(rest, first_val).await
+                // Check if all first values are Json
+                let has_json =
+                    first_vals.iter().any(|v| matches!(v, Value::Json(_)));
+                if has_json {
+                    // Start in JSON mode
+                    let json_acc: Vec<serde_json::Value> = first_vals
+                        .into_iter()
+                        .map(|v| self.jsonify(&v))
+                        .collect::<Result<Vec<_>>>()?;
+                    self.array_elems_json_tail_spread(rest, json_acc, span)
+                        .await
                 } else {
-                    let elem_ty = self.value_type_expr(&first_val);
-                    let first_id = self.arena.add(first_val, first_span);
+                    let mut iter = first_vals.into_iter();
+                    if let Some(first_val) = iter.next() {
+                        let elem_ty = self.value_type_expr(&first_val);
+                        let first_id = self.arena.add(first_val, first_span);
+                        let mut acc = SmallVec::new();
+                        acc.push(first_id);
 
-                    let mut acc = SmallVec::new();
-                    acc.push(first_id);
+                        // Add rest of first_vals
+                        iter.try_for_each(|v| -> Result<()> {
+                            let vt = self.value_type_expr(&v);
+                            if self.type_exprs.eq(elem_ty, vt) {
+                                let vid = self.arena.add(v, first_span);
+                                acc.push(vid);
+                            }
+                            Ok(())
+                        })?;
 
-                    self.array_elems(rest, elem_ty, acc, first_span).await
-                }
-            }
-        }
-    }
-
-    /// Recursively evaluate and type-check array elements.
-    ///
-    /// If all elements have the same type, returns `Value::Array`.
-    /// If types are heterogeneous or any element is `Json`, converts to JSON.
-    #[async_recursion]
-    async fn array_elems(
-        &mut self,
-        elems: &[ExprId],
-        elem_ty: TypeExprId,
-        mut acc: SmallVec<[ValueId; 4]>,
-        _first_span: Span,
-    ) -> Result<Value> {
-        match elems.split_first() {
-            None => Ok(Value::Array(elem_ty, acc)),
-            Some((expr_id, tail)) => {
-                let span = self.ast.expr_span(*expr_id).unwrap_or_default();
-                let val = self.eval(*expr_id).await?;
-
-                // Any Json value (including null) triggers JSON array mode
-                if matches!(&val, Value::Json(_)) {
-                    self.array_elems_json(tail, acc, val).await
-                } else {
-                    let val_ty = self.value_type_expr(&val);
-
-                    if self.type_exprs.eq(elem_ty, val_ty) {
-                        let val_id = self.arena.add(val, span);
-                        acc.push(val_id);
-                        self.array_elems(tail, elem_ty, acc, _first_span).await
+                        self.array_elems_spread(rest, elem_ty, acc, span).await
                     } else {
-                        // Heterogeneous: convert accumulated + current + rest to JSON
-                        self.array_elems_json(tail, acc, val).await
+                        // first_vals was empty (spread of empty array)
+                        let unknown_ty = self.type_exprs.named(TypeId::UNKNOWN);
+                        self.array_elems_spread(
+                            rest,
+                            unknown_ty,
+                            SmallVec::new(),
+                            span,
+                        )
+                        .await
                     }
                 }
             }
         }
     }
 
-    /// Continue collecting array elements as JSON (heterogeneous array).
-    ///
-    /// Called when a type mismatch is detected. Converts all accumulated
-    /// values to JSON and continues collecting the rest as JSON.
+    /// Recursively evaluate array elements with spread support.
     #[async_recursion]
-    async fn array_elems_json(
+    async fn array_elems_spread(
         &mut self,
-        elems: &[ExprId],
-        acc: SmallVec<[ValueId; 4]>,
-        current: Value,
-    ) -> Result<Value> {
-        // Convert accumulated values to JSON
-        let mut json_arr: Vec<serde_json::Value> = acc
-            .iter()
-            .filter_map(|vid| self.arena.get(*vid))
-            .map(|v| self.jsonify(v))
-            .collect::<Result<Vec<_>>>()?;
-
-        // Add current value
-        json_arr.push(self.jsonify(&current)?);
-
-        // Collect remaining elements as JSON
-        self.array_elems_json_tail(elems, json_arr).await
-    }
-
-    /// Recursively collect remaining array elements as JSON.
-    #[async_recursion]
-    async fn array_elems_json_tail(
-        &mut self,
-        elems: &[ExprId],
-        mut acc: Vec<serde_json::Value>,
+        elems: &[ArrayElem],
+        elem_ty: TypeExprId,
+        mut acc: SmallVec<[ValueId; 4]>,
+        span: Span,
     ) -> Result<Value> {
         match elems.split_first() {
-            None => Ok(Value::Json(serde_json::Value::Array(acc))),
-            Some((expr_id, tail)) => {
-                let val = self.eval(*expr_id).await?;
-                acc.push(self.jsonify(&val)?);
-                self.array_elems_json_tail(tail, acc).await
+            None => Ok(Value::Array(elem_ty, acc)),
+            Some((elem, tail)) => {
+                let vals: SmallVec<[Value; 4]> = match elem {
+                    ArrayElem::Elem(id) => {
+                        let val = self.eval(*id).await?;
+                        smallvec::smallvec![val]
+                    }
+                    ArrayElem::Spread(id) => {
+                        let val = self.eval(*id).await?;
+                        match val {
+                            Value::Array(_, elems) => elems
+                                .iter()
+                                .filter_map(|vid| self.arena.get(*vid).cloned())
+                                .collect(),
+                            _ => typechecked!("...spread", "Array"),
+                        }
+                    }
+                };
+
+                // Check for Json or type mismatch
+                let has_json = vals.iter().any(|v| matches!(v, Value::Json(_)));
+                if has_json {
+                    // Convert to JSON mode
+                    let mut json_arr: Vec<serde_json::Value> = acc
+                        .iter()
+                        .filter_map(|vid| self.arena.get(*vid))
+                        .map(|v| self.jsonify(v))
+                        .collect::<Result<Vec<_>>>()?;
+                    vals.iter().try_for_each(|v| -> Result<()> {
+                        json_arr.push(self.jsonify(v)?);
+                        Ok(())
+                    })?;
+                    self.array_elems_json_tail_spread(tail, json_arr, span)
+                        .await
+                } else {
+                    // Pre-compute value types to avoid borrow conflicts
+                    let val_tys: SmallVec<[TypeExprId; 4]> =
+                        vals.iter().map(|v| self.value_type_expr(v)).collect();
+                    let heterogeneous = val_tys
+                        .iter()
+                        .any(|vt| !self.type_exprs.eq(elem_ty, *vt));
+
+                    if heterogeneous {
+                        // Convert to JSON mode
+                        let mut json_arr: Vec<serde_json::Value> = acc
+                            .iter()
+                            .filter_map(|vid| self.arena.get(*vid))
+                            .map(|v| self.jsonify(v))
+                            .collect::<Result<Vec<_>>>()?;
+                        vals.iter().try_for_each(|v| -> Result<()> {
+                            json_arr.push(self.jsonify(v)?);
+                            Ok(())
+                        })?;
+                        self.array_elems_json_tail_spread(tail, json_arr, span)
+                            .await
+                    } else {
+                        // Add all values
+                        vals.into_iter().for_each(|v| {
+                            let vid = self.arena.add(v, span);
+                            acc.push(vid);
+                        });
+                        self.array_elems_spread(tail, elem_ty, acc, span).await
+                    }
+                }
             }
         }
     }
 
-    /// Start collecting array elements as JSON from the first element.
-    ///
-    /// Called when the first element is already a `Json` value.
+    /// Recursively collect remaining array elements as JSON with spread support.
     #[async_recursion]
-    async fn array_elems_json_start(
+    async fn array_elems_json_tail_spread(
         &mut self,
-        elems: &[ExprId],
-        first: Value,
+        elems: &[ArrayElem],
+        mut acc: Vec<serde_json::Value>,
+        span: Span,
     ) -> Result<Value> {
-        let acc = vec![self.jsonify(&first)?];
-        self.array_elems_json_tail(elems, acc).await
+        match elems.split_first() {
+            None => Ok(Value::Json(serde_json::Value::Array(acc))),
+            Some((elem, tail)) => {
+                match elem {
+                    ArrayElem::Elem(id) => {
+                        let val = self.eval(*id).await?;
+                        acc.push(self.jsonify(&val)?);
+                    }
+                    ArrayElem::Spread(id) => {
+                        let val = self.eval(*id).await?;
+                        match val {
+                            Value::Array(_, elems) => {
+                                elems.iter().try_for_each(
+                                    |vid| -> Result<()> {
+                                        self.arena.get(*vid).map_or(
+                                            Ok(()),
+                                            |v| {
+                                                acc.push(self.jsonify(v)?);
+                                                Ok(())
+                                            },
+                                        )
+                                    },
+                                )?;
+                            }
+                            Value::Json(serde_json::Value::Array(arr)) => {
+                                arr.iter().for_each(|v| acc.push(v.clone()));
+                            }
+                            _ => typechecked!("...spread", "Array"),
+                        }
+                    }
+                }
+                self.array_elems_json_tail_spread(tail, acc, span).await
+            }
+        }
     }
 
     /// Evaluate a tuple literal.

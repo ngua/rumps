@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test spread operator type errors\n; Section 8 of phase-4c.md\n\n; Spread non-array in array literal\nLET x = 42\nLET arr = [...x]\n\n; Spread non-object in object literal\nLET y = \"hello\"\nLET obj = { ...y }\n"
+---
+ERROR: cannot spread type `Int` in array literal
+cannot spread type `String` in object literal

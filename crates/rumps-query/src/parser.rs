@@ -1534,55 +1534,89 @@ impl Parser {
             });
         let paren = paren_or_tuple;
 
-        // Array literal
+        // Array literal with spread support
         let arr_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        let spread_elem = just(Token::DotDotDot)
+            .ignore_then(expr.clone())
+            .map(cst::ArrayElem::Spread);
+        let single_elem = expr.clone().map(cst::ArrayElem::Elem);
+        let arr_elem = spread_elem.or(single_elem);
         let array = just(Token::LBracket)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(expr.clone().separated_by(arr_sep).allow_trailing())
+            .ignore_then(arr_elem.separated_by(arr_sep).allow_trailing())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBracket))
             .map_with_span(|elems, span| {
                 cst::Expr::new(cst::ExprKind::Array(elems), span)
             });
 
-        // Object/JSON literal: { field: expr, ... } or { "field": expr, ... }
-        // Unquoted keys -> Object, quoted keys -> JSON
+        // Object/JSON literal with spread support:
+        // - `{ field: expr, ... }` (unquoted keys → Object)
+        // - `{ "field": expr, ... }` (quoted keys → JSON)
+        // - `{ ...expr, field: value }` (spread + fields → Object)
         // Mixed quoted/unquoted keys produce a parse error.
+        // Spreads are only valid in Object context (not JSON).
+
+        // Field entry: either quoted or unquoted key
         let unquoted_key = Self::ident().map(|s| (s, false));
         let quoted_key = select! { Token::String(s) => (s, true) };
         let obj_key = quoted_key.or(unquoted_key);
 
+        // Entry kind: Spread, or Field(key, quoted)
+        #[derive(Clone)]
+        enum ObjEntryKind {
+            Field(String, cst::Expr, bool), // (key, value, quoted)
+            Spread(cst::Expr),
+        }
+
         let obj_field = obj_key
             .then_ignore(just(Token::Colon))
             .then(expr.clone())
-            .map(|((key, quoted), value)| (key, value, quoted));
+            .map(|((key, quoted), value)| {
+                ObjEntryKind::Field(key, value, quoted)
+            });
+
+        let obj_spread = just(Token::DotDotDot)
+            .ignore_then(expr.clone())
+            .map(ObjEntryKind::Spread);
+
+        let obj_entry = obj_spread.or(obj_field);
 
         let obj_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let object_or_json = just(Token::LBrace)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(obj_field.separated_by(obj_sep).allow_trailing())
+            .ignore_then(obj_entry.separated_by(obj_sep).allow_trailing())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
-            .map_with_span(|fields: Vec<(String, cst::Expr, bool)>, span| {
-                // Determine if JSON or Object based on key quoting
-                let all_quoted = fields.iter().all(|(_, _, q)| *q);
-                let all_unquoted = fields.iter().all(|(_, _, q)| !*q);
-                let stripped: Vec<(String, cst::Expr)> =
-                    fields.into_iter().map(|(k, v, _)| (k, v)).collect();
+            .map_with_span(|entries: Vec<ObjEntryKind>, span| {
+                // Collect fields and spreads
+                let has_spread = entries
+                    .iter()
+                    .any(|e| matches!(e, ObjEntryKind::Spread(_)));
+                let fields: Vec<_> = entries
+                    .iter()
+                    .filter_map(|e| match e {
+                        ObjEntryKind::Field(k, _, q) => Some((k.clone(), *q)),
+                        ObjEntryKind::Spread(_) => None,
+                    })
+                    .collect();
 
-                if all_quoted || stripped.is_empty() && all_unquoted {
-                    // All quoted keys OR empty → JSON
-                    // Note: empty {} defaults to Object, but {"a": 1} is JSON
-                    if all_quoted && !stripped.is_empty() {
-                        cst::Expr::new(cst::ExprKind::Json(stripped), span)
-                    } else {
-                        cst::Expr::new(cst::ExprKind::Object(stripped), span)
-                    }
-                } else if all_unquoted {
-                    // All unquoted keys → Object
-                    cst::Expr::new(cst::ExprKind::Object(stripped), span)
-                } else {
-                    // Mixed quoted/unquoted → error
+                let all_quoted =
+                    !fields.is_empty() && fields.iter().all(|(_, q)| *q);
+                let all_unquoted = fields.iter().all(|(_, q)| !*q);
+                let has_mixed =
+                    !all_quoted && !all_unquoted && !fields.is_empty();
+
+                // Spread with quoted keys is an error
+                if has_spread && all_quoted {
+                    cst::Expr::new(
+                        cst::ExprKind::Error(
+                            "cannot use spread in JSON object (quoted keys)"
+                                .into(),
+                        ),
+                        span,
+                    )
+                } else if has_mixed {
                     cst::Expr::new(
                         cst::ExprKind::Error(
                             "cannot mix quoted and unquoted keys in object"
@@ -1590,6 +1624,30 @@ impl Parser {
                         ),
                         span,
                     )
+                } else if all_quoted && !fields.is_empty() {
+                    // JSON (all quoted, no spreads)
+                    let json_fields: Vec<(String, cst::Expr)> = entries
+                        .into_iter()
+                        .filter_map(|e| match e {
+                            ObjEntryKind::Field(k, v, _) => Some((k, v)),
+                            ObjEntryKind::Spread(_) => None, // unreachable
+                        })
+                        .collect();
+                    cst::Expr::new(cst::ExprKind::Json(json_fields), span)
+                } else {
+                    // Object (unquoted keys, possibly with spreads)
+                    let obj_entries: Vec<cst::ObjectEntry> = entries
+                        .into_iter()
+                        .map(|e| match e {
+                            ObjEntryKind::Field(k, v, _) => {
+                                cst::ObjectEntry::Field(k, v)
+                            }
+                            ObjEntryKind::Spread(e) => {
+                                cst::ObjectEntry::Spread(e)
+                            }
+                        })
+                        .collect();
+                    cst::Expr::new(cst::ExprKind::Object(obj_entries), span)
                 }
             });
 

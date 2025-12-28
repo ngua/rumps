@@ -70,6 +70,24 @@ pub(crate) enum TypePattern {
     Object(Vec<(String, TypeExpr)>),
 }
 
+/// An array element: either a single expression or a spread.
+#[derive(Clone, Debug)]
+pub(crate) enum ArrayElem {
+    /// A single element: `expr`
+    Elem(Expr),
+    /// A spread: `...expr`
+    Spread(Expr),
+}
+
+/// An object entry: either a field or a spread.
+#[derive(Clone, Debug)]
+pub(crate) enum ObjectEntry {
+    /// A key-value field: `key: expr`
+    Field(String, Expr),
+    /// A spread: `...expr`
+    Spread(Expr),
+}
+
 /// A CST expression node with inline span.
 #[derive(Clone, Debug)]
 pub(crate) struct Expr {
@@ -120,11 +138,11 @@ pub(crate) enum ExprKind {
     /// A function call.
     Call(Box<Expr>, Vec<Expr>),
 
-    /// An object literal.
-    Object(Vec<(String, Expr)>),
+    /// An object literal with potential spread entries.
+    Object(Vec<ObjectEntry>),
 
-    /// An array literal.
-    Array(Vec<Expr>),
+    /// An array literal with potential spread elements.
+    Array(Vec<ArrayElem>),
 
     /// A tuple literal.
     Tuple(Vec<Expr>),

@@ -280,8 +280,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
             Expr::Unary(op, operand) => self.unary(op, operand, span).await,
             Expr::Call(callee, args) => self.call(callee, &args, span).await,
-            Expr::Object(fields) => self.object(&fields).await,
-            Expr::Array(elems) => self.array(&elems).await,
+            Expr::Object(entries) => self.object(&entries, span).await,
+            Expr::Array(elems) => self.array(&elems, span).await,
             Expr::Tuple(elems) => self.tuple(&elems, span).await,
             Expr::MapLit(entries) => self.map_lit(&entries, span).await,
             Expr::TupleIndex(base, idx) => {

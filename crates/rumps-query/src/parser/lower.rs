@@ -8,9 +8,9 @@ use smallvec::SmallVec;
 
 use super::cst;
 use crate::ast::{
-    Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId,
-    JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, RestPattern, Stmt,
-    StmtId, TypeDefAst, TypePattern, VariantAst,
+    ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId,
+    JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, ObjectEntry,
+    RestPattern, Stmt, StmtId, TypeDefAst, TypePattern, VariantAst,
 };
 use crate::Result;
 
@@ -149,19 +149,19 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let arg_ids = lower_exprs(ast, args)?;
             Expr::Call(callee_id, arg_ids)
         }
-        cst::ExprKind::Object(fields) => {
-            let field_ids = fields
+        cst::ExprKind::Object(entries) => {
+            let lowered = entries
                 .into_iter()
-                .map(|(k, v)| lower_expr(ast, v).map(|id| (k, id)))
+                .map(|e| lower_object_entry(ast, e))
                 .collect::<Result<Vec<_>>>()?;
-            Expr::Object(field_ids)
+            Expr::Object(lowered)
         }
         cst::ExprKind::Array(elems) => {
-            let elem_ids = elems
+            let lowered = elems
                 .into_iter()
-                .map(|e| lower_expr(ast, e))
+                .map(|e| lower_array_elem(ast, e))
                 .collect::<Result<Vec<_>>>()?;
-            Expr::Array(elem_ids)
+            Expr::Array(lowered)
         }
         cst::ExprKind::Tuple(elems) => {
             let elem_ids = elems
@@ -456,6 +456,29 @@ fn lower_match_arm(ast: &mut Ast, arm: cst::MatchArm) -> Result<MatchArm> {
         guard,
         body,
     })
+}
+
+/// Lower a CST array element to AST.
+fn lower_array_elem(ast: &mut Ast, elem: cst::ArrayElem) -> Result<ArrayElem> {
+    match elem {
+        cst::ArrayElem::Elem(e) => lower_expr(ast, e).map(ArrayElem::Elem),
+        cst::ArrayElem::Spread(e) => lower_expr(ast, e).map(ArrayElem::Spread),
+    }
+}
+
+/// Lower a CST object entry to AST.
+fn lower_object_entry(
+    ast: &mut Ast,
+    entry: cst::ObjectEntry,
+) -> Result<ObjectEntry> {
+    match entry {
+        cst::ObjectEntry::Field(k, v) => {
+            lower_expr(ast, v).map(|id| ObjectEntry::Field(k, id))
+        }
+        cst::ObjectEntry::Spread(e) => {
+            lower_expr(ast, e).map(ObjectEntry::Spread)
+        }
+    }
 }
 
 /// Lower a CST match pattern to AST, allocating into the pattern arena.

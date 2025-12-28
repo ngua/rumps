@@ -8,7 +8,8 @@ use smallvec::smallvec;
 
 use super::Interpreter;
 use crate::ast::{
-    Ast, AstTypeExpr, BinOp, Expr, ExprId, Literal, Stmt, TypePattern, UnOp,
+    ArrayElem, Ast, AstTypeExpr, BinOp, Expr, ExprId, Literal, ObjectEntry,
+    Stmt, TypePattern, UnOp,
 };
 use crate::io::TestIo;
 use crate::value::{TypeExprArena, TypeRegistry, Value, ValueArena};
@@ -646,7 +647,14 @@ async fn array() {
         .add_expr(Expr::Literal(Literal::Int(3)), Span::new(7, 8))
         .unwrap();
     let arr = ast
-        .add_expr(Expr::Array(vec![e1, e2, e3]), Span::new(0, 9))
+        .add_expr(
+            Expr::Array(vec![
+                ArrayElem::Elem(e1),
+                ArrayElem::Elem(e2),
+                ArrayElem::Elem(e3),
+            ]),
+            Span::new(0, 9),
+        )
         .unwrap();
 
     let mut interp = test_interp(&ast);
@@ -673,7 +681,10 @@ async fn object() {
         .unwrap();
     let obj = ast
         .add_expr(
-            Expr::Object(vec![("id".into(), v1), ("name".into(), v2)]),
+            Expr::Object(vec![
+                ObjectEntry::Field("id".into(), v1),
+                ObjectEntry::Field("name".into(), v2),
+            ]),
             Span::new(0, 25),
         )
         .unwrap();
@@ -698,7 +709,10 @@ async fn index_array() {
         .add_expr(Expr::Literal(Literal::Int(20)), Span::new(5, 7))
         .unwrap();
     let arr = ast
-        .add_expr(Expr::Array(vec![e1, e2]), Span::new(0, 8))
+        .add_expr(
+            Expr::Array(vec![ArrayElem::Elem(e1), ArrayElem::Elem(e2)]),
+            Span::new(0, 8),
+        )
         .unwrap();
     let idx = ast
         .add_expr(Expr::Literal(Literal::Int(1)), Span::new(9, 10))
@@ -719,7 +733,10 @@ async fn field_access() {
         .add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8))
         .unwrap();
     let obj = ast
-        .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10))
+        .add_expr(
+            Expr::Object(vec![ObjectEntry::Field("x".into(), v)]),
+            Span::new(0, 10),
+        )
         .unwrap();
     let field = ast
         .add_expr(Expr::Field(obj, "x".into()), Span::new(0, 12))
@@ -1396,7 +1413,10 @@ async fn optional_field_on_object() {
         .add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8))
         .unwrap();
     let obj = ast
-        .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10))
+        .add_expr(
+            Expr::Object(vec![ObjectEntry::Field("x".into(), v)]),
+            Span::new(0, 10),
+        )
         .unwrap();
     let opt_field = ast
         .add_expr(Expr::OptionalField(obj, "x".into()), Span::new(0, 13))
@@ -1442,7 +1462,10 @@ async fn optional_field_on_some_with_object() {
         .add_expr(Expr::Literal(Literal::Int(99)), Span::new(20, 22))
         .unwrap();
     let obj = ast
-        .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(12, 24))
+        .add_expr(
+            Expr::Object(vec![ObjectEntry::Field("x".into(), v)]),
+            Span::new(12, 24),
+        )
         .unwrap();
     let some = ast
         .add_expr(
@@ -1478,7 +1501,10 @@ async fn optional_field_missing_field() {
         .add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8))
         .unwrap();
     let obj = ast
-        .add_expr(Expr::Object(vec![("x".into(), v)]), Span::new(0, 10))
+        .add_expr(
+            Expr::Object(vec![ObjectEntry::Field("x".into(), v)]),
+            Span::new(0, 10),
+        )
         .unwrap();
     let opt_field = ast
         .add_expr(Expr::OptionalField(obj, "y".into()), Span::new(0, 13))
@@ -2838,7 +2864,7 @@ async fn call_field_closure() {
     // Object: { inc: closure }
     let obj = ast
         .add_expr(
-            Expr::Object(vec![("inc".into(), closure)]),
+            Expr::Object(vec![ObjectEntry::Field("inc".into(), closure)]),
             Span::new(10, 30),
         )
         .unwrap();

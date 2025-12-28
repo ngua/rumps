@@ -5,12 +5,13 @@
 
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
 use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
-    AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey, JsonAccessKind, Literal,
-    MatchArm, StmtId, TypePattern, UnOp,
+    ArrayElem, AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey,
+    JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId, TypePattern, UnOp,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
@@ -69,8 +70,8 @@ impl InferCtx<'_> {
             // Non-empty tuples (empty handled above as Unit)
             Expr::Tuple(elems) => self.tuple(elems),
 
-            // Structural objects
-            Expr::Object(fields) => self.object(fields),
+            // Structural objects with potential spreads
+            Expr::Object(entries) => self.object(entries, span),
 
             // Map literals
             Expr::MapLit(entries) => self.map_lit(entries, span),
@@ -346,30 +347,62 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer type of an array literal.
+    /// Infer type of an array literal with potential spread elements.
     ///
     /// Empty arrays get a fresh element type. Homogeneous arrays get
     /// `Array[T]`. Heterogeneous arrays (mixed types) become `Json`.
-    fn array(&mut self, elems: &[ExprId], span: Span) -> Ty {
-        if let Some((first, rest)) = elems.split_first() {
-            let first_ty = self.expr(*first);
-            let all_tys: Vec<_> =
-                rest.iter().map(|id| self.expr(*id)).collect();
+    /// Spreads contribute their element type to the overall array type.
+    fn array(&mut self, elems: &[ArrayElem], span: Span) -> Ty {
+        // Collect element types (for regular elements) and array element types (for spreads)
+        let elem_tys: Vec<Ty> = elems
+            .iter()
+            .map(|elem| match elem {
+                ArrayElem::Elem(id) => self.expr(*id),
+                ArrayElem::Spread(id) => {
+                    let spread_ty = self.expr(*id);
+                    match spread_ty {
+                        Ty::Array(inner) => *inner,
+                        Ty::Var(_) => {
+                            // Create constraint: spread must be an array
+                            let elem_ty = self.fresh();
+                            self.unify(
+                                spread_ty,
+                                Ty::Array(Box::new(elem_ty.clone())),
+                                span,
+                            );
+                            elem_ty
+                        }
+                        Ty::Error => Ty::Error,
+                        _ => {
+                            self.error(TypeError::NotAnArray(spread_ty, span));
+                            Ty::Error
+                        }
+                    }
+                }
+            })
+            .collect();
 
-            // Check if all elements can unify with the first
-            let heterogeneous = all_tys
-                .iter()
-                .any(|ty| !self.types_compatible(&first_ty, ty));
-
-            if heterogeneous {
-                // Mixed types -> Json
-                Ty::Json
+        if let Some((first_ty, rest_tys)) = elem_tys.split_first() {
+            // Check for errors
+            if first_ty == &Ty::Error {
+                Ty::Error
             } else {
-                // Homogeneous: unify all elements
-                all_tys.iter().for_each(|ty| {
-                    self.unify(first_ty.clone(), ty.clone(), span);
+                // Check if all elements can unify with the first
+                let heterogeneous = rest_tys.iter().any(|ty| {
+                    ty != &Ty::Error && !self.types_compatible(first_ty, ty)
                 });
-                Ty::Array(Box::new(first_ty))
+
+                if heterogeneous {
+                    Ty::Json
+                } else {
+                    // Homogeneous: unify all elements
+                    rest_tys.iter().filter(|ty| **ty != Ty::Error).for_each(
+                        |ty| {
+                            self.unify(first_ty.clone(), ty.clone(), span);
+                        },
+                    );
+                    Ty::Array(Box::new(first_ty.clone()))
+                }
             }
         } else {
             Ty::Array(Box::new(self.fresh()))
@@ -384,19 +417,97 @@ impl InferCtx<'_> {
         Ty::Tuple(elems.iter().map(|id| self.expr(*id)).collect())
     }
 
-    /// Infer type of an object literal.
+    /// Infer type of an object literal with potential spread entries.
     ///
-    /// Produces a structural object type with inferred field types.
-    fn object(&mut self, fields: &[(String, ExprId)]) -> Ty {
-        let obj_fields = fields
-            .iter()
-            .map(|(name, expr_id)| {
+    /// Spreads merge fields from the spread object; later fields override earlier.
+    /// For struct preservation (Option 2): if we spread a struct and the result
+    /// still has all required fields, we preserve the struct type.
+    fn object(&mut self, entries: &[ObjectEntry], span: Span) -> Ty {
+        // Track accumulated fields; later entries override earlier
+        let mut acc: IndexMap<StringId, Ty> = IndexMap::new();
+        // Track if we're spreading exactly one struct (for potential preservation)
+        let mut spread_struct: Option<TypeId> = None;
+        let mut has_error = false;
+
+        entries.iter().for_each(|entry| match entry {
+            ObjectEntry::Field(name, expr_id) => {
                 let field_ty = self.expr(*expr_id);
                 let field_id = self.env.intern(name);
-                (field_id, field_ty)
-            })
-            .collect();
-        Ty::Object(obj_fields)
+                // Override or add field
+                acc.insert(field_id, field_ty);
+            }
+            ObjectEntry::Spread(expr_id) => {
+                let spread_ty = self.expr(*expr_id);
+                match &spread_ty {
+                    Ty::Object(fields) => {
+                        // Merge fields from spread object
+                        fields.iter().for_each(|(k, t)| {
+                            acc.insert(*k, t.clone());
+                        });
+                    }
+                    Ty::Named(ty_id, _args) => {
+                        // Spreading a struct: get its fields
+                        if let Some(def) = self.registry.get_def(*ty_id) {
+                            if let TypeDef::Struct { fields, .. } = def {
+                                // Remember we spread this struct (for potential preservation)
+                                if spread_struct.is_none() && acc.is_empty() {
+                                    spread_struct = Some(*ty_id);
+                                } else {
+                                    // Multiple spreads or fields before spread; no preservation
+                                    spread_struct = None;
+                                }
+                                // Merge struct fields (convert AstTypeExprId -> Ty)
+                                let empty_subst = HashMap::new();
+                                fields.iter().for_each(|(k, ast_ty_id)| {
+                                    let field_ty = self.ast_type_to_ty(
+                                        *ast_ty_id,
+                                        &empty_subst,
+                                    );
+                                    acc.insert(*k, field_ty);
+                                });
+                            } else {
+                                self.error(TypeError::NotAnObjectSpread(
+                                    spread_ty.clone(),
+                                    span,
+                                ));
+                                has_error = true;
+                            }
+                        } else {
+                            self.error(TypeError::NotAnObjectSpread(
+                                spread_ty.clone(),
+                                span,
+                            ));
+                            has_error = true;
+                        }
+                    }
+                    Ty::Var(_) => {
+                        // Create constraint: spread must be an object
+                        let fresh_obj = Ty::Object(IndexMap::new());
+                        self.unify(spread_ty, fresh_obj, span);
+                        // Can't know fields statically; no struct preservation
+                        spread_struct = None;
+                    }
+                    Ty::Error => has_error = true,
+                    _ => {
+                        self.error(TypeError::NotAnObjectSpread(
+                            spread_ty, span,
+                        ));
+                        has_error = true;
+                    }
+                }
+            }
+        });
+
+        if has_error {
+            Ty::Error
+        } else if let Some(struct_id) = spread_struct {
+            // Check if we can preserve the struct type (all required fields present)
+            // Since spreading can only add fields, never remove them, the struct is valid
+            // Extensible record semantics: struct + extra fields is still that struct
+            Ty::Named(struct_id, vec![])
+        } else {
+            Ty::Object(acc)
+        }
     }
 
     /// Infer type of a map literal.

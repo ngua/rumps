@@ -274,6 +274,14 @@ pub(crate) enum TypeError {
     #[error("type `{0}` is not indexable")]
     NotIndexable(Ty, Span),
 
+    /// Spread on non-array type.
+    #[error("cannot spread type `{0}` in array literal; expected `Array`")]
+    NotAnArray(Ty, Span),
+
+    /// Spread on non-object type.
+    #[error("cannot spread type `{0}` in object literal; expected `Object` or struct")]
+    NotAnObjectSpread(Ty, Span),
+
     /// JSON access on non-JSON type.
     #[error("type `{0}` is not JSON; cannot use JSON access operators")]
     NotJson(Ty, Span),
@@ -328,6 +336,8 @@ impl TypeError {
             | Self::NotATuple(_, span)
             | Self::TupleIndexOutOfBounds { span, .. }
             | Self::NotIndexable(_, span)
+            | Self::NotAnArray(_, span)
+            | Self::NotAnObjectSpread(_, span)
             | Self::NotJson(_, span)
             | Self::EmptyUnion(span)
             | Self::NotAUnionMember { span, .. }
@@ -447,6 +457,20 @@ impl TypeError {
             Self::NotIndexable(ty, _) => (
                 format!("type `{}` is not indexable", p.format(ty)),
                 Some("indexable types are `Array`, `Map`, `String`, and `Json`".to_owned()),
+            ),
+            Self::NotAnArray(ty, _) => (
+                format!(
+                    "cannot spread type `{}` in array literal",
+                    p.format(ty)
+                ),
+                Some("spread requires an `Array` type".to_owned()),
+            ),
+            Self::NotAnObjectSpread(ty, _) => (
+                format!(
+                    "cannot spread type `{}` in object literal",
+                    p.format(ty)
+                ),
+                Some("spread requires an `Object` or struct type".to_owned()),
             ),
             Self::NotJson(ty, _) => (
                 format!(

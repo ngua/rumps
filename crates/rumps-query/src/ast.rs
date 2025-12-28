@@ -484,6 +484,24 @@ pub(crate) enum TypeDefAst {
     Struct(Vec<(String, AstTypeExprId)>),
 }
 
+/// An array element: either a single expression or a spread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArrayElem {
+    /// A single element: `expr`
+    Elem(ExprId),
+    /// A spread: `...expr`
+    Spread(ExprId),
+}
+
+/// An object entry: either a field or a spread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ObjectEntry {
+    /// A key-value field: `key: expr`
+    Field(String, ExprId),
+    /// A spread: `...expr`
+    Spread(ExprId),
+}
+
 /// A literal value in the AST.
 ///
 /// This is the compile-time representation; runtime values (with arena
@@ -550,11 +568,21 @@ pub(crate) enum Expr {
     /// - `make_adder(5)(10)` -> `Call(Call(Var("make_adder"), [5]), [10])`
     Call(ExprId, SmallVec<[ExprId; 4]>),
 
-    /// An object/record literal: `{ key: value, ... }`.
-    Object(Vec<(String, ExprId)>),
+    /// An object/record literal with potential spread entries.
+    ///
+    /// Supports both regular fields and spread entries:
+    /// - `{ name: "Alice", age: 30 }` (fields only)
+    /// - `{ ...base, age: 31 }` (spread + override)
+    /// - `{ ...a, ...b }` (merge multiple objects)
+    Object(Vec<ObjectEntry>),
 
-    /// An array literal: `[expr, ...]`.
-    Array(Vec<ExprId>),
+    /// An array literal with potential spread elements.
+    ///
+    /// Supports both regular elements and spread elements:
+    /// - `[1, 2, 3]` (elements only)
+    /// - `[...arr1, ...arr2]` (spread multiple arrays)
+    /// - `[0, ...arr, 4]` (prepend/append)
+    Array(Vec<ArrayElem>),
 
     /// A tuple literal: `(a, b)`, `(x, y, z)`, `(single,)`.
     ///
