@@ -251,23 +251,26 @@ TYPE Path = File(FilePath) | Dir(FilePath)
 **NOTE**: Use `tokio` for everything!
 **NOTE**: Make sure to register the `Io.Directory` submodule under the existing `Io` module! See e.g. `Math.Trig` on how to do this (`with_submodule` pattern)
 
-- [ ] Add `FilePath` as opaque builtin type
-- [ ] Implement `String -> FilePath` coercion
-- [ ] Add `Path` enum type as builtin
-  - [ ] **NOTE**: Make sure `InferCtx::types_compatible` evaluates to `true`, otherwise `Array[FilePath]` will be inferred as `Json`!
+- [x] Add `FilePath` as opaque builtin type
+- [x] Implement `String -> FilePath` coercion
+- [x] Add `Path` enum type as builtin
+  - [x] **NOTE**: Make sure `InferCtx::types_compatible` evaluates to `true`, otherwise `Array[FilePath]` will be inferred as `Json`!
     - Current location to add `true` along with other types: crates/rumps-query/src/typecheck/infer/convert.rs:188
-- [ ] Create `Io.Directory` submodule structure
-- [ ] Implement core functions using `tokio::fs`:
-  - [ ] `list-dir`
-  - [ ] `move-path`
-  - [ ] `copy-path`
-  - [ ] `remove` / `remove-all`
-  - [ ] `exists` / `is-file` / `is-dir`
-  - [ ] `read-file` / `write-file` / `append-file`
-  - [ ] `create-dir` / `create-dir-all`
-  - [ ] `current-dir` / `set-current-dir`
-- [ ] Handle errors appropriately (return `Result` or panic?)
-- [ ] Add comprehensive test scripts
+- [x] Create `Io.Directory` submodule structure
+- [x] Implement core functions using `tokio::fs`:
+  - [x] `list-dir`
+  - [x] `move-path` (object type manually constructed; `scheme!` doesn't support objects)
+  - [x] `copy-path` (object type manually constructed; `scheme!` doesn't support objects)
+  - [x] `remove` / `remove-all`
+  - [x] `exists` / `is-file` / `is-dir`
+  - [x] `read-file`
+  - [x] `write-file` / `append-file` (object type manually constructed)
+  - [x] `create-dir` / `create-dir-all`
+  - [x] `pwd` / `set-pwd`
+  - [x] `get-env`
+  - [x] `set-env` (object type manually constructed)
+- [x] Handle errors appropriately (runtime errors with descriptive messages)
+- [x] Add comprehensive test scripts
 
 ---
 
@@ -467,15 +470,15 @@ Typing rules:
 
 High-level tracking:
 
-- [ ] Generic user-defined functions
-- [ ] Generic closures
-- [ ] Prefix `?` operator
-- [ ] Module type definitions
-- [ ] `Ordering` builtin type
-- [ ] `Array.sort-by`
-- [ ] `Array.zip` family
+- [x] Generic user-defined functions
+- [x] Generic closures
+- [x] Prefix `?` operator
+- [x] Module type definitions
+- [x] `Ordering` builtin type
+- [x] `Array.sort-by`
+- [x] `Array.zip` family
 - [x] `Io` module (stdin/stdout)
-- [ ] `Io.Directory` module (file system)
-- [ ] `FilePath` opaque type
+- [x] `Io.Directory` module (file system)
+- [x] `FilePath` opaque type
 - [ ] Spread operators (`...`)
 - [ ] Regex pattern matching (`MATCHES`)

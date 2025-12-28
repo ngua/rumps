@@ -1180,6 +1180,9 @@ impl InferCtx<'_> {
                 // Bool <-> Int
                 (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => target_ty,
 
+                // String -> FilePath
+                (Ty::String, Ty::FilePath) => Ty::FilePath,
+
                 // Same type is always valid
                 (a, b) if a == b => target_ty,
 

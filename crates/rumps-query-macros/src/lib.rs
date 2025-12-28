@@ -18,6 +18,7 @@ use syn::{Ident, Result, Token};
 /// ```text
 /// scheme!(forall T U. (Array[T], (T) -> U) -> Array[U])
 /// scheme!(Int -> Bool)  // monomorphic, no forall
+/// scheme!(ctx; { src: FilePath, dest: FilePath } -> Unit)  // with context for objects
 /// ```
 ///
 /// ## Type syntax
@@ -28,6 +29,7 @@ use syn::{Ident, Result, Token};
 /// - Functions: `(A, B) -> C` or `A -> B`
 /// - Tuples: `(A, B)` (without `->` following), `(A,)` for 1-tuple
 /// - Grouping: `(A)` is just `A`
+/// - Objects: `{ field1: Type1, field2: Type2 }` (requires context; use `ctx; ...`)
 #[proc_macro]
 pub fn scheme(input: TokenStream) -> TokenStream {
     syn::parse_macro_input!(input as SchemeInput)
@@ -35,14 +37,28 @@ pub fn scheme(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Parsed scheme input: optional `forall` + type.
+/// Parsed scheme input: optional context + optional `forall` + type.
 struct SchemeInput {
+    /// Optional context identifier for interning object field names.
+    ctx: Option<Ident>,
     vars: Vec<Ident>,
     ty: TyExpr,
 }
 
 impl Parse for SchemeInput {
     fn parse(input: ParseStream) -> Result<Self> {
+        // Check for optional context: `ctx; ...`
+        let ctx = input
+            .peek(Ident)
+            .then(|| {
+                input.peek2(Token![;]).then(|| {
+                    let ctx: Ident = input.parse().ok()?;
+                    input.parse::<Token![;]>().ok()?;
+                    Some(ctx)
+                })?
+            })
+            .flatten();
+
         // Check for `forall` keyword
         if input.peek(Ident) && input.peek2(Ident) {
             let kw: Ident = input.parse()?;
@@ -54,15 +70,23 @@ impl Parse for SchemeInput {
                 .collect();
                 input.parse::<Token![.]>()?;
                 let ty = parse_ty(input)?;
-                Ok(Self { vars, ty })
+                Ok(Self { ctx, vars, ty })
             } else {
                 // Not `forall`; the ident we parsed is part of the type
                 let ty = parse_ty_starting_with(input, kw)?;
-                Ok(Self { vars: vec![], ty })
+                Ok(Self {
+                    ctx,
+                    vars: vec![],
+                    ty,
+                })
             }
         } else {
             let ty = parse_ty(input)?;
-            Ok(Self { vars: vec![], ty })
+            Ok(Self {
+                ctx,
+                vars: vec![],
+                ty,
+            })
         }
     }
 }
@@ -77,7 +101,7 @@ impl SchemeInput {
             .map(|(i, v)| (v.to_string(), i as u32))
             .collect();
 
-        let ty_tokens = self.ty.to_tokens(&var_map);
+        let ty_tokens = self.ty.to_tokens(&var_map, self.ctx.as_ref());
 
         if self.vars.is_empty() {
             quote! {
@@ -110,10 +134,16 @@ enum TyExpr {
     Tuple(Vec<Self>),
     /// Union type: `A | B`.
     Union(Vec<Self>),
+    /// Object type: `{ field: Type, ... }`.
+    Object(Vec<(String, Box<Self>)>),
 }
 
 impl TyExpr {
-    fn to_tokens(&self, vars: &HashMap<String, u32>) -> TokenStream2 {
+    fn to_tokens(
+        &self,
+        vars: &HashMap<String, u32>,
+        ctx: Option<&Ident>,
+    ) -> TokenStream2 {
         match self {
             Self::Prim(name) => {
                 let ident = Ident::new(name, proc_macro2::Span::call_site());
@@ -127,7 +157,7 @@ impl TyExpr {
             }
             Self::App(name, args) => {
                 let arg_tokens: Vec<_> =
-                    args.iter().map(|a| a.to_tokens(vars)).collect();
+                    args.iter().map(|a| a.to_tokens(vars, ctx)).collect();
                 match name.as_str() {
                     "Array" => {
                         let inner = &arg_tokens[0];
@@ -152,8 +182,8 @@ impl TyExpr {
             }
             Self::Fn(params, ret) => {
                 let param_tokens: Vec<_> =
-                    params.iter().map(|p| p.to_tokens(vars)).collect();
-                let ret_tokens = ret.to_tokens(vars);
+                    params.iter().map(|p| p.to_tokens(vars, ctx)).collect();
+                let ret_tokens = ret.to_tokens(vars, ctx);
                 quote! {
                     crate::typecheck::Ty::Fn(
                         vec![#(#param_tokens),*],
@@ -163,16 +193,33 @@ impl TyExpr {
             }
             Self::Tuple(elems) => {
                 let elem_tokens: Vec<_> =
-                    elems.iter().map(|e| e.to_tokens(vars)).collect();
+                    elems.iter().map(|e| e.to_tokens(vars, ctx)).collect();
                 quote! {
                     crate::typecheck::Ty::Tuple(vec![#(#elem_tokens),*])
                 }
             }
             Self::Union(members) => {
                 let member_tokens: Vec<_> =
-                    members.iter().map(|m| m.to_tokens(vars)).collect();
+                    members.iter().map(|m| m.to_tokens(vars, ctx)).collect();
                 quote! {
                     crate::typecheck::Ty::Union(vec![#(#member_tokens),*])
+                }
+            }
+            Self::Object(fields) => {
+                let ctx = ctx.unwrap_or_else(|| {
+                    panic!("object types require a context; use `scheme!(ctx; ...)`")
+                });
+                let field_entries: Vec<_> = fields
+                    .iter()
+                    .map(|(name, ty)| {
+                        let ty_tokens = ty.to_tokens(vars, Some(ctx));
+                        quote! { #ctx.intern(#name) => #ty_tokens }
+                    })
+                    .collect();
+                quote! {
+                    crate::typecheck::Ty::Object(indexmap::indexmap! {
+                        #(#field_entries),*
+                    })
                 }
             }
         }
@@ -182,7 +229,7 @@ impl TyExpr {
 /// Primitive type names.
 const PRIMITIVES: &[&str] = &[
     "Bool", "Int", "Float", "Char", "String", "Unit", "Time", "Range", "Json",
-    "Unknown", "Error", "Ordering",
+    "Unknown", "Error", "Ordering", "FilePath", "Path",
 ];
 
 /// Parameterized type names (require `[...]` args).
@@ -256,6 +303,8 @@ fn parse_ty_fn(input: ParseStream) -> Result<TyExpr> {
 fn parse_ty_atom_track_paren(input: ParseStream) -> Result<(TyExpr, bool)> {
     if input.peek(syn::token::Paren) {
         parse_paren_or_tuple(input).map(|ty| (ty, true))
+    } else if input.peek(syn::token::Brace) {
+        parse_object(input).map(|ty| (ty, false))
     } else {
         parse_ty_ident(input).map(|ty| (ty, false))
     }
@@ -286,6 +335,23 @@ fn parse_paren_or_tuple(input: ParseStream) -> Result<TyExpr> {
         (1, false) => Ok(elems.pop().unwrap_or_else(|| unreachable!())),
         _ => Ok(TyExpr::Tuple(elems)),
     }
+}
+
+/// Parse `{ field: Type, ... }`: object type literal.
+fn parse_object(input: ParseStream) -> Result<TyExpr> {
+    let content;
+    syn::braced!(content in input);
+
+    // Parse comma-separated field definitions: `name: Type`
+    let fields: syn::punctuated::Punctuated<(String, Box<TyExpr>), Token![,]> =
+        syn::punctuated::Punctuated::parse_terminated_with(&content, |input| {
+            let name: Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            let ty = parse_ty(input)?;
+            Ok((name.to_string(), Box::new(ty)))
+        })?;
+
+    Ok(TyExpr::Object(fields.into_iter().collect()))
 }
 
 /// Parse bracketed type arguments: `[T, U, ...]`.

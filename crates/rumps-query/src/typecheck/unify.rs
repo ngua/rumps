@@ -93,7 +93,9 @@ impl<'a> InferCtx<'a> {
             | (Ty::Time, Ty::Time)
             | (Ty::Range, Ty::Range)
             | (Ty::Json, Ty::Json)
-            | (Ty::Ordering, Ty::Ordering) => UnifyResult::Ok(Subst::empty()),
+            | (Ty::Ordering, Ty::Ordering)
+            | (Ty::FilePath, Ty::FilePath)
+            | (Ty::Path, Ty::Path) => UnifyResult::Ok(Subst::empty()),
 
             // Numeric coercion: Int and Float unify (widening)
             (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) => {
@@ -804,8 +806,8 @@ impl<'a> InferCtx<'a> {
             // Deferred types
             Ty::Var(_) | Ty::Unknown | Ty::Error => {}
 
-            // Range, Time, and Ordering: technically not JSON-native but we allow conversion
-            Ty::Range | Ty::Time | Ty::Ordering => {}
+            // Range, Time, Ordering, FilePath, Path: technically not JSON-native but we allow conversion
+            Ty::Range | Ty::Time | Ty::Ordering | Ty::FilePath | Ty::Path => {}
         }
     }
 

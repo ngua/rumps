@@ -1,0 +1,184 @@
+; Io.Directory module primitives
+; Tests file system operations
+;
+; NOTE: Uses a unique temp directory under /tmp that is cleaned up at the end
+
+; ============ Setup: create temp directory ============
+
+; Generate unique directory name using Random.uuid
+LET test-uuid = Random.uuid()
+LET test-dir-path = "/tmp/rumps-test-" ++ test-uuid
+LET test-dir = test-dir-path AS FilePath
+
+; Create the test directory
+LET _ = Io.Directory.create-dir(test-dir)
+
+; ============ FilePath coercion ============
+
+; Create FilePath via AS cast
+LET p1 = "/tmp/rumps-test" AS FilePath
+OUTPUT p1 IS FilePath  ; true
+
+; ============ pwd ============
+
+; Get current working directory
+LET cwd = Io.Directory.pwd()
+OUTPUT cwd IS FilePath  ; true
+
+; ============ exists / is-file / is-dir ============
+
+; Check if test directory exists and is a directory
+LET dir-exists = Io.Directory.exists(test-dir)
+OUTPUT dir-exists  ; true
+
+LET dir-is-dir = Io.Directory.is-dir(test-dir)
+OUTPUT dir-is-dir  ; true
+
+LET dir-is-file = Io.Directory.is-file(test-dir)
+OUTPUT dir-is-file  ; false
+
+; Check non-existent path
+LET fake = "/nonexistent/path/xyz123" AS FilePath
+LET fake-exists = Io.Directory.exists(fake)
+OUTPUT fake-exists  ; false
+
+; ============ get-env ============
+
+; PATH environment variable should exist on most systems
+LET path-env = Io.Directory.get-env("PATH")
+OUTPUT path-env IS Option[String]  ; true
+
+; Non-existent env var
+LET no-such-var = Io.Directory.get-env("RUMPS_NONEXISTENT_VAR_12345")
+OUTPUT no-such-var  ; Option.None
+
+; ============ write-file / read-file ============
+
+; Write a file to our temp directory
+LET test-file-path = test-dir-path ++ "/test-file.txt"
+LET test-file = test-file-path AS FilePath
+LET test-contents = "Hello, RUMPS!"
+
+LET _ = Io.Directory.write-file({ path: test-file, contents: test-contents })
+
+; Verify the file exists
+LET file-exists = Io.Directory.exists(test-file)
+OUTPUT file-exists  ; true
+
+LET file-is-file = Io.Directory.is-file(test-file)
+OUTPUT file-is-file  ; true
+
+; Read the file back
+LET read-contents = Io.Directory.read-file(test-file)
+OUTPUT read-contents  ; Hello, RUMPS!
+
+; ============ append-file ============
+
+; Append to the file
+LET append-str = "\nAppended line"
+LET _ = Io.Directory.append-file({ path: test-file, contents: append-str })
+
+; Read the updated file
+LET appended-contents = Io.Directory.read-file(test-file)
+OUTPUT appended-contents  ; Hello, RUMPS!\nAppended line
+
+; ============ create-dir / create-dir-all ============
+
+; Create a single directory
+LET subdir-path = test-dir-path ++ "/subdir"
+LET subdir = subdir-path AS FilePath
+LET _ = Io.Directory.create-dir(subdir)
+
+LET subdir-exists = Io.Directory.exists(subdir)
+OUTPUT subdir-exists  ; true
+
+; Create nested directories
+LET nested-path = test-dir-path ++ "/a/b/c"
+LET nested = nested-path AS FilePath
+LET _ = Io.Directory.create-dir-all(nested)
+
+LET nested-exists = Io.Directory.exists(nested)
+OUTPUT nested-exists  ; true
+
+; ============ list-dir ============
+
+; List contents of test directory (should have at least test-file.txt and subdir)
+LET entries = Io.Directory.list-dir(test-dir)
+OUTPUT entries IS Array[Path]  ; true
+
+; Each entry is a Path (File or Dir)
+LET first = Array.head(entries)
+OUTPUT first IS Option[Path]  ; true
+
+; Should have multiple entries
+LET entry-count = Array.length(entries)
+OUTPUT entry-count >= 2  ; true (at least test-file.txt and subdir)
+
+; ============ copy-path ============
+
+; Copy the test file
+LET copy-dest-path = test-dir-path ++ "/test-file-copy.txt"
+LET copy-dest = copy-dest-path AS FilePath
+LET _ = Io.Directory.copy-path({ src: test-file, dest: copy-dest })
+
+LET copy-exists = Io.Directory.exists(copy-dest)
+OUTPUT copy-exists  ; true
+
+; Verify contents are the same
+LET copy-contents = Io.Directory.read-file(copy-dest)
+OUTPUT copy-contents == appended-contents  ; true
+
+; ============ move-path ============
+
+; Move (rename) the copy
+LET move-dest-path = test-dir-path ++ "/test-file-moved.txt"
+LET move-dest = move-dest-path AS FilePath
+LET _ = Io.Directory.move-path({ src: copy-dest, dest: move-dest })
+
+; Original should not exist
+LET old-exists = Io.Directory.exists(copy-dest)
+OUTPUT old-exists  ; false
+
+; New location should exist
+LET new-exists = Io.Directory.exists(move-dest)
+OUTPUT new-exists  ; true
+
+; ============ remove ============
+
+; Remove the moved file
+LET _ = Io.Directory.remove(move-dest)
+
+LET removed-exists = Io.Directory.exists(move-dest)
+OUTPUT removed-exists  ; false
+
+; ============ set-pwd ============
+
+; Save current directory, change to temp dir, then restore
+LET orig-cwd = Io.Directory.pwd()
+LET _ = Io.Directory.set-pwd(test-dir)
+
+LET new-cwd = Io.Directory.pwd()
+; The new cwd should end with our test dir name
+OUTPUT Io.Directory.is-dir(new-cwd)  ; true
+
+; Restore original cwd
+LET _ = Io.Directory.set-pwd(orig-cwd)
+
+; ============ set-env ============
+
+; Set an environment variable
+LET _ = Io.Directory.set-env({ name: "RUMPS_TEST_VAR", value: "test-value-123" })
+
+; Read it back
+LET env-val = Io.Directory.get-env("RUMPS_TEST_VAR")
+OUTPUT env-val  ; Option.Some("test-value-123")
+
+; ============ Cleanup: remove-all ============
+
+; Clean up the entire test directory
+LET _ = Io.Directory.remove-all(test-dir)
+
+LET cleanup-exists = Io.Directory.exists(test-dir)
+OUTPUT cleanup-exists  ; false
+
+OUTPUT "All Io.Directory tests passed"

@@ -133,6 +133,14 @@ impl TypeId {
     ///
     /// Used for comparison results in `sort-by` and similar operations.
     pub(crate) const ORDERING: Self = Self(17);
+    /// Builtin opaque type: `FilePath`.
+    ///
+    /// Represents a file system path. Created from `String` via coercion.
+    pub(crate) const FILEPATH: Self = Self(18);
+    /// Builtin enum: `Path = File(FilePath) | Dir(FilePath)`.
+    ///
+    /// Represents a file system entry (file or directory).
+    pub(crate) const PATH: Self = Self(19);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -419,6 +427,12 @@ pub(crate) enum Value {
     /// Access via `.` and `->` returns `Json`; `..` and `->>` extract scalars.
     Json(serde_json::Value),
 
+    /// An opaque file path.
+    ///
+    /// Created from `String` via type coercion or `Io.Directory` functions.
+    /// Used with `Io.Directory` module for file system operations.
+    FilePath(StringId),
+
     /// A tagged value (sum type variant).
     ///
     /// - `TypeExprId`: the full parameterized type (e.g., `Option[Int]`, `Result[Int, String]`)
@@ -511,6 +525,7 @@ impl Value {
             Self::Map(..) => Cow::Borrowed("Map"),
             Self::Time(_) => Cow::Borrowed("Time"),
             Self::Json(_) => Cow::Borrowed("Json"),
+            Self::FilePath(_) => Cow::Borrowed("FilePath"),
             Self::Tagged(ty_expr, _, _) => Cow::Borrowed(
                 type_exprs
                     .base_type(*ty_expr)
@@ -624,6 +639,7 @@ impl Value {
             Self::Map(..) => TypeId::MAP,
             Self::Time(_) => TypeId::TIME,
             Self::Json(_) => TypeId::JSON,
+            Self::FilePath(_) => TypeId::FILEPATH,
             Self::Tagged(ty_expr, _, _) => {
                 type_exprs.base_type(*ty_expr).unwrap_or(TypeId::UNKNOWN)
             }
@@ -651,6 +667,7 @@ pub(crate) enum BuiltinType {
     Range,
     Unit,
     Json,
+    FilePath,
 }
 
 impl BuiltinType {
@@ -669,6 +686,7 @@ impl BuiltinType {
             Self::Range => "Range",
             Self::Unit => "Unit",
             Self::Json => "Json",
+            Self::FilePath => "FilePath",
         }
     }
 }
@@ -1080,6 +1098,8 @@ impl TypeExprArena {
             Ty::Range => self.named(TypeId::RANGE),
             Ty::Json => self.named(TypeId::JSON),
             Ty::Ordering => self.named(TypeId::ORDERING),
+            Ty::FilePath => self.named(TypeId::FILEPATH),
+            Ty::Path => self.named(TypeId::PATH),
             Ty::Array(elem) => {
                 let elem_id = self.intern_ty(elem);
                 self.app(TypeId::ARRAY, smallvec![elem_id])
@@ -1519,6 +1539,56 @@ impl TypeRegistry {
                 ))
             })?;
 
+        // FilePath at index 18
+        let filepath_name = arena.intern("FilePath");
+        let filepath = self
+            .register(TypeDef::Builtin(BuiltinType::FilePath), filepath_name);
+        (filepath == TypeId::FILEPATH)
+            .then_some(())
+            .ok_or_else(|| {
+                crate::Error::runtime_no_span(format!(
+                    "FilePath at index {}, expected {}",
+                    filepath.0,
+                    TypeId::FILEPATH.0
+                ))
+            })?;
+
+        // Path at index 19: File(FilePath) | Dir(FilePath)
+        let path_name = arena.intern("Path");
+        let file_name = arena.intern("File");
+        let dir_name = arena.intern("Dir");
+
+        let path = self.register(
+            TypeDef::Sum {
+                name: path_name,
+                type_params: SmallVec::new(),
+                variants: smallvec::smallvec![
+                    VariantDef {
+                        name: file_name,
+                        idx: 0,
+                        arity: 1,
+                        // Builtin: type checker handles Path specially
+                        payloads: SmallVec::new(),
+                    },
+                    VariantDef {
+                        name: dir_name,
+                        idx: 1,
+                        arity: 1,
+                        // Builtin: type checker handles Path specially
+                        payloads: SmallVec::new(),
+                    },
+                ],
+            },
+            path_name,
+        );
+        (path == TypeId::PATH).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Path at index {}, expected {}",
+                path.0,
+                TypeId::PATH.0
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -1899,8 +1969,8 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
         let reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
 
-        // 13 primitives + Option + Result + Storable + Scalar + Ordering = 18
-        assert_eq!(reg.len(), 18);
+        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path = 20
+        assert_eq!(reg.len(), 20);
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

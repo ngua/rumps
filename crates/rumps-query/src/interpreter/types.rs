@@ -21,6 +21,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Float(_) => self.type_exprs.named(TypeId::FLOAT),
             Value::Char(_) => self.type_exprs.named(TypeId::CHAR),
             Value::String(_) => self.type_exprs.named(TypeId::STRING),
+            Value::FilePath(_) => self.type_exprs.named(TypeId::FILEPATH),
             Value::Array(elem_ty, _) => {
                 // Array[elem_ty]
                 self.type_exprs
@@ -231,6 +232,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .jsonify(val)
                 .map(Value::Json)
                 .map_err(|e| Error::runtime_type(span, e.to_string())),
+
+            // String -> FilePath
+            (Value::String(sid), TypeId::FILEPATH) => Ok(Value::FilePath(*sid)),
+
+            // FilePath identity
+            (Value::FilePath(_), TypeId::FILEPATH) => Ok(val.clone()),
 
             // Unsupported conversion
             _ => {
@@ -759,6 +766,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Float(_) => type_id == TypeId::FLOAT,
             Value::Char(_) => type_id == TypeId::CHAR,
             Value::String(_) => type_id == TypeId::STRING,
+            Value::FilePath(_) => type_id == TypeId::FILEPATH,
             Value::Array(_, _) => type_id == TypeId::ARRAY,
             Value::Object(_) => type_id == TypeId::OBJECT,
             Value::Tuple(_, _) => type_id == TypeId::TUPLE,

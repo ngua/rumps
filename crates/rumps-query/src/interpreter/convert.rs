@@ -30,6 +30,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
             // Json values store directly
             Value::Json(j) => Ok(rumps_types::Value::Json(j.clone())),
+            // FilePath stores as string
+            Value::FilePath(id) => self
+                .arena
+                .get_str(*id)
+                .map(|s| rumps_types::Value::String(s.to_owned()))
+                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
             // Serialize to JSON for complex values (closures, module fns,
             // and ranges will error in jsonify)
             Value::Array(_, _)
@@ -84,6 +90,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Float(f) => f.to_string(),
             Value::Char(c) => format!("'{c}'"),
             Value::String(id) => {
+                self.arena.get_str(*id).unwrap_or("").to_owned()
+            }
+            Value::FilePath(id) => {
                 self.arena.get_str(*id).unwrap_or("").to_owned()
             }
             Value::Array(_, elems) => {
@@ -207,6 +216,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Float(f) => Ok(serde_json::json!(f.0)),
             Value::Char(c) => Ok(serde_json::Value::String(c.to_string())),
             Value::String(id) => {
+                let s = self.arena.get_str(*id).unwrap_or("");
+                Ok(serde_json::Value::String(s.to_owned()))
+            }
+            Value::FilePath(id) => {
                 let s = self.arena.get_str(*id).unwrap_or("");
                 Ok(serde_json::Value::String(s.to_owned()))
             }
@@ -396,6 +409,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Map(_, _, _)
             | Value::Time(_)
             | Value::Json(_)
+            | Value::FilePath(_)
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
             | Value::Function { .. }

@@ -46,6 +46,8 @@ pub(crate) enum Ty {
     Range,
     Json,
     Ordering,
+    FilePath,
+    Path,
 
     // Parameterized builtins
     Array(Box<Self>),
@@ -137,6 +139,8 @@ impl Ty {
             | Self::Range
             | Self::Json
             | Self::Ordering
+            | Self::FilePath
+            | Self::Path
             | Self::Unknown
             | Self::Error => {}
             Self::Array(t) | Self::Option(t) => t.collect_free_vars(acc),
@@ -179,6 +183,8 @@ impl Ty {
             | Self::Range
             | Self::Json
             | Self::Ordering
+            | Self::FilePath
+            | Self::Path
             | Self::Unknown
             | Self::Error => false,
             Self::Array(t) | Self::Option(t) => t.occurs(v),
@@ -211,6 +217,8 @@ impl Ty {
             Self::Range => Self::Range,
             Self::Json => Self::Json,
             Self::Ordering => Self::Ordering,
+            Self::FilePath => Self::FilePath,
+            Self::Path => Self::Path,
             Self::Unknown => Self::Unknown,
             Self::Error => Self::Error,
             Self::Array(t) => Self::Array(Box::new(t.apply(subst))),

@@ -1025,6 +1025,9 @@ impl Environment {
             ]),
         );
 
+        // Build Directory submodule first to avoid double mutable borrow
+        let directory_module = self.build_directory_module();
+
         self.modules.insert(
             "Io".to_string(),
             Module::from_prims(&[
@@ -1053,8 +1056,105 @@ impl Environment {
                     f: Io::eprintln,
                     ty: scheme!((String) -> Unit),
                 },
-            ]),
+            ])
+            .with_submodule("Directory", directory_module),
         );
+    }
+
+    /// Build the `Io.Directory` submodule.
+    fn build_directory_module(&mut self) -> Module {
+        use crate::primitives::Directory;
+
+        // Alias for macro context
+        let consts = &mut self.consts;
+
+        Module::from_prims(&[
+            PrimDef {
+                name: "list-dir",
+                f: Directory::list_dir,
+                ty: scheme!((FilePath) -> Array[Path]),
+            },
+            PrimDef {
+                name: "exists",
+                f: Directory::exists,
+                ty: scheme!((FilePath) -> Bool),
+            },
+            PrimDef {
+                name: "is-file",
+                f: Directory::is_file,
+                ty: scheme!((FilePath) -> Bool),
+            },
+            PrimDef {
+                name: "is-dir",
+                f: Directory::is_dir,
+                ty: scheme!((FilePath) -> Bool),
+            },
+            PrimDef {
+                name: "read-file",
+                f: Directory::read_file,
+                ty: scheme!((FilePath) -> String),
+            },
+            PrimDef {
+                name: "remove",
+                f: Directory::remove,
+                ty: scheme!((FilePath) -> Unit),
+            },
+            PrimDef {
+                name: "remove-all",
+                f: Directory::remove_all,
+                ty: scheme!((FilePath) -> Unit),
+            },
+            PrimDef {
+                name: "create-dir",
+                f: Directory::create_dir,
+                ty: scheme!((FilePath) -> Unit),
+            },
+            PrimDef {
+                name: "create-dir-all",
+                f: Directory::create_dir_all,
+                ty: scheme!((FilePath) -> Unit),
+            },
+            PrimDef {
+                name: "pwd",
+                f: Directory::pwd,
+                ty: scheme!(() -> FilePath),
+            },
+            PrimDef {
+                name: "set-pwd",
+                f: Directory::set_pwd,
+                ty: scheme!((FilePath) -> Unit),
+            },
+            PrimDef {
+                name: "get-env",
+                f: Directory::get_env,
+                ty: scheme!((String) -> Option[String]),
+            },
+            PrimDef {
+                name: "move-path",
+                f: Directory::move_path,
+                ty: scheme!(consts; ({ src: FilePath, dest: FilePath }) -> Unit),
+            },
+            PrimDef {
+                name: "copy-path",
+                f: Directory::copy_path,
+                ty: scheme!(consts; ({ src: FilePath, dest: FilePath }) -> Unit),
+            },
+            PrimDef {
+                name: "write-file",
+                f: Directory::write_file,
+                ty: scheme!(consts; ({ path: FilePath, contents: String }) -> Unit),
+            },
+            PrimDef {
+                name: "append-file",
+                f: Directory::append_file,
+                ty: scheme!(consts; ({ path: FilePath, contents: String }) -> Unit),
+            },
+            PrimDef {
+                name: "set-env",
+                f: Directory::set_env,
+                ty: scheme!(consts; ({ name: String, value: String }) -> Unit),
+            },
+        ])
     }
 }
 

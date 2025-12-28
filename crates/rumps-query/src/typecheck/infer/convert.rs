@@ -39,6 +39,8 @@ impl InferCtx<'_> {
             | Ty::Range
             | Ty::Json
             | Ty::Ordering
+            | Ty::FilePath
+            | Ty::Path
             | Ty::Error => false,
             // Option, Result, Array, Map, and Fn with unresolved type params are
             // OK. These are intentionally polymorphic (e.g., `Option.None`,
@@ -185,7 +187,9 @@ impl InferCtx<'_> {
             | (Ty::Time, Ty::Time)
             | (Ty::Range, Ty::Range)
             | (Ty::Json, Ty::Json)
-            | (Ty::Ordering, Ty::Ordering) => true,
+            | (Ty::Ordering, Ty::Ordering)
+            | (Ty::FilePath, Ty::FilePath)
+            | (Ty::Path, Ty::Path) => true,
 
             // Type variables are compatible with anything
             (Ty::Var(_), _) | (_, Ty::Var(_)) => true,
@@ -316,6 +320,8 @@ impl InferCtx<'_> {
             "Range" => Ty::Range,
             "Json" => Ty::Json,
             "Ordering" => Ty::Ordering,
+            "FilePath" => Ty::FilePath,
+            "Path" => Ty::Path,
             _ => {
                 // Look up in registry
                 self.env
