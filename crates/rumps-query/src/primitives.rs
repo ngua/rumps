@@ -2772,6 +2772,186 @@ impl Directory {
             Ok(ctx.arena.add(Value::Unit, ctx.span))
         })
     }
+
+    /// `Io.Directory.canonicalize(path: FilePath) -> FilePath`
+    ///
+    /// Resolves a path to its absolute, canonical form.
+    pub(crate) fn canonicalize<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let canonical =
+                tokio::fs::canonicalize(&path_str).await.map_err(|e| {
+                    ctx.runtime_error(format!("Io.Directory.canonicalize: {e}"))
+                })?;
+            let sid = ctx.arena.intern(&canonical.to_string_lossy());
+            Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
+        })
+    }
+
+    /// `Io.Directory.parent(path: FilePath) -> Option[FilePath]`
+    ///
+    /// Returns the parent directory of a path.
+    pub(crate) fn parent<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path = std::path::Path::new(&path_str);
+
+            let fp_ty = ctx.type_exprs.named(TypeId::FILEPATH);
+            let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![fp_ty]);
+
+            match path.parent() {
+                Some(p) if !p.as_os_str().is_empty() => {
+                    let sid = ctx.arena.intern(&p.to_string_lossy());
+                    let fp = ctx.arena.add(Value::FilePath(sid), ctx.span);
+                    Ok(ctx.arena.add(Value::some(opt_ty, fp), ctx.span))
+                }
+                _ => Ok(ctx.arena.add(Value::none(opt_ty), ctx.span)),
+            }
+        })
+    }
+
+    /// `Io.Directory.file-name(path: FilePath) -> Option[String]`
+    ///
+    /// Returns the final component of a path.
+    pub(crate) fn file_name<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path = std::path::Path::new(&path_str);
+            let name_opt =
+                path.file_name().map(|n| n.to_string_lossy().to_string());
+
+            let str_ty = ctx.type_exprs.named(TypeId::STRING);
+            let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![str_ty]);
+
+            match name_opt {
+                Some(name) => {
+                    let sid = ctx.arena.intern(&name);
+                    let s = ctx.arena.add(Value::String(sid), ctx.span);
+                    Ok(ctx.arena.add(Value::some(opt_ty, s), ctx.span))
+                }
+                None => Ok(ctx.arena.add(Value::none(opt_ty), ctx.span)),
+            }
+        })
+    }
+
+    /// `Io.Directory.extension(path: FilePath) -> Option[String]`
+    ///
+    /// Returns the file extension, if any.
+    pub(crate) fn extension<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path = std::path::Path::new(&path_str);
+            let ext_opt =
+                path.extension().map(|e| e.to_string_lossy().to_string());
+
+            let str_ty = ctx.type_exprs.named(TypeId::STRING);
+            let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![str_ty]);
+
+            match ext_opt {
+                Some(ext) => {
+                    let sid = ctx.arena.intern(&ext);
+                    let s = ctx.arena.add(Value::String(sid), ctx.span);
+                    Ok(ctx.arena.add(Value::some(opt_ty, s), ctx.span))
+                }
+                None => Ok(ctx.arena.add(Value::none(opt_ty), ctx.span)),
+            }
+        })
+    }
+
+    /// `Io.Directory.join(base: FilePath, parts: Array[String]) -> FilePath`
+    ///
+    /// Joins path components.
+    pub(crate) fn join<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let base_str = Self::get_path_str(ctx, args[0]).to_string();
+
+            let parts = ctx.arena.get(args[1]).cloned().ok_or_else(|| {
+                ctx.runtime_error("Io.Directory.join: invalid array")
+            })?;
+
+            // Collect all parts as owned strings first
+            let part_strs: Vec<String> = match parts {
+                Value::Array(_, elems) => elems
+                    .iter()
+                    .map(|elem_id| {
+                        ctx.arena
+                            .get_string_id(*elem_id)
+                            .and_then(|sid| ctx.arena.get_str(sid))
+                            .map(String::from)
+                            .ok_or_else(|| {
+                                ctx.runtime_error(
+                                    "Io.Directory.join: invalid string in array",
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                _ => typechecked!("Io.Directory.join", "Array[String]"),
+            };
+
+            let mut path = std::path::PathBuf::from(&base_str);
+            part_strs.iter().for_each(|p| path.push(p));
+
+            let sid = ctx.arena.intern(&path.to_string_lossy());
+            Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
+        })
+    }
+
+    /// `Io.Directory.temp-dir() -> FilePath`
+    ///
+    /// Returns the system temporary directory.
+    pub(crate) fn temp_dir<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        _args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let tmp = std::env::temp_dir();
+            let sid = ctx.arena.intern(&tmp.to_string_lossy());
+            Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
+        })
+    }
+
+    /// `Io.Directory.with-extension(path: FilePath, ext: String) -> FilePath`
+    ///
+    /// Returns a new path with the given extension.
+    pub(crate) fn with_extension<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let ext = ctx
+                .arena
+                .get_string_id(args[1])
+                .and_then(|sid| ctx.arena.get_str(sid))
+                .map(String::from)
+                .ok_or_else(|| {
+                    ctx.runtime_error(
+                        "Io.Directory.with-extension: invalid extension",
+                    )
+                })?;
+
+            let mut path = std::path::PathBuf::from(&path_str);
+            path.set_extension(&ext);
+
+            let sid = ctx.arena.intern(&path.to_string_lossy());
+            Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
+        })
+    }
 }
 
 #[cfg(test)]

@@ -239,6 +239,18 @@ impl<I: IoContext> Interpreter<'_, I> {
             // FilePath identity
             (Value::FilePath(_), TypeId::FILEPATH) => Ok(val.clone()),
 
+            // Path -> FilePath (extract filepath from either File or Dir variant)
+            (Value::Tagged(ty, _, payloads), TypeId::FILEPATH)
+                if self.type_exprs.base_type(*ty) == Some(TypeId::PATH) =>
+            {
+                payloads
+                    .first()
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime_type(span, "invalid Path value")
+                    })
+            }
+
             // Unsupported conversion
             _ => {
                 let src_name = val.type_name(

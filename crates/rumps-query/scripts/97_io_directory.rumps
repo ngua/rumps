@@ -173,6 +173,84 @@ LET _ = Io.Directory.set-env({ name: "RUMPS_TEST_VAR", value: "test-value-123" }
 LET env-val = Io.Directory.get-env("RUMPS_TEST_VAR")
 OUTPUT env-val  ; Option.Some("test-value-123")
 
+; ============ Path AS FilePath ============
+
+; Path.File can be cast to FilePath
+LET file-path = Path.File(test-file) AS FilePath
+OUTPUT file-path IS FilePath  ; true
+
+; Path.Dir can be cast to FilePath
+LET dir-path = Path.Dir(test-dir) AS FilePath
+OUTPUT dir-path IS FilePath  ; true
+
+; ============ canonicalize ============
+
+; Canonicalize the test directory
+LET canonical = Io.Directory.canonicalize(test-dir)
+OUTPUT canonical IS FilePath  ; true
+OUTPUT Io.Directory.exists(canonical)  ; true
+
+; ============ parent ============
+
+; Get parent of test file
+LET file-parent = Io.Directory.parent(test-file)
+OUTPUT file-parent IS Option[FilePath]  ; true
+
+; The parent should exist (use unwrap-or to get the value)
+LET parent-fp = Option.unwrap-or(file-parent, "/" AS FilePath)
+OUTPUT Io.Directory.exists(parent-fp)  ; true
+
+; Root has no parent (or returns empty)
+LET root-parent = Io.Directory.parent("/" AS FilePath)
+OUTPUT root-parent  ; Option.None
+
+; ============ file-name ============
+
+; Get file name of test file
+LET fname = Io.Directory.file-name(test-file)
+OUTPUT fname  ; Option.Some("test-file.txt")
+
+; Get file name of directory
+LET dname = Io.Directory.file-name(test-dir)
+OUTPUT dname IS Option[String]  ; true
+
+; ============ extension ============
+
+; Get extension of test file
+LET ext = Io.Directory.extension(test-file)
+OUTPUT ext  ; Option.Some("txt")
+
+; Get extension of file without extension
+LET no-ext-path = test-dir-path ++ "/noext"
+LET no-ext-file = no-ext-path AS FilePath
+LET _ = Io.Directory.write-file({ path: no-ext-file, contents: "no extension" })
+LET no-ext = Io.Directory.extension(no-ext-file)
+OUTPUT no-ext  ; Option.None
+
+; ============ with-extension ============
+
+; Change extension
+LET new-ext = Io.Directory.with-extension(test-file, "md")
+OUTPUT Io.Directory.extension(new-ext)  ; Option.Some("md")
+
+; Add extension
+LET added-ext = Io.Directory.with-extension(no-ext-file, "json")
+OUTPUT Io.Directory.extension(added-ext)  ; Option.Some("json")
+
+; ============ join ============
+
+; Join path components
+LET joined = Io.Directory.join(test-dir, ["foo", "bar", "baz.txt"])
+OUTPUT joined IS FilePath  ; true
+OUTPUT Io.Directory.file-name(joined)  ; Option.Some("baz.txt")
+
+; ============ temp-dir ============
+
+; Get system temp directory
+LET tmp = Io.Directory.temp-dir()
+OUTPUT tmp IS FilePath  ; true
+OUTPUT Io.Directory.is-dir(tmp)  ; true
+
 ; ============ Cleanup: remove-all ============
 
 ; Clean up the entire test directory

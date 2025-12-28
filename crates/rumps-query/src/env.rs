@@ -1154,6 +1154,41 @@ impl Environment {
                 f: Directory::set_env,
                 ty: scheme!(consts; ({ name: String, value: String }) -> Unit),
             },
+            PrimDef {
+                name: "canonicalize",
+                f: Directory::canonicalize,
+                ty: scheme!((FilePath) -> FilePath),
+            },
+            PrimDef {
+                name: "parent",
+                f: Directory::parent,
+                ty: scheme!((FilePath) -> Option[FilePath]),
+            },
+            PrimDef {
+                name: "file-name",
+                f: Directory::file_name,
+                ty: scheme!((FilePath) -> Option[String]),
+            },
+            PrimDef {
+                name: "extension",
+                f: Directory::extension,
+                ty: scheme!((FilePath) -> Option[String]),
+            },
+            PrimDef {
+                name: "join",
+                f: Directory::join,
+                ty: scheme!((FilePath, Array[String]) -> FilePath),
+            },
+            PrimDef {
+                name: "temp-dir",
+                f: Directory::temp_dir,
+                ty: scheme!(() -> FilePath),
+            },
+            PrimDef {
+                name: "with-extension",
+                f: Directory::with_extension,
+                ty: scheme!((FilePath, String) -> FilePath),
+            },
         ])
     }
 }

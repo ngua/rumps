@@ -1183,6 +1183,12 @@ impl InferCtx<'_> {
                 // String -> FilePath
                 (Ty::String, Ty::FilePath) => Ty::FilePath,
 
+                // Path -> FilePath (extract filepath from File or Dir variant)
+                (Ty::Path, Ty::FilePath) => Ty::FilePath,
+                (Ty::Named(id, _), Ty::FilePath) if *id == TypeId::PATH => {
+                    Ty::FilePath
+                }
+
                 // Same type is always valid
                 (a, b) if a == b => target_ty,
 
