@@ -60,6 +60,7 @@ impl<'a> TyPrinter<'a> {
             Ty::Ordering => "Ordering".to_owned(),
             Ty::FilePath => "FilePath".to_owned(),
             Ty::Path => "Path".to_owned(),
+            Ty::Regex => "Regex".to_owned(),
             Ty::Unknown => "_".to_owned(),
             Ty::Error => "<error>".to_owned(),
             Ty::Array(t) => format!("Array[{}]", self.format_inner(t, namer)),
@@ -310,6 +311,10 @@ pub(crate) enum TypeError {
     /// Used for errors that don't fit into the other categories.
     #[error("{msg}")]
     Custom { msg: String, span: Span },
+
+    /// Invalid regex pattern.
+    #[error("invalid regex pattern `{0}`: {1}")]
+    InvalidRegex(String, String, Span),
 }
 
 impl TypeError {
@@ -342,7 +347,8 @@ impl TypeError {
             | Self::EmptyUnion(span)
             | Self::NotAUnionMember { span, .. }
             | Self::InvalidCast { span, .. }
-            | Self::Custom { span, .. } => *span,
+            | Self::Custom { span, .. }
+            | Self::InvalidRegex(_, _, span) => *span,
         }
     }
 
@@ -500,6 +506,10 @@ impl TypeError {
                 Some("use `READ` for fallible conversion or `MATCH`/`IS` for narrowing".to_owned()),
             ),
             Self::Custom { msg, .. } => (msg.clone(), None),
+            Self::InvalidRegex(pattern, err, _) => (
+                format!("invalid regex pattern `/{pattern}/`: {err}"),
+                None,
+            ),
         };
 
         FormattedTypeError {
@@ -588,6 +598,7 @@ impl fmt::Display for Ty {
             Self::Ordering => write!(f, "Ordering"),
             Self::FilePath => write!(f, "FilePath"),
             Self::Path => write!(f, "Path"),
+            Self::Regex => write!(f, "Regex"),
             Self::Unknown => write!(f, "Unknown"),
             Self::Error => write!(f, "<error>"),
             Self::Array(t) => write!(f, "Array[{t}]"),

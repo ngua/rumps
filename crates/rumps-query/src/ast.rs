@@ -730,6 +730,21 @@ pub(crate) enum Expr {
     /// | `->`     | `Key`              | `Json` (null if missing)               |
     /// | `->>`    | `ScalarKey`        | `Option[Bool \| Int \| Float \| String]` |
     JsonAccess(ExprId, JsonAccessKind, JsonAccessKey),
+
+    /// Regex literal: `/pattern/`.
+    ///
+    /// Compiles to a `Value::Regex` at runtime. The pattern is validated
+    /// during type checking; invalid patterns produce type errors.
+    ///
+    /// The `Option<u32>` is filled in during typechecking with the cache
+    /// index of the compiled regex.
+    Regex(String, Option<u32>),
+
+    /// Regex match: `expr MATCHES pattern`.
+    ///
+    /// Returns `Bool`. The left operand must be `Stringable` (convertible to
+    /// `String`); the right operand must be `Regex`.
+    Matches(ExprId, ExprId),
 }
 
 /// The kind of JSON access operation.

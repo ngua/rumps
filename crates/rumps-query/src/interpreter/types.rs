@@ -22,6 +22,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Char(_) => self.type_exprs.named(TypeId::CHAR),
             Value::String(_) => self.type_exprs.named(TypeId::STRING),
             Value::FilePath(_) => self.type_exprs.named(TypeId::FILEPATH),
+            Value::Regex(_) => self.type_exprs.named(TypeId::REGEX),
             Value::Array(elem_ty, _) => {
                 // Array[elem_ty]
                 self.type_exprs
@@ -779,6 +780,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Char(_) => type_id == TypeId::CHAR,
             Value::String(_) => type_id == TypeId::STRING,
             Value::FilePath(_) => type_id == TypeId::FILEPATH,
+            Value::Regex(_) => type_id == TypeId::REGEX,
             Value::Array(_, _) => type_id == TypeId::ARRAY,
             Value::Object(_) => type_id == TypeId::OBJECT,
             Value::Tuple(_, _) => type_id == TypeId::TUPLE,

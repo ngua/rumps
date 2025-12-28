@@ -355,9 +355,10 @@ impl Array {
                         None
                     }
 
-                    // Unit, closures, functions, module functions, ranges, and paths are not comparable
+                    // Unit, closures, functions, module functions, ranges, paths, and regex are not comparable
                     Value::Unit
                     | Value::FilePath(_)
+                    | Value::Regex(_)
                     | Value::Closure { .. }
                     | Value::Function { .. }
                     | Value::ModuleFn { .. }

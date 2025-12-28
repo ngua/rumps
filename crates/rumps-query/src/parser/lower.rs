@@ -295,6 +295,12 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             };
             Expr::JsonAccess(base_id, kind, key_lowered)
         }
+        cst::ExprKind::Regex(pattern) => Expr::Regex(pattern, None),
+        cst::ExprKind::Matches(lhs, rhs) => {
+            let lhs_id = lower_expr(ast, *lhs)?;
+            let rhs_id = lower_expr(ast, *rhs)?;
+            Expr::Matches(lhs_id, rhs_id)
+        }
         cst::ExprKind::Error(msg) => {
             Err(crate::Error::parse(span, msg, vec![]))?
         }

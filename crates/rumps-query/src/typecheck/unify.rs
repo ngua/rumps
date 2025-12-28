@@ -95,7 +95,8 @@ impl<'a> InferCtx<'a> {
             | (Ty::Json, Ty::Json)
             | (Ty::Ordering, Ty::Ordering)
             | (Ty::FilePath, Ty::FilePath)
-            | (Ty::Path, Ty::Path) => UnifyResult::Ok(Subst::empty()),
+            | (Ty::Path, Ty::Path)
+            | (Ty::Regex, Ty::Regex) => UnifyResult::Ok(Subst::empty()),
 
             // Numeric coercion: Int and Float unify (widening)
             (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) => {
@@ -798,8 +799,8 @@ impl<'a> InferCtx<'a> {
                 args.iter().for_each(|a| self.check_jsonable(a, span));
             }
 
-            // Functions cannot be serialized to JSON
-            Ty::Fn(_, _) => {
+            // Functions and regex cannot be serialized to JSON
+            Ty::Fn(_, _) | Ty::Regex => {
                 self.error(TypeError::NotJsonable(ty.clone(), span));
             }
 

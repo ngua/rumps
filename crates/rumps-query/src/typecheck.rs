@@ -19,12 +19,14 @@ mod infer;
 mod ty;
 mod unify;
 
+use std::collections::HashMap;
+
 pub(crate) use env::TypeEnv;
 pub(crate) use error::{FormattedTypeError, TyPrinter, TypeError};
 pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use ty::{Scheme, Subst, Ty, TyVar};
 
-use crate::ast::{Ast, StmtId};
+use crate::ast::{Ast, ExprId, StmtId};
 use crate::env::Environment;
 use crate::intern::StringInterner;
 use crate::value::{TypeExprArena, TypeRegistry, ValueArena};
@@ -32,7 +34,8 @@ use crate::value::{TypeExprArena, TypeRegistry, ValueArena};
 /// Run the type checker on an AST.
 ///
 /// Performs type inference and constraint solving on all statements. Returns
-/// `Ok(())` if the program is well-typed, or `Err` with collected type errors.
+/// a cache of compiled regex patterns on success, or `Err` with collected
+/// type errors.
 ///
 /// # Arguments
 ///
@@ -51,7 +54,7 @@ pub(crate) fn check(
     runtime_env: &Environment,
     arena: &ValueArena,
     strings: StringInterner,
-) -> crate::Result<()> {
+) -> crate::Result<(Vec<regex::Regex>, HashMap<ExprId, u32>)> {
     let mut ctx =
         InferCtx::new(ast, registry, type_exprs, runtime_env, strings);
 

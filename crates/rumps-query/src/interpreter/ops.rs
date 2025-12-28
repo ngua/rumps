@@ -406,4 +406,30 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .is_some_and(|(va, vb)| self.values_equal(va, vb))
         })
     }
+
+    /// Evaluate a `MATCHES` expression.
+    ///
+    /// Stringifies the LHS and tests it against the RHS regex pattern.
+    /// Type checker guarantees RHS is a `Regex` value.
+    pub(super) async fn matches(
+        &mut self,
+        lhs: crate::ast::ExprId,
+        rhs: crate::ast::ExprId,
+    ) -> Result<Value> {
+        let lhs_val = self.eval(lhs).await?;
+        let rhs_val = self.eval(rhs).await?;
+
+        // Stringify the LHS (Stringable constraint verified by typechecker)
+        let text = self.stringify(&lhs_val);
+
+        // Get the regex cache index from RHS (typechecker guarantees Regex)
+        let idx = match rhs_val {
+            Value::Regex(idx) => idx,
+            _ => typechecked!("MATCHES", "Regex"),
+        };
+        let re = self.regex_cache.get(idx as usize).unwrap_or_else(|| {
+            typechecked!("MATCHES regex", "valid cache index")
+        });
+        Ok(Value::Bool(re.is_match(&text)))
+    }
 }

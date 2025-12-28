@@ -744,7 +744,8 @@ impl Parser {
             let range = Self::range_expr(add);
             let cmp = Self::cmp_expr(range).boxed();
             let is = Self::is_expr(cmp, ty_pat.clone());
-            let as_cast = Self::as_expr(is, ty.clone());
+            let matches = Self::matches_expr(is);
+            let as_cast = Self::as_expr(matches, ty.clone());
             let read = Self::read_expr(as_cast, ty.clone()).boxed();
             let and = Self::and_expr(read);
             let or = Self::or_expr(and);
@@ -860,6 +861,28 @@ impl Parser {
                     cst::Expr::new(cst::ExprKind::Is(Box::new(expr), pat), span)
                 }
                 None => expr,
+            },
+        )
+    }
+
+    /// Parse a `MATCHES` expression: `expr MATCHES regex`.
+    fn matches_expr(
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let matches_rhs = Self::opt_newlines()
+            .ignore_then(just(Token::Matches))
+            .then_ignore(Self::opt_newlines())
+            .ignore_then(operand.clone());
+
+        operand.clone().then(matches_rhs.or_not()).map_with_span(
+            |(lhs, rhs), span| match rhs {
+                Some(r) => cst::Expr::new(
+                    cst::ExprKind::Matches(Box::new(lhs), Box::new(r)),
+                    span,
+                ),
+                None => lhs,
             },
         )
     }
@@ -1426,6 +1449,12 @@ impl Parser {
             cst::Expr::new(cst::ExprKind::Literal(lit), span)
         });
 
+        // Regex literal: `/pattern/`
+        let regex_lit =
+            select! { Token::Regex(s) => s }.map_with_span(|pattern, span| {
+                cst::Expr::new(cst::ExprKind::Regex(pattern), span)
+            });
+
         // Lexical variable
         let var = Self::ident().map_with_span(|name, span| {
             cst::Expr::new(cst::ExprKind::Var(name), span)
@@ -1798,6 +1827,7 @@ impl Parser {
         // Order matters (see original parser for rationale)
         choice((
             literal,
+            regex_lit,
             closure_single,
             closure_multi,
             global,

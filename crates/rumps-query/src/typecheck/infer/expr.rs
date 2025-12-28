@@ -32,13 +32,13 @@ impl InferCtx<'_> {
         let ty = self
             .ast
             .get_expr(id)
-            .map_or_else(|| Ty::Error, |expr| self.expr_inner(expr, span));
+            .map_or_else(|| Ty::Error, |expr| self.expr_inner(id, expr, span));
         self.record_type(id, ty.clone());
         ty
     }
 
     /// Inner expression inference; dispatches on expression variant.
-    fn expr_inner(&mut self, expr: &Expr, span: Span) -> Ty {
+    fn expr_inner(&mut self, id: ExprId, expr: &Expr, span: Span) -> Ty {
         match expr {
             // Literals
             Expr::Literal(lit) => self.literal(lit),
@@ -178,6 +178,29 @@ impl InferCtx<'_> {
                         )
                     })
                     .unwrap_or(Ty::Unknown)
+            }
+
+            // Regex literal: `/pattern/`
+            Expr::Regex(pattern, _) => {
+                // Compile and cache the regex pattern; invalid patterns
+                // produce a type error during compile_regex
+                self.compile_regex(pattern, span)
+                    .map(|idx| self.regex_indices.insert(id, idx));
+                Ty::Regex
+            }
+
+            // Regex match: `expr MATCHES regex`
+            Expr::Matches(lhs, rhs) => {
+                let lhs_ty = self.expr(*lhs);
+                let rhs_ty = self.expr(*rhs);
+
+                // LHS must be Stringable
+                self.constrain(Constraint::Stringable(lhs_ty, span));
+
+                // RHS must be Regex
+                self.unify(rhs_ty, Ty::Regex, span);
+
+                Ty::Bool
             }
         }
     }

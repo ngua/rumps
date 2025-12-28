@@ -1,0 +1,6 @@
+; Regex error handling
+; Tests invalid regex patterns produce type errors
+
+; Invalid regex pattern (unclosed group)
+LET r = /(abc/
+OUTPUT "test" MATCHES r

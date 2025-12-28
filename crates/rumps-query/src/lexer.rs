@@ -233,11 +233,51 @@ impl Lexer<'_> {
         choice((
             Self::string_lit(),
             Self::char_lit(),
+            Self::regex_lit(),
             Self::number(),
             Self::global(),
             Self::ident_or_keyword(),
             Self::operator_or_punct(),
         ))
+    }
+
+    /// Regex literal: `/pattern/`.
+    ///
+    /// Handles escape sequences (`\/`, `\\`). Regex ends at unescaped `/`.
+    /// Distinguished from division by requiring non-whitespace content
+    /// immediately after the opening `/`.
+    fn regex_lit() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+        // Escape sequence: `\X` where X is any character except newline
+        // Preserves the backslash in the output for the regex engine
+        let escape_seq = just('\\')
+            .then(filter(|c: &char| *c != '\n'))
+            .map(|(bs, c)| format!("{bs}{c}"));
+
+        // Regular character in regex (not `/`, `\`, or newline)
+        let regular = filter(|c: &char| *c != '/' && *c != '\\' && *c != '\n')
+            .map(|c: char| c.to_string());
+
+        // Content character: escape sequence or regular character
+        let content_char = escape_seq.clone().or(regular.clone());
+
+        // First element must be non-whitespace to distinguish `/pattern/` from `a / b`
+        // Can be either a non-whitespace regular char or an escape sequence
+        let first_regular = filter(|c: &char| {
+            !c.is_whitespace() && *c != '/' && *c != '\\' && *c != '\n'
+        })
+        .map(|c: char| c.to_string());
+        let first_element = escape_seq.or(first_regular);
+
+        // Regex pattern: `/` + first element + more content + `/`
+        just('/')
+            .ignore_then(first_element)
+            .then(content_char.repeated().collect::<Vec<_>>())
+            .then_ignore(just('/'))
+            .map_with_span(|(first, rest), span| {
+                let pattern =
+                    std::iter::once(first).chain(rest).collect::<String>();
+                Spanned::from_range(Token::Regex(pattern), span)
+            })
     }
 
     fn string_lit() -> impl Parser<char, Spanned, Error = LexErr> + Clone {

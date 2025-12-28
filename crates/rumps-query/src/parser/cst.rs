@@ -232,6 +232,17 @@ pub(crate) enum ExprKind {
     /// - `JsonAccessKind::Json`: `.` or `->` (returns Json)
     /// - `JsonAccessKind::Scalar`: `..` or `->>` (returns Option[scalar])
     JsonAccess(Box<Expr>, JsonAccessKind, JsonAccessKey),
+
+    /// Regex literal: `/pattern/`.
+    ///
+    /// The pattern string is stored as-is; validation happens during
+    /// type checking (invalid patterns produce type errors).
+    Regex(String),
+
+    /// Regex match: `expr MATCHES pattern`.
+    ///
+    /// Returns `Bool`. The left operand must be `Stringable`.
+    Matches(Box<Expr>, Box<Expr>),
 }
 
 /// The key specification for JSON access (CST form).

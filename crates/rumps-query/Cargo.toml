@@ -16,6 +16,7 @@ futures = { workspace = true }
 indexmap = "2"
 itertools = { workspace = true }
 rand = "0.8"
+regex = "1"
 unicode-segmentation = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 ordered-float = { workspace = true }

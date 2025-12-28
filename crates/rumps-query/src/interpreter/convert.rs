@@ -36,6 +36,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| rumps_types::Value::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
+            // Regex cannot be stored
+            Value::Regex(_) => {
+                Err(Error::runtime_no_span("Regex cannot be stored"))
+            }
             // Serialize to JSON for complex values (closures, module fns,
             // and ranges will error in jsonify)
             Value::Array(_, _)
@@ -94,6 +98,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Value::FilePath(id) => {
                 self.arena.get_str(*id).unwrap_or("").to_owned()
+            }
+            Value::Regex(idx) => {
+                let re =
+                    self.regex_cache.get(*idx as usize).unwrap_or_else(|| {
+                        typechecked!("stringify Regex", "valid cache index")
+                    });
+                format!("/{}/", re.as_str())
             }
             Value::Array(_, elems) => {
                 let items = elems
@@ -331,6 +342,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ModuleFn { .. } => Err(Error::runtime_no_span(
                 "module functions cannot be serialized to JSON",
             )),
+            Value::Regex(_) => Err(Error::runtime_no_span(
+                "regex patterns cannot be serialized to JSON",
+            )),
         }
     }
 
@@ -410,6 +424,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Time(_)
             | Value::Json(_)
             | Value::FilePath(_)
+            | Value::Regex(_)
             | Value::Tagged(_, _, _)
             | Value::Closure { .. }
             | Value::Function { .. }

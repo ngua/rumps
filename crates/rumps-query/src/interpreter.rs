@@ -164,6 +164,14 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// I/O context for output operations.
     io: I,
+
+    /// Cache of compiled regex patterns (populated during typechecking).
+    ///
+    /// `Value::Regex(idx)` holds an index into this cache.
+    regex_cache: Vec<regex::Regex>,
+
+    /// Mapping from regex expression IDs to cache indices.
+    regex_indices: HashMap<ExprId, u32>,
 }
 
 // Public API
@@ -195,7 +203,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let env = Environment::new();
 
         // Run type checking after resolution
-        crate::typecheck::check(
+        let (regex_cache, regex_indices) = crate::typecheck::check(
             ast,
             stmts,
             &registry,
@@ -212,6 +220,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             txn: None,
             arena,
             registry,
+            regex_cache,
+            regex_indices,
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -234,7 +244,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Create an interpreter with a pre-created arena and registry.
     ///
     /// Used by tests that need direct control over the arena/registry,
-    /// bypassing name resolution.
+    /// bypassing name resolution and typechecking.
     #[cfg(test)]
     pub(crate) fn with_arena(
         ast: &'a Ast,
@@ -251,6 +261,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             txn: None,
             arena,
             registry,
+            regex_cache: Vec::new(),
+            regex_indices: HashMap::new(),
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -321,6 +333,15 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::JsonAccess(base, kind, key) => {
                 self.json_access(base, kind, &key, span).await
             }
+            Expr::Regex(_, _) => {
+                // Look up the cache index set during typechecking
+                let idx =
+                    self.regex_indices.get(&id).copied().ok_or_else(|| {
+                        Error::runtime(span, "regex not compiled")
+                    })?;
+                Ok(Value::Regex(idx))
+            }
+            Expr::Matches(lhs, rhs) => self.matches(lhs, rhs).await,
         }
     }
 }

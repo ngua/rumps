@@ -193,6 +193,15 @@ pub(crate) struct InferCtx<'a> {
     expr_types: HashMap<ExprId, Ty>,
     /// Type errors encountered during inference.
     errors: Vec<TypeError>,
+    /// Cache of compiled regex patterns (validated during typechecking).
+    ///
+    /// Regex literals are compiled here; invalid patterns produce type errors.
+    /// The interpreter retrieves compiled patterns by index.
+    regex_cache: Vec<regex::Regex>,
+    /// Mapping from regex expression IDs to cache indices.
+    ///
+    /// When interpreting an `Expr::Regex`, look up the cache index here.
+    regex_indices: HashMap<ExprId, u32>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -219,6 +228,33 @@ impl<'a> InferCtx<'a> {
             next_var: 0,
             expr_types: HashMap::new(),
             errors: Vec::new(),
+            regex_cache: Vec::new(),
+            regex_indices: HashMap::new(),
+        }
+    }
+
+    /// Compile a regex pattern, caching it and returning the cache index.
+    ///
+    /// If the pattern is invalid, records a type error and returns `None`.
+    pub(crate) fn compile_regex(
+        &mut self,
+        pattern: &str,
+        span: Span,
+    ) -> Option<u32> {
+        match regex::Regex::new(pattern) {
+            Ok(r) => {
+                let idx = self.regex_cache.len() as u32;
+                self.regex_cache.push(r);
+                Some(idx)
+            }
+            Err(e) => {
+                self.error(TypeError::InvalidRegex(
+                    pattern.to_string(),
+                    e.to_string(),
+                    span,
+                ));
+                None
+            }
         }
     }
 
@@ -346,20 +382,27 @@ impl<'a> InferCtx<'a> {
         });
     }
 
-    /// Consume the context and return formatted errors.
+    /// Consume the context and return formatted errors or the regex cache.
     ///
-    /// Unlike `into_result`, this formats type errors with proper type names
-    /// using the provided registry and arena.
+    /// On success, returns the cache of compiled regex patterns. On failure,
+    /// returns formatted type errors with proper type names using the provided
+    /// registry and arena.
+    /// Consume the context, returning the regex cache and index map on success,
+    /// or formatted type errors on failure.
     pub(crate) fn into_result_formatted(
         self,
         registry: &TypeRegistry,
         arena: &crate::value::ValueArena,
-    ) -> crate::Result<()> {
-        NonEmpty::from_vec(self.errors).map_or(Ok(()), |errs| {
-            let printer = TyPrinter::new(registry, arena, &self.env.strings);
-            let formatted = errs.map(|e| e.format_with(&printer));
-            let errors = formatted.map(crate::Error::FormattedType);
-            Err(crate::Error::multiple(errors))
-        })
+    ) -> crate::Result<(Vec<regex::Regex>, HashMap<ExprId, u32>)> {
+        NonEmpty::from_vec(self.errors).map_or(
+            Ok((self.regex_cache, self.regex_indices)),
+            |errs| {
+                let printer =
+                    TyPrinter::new(registry, arena, &self.env.strings);
+                let formatted = errs.map(|e| e.format_with(&printer));
+                let errors = formatted.map(crate::Error::FormattedType);
+                Err(crate::Error::multiple(errors))
+            },
+        )
     }
 }

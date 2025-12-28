@@ -28,6 +28,7 @@ pub(crate) enum Token {
     Fun,
     Type,
     Match,
+    Matches,
     Union,
     Module,
 
@@ -36,6 +37,8 @@ pub(crate) enum Token {
     Float(OrderedFloat<f64>),
     Char(char),
     String(String),
+    /// Regex literal: `/pattern/`.
+    Regex(String),
     /// JSON null; only valid in JSON contexts (quoted-key objects, arrays).
     Null,
 
@@ -135,6 +138,7 @@ impl Token {
                 "FUN" => Some(Self::Fun),
                 "TYPE" => Some(Self::Type),
                 "MATCH" => Some(Self::Match),
+                "MATCHES" => Some(Self::Matches),
                 "UNION" => Some(Self::Union),
                 "MODULE" => Some(Self::Module),
                 // `null` is case-sensitive; other casings are identifiers
@@ -166,12 +170,14 @@ impl fmt::Display for Token {
             Self::Fun => write!(f, "FUN"),
             Self::Type => write!(f, "TYPE"),
             Self::Match => write!(f, "MATCH"),
+            Self::Matches => write!(f, "MATCHES"),
             Self::Union => write!(f, "UNION"),
             Self::Module => write!(f, "MODULE"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),
             Self::String(s) => write!(f, "\"{s}\""),
+            Self::Regex(p) => write!(f, "/{p}/"),
             Self::Null => write!(f, "null"),
             Self::Ident(s) => write!(f, "{s}"),
             Self::Global(s) => write!(f, "^{s}"),

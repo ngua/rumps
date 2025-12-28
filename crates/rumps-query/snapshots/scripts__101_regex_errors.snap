@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Regex error handling\n; Tests invalid regex patterns produce type errors\n\n; Invalid regex pattern (unclosed group)\nLET r = /(abc/\nOUTPUT \"test\" MATCHES r\n"
+---
+ERROR: invalid regex pattern `/(abc/`: regex parse error:
+    (abc
+    ^
+error: unclosed group

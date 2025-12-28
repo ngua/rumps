@@ -1479,6 +1479,7 @@ dependencies = [
  "nonempty",
  "ordered-float",
  "rand",
+ "regex",
  "rumps-query-macros",
  "rumps-storage",
  "rumps-types",

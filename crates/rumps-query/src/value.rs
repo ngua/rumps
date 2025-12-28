@@ -141,6 +141,10 @@ impl TypeId {
     ///
     /// Represents a file system entry (file or directory).
     pub(crate) const PATH: Self = Self(19);
+    /// Builtin opaque type: `Regex`.
+    ///
+    /// Represents a compiled regular expression pattern.
+    pub(crate) const REGEX: Self = Self(20);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -433,6 +437,13 @@ pub(crate) enum Value {
     /// Used with `Io.Directory` module for file system operations.
     FilePath(StringId),
 
+    /// A compiled regular expression.
+    ///
+    /// Created from regex literals (`/pattern/`). The pattern is validated
+    /// and compiled during typechecking; at runtime we just retrieve the
+    /// pre-compiled regex by its cache index.
+    Regex(u32),
+
     /// A tagged value (sum type variant).
     ///
     /// - `TypeExprId`: the full parameterized type (e.g., `Option[Int]`, `Result[Int, String]`)
@@ -526,6 +537,7 @@ impl Value {
             Self::Time(_) => Cow::Borrowed("Time"),
             Self::Json(_) => Cow::Borrowed("Json"),
             Self::FilePath(_) => Cow::Borrowed("FilePath"),
+            Self::Regex(_) => Cow::Borrowed("Regex"),
             Self::Tagged(ty_expr, _, _) => Cow::Borrowed(
                 type_exprs
                     .base_type(*ty_expr)
@@ -640,6 +652,7 @@ impl Value {
             Self::Time(_) => TypeId::TIME,
             Self::Json(_) => TypeId::JSON,
             Self::FilePath(_) => TypeId::FILEPATH,
+            Self::Regex(_) => TypeId::REGEX,
             Self::Tagged(ty_expr, _, _) => {
                 type_exprs.base_type(*ty_expr).unwrap_or(TypeId::UNKNOWN)
             }
@@ -668,6 +681,7 @@ pub(crate) enum BuiltinType {
     Unit,
     Json,
     FilePath,
+    Regex,
 }
 
 impl BuiltinType {
@@ -687,6 +701,7 @@ impl BuiltinType {
             Self::Unit => "Unit",
             Self::Json => "Json",
             Self::FilePath => "FilePath",
+            Self::Regex => "Regex",
         }
     }
 }
@@ -1100,6 +1115,7 @@ impl TypeExprArena {
             Ty::Ordering => self.named(TypeId::ORDERING),
             Ty::FilePath => self.named(TypeId::FILEPATH),
             Ty::Path => self.named(TypeId::PATH),
+            Ty::Regex => self.named(TypeId::REGEX),
             Ty::Array(elem) => {
                 let elem_id = self.intern_ty(elem);
                 self.app(TypeId::ARRAY, smallvec![elem_id])
@@ -1589,6 +1605,18 @@ impl TypeRegistry {
             ))
         })?;
 
+        // Regex at index 20
+        let regex_name = arena.intern("Regex");
+        let regex =
+            self.register(TypeDef::Builtin(BuiltinType::Regex), regex_name);
+        (regex == TypeId::REGEX).then_some(()).ok_or_else(|| {
+            crate::Error::runtime_no_span(format!(
+                "Regex at index {}, expected {}",
+                regex.0,
+                TypeId::REGEX.0
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -1969,8 +1997,8 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
         let reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
 
-        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path = 20
-        assert_eq!(reg.len(), 20);
+        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex = 21
+        assert_eq!(reg.len(), 21);
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");
