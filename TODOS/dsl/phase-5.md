@@ -278,10 +278,6 @@ Add to `parser/cst.rs`:
 
 ```rust
 /// Data query expression.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DataExpr {
-    pub(crate) var: VarRef,
-}
 ```
 
 ##### 5.2.5.2 Update ExprKind
@@ -292,15 +288,6 @@ Add `ExprKind::Data(DataExpr)` variant.
 
 ```rust
 /// `DATA var_ref`
-fn data_expr(
-    stmt: impl Parser<Token, cst::Stmt, Error = ParseErr> + Clone + 'static,
-) -> impl Parser<Token, cst::Expr, Error = ParseErr> {
-    just(Token::Data)
-        .ignore_then(Self::var_ref(stmt))
-        .map_with_span(|var, span| {
-            cst::Expr::new(cst::ExprKind::Data(cst::DataExpr { var }), span)
-        })
-}
 ```
 
 ### 5.2.6 AST
@@ -311,10 +298,6 @@ Add to `ast.rs`:
 
 ```rust
 /// Data query expression.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DataExpr {
-    pub(crate) var: VarRef,
-}
 ```
 
 ##### 5.2.6.2 Update Expr Enum
@@ -324,10 +307,7 @@ Add `Expr::Data(DataExpr)` variant.
 ### 5.2.7 Lowering (CST -> AST)
 
 ```rust
-cst::ExprKind::Data(data) => {
-    let var = lower_var_ref(ast, data.var)?;
-    Expr::Data(ast::DataExpr { var })
-}
+///
 ```
 
 ### 5.2.8 Builtin Type Registration
@@ -339,13 +319,7 @@ Follow the same pattern as `Ordering`. Register `DataStatus` as a builtin sum ty
 Add `Ty::DataStatus` variant to the `Ty` enum alongside other primitives:
 
 ```rust
-pub(crate) enum Ty {
-    // ... existing primitives ...
-    Ordering,
-    DataStatus,  // NEW
-    FilePath,
-    // ...
-}
+///
 ```
 
 Update all match arms in `Ty` methods (`free_vars`, `occurs`, `apply`) to handle `DataStatus` same as other primitives.
@@ -355,12 +329,7 @@ Update all match arms in `Ty` methods (`free_vars`, `occurs`, `apply`) to handle
 Add constant for the type ID:
 
 ```rust
-impl TypeId {
-    // ... existing constants ...
-    pub(crate) const ORDERING: Self = Self(17);
-    pub(crate) const DATA_STATUS: Self = Self(21);  // next available after REGEX(20)
-    // ...
-}
+///
 ```
 
 ##### 5.2.8.3 Type Registry (`value.rs`, `register_builtins`)
@@ -369,26 +338,6 @@ Register as `TypeDef::Sum` with four nullary variants:
 
 ```rust
 // DataStatus at index 21
-let data_status_name = arena.intern("DataStatus");
-let no_data = arena.intern("NoData");
-let has_value = arena.intern("HasValue");
-let has_descendants = arena.intern("HasDescendants");
-let both = arena.intern("Both");
-
-let data_status = self.register(
-    TypeDef::Sum {
-        name: data_status_name,
-        type_params: SmallVec::new(),
-        variants: smallvec::smallvec![
-            VariantDef { name: no_data, idx: 0, arity: 0, payloads: SmallVec::new() },
-            VariantDef { name: has_value, idx: 1, arity: 0, payloads: SmallVec::new() },
-            VariantDef { name: has_descendants, idx: 2, arity: 0, payloads: SmallVec::new() },
-            VariantDef { name: both, idx: 3, arity: 0, payloads: SmallVec::new() },
-        ],
-    },
-    data_status_name,
-);
-(data_status == TypeId::DATA_STATUS).then_some(()).ok_or_else(|| ...)?;
 ```
 
 **Note**: The variant `idx` values (`0`, `1`, `2`, `3`) are internal indices, NOT the MUMPS integer values. The `AS Int` conversion maps variant indices to MUMPS values (`0`, `1`, `10`, `11`).
@@ -398,7 +347,7 @@ let data_status = self.register(
 Add case for `Ty::DataStatus`:
 
 ```rust
-Ty::DataStatus => self.named(TypeId::DATA_STATUS),
+///
 ```
 
 ##### 5.2.8.5 Type Name Resolution (`typecheck/infer/convert.rs`)
@@ -406,7 +355,7 @@ Ty::DataStatus => self.named(TypeId::DATA_STATUS),
 Add to `parse_ty_name`:
 
 ```rust
-"DataStatus" => Ty::DataStatus,
+///
 ```
 
 ### 5.2.9 Typechecker
@@ -416,13 +365,7 @@ Add to `parse_ty_name`:
 The `DATA` expression always returns `DataStatus`:
 
 ```rust
-fn data(&mut self, data: &DataExpr, span: Span) -> TyId {
-    // Typecheck the variable reference (any subscripted var is valid)
-    self.var_ref(&data.var, span);
-
-    // Always returns DataStatus
-    self.ty(Ty::DataStatus)
-}
+///
 ```
 
 ##### 5.2.9.2 Unification (`typecheck/unify.rs`)
@@ -462,37 +405,19 @@ The inverse `(x: Int) READ DataStatus` is **fallible** since only `0`, `1`, `10`
 Add `DataStatus` variant to runtime values:
 
 ```rust
-pub enum Value {
-    // ... existing variants ...
-    DataStatus(rumps_types::DataStatus),
-}
+///
 ```
 
 ##### 5.2.10.2 DATA Evaluation
 
 ```rust
-async fn data(&mut self, data: &DataExpr) -> Result<Value> {
-    let (name, key) = self.resolve_var_ref(&data.var).await?;
-
-    let status = match &self.txn {
-        Some(txn) => txn.data(&name, &key).await?,
-        None => self.db.data(&name, &key).await?,
-    };
-
-    Ok(Value::DataStatus(status))
-}
+///
 ```
 
 ##### 5.2.10.3 AS Int Conversion
 
 ```rust
-fn coerce_as(&self, val: Value, target: &Ty, span: Span) -> Result<Value> {
-    match (val, target) {
-        // ... existing coercions ...
-        (Value::DataStatus(s), Ty::Int) => Ok(Value::Int(s as i64)),
-        // ...
-    }
-}
+///
 ```
 
 ### 5.2.11 Tests

@@ -234,6 +234,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Recursively collect remaining array elements as JSON with spread support.
     #[async_recursion]
+    #[allow(clippy::only_used_in_recursion)]
     async fn array_elems_json_tail_spread(
         &mut self,
         elems: &[ArrayElem],

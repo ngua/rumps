@@ -258,7 +258,7 @@ impl Lexer<'_> {
             .map(|c: char| c.to_string());
 
         // Content character: escape sequence or regular character
-        let content_char = escape_seq.clone().or(regular.clone());
+        let content_char = escape_seq.or(regular);
 
         // First element must be non-whitespace to distinguish `/pattern/` from `a / b`
         // Can be either a non-whitespace regular char or an escape sequence

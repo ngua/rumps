@@ -424,7 +424,7 @@ impl Parser {
         let to_file = Self::ctx_ident("TO")
             .ignore_then(Self::ctx_ident("FILE"))
             .ignore_then(Self::expr(stmt.clone()))
-            .map(cst::OutputTarget::File);
+            .map(|e| cst::OutputTarget::File(Box::new(e)));
 
         let target =
             to_error.or(to_file).or_not().map(|t| t.unwrap_or_default());

@@ -472,7 +472,7 @@ pub(crate) enum OutputTarget {
     /// Write to stderr.
     Stderr,
     /// Write to a file (path expression).
-    File(Expr),
+    File(Box<Expr>),
 }
 
 /// Extended output statement.

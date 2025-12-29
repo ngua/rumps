@@ -789,8 +789,13 @@ async fn if_true() {
     assert_eq!(result, Value::Int(0));
 }
 
+/// Tests that variables defined in inner blocks are not visible outside.
+///
+/// This should panic because the type checker would reject undefined variable
+/// references; we're bypassing it by constructing the AST directly.
 #[tokio::test]
-async fn if_else() {
+#[should_panic(expected = "type checker guarantees `var` satisfies `Defined`")]
+async fn if_else_scope_isolation() {
     let mut ast = Ast::new();
 
     // IF false { } ELSE { LET x = 42 }
@@ -814,16 +819,15 @@ async fn if_else() {
         .unwrap();
     let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 35)).unwrap();
 
-    // After IF, check x
+    // After IF, check x (undefined; type checker would reject this)
     let var = ast
         .add_expr(Expr::Var("x".into()), Span::new(0, 1))
         .unwrap();
 
     let mut interp = test_interp(&ast);
     interp.exec(if_stmt).await.unwrap();
-    // x was set in else block which exited, so x is not visible
-    let result = interp.eval(var).await;
-    assert!(result.is_err()); // x is not defined outside the block
+    // x was set in else block which exited, so x is not visible; panics
+    let _ = interp.eval(var).await;
 }
 
 #[tokio::test]
@@ -1389,9 +1393,15 @@ async fn variant_arity_mismatch_error() {
     assert!(result.is_err());
 }
 
+/// Tests that `Option` is not a valid variable (it's a type name).
+///
+/// This should panic because the type checker would reject undefined variable
+/// references; we're bypassing it by constructing the AST directly.
 #[tokio::test]
+#[should_panic(expected = "type checker guarantees `var` satisfies `Defined`")]
 async fn variant_some_requires_args() {
-    // Accessing Option.Some without args (as field) is an error
+    // Accessing Option.Some without args (as field) is an error;
+    // `Option` is a type, not a variable
     let mut ast = Ast::new();
     let base = ast
         .add_expr(Expr::Var("Option".into()), Span::new(0, 6))
@@ -1401,8 +1411,7 @@ async fn variant_some_requires_args() {
         .unwrap();
 
     let mut interp = test_interp(&ast);
-    let result = interp.eval(field).await;
-    assert!(result.is_err());
+    let _ = interp.eval(field).await;
 }
 
 #[tokio::test]
@@ -1763,11 +1772,16 @@ async fn is_variant_bind_else_branch() {
     assert_eq!(result, Value::Int(99));
 }
 
+/// Tests that pattern-bound variables are not visible outside the if branch.
+///
+/// This should panic because the type checker would reject undefined variable
+/// references; we're bypassing it by constructing the AST directly.
 #[tokio::test]
+#[should_panic(expected = "type checker guarantees `var` satisfies `Defined`")]
 async fn is_variant_bind_scope_isolated() {
     // `val` should NOT be visible after the IF
     // IF Option.Some(42) is Option.Some(val) { val } ELSE { 0 }
-    // val  // should error
+    // val  // undefined; type checker would reject
     let mut ast = Ast::new();
 
     // Option.Some(42)
@@ -1825,16 +1839,15 @@ async fn is_variant_bind_scope_isolated() {
         .unwrap();
     let if_stmt = ast.add_stmt(Stmt::Expr(if_expr), Span::new(0, 54)).unwrap();
 
-    // val (after if)
+    // val (after if; undefined)
     let val_ref2 = ast
         .add_expr(Expr::Var("val".into()), Span::new(56, 59))
         .unwrap();
 
     let mut interp = test_interp(&ast);
     interp.exec(if_stmt).await.unwrap();
-    // val should NOT be visible
-    let result = interp.eval(val_ref2).await;
-    assert!(result.is_err());
+    // val should NOT be visible; panics
+    let _ = interp.eval(val_ref2).await;
 }
 
 #[tokio::test]

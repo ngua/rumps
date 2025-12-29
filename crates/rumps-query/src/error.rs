@@ -366,11 +366,11 @@ mod tests {
 
     #[test]
     fn error_with_source_display() {
-        let src = "SET x = 10\nOUTPUT y";
-        let err = Error::runtime(Span::new(11, 17), "undefined variable `y`");
+        let src = "SET x = 10\nOUTPUT 1/0";
+        let err = Error::runtime(Span::new(11, 20), "division by zero");
         assert_eq!(
             err.display_with_source(src).to_string(),
-            "runtime error at 2:1: undefined variable `y`"
+            "runtime error at 2:1: division by zero"
         );
     }
 }

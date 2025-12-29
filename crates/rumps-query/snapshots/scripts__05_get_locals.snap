@@ -2,4 +2,12 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Test: GET locals\n; Tests retrieving values from local B-tree variables\n\n; Set up test data\nSET x = 42\nSET items(1) = \"first\"\nSET items(2) = \"second\"\nSET patient(123, \"name\") = \"John\"\nSET patient(123, \"age\") = 30\n\n; GET simple local\nLET val = GET x\nOUTPUT val\n; Expected: 42 (or Option.Some(42))\n\n; GET with subscript\nLET d1 = GET items(1)\nOUTPUT d1\n; Expected: first\n\nLET d2 = GET items(2)\nOUTPUT d2\n; Expected: second\n\n; GET with multiple subscripts\nLET name = GET patient(123, \"name\")\nOUTPUT name\n; Expected: John\n\nLET age = GET patient(123, \"age\")\nOUTPUT age\n; Expected: 30\n\n; GET non-existent key (should return Option.None)\nLET missing = GET items(999)\nOUTPUT missing\n; Expected: Option.None (or similar)\n\nLET missing2 = GET nonexistent\nOUTPUT missing2\n; Expected: Option.None\n\n; GET after overwrite\nSET x = 100\nLET newval = GET x\nOUTPUT newval\n; Expected: 100\n\nOUTPUT \"GET locals test complete\"\n"
 ---
-ERROR: runtime error at 645..659: undefined variable `items`
+Option.Some(42)
+Option.Some(first)
+Option.Some(second)
+Option.Some(John)
+Option.Some(30)
+Option.None
+Option.None
+Option.Some(100)
+GET locals test complete

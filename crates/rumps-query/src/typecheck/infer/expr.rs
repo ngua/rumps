@@ -473,31 +473,23 @@ impl InferCtx<'_> {
                     }
                     Ty::Named(ty_id, _args) => {
                         // Spreading a struct: get its fields
-                        if let Some(def) = self.registry.get_def(*ty_id) {
-                            if let TypeDef::Struct { fields, .. } = def {
-                                // Remember we spread this struct (for potential preservation)
-                                if spread_struct.is_none() && acc.is_empty() {
-                                    spread_struct = Some(*ty_id);
-                                } else {
-                                    // Multiple spreads or fields before spread; no preservation
-                                    spread_struct = None;
-                                }
-                                // Merge struct fields (convert AstTypeExprId -> Ty)
-                                let empty_subst = HashMap::new();
-                                fields.iter().for_each(|(k, ast_ty_id)| {
-                                    let field_ty = self.ast_type_to_ty(
-                                        *ast_ty_id,
-                                        &empty_subst,
-                                    );
-                                    acc.insert(*k, field_ty);
-                                });
+                        if let Some(TypeDef::Struct { fields, .. }) =
+                            self.registry.get_def(*ty_id)
+                        {
+                            // Remember we spread this struct (for potential preservation)
+                            if spread_struct.is_none() && acc.is_empty() {
+                                spread_struct = Some(*ty_id);
                             } else {
-                                self.error(TypeError::NotAnObjectSpread(
-                                    spread_ty.clone(),
-                                    span,
-                                ));
-                                has_error = true;
+                                // Multiple spreads or fields before spread; no preservation
+                                spread_struct = None;
                             }
+                            // Merge struct fields (convert AstTypeExprId -> Ty)
+                            let empty_subst = HashMap::new();
+                            fields.iter().for_each(|(k, ast_ty_id)| {
+                                let field_ty = self
+                                    .ast_type_to_ty(*ast_ty_id, &empty_subst);
+                                acc.insert(*k, field_ty);
+                            });
                         } else {
                             self.error(TypeError::NotAnObjectSpread(
                                 spread_ty.clone(),

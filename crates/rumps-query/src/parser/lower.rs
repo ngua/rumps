@@ -54,7 +54,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 cst::OutputTarget::Stdout => OutputTarget::Stdout,
                 cst::OutputTarget::Stderr => OutputTarget::Stderr,
                 cst::OutputTarget::File(path_expr) => {
-                    let path_id = lower_expr(ast, path_expr)?;
+                    let path_id = lower_expr(ast, *path_expr)?;
                     OutputTarget::File(path_id)
                 }
             };

@@ -8,6 +8,6 @@ Inside block
 a is true and b is false
 Made it past expression statements
 Debug mode enabled
-first
-second
+Option.Some(first)
+Option.Some(second)
 Expression statements test complete

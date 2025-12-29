@@ -45,12 +45,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
         .map_err(|e| Error::runtime(span, format!("GET failed: {e}")))?;
 
-        opt_val.map(|sv| self.load(sv)).ok_or_else(|| {
-            let prefix = if name.is_global() { "^" } else { "" };
-            Error::runtime(
-                span,
-                format!("undefined variable `{prefix}{}`", name.name()),
-            )
+        Ok(match opt_val {
+            None => self.make_none_scalar(),
+            Some(sv) => {
+                let v = self.load(sv);
+                let vid = self.arena.add(v, span);
+                self.make_some_scalar(vid)
+            }
         })
     }
 

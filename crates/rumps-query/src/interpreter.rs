@@ -281,7 +281,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
         match expr {
             Expr::Literal(lit) => Ok(self.literal(&lit)),
-            Expr::Var(name) => self.var(&name, span),
+            Expr::Var(name) => Ok(self.var(&name, span)),
             Expr::Local(_, _) => {
                 Err(Error::runtime(span, "cannot use local as value; use GET"))
             }
@@ -832,7 +832,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a lexical variable reference (LET bindings only).
     ///
     /// Does NOT fall back to B-tree locals; use `GET` for those.
-    fn var(&mut self, name: &str, span: Span) -> Result<Value> {
+    fn var(&mut self, name: &str, _span: Span) -> Value {
         let name_id = self.arena.intern(name);
 
         // First try lexical scope
@@ -849,9 +849,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     body: def.body,
                 })
             })
-            .ok_or_else(|| {
-                Error::runtime(span, format!("undefined variable `{name}`"))
-            })
+            .unwrap_or_else(|| typechecked!("var", "Defined"))
     }
 
     /// Evaluate a binary operation.
