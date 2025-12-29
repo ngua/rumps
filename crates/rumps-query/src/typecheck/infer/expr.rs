@@ -1434,8 +1434,8 @@ impl InferCtx<'_> {
 
     /// Infer type of `GET` expression.
     ///
-    /// Database reads return `Storable` union. Usage may narrow via
-    /// `IS`/`AS` checks or arithmetic operations.
+    /// Database reads return `Option[Storable]`; the value may not exist at the
+    /// given path. Usage may narrow via `IS`/`AS` checks or arithmetic operations.
     fn get(&mut self, inner_id: ExprId, span: Span) -> Ty {
         // Extract subscript IDs if Local or Global; ExprId is Copy so cheap
         let subs: SmallVec<[ExprId; 4]> = self
@@ -1453,7 +1453,7 @@ impl InferCtx<'_> {
             self.constrain(Constraint::Subscript(sub_ty, span));
         });
 
-        Ty::Named(TypeId::STORABLE, vec![])
+        Ty::Option(Box::new(Ty::Named(TypeId::STORABLE, vec![])))
     }
 
     /// Infer type of `DATA` expression.

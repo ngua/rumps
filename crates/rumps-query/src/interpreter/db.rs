@@ -46,11 +46,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         .map_err(|e| Error::runtime(span, format!("GET failed: {e}")))?;
 
         Ok(match opt_val {
-            None => self.make_none_scalar(),
+            None => self.make_none_storable(),
             Some(sv) => {
                 let v = self.load(sv);
                 let vid = self.arena.add(v, span);
-                self.make_some_scalar(vid)
+                self.make_some_storable(vid)
             }
         })
     }

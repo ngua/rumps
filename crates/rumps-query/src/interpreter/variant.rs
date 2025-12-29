@@ -44,6 +44,22 @@ impl<I: IoContext> Interpreter<'_, I> {
         Value::some(opt_ty, inner)
     }
 
+    /// Create an `Option.None` typed as `Option[Storable]`.
+    pub(super) fn make_none_storable(&mut self) -> Value {
+        let storable_ty = self.type_exprs.named(TypeId::STORABLE);
+        let opt_ty =
+            self.type_exprs.app(TypeId::OPTION, smallvec![storable_ty]);
+        Value::none(opt_ty)
+    }
+
+    /// Create an `Option.Some(v)` typed as `Option[Storable]`.
+    pub(super) fn make_some_storable(&mut self, inner: ValueId) -> Value {
+        let storable_ty = self.type_exprs.named(TypeId::STORABLE);
+        let opt_ty =
+            self.type_exprs.app(TypeId::OPTION, smallvec![storable_ty]);
+        Value::some(opt_ty, inner)
+    }
+
     /// Create a `Result.Ok(v)` value.
     pub(super) fn make_result_ok(&mut self, v: Value, span: Span) -> Value {
         let unknown = self.type_exprs.named(TypeId::UNKNOWN);
