@@ -2017,23 +2017,33 @@ impl Parser {
     /// Parse a user-facing constraint name.
     ///
     /// Recognizes: `Numeric`, `Stringable`, `Jsonable`, `Subscriptable`,
-    /// `Storable`, `Iterable`.
+    /// `Storable`, `Iterable`, `Iterable[T]`.
     fn constraint(
     ) -> impl chumsky::Parser<Token, cst::UserConstraint, Error = ParseErr> + Clone
     {
-        select! { Token::Ident(s) => s }.try_map(|name, span| match name.as_str()
-        {
-            "Numeric" => Ok(cst::UserConstraint::Numeric),
-            "Stringable" => Ok(cst::UserConstraint::Stringable),
-            "Jsonable" => Ok(cst::UserConstraint::Jsonable),
-            "Subscriptable" => Ok(cst::UserConstraint::Subscriptable),
-            "Storable" => Ok(cst::UserConstraint::Storable),
-            "Iterable" => Ok(cst::UserConstraint::Iterable),
-            _ => Err(Simple::custom(
-                span,
-                format!("unknown constraint `{name}`; valid constraints are: Numeric, Stringable, Jsonable, Subscriptable, Storable, Iterable"),
-            )),
-        })
+        // Optional element type for Iterable: `[T]`
+        let elem_param = just(Token::LBracket)
+            .ignore_then(Self::ident())
+            .then_ignore(just(Token::RBracket));
+
+        select! { Token::Ident(s) => s }
+            .then(elem_param.or_not())
+            .try_map(|(name, elem), span| match name.as_str() {
+                "Numeric" => Ok(cst::UserConstraint::Numeric),
+                "Stringable" => Ok(cst::UserConstraint::Stringable),
+                "Jsonable" => Ok(cst::UserConstraint::Jsonable),
+                "Subscriptable" => Ok(cst::UserConstraint::Subscriptable),
+                "Storable" => Ok(cst::UserConstraint::Storable),
+                "Iterable" => Ok(cst::UserConstraint::Iterable(elem)),
+                _ => Err(Simple::custom(
+                    span,
+                    format!(
+                        "unknown constraint `{name}`; valid constraints are: \
+                         Numeric, Stringable, Jsonable, Subscriptable, \
+                         Storable, Iterable[T]"
+                    ),
+                )),
+            })
     }
 
     /// Parse a type parameter with optional constraints: `T` or `T: C1 + C2`.

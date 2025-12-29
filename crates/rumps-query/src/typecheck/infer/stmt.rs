@@ -208,52 +208,83 @@ impl InferCtx<'_> {
         // Capture outer env free vars BEFORE binding function (for generalization)
         let outer_free = self.env.free_vars();
 
-        // Create fresh type variables for explicit type parameters and collect
-        // user-specified bounds for the scheme
-        let mut scheme_constraints: SmallVec<[(TyVar, UserConstraint); 2]> =
-            SmallVec::new();
+        // First pass: create fresh type variables for all type parameters
+        let name_to_tv: HashMap<&str, TyVar> = type_params
+            .iter()
+            .map(|tp| (tp.name.as_str(), self.fresh_var()))
+            .collect();
+
+        // Build type_param_subst (StringId -> Ty) for type resolution
         let type_param_subst: HashMap<_, _> = type_params
             .iter()
             .map(|tp| {
                 let id = self.env.intern(&tp.name);
-                let tv = self.fresh_var();
-                let ty = Ty::Var(tv);
-
-                // Emit constraints for each user-specified bound (for
-                // checking the function body) and collect them for the scheme
-                tp.constraints.iter().for_each(|c| {
-                    scheme_constraints.push((tv, c.clone()));
-                    let constraint = match c {
-                        UserConstraint::Numeric => {
-                            Constraint::Numeric(ty.clone(), span)
-                        }
-                        UserConstraint::Stringable => {
-                            Constraint::Stringable(ty.clone(), span)
-                        }
-                        UserConstraint::Jsonable => {
-                            Constraint::Jsonable(ty.clone(), span)
-                        }
-                        UserConstraint::Subscriptable => {
-                            Constraint::Subscriptable(ty.clone(), span)
-                        }
-                        UserConstraint::Storable => {
-                            Constraint::Storable(ty.clone(), span)
-                        }
-                        UserConstraint::Iterable => {
-                            let elem = self.fresh();
-                            Constraint::Iterable {
-                                coll: ty.clone(),
-                                elem,
-                                span,
-                            }
-                        }
-                    };
-                    self.constrain(constraint);
-                });
-
-                (id, ty)
+                let tv = name_to_tv[tp.name.as_str()];
+                (id, Ty::Var(tv))
             })
             .collect();
+
+        // Second pass: process constraints now that all type params are known
+        let mut scheme_constraints: SmallVec<
+            [(TyVar, UserConstraint, Option<TyVar>); 2],
+        > = SmallVec::new();
+
+        type_params.iter().for_each(|tp| {
+            let tv = name_to_tv[tp.name.as_str()];
+            let ty = Ty::Var(tv);
+
+            tp.constraints.iter().for_each(|c| {
+                // Resolve element type name for Iterable[T]
+                let elem_tv = match c {
+                    UserConstraint::Iterable(Some(el)) => {
+                        let tv = name_to_tv.get(el.as_str()).copied();
+                        if tv.is_none() {
+                            self.error(TypeError::Custom {
+                                msg: format!(
+                                    "unknown type parameter `{el}` in \
+                                     constraint `Iterable[{el}]`"
+                                ),
+                                span,
+                            });
+                        }
+                        tv
+                    }
+                    _ => None,
+                };
+                scheme_constraints.push((tv, c.clone(), elem_tv));
+
+                // Emit constraint for checking the function body
+                let constraint = match c {
+                    UserConstraint::Numeric => {
+                        Constraint::Numeric(ty.clone(), span)
+                    }
+                    UserConstraint::Stringable => {
+                        Constraint::Stringable(ty.clone(), span)
+                    }
+                    UserConstraint::Jsonable => {
+                        Constraint::Jsonable(ty.clone(), span)
+                    }
+                    UserConstraint::Subscriptable => {
+                        Constraint::Subscriptable(ty.clone(), span)
+                    }
+                    UserConstraint::Storable => {
+                        Constraint::Storable(ty.clone(), span)
+                    }
+                    UserConstraint::Iterable(_) => {
+                        // Use resolved elem type or fresh var
+                        let elem = elem_tv
+                            .map(Ty::Var)
+                            .unwrap_or_else(|| self.fresh());
+                        Constraint::Iterable {
+                            coll: ty.clone(),
+                            elem,
+                            span,
+                        }
+                    }
+                };
+                self.constrain(constraint);
+            });
+        });
 
         // Infer parameter types (using type param substitution)
         let param_tys = self.param_tys_with_subst(params, &type_param_subst);

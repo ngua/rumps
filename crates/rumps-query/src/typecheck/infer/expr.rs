@@ -797,47 +797,75 @@ impl InferCtx<'_> {
         body: ExprId,
         span: Span,
     ) -> Ty {
-        // Create fresh type variables for explicit type parameters and emit
-        // constraints for any user-specified bounds
+        // Two-pass approach: first create all type variables, then emit
+        // constraints (needed for Iterable[T] where T references another param)
         let type_param_subst: HashMap<_, _> = type_params
             .iter()
             .map(|tp| {
                 let id = self.env.intern(&tp.name);
                 let tv = self.fresh();
-
-                // Emit constraints for each user-specified bound
-                tp.constraints.iter().for_each(|c| {
-                    let constraint = match c {
-                        UserConstraint::Numeric => {
-                            Constraint::Numeric(tv.clone(), span)
-                        }
-                        UserConstraint::Stringable => {
-                            Constraint::Stringable(tv.clone(), span)
-                        }
-                        UserConstraint::Jsonable => {
-                            Constraint::Jsonable(tv.clone(), span)
-                        }
-                        UserConstraint::Subscriptable => {
-                            Constraint::Subscriptable(tv.clone(), span)
-                        }
-                        UserConstraint::Storable => {
-                            Constraint::Storable(tv.clone(), span)
-                        }
-                        UserConstraint::Iterable => {
-                            let elem = self.fresh();
-                            Constraint::Iterable {
-                                coll: tv.clone(),
-                                elem,
-                                span,
-                            }
-                        }
-                    };
-                    self.constrain(constraint);
-                });
-
                 (id, tv)
             })
             .collect();
+
+        // Build name -> Ty map for element type lookup
+        let name_to_ty: HashMap<&str, Ty> = type_params
+            .iter()
+            .map(|tp| {
+                let id = self.env.intern(&tp.name);
+                (tp.name.as_str(), type_param_subst.get(&id).unwrap().clone())
+            })
+            .collect();
+
+        // Emit constraints for each user-specified bound
+        type_params.iter().for_each(|tp| {
+            let id = self.env.intern(&tp.name);
+            let tv = type_param_subst.get(&id).unwrap();
+            tp.constraints.iter().for_each(|c| {
+                let constraint = match c {
+                    UserConstraint::Numeric => {
+                        Constraint::Numeric(tv.clone(), span)
+                    }
+                    UserConstraint::Stringable => {
+                        Constraint::Stringable(tv.clone(), span)
+                    }
+                    UserConstraint::Jsonable => {
+                        Constraint::Jsonable(tv.clone(), span)
+                    }
+                    UserConstraint::Subscriptable => {
+                        Constraint::Subscriptable(tv.clone(), span)
+                    }
+                    UserConstraint::Storable => {
+                        Constraint::Storable(tv.clone(), span)
+                    }
+                    UserConstraint::Iterable(elem_name) => {
+                        let elem = elem_name
+                            .as_ref()
+                            .map(|el| {
+                                name_to_ty.get(el.as_str()).cloned().unwrap_or_else(
+                                    || {
+                                        self.error(TypeError::Custom {
+                                            msg: format!(
+                                                "unknown type parameter `{el}` in \
+                                                 constraint `Iterable[{el}]`"
+                                            ),
+                                            span,
+                                        });
+                                        self.fresh()
+                                    },
+                                )
+                            })
+                            .unwrap_or_else(|| self.fresh());
+                        Constraint::Iterable {
+                            coll: tv.clone(),
+                            elem,
+                            span,
+                        }
+                    }
+                };
+                self.constrain(constraint);
+            });
+        });
 
         let param_tys = self.param_tys_with_subst(params, &type_param_subst);
 

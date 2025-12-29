@@ -272,7 +272,12 @@ pub(crate) struct Scheme {
     /// User-specified constraints on type variables.
     ///
     /// These are re-emitted when the scheme is instantiated at call sites.
-    pub(crate) constraints: SmallVec<[(TyVar, UserConstraint); 2]>,
+    /// The tuple contains:
+    /// - The type variable being constrained
+    /// - The constraint itself
+    /// - For `Iterable[T]`, the element type's TyVar (resolved from name)
+    pub(crate) constraints:
+        SmallVec<[(TyVar, UserConstraint, Option<TyVar>); 2]>,
 }
 
 impl Scheme {
@@ -322,11 +327,13 @@ impl Scheme {
     ///
     /// Takes a mutable counter for generating fresh `TyVar`s. Returns:
     /// - The concrete `Ty` with all quantified variables replaced by fresh ones
-    /// - The constraints with type variables substituted, to be re-emitted
+    /// - The constraints with type variables substituted, to be re-emitted;
+    ///   each entry is `(coll_ty, constraint, elem_ty)` where `elem_ty` is
+    ///   `Some` for `Iterable[T]` constraints
     pub(crate) fn instantiate(
         &self,
         next: &mut u32,
-    ) -> (Ty, SmallVec<[(Ty, UserConstraint); 2]>) {
+    ) -> (Ty, SmallVec<[(Ty, UserConstraint, Option<Ty>); 2]>) {
         if self.vars.is_empty() {
             (self.ty.clone(), SmallVec::new())
         } else {
@@ -346,9 +353,12 @@ impl Scheme {
             let constraints = self
                 .constraints
                 .iter()
-                .map(|(v, c)| {
+                .map(|(v, c, elem)| {
                     let ty = subst.0.get(v).cloned().unwrap_or(Ty::Var(*v));
-                    (ty, c.clone())
+                    let elem_ty = elem.map(|e| {
+                        subst.0.get(&e).cloned().unwrap_or(Ty::Var(e))
+                    });
+                    (ty, c.clone(), elem_ty)
                 })
                 .collect();
             (ty, constraints)

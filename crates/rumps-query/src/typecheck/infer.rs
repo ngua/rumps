@@ -289,11 +289,13 @@ impl<'a> InferCtx<'a> {
     /// call sites, not just at function definition.
     pub(crate) fn emit_user_constraints(
         &mut self,
-        constraints: smallvec::SmallVec<[(Ty, crate::ast::UserConstraint); 2]>,
+        constraints: smallvec::SmallVec<
+            [(Ty, crate::ast::UserConstraint, Option<Ty>); 2],
+        >,
         span: Span,
     ) {
         use crate::ast::UserConstraint;
-        constraints.into_iter().for_each(|(ty, c)| {
+        constraints.into_iter().for_each(|(ty, c, elem_ty)| {
             let constraint = match c {
                 UserConstraint::Numeric => Constraint::Numeric(ty, span),
                 UserConstraint::Stringable => Constraint::Stringable(ty, span),
@@ -302,8 +304,9 @@ impl<'a> InferCtx<'a> {
                     Constraint::Subscriptable(ty, span)
                 }
                 UserConstraint::Storable => Constraint::Storable(ty, span),
-                UserConstraint::Iterable => {
-                    let elem = self.fresh();
+                UserConstraint::Iterable(_) => {
+                    // Use pre-resolved element type if available, else fresh
+                    let elem = elem_ty.unwrap_or_else(|| self.fresh());
                     Constraint::Iterable {
                         coll: ty,
                         elem,

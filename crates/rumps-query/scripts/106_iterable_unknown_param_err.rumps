@@ -1,0 +1,9 @@
+; Error: unknown type parameter in Iterable[X] constraint
+
+; Function case
+FUN bad[T: Iterable[X]](coll: T) -> Int {
+    0
+}
+
+; Closure case
+LET bad-closure = [T: Iterable[Y]](coll: T) -> Int => 0

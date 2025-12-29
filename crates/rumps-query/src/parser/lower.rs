@@ -25,7 +25,9 @@ fn lower_constraint(c: cst::UserConstraint) -> ast::UserConstraint {
             ast::UserConstraint::Subscriptable
         }
         cst::UserConstraint::Storable => ast::UserConstraint::Storable,
-        cst::UserConstraint::Iterable => ast::UserConstraint::Iterable,
+        cst::UserConstraint::Iterable(elem) => {
+            ast::UserConstraint::Iterable(elem)
+        }
     }
 }
 

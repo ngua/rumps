@@ -120,7 +120,7 @@ impl MatchPatternId {
 /// This is a subset of the internal `Constraint` enum from the typechecker.
 /// Not all internal constraints are exposed to users; see the design doc
 /// at `TODOS/dsl/type-constraints.md` for rationale.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum UserConstraint {
     /// Type is `Int` or `Float`.
     Numeric,
@@ -133,7 +133,11 @@ pub(crate) enum UserConstraint {
     /// Type can be stored in the database.
     Storable,
     /// Type is iterable (`Array[T]` or `Range`).
-    Iterable,
+    ///
+    /// The optional string is the name of another type parameter that
+    /// represents the element type (e.g., `Iterable[T]` stores `Some("T")`).
+    /// If `None`, element type is unconstrained (fresh variable).
+    Iterable(Option<String>),
 }
 
 /// A type parameter with optional constraints.

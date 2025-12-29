@@ -95,3 +95,15 @@ FUN identity-storable[V: Storable](v: V) -> V {
 OUTPUT identity-storable(42)       ; 42
 OUTPUT identity-storable("hello")  ; "hello"
 OUTPUT identity-storable(true)     ; true
+
+; ============================================================================
+; Iterable constraint with element type
+; ============================================================================
+
+; Iterable[T]: type must be Array or Range, yielding elements of type T
+FUN sum-all[T: Numeric, C: Iterable[T]](coll: C) -> T {
+    Array.reduce((acc, x) => acc + x, 0, coll)
+}
+
+OUTPUT sum-all([1, 2, 3, 4, 5])     ; 15
+OUTPUT sum-all(1 .. 4)             ; 6 (1+2+3)

@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: unknown type parameter in Iterable[X] constraint\n\n; Function case\nFUN bad[T: Iterable[X]](coll: T) -> Int {\n    0\n}\n\n; Closure case\nLET bad-closure = [T: Iterable[Y]](coll: T) -> Int => 0\n"
+---
+ERROR: unknown type parameter `X` in constraint `Iterable[X]`
+unknown type parameter `Y` in constraint `Iterable[Y]`
