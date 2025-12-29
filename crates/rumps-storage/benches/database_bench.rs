@@ -305,10 +305,10 @@ fn bench_get(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `order` iteration.
-fn bench_order(c: &mut Criterion) {
+/// Benchmark `query` iteration (full key traversal, `$QUERY` semantics).
+fn bench_query(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("order_next_100");
+    let mut group = c.benchmark_group("query_next_100");
 
     MODES.iter().for_each(|&mode| {
         let (_dir, db) = create_db(mode, &rt);
@@ -334,7 +334,63 @@ fn bench_order(c: &mut Criterion) {
                             let mut current: Option<rumps_types::Key> = None;
                             // Iterate through first 100 keys
                             loop {
-                                match txn.order(&n, current.as_ref()).await? {
+                                match txn.query(&n, current.as_ref()).await? {
+                                    Some(next) if count < 100 => {
+                                        current = Some(next);
+                                        count += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            black_box(count);
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark `order` iteration (subscript at level, `$ORDER` semantics).
+fn bench_order(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("order_next_100");
+
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("BENCH");
+
+        // Setup: insert 1000 keys
+        rt.block_on(async {
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move { insert_keys(&txn, &n, 1000).await }
+            })
+            .await
+            .unwrap();
+        });
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n = name.clone();
+                        async move {
+                            let mut count = 0;
+                            let mut current: Option<rumps_types::Subscript> =
+                                None;
+                            let prefix = key![];
+                            // Iterate through first 100 subscripts at root level
+                            loop {
+                                match txn
+                                    .order(&n, &prefix, current.as_ref())
+                                    .await?
+                                {
                                     Some(next) if count < 100 => {
                                         current = Some(next);
                                         count += 1;
@@ -684,6 +740,7 @@ criterion_group!(
     bench_set_batch_100k,
     bench_set_multi_global,
     bench_get,
+    bench_query,
     bench_order,
     bench_collects,
     bench_collects_10k,

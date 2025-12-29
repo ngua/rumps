@@ -83,8 +83,8 @@
       let name = db.get(&patients, &key![1, "NAME"]).await?;
       assert_eq!(name, Some(value!("alice")));
 
-      // `ORDER`: get next key in sorted order
-      let first = db.order(&patients, None).await?;
+      // `QUERY`: get next full key in sorted order
+      let first = db.query(&patients, None).await?;
       assert_eq!(first, Some(key![1, "NAME"]));
 
       // `DATA`: check if a node has value/descendants
@@ -282,8 +282,8 @@ db.transaction(|txn| async move {
     Ok(())
 }).await?;
 
-// ORDER returns: 2, then 10, then 100 (numeric order, not "10" < "100" < "2")
-let first = db.order(&global!("X"), None).await?;
+// QUERY returns: 2, then 10, then 100 (numeric order, not "10" < "100" < "2")
+let first = db.query(&global!("X"), None).await?;
 assert_eq!(first, Some(key![2]));
 #+end_src
 *** RUMPS-specific things
@@ -475,33 +475,58 @@ let status = db.data(&global!("P"), &key![999]).await?;
 assert_eq!(status, DataStatus::NoData);  // doesn't exist
 #+end_src
 *** =ORDER=
-Returns the /next key/ in sorted order after a given key. Pass =None= to get the first key. This how iteration over keys in MUMPS worked; you'd typically call =ORDER= in a loop to walk through all keys. However, RUMPS has a more declarative way to do this (see =COLLECT= below).
+Returns the /next subscript/ at a specific level. This matches traditional MUMPS =$ORDER= semantics: given a prefix and a subscript, it returns the next subscript that exists at that level.
+
+*Transaction context*: Not required. Works outside transactions.
+
+#+begin_src rust
+use rumps_types::Subscript;
+
+// Assuming ^X(1,"A"), ^X(1,"B"), ^X(2,"C") exist
+let first = db.order(&global!("X"), &key![], None).await?;
+assert_eq!(first, Some(Subscript::from(1)));  // first subscript at root
+
+let next = db.order(&global!("X"), &key![], Some(&Subscript::from(1))).await?;
+assert_eq!(next, Some(Subscript::from(2)));  // next subscript at root
+
+// Iterate subscripts under [1]
+let sub = db.order(&global!("X"), &key![1], None).await?;
+assert_eq!(sub, Some(Subscript::from("A")));  // first under [1]
+
+let sub = db.order(&global!("X"), &key![1], Some(&Subscript::from("A"))).await?;
+assert_eq!(sub, Some(Subscript::from("B")));  // next under [1]
+
+let sub = db.order(&global!("X"), &key![1], Some(&Subscript::from("B"))).await?;
+assert_eq!(sub, None);  // no more under [1]
+#+end_src
+*** =QUERY=
+Returns the /next full key/ in sorted order after a given key. Pass =None= to get the first key. Unlike =ORDER= which returns just the next subscript at a level, =QUERY= returns the complete key path to the next node.
 
 *Transaction context*: Not required. Works outside transactions.
 
 #+begin_src rust
 // Assuming ^X(1), ^X(2), ^X(10) exist (inserted in any order)
-let first = db.order(&global!("X"), None).await?;
+let first = db.query(&global!("X"), None).await?;
 assert_eq!(first, Some(key![1]));  // first key
 
-let next = db.order(&global!("X"), Some(&key![1])).await?;
+let next = db.query(&global!("X"), Some(&key![1])).await?;
 assert_eq!(next, Some(key![2]));  // next after [1]
 
-let next = db.order(&global!("X"), Some(&key![2])).await?;
+let next = db.query(&global!("X"), Some(&key![2])).await?;
 assert_eq!(next, Some(key![10]));  // 2 < 10 numerically
 
-let next = db.order(&global!("X"), Some(&key![10])).await?;
+let next = db.query(&global!("X"), Some(&key![10])).await?;
 assert_eq!(next, None);  // no more keys
 #+end_src
 
-To iterate /all/ keys, you /could/ call =ORDER= repeatedly until =None=:
+To iterate /all/ keys, you /could/ call =QUERY= repeatedly until =None=:
 
 #+begin_src rust
-let mut cur = db.order(&global!("X"), None).await?;
+let mut cur = db.query(&global!("X"), None).await?;
 
 while let Some(k) = cur {
     println!("Key: {:?}", k);
-    cur = db.order(&global!("X"), Some(&k)).await?;
+    cur = db.query(&global!("X"), Some(&k)).await?;
 }
 #+end_src
 

@@ -7,7 +7,7 @@ use async_recursion::async_recursion;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::{Stream, TryStreamExt};
-use rumps_types::{DataStatus, Key};
+use rumps_types::{DataStatus, Key, Subscript};
 #[cfg(feature = "debug")]
 use tokio::sync::RwLock;
 
@@ -506,16 +506,19 @@ impl BTree {
         self.data_internal(root, key).await
     }
 
-    /// Returns the next key in lexicographic order (MUMPS `$ORDER`).
+    /// Returns the next full key in lexicographic order (MUMPS `$QUERY`).
+    ///
+    /// Unlike `$ORDER` which returns the next subscript at a level, `$QUERY`
+    /// returns the complete path to the next node with a value.
     ///
     /// Always reads committed state. Transaction context for metadata only.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let next_key = btree.order_at(root, Some(&key), None).await?;
+    /// let next_key = btree.query_at(root, Some(&key), None).await?;
     /// ```
-    pub(crate) async fn order_at(
+    pub(crate) async fn query_at(
         &self,
         root: NodeId,
         after: Option<&Key>,
@@ -523,7 +526,41 @@ impl BTree {
     ) -> Result<Option<Key>> {
         // NOTE: Snapshot isolation at Transaction layer (merges write buffer
         // with committed state).
-        self.order_internal(root, after).await
+        self.query_internal(root, after).await
+    }
+
+    /// Returns the next subscript at a specific level (MUMPS `$ORDER`).
+    ///
+    /// Unlike `$QUERY` which returns the full key path, `$ORDER` returns just
+    /// the next subscript value at the level defined by `prefix`.
+    ///
+    /// Always reads committed state. Transaction context for metadata only.
+    ///
+    /// The `prefix` is the parent key path defining the level to iterate;
+    /// `after` is the `Subscript` to start after, or `None` to get the first.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// Tree contents of variable (i.e. local/global):
+    ///   [1, "A"] = ...
+    ///   [1, "B"] = ...
+    ///   [2, "C"] = ...
+    ///
+    /// order_at(root, [], None)       → Some(1)    ; first subscript at root
+    /// order_at(root, [], Some(1))    → Some(2)    ; next subscript at root
+    /// order_at(root, [1], None)      → Some("A")  ; first subscript under [1]
+    /// order_at(root, [1], Some("A")) → Some("B")  ; next subscript under [1]
+    /// order_at(root, [1], Some("B")) → None       ; no more under [1]
+    /// ```
+    pub(crate) async fn order_at(
+        &self,
+        root: NodeId,
+        prefix: &Key,
+        after: Option<&Subscript>,
+        _ctx: Option<&crate::TransactionContext>,
+    ) -> Result<Option<Subscript>> {
+        self.order_internal(root, prefix, after).await
     }
 
     /// Creates a stream of key-value pairs from the tree (RUMPS `$COLLECT`).
@@ -1027,7 +1064,7 @@ impl BTree {
         })
     }
 
-    /// Internal ORDER operation returning the next key in lexicographic order.
+    /// Internal QUERY operation returning the next full key in lexicographic order.
     ///
     /// # Returns
     ///
@@ -1038,7 +1075,7 @@ impl BTree {
     ///
     /// 1. If `after` is `None`, return the leftmost (smallest) key
     /// 2. Otherwise, find the smallest key strictly greater than `after`
-    async fn order_internal(
+    async fn query_internal(
         &self,
         root: NodeId,
         after: Option<&Key>,
@@ -1049,9 +1086,74 @@ impl BTree {
         }
     }
 
+    /// Internal ORDER operation returning the next subscript at a level.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Find candidate key starting from `prefix ++ [after]` (or `prefix` if `None`)
+    /// 2. Extract subscript at `prefix.len()`
+    /// 3. If subscript equals `after`, skip to next key (recursively)
+    /// 4. Return first subscript that's actually greater than `after`
+    async fn order_internal(
+        &self,
+        root: NodeId,
+        prefix: &Key,
+        after: Option<&Subscript>,
+    ) -> Result<Option<Subscript>> {
+        let candidate = match after {
+            None => self.find_first_with_prefix(root, prefix).await?,
+            Some(sub) => {
+                let mut search_key = prefix.clone();
+                search_key.push(sub.clone());
+                self.find_successor_with_prefix(root, &search_key, prefix)
+                    .await?
+            }
+        };
+
+        match (candidate, after) {
+            (None, _) => Ok(None),
+            (Some(k), None) => Ok(k.get(prefix.len()).cloned()),
+            (Some(k), Some(after_sub)) => {
+                // Check if found subscript is actually > after
+                match k.get(prefix.len()) {
+                    None => Ok(None),
+                    Some(sub) if sub > after_sub => Ok(Some(sub.clone())),
+                    Some(_) => {
+                        // Found key is a descendant of prefix++[after]; skip it
+                        self.order_skip_same(root, prefix, &k, after_sub).await
+                    }
+                }
+            }
+        }
+    }
+
+    /// Skip past keys with same subscript at `prefix.len()` as `skip_sub`.
+    #[async_recursion]
+    async fn order_skip_same(
+        &self,
+        root: NodeId,
+        prefix: &Key,
+        after_key: &Key,
+        skip_sub: &Subscript,
+    ) -> Result<Option<Subscript>> {
+        let next = self
+            .find_successor_with_prefix(root, after_key, prefix)
+            .await?;
+        match next {
+            None => Ok(None),
+            Some(k) => match k.get(prefix.len()) {
+                None => Ok(None),
+                Some(sub) if sub > skip_sub => Ok(Some(sub.clone())),
+                Some(_) => {
+                    self.order_skip_same(root, prefix, &k, skip_sub).await
+                }
+            },
+        }
+    }
+
     /// Internal operation returning next key and its data in one call.
     ///
-    /// Combines `order_internal` and `get_internal` for efficiency in iteration.
+    /// Combines `query_internal` and `get_internal` for efficiency in iteration.
     ///
     /// # Arguments
     ///
@@ -1068,7 +1170,7 @@ impl BTree {
         root: NodeId,
         after: Option<&Key>,
     ) -> Result<Option<(Key, Arc<NodeData>)>> {
-        match self.order_internal(root, after).await? {
+        match self.query_internal(root, after).await? {
             None => Ok(None),
             Some(key) => self
                 .get_internal(root, &key)
@@ -1335,7 +1437,7 @@ impl BTree {
 
     /// Finds the smallest key strictly greater than `target` in the subtree.
     ///
-    /// This is the core of the `$ORDER` implementation. It navigates the B-tree
+    /// This is the core of the `$QUERY` implementation. It navigates the B-tree
     /// to find the successor key, handling transitions between leaf nodes.
     ///
     /// # Algorithm
@@ -1420,6 +1522,46 @@ impl BTree {
                     }
                 }
             }
+        }
+    }
+
+    /// Finds the first key > `after` that starts with `prefix` and is longer.
+    ///
+    /// Used by `$ORDER` to find the next subscript at a specific level.
+    /// Returns `None` if no such key exists (either no successor, or successor
+    /// doesn't share the prefix).
+    ///
+    /// Note: The key must be strictly longer than `prefix` (have at least one
+    /// more subscript) since we're looking for descendants, not the prefix key itself.
+    async fn find_successor_with_prefix(
+        &self,
+        root: NodeId,
+        after: &Key,
+        prefix: &Key,
+    ) -> Result<Option<Key>> {
+        self.find_successor_key(root, after).await.map(|opt| {
+            opt.filter(|k| k.starts_with(prefix) && k.len() > prefix.len())
+        })
+    }
+
+    /// Finds the first key that starts with `prefix` and is longer.
+    ///
+    /// For `$ORDER`, we need keys that are proper descendants of the prefix,
+    /// not the prefix key itself. Returns `None` if no such key exists.
+    async fn find_first_with_prefix(
+        &self,
+        root: NodeId,
+        prefix: &Key,
+    ) -> Result<Option<Key>> {
+        // If prefix is empty, just return the leftmost key
+        if prefix.is_empty() {
+            self.find_leftmost_key(root).await
+        } else {
+            // Find the first key > prefix that starts with prefix
+            // We use find_successor_key to skip past the prefix itself
+            self.find_successor_key(root, prefix)
+                .await
+                .map(|opt| opt.filter(|k| k.starts_with(prefix)))
         }
     }
 

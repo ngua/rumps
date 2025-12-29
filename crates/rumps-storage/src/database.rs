@@ -115,7 +115,7 @@ use std::sync::Arc;
 
 use fs2::FileExt;
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Name, Result, Value};
+use rumps_types::{DataStatus, Key, Name, Result, Subscript, Value};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::RwLock;
@@ -674,10 +674,13 @@ impl Database {
         })
     }
 
-    /// Returns the next key in lexicographic order (MUMPS `$ORDER`).
+    /// Returns the next full key in lexicographic order (MUMPS `$QUERY`).
+    ///
+    /// Unlike `$ORDER` which returns the next subscript at a specific level,
+    /// `$QUERY` returns the complete path to the next node with a value.
     ///
     /// Pass `None` as `after` to get the first key. Returns `None` when
-    /// there are no more keys. Read-only operation - no WAL logging.
+    /// there are no more keys. Read-only operation; no WAL logging.
     ///
     /// # Examples
     ///
@@ -692,27 +695,81 @@ impl Database {
     /// db.set(&local!("DATA"), &key![10], Value::from("c")).await?;
     ///
     /// // Get first key
-    /// let first = db.order(&local!("DATA"), None).await?;
+    /// let first = db.query(&local!("DATA"), None).await?;
     /// assert_eq!(first, Some(key![1]));
     ///
     /// // Get next key after `[1]`
-    /// let next = db.order(&local!("DATA"), Some(&key![1])).await?;
+    /// let next = db.query(&local!("DATA"), Some(&key![1])).await?;
     /// assert_eq!(next, Some(key![2]));
     ///
     /// // Numeric ordering: `2 < 10`
-    /// let next = db.order(&local!("DATA"), Some(&key![2])).await?;
+    /// let next = db.query(&local!("DATA"), Some(&key![2])).await?;
     /// assert_eq!(next, Some(key![10]));
     /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
-    pub async fn order(
+    pub async fn query(
         &self,
         name: &Name,
         after: Option<&Key>,
     ) -> Result<Option<Key>> {
         let opt_root = self.get_root(name).await?;
         Ok(match opt_root {
-            Some(root) => self.btree.order_at(root, after, None).await?,
+            Some(root) => self.btree.query_at(root, after, None).await?,
+            None => None,
+        })
+    }
+
+    /// Returns the next subscript at a specific level (MUMPS `$ORDER`).
+    ///
+    /// Given a prefix key and an optional subscript to start after, returns
+    /// the next subscript that exists at the level `prefix.len()`.
+    ///
+    /// Pass `None` as `after` to get the first subscript. Returns `None` when
+    /// there are no more subscripts at that level. Read-only operation; no WAL
+    /// logging.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{local, key, Value, Subscript};
+    ///
+    /// let db = Database::in_memory()?;
+    /// db.set(&local!("DATA"), &key![1, "A"], Value::from("a")).await?;
+    /// db.set(&local!("DATA"), &key![1, "B"], Value::from("b")).await?;
+    /// db.set(&local!("DATA"), &key![2, "C"], Value::from("c")).await?;
+    ///
+    /// // Get first subscript at root level
+    /// let first = db.order(&local!("DATA"), &key![], None).await?;
+    /// assert_eq!(first, Some(Subscript::from(1)));
+    ///
+    /// // Get next subscript at root level after `1`
+    /// let next = db.order(&local!("DATA"), &key![], Some(&Subscript::from(1))).await?;
+    /// assert_eq!(next, Some(Subscript::from(2)));
+    ///
+    /// // Get first subscript under `[1]`
+    /// let sub = db.order(&local!("DATA"), &key![1], None).await?;
+    /// assert_eq!(sub, Some(Subscript::from("A")));
+    ///
+    /// // No more subscripts at root after `2`
+    /// let none = db.order(&local!("DATA"), &key![], Some(&Subscript::from(2))).await?;
+    /// assert_eq!(none, None);
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    pub async fn order(
+        &self,
+        name: &Name,
+        prefix: &Key,
+        after: Option<&Subscript>,
+    ) -> Result<Option<Subscript>> {
+        let opt_root = self.get_root(name).await?;
+        Ok(match opt_root {
+            Some(root) => {
+                self.btree.order_at(root, prefix, after, None).await?
+            }
             None => None,
         })
     }

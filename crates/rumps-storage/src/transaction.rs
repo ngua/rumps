@@ -52,7 +52,7 @@ use std::{fmt, future};
 
 use async_recursion::async_recursion;
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Name, Result, Value};
+use rumps_types::{DataStatus, Key, Name, Result, Subscript, Value};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
@@ -1381,16 +1381,35 @@ impl Transaction {
         })
     }
 
-    /// Returns the next key in lexicographic order within this transaction's context.
+    /// Returns the next full key in lexicographic order (MUMPS `$QUERY`).
     ///
-    /// Must merge snapshot iteration with buffered writes - buffered sets may
+    /// Unlike `$ORDER` which returns the next subscript at a specific level,
+    /// `$QUERY` returns the complete path to the next node with a value.
+    ///
+    /// Merges snapshot iteration with buffered writes; buffered sets may
     /// insert new keys, buffered kills may remove keys.
-    pub async fn order(
+    pub async fn query(
         &self,
         name: &Name,
         after: Option<&Key>,
     ) -> Result<Option<Key>> {
-        self.order_impl(name, after).await
+        self.query_impl(name, after).await
+    }
+
+    /// Returns the next subscript at a specific level (MUMPS `$ORDER`).
+    ///
+    /// Unlike `$QUERY` which returns the full key path, `$ORDER` returns just
+    /// the next subscript value at the level defined by `prefix`.
+    ///
+    /// Merges snapshot iteration with buffered writes; buffered sets may
+    /// insert new subscripts, buffered kills may remove them.
+    pub async fn order(
+        &self,
+        name: &Name,
+        prefix: &Key,
+        after: Option<&Subscript>,
+    ) -> Result<Option<Subscript>> {
+        self.order_impl(name, prefix, after).await
     }
 
     /// Creates a stream of entries within this transaction's context.
@@ -1712,17 +1731,17 @@ impl Transaction {
         Err(StorageError::InvalidConfiguration(msg.into()))
     }
 
-    /// Internal recursive implementation of `order()`.
+    /// Internal recursive implementation of `query()`.
     ///
     /// Uses async recursion to avoid `loop` with `break`/`continue`.
     #[async_recursion]
-    async fn order_impl(
+    async fn query_impl(
         &self,
         name: &Name,
         after: Option<&Key>,
     ) -> Result<Option<Key>> {
         // Get snapshot view from database
-        let snapshot_candidate = self.db.order(name, after).await?;
+        let snapshot_candidate = self.db.query(name, after).await?;
 
         // Collect buffered keys for this name
         let writes = self.writes.read().await;
@@ -1774,9 +1793,90 @@ impl Transaction {
 
                 if is_deleted {
                     // Recurse to find next valid key
-                    self.order_impl(name, Some(&k)).await
+                    self.query_impl(name, Some(&k)).await
                 } else {
                     Ok(Some(k))
+                }
+            }
+        }
+    }
+
+    /// Internal recursive implementation of `order()`.
+    ///
+    /// Merges snapshot subscripts with buffered writes at the specified level.
+    #[async_recursion]
+    async fn order_impl(
+        &self,
+        name: &Name,
+        prefix: &Key,
+        after: Option<&Subscript>,
+    ) -> Result<Option<Subscript>> {
+        // Get snapshot view from database
+        let snapshot_sub = self.db.order(name, prefix, after).await?;
+
+        // Collect buffered subscripts at this level
+        let writes = self.writes.read().await;
+        let deleted = self.deleted_subtrees.read().await;
+
+        // Find minimum buffered subscript > `after` at this level
+        let buffered_sub = writes
+            .keys()
+            .filter(|(n, _)| n == name)
+            .map(|(_, k)| k)
+            // Key must start with prefix
+            .filter(|k| k.starts_with(prefix) && k.len() > prefix.len())
+            // Extract subscript at prefix.len()
+            .filter_map(|k| k.get(prefix.len()))
+            // Must be > after
+            .filter(|sub| match after {
+                Some(a) => *sub > a,
+                None => true,
+            })
+            // Must not be deleted
+            .filter(|sub| {
+                let mut full_key = prefix.clone();
+                full_key.push((*sub).clone());
+                let not_explicitly_deleted = !matches!(
+                    writes.get(&(name.clone(), full_key.clone())),
+                    Some(WriteOp::Delete | WriteOp::KillSubtree)
+                );
+                let not_in_deleted_subtree =
+                    !deleted.iter().any(|(del_name, del_key)| {
+                        del_name == name && full_key.starts_with(del_key)
+                    });
+                not_explicitly_deleted && not_in_deleted_subtree
+            })
+            .min()
+            .cloned();
+
+        // Choose the minimum between snapshot and buffered
+        let next = match (snapshot_sub.as_ref(), buffered_sub.as_ref()) {
+            (Some(snap), Some(buf)) => Some(snap.min(buf).clone()),
+            (Some(snap), None) => Some(snap.clone()),
+            (None, Some(buf)) => Some(buf.clone()),
+            (None, None) => None,
+        };
+
+        // Check if candidate subscript's key is deleted; if so, recurse
+        match next {
+            None => Ok(None),
+            Some(sub) => {
+                let mut check_key = prefix.clone();
+                check_key.push(sub.clone());
+
+                let is_deleted =
+                    matches!(
+                        writes.get(&(name.clone(), check_key.clone())),
+                        Some(WriteOp::Delete | WriteOp::KillSubtree)
+                    ) || deleted.iter().any(|(del_name, del_key)| {
+                        del_name == name && check_key.starts_with(del_key)
+                    });
+
+                if is_deleted {
+                    // Recurse to find next valid subscript
+                    self.order_impl(name, prefix, Some(&sub)).await
+                } else {
+                    Ok(Some(sub))
                 }
             }
         }
@@ -2082,5 +2182,256 @@ mod tests {
         assert_eq!(ctx.id, id);
         assert_eq!(ctx.start_timestamp, ts);
         assert_eq!(ctx.isolation_level, IsolationLevel::SnapshotIsolation);
+    }
+
+    /// Tests for `Transaction::order` ($ORDER semantics).
+    mod order_tests {
+        use rumps_types::{global, key, value, Subscript};
+
+        use crate::Database;
+
+        #[tokio::test]
+        async fn buffered_set_visible() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("TEST");
+
+            db.transaction(|txn| async move {
+                // Buffer some writes (not yet committed)
+                txn.set(&name, &key![1, "A"], value!(1)).await?;
+                txn.set(&name, &key![1, "B"], value!(2)).await?;
+                txn.set(&name, &key![2, "C"], value!(3)).await?;
+
+                // order at root level should see buffered subscripts
+                let sub = txn.order(&name, &key![], None).await?;
+                assert_eq!(sub, Some(Subscript::from(1)));
+
+                let sub = txn
+                    .order(&name, &key![], Some(&Subscript::from(1)))
+                    .await?;
+                assert_eq!(sub, Some(Subscript::from(2)));
+
+                let sub = txn
+                    .order(&name, &key![], Some(&Subscript::from(2)))
+                    .await?;
+                assert!(sub.is_none());
+
+                // order at nested level
+                let sub = txn.order(&name, &key![1], None).await?;
+                assert_eq!(sub, Some(Subscript::from("A")));
+
+                let sub = txn
+                    .order(&name, &key![1], Some(&Subscript::from("A")))
+                    .await?;
+                assert_eq!(sub, Some(Subscript::from("B")));
+
+                Ok(())
+            })
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn buffered_kill_skipped() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("TEST");
+
+            // First commit some data
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.set(&n, &key![1, "A"], value!(1)).await?;
+                    txn.set(&n, &key![1, "B"], value!(2)).await?;
+                    txn.set(&n, &key![1, "C"], value!(3)).await?;
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+
+            // Now kill "B" in a new transaction and verify order skips it
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.kill(&n, &key![1, "B"]).await?;
+
+                    // Should skip "B"
+                    let sub = txn.order(&n, &key![1], None).await?;
+                    assert_eq!(sub, Some(Subscript::from("A")));
+
+                    let sub = txn
+                        .order(&n, &key![1], Some(&Subscript::from("A")))
+                        .await?;
+                    assert_eq!(sub, Some(Subscript::from("C"))); // "B" skipped
+
+                    let sub = txn
+                        .order(&n, &key![1], Some(&Subscript::from("C")))
+                        .await?;
+                    assert!(sub.is_none());
+
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn kill_subtree_excluded() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("TEST");
+
+            // Commit data under multiple subscripts
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.set(&n, &key![1, "X"], value!(1)).await?;
+                    txn.set(&n, &key![2, "Y"], value!(2)).await?;
+                    txn.set(&n, &key![3, "Z"], value!(3)).await?;
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+
+            // Kill subscript 2's subtree
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.kill(&n, &key![2]).await?;
+
+                    // order should skip subscript 2
+                    let sub = txn.order(&n, &key![], None).await?;
+                    assert_eq!(sub, Some(Subscript::from(1)));
+
+                    let sub = txn
+                        .order(&n, &key![], Some(&Subscript::from(1)))
+                        .await?;
+                    assert_eq!(sub, Some(Subscript::from(3))); // 2 skipped
+
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn merged_snapshot_and_buffer() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("TEST");
+
+            // Commit some data
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.set(&n, &key![1], value!(1)).await?;
+                    txn.set(&n, &key![3], value!(3)).await?;
+                    txn.set(&n, &key![5], value!(5)).await?;
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+
+            // Buffer additional writes; verify merged iteration
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    // Add subscript 2 and 4 in buffer
+                    txn.set(&n, &key![2], value!(2)).await?;
+                    txn.set(&n, &key![4], value!(4)).await?;
+
+                    // Should iterate 1, 2, 3, 4, 5 in order
+                    let sub = txn.order(&n, &key![], None).await?;
+                    assert_eq!(sub, Some(Subscript::from(1))); // snapshot
+
+                    let sub = txn
+                        .order(&n, &key![], Some(&Subscript::from(1)))
+                        .await?;
+                    assert_eq!(sub, Some(Subscript::from(2))); // buffer
+
+                    let sub = txn
+                        .order(&n, &key![], Some(&Subscript::from(2)))
+                        .await?;
+                    assert_eq!(sub, Some(Subscript::from(3))); // snapshot
+
+                    let sub = txn
+                        .order(&n, &key![], Some(&Subscript::from(3)))
+                        .await?;
+                    assert_eq!(sub, Some(Subscript::from(4))); // buffer
+
+                    let sub = txn
+                        .order(&n, &key![], Some(&Subscript::from(4)))
+                        .await?;
+                    assert_eq!(sub, Some(Subscript::from(5))); // snapshot
+
+                    let sub = txn
+                        .order(&n, &key![], Some(&Subscript::from(5)))
+                        .await?;
+                    assert!(sub.is_none());
+
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn empty_returns_none() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("TEST");
+
+            db.transaction(|txn| async move {
+                let sub = txn.order(&name, &key![], None).await?;
+                assert!(sub.is_none());
+
+                let sub = txn.order(&name, &key![1, 2, 3], None).await?;
+                assert!(sub.is_none());
+
+                Ok(())
+            })
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn buffer_overrides_snapshot() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("TEST");
+
+            // Commit [1, "A"]
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.set(&n, &key![1, "A"], value!(1)).await?;
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+
+            // Kill [1, "A"] in buffer, add [1, "B"]
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.kill(&n, &key![1, "A"]).await?;
+                    txn.set(&n, &key![1, "B"], value!(2)).await?;
+
+                    // First subscript should be "B", not "A"
+                    let sub = txn.order(&n, &key![1], None).await?;
+                    assert_eq!(sub, Some(Subscript::from("B")));
+
+                    let sub = txn
+                        .order(&n, &key![1], Some(&Subscript::from("B")))
+                        .await?;
+                    assert!(sub.is_none());
+
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        }
     }
 }

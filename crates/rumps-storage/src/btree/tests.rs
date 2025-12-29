@@ -817,7 +817,7 @@ mod tests {
     }
 
     #[cfg(test)]
-    mod order_internal_tests {
+    mod query_internal_tests {
         use super::*;
 
         #[tokio::test]
@@ -825,7 +825,7 @@ mod tests {
             let btree = BTreeBuilder::default().build().unwrap();
             let root = btree.create_tree().await.unwrap();
 
-            let result = btree.order_internal(root, None).await.unwrap();
+            let result = btree.query_internal(root, None).await.unwrap();
             assert!(result.is_none());
         }
 
@@ -843,7 +843,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let result = btree.order_internal(root, None).await.unwrap();
+            let result = btree.query_internal(root, None).await.unwrap();
             assert_eq!(result, Some(key![10]));
         }
 
@@ -866,11 +866,11 @@ mod tests {
                 .unwrap();
 
             let result =
-                btree.order_internal(root, Some(&key![10])).await.unwrap();
+                btree.query_internal(root, Some(&key![10])).await.unwrap();
             assert_eq!(result, Some(key![20]));
 
             let result =
-                btree.order_internal(root, Some(&key![20])).await.unwrap();
+                btree.query_internal(root, Some(&key![20])).await.unwrap();
             assert_eq!(result, Some(key![30]));
         }
 
@@ -885,7 +885,7 @@ mod tests {
                 .unwrap();
 
             let result =
-                btree.order_internal(root, Some(&key![10])).await.unwrap();
+                btree.query_internal(root, Some(&key![10])).await.unwrap();
             assert!(result.is_none());
         }
 
@@ -916,7 +916,7 @@ mod tests {
 
             // Manual iteration since we can't use while loop
             let result =
-                btree.order_internal(r, cursor.as_ref()).await.unwrap();
+                btree.query_internal(r, cursor.as_ref()).await.unwrap();
             if let Some(k) = result {
                 collected.push(k.clone());
                 cursor = Some(k);
@@ -931,7 +931,7 @@ mod tests {
                             None => (None, acc),
                             Some(ref c) => {
                                 match bt
-                                    .order_internal(r, Some(c))
+                                    .query_internal(r, Some(c))
                                     .await
                                     .unwrap()
                                 {
@@ -951,6 +951,149 @@ mod tests {
             assert_eq!(keys_found.len(), 5);
             assert_eq!(keys_found[0], key![5]);
             assert_eq!(keys_found[4], key![45]);
+        }
+    }
+
+    #[cfg(test)]
+    mod order_internal_tests {
+        use rumps_types::Subscript;
+
+        use super::*;
+
+        #[tokio::test]
+        async fn empty_tree() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let result =
+                btree.order_internal(root, &key![], None).await.unwrap();
+            assert!(result.is_none());
+        }
+
+        #[tokio::test]
+        async fn first_subscript_at_root() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "A"],
+                    NodeData::with_value(value!(1)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![2, "B"],
+                    NodeData::with_value(value!(2)),
+                )
+                .await
+                .unwrap();
+
+            let result =
+                btree.order_internal(root, &key![], None).await.unwrap();
+            assert_eq!(result, Some(Subscript::from(1)));
+        }
+
+        #[tokio::test]
+        async fn next_subscript_at_root() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "A"],
+                    NodeData::with_value(value!(1)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![2, "B"],
+                    NodeData::with_value(value!(2)),
+                )
+                .await
+                .unwrap();
+
+            let result = btree
+                .order_internal(root, &key![], Some(&Subscript::from(1)))
+                .await
+                .unwrap();
+            assert_eq!(result, Some(Subscript::from(2)));
+        }
+
+        #[tokio::test]
+        async fn subscript_at_nested_level() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "A"],
+                    NodeData::with_value(value!(1)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "B"],
+                    NodeData::with_value(value!(2)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![2, "C"],
+                    NodeData::with_value(value!(3)),
+                )
+                .await
+                .unwrap();
+
+            // First subscript under [1]
+            let result =
+                btree.order_internal(root, &key![1], None).await.unwrap();
+            assert_eq!(result, Some(Subscript::from("A")));
+
+            // Next subscript under [1] after "A"
+            let result = btree
+                .order_internal(root, &key![1], Some(&Subscript::from("A")))
+                .await
+                .unwrap();
+            assert_eq!(result, Some(Subscript::from("B")));
+
+            // No more subscripts under [1] after "B"
+            let result = btree
+                .order_internal(root, &key![1], Some(&Subscript::from("B")))
+                .await
+                .unwrap();
+            assert!(result.is_none());
+        }
+
+        #[tokio::test]
+        async fn no_subscripts_at_nonexistent_prefix() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "A"],
+                    NodeData::with_value(value!(1)),
+                )
+                .await
+                .unwrap();
+
+            // No keys under [2]
+            let result =
+                btree.order_internal(root, &key![2], None).await.unwrap();
+            assert!(result.is_none());
         }
     }
 
