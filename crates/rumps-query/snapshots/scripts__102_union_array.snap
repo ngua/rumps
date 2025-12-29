@@ -1,0 +1,21 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Union-typed array tests\n;\n; Tests for bidirectional type checking of array literals with union element types.\n; When an array literal has an annotation like `Array[Subscript]`, it should NOT\n; fall back to JSON for heterogeneous elements; instead, each element is checked\n; against the union type.\n\n; === Comparison: without vs with annotation ===\n\n; WITHOUT annotation: heterogeneous array becomes Json\nLET json-arr = [1, \"a\", true]\nOUTPUT json-arr IS Json\n\n; WITH annotation: stays as native Array (not Json)\nLET sub-arr: Array[Subscript] = [1, \"a\", true]\nOUTPUT sub-arr IS Json\nOUTPUT Array.length(sub-arr)\n\n; === Named union: Subscript ===\n\nLET subscript-arr: Array[Subscript] = [42, \"hello\", 3.14, 'x', true]\nOUTPUT Array.length(subscript-arr)\n\n; === Named union: Storable ===\n\nLET storable-arr: Array[Storable] = [true, 42, 3.14, 'x', \"str\"]\nOUTPUT Array.length(storable-arr)\n\n; === Named union: Scalar ===\n\nLET scalar-arr: Array[Scalar] = [true, 42, 3.14, \"str\"]\nOUTPUT Array.length(scalar-arr)\n\n; === Anonymous union ===\n\nLET anon-arr: Array[Int | String] = [42, \"hello\", 99, \"world\"]\nOUTPUT Array.length(anon-arr)\n\n; === User-defined union ===\n\nUNION Id = Int | String\n\nLET ids: Array[Id] = [1, \"abc\", 2, \"def\"]\nOUTPUT Array.length(ids)\n\n; === Empty array with union element type ===\n\nLET empty: Array[Int | String] = []\nOUTPUT Array.length(empty)\n\n; === Spread in union arrays ===\n\nLET ints = [1, 2, 3]\nLET strs: Array[String] = [\"a\", \"b\"]\n\n; Spread homogeneous arrays into union array\nLET combined: Array[Int | String] = [...ints, \"x\", ...strs, 4]\nOUTPUT Array.length(combined)\n\n; === Iteration over union array ===\n\nLET arr: Array[Int | String] = [1, \"two\", 3, \"four\"]\n\n; Array.foreach works on union arrays\nArray.foreach(x => {\n  MATCH x {\n    n IS Int => { OUTPUT \"int: \" ++ (n AS String) }\n    s IS String => { OUTPUT \"str: \" ++ s }\n    _ => { OUTPUT \"other\" }\n  }\n}, arr)\n\n; Array.map with union elements\nLET mapped = Array.map(x => {\n  MATCH x {\n    n IS Int => { n * 2 }\n    s IS String => { String.length(s) }\n    _ => { 0 }\n  }\n}, arr)\nOUTPUT mapped\n\n; === Verify elements preserve their concrete types ===\n\n; Use Array.filter to extract Int elements\nLET ints-only = Array.filter(x => x IS Int, arr)\nOUTPUT Array.length(ints-only)\n\n; Use Array.filter to extract String elements\nLET strs-only = Array.filter(x => x IS String, arr)\nOUTPUT Array.length(strs-only)\n"
+---
+TRUE
+FALSE
+3
+5
+5
+4
+4
+4
+0
+7
+int: 1
+str: two
+int: 3
+str: four
+[ 2, 3, 6, 4 ]
+2
+2

@@ -9,8 +9,8 @@ use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
-    AstTypeExprId, BindingPattern, Expr, ExprId, OutputFormat, OutputStmt,
-    OutputTarget, Stmt, StmtId,
+    ArrayElem, AstTypeExprId, BindingPattern, Expr, ExprId, OutputFormat,
+    OutputStmt, OutputTarget, Stmt, StmtId,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty};
@@ -265,6 +265,10 @@ impl InferCtx<'_> {
     /// Infers the RHS type, optionally unifies with an annotation, then
     /// binds variables from the pattern with appropriate types.
     ///
+    /// Special case: when RHS is an array literal and annotation is
+    /// `Array[UnionType]`, uses bidirectional typing to allow heterogeneous
+    /// arrays that match the union members.
+    ///
     /// For extensible records: when the RHS is a structural object and the
     /// annotation is a named struct, we bind with the full object type
     /// (preserving extra fields) rather than the narrower annotation type.
@@ -275,30 +279,54 @@ impl InferCtx<'_> {
         rhs: ExprId,
         span: Span,
     ) {
-        let rhs_ty = self.expr(rhs);
-
-        // If annotation present, parse and unify
+        // If annotation present, parse and unify.
+        // Returns `None` if pattern was already bound (special case).
         let ty = match ann {
-            None => rhs_ty,
+            None => Some(self.expr(rhs)),
             Some(id) => {
                 let ann_ty = self.ast_type_to_ty(*id, &HashMap::new());
-                self.unify(rhs_ty.clone(), ann_ty.clone(), span);
 
-                // Extensible records: if rhs is an object and annotation is a
-                // struct, keep the full object type to preserve extra fields
-                let is_struct = matches!(&ann_ty, Ty::Named(id, _)
-                    if matches!(self.registry.get_def(*id), Some(TypeDef::Struct { .. })));
+                // Try special case: array literal with `Array[UnionType]`
+                let special = match (&ann_ty, self.ast.get_expr(rhs)) {
+                    (Ty::Array(elem_ty), Some(Expr::Array(elems)))
+                        if self.expand_union_members(elem_ty).is_some() =>
+                    {
+                        let result =
+                            self.array_with_expected(elems, elem_ty, span);
+                        self.record_type(rhs, result.clone());
+                        self.bind_pattern(pattern, &result, span);
+                        true
+                    }
+                    _ => false,
+                };
 
-                if matches!(&rhs_ty, Ty::Object(_)) && is_struct {
-                    rhs_ty
+                if special {
+                    None // Already bound
                 } else {
-                    ann_ty
+                    let rhs_ty = self.expr(rhs);
+                    self.unify(rhs_ty.clone(), ann_ty.clone(), span);
+
+                    // Extensible records: if rhs is an object and annotation
+                    // is a struct, keep the full object type to preserve extra
+                    // fields
+                    let is_struct = matches!(&ann_ty, Ty::Named(id, _)
+                        if matches!(self.registry.get_def(*id), Some(TypeDef::Struct { .. })));
+
+                    Some(
+                        if matches!(&rhs_ty, Ty::Object(_)) && is_struct {
+                            rhs_ty
+                        } else {
+                            ann_ty
+                        },
+                    )
                 }
             }
         };
 
-        // Bind variables from the pattern
-        self.bind_pattern(pattern, &ty, span);
+        // Bind variables from the pattern (if not already done)
+        if let Some(ty) = ty {
+            self.bind_pattern(pattern, &ty, span);
+        }
     }
 
     /// Bind variables from a binding pattern to types in the environment.

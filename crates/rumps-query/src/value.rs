@@ -149,6 +149,11 @@ impl TypeId {
     ///
     /// Result of `DATA` primitive; indicates node existence status.
     pub(crate) const DATA_STATUS: Self = Self(21);
+    /// Builtin union: `Subscript = Bool | Int | Float | Char | String | Json`.
+    ///
+    /// The set of types that can be used as subscripts in variable references.
+    /// Semantically distinct from `Storable` (what can be stored) though currently identical.
+    pub(crate) const SUBSCRIPT: Self = Self(22);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -1672,6 +1677,34 @@ impl TypeRegistry {
                 ))
             })?;
 
+        // Subscript union at index 22: Bool | Int | Float | Char | String | Json
+        let subscript_name = arena.intern("Subscript");
+        let subscript_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
+            type_exprs.named(TypeId::BOOL),
+            type_exprs.named(TypeId::INT),
+            type_exprs.named(TypeId::FLOAT),
+            type_exprs.named(TypeId::CHAR),
+            type_exprs.named(TypeId::STRING),
+            type_exprs.named(TypeId::JSON),
+        ];
+        let subscript = self.register(
+            TypeDef::Union {
+                name: subscript_name,
+                type_params: SmallVec::new(),
+                members: subscript_members,
+            },
+            subscript_name,
+        );
+        (subscript == TypeId::SUBSCRIPT)
+            .then_some(())
+            .ok_or_else(|| {
+                crate::Error::runtime_no_span(format!(
+                    "Subscript at index {}, expected {}",
+                    subscript.0,
+                    TypeId::SUBSCRIPT.0
+                ))
+            })?;
+
         Ok(())
     }
 
@@ -2052,8 +2085,8 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
         let reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
 
-        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex + DataStatus = 22
-        assert_eq!(reg.len(), 22);
+        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex + DataStatus + Subscript = 23
+        assert_eq!(reg.len(), 23);
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

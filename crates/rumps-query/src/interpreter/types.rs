@@ -811,6 +811,22 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    /// Check if a type expression represents a union type.
+    ///
+    /// Returns `true` for both anonymous unions (`Int | String`) and named
+    /// unions (`Storable`, `Subscript`).
+    pub(super) fn is_union_type(&self, ty: TypeExprId) -> bool {
+        // Check for anonymous union
+        self.type_exprs.union_members(ty).is_some()
+            || self
+                .type_exprs
+                .base_type(ty)
+                .and_then(|id| self.registry.get_def(id))
+                .is_some_and(|def| {
+                    matches!(def, crate::value::TypeDef::Union { .. })
+                })
+    }
+
     /// Direct type match (non-union types).
     fn value_matches_type_direct(&self, val: &Value, type_id: TypeId) -> bool {
         match val {

@@ -1476,15 +1476,101 @@ impl InferCtx<'_> {
     ///
     /// Infers the inner expression type, parses the annotation, and unifies
     /// them. Returns the annotation type (which is the expected type).
+    ///
+    /// Special case: when the inner expression is an array literal and the
+    /// annotation is `Array[UnionType]`, uses bidirectional typing to check
+    /// each element against the union instead of inferring then unifying.
+    /// This allows `[1, "a"]: Array[Int | String]` to produce a union-typed
+    /// array rather than falling back to `Json`.
     fn annotate(
         &mut self,
         inner_id: ExprId,
         ty_id: AstTypeExprId,
         span: Span,
     ) -> Ty {
-        let inner_ty = self.expr(inner_id);
         let ann_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
-        self.unify(inner_ty, ann_ty.clone(), span);
-        ann_ty
+
+        // Try special case: array literal with `Array[UnionType]`
+        match (&ann_ty, self.ast.get_expr(inner_id)) {
+            (Ty::Array(elem_ty), Some(Expr::Array(elems)))
+                if self.expand_union_members(elem_ty).is_some() =>
+            {
+                let result = self.array_with_expected(elems, elem_ty, span);
+                self.record_type(inner_id, result.clone());
+                result
+            }
+            _ => {
+                // Default: infer then unify
+                let inner_ty = self.expr(inner_id);
+                self.unify(inner_ty, ann_ty.clone(), span);
+                ann_ty
+            }
+        }
+    }
+
+    /// Infer type of array literal with expected union element type.
+    ///
+    /// When annotating an array with `Array[UnionType]`, each element must be
+    /// a member of the union. Returns `Array[expected_elem]` if all elements
+    /// match, or `Ty::Error` if any element fails.
+    pub(super) fn array_with_expected(
+        &mut self,
+        elems: &[ArrayElem],
+        expected_elem: &Ty,
+        span: Span,
+    ) -> Ty {
+        let members = self.expand_union_members(expected_elem);
+
+        elems.iter().for_each(|elem| match elem {
+            ArrayElem::Elem(id) => {
+                let elem_ty = self.expr(*id);
+                // Check element is a member of the expected union
+                if elem_ty != Ty::Error {
+                    let is_member = members.as_ref().is_some_and(|ms| {
+                        ms.iter().any(|m| self.types_compatible(&elem_ty, m))
+                    });
+                    if !is_member {
+                        self.error(TypeError::Mismatch {
+                            expected: expected_elem.clone(),
+                            got: elem_ty,
+                            span,
+                        });
+                    }
+                }
+            }
+            ArrayElem::Spread(id) => {
+                let spread_ty = self.expr(*id);
+                // Spread must be Array[T] where T is compatible with expected
+                match spread_ty {
+                    Ty::Array(inner) => {
+                        let is_member = members.as_ref().is_some_and(|ms| {
+                            ms.iter().any(|m| self.types_compatible(&inner, m))
+                        });
+                        if !is_member {
+                            self.error(TypeError::Mismatch {
+                                expected: Ty::Array(Box::new(
+                                    expected_elem.clone(),
+                                )),
+                                got: Ty::Array(inner),
+                                span,
+                            });
+                        }
+                    }
+                    Ty::Var(_) => {
+                        self.unify(
+                            spread_ty,
+                            Ty::Array(Box::new(expected_elem.clone())),
+                            span,
+                        );
+                    }
+                    Ty::Error => {}
+                    _ => {
+                        self.error(TypeError::NotAnArray(spread_ty, span));
+                    }
+                }
+            }
+        });
+
+        Ty::Array(Box::new(expected_elem.clone()))
     }
 }

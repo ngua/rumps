@@ -515,13 +515,13 @@ WHILE k IS Some {
 
 ### 5.3.2 Subscript Builtin Union Type
 
-Add a builtin union type `Subscript` representing values that can be used as subscripts in variable references:
+The `Subscript` builtin union type already exists:
 
 ```rumps
 UNION Subscript = Bool | Int | Float | Char | String | Json
 ```
 
-This matches `rumps_types::Subscript` which supports these types in the storage layer.
+This was added to support union-typed arrays (e.g., `Array[Subscript]`). It matches `rumps_types::Subscript` in the storage layer.
 
 **Note**: `Int` and `Float` both map to `Subscript::Number(f64)` in storage; they are unified at the storage layer.
 
@@ -605,56 +605,9 @@ cst::ExprKind::Order(order) => {
 }
 ```
 
-### 5.3.8 Subscript Union Type Registration
+### 5.3.8 Typechecker
 
-##### 5.3.8.1 TypeId Constant (`value.rs`)
-
-Add constant for the type ID:
-
-```rust
-impl TypeId {
-    // ... existing constants ...
-    pub(crate) const SUBSCRIPT: Self = Self(22);  // next available after DATA_STATUS(21)
-}
-```
-
-##### 5.3.8.2 Type Registry (`value.rs`, `register_builtins`)
-
-Register as `TypeDef::Union` with 6 members:
-
-```rust
-// Subscript union at index 22: Bool | Int | Float | Char | String | Json
-let subscript_name = arena.intern("Subscript");
-let subscript_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
-    type_exprs.named(TypeId::BOOL),
-    type_exprs.named(TypeId::INT),
-    type_exprs.named(TypeId::FLOAT),
-    type_exprs.named(TypeId::CHAR),
-    type_exprs.named(TypeId::STRING),
-    type_exprs.named(TypeId::JSON),
-];
-let subscript = self.register(
-    TypeDef::Union {
-        name: subscript_name,
-        type_params: SmallVec::new(),
-        members: subscript_members,
-    },
-    subscript_name,
-);
-(subscript == TypeId::SUBSCRIPT).then_some(()).ok_or_else(|| ...)?;
-```
-
-##### 5.3.8.3 Type Name Resolution (`typecheck/infer/convert.rs`)
-
-Add to `parse_ty_name`:
-
-```rust
-"Subscript" => Ty::Named(TypeId::SUBSCRIPT, vec![]),
-```
-
-### 5.3.9 Typechecker
-
-##### 5.3.9.1 ORDER Expression
+##### 5.3.8.1 ORDER Expression
 
 The `ORDER` expression returns `Option[Subscript]`:
 
@@ -669,13 +622,13 @@ fn order(&mut self, order: &OrderExpr, span: Span) -> TyId {
 }
 ```
 
-##### 5.3.9.2 Subscript Constraint for Subscripts
+##### 5.3.8.2 Subscript Constraint for Subscripts
 
 Subscripts in variable references should be constrained to `Subscript` type. This may require updating `var_ref` type checking to unify each subscript with `Subscript`.
 
-### 5.3.10 Interpreter
+### 5.3.9 Interpreter
 
-##### 5.3.10.1 ORDER Evaluation
+##### 5.3.9.1 ORDER Evaluation
 
 ```rust
 async fn order(&mut self, order: &OrderExpr) -> Result<Value> {
@@ -693,7 +646,7 @@ async fn order(&mut self, order: &OrderExpr) -> Result<Value> {
 }
 ```
 
-##### 5.3.10.2 Subscript to Value Conversion
+##### 5.3.9.2 Subscript to Value Conversion
 
 Add conversion from `rumps_types::Subscript` to runtime `Value`:
 
@@ -717,7 +670,7 @@ fn subscript_to_value(&mut self, sub: Subscript) -> Result<Value> {
 }
 ```
 
-##### 5.3.10.3 Fix Json Subscript Support in `convert.rs`
+##### 5.3.9.3 Fix Json Subscript Support in `convert.rs`
 
 Currently `convert.rs` `subscript()` does NOT support `Value::Json`, but `rumps_types::Subscript` does include `Json`. Update to support it:
 
@@ -737,14 +690,14 @@ pub(crate) fn subscript(&self, v: &Value) -> Result<Subscript> {
 
 This fixes the mismatch between `rumps_types::Subscript` (which includes `Json`) and the runtime conversion (which previously rejected it).
 
-### 5.3.11 Tests
+### 5.3.10 Tests
 
 **NOTE**: Integration tests must use **locals** only; globals require `TRANSACTION` blocks.
 
 - [ ] Parser tests for `ORDER local` and `ORDER ^global`
-- [ ] Integration test script (`102_order_primitive.rumps`) using locals
+- [ ] Integration test script (`103_order_primitive.rumps`) using locals
 
-### 5.3.12 Implementation Checklist
+### 5.3.11 Implementation Checklist
 
 - [ ] **Lexer**: Add `Token::Order` keyword
 - [ ] **CST**: Add `OrderExpr` type
@@ -753,14 +706,14 @@ This fixes the mismatch between `rumps_types::Subscript` (which includes `Json`)
 - [ ] **AST**: Add `OrderExpr` type
 - [ ] **AST**: Add `Expr::Order` variant
 - [ ] **Lowering**: Convert `cst::OrderExpr` to `ast::OrderExpr`
-- [ ] **TypeId**: Add `TypeId::SUBSCRIPT` constant
-- [ ] **Type Registry**: Register `Subscript` as `TypeDef::Union` with 6 members
-- [ ] **Type Names**: Add `"Subscript"` to `parse_ty_name`
+- [x] **TypeId**: Add `TypeId::SUBSCRIPT` constant
+- [x] **Type Registry**: Register `Subscript` as `TypeDef::Union` with 6 members
+- [x] **Type Names**: Add `"Subscript"` to `parse_ty_name` (via registry lookup)
 - [ ] **Typechecker**: Infer `Option[Subscript]` for `ORDER` expressions
 - [ ] **Interpreter**: Implement `ORDER` evaluation via `Database::order`/`Transaction::order`
 - [ ] **Interpreter**: Add `subscript_to_value` conversion
 - [ ] **Interpreter**: Fix `convert.rs` `subscript()` to support `Json` values
-- [ ] **Tests**: Integration test script (`102_order_primitive.rumps`)
+- [ ] **Tests**: Integration test script (`103_order_primitive.rumps`)
 
 ---
 

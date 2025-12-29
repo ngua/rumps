@@ -1039,6 +1039,10 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Validates that the value matches the annotated type at runtime.
     /// Returns the value unchanged if it matches; errors otherwise.
+    ///
+    /// Special case: when `expr` is an array literal and annotation is
+    /// `Array[UnionType]`, constructs the array with the union element type
+    /// instead of falling back to JSON for heterogeneous elements.
     #[async_recursion]
     async fn annotate(
         &mut self,
@@ -1046,16 +1050,43 @@ impl<I: IoContext> Interpreter<'_, I> {
         ast_ty: AstTypeExprId,
         span: Span,
     ) -> Result<Value> {
-        let val = self.eval(expr).await?;
         let expected_ty = self.resolve_type_expr(ast_ty, span)?;
-        self.validate_type(&val, expected_ty, span)?;
-        Ok(self.refine_type(val, expected_ty))
+
+        // Try special case: array literal with `Array[UnionType]`
+        // Must clone elems since we can't hold AST borrow across await
+        let special = (self.type_exprs.base_type(expected_ty)
+            == Some(TypeId::ARRAY))
+        .then_some(())
+        .and_then(|_| self.ast.get_expr(expr))
+        .and_then(|e| match e {
+            Expr::Array(elems) => Some(elems.clone()),
+            _ => None,
+        })
+        .and_then(|elems| {
+            self.type_exprs
+                .type_args(expected_ty)
+                .and_then(|args| args.first().copied())
+                .filter(|&ty| self.is_union_type(ty))
+                .map(|elem_ty| (elems, elem_ty))
+        });
+
+        if let Some((elems, elem_ty)) = special {
+            self.array_with_union_elem(&elems, elem_ty, span).await
+        } else {
+            let val = self.eval(expr).await?;
+            self.validate_type(&val, expected_ty, span)?;
+            Ok(self.refine_type(val, expected_ty))
+        }
     }
 
     /// Execute a `LET` binding with destructuring.
     ///
     /// If a type annotation is present, validates that the value's type matches
     /// before destructuring.
+    ///
+    /// Special case: when RHS is an array literal and annotation is
+    /// `Array[UnionType]`, constructs the array with the union element type
+    /// instead of falling back to JSON for heterogeneous elements.
     #[async_recursion]
     async fn r#let(
         &mut self,
@@ -1064,17 +1095,40 @@ impl<I: IoContext> Interpreter<'_, I> {
         expr_id: ExprId,
         span: Span,
     ) -> Result<()> {
-        let val = self.eval(expr_id).await?;
-
         // Check type annotation if present (applies to the entire value)
-        // Also refine UNKNOWN type parameters (e.g., empty array gets concrete element type)
+        // Also refine UNKNOWN type parameters (e.g., empty array gets concrete
+        // element type)
         let val = match ty_ann {
             Some(ast_ty_id) => {
                 let expected_ty = self.resolve_type_expr(ast_ty_id, span)?;
-                self.validate_type(&val, expected_ty, span)?;
-                self.refine_type(val, expected_ty)
+
+                // Try special case: array literal with `Array[UnionType]`
+                // Must clone elems since we can't hold AST borrow across await
+                let special = (self.type_exprs.base_type(expected_ty)
+                    == Some(TypeId::ARRAY))
+                .then_some(())
+                .and_then(|_| self.ast.get_expr(expr_id))
+                .and_then(|e| match e {
+                    Expr::Array(elems) => Some(elems.clone()),
+                    _ => None,
+                })
+                .and_then(|elems| {
+                    self.type_exprs
+                        .type_args(expected_ty)
+                        .and_then(|args| args.first().copied())
+                        .filter(|&ty| self.is_union_type(ty))
+                        .map(|elem_ty| (elems, elem_ty))
+                });
+
+                if let Some((elems, elem_ty)) = special {
+                    self.array_with_union_elem(&elems, elem_ty, span).await?
+                } else {
+                    let val = self.eval(expr_id).await?;
+                    self.validate_type(&val, expected_ty, span)?;
+                    self.refine_type(val, expected_ty)
+                }
             }
-            None => val,
+            None => self.eval(expr_id).await?,
         };
 
         self.destructure(pat, &val, span)

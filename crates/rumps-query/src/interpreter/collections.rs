@@ -277,6 +277,57 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    /// Evaluate an array literal with expected union element type.
+    ///
+    /// Used when the array has a type annotation like `[1, "a"]: Array[Subscript]`.
+    /// Unlike `array()`, this does NOT fall back to JSON for heterogeneous elements;
+    /// instead, it validates each element is a member of the union and constructs
+    /// `Value::Array` with the union element type.
+    #[async_recursion]
+    pub(super) async fn array_with_union_elem(
+        &mut self,
+        elems: &[ArrayElem],
+        elem_ty: TypeExprId,
+        span: Span,
+    ) -> Result<Value> {
+        self.array_union_elems(elems, elem_ty, SmallVec::new(), span)
+            .await
+    }
+
+    /// Recursively evaluate array elements for union-typed arrays.
+    #[async_recursion]
+    async fn array_union_elems(
+        &mut self,
+        elems: &[ArrayElem],
+        elem_ty: TypeExprId,
+        mut acc: SmallVec<[ValueId; 4]>,
+        span: Span,
+    ) -> Result<Value> {
+        match elems.split_first() {
+            None => Ok(Value::Array(elem_ty, acc)),
+            Some((elem, tail)) => {
+                match elem {
+                    ArrayElem::Elem(id) => {
+                        let s = self.ast.expr_span(*id).unwrap_or(span);
+                        let v = self.eval(*id).await?;
+                        let vid = self.arena.add(v, s);
+                        acc.push(vid);
+                    }
+                    ArrayElem::Spread(id) => {
+                        let v = self.eval(*id).await?;
+                        match v {
+                            Value::Array(_, arr_elems) => {
+                                arr_elems.iter().for_each(|vid| acc.push(*vid));
+                            }
+                            _ => typechecked!("...spread", "Array"),
+                        }
+                    }
+                }
+                self.array_union_elems(tail, elem_ty, acc, span).await
+            }
+        }
+    }
+
     /// Evaluate a tuple literal.
     ///
     /// Unlike arrays, tuples are heterogeneous; each element can have a different type.
