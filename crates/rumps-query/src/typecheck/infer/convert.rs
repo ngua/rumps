@@ -39,6 +39,7 @@ impl InferCtx<'_> {
             | Ty::Range
             | Ty::Json
             | Ty::Ordering
+            | Ty::DataStatus
             | Ty::FilePath
             | Ty::Path
             | Ty::Regex
@@ -189,6 +190,7 @@ impl InferCtx<'_> {
             | (Ty::Range, Ty::Range)
             | (Ty::Json, Ty::Json)
             | (Ty::Ordering, Ty::Ordering)
+            | (Ty::DataStatus, Ty::DataStatus)
             | (Ty::FilePath, Ty::FilePath)
             | (Ty::Path, Ty::Path) => true,
 
@@ -321,6 +323,7 @@ impl InferCtx<'_> {
             "Range" => Ty::Range,
             "Json" => Ty::Json,
             "Ordering" => Ty::Ordering,
+            "DataStatus" => Ty::DataStatus,
             "FilePath" => Ty::FilePath,
             "Path" => Ty::Path,
             _ => {

@@ -237,6 +237,24 @@ impl<I: IoContext> Interpreter<'_, I> {
             // String -> FilePath
             (Value::String(sid), TypeId::FILEPATH) => Ok(Value::FilePath(*sid)),
 
+            // DataStatus -> Int (variant idx to MUMPS value: 0, 1, 10, 11)
+            (Value::Tagged(ty, idx, _), TypeId::INT)
+                if self.type_exprs.base_type(*ty)
+                    == Some(TypeId::DATA_STATUS) =>
+            {
+                let mumps_val = match idx {
+                    0 => 0,  // NoData
+                    1 => 1,  // HasValue
+                    2 => 10, // HasDescendants
+                    3 => 11, // Both
+                    _ => Err(Error::runtime_type(
+                        span,
+                        "invalid DataStatus variant",
+                    ))?,
+                };
+                Ok(Value::Int(mumps_val))
+            }
+
             // FilePath identity
             (Value::FilePath(_), TypeId::FILEPATH) => Ok(val.clone()),
 
@@ -396,6 +414,29 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Ok(self.make_result_err(&msg, span))
                 }
             },
+
+            // Int -> DataStatus (MUMPS values: 0, 1, 10, 11 -> variants)
+            (Value::Int(n), TypeId::DATA_STATUS) => {
+                let (variant_idx, valid) = match *n {
+                    0 => (0, true),  // NoData
+                    1 => (1, true),  // HasValue
+                    10 => (2, true), // HasDescendants
+                    11 => (3, true), // Both
+                    _ => (0, false),
+                };
+
+                if valid {
+                    let ty_expr = self.type_exprs.named(TypeId::DATA_STATUS);
+                    Ok(self.make_result_ok(
+                        Value::Tagged(ty_expr, variant_idx, SmallVec::new()),
+                        span,
+                    ))
+                } else {
+                    let msg =
+                        format!("invalid DataStatus value: {n} (expected 0, 1, 10, or 11)");
+                    Ok(self.make_result_err(&msg, span))
+                }
+            }
 
             // Json -> Object
             (Value::Json(j), TypeId::OBJECT) => match j {

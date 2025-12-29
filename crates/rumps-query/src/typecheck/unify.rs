@@ -94,6 +94,7 @@ impl<'a> InferCtx<'a> {
             | (Ty::Range, Ty::Range)
             | (Ty::Json, Ty::Json)
             | (Ty::Ordering, Ty::Ordering)
+            | (Ty::DataStatus, Ty::DataStatus)
             | (Ty::FilePath, Ty::FilePath)
             | (Ty::Path, Ty::Path)
             | (Ty::Regex, Ty::Regex) => UnifyResult::Ok(Subst::empty()),
@@ -807,8 +808,13 @@ impl<'a> InferCtx<'a> {
             // Deferred types
             Ty::Var(_) | Ty::Unknown | Ty::Error => {}
 
-            // Range, Time, Ordering, FilePath, Path: technically not JSON-native but we allow conversion
-            Ty::Range | Ty::Time | Ty::Ordering | Ty::FilePath | Ty::Path => {}
+            // Range, Time, Ordering, DataStatus, FilePath, Path: technically not JSON-native but we allow conversion
+            Ty::Range
+            | Ty::Time
+            | Ty::Ordering
+            | Ty::DataStatus
+            | Ty::FilePath
+            | Ty::Path => {}
         }
     }
 

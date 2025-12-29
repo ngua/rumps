@@ -60,14 +60,14 @@ OUTPUT nested.user.address.city
 ; Expected: NYC
 
 ; Object with array value
-LET data = {
+LET rec = {
   items: [1, 2, 3],
   count: 3
 }
-OUTPUT data.items
+OUTPUT rec.items
 ; Expected: [1, 2, 3]
 
-OUTPUT data.items[0]
+OUTPUT rec.items[0]
 ; Expected: 1
 
 ; Array of objects

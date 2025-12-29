@@ -55,14 +55,14 @@ IF mode == "debug" {
 
 ; Block with SET side effects
 {
-  SET data(1) = "first"
-  SET data(2) = "second"
+  SET items(1) = "first"
+  SET items(2) = "second"
 }
 
-OUTPUT GET data(1)
+OUTPUT GET items(1)
 ; Expected: first
 
-OUTPUT GET data(2)
+OUTPUT GET items(2)
 ; Expected: second
 
 OUTPUT "Expression statements test complete"

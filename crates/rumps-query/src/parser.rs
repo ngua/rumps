@@ -1274,7 +1274,14 @@ impl Parser {
                     cst::Expr::new(cst::ExprKind::Get(Box::new(inner)), span)
                 });
 
-            choice((with_op, get_expr)).or(operand.clone())
+            // DATA target
+            let data_expr = just(Token::Data)
+                .ignore_then(Self::gettable(expr.clone()))
+                .map_with_span(|inner, span| {
+                    cst::Expr::new(cst::ExprKind::Data(Box::new(inner)), span)
+                });
+
+            choice((with_op, get_expr, data_expr)).or(operand.clone())
         })
     }
 

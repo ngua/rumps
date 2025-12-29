@@ -11,9 +11,9 @@ OUTPUT GET x
 ; Expected: 200
 
 ; SET with single subscript
-SET data(1) = "first"
-SET data(2) = "second"
-SET data(3) = "third"
+SET items(1) = "first"
+SET items(2) = "second"
+SET items(3) = "third"
 
 ; SET with multiple subscripts
 SET patient(123, "name") = "John Doe"

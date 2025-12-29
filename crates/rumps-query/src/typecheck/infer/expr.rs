@@ -202,6 +202,9 @@ impl InferCtx<'_> {
 
                 Ty::Bool
             }
+
+            // Data query: `DATA local(...)` or `DATA ^global(...)`
+            Expr::Data(inner) => self.data(*inner, span),
         }
     }
 
@@ -1314,6 +1317,9 @@ impl InferCtx<'_> {
                 // Bool <-> Int
                 (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => target_ty,
 
+                // DataStatus -> Int (infallible; variant idx to MUMPS value)
+                (Ty::DataStatus, Ty::Int) => Ty::Int,
+
                 // String -> FilePath
                 (Ty::String, Ty::FilePath) => Ty::FilePath,
 
@@ -1408,6 +1414,7 @@ impl InferCtx<'_> {
             | Ty::Float
             | Ty::Char
             | Ty::String
+            | Ty::DataStatus
             | Ty::Array(_)
             | Ty::Option(_)
             | Ty::Object(_)
@@ -1448,6 +1455,29 @@ impl InferCtx<'_> {
         });
 
         Ty::Named(TypeId::STORABLE, vec![])
+    }
+
+    /// Infer type of `DATA` expression.
+    ///
+    /// Queries the existence status of a node. Returns `DataStatus` enum.
+    fn data(&mut self, inner_id: ExprId, span: Span) -> Ty {
+        // Extract subscript IDs if Local or Global
+        let subs: SmallVec<[ExprId; 4]> = self
+            .ast
+            .get_expr(inner_id)
+            .and_then(|e| match e {
+                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        // Type-check subscript expressions
+        subs.iter().for_each(|sub_id| {
+            let sub_ty = self.expr(*sub_id);
+            self.constrain(Constraint::Subscript(sub_ty, span));
+        });
+
+        Ty::DataStatus
     }
 
     /// Infer type of type annotation expression `(expr) : Type`.

@@ -31,6 +31,7 @@ pub(crate) enum Token {
     Matches,
     Union,
     Module,
+    Data,
 
     // Literals
     Int(i64),
@@ -141,6 +142,7 @@ impl Token {
                 "MATCHES" => Some(Self::Matches),
                 "UNION" => Some(Self::Union),
                 "MODULE" => Some(Self::Module),
+                "DATA" => Some(Self::Data),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -173,6 +175,7 @@ impl fmt::Display for Token {
             Self::Matches => write!(f, "MATCHES"),
             Self::Union => write!(f, "UNION"),
             Self::Module => write!(f, "MODULE"),
+            Self::Data => write!(f, "DATA"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),

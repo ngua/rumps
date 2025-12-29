@@ -289,6 +289,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 Err(Error::runtime(span, "cannot use global as value; use GET"))
             }
             Expr::Get(inner) => self.get(inner, span).await,
+            Expr::Data(inner) => self.data(inner, span).await,
             Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
             Expr::Unary(op, operand) => self.unary(op, operand, span).await,
             Expr::Call(callee, args) => self.call(callee, &args, span).await,

@@ -318,6 +318,10 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let rhs_id = lower_expr(ast, *rhs)?;
             Expr::Matches(lhs_id, rhs_id)
         }
+        cst::ExprKind::Data(inner) => {
+            let inner_id = lower_expr(ast, *inner)?;
+            Expr::Data(inner_id)
+        }
         cst::ExprKind::Error(msg) => {
             Err(crate::Error::parse(span, msg, vec![]))?
         }

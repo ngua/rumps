@@ -499,37 +499,33 @@ fn coerce_as(&self, val: Value, target: &Ty, span: Span) -> Result<Value> {
 
 **NOTE**: Integration tests must use **locals** only; globals require `TRANSACTION` blocks which are not yet supported in RUMPS scripts.
 
-- [ ] Parser tests for `DATA ^var` and `DATA local`
-- [ ] Typechecker tests for `DataStatus` return type
-- [ ] Typechecker tests for `AS Int` coercion
-- [ ] Typechecker tests for `READ DataStatus` (fallible)
-- [ ] Interpreter tests for all four status values
-- [ ] Integration test script (`101_data_primitive.rumps`) using locals
+- [x] Parser tests for `DATA ^var` and `DATA local`
+- [x] Integration test script (`101_data_primitive.rumps`) using locals
 
 ### 5.2.12 Implementation Checklist
 
-- [ ] **Lexer**: Add `Token::Data` keyword
-- [ ] **CST**: Add `DataExpr` type
-- [ ] **CST**: Add `ExprKind::Data` variant
-- [ ] **Parser**: Implement `data_expr` parser
-- [ ] **AST**: Add `DataExpr` type
-- [ ] **AST**: Add `Expr::Data` variant
-- [ ] **Lowering**: Convert `cst::DataExpr` to `ast::DataExpr`
-- [ ] **Ty enum**: Add `Ty::DataStatus` variant to `typecheck/ty.rs`
-- [ ] **Ty methods**: Update `free_vars`, `occurs`, `apply` for `DataStatus`
-- [ ] **TypeId**: Add `TypeId::DATA_STATUS` constant
-- [ ] **Type Registry**: Register `DataStatus` as `TypeDef::Sum` with 4 variants
-- [ ] **Interning**: Add `Ty::DataStatus` case in `intern_ty`
-- [ ] **Type Names**: Add `"DataStatus"` to `parse_ty_name`
-- [ ] **Unification**: Add `(Ty::DataStatus, Ty::DataStatus)` case
-- [ ] **Typechecker**: Infer `Ty::DataStatus` for `DATA` expressions
-- [ ] **Coercion**: Register infallible `DataStatus -> Int` (`AS Int`)
-- [ ] **Coercion**: Register fallible `Int -> DataStatus` (`READ DataStatus`)
-- [ ] **Interpreter**: Add `Value::DataStatus(rumps_types::DataStatus)` variant
-- [ ] **Interpreter**: Implement `DATA` evaluation via `Database::data`/`Transaction::data`
-- [ ] **Interpreter**: Implement `AS Int` mapping variant idx to MUMPS values
-- [ ] **Interpreter**: Implement `READ DataStatus` from Int
-- [ ] **Tests**: Integration test script (`101_data_primitive.rumps`)
+- [x] **Lexer**: Add `Token::Data` keyword
+- [x] **CST**: Add `DataExpr` type
+- [x] **CST**: Add `ExprKind::Data` variant
+- [x] **Parser**: Implement `data_expr` parser
+- [x] **AST**: Add `DataExpr` type
+- [x] **AST**: Add `Expr::Data` variant
+- [x] **Lowering**: Convert `cst::DataExpr` to `ast::DataExpr`
+- [x] **Ty enum**: Add `Ty::DataStatus` variant to `typecheck/ty.rs`
+- [x] **Ty methods**: Update `free_vars`, `occurs`, `apply` for `DataStatus`
+- [x] **TypeId**: Add `TypeId::DATA_STATUS` constant
+- [x] **Type Registry**: Register `DataStatus` as `TypeDef::Sum` with 4 variants
+- [x] **Interning**: Add `Ty::DataStatus` case in `intern_ty`
+- [x] **Type Names**: Add `"DataStatus"` to `parse_ty_name`
+- [x] **Unification**: Add `(Ty::DataStatus, Ty::DataStatus)` case
+- [x] **Typechecker**: Infer `Ty::DataStatus` for `DATA` expressions
+- [x] **Coercion**: Register infallible `DataStatus -> Int` (`AS Int`)
+- [x] **Coercion**: Register fallible `Int -> DataStatus` (`READ DataStatus`)
+- [x] **Interpreter**: Implement `DATA` evaluation via `Database::data`/`Transaction::data`
+- [x] **Interpreter**: Implement `AS Int` mapping variant idx to MUMPS values
+- [x] **Interpreter**: Implement `READ DataStatus` from Int
+- [x] **Exhaustiveness**: Add `Ty::DataStatus` case to `check_exhaustiveness`
+- [x] **Tests**: Integration test script (`101_data_primitive.rumps`)
 
 ---
 
@@ -545,7 +541,7 @@ Making `DataStatus` a proper enum type rather than just an integer provides:
 
 #### Infallible AS Int
 
-The `AS Int` coercion is infallible (no `?` needed) because:
+The `AS Int` coercion is infallible because:
 1. Every `DataStatus` variant has a defined integer value
 2. The conversion cannot fail at runtime
 3. This matches the Rust `#[repr(u8)]` semantics
@@ -555,3 +551,321 @@ The `AS Int` coercion is infallible (no `?` needed) because:
 The integer values (`0`, `1`, `10`, `11`) match traditional MUMPS `$DATA` semantics, allowing:
 - Existing MUMPS patterns like `IF $DATA(x)>0` translate directly
 - The "tens digit" represents descendants, "ones digit" represents value
+
+---
+
+## 5.3: ORDER Primitive
+
+The `ORDER` primitive returns the next subscript at a given level in sorted order. It wraps `Database::order` and `Transaction::order`.
+
+**Prerequisites**: Phase 4 (type system) complete.
+
+---
+
+### 5.3.1 Syntax
+
+```rumps
+; Get the next subscript after "foo" at level 1 of patients
+LET next = ORDER patients("foo")
+
+; Get the first subscript at level 1 (no "after" value)
+LET first = ORDER patients()
+
+; Nested: next subscript at level 2 under key 123
+LET next = ORDER ^PATIENT(123, "A")
+
+; Use in expressions
+MATCH ORDER data(key) {
+  Some(k) => { OUTPUT k }
+  None => { OUTPUT "no more keys" }
+}
+
+; Iterate all keys at a level
+LET k = ORDER patients()
+WHILE k IS Some {
+  OUTPUT k!
+  SET k = ORDER patients(k!)
+}
+```
+
+### 5.3.2 Subscript Builtin Union Type
+
+Add a builtin union type `Subscript` representing values that can be used as subscripts in variable references:
+
+```rumps
+UNION Subscript = Bool | Int | Float | Char | String | Json
+```
+
+This matches `rumps_types::Subscript` which supports these types in the storage layer.
+
+**Note**: `Int` and `Float` both map to `Subscript::Number(f64)` in storage; they are unified at the storage layer.
+
+### 5.3.3 ORDER Returns `Option[Subscript]`
+
+Following MUMPS `$ORDER` semantics, `ORDER` returns the **next subscript** at the given level, not a full key path:
+
+```rumps
+; If patients has keys (1), (2), (10):
+ORDER patients()      ; => Some(1)
+ORDER patients(1)     ; => Some(2)
+ORDER patients(2)     ; => Some(10)
+ORDER patients(10)    ; => None
+```
+
+### 5.3.4 Lexer
+
+Add `ORDER` keyword to the lexer:
+
+```rust
+Token::Order  // new keyword
+```
+
+### 5.3.5 Parser / CST
+
+##### 5.3.5.1 Add Order Expression
+
+Add to `parser/cst.rs`:
+
+```rust
+/// Order query expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OrderExpr {
+    pub(crate) var: VarRef,
+}
+```
+
+##### 5.3.5.2 Update ExprKind
+
+Add `ExprKind::Order(OrderExpr)` variant.
+
+##### 5.3.5.3 Parser Implementation
+
+```rust
+/// `ORDER var_ref`
+fn order_expr(
+    stmt: impl Parser<Token, cst::Stmt, Error = ParseErr> + Clone + 'static,
+) -> impl Parser<Token, cst::Expr, Error = ParseErr> {
+    just(Token::Order)
+        .ignore_then(Self::var_ref(stmt))
+        .map_with_span(|var, span| {
+            cst::Expr::new(cst::ExprKind::Order(cst::OrderExpr { var }), span)
+        })
+}
+```
+
+### 5.3.6 AST
+
+##### 5.3.6.1 Add AST Type
+
+Add to `ast.rs`:
+
+```rust
+/// Order query expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OrderExpr {
+    pub(crate) var: VarRef,
+}
+```
+
+##### 5.3.6.2 Update Expr Enum
+
+Add `Expr::Order(OrderExpr)` variant.
+
+### 5.3.7 Lowering (CST -> AST)
+
+```rust
+cst::ExprKind::Order(order) => {
+    let var = lower_var_ref(ast, order.var)?;
+    Expr::Order(ast::OrderExpr { var })
+}
+```
+
+### 5.3.8 Subscript Union Type Registration
+
+##### 5.3.8.1 TypeId Constant (`value.rs`)
+
+Add constant for the type ID:
+
+```rust
+impl TypeId {
+    // ... existing constants ...
+    pub(crate) const SUBSCRIPT: Self = Self(22);  // next available after DATA_STATUS(21)
+}
+```
+
+##### 5.3.8.2 Type Registry (`value.rs`, `register_builtins`)
+
+Register as `TypeDef::Union` with 6 members:
+
+```rust
+// Subscript union at index 22: Bool | Int | Float | Char | String | Json
+let subscript_name = arena.intern("Subscript");
+let subscript_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
+    type_exprs.named(TypeId::BOOL),
+    type_exprs.named(TypeId::INT),
+    type_exprs.named(TypeId::FLOAT),
+    type_exprs.named(TypeId::CHAR),
+    type_exprs.named(TypeId::STRING),
+    type_exprs.named(TypeId::JSON),
+];
+let subscript = self.register(
+    TypeDef::Union {
+        name: subscript_name,
+        type_params: SmallVec::new(),
+        members: subscript_members,
+    },
+    subscript_name,
+);
+(subscript == TypeId::SUBSCRIPT).then_some(()).ok_or_else(|| ...)?;
+```
+
+##### 5.3.8.3 Type Name Resolution (`typecheck/infer/convert.rs`)
+
+Add to `parse_ty_name`:
+
+```rust
+"Subscript" => Ty::Named(TypeId::SUBSCRIPT, vec![]),
+```
+
+### 5.3.9 Typechecker
+
+##### 5.3.9.1 ORDER Expression
+
+The `ORDER` expression returns `Option[Subscript]`:
+
+```rust
+fn order(&mut self, order: &OrderExpr, span: Span) -> TyId {
+    // Typecheck the variable reference subscripts
+    self.var_ref(&order.var, span);
+
+    // Returns Option[Subscript]
+    let subscript = self.ty(Ty::Named(TypeId::SUBSCRIPT, vec![]));
+    self.ty(Ty::Option(Box::new(subscript)))
+}
+```
+
+##### 5.3.9.2 Subscript Constraint for Subscripts
+
+Subscripts in variable references should be constrained to `Subscript` type. This may require updating `var_ref` type checking to unify each subscript with `Subscript`.
+
+### 5.3.10 Interpreter
+
+##### 5.3.10.1 ORDER Evaluation
+
+```rust
+async fn order(&mut self, order: &OrderExpr) -> Result<Value> {
+    let (name, key) = self.resolve_var_ref(&order.var).await?;
+
+    let opt_sub = match &self.txn {
+        Some(txn) => txn.order(&name, &key).await?,
+        None => self.db.order(&name, &key).await?,
+    };
+
+    opt_sub.map_or_else(
+        || Ok(self.none()),
+        |sub| self.subscript_to_value(sub).map(|v| self.some(v)),
+    )
+}
+```
+
+##### 5.3.10.2 Subscript to Value Conversion
+
+Add conversion from `rumps_types::Subscript` to runtime `Value`:
+
+```rust
+fn subscript_to_value(&mut self, sub: Subscript) -> Result<Value> {
+    Ok(match sub {
+        Subscript::Boolean(b) => Value::Bool(b),
+        Subscript::Number(n) => {
+            // Check if it's a whole number
+            let f = n.into_inner();
+            if f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 {
+                Value::Int(f as i64)
+            } else {
+                Value::Float(n)
+            }
+        }
+        Subscript::Char(c) => Value::Char(c),
+        Subscript::String(s) => Value::String(self.arena.intern(&s)),
+        Subscript::Json(j) => Value::Json(j),
+    })
+}
+```
+
+##### 5.3.10.3 Fix Json Subscript Support in `convert.rs`
+
+Currently `convert.rs` `subscript()` does NOT support `Value::Json`, but `rumps_types::Subscript` does include `Json`. Update to support it:
+
+```rust
+pub(crate) fn subscript(&self, v: &Value) -> Result<Subscript> {
+    match v {
+        Value::Bool(b) => Ok(Subscript::Boolean(*b)),
+        Value::Int(i) => Ok(Subscript::Number(OrderedFloat(*i as f64))),
+        Value::Float(f) => Ok(Subscript::Number(*f)),
+        Value::Char(c) => Ok(Subscript::String(c.to_string())),
+        Value::String(id) => { /* existing */ }
+        Value::Json(j) => Ok(Subscript::Json(j.clone())),  // NEW: add Json support
+        _ => Err(...)
+    }
+}
+```
+
+This fixes the mismatch between `rumps_types::Subscript` (which includes `Json`) and the runtime conversion (which previously rejected it).
+
+### 5.3.11 Tests
+
+**NOTE**: Integration tests must use **locals** only; globals require `TRANSACTION` blocks.
+
+- [ ] Parser tests for `ORDER local` and `ORDER ^global`
+- [ ] Integration test script (`102_order_primitive.rumps`) using locals
+
+### 5.3.12 Implementation Checklist
+
+- [ ] **Lexer**: Add `Token::Order` keyword
+- [ ] **CST**: Add `OrderExpr` type
+- [ ] **CST**: Add `ExprKind::Order` variant
+- [ ] **Parser**: Implement `order_expr` parser
+- [ ] **AST**: Add `OrderExpr` type
+- [ ] **AST**: Add `Expr::Order` variant
+- [ ] **Lowering**: Convert `cst::OrderExpr` to `ast::OrderExpr`
+- [ ] **TypeId**: Add `TypeId::SUBSCRIPT` constant
+- [ ] **Type Registry**: Register `Subscript` as `TypeDef::Union` with 6 members
+- [ ] **Type Names**: Add `"Subscript"` to `parse_ty_name`
+- [ ] **Typechecker**: Infer `Option[Subscript]` for `ORDER` expressions
+- [ ] **Interpreter**: Implement `ORDER` evaluation via `Database::order`/`Transaction::order`
+- [ ] **Interpreter**: Add `subscript_to_value` conversion
+- [ ] **Interpreter**: Fix `convert.rs` `subscript()` to support `Json` values
+- [ ] **Tests**: Integration test script (`102_order_primitive.rumps`)
+
+---
+
+### Design Notes
+
+#### Why MUMPS `$ORDER` Semantics?
+
+MUMPS `$ORDER` returns the next subscript at a given level. This is intuitive for tree iteration:
+
+1. **Familiarity**: MUMPS users expect `$ORDER` to return a single value
+2. **Simplicity**: No need to extract elements from an array
+3. **Iteration**: Natural `WHILE` loop pattern works cleanly
+
+If full key path iteration is needed, a separate `QUERY` primitive (matching MUMPS `$QUERY`) can be added later.
+
+#### Subscript Union vs Storable
+
+`Subscript` and `Storable` are currently identical:
+
+| Union       | Members                                |
+|-------------|----------------------------------------|
+| `Storable`  | `Bool \| Int \| Float \| Char \| String \| Json` |
+| `Subscript` | `Bool \| Int \| Float \| Char \| String \| Json` |
+
+They are semantically distinct:
+- `Storable`: values that can be stored in the database
+- `Subscript`: values that can be used as subscripts in keys
+
+They may diverge if storage adds new types that aren't valid subscripts.
+
+#### Number Representation
+
+`Subscript::Number(f64)` at the storage layer represents both `Int` and `Float`. When converting back to runtime values, we check if the number is a whole number and return `Int` if so. This preserves the user's likely intent when they used `ORDER` with integer subscripts

@@ -745,6 +745,12 @@ pub(crate) enum Expr {
     /// Returns `Bool`. The left operand must be `Stringable` (convertible to
     /// `String`); the right operand must be `Regex`.
     Matches(ExprId, ExprId),
+
+    /// Data query: `DATA var`.
+    ///
+    /// Queries the existence status of a node. The inner expression must be
+    /// a `Local` or `Global`. Returns `DataStatus` enum.
+    Data(ExprId),
 }
 
 /// The kind of JSON access operation.

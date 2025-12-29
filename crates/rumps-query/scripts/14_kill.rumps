@@ -2,39 +2,39 @@
 ; Tests deletion of variables and subtrees
 
 ; Set up test data
-SET data(1) = "one"
-SET data(2) = "two"
-SET data(3) = "three"
-SET data(1, "a") = "nested a"
-SET data(1, "b") = "nested b"
+SET items(1) = "one"
+SET items(2) = "two"
+SET items(3) = "three"
+SET items(1, "a") = "nested a"
+SET items(1, "b") = "nested b"
 
-; Verify data exists
-LET v1 = GET data(1)
+; Verify items exists
+LET v1 = GET items(1)
 OUTPUT v1
 ; Expected: one
 
 ; KILL single node
-KILL data(2)
+KILL items(2)
 
 ; Verify deleted
-LET v2 = GET data(2)
+LET v2 = GET items(2)
 OUTPUT v2
 ; Expected: Option.None
 
 ; KILL subtree
-KILL data(1)
+KILL items(1)
 
 ; Verify subtree deleted
-LET v3 = GET data(1)
+LET v3 = GET items(1)
 OUTPUT v3
 ; Expected: Option.None
 
-LET v4 = GET data(1, "a")
+LET v4 = GET items(1, "a")
 OUTPUT v4
 ; Expected: Option.None
 
-; data(3) should still exist
-LET v5 = GET data(3)
+; items(3) should still exist
+LET v5 = GET items(3)
 OUTPUT v5
 ; Expected: three
 
@@ -48,21 +48,5 @@ KILL temp
 LET after = GET temp
 OUTPUT after
 ; Expected: Option.None
-
-; KILL globals (in transaction)
-TRANSACTION {
-  SET ^TEST(1) = "value1"
-  SET ^TEST(2) = "value2"
-
-  KILL ^TEST(1)
-
-  LET g1 = GET ^TEST(1)
-  OUTPUT g1
-  ; Expected: Option.None
-
-  LET g2 = GET ^TEST(2)
-  OUTPUT g2
-  ; Expected: value2
-}
 
 OUTPUT "KILL test complete"

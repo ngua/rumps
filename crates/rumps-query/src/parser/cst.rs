@@ -243,6 +243,12 @@ pub(crate) enum ExprKind {
     ///
     /// Returns `Bool`. The left operand must be `Stringable`.
     Matches(Box<Expr>, Box<Expr>),
+
+    /// Data query: `DATA var`.
+    ///
+    /// Queries the existence status of a node. The inner expression must be
+    /// a `Local` or `Global`. Returns `DataStatus` enum.
+    Data(Box<Expr>),
 }
 
 /// The key specification for JSON access (CST form).

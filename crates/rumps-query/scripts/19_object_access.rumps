@@ -14,7 +14,7 @@ OUTPUT obj.active
 ; Expected: TRUE
 
 ; Nested object access (dot notation)
-LET data = {
+LET rec = {
   user: {
     profile: {
       first-name: "Bob",
@@ -24,16 +24,16 @@ LET data = {
   }
 }
 
-OUTPUT data.user.profile.first-name
+OUTPUT rec.user.profile.first-name
 ; Expected: Bob
 
-OUTPUT data.user.profile.last-name
+OUTPUT rec.user.profile.last-name
 ; Expected: Smith
 
-OUTPUT data.user.scores[0]
+OUTPUT rec.user.scores[0]
 ; Expected: 90
 
-OUTPUT data.user.scores[-1]
+OUTPUT rec.user.scores[-1]
 ; Expected: 95
 
 ; Object with dashed keys (valid RUMPS identifiers)

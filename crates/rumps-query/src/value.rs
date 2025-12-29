@@ -145,6 +145,10 @@ impl TypeId {
     ///
     /// Represents a compiled regular expression pattern.
     pub(crate) const REGEX: Self = Self(20);
+    /// Builtin enum: `DataStatus = NoData | HasValue | HasDescendants | Both`.
+    ///
+    /// Result of `DATA` primitive; indicates node existence status.
+    pub(crate) const DATA_STATUS: Self = Self(21);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -1113,6 +1117,7 @@ impl TypeExprArena {
             Ty::Range => self.named(TypeId::RANGE),
             Ty::Json => self.named(TypeId::JSON),
             Ty::Ordering => self.named(TypeId::ORDERING),
+            Ty::DataStatus => self.named(TypeId::DATA_STATUS),
             Ty::FilePath => self.named(TypeId::FILEPATH),
             Ty::Path => self.named(TypeId::PATH),
             Ty::Regex => self.named(TypeId::REGEX),
@@ -1617,6 +1622,56 @@ impl TypeRegistry {
             ))
         })?;
 
+        // DataStatus at index 21: NoData | HasValue | HasDescendants | Both
+        let data_status_name = arena.intern("DataStatus");
+        let no_data = arena.intern("NoData");
+        let has_value = arena.intern("HasValue");
+        let has_descendants = arena.intern("HasDescendants");
+        let both = arena.intern("Both");
+
+        let data_status = self.register(
+            TypeDef::Sum {
+                name: data_status_name,
+                type_params: SmallVec::new(),
+                variants: smallvec::smallvec![
+                    VariantDef {
+                        name: no_data,
+                        idx: 0,
+                        arity: 0,
+                        payloads: SmallVec::new(),
+                    },
+                    VariantDef {
+                        name: has_value,
+                        idx: 1,
+                        arity: 0,
+                        payloads: SmallVec::new(),
+                    },
+                    VariantDef {
+                        name: has_descendants,
+                        idx: 2,
+                        arity: 0,
+                        payloads: SmallVec::new(),
+                    },
+                    VariantDef {
+                        name: both,
+                        idx: 3,
+                        arity: 0,
+                        payloads: SmallVec::new(),
+                    },
+                ],
+            },
+            data_status_name,
+        );
+        (data_status == TypeId::DATA_STATUS)
+            .then_some(())
+            .ok_or_else(|| {
+                crate::Error::runtime_no_span(format!(
+                    "DataStatus at index {}, expected {}",
+                    data_status.0,
+                    TypeId::DATA_STATUS.0
+                ))
+            })?;
+
         Ok(())
     }
 
@@ -1997,8 +2052,8 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
         let reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
 
-        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex = 21
-        assert_eq!(reg.len(), 21);
+        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex + DataStatus = 22
+        assert_eq!(reg.len(), 22);
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

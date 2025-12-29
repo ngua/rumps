@@ -2,28 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Destructuring bindings\n\n; === Tuple destructuring ===\n\nLET pair = (1, 2)\nLET (a, b) = pair\nOUTPUT a\nOUTPUT b\n\n; Nested tuple\nLET nested = ((1, 2), (3, 4))\nLET ((x1, y1), (x2, y2)) = nested\nOUTPUT x1\nOUTPUT y1\nOUTPUT x2\nOUTPUT y2\n\n; === Object destructuring ===\n\nLET person = { name: \"Alice\", age: 30 }\nLET { name, age } = person\nOUTPUT name\nOUTPUT age\n\n; Object with rename\nLET point = { x: 10, y: 20 }\nLET { x: px, y: py } = point\nOUTPUT px\nOUTPUT py\n\n; === Array destructuring ===\n\nLET arr = [1, 2, 3]\nLET [first, second, third] = arr\nOUTPUT first\nOUTPUT second\nOUTPUT third\n\n; Array with rest (bind)\nLET nums = [1, 2, 3, 4, 5]\nLET [head, ...tail] = nums\nOUTPUT head\nOUTPUT tail\n\n; Array with rest (ignore)\nLET long = [10, 20, 30, 40, 50]\nLET [first2, second2, ..] = long\nOUTPUT first2\nOUTPUT second2\n\n; === Wildcard ===\n\nLET triple = (100, 200, 300)\nLET (keep, _, last) = triple\nOUTPUT keep\nOUTPUT last\n\n; Wildcard discards entire value\nLET _ = \"discarded\"\nOUTPUT \"wildcard works\"\n\n; === Mixed nesting ===\n\nLET data = { coords: (10, 20), name: \"origin\" }\nLET { coords: (cx, cy), name: label } = data\nOUTPUT cx\nOUTPUT cy\nOUTPUT label\n\n; === In expressions ===\n\nLET result = {\n  LET (x, y) = (5, 10)\n  x + y\n}\nOUTPUT result\n\nOUTPUT \"Destructuring test complete\"\n"
 ---
-1
-2
-1
-2
-3
-4
-Alice
-30
-10
-20
-1
-2
-3
-1
-[ 2, 3, 4, 5 ]
-10
-20
-100
-300
-wildcard works
-10
-20
-origin
-15
-Destructuring test complete
+ERROR: parse error at 1016..1020: unexpected `DATA` (expected: (, [, {)

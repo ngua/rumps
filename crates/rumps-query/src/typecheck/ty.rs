@@ -46,6 +46,7 @@ pub(crate) enum Ty {
     Range,
     Json,
     Ordering,
+    DataStatus,
     FilePath,
     Path,
     Regex,
@@ -140,6 +141,7 @@ impl Ty {
             | Self::Range
             | Self::Json
             | Self::Ordering
+            | Self::DataStatus
             | Self::FilePath
             | Self::Path
             | Self::Regex
@@ -185,6 +187,7 @@ impl Ty {
             | Self::Range
             | Self::Json
             | Self::Ordering
+            | Self::DataStatus
             | Self::FilePath
             | Self::Path
             | Self::Regex
@@ -220,6 +223,7 @@ impl Ty {
             Self::Range => Self::Range,
             Self::Json => Self::Json,
             Self::Ordering => Self::Ordering,
+            Self::DataStatus => Self::DataStatus,
             Self::FilePath => Self::FilePath,
             Self::Path => Self::Path,
             Self::Regex => Self::Regex,

@@ -1,12 +1,13 @@
-//! Database primitives: GET, SET, KILL, and key construction.
+//! Database primitives: GET, SET, KILL, DATA, and key construction.
 
 use async_recursion::async_recursion;
-use rumps_types::{Key, Name, Subscript};
+use rumps_types::{DataStatus, Key, Name, Subscript};
+use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
 use crate::io::IoContext;
-use crate::value::Value;
+use crate::value::{TypeId, Value};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -150,6 +151,52 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .await
                 .map_err(|e| Error::runtime(span, format!("KILL failed: {e}")))
         }
+    }
+
+    /// `DATA` primitive; queries existence status of a B-tree node.
+    ///
+    /// The inner expression must be a `Local` or `Global`. Uses the active
+    /// transaction if one exists, otherwise reads directly from the database.
+    /// Returns a `DataStatus` enum value (tagged variant).
+    #[async_recursion]
+    pub(super) async fn data(
+        &mut self,
+        inner: ExprId,
+        span: Span,
+    ) -> Result<Value> {
+        let inner_span = self.ast.expr_span(inner).unwrap_or(span);
+        let inner_expr = self
+            .ast
+            .get_expr(inner)
+            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+            .clone();
+
+        let (name, subs) = match inner_expr {
+            Expr::Local(n, s) => Ok((Name::local(&n), s)),
+            Expr::Global(n, s) => Ok((Name::global(&n), s)),
+            _ => Err(Error::runtime(
+                inner_span,
+                "DATA requires a local or global",
+            )),
+        }?;
+
+        let key = self.build_key(&subs).await?;
+
+        let status = match &self.txn {
+            Some(txn) => txn.data(&name, &key).await,
+            None => self.db.data(&name, &key).await,
+        }
+        .map_err(|e| Error::runtime(span, format!("DATA failed: {e}")))?;
+
+        // Convert DataStatus to Tagged variant
+        let type_expr_id = self.type_exprs.named(TypeId::DATA_STATUS);
+        let variant_idx = match status {
+            DataStatus::NoData => 0,
+            DataStatus::HasValue => 1,
+            DataStatus::HasDescendants => 2,
+            DataStatus::Both => 3,
+        };
+        Ok(Value::Tagged(type_expr_id, variant_idx, SmallVec::new()))
     }
 
     /// Evaluate subscript expressions and build a `Key`.

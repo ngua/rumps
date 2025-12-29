@@ -328,6 +328,32 @@ impl InferCtx<'_> {
                     }
                 }
 
+                Ty::DataStatus => {
+                    let has_no_data = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "DataStatus" && var == "NoData")
+                        })
+                    });
+                    let has_value = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "DataStatus" && var == "HasValue")
+                        })
+                    });
+                    let has_desc = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "DataStatus" && var == "HasDescendants")
+                        })
+                    });
+                    let has_both = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
+                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "DataStatus" && var == "Both")
+                        })
+                    });
+                    if !has_no_data || !has_value || !has_desc || !has_both {
+                        self.error(TypeError::NonExhaustiveMatch(span));
+                    }
+                }
+
                 Ty::Union(members) => {
                     // Collect covered types (small N, Vec is fine)
                     let covered: Vec<Ty> = unguarded
