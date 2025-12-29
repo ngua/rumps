@@ -185,13 +185,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let cond_val = self.eval(cond).await?;
                 let cond_true = match cond_val {
                     Value::Bool(b) => b,
-                    _ => {
-                        let span = self.ast.expr_span(cond).unwrap_or_default();
-                        Err(Error::runtime_type(
-                            span,
-                            "IF condition must be Bool",
-                        ))?
-                    }
+                    _ => typechecked!("IF condition", "Bool"),
                 };
 
                 match else_br {
@@ -345,16 +339,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 let guard_val = self.eval(guard_expr).await?;
                                 match guard_val {
                                     Value::Bool(b) => b,
-                                    _ => {
-                                        let g_span = self
-                                            .ast
-                                            .expr_span(guard_expr)
-                                            .unwrap_or_default();
-                                        Err(Error::runtime_type(
-                                            g_span,
-                                            "MATCH guard must be Bool",
-                                        ))?
-                                    }
+                                    _ => typechecked!("MATCH guard", "Bool"),
                                 }
                             }
                         };

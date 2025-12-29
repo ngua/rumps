@@ -1390,13 +1390,16 @@ impl InferCtx<'_> {
     ///
     /// `expr READ T` returns `Result[T, String]`. The conversion is fallible;
     /// if the value cannot be converted to `T`, an error message is returned.
+    ///
+    /// For `READ Json`, adds a `Jsonable` constraint on the input type to
+    /// catch known-impossible conversions at compile time.
     fn read_conv(
         &mut self,
         inner_id: ExprId,
         ty_id: AstTypeExprId,
         span: Span,
     ) -> Ty {
-        let _inner_ty = self.expr(inner_id);
+        let inner_ty = self.expr(inner_id);
         let target_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
 
         // Validate the target type is usable for READ
@@ -1411,6 +1414,10 @@ impl InferCtx<'_> {
             | Ty::Option(_)
             | Ty::Object(_)
             | Ty::Named(_, _) => {}
+            // READ Json requires the input to be Jsonable
+            Ty::Json => {
+                self.constrain(Constraint::Jsonable(inner_ty, span));
+            }
             Ty::Fn(_, _) => {
                 self.error(TypeError::Mismatch {
                     expected: Ty::String, // placeholder

@@ -873,26 +873,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let right = self.eval(rhs).await?;
                         match right {
                             Value::Bool(b) => Ok(Value::Bool(b)),
-                            _ => Err(Error::runtime_type(
-                                span,
-                                format!(
-                                    "logical AND requires booleans; got Bool and {}",
-                                    right.type_name(&self.registry, &self.type_exprs, &self.arena)
-                                ),
-                            )),
+                            _ => typechecked!("&&", "Bool"),
                         }
                     }
-                    _ => Err(Error::runtime_type(
-                        span,
-                        format!(
-                            "logical AND requires booleans; got {}",
-                            left.type_name(
-                                &self.registry,
-                                &self.type_exprs,
-                                &self.arena
-                            )
-                        ),
-                    )),
+                    _ => typechecked!("&&", "Bool"),
                 }
             }
             // Short-circuit OR: if left is true, don't evaluate right
@@ -904,26 +888,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let right = self.eval(rhs).await?;
                         match right {
                             Value::Bool(b) => Ok(Value::Bool(b)),
-                            _ => Err(Error::runtime_type(
-                                span,
-                                format!(
-                                    "logical OR requires booleans; got Bool and {}",
-                                    right.type_name(&self.registry, &self.type_exprs, &self.arena)
-                                ),
-                            )),
+                            _ => typechecked!("||", "Bool"),
                         }
                     }
-                    _ => Err(Error::runtime_type(
-                        span,
-                        format!(
-                            "logical OR requires booleans; got {}",
-                            left.type_name(
-                                &self.registry,
-                                &self.type_exprs,
-                                &self.arena
-                            )
-                        ),
-                    )),
+                    _ => typechecked!("||", "Bool"),
                 }
             }
             // Coalesce: unwrap Option.Some/Result.Ok, or evaluate right for None/Err
@@ -1264,17 +1232,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         self.arena.get_str(sid).unwrap_or("").to_owned()
                     }
                     Value::Int(n) => n.to_string(),
-                    _ => {
-                        let ty = key_val.type_name(
-                            &self.registry,
-                            &self.type_exprs,
-                            &self.arena,
-                        );
-                        Err(Error::runtime_type(
-                            span,
-                            format!("JSON key must be String or Int; got {ty}"),
-                        ))?
-                    }
+                    _ => typechecked!("json[key]", "String | Int"),
                 }
             }
         };
@@ -1282,17 +1240,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Access the JSON value
         let json_val = match &base_val {
             Value::Json(j) => j.get(&key_str).cloned(),
-            _ => {
-                let ty = base_val.type_name(
-                    &self.registry,
-                    &self.type_exprs,
-                    &self.arena,
-                );
-                Err(Error::runtime_type(
-                    span,
-                    format!("JSON access requires Json; got {ty}"),
-                ))?
-            }
+            _ => typechecked!("json access", "Json"),
         };
 
         match kind {
@@ -1339,14 +1287,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let val_id = self.arena.add(Value::String(sid), span);
                 Ok(self.make_some_scalar(val_id))
             }
-            Some(serde_json::Value::Array(_)) => Err(Error::runtime_type(
-                span,
-                "JSON scalar access on array; use READ to convert",
-            )),
-            Some(serde_json::Value::Object(_)) => Err(Error::runtime_type(
-                span,
-                "JSON scalar access on object; use READ to convert",
-            )),
+            Some(serde_json::Value::Array(_)) => {
+                typechecked!("json scalar access", "Scalar")
+            }
+            Some(serde_json::Value::Object(_)) => {
+                typechecked!("json scalar access", "Scalar")
+            }
         }
     }
 }

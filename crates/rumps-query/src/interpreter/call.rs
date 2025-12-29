@@ -86,7 +86,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.env.scopes.restore(saved);
 
             // Validate return type if annotated
-            result.and_then(|val| self.check_return_type(val, ret, span))
+            result.and_then(|val| self.check_return_type(val, ret))
         }
     }
 
@@ -121,7 +121,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.env.scopes.pop();
 
             // Validate return type if annotated
-            result.and_then(|val| self.check_return_type(val, ret, span))
+            result.and_then(|val| self.check_return_type(val, ret))
         }
     }
 
@@ -1376,24 +1376,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         val: Value,
         ret: Option<TypeExprId>,
-        span: Span,
     ) -> Result<Value> {
         if let Some(expected_ty) = ret {
             if self.value_matches_type_expr(&val, expected_ty) {
                 Ok(val)
             } else {
-                let expected = self.format_type_expr(expected_ty);
-                let actual = val.type_name(
-                    &self.registry,
-                    &self.type_exprs,
-                    &self.arena,
-                );
-                Err(Error::runtime_type(
-                    span,
-                    format!(
-                        "expected return type `{expected}`, got `{actual}`"
-                    ),
-                ))
+                typechecked!("return type", "matches declaration")
             }
         } else {
             Ok(val)
@@ -1476,41 +1464,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                     Some(&pname),
                 ),
-                _ => {
-                    let expected = self.format_type_expr(expected_ty);
-                    let actual = val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena,
-                    );
-                    Err(Error::runtime_type(
-                        span,
-                        format!(
-                            "parameter `{pname}`: expected `{expected}`, \
-                             got `{actual}`"
-                        ),
-                    ))
-                }
+                _ => typechecked!("parameter type", "Object (struct)"),
             }
+        } else if self.value_matches_type_expr(val, expected_ty) {
+            Ok(())
         } else {
-            // Non-struct type: use standard matching
-            if self.value_matches_type_expr(val, expected_ty) {
-                Ok(())
-            } else {
-                let expected = self.format_type_expr(expected_ty);
-                let actual = val.type_name(
-                    &self.registry,
-                    &self.type_exprs,
-                    &self.arena,
-                );
-                Err(Error::runtime_type(
-                    span,
-                    format!(
-                        "parameter `{pname}`: expected `{expected}`, \
-                         got `{actual}`"
-                    ),
-                ))
-            }
+            typechecked!("parameter type", "matches declaration")
         }
     }
 }

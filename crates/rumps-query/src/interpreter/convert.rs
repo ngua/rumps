@@ -464,10 +464,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| s.to_owned())
                 .ok_or_else(|| Error::runtime(span, "invalid string id")),
-            _ => Err(Error::runtime_type(
-                span,
-                "expected FilePath or String for file path",
-            )),
+            _ => typechecked!("file path", "FilePath | String"),
         }
     }
 }

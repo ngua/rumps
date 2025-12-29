@@ -100,9 +100,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         ast_id: AstTypeExprId,
         span: Span,
     ) -> Result<TypeExprId> {
-        self.try_resolve_type_expr(ast_id, span)?.ok_or_else(|| {
-            Error::runtime_type(span, "unresolved type parameter")
-        })
+        self.try_resolve_type_expr(ast_id, span)?
+            .ok_or_else(|| typechecked!("type expression", "resolved"))
     }
 
     /// Try to resolve an AST type expression to a runtime `TypeExprId`.
@@ -229,10 +228,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
 
             // T -> Json (jsonify anything that can be serialized)
-            (_, TypeId::JSON) => self
-                .jsonify(val)
-                .map(Value::Json)
-                .map_err(|e| Error::runtime_type(span, e.to_string())),
+            // Type checker guarantees Jsonable constraint.
+            (_, TypeId::JSON) => Ok(Value::Json(
+                self.jsonify(val)
+                    .unwrap_or_else(|_| typechecked!("AS Json", "Jsonable")),
+            )),
 
             // String -> FilePath
             (Value::String(sid), TypeId::FILEPATH) => Ok(Value::FilePath(*sid)),
@@ -242,15 +242,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if self.type_exprs.base_type(*ty)
                     == Some(TypeId::DATA_STATUS) =>
             {
+                // `mumps_val` for compatibility with MUMPS, i.e. `$DATA` in
+                // MUMPS returns an integer
                 let mumps_val = match idx {
                     0 => 0,  // NoData
                     1 => 1,  // HasValue
                     2 => 10, // HasDescendants
                     3 => 11, // Both
-                    _ => Err(Error::runtime_type(
-                        span,
-                        "invalid DataStatus variant",
-                    ))?,
+                    _ => typechecked!("DataStatus AS Int", "valid variant"),
                 };
                 Ok(Value::Int(mumps_val))
             }
@@ -262,16 +261,27 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Tagged(ty, _, payloads), TypeId::FILEPATH)
                 if self.type_exprs.base_type(*ty) == Some(TypeId::PATH) =>
             {
-                payloads
+                Ok(payloads
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime_type(span, "invalid Path value")
-                    })
+                    .unwrap_or_else(|| {
+                        typechecked!("Path AS FilePath", "valid Path")
+                    }))
             }
 
-            // Unsupported conversion
-            _ => {
+            // Storable narrowing: runtime type check for `Storable AS T` where
+            // T is a Storable member. This is the ONLY case requiring runtime
+            // type errors; all other casts are validated by the type checker.
+            _ if matches!(
+                target,
+                TypeId::BOOL
+                    | TypeId::INT
+                    | TypeId::FLOAT
+                    | TypeId::CHAR
+                    | TypeId::STRING
+                    | TypeId::JSON
+            ) =>
+            {
                 let src_name = val.type_name(
                     &self.registry,
                     &self.type_exprs,
@@ -286,6 +296,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                     format!("cannot cast {src_name} as {tgt_name}"),
                 ))
             }
+
+            // All other unsupported conversions: type checker should have caught
+            _ => typechecked!("AS cast", "valid conversion"),
         }
     }
 
@@ -462,7 +475,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             },
 
-            // Unsupported conversion
+            // Unsupported conversion: return Result.Err (soft error)
             _ => {
                 let src_name = val.type_name(
                     &self.registry,
@@ -473,10 +486,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .registry
                     .type_name(target, &self.arena)
                     .unwrap_or("Unknown");
-                Err(Error::runtime_type(
-                    span,
-                    format!("cannot read {src_name} as {tgt_name}"),
-                ))
+                let msg = format!("cannot read {src_name} as {tgt_name}");
+                Ok(self.make_result_err(&msg, span))
             }
         }
     }
@@ -525,10 +536,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.read_to_struct(val, &fields, target, span)
         } else {
             let tgt_name = self.format_type_expr(target);
-            Err(Error::runtime_type(
-                span,
-                format!("cannot read into type `{tgt_name}`"),
-            ))
+            let msg = format!("cannot read into type `{tgt_name}`");
+            Ok(self.make_result_err(&msg, span))
         }
     }
 
@@ -543,79 +552,96 @@ impl<I: IoContext> Interpreter<'_, I> {
         struct_ty: TypeExprId,
         span: Span,
     ) -> Result<Value> {
-        // Extract object source; hard error if not an object
-        let (json_obj, native_obj) = match val {
+        // Extract object source; soft error if not an object
+        let objs = match val {
             Value::Json(serde_json::Value::Object(obj)) => {
-                (Some(obj.clone()), None)
+                Some((Some(obj.clone()), None))
             }
-            Value::Object(obj) => (None, Some(obj.clone())),
-            _ => {
+            Value::Object(obj) => Some((None, Some(obj.clone()))),
+            _ => None,
+        };
+
+        match objs {
+            None => {
                 let src = val.type_name(
                     &self.registry,
                     &self.type_exprs,
                     &self.arena,
                 );
                 let tgt = self.format_type_expr(struct_ty);
-                Err(Error::runtime_type(
-                    span,
-                    format!("cannot read `{src}` as `{tgt}`"),
-                ))?
+                let msg = format!("cannot read `{src}` as `{tgt}`");
+                Ok(self.make_result_err(&msg, span))
             }
-        };
+            Some((json_obj, native_obj)) => {
+                let fields = fields.clone();
 
-        let fields = fields.clone();
+                // Use a local enum to distinguish soft errors (Result.Err) from hard errors
+                enum FieldErr {
+                    Soft(String),
+                    Hard(Error),
+                }
 
-        // Use a local enum to distinguish soft errors (Result.Err) from hard errors
-        enum FieldErr {
-            Soft(String),
-            Hard(Error),
-        }
+                // Process each required field
+                let result: std::result::Result<
+                    IndexMap<StringId, ValueId>,
+                    FieldErr,
+                > = fields.iter().try_fold(
+                    IndexMap::new(),
+                    |mut acc, (&fid, &fty)| {
+                        let fname = self
+                            .arena
+                            .get_str(fid)
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| "?".to_owned());
 
-        // Process each required field
-        let result: std::result::Result<IndexMap<StringId, ValueId>, FieldErr> =
-            fields
-                .iter()
-                .try_fold(IndexMap::new(), |mut acc, (&fid, &fty)| {
-                    let fname = self
-                        .arena
-                        .get_str(fid)
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| "?".to_owned());
+                        // Get field value from JSON or native object
+                        let field_val = json_obj
+                            .as_ref()
+                            .and_then(|obj| {
+                                obj.get(&fname).map(|v| Value::Json(v.clone()))
+                            })
+                            .or_else(|| {
+                                native_obj
+                                    .as_ref()
+                                    .and_then(|obj| obj.get(&fid))
+                                    .and_then(|id| self.arena.get(*id).cloned())
+                            });
 
-                    // Get field value from JSON or native object
-                    let field_val = json_obj
-                        .as_ref()
-                        .and_then(|obj| {
-                            obj.get(&fname).map(|v| Value::Json(v.clone()))
-                        })
-                        .or_else(|| {
-                            native_obj
-                                .as_ref()
-                                .and_then(|obj| obj.get(&fid))
-                                .and_then(|id| self.arena.get(*id).cloned())
-                        });
+                        match field_val {
+                            None => Err(FieldErr::Soft(format!(
+                                "missing field `{fname}`"
+                            ))),
+                            Some(v) => {
+                                let field_result = self
+                                    .read_value_expr(&v, fty, span)
+                                    .map_err(FieldErr::Hard)?;
 
-                    match field_val {
-                        None => Err(FieldErr::Soft(format!(
-                            "missing field `{fname}`"
-                        ))),
-                        Some(v) => {
-                            let field_result = self
-                                .read_value_expr(&v, fty, span)
-                                .map_err(FieldErr::Hard)?;
-
-                            // Check for Result.Err (soft error)
-                            if let Value::Tagged(ty, 1, _) = &field_result {
-                                if self.type_exprs.base_type(*ty)
-                                    == Some(TypeId::RESULT)
-                                {
-                                    let msg = self
-                                        .extract_result_err_msg(&field_result);
-                                    Err(FieldErr::Soft(format!(
-                                        "field `{fname}`: {msg}"
-                                    )))
+                                // Check for Result.Err (soft error)
+                                if let Value::Tagged(ty, 1, _) = &field_result {
+                                    if self.type_exprs.base_type(*ty)
+                                        == Some(TypeId::RESULT)
+                                    {
+                                        let msg = self.extract_result_err_msg(
+                                            &field_result,
+                                        );
+                                        Err(FieldErr::Soft(format!(
+                                            "field `{fname}`: {msg}"
+                                        )))
+                                    } else {
+                                        // Tagged but not Result.Err; extract value
+                                        let inner = self
+                                            .unwrap_result_ok(
+                                                &field_result,
+                                                span,
+                                            )
+                                            .map_err(FieldErr::Hard)?;
+                                        let inner_id =
+                                            self.arena.add(inner, span);
+                                        acc.insert(fid, inner_id);
+                                        Ok(acc)
+                                    }
                                 } else {
-                                    // Tagged but not Result.Err; extract value
+                                    // Result.Ok case
                                     let inner = self
                                         .unwrap_result_ok(&field_result, span)
                                         .map_err(FieldErr::Hard)?;
@@ -623,25 +649,21 @@ impl<I: IoContext> Interpreter<'_, I> {
                                     acc.insert(fid, inner_id);
                                     Ok(acc)
                                 }
-                            } else {
-                                // Result.Ok case
-                                let inner = self
-                                    .unwrap_result_ok(&field_result, span)
-                                    .map_err(FieldErr::Hard)?;
-                                let inner_id = self.arena.add(inner, span);
-                                acc.insert(fid, inner_id);
-                                Ok(acc)
                             }
                         }
-                    }
-                });
+                    },
+                );
 
-        match result {
-            Ok(obj_fields) => {
-                Ok(self.make_result_ok(Value::Object(obj_fields), span))
+                match result {
+                    Ok(obj_fields) => {
+                        Ok(self.make_result_ok(Value::Object(obj_fields), span))
+                    }
+                    Err(FieldErr::Soft(msg)) => {
+                        Ok(self.make_result_err(&msg, span))
+                    }
+                    Err(FieldErr::Hard(e)) => Err(e),
+                }
             }
-            Err(FieldErr::Soft(msg)) => Ok(self.make_result_err(&msg, span)),
-            Err(FieldErr::Hard(e)) => Err(e),
         }
     }
 
@@ -925,22 +947,21 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if let Some(&ty) = subst.get(&name_id) {
                     Ok(ty)
                 } else {
-                    // Regular type lookup
+                    // Regular type lookup; type checker guarantees it exists
                     let ty_id =
-                        self.registry.lookup(name_id).ok_or_else(|| {
-                            Error::runtime_type(
-                                span,
-                                format!("unknown type: `{name}`"),
-                            )
-                        })?;
+                        self.registry.lookup(name_id).unwrap_or_else(|| {
+                            typechecked!("type lookup", "known type")
+                        });
                     Ok(self.type_exprs.named(ty_id))
                 }
             }
             AstTypeExpr::App(name, params) => {
                 let name_id = self.arena.intern(&name);
-                let ty_id = self.registry.lookup(name_id).ok_or_else(|| {
-                    Error::runtime_type(span, format!("unknown type: `{name}`"))
-                })?;
+                // Type checker guarantees the type exists
+                let ty_id =
+                    self.registry.lookup(name_id).unwrap_or_else(|| {
+                        typechecked!("type lookup", "known type")
+                    });
                 let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
                     .iter()
                     .map(|&p| self.resolve_ast_type_with_subst(p, subst))
@@ -1185,18 +1206,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         let expected_fields = expected_fields.clone();
         let obj = obj.clone();
         expected_fields.iter().try_for_each(|(fname_id, fty)| {
-            let fname = self.arena.get_str(*fname_id).unwrap_or("?").to_owned();
             obj.get(fname_id).map_or_else(
-                || {
-                    let msg = ctx.map_or_else(
-                        || format!("missing required field `{fname}`"),
-                        |p| format!("parameter `{p}`: missing field `{fname}`"),
-                    );
-                    Err(Error::runtime_type(span, msg))
-                },
+                || typechecked!("struct field", "present"),
                 |val_id| {
                     self.arena.get(*val_id).cloned().map_or(Ok(()), |val| {
-                        self.validate_field_type(&val, *fty, &fname, span, ctx)
+                        self.validate_field_type(&val, *fty, span, ctx)
                     })
                 },
             )
@@ -1208,7 +1222,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         val: &Value,
         expected_ty: TypeExprId,
-        fname: &str,
         span: Span,
         ctx: Option<&str>,
     ) -> Result<()> {
@@ -1223,45 +1236,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                     ctx,
                 ),
-                _ => {
-                    let expected = self.format_type_expr(expected_ty);
-                    let actual = val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena,
-                    );
-                    let msg = ctx.map_or_else(
-                        || format!("field `{fname}`: expected `{expected}`, got `{actual}`"),
-                        |p| {
-                            format!(
-                                "parameter `{p}`: field `{fname}` expected `{expected}`, got `{actual}`"
-                            )
-                        },
-                    );
-                    Err(Error::runtime_type(span, msg))
-                }
+                _ => typechecked!("struct field", "Object"),
             }
+        } else if self.value_matches_type_expr(val, expected_ty) {
+            Ok(())
         } else {
-            // Non-struct: use standard type matching
-            if self.value_matches_type_expr(val, expected_ty) {
-                Ok(())
-            } else {
-                let expected = self.format_type_expr(expected_ty);
-                let actual = val.type_name(
-                    &self.registry,
-                    &self.type_exprs,
-                    &self.arena,
-                );
-                let msg = ctx.map_or_else(
-                    || format!("field `{fname}`: expected `{expected}`, got `{actual}`"),
-                    |p| {
-                        format!(
-                            "parameter `{p}`: field `{fname}` expected `{expected}`, got `{actual}`"
-                        )
-                    },
-                );
-                Err(Error::runtime_type(span, msg))
-            }
+            typechecked!("field type", "matches declaration")
         }
     }
 
@@ -1283,34 +1263,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Value::Object(obj) => {
                     self.validate_object_fields(obj, &fields, span, None)
                 }
-                _ => {
-                    let actual = val.type_name(
-                        &self.registry,
-                        &self.type_exprs,
-                        &self.arena,
-                    );
-                    Err(Error::runtime_type(
-                        span,
-                        format!("expected struct (Object), got {actual}"),
-                    ))
-                }
+                _ => typechecked!("struct value", "Object"),
             }
+        } else if self.value_matches_type_expr(val, expected_ty) {
+            Ok(())
         } else {
-            // Non-struct type: use semantic type matching (handles unions)
-            if self.value_matches_type_expr(val, expected_ty) {
-                Ok(())
-            } else {
-                let expected = self.type_expr_name(expected_ty);
-                let actual = val.type_name(
-                    &self.registry,
-                    &self.type_exprs,
-                    &self.arena,
-                );
-                Err(Error::runtime_type(
-                    span,
-                    format!("type mismatch: expected {expected}, got {actual}"),
-                ))
-            }
+            typechecked!("value type", "matches declaration")
         }
     }
 }

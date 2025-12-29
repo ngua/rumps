@@ -17,6 +17,7 @@
 // only relevant in program termination, not the happy-path interpreter, so
 // we silence them here.
 #![allow(clippy::result_large_err)]
+#![allow(clippy::only_used_in_recursion)]
 
 /// Marks a branch as unreachable due to static type checking.
 ///

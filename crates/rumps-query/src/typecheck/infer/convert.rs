@@ -255,17 +255,33 @@ impl InferCtx<'_> {
             AstTypeExpr::Named(name) => {
                 let name_id = self.env.intern(name);
                 // Check substitution first (for type params)
-                subst
+                let ty = subst
                     .get(&name_id)
                     .cloned()
-                    .unwrap_or_else(|| self.named_type_to_ty(name))
+                    .unwrap_or_else(|| self.named_type_to_ty(name));
+                // Emit error for unknown types
+                if ty == Ty::Unknown {
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    self.error(TypeError::UnknownType(name.clone(), span));
+                    Ty::Error
+                } else {
+                    ty
+                }
             }
             AstTypeExpr::App(name, args) => {
                 let arg_tys: Vec<_> = args
                     .iter()
                     .map(|a| self.ast_type_to_ty(*a, subst))
                     .collect();
-                self.parameterized_type_to_ty(name, arg_tys)
+                let ty = self.parameterized_type_to_ty(name, arg_tys);
+                // Emit error for unknown parameterized types
+                if ty == Ty::Unknown {
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    self.error(TypeError::UnknownType(name.clone(), span));
+                    Ty::Error
+                } else {
+                    ty
+                }
             }
             AstTypeExpr::Fn(params, ret) => {
                 let param_tys: Vec<_> = params
