@@ -1,14 +1,14 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Coalesce operator (??) tests\n; `??` unwraps Option.Some/Result.Ok or falls back to right operand\n\n; === Option.None coalesces to fallback ===\n\n; Option.None falls back to right operand\nOUTPUT Option.None ?? \"fallback1\"\n; Expected: fallback1\n\n; Option.Some unwraps to its value\nOUTPUT Option.Some(42) ?? 0\n; Expected: 42\n\n; === Chained coalesce ===\n\n; Chain of None values falls through to final fallback\nLET result = Option.None ?? Option.None ?? 3\nOUTPUT result\n; Expected: 3\n\n; First non-None wins\nLET chain2 = Option.None ?? Option.Some(\"found\") ?? \"default\"\nOUTPUT chain2\n; Expected: found\n\n; === Result coalesce ===\n\n; Result.Ok unwraps to its value\nOUTPUT Result.Ok(100) ?? 0\n; Expected: 100\n\n; Result.Err falls back to right operand\nOUTPUT Result.Err(\"oops\") ?? 999\n; Expected: 999\n\n; === Coalesce in expressions ===\n\n; Coalesce result can be used in further expressions\nLET val = (Option.None ?? 5) + 1\nOUTPUT val\n; Expected: 6\n\n; Coalesce with string concatenation\nLET greeting = Option.None ?? \"Hello\"\nOUTPUT greeting ++ \" World\"\n; Expected: Hello World\n\n; Coalesce with Option.Some in expression\nLET num = (Option.Some(10) ?? 0) * 2\nOUTPUT num\n; Expected: 20\n\nOUTPUT \"Coalesce tests complete\"\n"
+description: "; Coalesce operator (??) tests\n; `??` unwraps Option.Some/Result.Ok or falls back to right operand\n\n; === Option.None coalesces to fallback ===\n\n; Option.None falls back to right operand\nOUTPUT Option.None ?? \"fallback1\"\n; Expected: fallback1\n\n; Option.Some unwraps to its value\nOUTPUT Option.Some(42) ?? 0\n; Expected: 42\n\n; === Chained coalesce ===\n\n; Chain of None values falls through to final fallback\nLET result = Option.None ?? Option.None ?? 3\nOUTPUT result\n; Expected: 3\n\n; First non-None wins\nLET chain-2 = Option.None ?? Option.Some(\"found\") ?? \"default\"\nOUTPUT chain-2\n; Expected: found\n\n; === Result coalesce ===\n\n; Result.Ok unwraps to its value\nOUTPUT Result.Ok(100) ?? 0\n; Expected: 100\n\n; Result.Err falls back to right operand\nOUTPUT Result.Err(\"oops\") ?? 999\n; Expected: 999\n\n; === Coalesce in expressions ===\n\n; Coalesce result can be used in further expressions\nLET val = (Option.None ?? 5) + 1\nOUTPUT val\n; Expected: 6\n\n; Coalesce with string concatenation\nLET greeting = Option.None ?? \"Hello\"\nOUTPUT greeting ++ \" World\"\n; Expected: Hello World\n\n; Coalesce with Option.Some in expression\nLET num = (Option.Some(10) ?? 0) * 2\nOUTPUT num\n; Expected: 20\n\nOUTPUT \"Coalesce tests complete\"\n"
 ---
-fallback1
+"fallback1"
 42
 3
-found
+"found"
 100
 999
 6
-Hello World
+"Hello World"
 20
-Coalesce tests complete
+"Coalesce tests complete"

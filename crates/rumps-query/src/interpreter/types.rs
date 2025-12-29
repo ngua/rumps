@@ -220,9 +220,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(Value::Int(if *b { 1 } else { 0 }))
             }
 
-            // T -> String (stringify anything)
+            // T -> String (coerce to raw string, not quoted)
             (_, TypeId::STRING) => {
-                let s = self.stringify(val);
+                let s = self.coerce_to_str(val);
                 let id = self.arena.intern(&s);
                 Ok(Value::String(id))
             }

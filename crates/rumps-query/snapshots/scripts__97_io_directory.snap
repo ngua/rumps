@@ -12,9 +12,9 @@ TRUE
 Option.None
 TRUE
 TRUE
-Hello, RUMPS!
-Hello, RUMPS!
-Appended line
+"Hello, RUMPS!"
+"Hello, RUMPS!
+Appended line"
 TRUE
 TRUE
 TRUE
@@ -26,7 +26,7 @@ FALSE
 TRUE
 FALSE
 TRUE
-Option.Some(test-value-123)
+Option.Some("test-value-123")
 TRUE
 TRUE
 TRUE
@@ -34,15 +34,15 @@ TRUE
 TRUE
 TRUE
 Option.None
-Option.Some(test-file.txt)
+Option.Some("test-file.txt")
 TRUE
-Option.Some(txt)
+Option.Some("txt")
 Option.None
-Option.Some(md)
-Option.Some(json)
+Option.Some("md")
+Option.Some("json")
 TRUE
-Option.Some(baz.txt)
+Option.Some("baz.txt")
 TRUE
 TRUE
 FALSE
-All Io.Directory tests passed
+"All Io.Directory tests passed"

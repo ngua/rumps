@@ -4,9 +4,9 @@ description: "; Test: Nested structural types in various contexts\n; Verifies th
 ---
 1
 10
-hello
+"hello"
 1
-two
+"two"
 TRUE
 TRUE
 TRUE
@@ -18,8 +18,8 @@ TRUE
 TRUE
 99
 777
-deep
+"deep"
 123
 42
 55
-Nested structural types test complete
+"Nested structural types test complete"

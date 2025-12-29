@@ -1,6 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
 description: "; Test: logical operators\n; Tests AND, OR, NOT with both keyword and symbol forms\n\n; AND operator (keyword)\nOUTPUT TRUE AND TRUE\n; Expected: true\n\nOUTPUT TRUE AND FALSE\n; Expected: false\n\nOUTPUT FALSE AND TRUE\n; Expected: false\n\nOUTPUT FALSE AND FALSE\n; Expected: false\n\n; AND operator (symbol)\nOUTPUT TRUE && TRUE\n; Expected: true\n\nOUTPUT TRUE && FALSE\n; Expected: false\n\n; OR operator (keyword)\nOUTPUT TRUE OR TRUE\n; Expected: true\n\nOUTPUT TRUE OR FALSE\n; Expected: true\n\nOUTPUT FALSE OR TRUE\n; Expected: true\n\nOUTPUT FALSE OR FALSE\n; Expected: false\n\n; OR operator (symbol)\nOUTPUT TRUE || FALSE\n; Expected: true\n\nOUTPUT FALSE || FALSE\n; Expected: false\n\n; NOT operator (keyword)\nOUTPUT NOT TRUE\n; Expected: false\n\nOUTPUT NOT FALSE\n; Expected: true\n\n; NOT operator (symbol)\nOUTPUT !TRUE\n; Expected: false\n\nOUTPUT !FALSE\n; Expected: true\n\n; Precedence: NOT before AND before OR\nOUTPUT NOT FALSE AND TRUE\n; Expected: true (NOT binds tighter)\n\nOUTPUT TRUE OR FALSE AND FALSE\n; Expected: true (AND binds tighter than OR)\n\nOUTPUT FALSE OR TRUE AND TRUE\n; Expected: true\n\n; Parentheses override precedence\nOUTPUT (TRUE OR FALSE) AND FALSE\n; Expected: false\n\nOUTPUT NOT (TRUE AND FALSE)\n; Expected: true\n\n; Complex expressions\nOUTPUT (TRUE AND FALSE) OR (FALSE OR TRUE)\n; Expected: true\n\nOUTPUT NOT (FALSE OR FALSE)\n; Expected: true\n\nOUTPUT (NOT FALSE) AND (NOT FALSE)\n; Expected: true\n\n; With variables\nLET a = TRUE\nLET b = FALSE\nOUTPUT a AND NOT b\n; Expected: true\n\nOUTPUT NOT a OR b\n; Expected: false\n\nOUTPUT (a OR b) AND (NOT b)\n; Expected: true\n\nOUTPUT \"Logical operators test complete\"\n"
 ---
 TRUE
@@ -30,4 +29,4 @@ TRUE
 TRUE
 FALSE
 TRUE
-Logical operators test complete
+"Logical operators test complete"

@@ -6,10 +6,10 @@ DataStatus.NoData
 DataStatus.HasValue
 DataStatus.HasDescendants
 DataStatus.Both
-no data
-has value
-has descendants
-both
+"no data"
+"has value"
+"has descendants"
+"both"
 0
 1
 10
@@ -18,9 +18,9 @@ FALSE
 TRUE
 DataStatus.Both
 4
-[ no data, has value, has descendants, both ]
+[ "no data", "has value", "has descendants", "both" ]
 Result.Ok(DataStatus.NoData)
 Result.Ok(DataStatus.HasValue)
 Result.Ok(DataStatus.HasDescendants)
 Result.Ok(DataStatus.Both)
-Result.Err(invalid DataStatus value: 5 (expected 0, 1, 10, or 11))
+Result.Err("invalid DataStatus value: 5 (expected 0, 1, 10, or 11)")

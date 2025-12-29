@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Unwrap Result.Err should error with message\nLET err-val = Result.Err(\"something went wrong\")\nOUTPUT err-val!\n"
 ---
-ERROR: runtime error at 102..110: unwrap failed: something went wrong
+ERROR: runtime error at 102..110: unwrap failed: "something went wrong"

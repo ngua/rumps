@@ -5,16 +5,16 @@ description: "; Ordering type tests\n\n; === Ordering variant construction ===\n
 Ordering.Lt
 Ordering.Eq
 Ordering.Gt
-less than
-equal
-greater than
-less than
-equal
-greater than
+"less than"
+"equal"
+"greater than"
+"less than"
+"equal"
+"greater than"
 3
-[ less than, equal, greater than ]
+[ "less than", "equal", "greater than" ]
 -1
 0
 1
-greater than
-equal
+"greater than"
+"equal"

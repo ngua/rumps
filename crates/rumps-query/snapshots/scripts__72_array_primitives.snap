@@ -23,7 +23,7 @@ Option.None
 [ 1, 1, 2, 3, 4, 5, 6, 9 ]
 [ 1, 2, 3 ]
 [ 1, 2, 3 ]
-[ apple, banana, cherry ]
+[ "apple", "banana", "cherry" ]
 [ FALSE, FALSE, TRUE, TRUE ]
 [  ]
 [ 1, 2, 3 ]
@@ -43,7 +43,7 @@ TRUE
 [ 1, 2, 3 ]
 [ 1, 2, 3 ]
 [  ]
-[ a, b, c, d ]
+[ "a", "b", "c", "d" ]
 5
 [ 3, 2, 1 ]
 3

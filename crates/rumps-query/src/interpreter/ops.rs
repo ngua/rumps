@@ -95,7 +95,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let rs = self.arena.get_str(*r).unwrap_or("");
                 format!("{ls}{rs}")
             }
-            _ => format!("{}{}", self.stringify(left), self.stringify(right)),
+            _ => format!(
+                "{}{}",
+                self.coerce_to_str(left),
+                self.coerce_to_str(right)
+            ),
         };
         Value::String(self.arena.intern(&result))
     }
@@ -419,8 +423,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         let lhs_val = self.eval(lhs).await?;
         let rhs_val = self.eval(rhs).await?;
 
-        // Stringify the LHS (Stringable constraint verified by typechecker)
-        let text = self.stringify(&lhs_val);
+        // Coerce LHS to raw string (Stringable constraint verified by typechecker)
+        let text = self.coerce_to_str(&lhs_val);
 
         // Get the regex cache index from RHS (typechecker guarantees Regex)
         let idx = match rhs_val {

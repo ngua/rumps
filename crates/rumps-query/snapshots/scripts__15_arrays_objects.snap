@@ -7,15 +7,15 @@ description: "; Test: arrays and objects\n; Tests array and object literals, ind
 10
 20
 30
-{ name: Alice, age: 30 }
+{ name: "Alice", age: 30 }
 {  }
-Bob
+"Bob"
 25
 TRUE
-Charlie
-NYC
+"Charlie"
+"NYC"
 [ 1, 2, 3 ]
 1
-Alice
+"Alice"
 85
-Arrays/Objects test complete
+"Arrays/Objects test complete"

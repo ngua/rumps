@@ -2,11 +2,11 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Test: KILL statement\n; Tests deletion of variables and subtrees\n\n; Set up test data\nSET items(1) = \"one\"\nSET items(2) = \"two\"\nSET items(3) = \"three\"\nSET items(1, \"a\") = \"nested a\"\nSET items(1, \"b\") = \"nested b\"\n\n; Verify items exists\nLET v1 = GET items(1)\nOUTPUT v1\n; Expected: one\n\n; KILL single node\nKILL items(2)\n\n; Verify deleted\nLET v2 = GET items(2)\nOUTPUT v2\n; Expected: Option.None\n\n; KILL subtree\nKILL items(1)\n\n; Verify subtree deleted\nLET v3 = GET items(1)\nOUTPUT v3\n; Expected: Option.None\n\nLET v4 = GET items(1, \"a\")\nOUTPUT v4\n; Expected: Option.None\n\n; items(3) should still exist\nLET v5 = GET items(3)\nOUTPUT v5\n; Expected: three\n\n; KILL entire variable\nSET temp = 999\nLET before = GET temp\nOUTPUT before\n; Expected: 999\n\nKILL temp\nLET after = GET temp\nOUTPUT after\n; Expected: Option.None\n\nOUTPUT \"KILL test complete\"\n"
 ---
-Option.Some(one)
+Option.Some("one")
 Option.None
 Option.None
 Option.None
-Option.Some(three)
+Option.Some("three")
 Option.Some(999)
 Option.None
-KILL test complete
+"KILL test complete"

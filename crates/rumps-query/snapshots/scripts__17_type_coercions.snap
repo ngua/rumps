@@ -15,14 +15,14 @@ description: "; Test: type coercions\n; Tests implicit numeric coercion and stri
 3
 3
 1.5
-Number: 42
-Pi: 3.14159
-Flag: TRUE
-Flag: FALSE
+"Number: 42"
+"Pi: 3.14159"
+"Flag: TRUE"
+"Flag: FALSE"
 TRUE
 TRUE
 TRUE
 TRUE
 TRUE
 TRUE
-Type coercion test complete
+"Type coercion test complete"

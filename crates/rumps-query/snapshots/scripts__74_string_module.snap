@@ -6,40 +6,40 @@ description: "; String module primitives\n; Tests String.length, String.upper, S
 0
 1
 11
-HELLO
-HELLO WORLD
-ALREADY UPPER
-
-ABC123
-hello
-hello world
-already lower
-
-abc123
-hello
-world
-hello
-no spaces
-
-
-[ a, b, c ]
-[ hello, world, foo ]
-[ foo, bar, baz ]
-[ hello ]
-[  ]
-[ , a, b, c,  ]
-a,b,c
-hello world
-abc
-alone
-
-hello
-world
-lo wo
-
-abc
-ab
-hel
+"HELLO"
+"HELLO WORLD"
+"ALREADY UPPER"
+""
+"ABC123"
+"hello"
+"hello world"
+"already lower"
+""
+"abc123"
+"hello"
+"world"
+"hello"
+"no spaces"
+""
+""
+[ "a", "b", "c" ]
+[ "hello", "world", "foo" ]
+[ "foo", "bar", "baz" ]
+[ "hello" ]
+[ "" ]
+[ "", "a", "b", "c", "" ]
+"a,b,c"
+"hello world"
+"abc"
+"alone"
+""
+"hello"
+"world"
+"lo wo"
+""
+"abc"
+"ab"
+"hel"
 TRUE
 FALSE
 TRUE
@@ -48,14 +48,14 @@ TRUE
 TRUE
 FALSE
 TRUE
-faa
-bonono
-hello there
-hello
-heo
--a-b-
-HELLO
-[ a, b, c ]
-a	b	c
-hello world
-apple - banana - cherry
+"faa"
+"bonono"
+"hello there"
+"hello"
+"heo"
+"-a-b-"
+"HELLO"
+[ "a", "b", "c" ]
+"a	b	c"
+"hello world"
+"apple - banana - cherry"

@@ -9,9 +9,9 @@ description: "; Test: indentation-based expression continuation\n; Expressions c
 10
 TRUE
 FALSE
-Hello World
+"Hello World"
 1
 1
 10
 6
-Indent continuation test complete
+"Indent continuation test complete"

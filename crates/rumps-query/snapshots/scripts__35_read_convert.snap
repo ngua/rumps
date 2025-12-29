@@ -4,16 +4,16 @@ description: "; Test: Fallible type conversion operator (READ)\n; Tests fallible
 ---
 Result.Ok(42)
 Result.Ok(-123)
-Result.Err(invalid integer: hello)
-Result.Err(invalid integer: 3.14)
+Result.Err("invalid integer: hello")
+Result.Err("invalid integer: 3.14")
 Result.Ok(3.14)
 Result.Ok(42)
 Result.Ok(-2.5)
-Result.Err(invalid float: not-a-number)
+Result.Err("invalid float: not-a-number")
 Result.Ok(FALSE)
 Result.Ok(TRUE)
-Result.Err(expected 0 or 1 for Bool, got 42)
-Result.Err(expected 0 or 1 for Bool, got -1)
-Result.Ok(42)
+Result.Err("expected 0 or 1 for Bool, got 42")
+Result.Err("expected 0 or 1 for Bool, got -1")
+"Result.Ok(42)"
 Result.Ok(123)
-Fallible read test complete
+"Fallible read test complete"

@@ -6,20 +6,20 @@ Status.Pending
 Status.Active
 Status.Completed
 Status.Failed
-s1 is Pending
-s2 is Active
+"s1 is Pending"
+"s2 is Active"
 Event.Click(100, 200)
-Event.KeyPress(Enter)
+Event.KeyPress("Enter")
 Event.Resize(1920, 1080)
-Click at: 100, 200
-Key: Enter
-Either.Left(error message)
+"Click at: 100, 200"
+"Key: Enter"
+Either.Left("error message")
 Either.Right(42)
-Got left: error message
-Got right: 42
+"Got left: error message"
+"Got right: 42"
 Outcome.Success(100)
-Outcome.Failure(failed)
-ok is Success (wildcard)
-Maybe.Just(hello)
+Outcome.Failure("failed")
+"ok is Success (wildcard)"
+Maybe.Just("hello")
 Maybe.Nothing
-User-defined sum types complete
+"User-defined sum types complete"

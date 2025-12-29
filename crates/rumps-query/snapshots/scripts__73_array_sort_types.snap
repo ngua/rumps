@@ -3,12 +3,12 @@ source: crates/rumps-query/tests/scripts.rs
 description: "; Test Array.sort with various types\n\n; --- Scalars ---\nOUTPUT Array.sort([3, 1, 4, 1, 5, 9, 2, 6])\nOUTPUT Array.sort([\"banana\", \"apple\", \"cherry\"])\nOUTPUT Array.sort([true, false, true, false])\nOUTPUT Array.sort([3.14, 1.0, 2.71])\n\n; --- Option ---\n; None < Some, then by payload\nOUTPUT Array.sort([Option.Some(3), Option.None, Option.Some(1), Option.None, Option.Some(2)])\n\n; --- Result ---\n; Err < Ok, then by payload\nOUTPUT Array.sort([Result.Ok(2), Result.Err(\"b\"), Result.Ok(1), Result.Err(\"a\")])\n\n; --- Tuples ---\n; Lexicographic ordering\nOUTPUT Array.sort([(2, \"b\"), (1, \"z\"), (2, \"a\"), (1, \"a\")])\nOUTPUT Array.sort([(1, 2, 3), (1, 1, 9), (1, 2, 1)])\n\n; --- Nested Options ---\nOUTPUT Array.sort([Option.Some(Option.Some(2)), Option.Some(Option.None), Option.None, Option.Some(Option.Some(1))])\n\n; --- User-defined sum type ---\nTYPE Priority = Low | Medium | High\n\nLET tasks = [Priority.High, Priority.Low, Priority.Medium, Priority.Low, Priority.High]\nOUTPUT Array.sort(tasks)\n\n; --- Sum type with payloads ---\nTYPE Event = Click(Int, Int) | Scroll(Int) | Resize(Int, Int)\n\nLET events = [Event.Resize(100, 200), Event.Click(5, 5), Event.Scroll(10), Event.Click(1, 1), Event.Scroll(5)]\nOUTPUT Array.sort(events)\n\n; --- Objects ---\nOUTPUT Array.sort([{ a: 2 }, { a: 1 }, { a: 3 }])\nOUTPUT Array.sort([{ x: 1, y: 2 }, { x: 1, y: 1 }, { x: 0, y: 9 }])\n\n; --- Arrays of arrays ---\nOUTPUT Array.sort([[3, 1], [1, 2], [1, 1], [2, 0]])\n\n; --- Mixed with pipeline ---\nLET sorted-options = [Option.Some(5), Option.None, Option.Some(3)] |> Array.sort\nOUTPUT sorted-options\n"
 ---
 [ 1, 1, 2, 3, 4, 5, 6, 9 ]
-[ apple, banana, cherry ]
+[ "apple", "banana", "cherry" ]
 [ FALSE, FALSE, TRUE, TRUE ]
 [ 1, 2.71, 3.14 ]
 [ Option.None, Option.None, Option.Some(1), Option.Some(2), Option.Some(3) ]
-[ Result.Err(a), Result.Err(b), Result.Ok(1), Result.Ok(2) ]
-[ (1, a), (1, z), (2, a), (2, b) ]
+[ Result.Err("a"), Result.Err("b"), Result.Ok(1), Result.Ok(2) ]
+[ (1, "a"), (1, "z"), (2, "a"), (2, "b") ]
 [ (1, 1, 9), (1, 2, 1), (1, 2, 3) ]
 [ Option.None, Option.Some(Option.None), Option.Some(Option.Some(1)), Option.Some(Option.Some(2)) ]
 [ Priority.Low, Priority.Low, Priority.Medium, Priority.High, Priority.High ]

@@ -7,16 +7,16 @@ description: "; Test: Type cast operator (AS)\n; Tests infallible type conversio
 -2
 1
 0
-123
-3.14
-TRUE
-FALSE
-[ 1, 2, 3 ]
-{ name: Alice, age: 30 }
-Option.Some(42)
-Option.None
+"123"
+"3.14"
+"TRUE"
+"FALSE"
+"[ 1, 2, 3 ]"
+"{ name: "Alice", age: 30 }"
+"Option.Some(42)"
+"Option.None"
 42
-hello
+"hello"
 3
 15
-Type cast test complete
+"Type cast test complete"

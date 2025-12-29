@@ -8,18 +8,18 @@ description: "; Test spread operators for arrays and objects\n; Section 8 of pha
 [ 0, 1, 2, 3, 4, 5 ]
 [ 1, 2 ]
 [ 42, 42 ]
-Alice
+"Alice"
 31
-red
-large
-Alice
-NYC
+"red"
+"large"
+"Alice"
+"NYC"
 1
-Alice
+"Alice"
 31
-NYC
+"NYC"
 [ 1, 2, 3, 4, 5, 6 ]
 1
 2
 3
---- TESTS PASSED ---
+"--- TESTS PASSED ---"

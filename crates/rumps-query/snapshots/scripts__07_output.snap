@@ -4,17 +4,17 @@ description: "; Test: OUTPUT statement\n; Tests various OUTPUT scenarios\n\n; Ou
 ---
 42
 3.14159
-Hello, World!
+"Hello, World!"
 TRUE
 FALSE
 123
 70
-Hello RUMPS
+"Hello RUMPS"
 TRUE
 FALSE
 TRUE
 15
-Line 1
-Line 2
-Line 3
-OUTPUT test complete
+"Line 1"
+"Line 2"
+"Line 3"
+"OUTPUT test complete"

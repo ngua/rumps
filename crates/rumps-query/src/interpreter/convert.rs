@@ -78,12 +78,27 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a value to a human-readable display string.
     ///
-    /// Used for OUTPUT statements.
+    /// Used for OUTPUT statements. Quotes strings and file paths so output
+    /// is valid RUMPS syntax.
     pub(crate) fn display(&self, v: &Value) -> String {
         self.stringify(v)
     }
 
+    /// Coerce a value to a raw string for concatenation.
+    ///
+    /// Unlike `stringify`, this does not quote strings.
+    pub(crate) fn coerce_to_str(&self, v: &Value) -> String {
+        match v {
+            Value::String(id) | Value::FilePath(id) => {
+                self.arena.get_str(*id).unwrap_or("").to_owned()
+            }
+            _ => self.stringify(v),
+        }
+    }
+
     /// Recursive stringify helper.
+    ///
+    /// Produces valid RUMPS syntax; strings and file paths are quoted.
     pub(crate) fn stringify(&self, v: &Value) -> String {
         match v {
             Value::Unit => "Unit".into(),
@@ -93,11 +108,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Int(n) => n.to_string(),
             Value::Float(f) => f.to_string(),
             Value::Char(c) => format!("'{c}'"),
-            Value::String(id) => {
-                self.arena.get_str(*id).unwrap_or("").to_owned()
-            }
-            Value::FilePath(id) => {
-                self.arena.get_str(*id).unwrap_or("").to_owned()
+            Value::String(id) | Value::FilePath(id) => {
+                let s = self.arena.get_str(*id).unwrap_or("");
+                format!("\"{s}\"")
             }
             Value::Regex(idx) => {
                 let re =

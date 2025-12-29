@@ -12,4 +12,4 @@ description: "; Test: Closures\n; Tests closure definition, binding, and display
 <closure(1)>
 <closure(1)>
 <closure(2)>
-Closure test complete
+"Closure test complete"

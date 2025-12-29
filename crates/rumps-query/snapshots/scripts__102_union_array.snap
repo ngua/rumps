@@ -12,10 +12,10 @@ FALSE
 4
 0
 7
-int: 1
-str: two
-int: 3
-str: four
+"int: 1"
+"str: two"
+"int: 3"
+"str: four"
 [ 2, 3, 6, 4 ]
 2
 2

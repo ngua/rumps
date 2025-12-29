@@ -7,7 +7,7 @@ description: "; Test: Named Functions (FUN)\n; Tests function definition, calls,
 42
 49
 0
-Hello, World!
+"Hello, World!"
 5
 1
 1
@@ -24,4 +24,4 @@ Hello, World!
 18
 19
 100
-Named functions test complete
+"Named functions test complete"

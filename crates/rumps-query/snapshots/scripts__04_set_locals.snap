@@ -4,4 +4,4 @@ description: "; Test: SET locals (B-tree variables)\n; Tests SET for local varia
 ---
 Option.Some(100)
 Option.Some(200)
-SET locals test complete
+"SET locals test complete"
