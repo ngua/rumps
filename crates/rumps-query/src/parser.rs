@@ -2500,7 +2500,7 @@ mod tests {
 
     #[test]
     fn parse_set_local() {
-        let result = parse_ok("SET x = 10");
+        let result = parse_ok("$SET x = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
             Some(Stmt::Set(target, _)) => match result.ast.get_expr(*target) {
@@ -2516,7 +2516,7 @@ mod tests {
 
     #[test]
     fn parse_set_global() {
-        let result = parse_ok("SET ^DATA = 10");
+        let result = parse_ok("$SET ^DATA = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
             Some(Stmt::Set(target, _)) => match result.ast.get_expr(*target) {

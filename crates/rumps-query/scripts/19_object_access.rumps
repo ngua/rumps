@@ -4,13 +4,13 @@
 LET obj = { name: "Alice", age: 30, active: TRUE }
 
 ; Dot notation
-OUTPUT obj.name
+$OUTPUT obj.name
 ; Expected: Alice
 
-OUTPUT obj.age
+$OUTPUT obj.age
 ; Expected: 30
 
-OUTPUT obj.active
+$OUTPUT obj.active
 ; Expected: TRUE
 
 ; Nested object access (dot notation)
@@ -24,24 +24,24 @@ LET rec = {
   }
 }
 
-OUTPUT rec.user.profile.first-name
+$OUTPUT rec.user.profile.first-name
 ; Expected: Bob
 
-OUTPUT rec.user.profile.last-name
+$OUTPUT rec.user.profile.last-name
 ; Expected: Smith
 
-OUTPUT rec.user.scores[0]
+$OUTPUT rec.user.scores[0]
 ; Expected: 90
 
-OUTPUT rec.user.scores[-1]
+$OUTPUT rec.user.scores[-1]
 ; Expected: 95
 
 ; Object with dashed keys (valid RUMPS identifiers)
 LET special = { my-key: "value1", another-key: "value2" }
-OUTPUT special.my-key
+$OUTPUT special.my-key
 ; Expected: value1
 
-OUTPUT special.another-key
+$OUTPUT special.another-key
 ; Expected: value2
 
-OUTPUT "Object access test complete"
+$OUTPUT "Object access test complete"

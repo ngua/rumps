@@ -1,46 +1,46 @@
 ; Test Array.sort with various types
 
 ; --- Scalars ---
-OUTPUT Array.sort([3, 1, 4, 1, 5, 9, 2, 6])
-OUTPUT Array.sort(["banana", "apple", "cherry"])
-OUTPUT Array.sort([true, false, true, false])
-OUTPUT Array.sort([3.14, 1.0, 2.71])
+$OUTPUT Array.sort([3, 1, 4, 1, 5, 9, 2, 6])
+$OUTPUT Array.sort(["banana", "apple", "cherry"])
+$OUTPUT Array.sort([true, false, true, false])
+$OUTPUT Array.sort([3.14, 1.0, 2.71])
 
 ; --- Option ---
 ; None < Some, then by payload
-OUTPUT Array.sort([Option.Some(3), Option.None, Option.Some(1), Option.None, Option.Some(2)])
+$OUTPUT Array.sort([Option.Some(3), Option.None, Option.Some(1), Option.None, Option.Some(2)])
 
 ; --- Result ---
 ; Err < Ok, then by payload
-OUTPUT Array.sort([Result.Ok(2), Result.Err("b"), Result.Ok(1), Result.Err("a")])
+$OUTPUT Array.sort([Result.Ok(2), Result.Err("b"), Result.Ok(1), Result.Err("a")])
 
 ; --- Tuples ---
 ; Lexicographic ordering
-OUTPUT Array.sort([(2, "b"), (1, "z"), (2, "a"), (1, "a")])
-OUTPUT Array.sort([(1, 2, 3), (1, 1, 9), (1, 2, 1)])
+$OUTPUT Array.sort([(2, "b"), (1, "z"), (2, "a"), (1, "a")])
+$OUTPUT Array.sort([(1, 2, 3), (1, 1, 9), (1, 2, 1)])
 
 ; --- Nested Options ---
-OUTPUT Array.sort([Option.Some(Option.Some(2)), Option.Some(Option.None), Option.None, Option.Some(Option.Some(1))])
+$OUTPUT Array.sort([Option.Some(Option.Some(2)), Option.Some(Option.None), Option.None, Option.Some(Option.Some(1))])
 
 ; --- User-defined sum type ---
 TYPE Priority = Low | Medium | High
 
 LET tasks = [Priority.High, Priority.Low, Priority.Medium, Priority.Low, Priority.High]
-OUTPUT Array.sort(tasks)
+$OUTPUT Array.sort(tasks)
 
 ; --- Sum type with payloads ---
 TYPE Event = Click(Int, Int) | Scroll(Int) | Resize(Int, Int)
 
 LET events = [Event.Resize(100, 200), Event.Click(5, 5), Event.Scroll(10), Event.Click(1, 1), Event.Scroll(5)]
-OUTPUT Array.sort(events)
+$OUTPUT Array.sort(events)
 
 ; --- Objects ---
-OUTPUT Array.sort([{ a: 2 }, { a: 1 }, { a: 3 }])
-OUTPUT Array.sort([{ x: 1, y: 2 }, { x: 1, y: 1 }, { x: 0, y: 9 }])
+$OUTPUT Array.sort([{ a: 2 }, { a: 1 }, { a: 3 }])
+$OUTPUT Array.sort([{ x: 1, y: 2 }, { x: 1, y: 1 }, { x: 0, y: 9 }])
 
 ; --- Arrays of arrays ---
-OUTPUT Array.sort([[3, 1], [1, 2], [1, 1], [2, 0]])
+$OUTPUT Array.sort([[3, 1], [1, 2], [1, 1], [2, 0]])
 
 ; --- Mixed with pipeline ---
 LET sorted-options = [Option.Some(5), Option.None, Option.Some(3)] |> Array.sort
-OUTPUT sorted-options
+$OUTPUT sorted-options

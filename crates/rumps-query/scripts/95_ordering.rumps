@@ -6,9 +6,9 @@ LET lt = Ordering.Lt
 LET eq = Ordering.Eq
 LET gt = Ordering.Gt
 
-OUTPUT lt
-OUTPUT eq
-OUTPUT gt
+$OUTPUT lt
+$OUTPUT eq
+$OUTPUT gt
 
 ; === Pattern matching on Ordering ===
 
@@ -20,9 +20,9 @@ FUN describe(ord: Ordering) -> String {
   }
 }
 
-OUTPUT describe(Ordering.Lt)
-OUTPUT describe(Ordering.Eq)
-OUTPUT describe(Ordering.Gt)
+$OUTPUT describe(Ordering.Lt)
+$OUTPUT describe(Ordering.Eq)
+$OUTPUT describe(Ordering.Gt)
 
 ; === Using Ordering as function result ===
 
@@ -32,17 +32,17 @@ FUN compare-int(a: Int, b: Int) -> Ordering {
   }
 }
 
-OUTPUT describe(compare-int(1, 2))
-OUTPUT describe(compare-int(2, 2))
-OUTPUT describe(compare-int(3, 2))
+$OUTPUT describe(compare-int(1, 2))
+$OUTPUT describe(compare-int(2, 2))
+$OUTPUT describe(compare-int(3, 2))
 
 ; === Ordering in data structures ===
 
 LET orderings: Array[Ordering] = [Ordering.Lt, Ordering.Eq, Ordering.Gt]
-OUTPUT Array.length(orderings)
+$OUTPUT Array.length(orderings)
 
 LET mapped = Array.map(describe, orderings)
-OUTPUT mapped
+$OUTPUT mapped
 
 ; === Ordering in match with guards ===
 
@@ -54,17 +54,17 @@ FUN classify(ord: Ordering) -> Int {
   }
 }
 
-OUTPUT classify(Ordering.Lt)
-OUTPUT classify(Ordering.Eq)
-OUTPUT classify(Ordering.Gt)
+$OUTPUT classify(Ordering.Lt)
+$OUTPUT classify(Ordering.Eq)
+$OUTPUT classify(Ordering.Gt)
 
 ; === Type annotation with Ordering ===
 
 LET typed: Ordering = Ordering.Gt
-OUTPUT describe(typed)
+$OUTPUT describe(typed)
 
 FUN identity(ord: Ordering) -> Ordering {
   ord
 }
 
-OUTPUT describe(identity(Ordering.Eq))
+$OUTPUT describe(identity(Ordering.Eq))

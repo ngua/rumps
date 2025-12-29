@@ -2,96 +2,96 @@
 ; Tests AND, OR, NOT with both keyword and symbol forms
 
 ; AND operator (keyword)
-OUTPUT TRUE AND TRUE
+$OUTPUT TRUE AND TRUE
 ; Expected: true
 
-OUTPUT TRUE AND FALSE
+$OUTPUT TRUE AND FALSE
 ; Expected: false
 
-OUTPUT FALSE AND TRUE
+$OUTPUT FALSE AND TRUE
 ; Expected: false
 
-OUTPUT FALSE AND FALSE
+$OUTPUT FALSE AND FALSE
 ; Expected: false
 
 ; AND operator (symbol)
-OUTPUT TRUE && TRUE
+$OUTPUT TRUE && TRUE
 ; Expected: true
 
-OUTPUT TRUE && FALSE
+$OUTPUT TRUE && FALSE
 ; Expected: false
 
 ; OR operator (keyword)
-OUTPUT TRUE OR TRUE
+$OUTPUT TRUE OR TRUE
 ; Expected: true
 
-OUTPUT TRUE OR FALSE
+$OUTPUT TRUE OR FALSE
 ; Expected: true
 
-OUTPUT FALSE OR TRUE
+$OUTPUT FALSE OR TRUE
 ; Expected: true
 
-OUTPUT FALSE OR FALSE
+$OUTPUT FALSE OR FALSE
 ; Expected: false
 
 ; OR operator (symbol)
-OUTPUT TRUE || FALSE
+$OUTPUT TRUE || FALSE
 ; Expected: true
 
-OUTPUT FALSE || FALSE
+$OUTPUT FALSE || FALSE
 ; Expected: false
 
 ; NOT operator (keyword)
-OUTPUT NOT TRUE
+$OUTPUT NOT TRUE
 ; Expected: false
 
-OUTPUT NOT FALSE
+$OUTPUT NOT FALSE
 ; Expected: true
 
 ; NOT operator (symbol)
-OUTPUT !TRUE
+$OUTPUT !TRUE
 ; Expected: false
 
-OUTPUT !FALSE
+$OUTPUT !FALSE
 ; Expected: true
 
 ; Precedence: NOT before AND before OR
-OUTPUT NOT FALSE AND TRUE
+$OUTPUT NOT FALSE AND TRUE
 ; Expected: true (NOT binds tighter)
 
-OUTPUT TRUE OR FALSE AND FALSE
+$OUTPUT TRUE OR FALSE AND FALSE
 ; Expected: true (AND binds tighter than OR)
 
-OUTPUT FALSE OR TRUE AND TRUE
+$OUTPUT FALSE OR TRUE AND TRUE
 ; Expected: true
 
 ; Parentheses override precedence
-OUTPUT (TRUE OR FALSE) AND FALSE
+$OUTPUT (TRUE OR FALSE) AND FALSE
 ; Expected: false
 
-OUTPUT NOT (TRUE AND FALSE)
+$OUTPUT NOT (TRUE AND FALSE)
 ; Expected: true
 
 ; Complex expressions
-OUTPUT (TRUE AND FALSE) OR (FALSE OR TRUE)
+$OUTPUT (TRUE AND FALSE) OR (FALSE OR TRUE)
 ; Expected: true
 
-OUTPUT NOT (FALSE OR FALSE)
+$OUTPUT NOT (FALSE OR FALSE)
 ; Expected: true
 
-OUTPUT (NOT FALSE) AND (NOT FALSE)
+$OUTPUT (NOT FALSE) AND (NOT FALSE)
 ; Expected: true
 
 ; With variables
 LET a = TRUE
 LET b = FALSE
-OUTPUT a AND NOT b
+$OUTPUT a AND NOT b
 ; Expected: true
 
-OUTPUT NOT a OR b
+$OUTPUT NOT a OR b
 ; Expected: false
 
-OUTPUT (a OR b) AND (NOT b)
+$OUTPUT (a OR b) AND (NOT b)
 ; Expected: true
 
-OUTPUT "Logical operators test complete"
+$OUTPUT "Logical operators test complete"

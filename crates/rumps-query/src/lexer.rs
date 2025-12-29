@@ -236,9 +236,30 @@ impl Lexer<'_> {
             Self::regex_lit(),
             Self::number(),
             Self::global(),
+            Self::intrinsic(),
             Self::ident_or_keyword(),
             Self::operator_or_punct(),
         ))
+    }
+
+    /// MUMPS intrinsic: `$SET`, `$GET`, `$KILL`, `$OUTPUT`, `$DATA`, `$ORDER`.
+    ///
+    /// Case-insensitive (e.g., `$set`, `$SET`, `$Set` all work).
+    fn intrinsic() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+        just('$').ignore_then(Self::ident_chars()).map_with_span(
+            |name, span| {
+                Token::intrinsic(&name)
+                    .map(|tok| Spanned::from_range(tok, span.clone()))
+                    .unwrap_or_else(|| {
+                        // Unknown `$xxx` is an error; we'll let it fall through
+                        // as an identifier which will cause a parse error later
+                        Spanned::from_range(
+                            Token::Ident(format!("${name}")),
+                            span,
+                        )
+                    })
+            },
+        )
     }
 
     /// Regex literal: `/pattern/`.
@@ -658,24 +679,27 @@ mod tests {
 
     #[test]
     fn keywords_case_insensitive() {
-        assert_eq!(lex_ok("SET")[0], Token::Set);
-        assert_eq!(lex_ok("set")[0], Token::Set);
-        assert_eq!(lex_ok("Set")[0], Token::Set);
-        assert_eq!(lex_ok("sEt")[0], Token::Set);
+        assert_eq!(lex_ok("LET")[0], Token::Let);
+        assert_eq!(lex_ok("let")[0], Token::Let);
+        assert_eq!(lex_ok("Let")[0], Token::Let);
+        assert_eq!(lex_ok("lEt")[0], Token::Let);
+    }
+
+    #[test]
+    fn intrinsics_case_insensitive() {
+        assert_eq!(lex_ok("$SET")[0], Token::Set);
+        assert_eq!(lex_ok("$set")[0], Token::Set);
+        assert_eq!(lex_ok("$Set")[0], Token::Set);
+        assert_eq!(lex_ok("$sEt")[0], Token::Set);
     }
 
     #[test]
     fn all_keywords() {
-        let tokens = lex_ok(
-            "LET SET KILL OUTPUT IF ELSE AND OR NOT TRUE FALSE FUN TYPE",
-        );
+        let tokens = lex_ok("LET IF ELSE AND OR NOT TRUE FALSE FUN TYPE");
         assert_eq!(
             tokens,
             vec![
                 Token::Let,
-                Token::Set,
-                Token::Kill,
-                Token::Output,
                 Token::If,
                 Token::Else,
                 Token::And,
@@ -685,6 +709,51 @@ mod tests {
                 Token::False,
                 Token::Fun,
                 Token::Type,
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn all_intrinsics() {
+        let tokens = lex_ok("$SET $GET $KILL $OUTPUT $DATA $ORDER");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Set,
+                Token::Get,
+                Token::Kill,
+                Token::Output,
+                Token::Data,
+                Token::Order,
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn read_is_keyword_not_intrinsic() {
+        // READ is a keyword, not a `$`-prefixed intrinsic
+        let tokens = lex_ok("READ read");
+        assert_eq!(tokens, vec![Token::Read, Token::Read, Token::Eof]);
+        // `$READ` becomes an identifier (unknown intrinsic)
+        let tokens = lex_ok("$READ");
+        assert_eq!(tokens[0], Token::Ident("$READ".into()));
+    }
+
+    #[test]
+    fn intrinsics_are_not_keywords() {
+        // Without `$` prefix, these are identifiers, not intrinsics
+        let tokens = lex_ok("SET GET KILL OUTPUT DATA ORDER");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("SET".into()),
+                Token::Ident("GET".into()),
+                Token::Ident("KILL".into()),
+                Token::Ident("OUTPUT".into()),
+                Token::Ident("DATA".into()),
+                Token::Ident("ORDER".into()),
                 Token::Eof
             ]
         );
@@ -780,7 +849,7 @@ mod tests {
 
     #[test]
     fn comments_stripped() {
-        let tokens = lex_ok("SET x = 10 ; this is a comment");
+        let tokens = lex_ok("$SET x = 10 ; this is a comment");
         assert_eq!(
             tokens,
             vec![
@@ -795,7 +864,7 @@ mod tests {
 
     #[test]
     fn comment_whole_line() {
-        let tokens = lex_ok("; entire line is comment\nSET x = 1");
+        let tokens = lex_ok("; entire line is comment\n$SET x = 1");
         assert_eq!(
             tokens,
             vec![
@@ -811,7 +880,7 @@ mod tests {
 
     #[test]
     fn newlines_preserved() {
-        let tokens = lex_ok("SET x = 10\nOUTPUT x");
+        let tokens = lex_ok("$SET x = 10\n$OUTPUT x");
         assert_eq!(
             tokens,
             vec![
@@ -830,7 +899,7 @@ mod tests {
     #[test]
     fn indentation_tokens_preserved() {
         // Indent/Dedent tokens are preserved for formatters; parser handles them
-        let tokens = lex_ok("IF x\n  OUTPUT y");
+        let tokens = lex_ok("IF x\n  $OUTPUT y");
         assert!(tokens.contains(&Token::Indent));
         assert!(tokens.contains(&Token::Dedent));
         assert!(tokens.contains(&Token::If));
@@ -840,7 +909,7 @@ mod tests {
     #[test]
     fn all_whitespace_tokens_preserved() {
         // All whitespace tokens preserved for formatters
-        let tokens = lex_ok("IF x\n  OUTPUT y\nSET z = 1");
+        let tokens = lex_ok("IF x\n  $OUTPUT y\n$SET z = 1");
         assert!(tokens.contains(&Token::Indent));
         assert!(tokens.contains(&Token::Dedent));
         assert!(tokens.contains(&Token::Newline));
@@ -849,7 +918,7 @@ mod tests {
 
     #[test]
     fn complex_expression() {
-        let tokens = lex_ok("SET sum = x + y * (z - 10)");
+        let tokens = lex_ok("$SET sum = x + y * (z - 10)");
         assert_eq!(
             tokens,
             vec![
@@ -873,7 +942,7 @@ mod tests {
     #[test]
     fn if_else_block() {
         let tokens = lex_ok(
-            "IF x > 10 {\n  OUTPUT \"big\"\n} ELSE {\n  OUTPUT \"small\"\n}",
+            "IF x > 10 {\n  $OUTPUT \"big\"\n} ELSE {\n  $OUTPUT \"small\"\n}",
         );
         assert!(tokens.contains(&Token::If));
         assert!(tokens.contains(&Token::Else));
@@ -900,19 +969,19 @@ mod tests {
 
     #[test]
     fn spans_correct() {
-        let result = lex_spanned("SET x");
+        let result = lex_spanned("$SET x");
         assert_eq!(
             result[0],
             Spanned {
                 tok: Token::Set,
-                span: Span::new(0, 3)
+                span: Span::new(0, 4) // `$SET` is 4 chars
             }
         );
         assert_eq!(
             result[1],
             Spanned {
                 tok: Token::Ident("x".into()),
-                span: Span::new(4, 5)
+                span: Span::new(5, 6)
             }
         );
     }
@@ -1051,7 +1120,7 @@ mod tests {
 
     #[test]
     fn unknown_char_error() {
-        let err = lex_err("SET x = @invalid");
+        let err = lex_err("$SET x = @invalid");
         assert!(err.to_string().contains("unexpected character"));
     }
 
@@ -1211,7 +1280,7 @@ mod continuation_tests {
     #[test]
     fn continuation_preserves_all_tokens() {
         // Lexer preserves all tokens; parser handles continuation
-        let src = "LET x = 1\n    + 2\nOUTPUT x";
+        let src = "LET x = 1\n    + 2\n$OUTPUT x";
         let tokens: Vec<_> = Lexer::new(src)
             .lex()
             .expect("lex")
@@ -1232,7 +1301,7 @@ mod continuation_tests {
 
     #[test]
     fn multi_line_preserves_structure() {
-        let src = "LET x = 1\n    + 2\n    + 3\nOUTPUT x";
+        let src = "LET x = 1\n    + 2\n    + 3\n$OUTPUT x";
         let tokens: Vec<_> = Lexer::new(src)
             .lex()
             .expect("lex")
@@ -1253,7 +1322,7 @@ mod continuation_tests {
 
     #[test]
     fn simple_statements_have_newlines() {
-        let src = "LET x = 1\nOUTPUT x";
+        let src = "LET x = 1\n$OUTPUT x";
         let tokens: Vec<_> = Lexer::new(src)
             .lex()
             .expect("lex")
@@ -1279,7 +1348,7 @@ LET arr = [
     1,
     2
 ]
-OUTPUT arr[0]"#;
+$OUTPUT arr[0]"#;
 
         let tokens: Vec<_> = Lexer::new(src)
             .lex()

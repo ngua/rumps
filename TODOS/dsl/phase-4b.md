@@ -157,7 +157,7 @@ For each of the ~46 failing test scripts:
 1. **Run the script** and examine the type checker output
 2. **Categorize the errors**:
    - **Legitimate type errors**: The type checker correctly caught a violation (e.g., `33_type_mismatch.rumps`). Update the snapshot to include the expected error.
-   - **Broken scripts**: Some scripts may be testing something non-sensical, e.g. `SET x = 100 \n OUTPUT x`; this _shouldn't_ work and the script is broken (i.e. non-type error, but still a broken script)
+   - **Broken scripts**: Some scripts may be testing something non-sensical, e.g. `$SET x = 100 \n $OUTPUT x`; this _shouldn't_ work and the script is broken (i.e. non-type error, but still a broken script)
    - **Type checker bugs**: The type checker incorrectly rejects valid code. Fix the bug.
 3. **Fix or update snapshot**: Either fix the type checker issue or run `cargo insta review` to accept the new snapshot if the errors are expected.
    - **NOTE**: Do NOT introduce new regressions in other scripts. That is not a fix. If a script that is NOT in the audit checklist below, and it is broken following your fixes, you must reconsider your approach or ask for guidance
@@ -501,7 +501,7 @@ Comprehensive test suite for the type checker. **91 integration test scripts** c
 | **Variants**               | ✅     | `25`, `29`, `53`, `56`, `62`, `79`, `87` (Option, Result, user-defined)                      |
 | **Errors**                 | ✅     | `33`, `40`-`44`, `48`-`52`, `54`-`55`, `57`-`61`, `63`-`65`, `70`, `72`, `83`-`85`, `90`     |
 | **Inference**              | ✅     | `91` (polymorphic functions, generalization, identity, compose)                              |
-| **Database**               | ✅     | `06` (GET with globals, transactions)                                                        |
+| **Database**               | ✅     | `06` ($GET with globals, transactions)                                                        |
 
 ### Checklist
 
@@ -796,13 +796,13 @@ crates/rumps-query/src/typecheck/
 
 The following primitives are not yet implemented but will require special type handling when added:
 
-### `DATA`
+### `$DATA`
 
 Returns information about whether a node exists and has data/descendants. Returns a `DataStatus` type (not `Int`):
 
 ```rumps
-DATA ^global(subscripts...)  ; -> DataStatus
-DATA local(subscripts...)    ; -> DataStatus
+$DATA ^global(subscripts...)  ; -> DataStatus
+$DATA local(subscripts...)    ; -> DataStatus
 ```
 
 The `DataStatus` type corresponds to `rumps_types::DataStatus`:
@@ -816,22 +816,22 @@ enum DataStatus {
 }
 ```
 
-**Casting to Int**: `DATA ... AS Int` always succeeds and evaluates to the `u8` representation:
+**Casting to Int**: `$DATA ... AS Int` always succeeds and evaluates to the `u8` representation:
 
 ```rumps
-LET status = DATA ^PATIENT(123)
+LET status = $DATA ^PATIENT(123)
 IF status IS DataStatus.HasValue { ... }
 
 ; Or get the numeric value
-LET code: Int = DATA ^PATIENT(123) AS Int  ; 0, 1, 10, or 11
+LET code: Int = $DATA ^PATIENT(123) AS Int  ; 0, 1, 10, or 11
 ```
 
-### `ORDER`
+### `$ORDER`
 
 Returns the next/previous subscript key in sorted order. Type depends on subscript type:
 
 ```
-ORDER(^global(subscripts...), direction) -> Option[Subscript]
+$ORDER(^global(subscripts...), direction) -> Option[Subscript]
 ```
 
 Where `Subscript` is a union of valid subscript types (`Bool | Int | Float | Char | String | Json`). May need a dedicated `Subscript` type or return `Unknown` and require annotation.
@@ -868,11 +868,11 @@ UNION Subscript = Bool | Number | Char | String | Json
 ```
 
 For typing:
-- `GET local(k)` -> returns `Storable`
-- `GET local(k)` used as `x + 1` -> narrow to `Int | Float`
-- `GET local(k)` used as `x ++ y` -> narrow to `String`
-- `GET local(k)` with no constraining usage -> remains `Storable`
-- `ORDER` result -> `Option[Subscript]`
+- `$GET local(k)` -> returns `Storable`
+- `$GET local(k)` used as `x + 1` -> narrow to `Int | Float`
+- `$GET local(k)` used as `x ++ y` -> narrow to `String`
+- `$GET local(k)` with no constraining usage -> remains `Storable`
+- `$ORDER` result -> `Option[Subscript]`
 - `COLLECT` element values -> `Storable` (narrowed by `SELECT` usage)
 
 Users can:

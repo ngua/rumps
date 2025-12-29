@@ -9,44 +9,44 @@
 
 ; WITHOUT annotation: heterogeneous array becomes Json
 LET json-arr = [1, "a", true]
-OUTPUT json-arr IS Json
+$OUTPUT json-arr IS Json
 
 ; WITH annotation: stays as native Array (not Json)
 LET sub-arr: Array[Subscript] = [1, "a", true]
-OUTPUT sub-arr IS Json
-OUTPUT Array.length(sub-arr)
+$OUTPUT sub-arr IS Json
+$OUTPUT Array.length(sub-arr)
 
 ; === Named union: Subscript ===
 
 LET subscript-arr: Array[Subscript] = [42, "hello", 3.14, 'x', true]
-OUTPUT Array.length(subscript-arr)
+$OUTPUT Array.length(subscript-arr)
 
 ; === Named union: Storable ===
 
 LET storable-arr: Array[Storable] = [true, 42, 3.14, 'x', "str"]
-OUTPUT Array.length(storable-arr)
+$OUTPUT Array.length(storable-arr)
 
 ; === Named union: Scalar ===
 
 LET scalar-arr: Array[Scalar] = [true, 42, 3.14, "str"]
-OUTPUT Array.length(scalar-arr)
+$OUTPUT Array.length(scalar-arr)
 
 ; === Anonymous union ===
 
 LET anon-arr: Array[Int | String] = [42, "hello", 99, "world"]
-OUTPUT Array.length(anon-arr)
+$OUTPUT Array.length(anon-arr)
 
 ; === User-defined union ===
 
 UNION Id = Int | String
 
 LET ids: Array[Id] = [1, "abc", 2, "def"]
-OUTPUT Array.length(ids)
+$OUTPUT Array.length(ids)
 
 ; === Empty array with union element type ===
 
 LET empty: Array[Int | String] = []
-OUTPUT Array.length(empty)
+$OUTPUT Array.length(empty)
 
 ; === Spread in union arrays ===
 
@@ -55,7 +55,7 @@ LET strs: Array[String] = ["a", "b"]
 
 ; Spread homogeneous arrays into union array
 LET combined: Array[Int | String] = [...ints, "x", ...strs, 4]
-OUTPUT Array.length(combined)
+$OUTPUT Array.length(combined)
 
 ; === Iteration over union array ===
 
@@ -64,9 +64,9 @@ LET arr: Array[Int | String] = [1, "two", 3, "four"]
 ; Array.foreach works on union arrays
 Array.foreach(x => {
   MATCH x {
-    n IS Int => { OUTPUT "int: " ++ (n AS String) }
-    s IS String => { OUTPUT "str: " ++ s }
-    _ => { OUTPUT "other" }
+    n IS Int => { $OUTPUT "int: " ++ (n AS String) }
+    s IS String => { $OUTPUT "str: " ++ s }
+    _ => { $OUTPUT "other" }
   }
 }, arr)
 
@@ -78,14 +78,14 @@ LET mapped = Array.map(x => {
     _ => { 0 }
   }
 }, arr)
-OUTPUT mapped
+$OUTPUT mapped
 
 ; === Verify elements preserve their concrete types ===
 
 ; Use Array.filter to extract Int elements
 LET ints-only = Array.filter(x => x IS Int, arr)
-OUTPUT Array.length(ints-only)
+$OUTPUT Array.length(ints-only)
 
 ; Use Array.filter to extract String elements
 LET strs-only = Array.filter(x => x IS String, arr)
-OUTPUT Array.length(strs-only)
+$OUTPUT Array.length(strs-only)

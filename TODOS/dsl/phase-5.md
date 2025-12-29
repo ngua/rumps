@@ -1,55 +1,55 @@
 # Phase 5
 
-## 5.1: Extended OUTPUT Statement
+## 5.1: Extended $OUTPUT Statement
 
-This phase extends the `OUTPUT` statement with formatting and target options.
+This phase extends the `$OUTPUT` statement with formatting and target options.
 
 **Prerequisites**: Phase 4 (type system) complete.
 
 **Testing**: Each feature requires integration tests (`.rumps` script + snapshot).
 
-**IMPORTANT**: All I/O operations MUST use `tokio`. This includes `OUTPUT` to stderr and file targets. Use `tokio::io::stderr` and `tokio::fs::write` (or similar async APIs), NOT the synchronous `std::io` equivalents.
+**IMPORTANT**: All I/O operations MUST use `tokio`. This includes `$OUTPUT` to stderr and file targets. Use `tokio::io::stderr` and `tokio::fs::write` (or similar async APIs), NOT the synchronous `std::io` equivalents.
 
 ---
 
-### 5.1. Extended OUTPUT Statement
+### 5.1. Extended $OUTPUT Statement
 
-The current `OUTPUT expr` statement writes to stdout. We extend it with:
+The current `$OUTPUT expr` statement writes to stdout. We extend it with:
 - **Format modifiers**: `JSON` (convert to JSON before output)
 - **Target modifiers**: `TO ERROR` (stderr), `TO FILE "path"` (file)
-- **Combinations**: `OUTPUT x JSON TO FILE "path"`
+- **Combinations**: `$OUTPUT x JSON TO FILE "path"`
 
 #### 5.1.1 Syntax
 
 ```rumps
 ; Current (unchanged)
-OUTPUT x
+$OUTPUT x
 
 ; Format: convert to JSON first
-OUTPUT x JSON
+$OUTPUT x JSON
 
 ; Target: output to stderr
-OUTPUT x TO ERROR
+$OUTPUT x TO ERROR
 
 ; Target: output to file
-OUTPUT x TO FILE "/tmp/out.txt"
-OUTPUT x TO FILE path-var        ; FilePath variable
+$OUTPUT x TO FILE "/tmp/out.txt"
+$OUTPUT x TO FILE path-var        ; FilePath variable
 
 ; Combined: format + target
-OUTPUT x JSON TO ERROR
-OUTPUT x JSON TO FILE "/tmp/out.json"
+$OUTPUT x JSON TO ERROR
+$OUTPUT x JSON TO FILE "/tmp/out.json"
 ```
 
 **Grammar**:
 ```
-output_stmt := OUTPUT expr [format] [target]
+output_stmt := $OUTPUT expr [format] [target]
 format      := JSON
 target      := TO ERROR | TO FILE expr
 ```
 
 #### 5.1.2 Contextual Identifiers (Not Keywords)
 
-**Critical requirement**: `TO`, `JSON`, `ERROR`, `FILE` must NOT be global keywords. They should only be recognized specially in the `OUTPUT` context. This preserves backward compatibility:
+**Critical requirement**: `TO`, `JSON`, `ERROR`, `FILE` must NOT be global keywords. They should only be recognized specially in the `$OUTPUT` context. This preserves backward compatibility:
 
 ```rumps
 ; These must continue to work:
@@ -58,12 +58,12 @@ LET to = 10                     ; `to` as variable name
 LET error = "something failed"  ; `error` as variable name
 LET file = "/path/to/file"      ; `file` as variable name
 
-; These are the new OUTPUT modifiers:
-OUTPUT data JSON                ; `JSON` recognized after OUTPUT expr
-OUTPUT data TO ERROR            ; `TO ERROR` recognized after OUTPUT expr
+; These are the new $OUTPUT modifiers:
+$OUTPUT data JSON                ; `JSON` recognized after $OUTPUT expr
+$OUTPUT data TO ERROR            ; `TO ERROR` recognized after $OUTPUT expr
 ```
 
-**Implementation approach**: In the parser, after consuming `OUTPUT expr`, optionally match identifiers whose value (case-insensitive) equals `"JSON"`, `"TO"`, `"ERROR"`, or `"FILE"`. Use `filter_map` on `Token::Ident(s)` to check the identifier string.
+**Implementation approach**: In the parser, after consuming `$OUTPUT expr`, optionally match identifiers whose value (case-insensitive) equals `"JSON"`, `"TO"`, `"ERROR"`, or `"FILE"`. Use `filter_map` on `Token::Ident(s)` to check the identifier string.
 
 #### 5.1.3 Lexer
 
@@ -85,7 +85,7 @@ Change `StmtKind::Output(Expr)` to `StmtKind::Output(OutputStmt)`.
 
 ##### 5.1.4.3 Parser Implementation
 
-**NOTE**: As with keywords, `OUTPUT` modifiers must be case-insensitive. E.g. `output x json to error`
+**NOTE**: As with keywords, `$OUTPUT` modifiers must be case-insensitive. E.g. `output x json to error`
 
 Update `output_stmt` in `parser.rs`:
 
@@ -93,7 +93,7 @@ Update `output_stmt` in `parser.rs`:
 /// Implemented
 ```
 
-**Parsing order matters**: The format (`JSON`) must come before the target (`TO ...`) to avoid ambiguity. `OUTPUT x TO ERROR` should not try to parse `TO` as a format.
+**Parsing order matters**: The format (`JSON`) must come before the target (`TO ...`) to avoid ambiguity. `$OUTPUT x TO ERROR` should not try to parse `TO` as a format.
 
 #### 5.1.5 AST
 
@@ -176,14 +176,14 @@ Adding `TO`, `JSON`, `ERROR`, `FILE` as global keywords would:
 2. Pollute the keyword namespace unnecessarily
 3. Make the language less predictable
 
-By parsing them contextually (only after `OUTPUT expr`), we:
+By parsing them contextually (only after `$OUTPUT expr`), we:
 1. Keep the keyword set minimal
 2. Allow natural variable naming
 
 #### Parser Approach
 
 The parser uses a lookahead pattern:
-1. Parse `OUTPUT expr` as before
+1. Parse `$OUTPUT expr` as before
 2. Optionally match `Ident("JSON")` for format
 3. Optionally match `Ident("TO")` followed by target
 
@@ -195,9 +195,9 @@ An alternative would be to add `Token::Json`, `Token::To`, etc., and make them "
 
 ---
 
-## 5.2: DATA Primitive
+## 5.2: $DATA Primitive
 
-The `DATA` primitive queries the existence status of a node in a global or local variable. It wraps `Database::data` and `Transaction::data`.
+The `$DATA` primitive queries the existence status of a node in a global or local variable. It wraps `Database::data` and `Transaction::data`.
 
 **Prerequisites**: Phase 4 (type system) complete.
 
@@ -207,22 +207,22 @@ The `DATA` primitive queries the existence status of a node in a global or local
 
 ```rumps
 ; Query data status of a global
-DATA ^PATIENT(123)
+$DATA ^PATIENT(123)
 
 ; Query data status of a local
-DATA patients(123)
+$DATA patients(123)
 
 ; Use in expressions
-MATCH DATA patients(123) {
+MATCH $DATA patients(123) {
   NoData => { ... }
   HasValue => { ... }
   HasDescendants => { ... }
   Both => { ... }
 }
 
-LET status = DATA patients(123)
-IF (DATA ^PATIENT(123)) AS Int > 0 {
-    OUTPUT "Node exists"
+LET status = $DATA patients(123)
+IF ($DATA ^PATIENT(123)) AS Int > 0 {
+    $OUTPUT "Node exists"
 }
 
 ```
@@ -242,7 +242,7 @@ TYPE DataStatus = NoData | HasValue | HasDescendants | Both
 | `HasDescendants`| `10`      | Has descendants only             |
 | `Both`          | `11`      | Has both value and descendants   |
 
-The integer values match MUMPS `$DATA` semantics:
+The integer values match MUMPS `$$DATA` semantics:
 - `0`: Node does not exist
 - `1`: Node has a value but no descendants
 - `10`: Node has descendants but no value
@@ -253,7 +253,7 @@ The integer values match MUMPS `$DATA` semantics:
 `DataStatus` must support infallible conversion via `AS Int`:
 
 ```rumps
-LET status = DATA ^PATIENT(123)
+LET status = $DATA ^PATIENT(123)
 LET n: Int = status AS Int   ; Always succeeds
 
 ```
@@ -264,7 +264,7 @@ This mirrors the Rust `#[repr(u8)]` on `DataStatus`.
 
 ### 5.2.4 Lexer
 
-Add `DATA` keyword to the lexer:
+Add `$DATA` keyword to the lexer:
 
 ```rust
 Token::Data  // new keyword
@@ -287,7 +287,7 @@ Add `ExprKind::Data(DataExpr)` variant.
 ##### 5.2.5.3 Parser Implementation
 
 ```rust
-/// `DATA var_ref`
+/// `$DATA var_ref`
 ```
 
 ### 5.2.6 AST
@@ -360,9 +360,9 @@ Add to `parse_ty_name`:
 
 ### 5.2.9 Typechecker
 
-##### 5.2.9.1 DATA Expression
+##### 5.2.9.1 $DATA Expression
 
-The `DATA` expression always returns `DataStatus`:
+The `$DATA` expression always returns `DataStatus`:
 
 ```rust
 ///
@@ -408,7 +408,7 @@ Add `DataStatus` variant to runtime values:
 ///
 ```
 
-##### 5.2.10.2 DATA Evaluation
+##### 5.2.10.2 $DATA Evaluation
 
 ```rust
 ///
@@ -424,7 +424,7 @@ Add `DataStatus` variant to runtime values:
 
 **NOTE**: Integration tests must use **locals** only; globals require `TRANSACTION` blocks which are not yet supported in RUMPS scripts.
 
-- [x] Parser tests for `DATA ^var` and `DATA local`
+- [x] Parser tests for `$DATA ^var` and `$DATA local`
 - [x] Integration test script (`101_data_primitive.rumps`) using locals
 
 ### 5.2.12 Implementation Checklist
@@ -443,10 +443,10 @@ Add `DataStatus` variant to runtime values:
 - [x] **Interning**: Add `Ty::DataStatus` case in `intern_ty`
 - [x] **Type Names**: Add `"DataStatus"` to `parse_ty_name`
 - [x] **Unification**: Add `(Ty::DataStatus, Ty::DataStatus)` case
-- [x] **Typechecker**: Infer `Ty::DataStatus` for `DATA` expressions
+- [x] **Typechecker**: Infer `Ty::DataStatus` for `$DATA` expressions
 - [x] **Coercion**: Register infallible `DataStatus -> Int` (`AS Int`)
 - [x] **Coercion**: Register fallible `Int -> DataStatus` (`READ DataStatus`)
-- [x] **Interpreter**: Implement `DATA` evaluation via `Database::data`/`Transaction::data`
+- [x] **Interpreter**: Implement `$DATA` evaluation via `Database::data`/`Transaction::data`
 - [x] **Interpreter**: Implement `AS Int` mapping variant idx to MUMPS values
 - [x] **Interpreter**: Implement `READ DataStatus` from Int
 - [x] **Exhaustiveness**: Add `Ty::DataStatus` case to `check_exhaustiveness`
@@ -471,17 +471,17 @@ The `AS Int` coercion is infallible because:
 2. The conversion cannot fail at runtime
 3. This matches the Rust `#[repr(u8)]` semantics
 
-#### Compatibility with MUMPS $DATA
+#### Compatibility with MUMPS $$DATA
 
-The integer values (`0`, `1`, `10`, `11`) match traditional MUMPS `$DATA` semantics, allowing:
-- Existing MUMPS patterns like `IF $DATA(x)>0` translate directly
+The integer values (`0`, `1`, `10`, `11`) match traditional MUMPS `$$DATA` semantics, allowing:
+- Existing MUMPS patterns like `IF $$DATA(x)>0` translate directly
 - The "tens digit" represents descendants, "ones digit" represents value
 
 ---
 
-## 5.3: ORDER Primitive
+## 5.3: $ORDER Primitive
 
-The `ORDER` primitive returns the next subscript at a given level in sorted order. It wraps `Database::order` and `Transaction::order`.
+The `$ORDER` primitive returns the next subscript at a given level in sorted order. It wraps `Database::order` and `Transaction::order`.
 
 **Prerequisites**: Phase 4 (type system) complete.
 
@@ -491,25 +491,25 @@ The `ORDER` primitive returns the next subscript at a given level in sorted orde
 
 ```rumps
 ; Get the next subscript after "foo" at level 1 of patients
-LET next = ORDER patients("foo")
+LET next = $ORDER patients("foo")
 
 ; Get the first subscript at level 1 (no "after" value)
-LET first = ORDER patients()
+LET first = $ORDER patients()
 
 ; Nested: next subscript at level 2 under key 123
-LET next = ORDER ^PATIENT(123, "A")
+LET next = $ORDER ^PATIENT(123, "A")
 
 ; Use in expressions
-MATCH ORDER data(key) {
-  Some(k) => { OUTPUT k }
-  None => { OUTPUT "no more keys" }
+MATCH $ORDER data(key) {
+  Some(k) => { $OUTPUT k }
+  None => { $OUTPUT "no more keys" }
 }
 
 ; Iterate all keys at a level
-LET k = ORDER patients()
+LET k = $ORDER patients()
 WHILE k IS Some {
-  OUTPUT k!
-  SET k = ORDER patients(k!)
+  $OUTPUT k!
+  $SET k = $ORDER patients(k!)
 }
 ```
 
@@ -525,21 +525,21 @@ This was added to support union-typed arrays (e.g., `Array[Subscript]`). It matc
 
 **Note**: `Int` and `Float` both map to `Subscript::Number(f64)` in storage; they are unified at the storage layer.
 
-### 5.3.3 ORDER Returns `Option[Subscript]`
+### 5.3.3 $ORDER Returns `Option[Subscript]`
 
-Following MUMPS `$ORDER` semantics, `ORDER` returns the **next subscript** at the given level, not a full key path:
+Following MUMPS `$$ORDER` semantics, `$ORDER` returns the **next subscript** at the given level, not a full key path:
 
 ```rumps
 ; If patients has keys (1), (2), (10):
-ORDER patients()      ; => Some(1)
-ORDER patients(1)     ; => Some(2)
-ORDER patients(2)     ; => Some(10)
-ORDER patients(10)    ; => None
+$ORDER patients()      ; => Some(1)
+$ORDER patients(1)     ; => Some(2)
+$ORDER patients(2)     ; => Some(10)
+$ORDER patients(10)    ; => None
 ```
 
 ### 5.3.4 Lexer
 
-Add `ORDER` keyword to the lexer:
+Add `$ORDER` keyword to the lexer:
 
 ```rust
 Token::Order  // new keyword
@@ -566,7 +566,7 @@ Add `ExprKind::Order(OrderExpr)` variant.
 ##### 5.3.5.3 Parser Implementation
 
 ```rust
-/// `ORDER var_ref`
+/// `$ORDER var_ref`
 fn order_expr(
     stmt: impl Parser<Token, cst::Stmt, Error = ParseErr> + Clone + 'static,
 ) -> impl Parser<Token, cst::Expr, Error = ParseErr> {
@@ -607,9 +607,9 @@ cst::ExprKind::Order(order) => {
 
 ### 5.3.8 Typechecker
 
-##### 5.3.8.1 ORDER Expression
+##### 5.3.8.1 $ORDER Expression
 
-The `ORDER` expression returns `Option[Subscript]`:
+The `$ORDER` expression returns `Option[Subscript]`:
 
 ```rust
 fn order(&mut self, order: &OrderExpr, span: Span) -> TyId {
@@ -628,7 +628,7 @@ Subscripts in variable references should be constrained to `Subscript` type. Thi
 
 ### 5.3.9 Interpreter
 
-##### 5.3.9.1 ORDER Evaluation
+##### 5.3.9.1 $ORDER Evaluation
 
 ```rust
 async fn order(&mut self, order: &OrderExpr) -> Result<Value> {
@@ -694,7 +694,7 @@ This fixes the mismatch between `rumps_types::Subscript` (which includes `Json`)
 
 **NOTE**: Integration tests must use **locals** only; globals require `TRANSACTION` blocks.
 
-- [ ] Parser tests for `ORDER local` and `ORDER ^global`
+- [ ] Parser tests for `$ORDER local` and `$ORDER ^global`
 - [ ] Integration test script (`103_order_primitive.rumps`) using locals
 
 ### 5.3.11 Implementation Checklist
@@ -707,8 +707,8 @@ This fixes the mismatch between `rumps_types::Subscript` (which includes `Json`)
 - [x] **TypeId**: Add `TypeId::SUBSCRIPT` constant
 - [x] **Type Registry**: Register `Subscript` as `TypeDef::Union` with 6 members
 - [x] **Type Names**: Add `"Subscript"` to `parse_ty_name` (via registry lookup)
-- [x] **Typechecker**: Infer `Option[Subscript]` for `ORDER` expressions
-- [x] **Interpreter**: Implement `ORDER` evaluation via `Database::order`/`Transaction::order`
+- [x] **Typechecker**: Infer `Option[Subscript]` for `$ORDER` expressions
+- [x] **Interpreter**: Implement `$ORDER` evaluation via `Database::order`/`Transaction::order`
 - [x] **Interpreter**: Add `subscript_to_value` conversion
 - [x] **Interpreter**: Fix `convert.rs` `subscript()` to support `Json` values
 - [x] **Tests**: Integration test script (`103_order_primitive.rumps`)
@@ -717,11 +717,11 @@ This fixes the mismatch between `rumps_types::Subscript` (which includes `Json`)
 
 ### Design Notes
 
-#### Why MUMPS `$ORDER` Semantics?
+#### Why MUMPS `$$ORDER` Semantics?
 
-MUMPS `$ORDER` returns the next subscript at a given level. This is intuitive for tree iteration:
+MUMPS `$$ORDER` returns the next subscript at a given level. This is intuitive for tree iteration:
 
-1. **Familiarity**: MUMPS users expect `$ORDER` to return a single value
+1. **Familiarity**: MUMPS users expect `$$ORDER` to return a single value
 2. **Simplicity**: No need to extract elements from an array
 3. **Iteration**: Natural `WHILE` loop pattern works cleanly
 
@@ -731,8 +731,8 @@ If full key path iteration is needed, a separate `QUERY` primitive (matching MUM
 
 `Subscript` and `Storable` are currently identical:
 
-| Union       | Members                                |
-|-------------|----------------------------------------|
+| Union       | Members                                          |
+|-------------|--------------------------------------------------|
 | `Storable`  | `Bool \| Int \| Float \| Char \| String \| Json` |
 | `Subscript` | `Bool \| Int \| Float \| Char \| String \| Json` |
 
@@ -744,4 +744,4 @@ They may diverge if storage adds new types that aren't valid subscripts.
 
 #### Number Representation
 
-`Subscript::Number(f64)` at the storage layer represents both `Int` and `Float`. When converting back to runtime values, we check if the number is a whole number and return `Int` if so. This preserves the user's likely intent when they used `ORDER` with integer subscripts
+`Subscript::Number(f64)` at the storage layer represents both `Int` and `Float`. When converting back to runtime values, we check if the number is a whole number and return `Int` if so. This preserves the user's likely intent when they used `$ORDER` with integer subscripts

@@ -1,99 +1,99 @@
 ; Test: short-circuit evaluation
-; Uses SET side effects to verify RHS is/isn't evaluated
+; Uses $SET side effects to verify RHS is/isn't evaluated
 
 ; === Setup ===
-SET counter = 0
+$SET counter = 0
 
 ; === Short-circuit AND (FALSE AND ...) ===
 ; RHS should NOT be evaluated
 
-SET counter = 0
+$SET counter = 0
 LET r1 = FALSE AND {
-  SET counter = 100
+  $SET counter = 100
   TRUE
 }
-OUTPUT GET counter
+$OUTPUT $GET counter
 ; Expected: 0 (block not evaluated)
 
 ; === Non-short-circuit AND (TRUE AND ...) ===
 ; RHS SHOULD be evaluated
 
-SET counter = 0
+$SET counter = 0
 LET r2 = TRUE AND {
-  SET counter = 200
+  $SET counter = 200
   TRUE
 }
-OUTPUT GET counter
+$OUTPUT $GET counter
 ; Expected: 200 (block was evaluated)
 
 ; === Short-circuit OR (TRUE OR ...) ===
 ; RHS should NOT be evaluated
 
-SET counter = 0
+$SET counter = 0
 LET r3 = TRUE OR {
-  SET counter = 300
+  $SET counter = 300
   FALSE
 }
-OUTPUT GET counter
+$OUTPUT $GET counter
 ; Expected: 0 (block not evaluated)
 
 ; === Non-short-circuit OR (FALSE OR ...) ===
 ; RHS SHOULD be evaluated
 
-SET counter = 0
+$SET counter = 0
 LET r4 = FALSE OR {
-  SET counter = 400
+  $SET counter = 400
   TRUE
 }
-OUTPUT GET counter
+$OUTPUT $GET counter
 ; Expected: 400 (block was evaluated)
 
 ; === Chained short-circuit ===
 
-SET counter = 0
+$SET counter = 0
 LET r5 = FALSE AND {
-  SET counter = 1
+  $SET counter = 1
   FALSE
 } AND {
-  SET counter = 2
+  $SET counter = 2
   TRUE
 }
-OUTPUT GET counter
+$OUTPUT $GET counter
 ; Expected: 0 (first FALSE short-circuits entire chain)
 
-SET counter = 0
+$SET counter = 0
 LET r6 = TRUE OR {
-  SET counter = 1
+  $SET counter = 1
   TRUE
 } OR {
-  SET counter = 2
+  $SET counter = 2
   FALSE
 }
-OUTPUT GET counter
+$OUTPUT $GET counter
 ; Expected: 0 (first TRUE short-circuits entire chain)
 
 ; === Mixed AND/OR ===
 
-SET counter = 0
+$SET counter = 0
 LET r7 = (FALSE AND {
-  SET counter = 10
+  $SET counter = 10
   TRUE
 }) OR {
-  SET counter = 20
+  $SET counter = 20
   TRUE
 }
-OUTPUT GET counter
+$OUTPUT $GET counter
 ; Expected: 20 (AND short-circuits, OR evaluates RHS)
 
-SET counter = 0
+$SET counter = 0
 LET r8 = (TRUE OR {
-  SET counter = 10
+  $SET counter = 10
   FALSE
 }) AND {
-  SET counter = 30
+  $SET counter = 30
   TRUE
 }
-OUTPUT GET counter
+$OUTPUT $GET counter
 ; Expected: 30 (OR short-circuits, AND evaluates RHS)
 
-OUTPUT "done"
+$OUTPUT "done"

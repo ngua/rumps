@@ -7,12 +7,12 @@ LET x = {
   LET b = 20
   a + b
 }
-OUTPUT x
+$OUTPUT x
 ; Expected: 30
 
 ; Block with no tail (returns None)
 LET y = {
-  OUTPUT "Side effect"
+  $OUTPUT "Side effect"
 }
 ; y should be Option.None or unit
 
@@ -24,27 +24,27 @@ LET z = {
     outer + inner
   }
 }
-OUTPUT z
+$OUTPUT z
 ; Expected: 15
 
-; Block with SET (side effect, no return)
+; Block with $SET (side effect, no return)
 {
-  SET counter = 0
-  SET counter = 1
-  SET counter = 2
+  $SET counter = 0
+  $SET counter = 1
+  $SET counter = 2
 }
-LET c = GET counter
-OUTPUT c
+LET c = $GET counter
+$OUTPUT c
 ; Expected: 2
 
 ; Block scope isolation
 LET val = 100
 {
   LET val = 200
-  OUTPUT val
+  $OUTPUT val
   ; Expected: 200
 }
-OUTPUT val
+$OUTPUT val
 ; Expected: 100 (outer val unchanged due to LET shadowing)
 
 ; Block with conditional
@@ -56,7 +56,7 @@ LET result = {
     "fail"
   }
 }
-OUTPUT result
+$OUTPUT result
 ; Expected: pass
 
 ; Multiple statements before tail
@@ -64,10 +64,10 @@ LET multi = {
   LET a = 1
   LET b = 2
   LET c = 3
-  OUTPUT "Computing..."
+  $OUTPUT "Computing..."
   a + b + c
 }
-OUTPUT multi
+$OUTPUT multi
 ; Expected: Computing... then 6
 
-OUTPUT "Block test complete"
+$OUTPUT "Block test complete"

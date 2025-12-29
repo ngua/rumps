@@ -5,4 +5,4 @@
 LET x: Int = "hello"
 
 ; This line should not be reached
-OUTPUT "Should not reach here"
+$OUTPUT "Should not reach here"

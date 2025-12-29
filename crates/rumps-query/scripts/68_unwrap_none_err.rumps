@@ -1,3 +1,3 @@
 ; Unwrap Option.None should error
 LET none-val = Option.None
-OUTPUT none-val!
+$OUTPUT none-val!

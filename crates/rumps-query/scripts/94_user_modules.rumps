@@ -10,13 +10,13 @@ MODULE Counter {
 }
 
 LET c = Counter.new()
-OUTPUT c  ; 0
+$OUTPUT c  ; 0
 
 LET c1 = Counter.inc(c)
-OUTPUT c1  ; 1
+$OUTPUT c1  ; 1
 
 LET c2 = Counter.add(c1, 10)
-OUTPUT c2  ; 11
+$OUTPUT c2  ; 11
 
 ; ============ Module with constants ============
 
@@ -26,13 +26,13 @@ MODULE Config {
   LET ratio = 3.14
 }
 
-OUTPUT Config.max-size  ; 1000
-OUTPUT Config.default-name  ; unnamed
-OUTPUT Config.ratio > 3  ; true
+$OUTPUT Config.max-size  ; 1000
+$OUTPUT Config.default-name  ; unnamed
+$OUTPUT Config.ratio > 3  ; true
 
 ; Use constants in expressions
 LET scaled = Config.max-size * 2
-OUTPUT scaled  ; 2000
+$OUTPUT scaled  ; 2000
 
 ; ============ Module with both functions and constants ============
 
@@ -48,13 +48,13 @@ MODULE Geometry {
   }
 }
 
-OUTPUT Geometry.pi > 3  ; true
+$OUTPUT Geometry.pi > 3  ; true
 
 LET a = Geometry.area(2.0)
-OUTPUT a > 12  ; true
+$OUTPUT a > 12  ; true
 
 LET circ = Geometry.circumference(1.0)
-OUTPUT circ > 6  ; true
+$OUTPUT circ > 6  ; true
 
 ; ============ Nested modules ============
 
@@ -71,11 +71,11 @@ MODULE Outer {
   }
 }
 
-OUTPUT Outer.val  ; 100
-OUTPUT Outer.value()  ; 100
-OUTPUT Outer.Inner.secret  ; 42
-OUTPUT Outer.Inner.get-secret()  ; 42
-OUTPUT Outer.Inner.combined()  ; 142
+$OUTPUT Outer.val  ; 100
+$OUTPUT Outer.value()  ; 100
+$OUTPUT Outer.Inner.secret  ; 42
+$OUTPUT Outer.Inner.get-secret()  ; 42
+$OUTPUT Outer.Inner.combined()  ; 142
 
 ; ============ Generic functions in modules ============
 
@@ -85,19 +85,19 @@ MODULE Utils {
 }
 
 LET id-int = Utils.identity(42)
-OUTPUT id-int  ; 42
+$OUTPUT id-int  ; 42
 
 LET id-str = Utils.identity("hello")
-OUTPUT id-str  ; hello
+$OUTPUT id-str  ; hello
 
 LET p = Utils.pair(1, "one")
-OUTPUT p  ; (1, one)
+$OUTPUT p  ; (1, one)
 
 ; ============ Module function as value ============
 
 LET inc-fn = Counter.inc
 LET result = inc-fn(5)
-OUTPUT result  ; 6
+$OUTPUT result  ; 6
 
 ; ============ Module with closures ============
 
@@ -108,10 +108,10 @@ MODULE Adder {
 }
 
 LET add5 = Adder.make(5)
-OUTPUT add5(10)  ; 15
+$OUTPUT add5(10)  ; 15
 
 LET add10 = Adder.make(10)
-OUTPUT add10(7)  ; 17
+$OUTPUT add10(7)  ; 17
 
 ; ============ Monomorphic higher-order functions ============
 
@@ -125,8 +125,8 @@ MODULE MonoHof {
   }
 }
 
-OUTPUT MonoHof.apply(n => n + 1, 5)  ; 6
-OUTPUT MonoHof.map-twice(n => n * 2, 3)  ; 12
+$OUTPUT MonoHof.apply(n => n + 1, 5)  ; 6
+$OUTPUT MonoHof.map-twice(n => n * 2, 3)  ; 12
 
 ; ============ Polymorphic higher-order functions ============
 
@@ -141,16 +141,16 @@ MODULE PolyHof {
 }
 
 ; Int -> Int
-OUTPUT PolyHof.apply(n => n + 1, 5)  ; 6
+$OUTPUT PolyHof.apply(n => n + 1, 5)  ; 6
 
 ; Int -> String
-OUTPUT PolyHof.apply(n => "num: " ++ (n as String), 42)  ; num: 42
+$OUTPUT PolyHof.apply(n => "num: " ++ (n as String), 42)  ; num: 42
 
 ; String -> Int
-OUTPUT PolyHof.apply(s => String.length(s), "hello")  ; 5
+$OUTPUT PolyHof.apply(s => String.length(s), "hello")  ; 5
 
 ; Compose: Int -> Int -> String
-OUTPUT PolyHof.compose(n => "result: " ++ (n as String), x => x * 2, 10)  ; result: 20
+$OUTPUT PolyHof.compose(n => "result: " ++ (n as String), x => x * 2, 10)  ; result: 20
 
 ; ============ Module with TYPE definitions ============
 
@@ -175,10 +175,10 @@ MODULE Shapes {
 LET c = Shapes.Shape.Circle(2.0)
 LET r = Shapes.Shape.Rectangle(3.0, 4.0)
 
-OUTPUT Shapes.describe(c)  ; circle
-OUTPUT Shapes.describe(r)  ; rectangle
-OUTPUT Shapes.area(c) > 12  ; true (approx 12.56)
-OUTPUT Shapes.area(r) > 11  ; true (12.0)
+$OUTPUT Shapes.describe(c)  ; circle
+$OUTPUT Shapes.describe(r)  ; rectangle
+$OUTPUT Shapes.area(c) > 12  ; true (approx 12.56)
+$OUTPUT Shapes.area(r) > 11  ; true (12.0)
 
 ; ============ Module with struct TYPE ============
 
@@ -195,11 +195,11 @@ MODULE Users {
 }
 
 LET u: Users.User = { name: "Alice", age: 30 }
-OUTPUT Users.greet(u)  ; Hello, Alice
-OUTPUT Users.is-adult(u)  ; true
+$OUTPUT Users.greet(u)  ; Hello, Alice
+$OUTPUT Users.is-adult(u)  ; true
 
 LET child: Users.User = { name: "Bob", age: 10 }
-OUTPUT Users.is-adult(child)  ; false
+$OUTPUT Users.is-adult(child)  ; false
 
 ; ============ Module with UNION definition ============
 
@@ -213,8 +213,8 @@ MODULE Data {
 
 LET i: Data.Primitive = 42
 LET s: Data.Primitive = "hello"
-OUTPUT Data.stringify(i)  ; 42
-OUTPUT Data.stringify(s)  ; hello
+$OUTPUT Data.stringify(i)  ; 42
+$OUTPUT Data.stringify(s)  ; hello
 
 ; ============ Nested module with types ============
 
@@ -233,8 +233,8 @@ MODULE Outer2 {
 
 LET active = Outer2.Inner2.Status.Active
 LET inactive = Outer2.Inner2.Status.Inactive
-OUTPUT Outer2.Inner2.is-active(active)  ; true
-OUTPUT Outer2.Inner2.is-active(inactive)  ; false
+$OUTPUT Outer2.Inner2.is-active(active)  ; true
+$OUTPUT Outer2.Inner2.is-active(inactive)  ; false
 
 ; ============ Generic type in module ============
 
@@ -251,5 +251,5 @@ MODULE Container {
 
 LET box-int = Container.Box.Wrapped(42)
 LET empty-box = Container.Box.Empty
-OUTPUT Container.unwrap-or(box-int, 0)  ; 42
-OUTPUT Container.unwrap-or(empty-box, 99)  ; 99
+$OUTPUT Container.unwrap-or(box-int, 0)  ; 42
+$OUTPUT Container.unwrap-or(empty-box, 99)  ; 99

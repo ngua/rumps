@@ -8,13 +8,13 @@ TYPE Person = {
 
 ; Construct an object matching the type
 LET p: Person = { name: "Alice", age: 30 }
-OUTPUT p.name
-OUTPUT p.age
+$OUTPUT p.name
+$OUTPUT p.age
 
 ; Extra fields are allowed (extensible-record style)
 LET p2: Person = { name: "Bob", age: 25, occupation: "Developer" }
-OUTPUT p2.name
-OUTPUT p2.occupation
+$OUTPUT p2.name
+$OUTPUT p2.occupation
 
 ; Direct field access (no MATCH required)
 TYPE Address = {
@@ -24,7 +24,7 @@ TYPE Address = {
 }
 
 LET addr: Address = { street: "123 Main St", city: "NYC", zip: "10001" }
-OUTPUT addr.city
+$OUTPUT addr.city
 
 ; Nested struct types
 TYPE Patient = {
@@ -42,15 +42,15 @@ LET rec: PatientRecord = {
   patient: { id: 1, name: "Charlie", active: true },
   address: { street: "456 Oak Ave", city: "LA", zip: "90001" }
 }
-OUTPUT rec.patient.name
-OUTPUT rec.address.city
+$OUTPUT rec.patient.name
+$OUTPUT rec.address.city
 
 ; Function with struct type parameter
 FUN greet (p: Person) -> String {
   "Hello, " ++ p.name ++ "!"
 }
 
-OUTPUT greet({ name: "Diana", age: 28 })
+$OUTPUT greet({ name: "Diana", age: 28 })
 
 ; Function returning struct-compatible object
 FUN make-person (name: String, age: Int) -> { name: String, age: Int } {
@@ -58,8 +58,8 @@ FUN make-person (name: String, age: Int) -> { name: String, age: Int } {
 }
 
 LET p3 = make-person("Eve", 35)
-OUTPUT p3.name
-OUTPUT p3.age
+$OUTPUT p3.name
+$OUTPUT p3.age
 
 ; --- Parametric struct types ---
 
@@ -67,27 +67,27 @@ OUTPUT p3.age
 TYPE Box[T] = { value: T }
 
 LET int-box: Box[Int] = { value: 42 }
-OUTPUT int-box.value
+$OUTPUT int-box.value
 
 LET str-box: Box[String] = { value: "hello" }
-OUTPUT str-box.value
+$OUTPUT str-box.value
 
 ; Two type parameters
 TYPE Pair[L, R] = { left: L, right: R }
 
 LET pair: Pair[Int, String] = { left: 1, right: "one" }
-OUTPUT pair.left
-OUTPUT pair.right
+$OUTPUT pair.left
+$OUTPUT pair.right
 
 ; Nested type parameters
 LET nested: Box[Pair[Int, Bool]] = { value: { left: 99, right: true } }
-OUTPUT nested.value.left
-OUTPUT nested.value.right
+$OUTPUT nested.value.left
+$OUTPUT nested.value.right
 
 ; Struct with Option type parameter
 TYPE Maybe[T] = { inner: Option[T] }
 
 LET some-val: Maybe[Int] = { inner: Option.Some(123) }
 LET none-val: Maybe[Int] = { inner: Option.None }
-OUTPUT some-val.inner!
-OUTPUT none-val.inner ?? 0
+$OUTPUT some-val.inner!
+$OUTPUT none-val.inner ?? 0

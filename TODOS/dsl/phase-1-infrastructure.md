@@ -15,8 +15,8 @@ The initial subset should support:
 - Literals (integers, floats, strings, booleans)
 - Variables (locals only initially; globals require DB integration)
 - Basic expressions (arithmetic, comparison, logical ops)
-- `SET` statements
-- `OUTPUT` statements
+- `$SET` statements
+- `$OUTPUT` statements
 - Comments (`;` to end of line; this is the ONLY use of semicolon)
 
 ## Crate Structure
@@ -74,7 +74,7 @@ crates/rumps-query/
 **NOTE**: This is a minimal subset for Phase 1. See `TODOS/dsl.md` for the full language specification including all keywords, operators, and constructs to be implemented in later phases.
 
 - [x] Define `Token` enum with:
-  - Keywords (Phase 1 subset): `LET`, `SET`, `KILL`, `OUTPUT`, `IF`, `ELSE`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`
+  - Keywords (Phase 1 subset): `LET`, `$SET`, `$KILL`, `$OUTPUT`, `IF`, `ELSE`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`
     - Future keywords (see `dsl.md`): `COLLECT`, `WHERE`, `SELECT`, `FILTER`, `MAP`, `TAKE`, `SKIP`, `INTO`, `TRANSACTION`, `FUN`, `MATCH`, `TYPE`, `IMPORT`, `NAMESPACE`, `CATCH`, `HANDLE`, `TRY`, `FINALLY`, `THROW`, `FOREACH`, `PARALLEL`, `GROUP`, `BY`, `SORT`, `JOIN`, `AGGREGATE`, `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `REDUCE`, `REVERSE`, `WHILE`, `SAVEPOINT`, `ROLLBACK`, `WITH`, `ISOLATION`, `TIMEOUT`, `PRIORITY`, `ON`, `CONFLICT`, `RETRY`, `ABORT`, `SKIP`, `OVERWRITE`, `DO`, `AS`, `TO`, `FILE`, `ERROR`, `HEADERS`, `SEPARATOR`, (`ROOT`, `ELEMENT` if we ever do XML output?)
   - Literals (Phase 1 subset): `Int(i64)`, `Float(f64)`, `String(String)` (no `Bool` token; booleans come from `TRUE`/`FALSE` keywords, converted to `Literal(Value::Bool(...))` by the parser)
     - Future literals (see `dsl.md`): record literals (`{ id: 123, name: "John" }`; unquoted keys), JSON object literals (`{ "id": 123 }`; quoted keys), array literals (`[1, 2, 3]`), regex literals (`/pattern/`), template strings with interpolation (`"Hello {name}"`), range literals (`1..10`)
@@ -99,8 +99,8 @@ crates/rumps-query/
   - `my-var` (no spaces) = identifier
   - `a - b` (spaces) = subtraction
 - [x] Implement keyword recognition:
-  - Case-insensitive (`SET` = `set` = `Set`)
-  - No abbreviations; full keyword names only (no `S` for `SET`, etc.)
+  - Case-insensitive (`$SET` = `set` = `Set`)
+  - No abbreviations; full keyword names only (no `S` for `$SET`, etc.)
 - [x] Implement operator tokenization (handle multi-char: `==`, `!=`, `>=`, `<=`, `++`, `&&`, `||`)
 
 ### 5. AST Definition
@@ -128,7 +128,7 @@ Uses **arena allocation** with indices instead of `Box<Expr>` for cache-friendli
 - [x] Define `Expr` enum (references use `ExprId`):
   - `Literal(Value)`
   - `Local(String)` (local variable)
-  - `Global(String, SmallVec<[ExprId; 4]>)` (global with subscripts; requires explicit `GET` to read, e.g. `GET ^PATIENT(123)`)
+  - `Global(String, SmallVec<[ExprId; 4]>)` (global with subscripts; requires explicit `$GET` to read, e.g. `$GET ^PATIENT(123)`)
   - `Binary(ExprId, BinOp, ExprId)`
   - `Unary(UnOp, ExprId)`
   - `Call(String, SmallVec<[ExprId; 4]>)` (function call; most have 0-4 args)
@@ -257,7 +257,7 @@ Uses **arena allocation** (like the AST) for cache efficiency and to avoid `Box`
 
 ### 8. Environment
 
-The `Environment` tracks lexical scope for `LET` bindings and callable names. `SET` variables (both local and global) go through the `Database`.
+The `Environment` tracks lexical scope for `LET` bindings and callable names. `$SET` variables (both local and global) go through the `Database`.
 
 - [x] Define `Scopes` as a stack for lexical `LET` bindings:
   ```rust
@@ -278,7 +278,7 @@ The `Environment` tracks lexical scope for `LET` bindings and callable names. `S
   - `push(&mut self)` (enter nested scope)
   - `pop(&mut self)` (exit scope)
 - [x] Define `PrimFn` type (async fn pointer or enum)
-- [x] Register built-in primitives (Phase 1 subset: maybe just `GET` as a function?)
+- [x] Register built-in primitives (Phase 1 subset: maybe just `$GET` as a function?)
 - [x] Implement name lookup with scope chain (for nested scopes)
 
 ### 9. Interpreter
@@ -305,12 +305,12 @@ The `Environment` tracks lexical scope for `LET` bindings and callable names. `S
   ```
 - [x] Implement binary operations with type checking (ALL Phase 1 binary operations; see `ast::BinOp`)
   - **NOTE** Here is where we will do type coercions for numeric types; i.e. `<int> + <float>` requires coercion
-- [x] Implement basic `OUTPUT` (print to stdout; use `tokio::io::stdout` for consistency)
+- [x] Implement basic `$OUTPUT` (print to stdout; use `tokio::io::stdout` for consistency)
 - [x] Implement `LET` (sync; `env.scopes.bind(...)`)
-- [x] Implement `SET` for locals (async; `db.set(...)` with `Name::local` [`Database::set` will dispatch correctly])
-- [x] Implement `SET` for globals (async; requires `txn.set(...)`, i.e. active transaction;  error if not in transaction)
-- [x] Implement `GET` for locals (async; `db.get(...)` with `Name::local` [`Database::get` will dispatch correctly]; `eval_local` also checks LET scopes first)
-- [x] Implement `GET` for globals (async; `db.get(...)` or `txn.get(...)` [if there's an active transaction])
+- [x] Implement `$SET` for locals (async; `db.set(...)` with `Name::local` [`Database::set` will dispatch correctly])
+- [x] Implement `$SET` for globals (async; requires `txn.set(...)`, i.e. active transaction;  error if not in transaction)
+- [x] Implement `$GET` for locals (async; `db.get(...)` with `Name::local` [`Database::get` will dispatch correctly]; `eval_local` also checks LET scopes first)
+- [x] Implement `$GET` for globals (async; `db.get(...)` or `txn.get(...)` [if there's an active transaction])
 
 ### 10. Integration Tests
 - [x] Test essentially everything supported in current interpreter implementation
@@ -408,7 +408,7 @@ enum TypeExpr {
 }
 ```
 
-**No `Value::None`**: Instead of a special `None` primitive, we use `Option.None` represented as `Tagged(TypeId::OPTION, 0, [])`. This is consistent with `Option` being a proper sum type. `GET(...)` returns `Option.Some(v)` or `Option.None`; `??` operates on `Option` types.
+**No `Value::None`**: Instead of a special `None` primitive, we use `Option.None` represented as `Tagged(TypeId::OPTION, 0, [])`. This is consistent with `Option` being a proper sum type. `$GET(...)` returns `Option.Some(v)` or `Option.None`; `??` operates on `Option` types.
 
 **Reserved `TypeId` constants**: `TypeId::OPTION` (6) and `TypeId::RESULT` (7) are compile-time constants. Builtins are registered in a fixed order (Bool, Int, Float, String, Array, Object, Option, Result), and `TypeRegistry::new()` validates the indices match. This avoids storing `Option<TypeId>` fields and simplifies `Value::none()`, `Value::some(v)`, etc., which can use the constants directly without needing a registry reference.
 
@@ -448,7 +448,7 @@ This means:
 
 Even locals use async methods (`db.set_local(...)`, `db.get_local(...)`), so nearly everything in the interpreter is async. Only pure computations (arithmetic, string ops) are truly sync, but wrapped in async for uniformity.
 
-**Why locals are async too**: Locals support full subscripting (`SET x(1,2,3) = "value"`), making them tree-structured just like globals. They use the same B-tree implementation (in-memory only, not persisted), which is inherently async. Distinguishing "simple" locals (`SET x = 1`) from subscripted locals would add interpreter complexity for marginal gain; the real bottleneck in a query language is disk I/O for globals, not async overhead on immediately-ready futures.
+**Why locals are async too**: Locals support full subscripting (`$SET x(1,2,3) = "value"`), making them tree-structured just like globals. They use the same B-tree implementation (in-memory only, not persisted), which is inherently async. Distinguishing "simple" locals (`$SET x = 1`) from subscripted locals would add interpreter complexity for marginal gain; the real bottleneck in a query language is disk I/O for globals, not async overhead on immediately-ready futures.
 
 ### Train-Case Handling
 The lexer needs to be whitespace-aware for `-`:
@@ -458,7 +458,7 @@ The lexer needs to be whitespace-aware for `-`:
 Rule: `-` followed immediately by `[a-zA-Z]` is part of an identifier.
 
 ### Case Sensitivity
-- **Keywords**: Case-insensitive (`SET` = `set` = `Set`)
+- **Keywords**: Case-insensitive (`$SET` = `set` = `Set`)
 - **Identifiers**: Case-sensitive (`myVar` != `MyVar`)
 
 ### Statement Termination and Indentation
@@ -467,8 +467,8 @@ Rule: `-` followed immediately by `[a-zA-Z]` is part of an identifier.
 
 ```rumps
 TRANSACTION {
-  SET ^P(123) = 1   ; newline terminates this statement
-  SET ^X(321) = 2   ; newline terminates this statement
+  $SET ^P(123) = 1   ; newline terminates this statement
+  $SET ^X(321) = 2   ; newline terminates this statement
 }
 ```
 
@@ -480,7 +480,7 @@ TRANSACTION {
 COLLECT ^DATA
   WHERE key[0] > 100    ; Indent emitted before WHERE (continuation)
   SELECT value          ; Same indent level, no extra token
-  OUTPUT                ; Same indent level
+  $OUTPUT                ; Same indent level
                         ; Dedent emitted when returning to base level
 ```
 
@@ -508,17 +508,17 @@ The following program should work:
 LET x = 10
 LET y = 20
 LET sum = x + y
-OUTPUT sum
+$OUTPUT sum
 
-; SET for B-tree locals (async, subscriptable)
-SET z = 100
-SET z(1, "ABC") = 30
+; $SET for B-tree locals (async, subscriptable)
+$SET z = 100
+$SET z(1, "ABC") = 30
 
 ; Comparison and branching
 IF sum > 25 {
-  OUTPUT "Large sum"
+  $OUTPUT "Large sum"
 } ELSE {
-  OUTPUT "Small sum"
+  $OUTPUT "Small sum"
 }
 ```
 

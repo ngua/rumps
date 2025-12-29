@@ -2,4 +2,4 @@
 ; `(x,)` is a tuple (due to trailing comma), so `(x,) : T` is invalid
 
 LET x = (42,) : Int
-OUTPUT x
+$OUTPUT x

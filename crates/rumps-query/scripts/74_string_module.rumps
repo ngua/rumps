@@ -4,185 +4,185 @@
 
 ; ============ String.length ============
 
-OUTPUT String.length("hello")  ; 5
+$OUTPUT String.length("hello")  ; 5
 
 LET empty-str = ""
-OUTPUT String.length(empty-str)  ; 0
+$OUTPUT String.length(empty-str)  ; 0
 
 LET single-char = "x"
-OUTPUT String.length(single-char)  ; 1
+$OUTPUT String.length(single-char)  ; 1
 
 LET with-spaces = "hello world"
-OUTPUT String.length(with-spaces)  ; 11
+$OUTPUT String.length(with-spaces)  ; 11
 
 ; ============ String.upper ============
 
-OUTPUT String.upper("hello")  ; "HELLO"
+$OUTPUT String.upper("hello")  ; "HELLO"
 
 LET mixed-case = "Hello World"
-OUTPUT String.upper(mixed-case)  ; "HELLO WORLD"
+$OUTPUT String.upper(mixed-case)  ; "HELLO WORLD"
 
-OUTPUT String.upper("ALREADY UPPER")  ; "ALREADY UPPER"
+$OUTPUT String.upper("ALREADY UPPER")  ; "ALREADY UPPER"
 
-OUTPUT String.upper("")  ; ""
+$OUTPUT String.upper("")  ; ""
 
 LET with-nums = "abc123"
-OUTPUT String.upper(with-nums)  ; "ABC123"
+$OUTPUT String.upper(with-nums)  ; "ABC123"
 
 ; ============ String.lower ============
 
-OUTPUT String.lower("HELLO")  ; "hello"
+$OUTPUT String.lower("HELLO")  ; "hello"
 
 LET upper-mixed = "Hello World"
-OUTPUT String.lower(upper-mixed)  ; "hello world"
+$OUTPUT String.lower(upper-mixed)  ; "hello world"
 
-OUTPUT String.lower("already lower")  ; "already lower"
+$OUTPUT String.lower("already lower")  ; "already lower"
 
-OUTPUT String.lower("")  ; ""
+$OUTPUT String.lower("")  ; ""
 
 LET lower-nums = "ABC123"
-OUTPUT String.lower(lower-nums)  ; "abc123"
+$OUTPUT String.lower(lower-nums)  ; "abc123"
 
 ; ============ String.trim ============
 
-OUTPUT String.trim("  hello  ")  ; "hello"
+$OUTPUT String.trim("  hello  ")  ; "hello"
 
 LET leading-space = "   world"
-OUTPUT String.trim(leading-space)  ; "world"
+$OUTPUT String.trim(leading-space)  ; "world"
 
 LET trailing-space = "hello   "
-OUTPUT String.trim(trailing-space)  ; "hello"
+$OUTPUT String.trim(trailing-space)  ; "hello"
 
-OUTPUT String.trim("no spaces")  ; "no spaces"
+$OUTPUT String.trim("no spaces")  ; "no spaces"
 
-OUTPUT String.trim("")  ; ""
+$OUTPUT String.trim("")  ; ""
 
 LET only-spaces = "     "
-OUTPUT String.trim(only-spaces)  ; ""
+$OUTPUT String.trim(only-spaces)  ; ""
 
 ; ============ String.split ============
 
 LET csv = "a,b,c"
 LET parts = String.split(csv, ",")
-OUTPUT parts  ; ["a", "b", "c"]
+$OUTPUT parts  ; ["a", "b", "c"]
 
 ; Split on space
 LET sentence = "hello world foo"
 LET words = String.split(sentence, " ")
-OUTPUT words  ; ["hello", "world", "foo"]
+$OUTPUT words  ; ["hello", "world", "foo"]
 
 ; Split on multi-char delimiter
 LET multi-delim = "foo::bar::baz"
 LET multi-parts = String.split(multi-delim, "::")
-OUTPUT multi-parts  ; ["foo", "bar", "baz"]
+$OUTPUT multi-parts  ; ["foo", "bar", "baz"]
 
 ; Split with no delimiter found
 LET no-match = String.split("hello", ",")
-OUTPUT no-match  ; ["hello"]
+$OUTPUT no-match  ; ["hello"]
 
 ; Split empty string
 LET split-empty = String.split("", ",")
-OUTPUT split-empty  ; [""]
+$OUTPUT split-empty  ; [""]
 
 ; Split on empty delimiter (splits every char)
 LET split-chars = String.split("abc", "")
-OUTPUT split-chars  ; ["", "a", "b", "c", ""]
+$OUTPUT split-chars  ; ["", "a", "b", "c", ""]
 
 ; ============ String.join ============
 
 LET join-arr = ["a", "b", "c"]
 LET joined = String.join(join-arr, ",")
-OUTPUT joined  ; "a,b,c"
+$OUTPUT joined  ; "a,b,c"
 
 ; Join with space
 LET join-words = ["hello", "world"]
 LET joined-words = String.join(join-words, " ")
-OUTPUT joined-words  ; "hello world"
+$OUTPUT joined-words  ; "hello world"
 
 ; Join with empty delimiter
 LET join-no-sep = String.join(["a", "b", "c"], "")
-OUTPUT join-no-sep  ; "abc"
+$OUTPUT join-no-sep  ; "abc"
 
 ; Join single element
 LET join-single = String.join(["alone"], ",")
-OUTPUT join-single  ; "alone"
+$OUTPUT join-single  ; "alone"
 
 ; Join empty array
 LET join-empty = String.join([], ",")
-OUTPUT join-empty  ; ""
+$OUTPUT join-empty  ; ""
 
 ; ============ String.slice ============
 
 LET slice-str = "hello world"
-OUTPUT String.slice(slice-str, 0, 5)  ; "hello"
-OUTPUT String.slice(slice-str, 6, 11)  ; "world"
+$OUTPUT String.slice(slice-str, 0, 5)  ; "hello"
+$OUTPUT String.slice(slice-str, 6, 11)  ; "world"
 
 ; Slice middle
-OUTPUT String.slice(slice-str, 3, 8)  ; "lo wo"
+$OUTPUT String.slice(slice-str, 3, 8)  ; "lo wo"
 
 ; Slice empty range
-OUTPUT String.slice(slice-str, 5, 5)  ; ""
+$OUTPUT String.slice(slice-str, 5, 5)  ; ""
 
 ; Slice with clamped bounds
-OUTPUT String.slice("abc", 0, 100)  ; "abc"
-OUTPUT String.slice("abc", -5, 2)  ; "ab"
+$OUTPUT String.slice("abc", 0, 100)  ; "abc"
+$OUTPUT String.slice("abc", -5, 2)  ; "ab"
 
 ; Slice from start
-OUTPUT String.slice("hello", 0, 3)  ; "hel"
+$OUTPUT String.slice("hello", 0, 3)  ; "hel"
 
 ; ============ String.contains ============
 
 LET haystack = "hello world"
-OUTPUT String.contains(haystack, "wor")  ; true
-OUTPUT String.contains(haystack, "xyz")  ; false
-OUTPUT String.contains(haystack, "hello")  ; true
-OUTPUT String.contains(haystack, "world")  ; true
+$OUTPUT String.contains(haystack, "wor")  ; true
+$OUTPUT String.contains(haystack, "xyz")  ; false
+$OUTPUT String.contains(haystack, "hello")  ; true
+$OUTPUT String.contains(haystack, "world")  ; true
 
 ; Contains empty string (always true)
-OUTPUT String.contains("hello", "")  ; true
+$OUTPUT String.contains("hello", "")  ; true
 
 ; Contains itself
-OUTPUT String.contains("abc", "abc")  ; true
+$OUTPUT String.contains("abc", "abc")  ; true
 
 ; Contains in empty string
-OUTPUT String.contains("", "x")  ; false
-OUTPUT String.contains("", "")  ; true
+$OUTPUT String.contains("", "x")  ; false
+$OUTPUT String.contains("", "")  ; true
 
 ; ============ String.replace ============
 
-OUTPUT String.replace("foo", "o", "a")  ; "faa"
+$OUTPUT String.replace("foo", "o", "a")  ; "faa"
 
 LET banana = "banana"
-OUTPUT String.replace(banana, "a", "o")  ; "bonono"
+$OUTPUT String.replace(banana, "a", "o")  ; "bonono"
 
 ; Replace substring
 LET greeting = "hello world"
-OUTPUT String.replace(greeting, "world", "there")  ; "hello there"
+$OUTPUT String.replace(greeting, "world", "there")  ; "hello there"
 
 ; Replace not found
-OUTPUT String.replace("hello", "x", "y")  ; "hello"
+$OUTPUT String.replace("hello", "x", "y")  ; "hello"
 
 ; Replace with empty
-OUTPUT String.replace("hello", "l", "")  ; "heo"
+$OUTPUT String.replace("hello", "l", "")  ; "heo"
 
 ; Replace empty pattern (inserts between chars)
-OUTPUT String.replace("ab", "", "-")  ; "-a-b-"
+$OUTPUT String.replace("ab", "", "-")  ; "-a-b-"
 
 ; ============ Chaining operations ============
 
 ; Upper then slice
 LET chain-str = "hello world"
 LET chain-upper = String.slice(String.upper(chain-str), 0, 5)
-OUTPUT chain-upper  ; "HELLO"
+$OUTPUT chain-upper  ; "HELLO"
 
 ; Trim then split
 LET messy = "  a,b,c  "
 LET clean-parts = String.split(String.trim(messy), ",")
-OUTPUT clean-parts  ; ["a", "b", "c"]
+$OUTPUT clean-parts  ; ["a", "b", "c"]
 
 ; Split then join with different separator
 LET csv-to-tabs = String.join(String.split("a,b,c", ","), "\t")
-OUTPUT csv-to-tabs  ; "a	b	c"
+$OUTPUT csv-to-tabs  ; "a	b	c"
 
 ; ============ Pipeline usage ============
 
@@ -190,9 +190,9 @@ LET pipeline-str = "  HELLO WORLD  "
 LET pipeline-result = pipeline-str
   |> String.trim
   |> String.lower
-OUTPUT pipeline-result  ; "hello world"
+$OUTPUT pipeline-result  ; "hello world"
 
 LET pipeline-words = "apple,banana,cherry"
   |> (s => String.split(s, ","))
   |> (arr => String.join(arr, " - "))
-OUTPUT pipeline-words  ; "apple - banana - cherry"
+$OUTPUT pipeline-words  ; "apple - banana - cherry"

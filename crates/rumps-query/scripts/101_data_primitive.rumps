@@ -1,34 +1,34 @@
-; DATA primitive tests
+; $DATA primitive tests
 ; NOTE: Uses locals only; globals require TRANSACTION blocks
 
 ; === Setup: create test data ===
 
-SET vars(1) = "value at 1"
-SET vars(1, "A") = "value at 1,A"
-SET vars(2, "B", "C") = "deep value"
+$SET vars(1) = "value at 1"
+$SET vars(1, "A") = "value at 1,A"
+$SET vars(2, "B", "C") = "deep value"
 
-; === DATA on non-existent key ===
+; === $DATA on non-existent key ===
 
-LET status0 = DATA vars(999)
-OUTPUT status0
+LET status0 = $DATA vars(999)
+$OUTPUT status0
 
-; === DATA on key with value only ===
+; === $DATA on key with value only ===
 
 ; Key (1, "A") has value but no descendants
-LET status1 = DATA vars(1, "A")
-OUTPUT status1
+LET status1 = $DATA vars(1, "A")
+$OUTPUT status1
 
-; === DATA on key with descendants only ===
+; === $DATA on key with descendants only ===
 
 ; Key (2) has no value but has descendants at (2, "B", ...)
-LET status2 = DATA vars(2)
-OUTPUT status2
+LET status2 = $DATA vars(2)
+$OUTPUT status2
 
-; === DATA on key with both value and descendants ===
+; === $DATA on key with both value and descendants ===
 
 ; Key (1) has value AND descendants at (1, "A")
-LET status3 = DATA vars(1)
-OUTPUT status3
+LET status3 = $DATA vars(1)
+$OUTPUT status3
 
 ; === Pattern matching on DataStatus ===
 
@@ -41,17 +41,17 @@ FUN describe(s: DataStatus) -> String {
   }
 }
 
-OUTPUT describe(DATA vars(999))
-OUTPUT describe(DATA vars(1, "A"))
-OUTPUT describe(DATA vars(2))
-OUTPUT describe(DATA vars(1))
+$OUTPUT describe($DATA vars(999))
+$OUTPUT describe($DATA vars(1, "A"))
+$OUTPUT describe($DATA vars(2))
+$OUTPUT describe($DATA vars(1))
 
-; === AS Int coercion (MUMPS $DATA values) ===
+; === AS Int coercion (MUMPS $$DATA values) ===
 
-OUTPUT (DATA vars(999)) AS Int
-OUTPUT (DATA vars(1, "A")) AS Int
-OUTPUT (DATA vars(2)) AS Int
-OUTPUT (DATA vars(1)) AS Int
+$OUTPUT ($DATA vars(999)) AS Int
+$OUTPUT ($DATA vars(1, "A")) AS Int
+$OUTPUT ($DATA vars(2)) AS Int
+$OUTPUT ($DATA vars(1)) AS Int
 
 ; === DataStatus in expressions ===
 
@@ -59,24 +59,24 @@ FUN has-data(s: DataStatus) -> Bool {
   (s AS Int) > 0
 }
 
-OUTPUT has-data(DATA vars(999))
-OUTPUT has-data(DATA vars(1))
+$OUTPUT has-data($DATA vars(999))
+$OUTPUT has-data($DATA vars(1))
 
 ; === Type annotation ===
 
-LET typed: DataStatus = DATA vars(1)
-OUTPUT typed
+LET typed: DataStatus = $DATA vars(1)
+$OUTPUT typed
 
 ; === DataStatus in arrays ===
 
 LET statuses: Array[DataStatus] = [
-  DATA vars(999),
-  DATA vars(1, "A"),
-  DATA vars(2),
-  DATA vars(1)
+  $DATA vars(999),
+  $DATA vars(1, "A"),
+  $DATA vars(2),
+  $DATA vars(1)
 ]
-OUTPUT Array.length(statuses)
-OUTPUT Array.map(describe, statuses)
+$OUTPUT Array.length(statuses)
+$OUTPUT Array.map(describe, statuses)
 
 ; === READ DataStatus from Int ===
 
@@ -86,8 +86,8 @@ LET from10 = 10 READ DataStatus
 LET from11 = 11 READ DataStatus
 LET invalid = 5 READ DataStatus
 
-OUTPUT from0
-OUTPUT from1
-OUTPUT from10
-OUTPUT from11
-OUTPUT invalid
+$OUTPUT from0
+$OUTPUT from1
+$OUTPUT from10
+$OUTPUT from11
+$OUTPUT invalid

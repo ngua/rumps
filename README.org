@@ -143,9 +143,9 @@ These concepts are borrowed from MUMPS; where RUMPS differs explicitly from MUMP
 In most languages, a "variable" is a name bound to a single value. In RUMPS, a variable is a /name bound to an entire tree/. The name (=^PATIENT= or =TEMP=) identifies the tree root; subscripts (=(123, "NAME")=) navigate to /nodes/ within it. A variable can be bound at the root node or any arbitrary key path under it. Using the query language syntax:
 
 #+begin_src rumps
-SET ^P = "root"              ; value at root node (empty path)
-SET ^P(1) = "child"          ; value at node [1]
-SET ^P(1,"A") = "deeper"     ; value at node [1, "A"]
+$SET ^P = "root"              ; value at root node (empty path)
+$SET ^P(1) = "child"          ; value at node [1]
+$SET ^P(1,"A") = "deeper"     ; value at node [1, "A"]
 #+end_src
 
 All three are "the variable =^P=", i.e. nodes in the same tree. A node can hold a value /and/ have children simultaneously (=^P(1)= stores ="child"= while =^P(1,"A")= exists beneath it).
@@ -233,11 +233,11 @@ Because subscripts participate in /ordering and traversal/, we require this dist
 Another way to think about it: in a filesystem analogy, subscripts are like directory and file names (they form the path, or /key/), while values are like file contents (what's stored there).
 
 #+begin_src rumps
-SET ^PATIENT(1,"NAME") = "Alice"
+$SET ^PATIENT(1,"NAME") = "Alice"
 ;
-;            ^^^^^^^^    ^^^^^^^
-;            subscripts  value
-;            (the path)  (the data)
+;             ^^^^^^^^    ^^^^^^^
+;             subscripts  value
+;             (the path)  (the data)
 #+end_src
 *** Value types
 As noted above, nodes hold /values/. This is the actual data stored in the DB and has no bearing on traversal semantics.

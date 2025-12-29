@@ -4,76 +4,76 @@
 LET arr = [10, 20, 30, 40, 50]
 
 ; Positive indexing (0-based)
-OUTPUT arr[0]
+$OUTPUT arr[0]
 ; Expected: 10
 
-OUTPUT arr[1]
+$OUTPUT arr[1]
 ; Expected: 20
 
-OUTPUT arr[2]
+$OUTPUT arr[2]
 ; Expected: 30
 
-OUTPUT arr[3]
+$OUTPUT arr[3]
 ; Expected: 40
 
-OUTPUT arr[4]
+$OUTPUT arr[4]
 ; Expected: 50
 
 ; Negative indexing (from end)
-OUTPUT arr[-1]
+$OUTPUT arr[-1]
 ; Expected: 50 (last element)
 
-OUTPUT arr[-2]
+$OUTPUT arr[-2]
 ; Expected: 40 (second to last)
 
-OUTPUT arr[-3]
+$OUTPUT arr[-3]
 ; Expected: 30
 
-OUTPUT arr[-4]
+$OUTPUT arr[-4]
 ; Expected: 20
 
-OUTPUT arr[-5]
+$OUTPUT arr[-5]
 ; Expected: 10 (first element via negative)
 
 ; Index with expression
 LET idx = 2
-OUTPUT arr[idx]
+$OUTPUT arr[idx]
 ; Expected: 30
 
 LET neg-idx = -1
-OUTPUT arr[neg-idx]
+$OUTPUT arr[neg-idx]
 ; Expected: 50
 
 ; Index with arithmetic
-OUTPUT arr[1 + 1]
+$OUTPUT arr[1 + 1]
 ; Expected: 30 (arr[2])
 
-OUTPUT arr[5 - 3]
+$OUTPUT arr[5 - 3]
 ; Expected: 30 (arr[2])
 
 ; Nested array indexing
 LET matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
-OUTPUT matrix[0][0]
+$OUTPUT matrix[0][0]
 ; Expected: 1
 
-OUTPUT matrix[1][1]
+$OUTPUT matrix[1][1]
 ; Expected: 5
 
-OUTPUT matrix[2][2]
+$OUTPUT matrix[2][2]
 ; Expected: 9
 
-OUTPUT matrix[-1][-1]
+$OUTPUT matrix[-1][-1]
 ; Expected: 9 (last row, last col)
 
-OUTPUT matrix[0][-1]
+$OUTPUT matrix[0][-1]
 ; Expected: 3 (first row, last col)
 
 ; Single element array
 LET single = [42]
-OUTPUT single[0]
+$OUTPUT single[0]
 ; Expected: 42
 
-OUTPUT single[-1]
+$OUTPUT single[-1]
 ; Expected: 42
 
-OUTPUT "Array indexing test complete"
+$OUTPUT "Array indexing test complete"

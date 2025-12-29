@@ -1,45 +1,45 @@
-; Test: SET locals (B-tree variables)
-; Tests SET for local variables with subscripts
+; Test: $SET locals (B-tree variables)
+; Tests $SET for local variables with subscripts
 
-; Simple SET without subscripts
-SET x = 100
-OUTPUT GET x
+; Simple $SET without subscripts
+$SET x = 100
+$OUTPUT $GET x
 ; Expected: 100
 
-SET x = 200
-OUTPUT GET x
+$SET x = 200
+$OUTPUT $GET x
 ; Expected: 200
 
-; SET with single subscript
-SET items(1) = "first"
-SET items(2) = "second"
-SET items(3) = "third"
+; $SET with single subscript
+$SET items(1) = "first"
+$SET items(2) = "second"
+$SET items(3) = "third"
 
-; SET with multiple subscripts
-SET patient(123, "name") = "John Doe"
-SET patient(123, "age") = 45
-SET patient(123, "active") = TRUE
+; $SET with multiple subscripts
+$SET patient(123, "name") = "John Doe"
+$SET patient(123, "age") = 45
+$SET patient(123, "active") = TRUE
 
-SET patient(456, "name") = "Jane Smith"
-SET patient(456, "age") = 32
-SET patient(456, "active") = FALSE
+$SET patient(456, "name") = "Jane Smith"
+$SET patient(456, "age") = 32
+$SET patient(456, "active") = FALSE
 
 ; Nested subscripts
-SET tree(1, 2, 3) = "deep"
-SET tree(1, 2, 4) = "also deep"
+$SET tree(1, 2, 3) = "deep"
+$SET tree(1, 2, 4) = "also deep"
 
 ; Mixed subscript types
-SET mixed("key", 42, TRUE) = "mixed types"
+$SET mixed("key", 42, TRUE) = "mixed types"
 
 ; Numeric subscripts
-SET arr(0) = "zero"
-SET arr(1) = "one"
-SET arr(10) = "ten"
-SET arr(100) = "hundred"
+$SET arr(0) = "zero"
+$SET arr(1) = "one"
+$SET arr(10) = "ten"
+$SET arr(100) = "hundred"
 
 ; String subscripts
-SET dict("alpha") = 1
-SET dict("beta") = 2
-SET dict("gamma") = 3
+$SET dict("alpha") = 1
+$SET dict("beta") = 2
+$SET dict("gamma") = 3
 
-OUTPUT "SET locals test complete"
+$OUTPUT "$SET locals test complete"

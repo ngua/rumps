@@ -113,8 +113,11 @@ pub(crate) enum Token {
 impl Token {
     /// Returns the keyword token for a given identifier, if it matches.
     ///
-    /// Most keywords are case-insensitive (e.g., `SET`, `set`, `SeT`).
+    /// Keywords are case-insensitive (e.g., `LET`, `let`, `Let`).
     /// Exception: `null` is case-sensitive (JSON literal).
+    ///
+    /// Note: MUMPS intrinsics (`$SET`, `$GET`, etc.) are handled by
+    /// [`Token::intrinsic`] instead.
     pub(crate) fn keyword(s: &str) -> Option<Self> {
         // `null` is case-sensitive (JSON requires lowercase)
         if s == "null" {
@@ -123,10 +126,6 @@ impl Token {
             // All other keywords are case-insensitive
             match s.to_ascii_uppercase().as_str() {
                 "LET" => Some(Self::Let),
-                "SET" => Some(Self::Set),
-                "GET" => Some(Self::Get),
-                "KILL" => Some(Self::Kill),
-                "OUTPUT" => Some(Self::Output),
                 "IF" => Some(Self::If),
                 "ELSE" => Some(Self::Else),
                 "IS" => Some(Self::Is),
@@ -143,12 +142,26 @@ impl Token {
                 "MATCHES" => Some(Self::Matches),
                 "UNION" => Some(Self::Union),
                 "MODULE" => Some(Self::Module),
-                "DATA" => Some(Self::Data),
-                "ORDER" => Some(Self::Order),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
             }
+        }
+    }
+
+    /// Returns the token for a MUMPS intrinsic (prefixed with `$`).
+    ///
+    /// Case-insensitive (e.g., `$SET`, `$set`, `$Set` all work).
+    /// The `$` prefix is already stripped by the lexer.
+    pub(crate) fn intrinsic(s: &str) -> Option<Self> {
+        match s.to_ascii_uppercase().as_str() {
+            "SET" => Some(Self::Set),
+            "GET" => Some(Self::Get),
+            "KILL" => Some(Self::Kill),
+            "OUTPUT" => Some(Self::Output),
+            "DATA" => Some(Self::Data),
+            "ORDER" => Some(Self::Order),
+            _ => None,
         }
     }
 }
@@ -156,11 +169,8 @@ impl Token {
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            // Keywords
             Self::Let => write!(f, "LET"),
-            Self::Set => write!(f, "SET"),
-            Self::Get => write!(f, "GET"),
-            Self::Kill => write!(f, "KILL"),
-            Self::Output => write!(f, "OUTPUT"),
             Self::If => write!(f, "IF"),
             Self::Else => write!(f, "ELSE"),
             Self::Is => write!(f, "IS"),
@@ -177,8 +187,13 @@ impl fmt::Display for Token {
             Self::Matches => write!(f, "MATCHES"),
             Self::Union => write!(f, "UNION"),
             Self::Module => write!(f, "MODULE"),
-            Self::Data => write!(f, "DATA"),
-            Self::Order => write!(f, "ORDER"),
+            // MUMPS intrinsics (prefixed with `$`)
+            Self::Set => write!(f, "$SET"),
+            Self::Get => write!(f, "$GET"),
+            Self::Kill => write!(f, "$KILL"),
+            Self::Output => write!(f, "$OUTPUT"),
+            Self::Data => write!(f, "$DATA"),
+            Self::Order => write!(f, "$ORDER"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),
@@ -240,25 +255,25 @@ mod tests {
 
     #[test]
     fn keyword_case_insensitive() {
-        assert_eq!(Token::keyword("SET"), Some(Token::Set));
-        assert_eq!(Token::keyword("set"), Some(Token::Set));
-        assert_eq!(Token::keyword("Set"), Some(Token::Set));
-        assert_eq!(Token::keyword("sEt"), Some(Token::Set));
+        assert_eq!(Token::keyword("LET"), Some(Token::Let));
+        assert_eq!(Token::keyword("let"), Some(Token::Let));
+        assert_eq!(Token::keyword("Let"), Some(Token::Let));
+        assert_eq!(Token::keyword("lEt"), Some(Token::Let));
     }
 
     #[test]
     fn keyword_not_found() {
         assert_eq!(Token::keyword("foo"), None);
-        assert_eq!(Token::keyword("SETS"), None);
+        assert_eq!(Token::keyword("LETS"), None);
+        // MUMPS intrinsics are NOT keywords (need `$` prefix)
+        assert_eq!(Token::keyword("SET"), None);
+        assert_eq!(Token::keyword("GET"), None);
+        assert_eq!(Token::keyword("OUTPUT"), None);
     }
 
     #[test]
     fn all_keywords() {
         assert_eq!(Token::keyword("LET"), Some(Token::Let));
-        assert_eq!(Token::keyword("SET"), Some(Token::Set));
-        assert_eq!(Token::keyword("GET"), Some(Token::Get));
-        assert_eq!(Token::keyword("KILL"), Some(Token::Kill));
-        assert_eq!(Token::keyword("OUTPUT"), Some(Token::Output));
         assert_eq!(Token::keyword("IF"), Some(Token::If));
         assert_eq!(Token::keyword("ELSE"), Some(Token::Else));
         assert_eq!(Token::keyword("IS"), Some(Token::Is));
@@ -271,10 +286,39 @@ mod tests {
         assert_eq!(Token::keyword("FALSE"), Some(Token::False));
         assert_eq!(Token::keyword("FUN"), Some(Token::Fun));
         assert_eq!(Token::keyword("MATCH"), Some(Token::Match));
+        assert_eq!(Token::keyword("MATCHES"), Some(Token::Matches));
         assert_eq!(Token::keyword("UNION"), Some(Token::Union));
         assert_eq!(Token::keyword("MODULE"), Some(Token::Module));
+        assert_eq!(Token::keyword("TYPE"), Some(Token::Type));
         // Case-sensitive: null
         assert_eq!(Token::keyword("null"), Some(Token::Null));
+    }
+
+    #[test]
+    fn intrinsic_case_insensitive() {
+        assert_eq!(Token::intrinsic("SET"), Some(Token::Set));
+        assert_eq!(Token::intrinsic("set"), Some(Token::Set));
+        assert_eq!(Token::intrinsic("Set"), Some(Token::Set));
+        assert_eq!(Token::intrinsic("sEt"), Some(Token::Set));
+    }
+
+    #[test]
+    fn all_intrinsics() {
+        assert_eq!(Token::intrinsic("SET"), Some(Token::Set));
+        assert_eq!(Token::intrinsic("GET"), Some(Token::Get));
+        assert_eq!(Token::intrinsic("KILL"), Some(Token::Kill));
+        assert_eq!(Token::intrinsic("OUTPUT"), Some(Token::Output));
+        assert_eq!(Token::intrinsic("DATA"), Some(Token::Data));
+        assert_eq!(Token::intrinsic("ORDER"), Some(Token::Order));
+        // READ is a keyword, not an intrinsic
+        assert_eq!(Token::intrinsic("READ"), None);
+    }
+
+    #[test]
+    fn intrinsic_not_found() {
+        assert_eq!(Token::intrinsic("foo"), None);
+        assert_eq!(Token::intrinsic("LET"), None);
+        assert_eq!(Token::intrinsic("IF"), None);
     }
 
     #[test]
@@ -287,7 +331,17 @@ mod tests {
 
     #[test]
     fn display_tokens() {
-        assert_eq!(Token::Set.to_string(), "SET");
+        // MUMPS intrinsics display with `$` prefix
+        assert_eq!(Token::Set.to_string(), "$SET");
+        assert_eq!(Token::Get.to_string(), "$GET");
+        assert_eq!(Token::Kill.to_string(), "$KILL");
+        assert_eq!(Token::Output.to_string(), "$OUTPUT");
+        assert_eq!(Token::Data.to_string(), "$DATA");
+        assert_eq!(Token::Order.to_string(), "$ORDER");
+        // Keywords display without prefix
+        assert_eq!(Token::Let.to_string(), "LET");
+        assert_eq!(Token::Read.to_string(), "READ");
+        // Other tokens
         assert_eq!(Token::Int(42).to_string(), "42");
         assert_eq!(Token::Float(OrderedFloat(3.14)).to_string(), "3.14");
         assert_eq!(Token::String("hello".into()).to_string(), "\"hello\"");

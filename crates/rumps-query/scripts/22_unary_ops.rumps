@@ -4,98 +4,98 @@
 ; === Numeric Negation ===
 
 ; Negate integer
-OUTPUT -5
+$OUTPUT -5
 ; Expected: -5
 
-OUTPUT -0
+$OUTPUT -0
 ; Expected: 0
 
-OUTPUT -(-5)
+$OUTPUT -(-5)
 ; Expected: 5
 
 ; Negate float
-OUTPUT -3.14
+$OUTPUT -3.14
 ; Expected: -3.14
 
-OUTPUT -0.0
+$OUTPUT -0.0
 ; Expected: -0.0 (or 0.0)
 
-OUTPUT -(-2.5)
+$OUTPUT -(-2.5)
 ; Expected: 2.5
 
 ; Negate variable
 LET x = 42
-OUTPUT -x
+$OUTPUT -x
 ; Expected: -42
 
 LET y = -10
-OUTPUT -y
+$OUTPUT -y
 ; Expected: 10
 
 ; Negate expression
-OUTPUT -(5 + 3)
+$OUTPUT -(5 + 3)
 ; Expected: -8
 
-OUTPUT -(10 - 15)
+$OUTPUT -(10 - 15)
 ; Expected: 5
 
 ; Negate in larger expression
-OUTPUT 10 + -3
+$OUTPUT 10 + -3
 ; Expected: 7
 
-OUTPUT 10 - -5
+$OUTPUT 10 - -5
 ; Expected: 15
 
-OUTPUT -5 * 2
+$OUTPUT -5 * 2
 ; Expected: -10
 
-OUTPUT -5 * -2
+$OUTPUT -5 * -2
 ; Expected: 10
 
 ; === Logical NOT ===
 
-OUTPUT NOT TRUE
+$OUTPUT NOT TRUE
 ; Expected: FALSE
 
-OUTPUT NOT FALSE
+$OUTPUT NOT FALSE
 ; Expected: TRUE
 
-OUTPUT !TRUE
+$OUTPUT !TRUE
 ; Expected: FALSE
 
-OUTPUT !FALSE
+$OUTPUT !FALSE
 ; Expected: TRUE
 
 ; NOT with variable
 LET flag = TRUE
-OUTPUT NOT flag
+$OUTPUT NOT flag
 ; Expected: FALSE
 
-OUTPUT !flag
+$OUTPUT !flag
 ; Expected: FALSE
 
 ; Double NOT
-OUTPUT NOT NOT TRUE
+$OUTPUT NOT NOT TRUE
 ; Expected: TRUE
 
-OUTPUT !!FALSE
+$OUTPUT !!FALSE
 ; Expected: FALSE
 
 ; NOT in expression
-OUTPUT NOT (5 > 10)
+$OUTPUT NOT (5 > 10)
 ; Expected: TRUE
 
-OUTPUT !(3 == 4)
+$OUTPUT !(3 == 4)
 ; Expected: TRUE
 
 ; NOT with AND/OR
-OUTPUT NOT TRUE AND FALSE
+$OUTPUT NOT TRUE AND FALSE
 ; Expected: FALSE (NOT binds tighter: (NOT TRUE) AND FALSE = FALSE AND FALSE)
 
-OUTPUT NOT (TRUE AND FALSE)
+$OUTPUT NOT (TRUE AND FALSE)
 ; Expected: TRUE (NOT applied to result: NOT FALSE = TRUE)
 
-OUTPUT NOT FALSE OR TRUE
+$OUTPUT NOT FALSE OR TRUE
 ; Expected: TRUE ((NOT FALSE) OR TRUE = TRUE OR TRUE)
 
-OUTPUT "Unary ops test complete"
+$OUTPUT "Unary ops test complete"

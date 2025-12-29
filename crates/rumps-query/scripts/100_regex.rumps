@@ -4,109 +4,109 @@
 ; ============ Basic matching ============
 
 ; Simple pattern
-OUTPUT "hello" MATCHES /hello/  ; true
-OUTPUT "world" MATCHES /hello/  ; false
+$OUTPUT "hello" MATCHES /hello/  ; true
+$OUTPUT "world" MATCHES /hello/  ; false
 
 ; Partial match (regex finds pattern anywhere)
-OUTPUT "hello world" MATCHES /world/  ; true
-OUTPUT "say hello" MATCHES /hello/  ; true
+$OUTPUT "hello world" MATCHES /world/  ; true
+$OUTPUT "say hello" MATCHES /hello/  ; true
 
 ; ============ Character classes ============
 
 ; Digit matching
-OUTPUT "abc123" MATCHES /\d+/  ; true
-OUTPUT "abc" MATCHES /\d+/  ; false
+$OUTPUT "abc123" MATCHES /\d+/  ; true
+$OUTPUT "abc" MATCHES /\d+/  ; false
 
 ; Word characters
-OUTPUT "hello_world" MATCHES /\w+/  ; true
+$OUTPUT "hello_world" MATCHES /\w+/  ; true
 
 ; Whitespace
-OUTPUT "hello world" MATCHES /\s/  ; true
-OUTPUT "helloworld" MATCHES /\s/  ; false
+$OUTPUT "hello world" MATCHES /\s/  ; true
+$OUTPUT "helloworld" MATCHES /\s/  ; false
 
 ; ============ Anchors ============
 
 ; Start anchor
-OUTPUT "hello world" MATCHES /^hello/  ; true
-OUTPUT "say hello" MATCHES /^hello/  ; false
+$OUTPUT "hello world" MATCHES /^hello/  ; true
+$OUTPUT "say hello" MATCHES /^hello/  ; false
 
 ; End anchor
-OUTPUT "hello world" MATCHES /world$/  ; true
-OUTPUT "worldly" MATCHES /world$/  ; false
+$OUTPUT "hello world" MATCHES /world$/  ; true
+$OUTPUT "worldly" MATCHES /world$/  ; false
 
 ; Full match with both anchors
-OUTPUT "hello" MATCHES /^hello$/  ; true
-OUTPUT "hello world" MATCHES /^hello$/  ; false
+$OUTPUT "hello" MATCHES /^hello$/  ; true
+$OUTPUT "hello world" MATCHES /^hello$/  ; false
 
 ; ============ Quantifiers ============
 
 ; Zero or more
-OUTPUT "goood" MATCHES /go*d/  ; true
-OUTPUT "gd" MATCHES /go*d/  ; true
+$OUTPUT "goood" MATCHES /go*d/  ; true
+$OUTPUT "gd" MATCHES /go*d/  ; true
 
 ; One or more
-OUTPUT "goood" MATCHES /go+d/  ; true
-OUTPUT "gd" MATCHES /go+d/  ; false
+$OUTPUT "goood" MATCHES /go+d/  ; true
+$OUTPUT "gd" MATCHES /go+d/  ; false
 
 ; Optional
-OUTPUT "color" MATCHES /colou?r/  ; true
-OUTPUT "colour" MATCHES /colou?r/  ; true
+$OUTPUT "color" MATCHES /colou?r/  ; true
+$OUTPUT "colour" MATCHES /colou?r/  ; true
 
 ; ============ Alternation ============
 
-OUTPUT "cat" MATCHES /cat|dog/  ; true
-OUTPUT "dog" MATCHES /cat|dog/  ; true
-OUTPUT "bird" MATCHES /cat|dog/  ; false
+$OUTPUT "cat" MATCHES /cat|dog/  ; true
+$OUTPUT "dog" MATCHES /cat|dog/  ; true
+$OUTPUT "bird" MATCHES /cat|dog/  ; false
 
 ; ============ Groups ============
 
-OUTPUT "abab" MATCHES /(ab)+/  ; true
-OUTPUT "ab" MATCHES /(ab)+/  ; true
+$OUTPUT "abab" MATCHES /(ab)+/  ; true
+$OUTPUT "ab" MATCHES /(ab)+/  ; true
 
 ; ============ Stringable operand ============
 
 ; Integer (converts to string)
-OUTPUT 123 MATCHES /\d+/  ; true
-OUTPUT 123 MATCHES /^123$/  ; true
+$OUTPUT 123 MATCHES /\d+/  ; true
+$OUTPUT 123 MATCHES /^123$/  ; true
 
 ; Float
-OUTPUT 3.14 MATCHES /3\.14/  ; true
+$OUTPUT 3.14 MATCHES /3\.14/  ; true
 
 ; Boolean
-OUTPUT true MATCHES /true/  ; true
-OUTPUT false MATCHES /false/  ; true
+$OUTPUT true MATCHES /true/  ; true
+$OUTPUT false MATCHES /false/  ; true
 
 ; ============ Variables ============
 
 LET text = "The quick brown fox"
 LET pat = /quick/
-OUTPUT text MATCHES pat  ; true
+$OUTPUT text MATCHES pat  ; true
 
 LET email-pattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
-OUTPUT "test@example.com" MATCHES email-pattern  ; true
-OUTPUT "invalid-email" MATCHES email-pattern  ; false
+$OUTPUT "test@example.com" MATCHES email-pattern  ; true
+$OUTPUT "invalid-email" MATCHES email-pattern  ; false
 
 ; ============ Case sensitivity ============
 
 ; Regex is case-sensitive by default
-OUTPUT "Hello" MATCHES /hello/  ; false
-OUTPUT "Hello" MATCHES /Hello/  ; true
+$OUTPUT "Hello" MATCHES /hello/  ; false
+$OUTPUT "Hello" MATCHES /Hello/  ; true
 
 ; ============ Special characters ============
 
 ; Escaped special chars
-OUTPUT "a.b" MATCHES /a\.b/  ; true
-OUTPUT "a*b" MATCHES /a\*b/  ; true
-OUTPUT "a+b" MATCHES /a\+b/  ; true
+$OUTPUT "a.b" MATCHES /a\.b/  ; true
+$OUTPUT "a*b" MATCHES /a\*b/  ; true
+$OUTPUT "a+b" MATCHES /a\+b/  ; true
 
 ; ============ Keyword case insensitivity ============
 
 ; MATCHES keyword is case-insensitive
-OUTPUT "hello" matches /hello/  ; true
-OUTPUT "hello" Matches /hello/  ; true
+$OUTPUT "hello" matches /hello/  ; true
+$OUTPUT "hello" Matches /hello/  ; true
 
 ; ============ Precedence ============
 
 ; MATCHES has lower precedence than comparison
 LET x = 5
-OUTPUT (x > 3) AND ("test" MATCHES /test/)  ; true
+$OUTPUT (x > 3) AND ("test" MATCHES /test/)  ; true

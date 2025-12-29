@@ -4,17 +4,17 @@
 ; === Block without tail returns Unit ===
 
 LET result = {
-  OUTPUT "Side effect only"
+  $OUTPUT "Side effect only"
 }
-OUTPUT result
+$OUTPUT result
 ; Expected: Unit
 
 LET result-2 = {
   LET x = 42
-  OUTPUT x
+  $OUTPUT x
   ; No tail expression
 }
-OUTPUT result-2
+$OUTPUT result-2
 ; Expected: Unit
 
 ; === Block with tail returns value ===
@@ -23,66 +23,66 @@ LET result-3 = {
   LET x = 42
   x
 }
-OUTPUT result-3
+$OUTPUT result-3
 ; Expected: 42
 
 ; === Single-arm IF returns Unit ===
 
 ; Single-arm IF with false condition (body not evaluated)
 LET cond-1 = IF FALSE {
-  OUTPUT "never reached"
+  $OUTPUT "never reached"
 }
-OUTPUT cond-1
+$OUTPUT cond-1
 ; Expected: Unit
 
 ; Single-arm IF with true condition (body evaluated, must be Unit)
 LET cond-2 = IF TRUE {
-  OUTPUT "side effect"
+  $OUTPUT "side effect"
 }
-OUTPUT cond-2
+$OUTPUT cond-2
 ; Expected: Unit
 
 ; === Option values ===
 
 ; Option.None
-OUTPUT Option.None
+$OUTPUT Option.None
 ; Expected: Option.None
 
 ; Option.Some unwrapping with coalesce
-OUTPUT Option.Some(42) ?? 0
+$OUTPUT Option.Some(42) ?? 0
 ; Expected: 42
 
 ; Option.None fallback with coalesce
-OUTPUT Option.None ?? "fallback"
+$OUTPUT Option.None ?? "fallback"
 ; Expected: fallback
 
 ; === Prefix `?` for Some wrapping ===
 
 ; Basic usage: wrap a value in Some
 LET wrapped = ?42
-OUTPUT wrapped
+$OUTPUT wrapped
 ; Expected: Option.Some(42)
 
 ; Unwrap with coalesce
-OUTPUT ?100 ?? 0
+$OUTPUT ?100 ?? 0
 ; Expected: 100
 
 ; Wrap a string
-OUTPUT ?"hello"
+$OUTPUT ?"hello"
 ; Expected: Option.Some(hello)
 
 ; Nested `?` produces Option.Some(Option.Some(v))
 ; Note: `??` is the coalesce operator, so use `?(?x)` for nesting
 LET nested = ?(?10)
-OUTPUT nested
+$OUTPUT nested
 ; Expected: Option.Some(Option.Some(10))
 
 ; Unwrap outer layer
-OUTPUT nested!
+$OUTPUT nested!
 ; Expected: Option.Some(10)
 
 ; Fully unwrap nested
-OUTPUT nested!!
+$OUTPUT nested!!
 ; Expected: 10
 
 ; Function that expects an Option argument
@@ -91,20 +91,20 @@ FUN maybe-double(x: Option[Int]) -> Int {
 }
 
 ; Call with explicit Some
-OUTPUT maybe-double(Option.Some(5))
+$OUTPUT maybe-double(Option.Some(5))
 ; Expected: 10
 
 ; Call with `?` wrap syntax
-OUTPUT maybe-double(?7)
+$OUTPUT maybe-double(?7)
 ; Expected: 14
 
 ; Call with None
-OUTPUT maybe-double(Option.None)
+$OUTPUT maybe-double(Option.None)
 ; Expected: 0
 
 ; Wrap an expression
 LET expr-result = ?(3 + 4)
-OUTPUT expr-result
+$OUTPUT expr-result
 ; Expected: Option.Some(7)
 
-OUTPUT "Unit and Option test complete"
+$OUTPUT "Unit and Option test complete"

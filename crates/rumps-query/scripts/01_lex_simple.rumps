@@ -44,4 +44,4 @@ LET not2 = !FALSE
 ; Concat operator
 LET concat = "hello" ++ " " ++ "world"
 
-OUTPUT "Lexer test complete"
+$OUTPUT "Lexer test complete"

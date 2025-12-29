@@ -3,4 +3,4 @@
 
 ; Invalid regex pattern (unclosed group)
 LET r = /(abc/
-OUTPUT "test" MATCHES r
+$OUTPUT "test" MATCHES r
