@@ -10,10 +10,10 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExprId, BindingPattern, Expr, ExprId, OutputFormat,
-    OutputStmt, OutputTarget, Stmt, StmtId,
+    OutputStmt, OutputTarget, Stmt, StmtId, TypeParam, UserConstraint,
 };
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{Scheme, Ty};
+use crate::typecheck::ty::{Scheme, Ty, TyVar};
 use crate::value::TypeDef;
 use crate::Span;
 
@@ -199,7 +199,7 @@ impl InferCtx<'_> {
     fn fun(
         &mut self,
         name: &str,
-        type_params: &SmallVec<[String; 2]>,
+        type_params: &SmallVec<[TypeParam; 2]>,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
         body: ExprId,
@@ -208,13 +208,50 @@ impl InferCtx<'_> {
         // Capture outer env free vars BEFORE binding function (for generalization)
         let outer_free = self.env.free_vars();
 
-        // Create fresh type variables for explicit type parameters
+        // Create fresh type variables for explicit type parameters and collect
+        // user-specified bounds for the scheme
+        let mut scheme_constraints: SmallVec<[(TyVar, UserConstraint); 2]> =
+            SmallVec::new();
         let type_param_subst: HashMap<_, _> = type_params
             .iter()
             .map(|tp| {
-                let id = self.env.intern(tp);
-                let tv = self.fresh();
-                (id, tv)
+                let id = self.env.intern(&tp.name);
+                let tv = self.fresh_var();
+                let ty = Ty::Var(tv);
+
+                // Emit constraints for each user-specified bound (for
+                // checking the function body) and collect them for the scheme
+                tp.constraints.iter().for_each(|c| {
+                    scheme_constraints.push((tv, c.clone()));
+                    let constraint = match c {
+                        UserConstraint::Numeric => {
+                            Constraint::Numeric(ty.clone(), span)
+                        }
+                        UserConstraint::Stringable => {
+                            Constraint::Stringable(ty.clone(), span)
+                        }
+                        UserConstraint::Jsonable => {
+                            Constraint::Jsonable(ty.clone(), span)
+                        }
+                        UserConstraint::Subscriptable => {
+                            Constraint::Subscriptable(ty.clone(), span)
+                        }
+                        UserConstraint::Storable => {
+                            Constraint::Storable(ty.clone(), span)
+                        }
+                        UserConstraint::Iterable => {
+                            let elem = self.fresh();
+                            Constraint::Iterable {
+                                coll: ty.clone(),
+                                elem,
+                                span,
+                            }
+                        }
+                    };
+                    self.constrain(constraint);
+                });
+
+                (id, ty)
             })
             .collect();
 
@@ -256,7 +293,11 @@ impl InferCtx<'_> {
         let fn_ty = Ty::Fn(param_tys, Box::new(actual_ret));
         let ty_vars = fn_ty.free_vars();
         let vars: Vec<_> = ty_vars.difference(&outer_free).copied().collect();
-        let scheme = Scheme { vars, ty: fn_ty };
+        let scheme = Scheme {
+            vars,
+            ty: fn_ty,
+            constraints: scheme_constraints,
+        };
         self.env.bind(name, scheme);
     }
 
@@ -436,7 +477,7 @@ impl InferCtx<'_> {
         // Type-check subscript expressions
         subs.iter().for_each(|sub_id| {
             let sub_ty = self.expr(*sub_id);
-            self.constrain(Constraint::Subscript(sub_ty, span));
+            self.constrain(Constraint::Subscriptable(sub_ty, span));
         });
 
         // Type-check value and add Storable constraint
@@ -446,7 +487,7 @@ impl InferCtx<'_> {
 
     /// Infer types for a `KILL` statement.
     ///
-    /// Type-checks subscript expressions with `Subscript` constraints.
+    /// Type-checks subscript expressions with `Subscriptable` constraints.
     /// Does not modify the environment (database delete).
     fn kill(&mut self, target: ExprId, span: Span) {
         // Extract subscripts from target (Local or Global)
@@ -462,7 +503,7 @@ impl InferCtx<'_> {
         // Type-check subscript expressions
         subs.iter().for_each(|sub_id| {
             let sub_ty = self.expr(*sub_id);
-            self.constrain(Constraint::Subscript(sub_ty, span));
+            self.constrain(Constraint::Subscriptable(sub_ty, span));
         });
     }
 

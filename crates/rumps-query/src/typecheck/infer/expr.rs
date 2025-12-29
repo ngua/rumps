@@ -11,7 +11,8 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey,
-    JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId, TypePattern, UnOp,
+    JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId, TypeParam,
+    TypePattern, UnOp, UserConstraint,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
@@ -162,22 +163,29 @@ impl InferCtx<'_> {
                 let path: SmallVec<[&str; 4]> =
                     segments.iter().map(String::as_str).collect();
 
-                // Check builtin modules first
-                self.runtime_env
-                    .get_module_const_type(&path)
-                    .cloned()
-                    .or_else(|| {
-                        self.runtime_env.get_module_fn_type(&path).map(
-                            |scheme| scheme.instantiate(&mut self.next_var),
-                        )
-                    })
-                    // Then check user-defined modules
-                    .or_else(|| {
-                        self.env.lookup_user_module_member(&path).map(
-                            |scheme| scheme.instantiate(&mut self.next_var),
-                        )
-                    })
-                    .unwrap_or(Ty::Unknown)
+                // Check builtin module constants first (no constraints)
+                if let Some(ty) = self.runtime_env.get_module_const_type(&path)
+                {
+                    ty.clone()
+                } else if let Some(scheme) =
+                    self.runtime_env.get_module_fn_type(&path)
+                {
+                    // Builtin module functions (no user constraints)
+                    let (ty, constraints) =
+                        scheme.instantiate(&mut self.next_var);
+                    self.emit_user_constraints(constraints, span);
+                    ty
+                } else if let Some(scheme) =
+                    self.env.lookup_user_module_member(&path)
+                {
+                    // User-defined module members may have constraints
+                    let (ty, constraints) =
+                        scheme.instantiate(&mut self.next_var);
+                    self.emit_user_constraints(constraints, span);
+                    ty
+                } else {
+                    Ty::Unknown
+                }
             }
 
             // Regex literal: `/pattern/`
@@ -228,7 +236,11 @@ impl InferCtx<'_> {
     /// and returns `Ty::Error`.
     fn var(&mut self, name: &str, span: Span) -> Ty {
         match self.env.lookup(name) {
-            Some(scheme) => scheme.instantiate(&mut self.next_var),
+            Some(scheme) => {
+                let (ty, constraints) = scheme.instantiate(&mut self.next_var);
+                self.emit_user_constraints(constraints, span);
+                ty
+            }
             None => {
                 self.error(TypeError::UndefinedVar(name.to_string(), span));
                 Ty::Error
@@ -779,18 +791,50 @@ impl InferCtx<'_> {
     /// as fresh type variables before inferring parameter/return types.
     fn closure(
         &mut self,
-        type_params: &SmallVec<[String; 2]>,
+        type_params: &SmallVec<[TypeParam; 2]>,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
         body: ExprId,
         span: Span,
     ) -> Ty {
-        // Create fresh type variables for explicit type parameters
+        // Create fresh type variables for explicit type parameters and emit
+        // constraints for any user-specified bounds
         let type_param_subst: HashMap<_, _> = type_params
             .iter()
             .map(|tp| {
-                let id = self.env.intern(tp);
+                let id = self.env.intern(&tp.name);
                 let tv = self.fresh();
+
+                // Emit constraints for each user-specified bound
+                tp.constraints.iter().for_each(|c| {
+                    let constraint = match c {
+                        UserConstraint::Numeric => {
+                            Constraint::Numeric(tv.clone(), span)
+                        }
+                        UserConstraint::Stringable => {
+                            Constraint::Stringable(tv.clone(), span)
+                        }
+                        UserConstraint::Jsonable => {
+                            Constraint::Jsonable(tv.clone(), span)
+                        }
+                        UserConstraint::Subscriptable => {
+                            Constraint::Subscriptable(tv.clone(), span)
+                        }
+                        UserConstraint::Storable => {
+                            Constraint::Storable(tv.clone(), span)
+                        }
+                        UserConstraint::Iterable => {
+                            let elem = self.fresh();
+                            Constraint::Iterable {
+                                coll: tv.clone(),
+                                elem,
+                                span,
+                            }
+                        }
+                    };
+                    self.constrain(constraint);
+                });
+
                 (id, tv)
             })
             .collect();
@@ -1450,7 +1494,7 @@ impl InferCtx<'_> {
         // Type-check subscript expressions
         subs.iter().for_each(|sub_id| {
             let sub_ty = self.expr(*sub_id);
-            self.constrain(Constraint::Subscript(sub_ty, span));
+            self.constrain(Constraint::Subscriptable(sub_ty, span));
         });
 
         Ty::Option(Box::new(Ty::Named(TypeId::STORABLE, vec![])))
@@ -1473,7 +1517,7 @@ impl InferCtx<'_> {
         // Type-check subscript expressions
         subs.iter().for_each(|sub_id| {
             let sub_ty = self.expr(*sub_id);
-            self.constrain(Constraint::Subscript(sub_ty, span));
+            self.constrain(Constraint::Subscriptable(sub_ty, span));
         });
 
         Ty::DataStatus

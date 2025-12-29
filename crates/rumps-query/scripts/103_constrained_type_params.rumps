@@ -1,0 +1,97 @@
+; Test constrained type parameters
+; Syntax: [T: Constraint1 + Constraint2]
+
+; ============================================================================
+; Basic constrained functions
+; ============================================================================
+
+; Numeric constraint: `T` must be `Int` or `Float`
+FUN add-numeric[T: Numeric](a: T, b: T) -> T {
+    a + b
+}
+
+OUTPUT add-numeric(1, 2)       ; 3
+OUTPUT add-numeric(1.5, 2.5)   ; 4.0
+
+; Stringable constraint: `T` can be converted to `String`
+FUN to-str[T: Stringable](x: T) -> String {
+    x AS String
+}
+
+OUTPUT to-str(42)        ; "42"
+OUTPUT to-str(true)      ; "true"
+
+; Jsonable constraint: `T` can be serialized to `Json`
+FUN to-json[T: Jsonable](x: T) -> Json {
+    x AS Json
+}
+
+OUTPUT to-json({a: 1, b: 2}) AS String   ; {"a":1,"b":2}
+
+; ============================================================================
+; Multiple constraints
+; ============================================================================
+
+; Multiple constraints with `+`
+FUN numeric-to-str[T: Numeric + Stringable](x: T) -> String {
+    (x + x) AS String
+}
+
+OUTPUT numeric-to-str(21)    ; "42"
+OUTPUT numeric-to-str(1.5)   ; "3"
+
+; ============================================================================
+; Mixed constrained and unconstrained
+; ============================================================================
+
+; Mix of constrained and unconstrained type parameters
+FUN pair-numeric[T: Numeric, U](x: T, y: U) -> (T, U) {
+    (x + x, y)
+}
+
+LET (n, s) = pair-numeric(21, "hello")
+OUTPUT n    ; 42
+OUTPUT s    ; "hello"
+
+; ============================================================================
+; Closures with constraints
+; ============================================================================
+
+; Closure with constrained type parameter
+LET double = [T: Numeric](x: T) -> T => x + x
+
+OUTPUT double(10)    ; 20
+OUTPUT double(1.5)   ; 3.0
+
+; Higher-order function taking a constrained closure
+FUN apply-numeric[T: Numeric](f: (T) -> T, x: T) -> T {
+    f(x)
+}
+
+OUTPUT apply-numeric(double, 5)   ; 10
+
+; ============================================================================
+; Subscriptable constraint
+; ============================================================================
+
+; Subscriptable: type can be used as a DB subscript key
+FUN format-key[K: Subscriptable](k: K) -> String {
+    k AS String
+}
+
+OUTPUT format-key(42)        ; "42"
+OUTPUT format-key("foo")     ; "foo"
+OUTPUT format-key(true)      ; "true"
+
+; ============================================================================
+; Storable constraint
+; ============================================================================
+
+; Storable: type can be stored in the database
+FUN identity-storable[V: Storable](v: V) -> V {
+    v
+}
+
+OUTPUT identity-storable(42)       ; 42
+OUTPUT identity-storable("hello")  ; "hello"
+OUTPUT identity-storable(true)     ; true

@@ -115,6 +115,36 @@ impl MatchPatternId {
     }
 }
 
+/// User-facing constraint for type parameters.
+///
+/// This is a subset of the internal `Constraint` enum from the typechecker.
+/// Not all internal constraints are exposed to users; see the design doc
+/// at `TODOS/dsl/type-constraints.md` for rationale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UserConstraint {
+    /// Type is `Int` or `Float`.
+    Numeric,
+    /// Type can be converted to string.
+    Stringable,
+    /// Type can be serialized to JSON.
+    Jsonable,
+    /// Type can be used as a DB subscript key.
+    Subscriptable,
+    /// Type can be stored in the database.
+    Storable,
+    /// Type is iterable (`Array[T]` or `Range`).
+    Iterable,
+}
+
+/// A type parameter with optional constraints.
+///
+/// Represents `T` or `T: Constraint1 + Constraint2` in type parameter lists.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TypeParam {
+    pub name: String,
+    pub constraints: SmallVec<[UserConstraint; 2]>,
+}
+
 /// The AST arena; owns all expressions and statements.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Ast {
@@ -678,14 +708,14 @@ pub(crate) enum Expr {
 
     /// Closure (anonymous function): `x => expr` or `(a, b) => expr`.
     ///
-    /// - type_params: optional type parameters (e.g., `[T]`, `[A, B]`)
+    /// - type_params: optional type parameters with constraints (e.g., `[T]`, `[T: Numeric]`)
     /// - params: parameter names with optional type annotations
     /// - return type annotation (optional)
     /// - body expression
     ///
     /// Closures capture their lexical environment at creation time (by value).
     Closure {
-        type_params: SmallVec<[String; 2]>,
+        type_params: SmallVec<[TypeParam; 2]>,
         params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<AstTypeExprId>,
         body: ExprId,
@@ -840,7 +870,7 @@ pub(crate) enum Stmt {
     /// Named function definition: `FUN name (params) { body }`.
     ///
     /// - `name`: the function's identifier
-    /// - `type_params`: optional type parameters (e.g., `[T]`, `[A, B]`)
+    /// - `type_params`: optional type parameters with constraints (e.g., `[T]`, `[T: Numeric]`)
     /// - `params`: parameter names with optional type annotations
     /// - `ret`: optional return type annotation
     /// - `body`: the function body expression (typically a block)
@@ -848,7 +878,7 @@ pub(crate) enum Stmt {
     /// Named functions support recursion (the name is visible in the body).
     Fun {
         name: String,
-        type_params: SmallVec<[String; 2]>,
+        type_params: SmallVec<[TypeParam; 2]>,
         params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<AstTypeExprId>,
         body: ExprId,
@@ -857,7 +887,7 @@ pub(crate) enum Stmt {
     /// User-defined type declaration: `TYPE Name = ...` or `TYPE Name[T] = ...`.
     ///
     /// - `name`: the type's identifier (e.g., `Status`, `Event`)
-    /// - `type_params`: optional type parameters (e.g., `[T]`, `[L, R]`)
+    /// - `type_params`: optional type parameters with constraints (e.g., `[T]`, `[T: Numeric]`)
     /// - `def`: the type definition body (sum type or struct)
     ///
     /// Examples:
@@ -866,7 +896,7 @@ pub(crate) enum Stmt {
     /// - `TYPE Either[L, R] = Left(L) | Right(R)`
     Type {
         name: String,
-        type_params: SmallVec<[String; 2]>,
+        type_params: SmallVec<[TypeParam; 2]>,
         def: TypeDefAst,
     },
 
@@ -881,7 +911,7 @@ pub(crate) enum Stmt {
     /// - `UNION F[T] = Int | Option[T]`
     Union {
         name: String,
-        type_params: SmallVec<[String; 2]>,
+        type_params: SmallVec<[TypeParam; 2]>,
         members: SmallVec<[AstTypeExprId; 4]>,
     },
 

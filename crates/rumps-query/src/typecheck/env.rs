@@ -140,6 +140,11 @@ impl TypeEnv {
     ///
     /// Creates a polymorphic scheme by quantifying over type variables that
     /// are free in `ty` but not in any existing binding.
+    ///
+    /// Note: This produces a scheme with no constraints. For user-defined
+    /// functions, constraints are added separately in `InferCtx::fun`. This
+    /// means closures with constrained type params will only be checked at
+    /// definition time, not at call sites.
     pub(crate) fn generalize(&self, ty: &Ty) -> Scheme {
         let env_fv = self.free_vars();
         let ty_fv = ty.free_vars();
@@ -147,6 +152,7 @@ impl TypeEnv {
         Scheme {
             vars,
             ty: ty.clone(),
+            constraints: smallvec::SmallVec::new(),
         }
     }
 

@@ -6,7 +6,9 @@
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
+use smallvec::SmallVec;
 
+use crate::ast::UserConstraint;
 use crate::intern::StringId;
 use crate::TypeId;
 
@@ -267,12 +269,20 @@ pub(crate) struct Scheme {
     pub(crate) vars: Vec<TyVar>,
     /// The body type (may contain the quantified variables).
     pub(crate) ty: Ty,
+    /// User-specified constraints on type variables.
+    ///
+    /// These are re-emitted when the scheme is instantiated at call sites.
+    pub(crate) constraints: SmallVec<[(TyVar, UserConstraint); 2]>,
 }
 
 impl Scheme {
     /// Create a monomorphic scheme (no quantified variables).
     pub(crate) fn mono(ty: Ty) -> Self {
-        Self { vars: vec![], ty }
+        Self {
+            vars: vec![],
+            ty,
+            constraints: SmallVec::new(),
+        }
     }
 
     /// Polymorphic with 1 type variable: `forall T. ...`
@@ -281,6 +291,7 @@ impl Scheme {
         Self {
             vars: vec![TyVar(0)],
             ty: f(t),
+            constraints: SmallVec::new(),
         }
     }
 
@@ -291,6 +302,7 @@ impl Scheme {
         Self {
             vars: vec![TyVar(0), TyVar(1)],
             ty: f(t, u),
+            constraints: SmallVec::new(),
         }
     }
 
@@ -302,16 +314,21 @@ impl Scheme {
         Self {
             vars: vec![TyVar(0), TyVar(1), TyVar(2)],
             ty: f(t, u, v),
+            constraints: SmallVec::new(),
         }
     }
 
     /// Instantiate the scheme with fresh type variables.
     ///
-    /// Takes a mutable counter for generating fresh `TyVar`s. Returns a
-    /// concrete `Ty` with all quantified variables replaced by fresh ones.
-    pub(crate) fn instantiate(&self, next: &mut u32) -> Ty {
+    /// Takes a mutable counter for generating fresh `TyVar`s. Returns:
+    /// - The concrete `Ty` with all quantified variables replaced by fresh ones
+    /// - The constraints with type variables substituted, to be re-emitted
+    pub(crate) fn instantiate(
+        &self,
+        next: &mut u32,
+    ) -> (Ty, SmallVec<[(Ty, UserConstraint); 2]>) {
         if self.vars.is_empty() {
-            self.ty.clone()
+            (self.ty.clone(), SmallVec::new())
         } else {
             let subst = Subst(
                 self.vars
@@ -325,7 +342,16 @@ impl Scheme {
                     })
                     .collect(),
             );
-            self.ty.apply(&subst)
+            let ty = self.ty.apply(&subst);
+            let constraints = self
+                .constraints
+                .iter()
+                .map(|(v, c)| {
+                    let ty = subst.0.get(v).cloned().unwrap_or(Ty::Var(*v));
+                    (ty, c.clone())
+                })
+                .collect();
+            (ty, constraints)
         }
     }
 
@@ -344,6 +370,7 @@ impl Scheme {
         Self {
             vars: self.vars.clone(),
             ty: self.ty.apply(&filtered),
+            constraints: self.constraints.clone(),
         }
     }
 
@@ -483,12 +510,14 @@ mod tests {
         let s = Scheme {
             vars: vec![v],
             ty: Ty::Array(Box::new(Ty::Var(v))),
+            constraints: SmallVec::new(),
         };
         let mut next = 100;
-        let inst = s.instantiate(&mut next);
+        let (inst, constraints) = s.instantiate(&mut next);
         // Should have replaced `v` with fresh var `TyVar::new(100)`
         assert_eq!(next, 101);
         assert_eq!(inst, Ty::Array(Box::new(Ty::Var(TyVar::new(100)))));
+        assert!(constraints.is_empty());
     }
 
     #[test]
@@ -498,6 +527,7 @@ mod tests {
         let s = Scheme {
             vars: vec![a],
             ty: Ty::Fn(vec![Ty::Var(a)], Box::new(Ty::Var(b))),
+            constraints: SmallVec::new(),
         };
         let fv = s.free_vars();
         assert!(!fv.contains(&a)); // bound
@@ -703,21 +733,23 @@ mod tests {
     fn scheme_poly_instantiate() {
         let s = Scheme::poly(|t| Ty::Array(Box::new(t)));
         let mut next = 100;
-        let inst = s.instantiate(&mut next);
+        let (inst, constraints) = s.instantiate(&mut next);
         // Should replace TyVar(0) with fresh TyVar(100)
         assert_eq!(next, 101);
         assert_eq!(inst, Ty::Array(Box::new(Ty::Var(TyVar::new(100)))));
+        assert!(constraints.is_empty());
     }
 
     #[test]
     fn scheme_poly2_instantiate() {
         let s = Scheme::poly2(|t, u| Ty::Tuple(vec![t, u]));
         let mut next = 50;
-        let inst = s.instantiate(&mut next);
+        let (inst, constraints) = s.instantiate(&mut next);
         assert_eq!(next, 52);
         assert_eq!(
             inst,
             Ty::Tuple(vec![Ty::Var(TyVar::new(50)), Ty::Var(TyVar::new(51))])
         );
+        assert!(constraints.is_empty());
     }
 }

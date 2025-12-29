@@ -663,8 +663,8 @@ impl<'a> InferCtx<'a> {
                     self.check_jsonable(&ty.apply(&subst), *span);
                 }
 
-                Constraint::Subscript(ty, span) => {
-                    self.check_subscript(&ty.apply(&subst), *span);
+                Constraint::Subscriptable(ty, span) => {
+                    self.check_subscriptable(&ty.apply(&subst), *span);
                 }
 
                 Constraint::Storable(ty, span) => {
@@ -821,7 +821,7 @@ impl<'a> InferCtx<'a> {
     /// Check that a type can be used as a database subscript key.
     ///
     /// Valid types: `Bool`, `Int`, `Float`, `Char`, `String`, `Json`.
-    fn check_subscript(&mut self, ty: &Ty, span: Span) {
+    fn check_subscriptable(&mut self, ty: &Ty, span: Span) {
         match ty {
             Ty::Bool
             | Ty::Int
@@ -831,7 +831,7 @@ impl<'a> InferCtx<'a> {
             | Ty::Json => {}
             Ty::Var(_) | Ty::Unknown | Ty::Error => {}
             _ => {
-                self.error(TypeError::NotSubscript(ty.clone(), span));
+                self.error(TypeError::NotSubscriptable(ty.clone(), span));
             }
         }
     }

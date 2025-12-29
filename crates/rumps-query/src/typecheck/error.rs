@@ -213,7 +213,7 @@ pub(crate) enum TypeError {
 
     /// Type cannot be used as database subscript key.
     #[error("type `{0}` cannot be used as subscript key")]
-    NotSubscript(Ty, Span),
+    NotSubscriptable(Ty, Span),
 
     /// Type cannot be stored in database.
     #[error("type `{0}` is not storable")]
@@ -328,7 +328,7 @@ impl TypeError {
             | Self::ArityMismatch { span, .. }
             | Self::NotNumeric(_, span)
             | Self::NotJsonable(_, span)
-            | Self::NotSubscript(_, span)
+            | Self::NotSubscriptable(_, span)
             | Self::NotStorable(_, span)
             | Self::MissingField { span, .. }
             | Self::FieldTypeMismatch { span, .. }
@@ -382,7 +382,7 @@ impl TypeError {
                 format!("type `{}` cannot be converted to JSON", p.format(ty)),
                 None,
             ),
-            Self::NotSubscript(ty, _) => (
+            Self::NotSubscriptable(ty, _) => (
                 format!(
                     "type `{}` cannot be used as subscript key",
                     p.format(ty)

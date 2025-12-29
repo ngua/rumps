@@ -113,6 +113,7 @@ impl SchemeInput {
                 crate::typecheck::Scheme {
                     vars: vec![#(crate::typecheck::TyVar::new(#var_indices)),*],
                     ty: #ty_tokens,
+                    constraints: smallvec::SmallVec::new(),
                 }
             }
         }

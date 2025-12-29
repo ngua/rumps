@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: unknown constraint name\nFUN bad[T: Unknown](x: T) -> T {\n    x\n}\n"
+---
+ERROR: parse error at 44..51: unexpected end of input

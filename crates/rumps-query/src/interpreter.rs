@@ -114,7 +114,7 @@ use smallvec::SmallVec;
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
     JsonAccessKey, JsonAccessKind, Literal, OutputFormat, OutputStmt,
-    OutputTarget, Stmt, StmtId, TypeDefAst, TypePattern, UnOp,
+    OutputTarget, Stmt, StmtId, TypeDefAst, TypeParam, TypePattern, UnOp,
 };
 use crate::env::Environment;
 use crate::intern::StringId;
@@ -585,7 +585,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn type_decl(
         &mut self,
         name: &str,
-        type_params: &[String],
+        type_params: &[TypeParam],
         def: &TypeDefAst,
         span: Span,
     ) -> Result<()> {
@@ -619,10 +619,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                             })
                             .collect();
 
-                    // Intern type parameters
+                    // Intern type parameters (constraints are ignored at runtime)
                     let type_param_ids: SmallVec<[StringId; 2]> = type_params
                         .iter()
-                        .map(|p| self.arena.intern(p))
+                        .map(|tp| self.arena.intern(&tp.name))
                         .collect();
 
                     // Register the type
@@ -651,10 +651,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                         })
                         .collect();
 
-                    // Intern type parameters
+                    // Intern type parameters (constraints are ignored at runtime)
                     let type_param_ids: SmallVec<[StringId; 2]> = type_params
                         .iter()
-                        .map(|p| self.arena.intern(p))
+                        .map(|tp| self.arena.intern(&tp.name))
                         .collect();
 
                     // Register the struct type
@@ -680,7 +680,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn union_decl(
         &mut self,
         name: &str,
-        type_params: &[String],
+        type_params: &[TypeParam],
         members: &[AstTypeExprId],
         span: Span,
     ) -> Result<()> {
@@ -701,9 +701,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .map(|&m| self.resolve_type_expr(m, span))
                 .collect();
 
-            // Intern type parameters
-            let type_param_ids: SmallVec<[StringId; 2]> =
-                type_params.iter().map(|p| self.arena.intern(p)).collect();
+            // Intern type parameters (constraints are ignored at runtime)
+            let type_param_ids: SmallVec<[StringId; 2]> = type_params
+                .iter()
+                .map(|tp| self.arena.intern(&tp.name))
+                .collect();
 
             // Register the union type
             self.registry.register(
@@ -726,14 +728,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn validate_type_params(
         &mut self,
         ty_id: AstTypeExprId,
-        declared: &[String],
+        declared: &[TypeParam],
         span: Span,
     ) -> Result<()> {
         self.ast.get_type_expr(ty_id).map_or(Ok(()), |ty| match ty {
             AstTypeExpr::Named(n) => {
                 let name_id = self.arena.intern(n);
                 let is_registered = self.registry.lookup(name_id).is_some();
-                let is_declared = declared.iter().any(|p| p == n);
+                let is_declared = declared.iter().any(|tp| tp.name == *n);
                 if is_registered || is_declared {
                     Ok(())
                 } else {

@@ -8,12 +8,41 @@ use smallvec::SmallVec;
 
 use super::cst;
 use crate::ast::{
-    ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr, ExprId,
-    JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, ObjectEntry,
+    self, ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr,
+    ExprId, JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, ObjectEntry,
     OutputFormat, OutputStmt, OutputTarget, RestPattern, Stmt, StmtId,
     TypeDefAst, TypePattern, VariantAst,
 };
 use crate::Result;
+
+/// Convert a CST constraint to an AST constraint.
+fn lower_constraint(c: cst::UserConstraint) -> ast::UserConstraint {
+    match c {
+        cst::UserConstraint::Numeric => ast::UserConstraint::Numeric,
+        cst::UserConstraint::Stringable => ast::UserConstraint::Stringable,
+        cst::UserConstraint::Jsonable => ast::UserConstraint::Jsonable,
+        cst::UserConstraint::Subscriptable => {
+            ast::UserConstraint::Subscriptable
+        }
+        cst::UserConstraint::Storable => ast::UserConstraint::Storable,
+        cst::UserConstraint::Iterable => ast::UserConstraint::Iterable,
+    }
+}
+
+/// Convert a CST type parameter to an AST type parameter.
+fn lower_type_param(tp: cst::TypeParam) -> ast::TypeParam {
+    ast::TypeParam {
+        name: tp.name,
+        constraints: tp.constraints.into_iter().map(lower_constraint).collect(),
+    }
+}
+
+/// Convert a list of CST type parameters to AST type parameters.
+fn lower_type_params(
+    tps: Vec<cst::TypeParam>,
+) -> SmallVec<[ast::TypeParam; 2]> {
+    tps.into_iter().map(lower_type_param).collect()
+}
 
 /// Lower a CST program (list of statements) to AST.
 pub(crate) fn program(stmts: Vec<cst::Stmt>) -> Result<(Ast, Vec<StmtId>)> {
@@ -87,7 +116,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
             let body_id = lower_expr(ast, body)?;
             Stmt::Fun {
                 name,
-                type_params: SmallVec::from_vec(type_params),
+                type_params: lower_type_params(type_params),
                 params: params_lowered,
                 ret: ret_id,
                 body: body_id,
@@ -101,7 +130,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
             let def_lowered = lower_type_def(ast, def)?;
             Stmt::Type {
                 name,
-                type_params: SmallVec::from_vec(type_params),
+                type_params: lower_type_params(type_params),
                 def: def_lowered,
             }
         }
@@ -116,7 +145,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 .collect::<Result<SmallVec<_>>>()?;
             Stmt::Union {
                 name,
-                type_params: SmallVec::from_vec(type_params),
+                type_params: lower_type_params(type_params),
                 members: member_ids,
             }
         }
@@ -266,7 +295,7 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let ret_id = ret.map(|t| lower_type_expr(ast, t)).transpose()?;
             let body_id = lower_expr(ast, *body)?;
             Expr::Closure {
-                type_params: SmallVec::from_vec(type_params),
+                type_params: lower_type_params(type_params),
                 params: params_lowered,
                 ret: ret_id,
                 body: body_id,

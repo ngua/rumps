@@ -449,22 +449,6 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        // Type parameters: `[T]` or `[T, U]`
-        let type_param_sep =
-            just(Token::Comma).then_ignore(Self::opt_newlines());
-        let type_params = just(Token::LBracket)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(
-                Self::ident()
-                    .separated_by(type_param_sep)
-                    .at_least(1)
-                    .allow_trailing(),
-            )
-            .then_ignore(Self::opt_newlines())
-            .then_ignore(just(Token::RBracket))
-            .or_not()
-            .map(|ps| ps.unwrap_or_default());
-
         // Parameter: `name` or `name: Type`
         let param = Self::ident()
             .then(
@@ -498,7 +482,7 @@ impl Parser {
             .ignore_then(Self::opt_newlines())
             .ignore_then(Self::ident())
             .then_ignore(Self::opt_newlines())
-            .then(type_params)
+            .then(Self::type_params())
             .then_ignore(Self::opt_newlines())
             .then(params)
             .then(ret_ty)
@@ -531,22 +515,6 @@ impl Parser {
     ///
     /// User-defined type declaration (sum type or struct).
     fn type_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        // Type parameters: `[T]` or `[T, U]`
-        let type_param_sep =
-            just(Token::Comma).then_ignore(Self::opt_newlines());
-        let type_params = just(Token::LBracket)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(
-                Self::ident()
-                    .separated_by(type_param_sep.clone())
-                    .at_least(1)
-                    .allow_trailing(),
-            )
-            .then_ignore(Self::opt_newlines())
-            .then_ignore(just(Token::RBracket))
-            .or_not()
-            .map(|ps| ps.unwrap_or_default());
-
         // --- Sum type definition ---
 
         // Variant: `Name` or `Name(Type, Type, ...)`
@@ -604,7 +572,7 @@ impl Parser {
         just(Token::Type)
             .ignore_then(Self::opt_newlines())
             .ignore_then(Self::ident())
-            .then(type_params)
+            .then(Self::type_params())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
@@ -627,22 +595,6 @@ impl Parser {
     /// Named union type declaration.
     fn union_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
     {
-        // Type parameters: `[T]` or `[T, U]`
-        let type_param_sep =
-            just(Token::Comma).then_ignore(Self::opt_newlines());
-        let type_params = just(Token::LBracket)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(
-                Self::ident()
-                    .separated_by(type_param_sep)
-                    .at_least(1)
-                    .allow_trailing(),
-            )
-            .then_ignore(Self::opt_newlines())
-            .then_ignore(just(Token::RBracket))
-            .or_not()
-            .map(|ps| ps.unwrap_or_default());
-
         // Type members separated by `|`
         let member_sep = Self::opt_newlines()
             .ignore_then(just(Token::SinglePipe))
@@ -656,7 +608,7 @@ impl Parser {
         just(Token::Union)
             .ignore_then(Self::opt_newlines())
             .ignore_then(Self::ident())
-            .then(type_params)
+            .then(Self::type_params())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
@@ -1808,22 +1760,6 @@ impl Parser {
             )
             .map(|(name, ty)| (name, ty));
 
-        // Type parameters for closures: `[T]` or `[T, U]`
-        let type_param_sep =
-            just(Token::Comma).then_ignore(Self::opt_newlines());
-        let closure_type_params = just(Token::LBracket)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(
-                Self::ident()
-                    .separated_by(type_param_sep)
-                    .at_least(1)
-                    .allow_trailing(),
-            )
-            .then_ignore(Self::opt_newlines())
-            .then_ignore(just(Token::RBracket))
-            .or_not()
-            .map(|ps| ps.unwrap_or_default());
-
         // Multi-param closure: `(params) => expr`, `(params) -> Type => expr`,
         // or with type params: `[T](params) -> Type => expr`
         let param_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
@@ -1833,7 +1769,7 @@ impl Parser {
                 .allow_trailing()
                 .then_ignore(Self::opt_newlines())
                 .then_ignore(just(Token::RParen)));
-        let closure_multi = closure_type_params
+        let closure_multi = Self::type_params()
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::LParen))
             .then_ignore(Self::opt_newlines())
@@ -2076,6 +2012,70 @@ impl Parser {
     fn ident() -> impl chumsky::Parser<Token, String, Error = ParseErr> + Clone
     {
         select! { Token::Ident(s) => s }
+    }
+
+    /// Parse a user-facing constraint name.
+    ///
+    /// Recognizes: `Numeric`, `Stringable`, `Jsonable`, `Subscriptable`,
+    /// `Storable`, `Iterable`.
+    fn constraint(
+    ) -> impl chumsky::Parser<Token, cst::UserConstraint, Error = ParseErr> + Clone
+    {
+        select! { Token::Ident(s) => s }.try_map(|name, span| match name.as_str()
+        {
+            "Numeric" => Ok(cst::UserConstraint::Numeric),
+            "Stringable" => Ok(cst::UserConstraint::Stringable),
+            "Jsonable" => Ok(cst::UserConstraint::Jsonable),
+            "Subscriptable" => Ok(cst::UserConstraint::Subscriptable),
+            "Storable" => Ok(cst::UserConstraint::Storable),
+            "Iterable" => Ok(cst::UserConstraint::Iterable),
+            _ => Err(Simple::custom(
+                span,
+                format!("unknown constraint `{name}`; valid constraints are: Numeric, Stringable, Jsonable, Subscriptable, Storable, Iterable"),
+            )),
+        })
+    }
+
+    /// Parse a type parameter with optional constraints: `T` or `T: C1 + C2`.
+    fn type_param(
+    ) -> impl chumsky::Parser<Token, cst::TypeParam, Error = ParseErr> + Clone
+    {
+        let constraints = just(Token::Colon)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::constraint()
+                    .separated_by(
+                        Self::opt_newlines()
+                            .ignore_then(just(Token::Plus))
+                            .then_ignore(Self::opt_newlines()),
+                    )
+                    .at_least(1),
+            )
+            .or_not()
+            .map(|cs| SmallVec::from_vec(cs.unwrap_or_default()));
+
+        Self::ident()
+            .then(constraints)
+            .map(|(name, constraints)| cst::TypeParam { name, constraints })
+    }
+
+    /// Parse a type parameter list: `[T]`, `[T, U]`, or `[T: C1, U: C2 + C3]`.
+    fn type_params(
+    ) -> impl chumsky::Parser<Token, Vec<cst::TypeParam>, Error = ParseErr> + Clone
+    {
+        let sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::type_param()
+                    .separated_by(sep)
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBracket))
+            .or_not()
+            .map(|ps| ps.unwrap_or_default())
     }
 
     /// Parse a global variable name.
@@ -2994,8 +2994,8 @@ mod tests {
             }) => {
                 assert_eq!(name, "Either");
                 assert_eq!(type_params.len(), 2);
-                assert_eq!(type_params[0], "L");
-                assert_eq!(type_params[1], "R");
+                assert_eq!(type_params[0].name, "L");
+                assert_eq!(type_params[1].name, "R");
             }
             _ => panic!("expected Type"),
         }

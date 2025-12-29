@@ -48,6 +48,36 @@ use smallvec::SmallVec;
 use crate::ast::{BinOp, JsonAccessKind, Literal, UnOp};
 use crate::Span;
 
+/// User-facing constraint for type parameters.
+///
+/// This is a subset of the internal `Constraint` enum from the typechecker.
+/// Not all internal constraints are exposed to users; see the design doc
+/// at `TODOS/dsl/type-constraints.md` for rationale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UserConstraint {
+    /// Type is `Int` or `Float`.
+    Numeric,
+    /// Type can be converted to string.
+    Stringable,
+    /// Type can be serialized to JSON.
+    Jsonable,
+    /// Type can be used as a DB subscript key.
+    Subscriptable,
+    /// Type can be stored in the database.
+    Storable,
+    /// Type is iterable (`Array[T]` or `Range`).
+    Iterable,
+}
+
+/// A type parameter with optional constraints.
+///
+/// Represents `T` or `T: Constraint1 + Constraint2` in type parameter lists.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TypeParam {
+    pub name: String,
+    pub constraints: SmallVec<[UserConstraint; 2]>,
+}
+
 /// Type pattern for the `IS` operator (CST version).
 ///
 /// This is the CST equivalent of `ast::TypePattern`. During lowering,
@@ -187,7 +217,7 @@ pub(crate) enum ExprKind {
 
     /// Closure.
     Closure {
-        type_params: Vec<String>,
+        type_params: Vec<TypeParam>,
         params: SmallVec<[(String, Option<TypeExpr>); 4]>,
         ret: Option<TypeExpr>,
         body: Box<Expr>,
@@ -323,7 +353,7 @@ pub(crate) enum StmtKind {
     /// Named function definition.
     Fun {
         name: String,
-        type_params: Vec<String>,
+        type_params: Vec<TypeParam>,
         params: SmallVec<[(String, Option<TypeExpr>); 4]>,
         ret: Option<TypeExpr>,
         body: Expr,
@@ -332,7 +362,7 @@ pub(crate) enum StmtKind {
     /// User-defined type declaration.
     Type {
         name: String,
-        type_params: Vec<String>,
+        type_params: Vec<TypeParam>,
         def: TypeDefCst,
     },
 
@@ -342,7 +372,7 @@ pub(crate) enum StmtKind {
     /// (`x: Int | String`). Named unions are registered in the type registry.
     Union {
         name: String,
-        type_params: Vec<String>,
+        type_params: Vec<TypeParam>,
         members: Vec<TypeExpr>,
     },
 

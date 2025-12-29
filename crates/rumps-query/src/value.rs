@@ -19,7 +19,9 @@ use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
-use crate::ast::{Ast, AstTypeExprId, ExprId, Stmt, StmtId, TypeDefAst};
+use crate::ast::{
+    Ast, AstTypeExprId, ExprId, Stmt, StmtId, TypeDefAst, TypeParam,
+};
 use crate::intern::{StringId, StringInterner};
 use crate::typecheck::Ty;
 use crate::{Result, Span};
@@ -1798,7 +1800,7 @@ impl TypeRegistry {
     fn register_type(
         &mut self,
         name: &str,
-        type_params: &[String],
+        type_params: &[TypeParam],
         def: &TypeDefAst,
         arena: &mut ValueArena,
         span: Span,
@@ -1813,8 +1815,11 @@ impl TypeRegistry {
             ))?;
         }
 
-        let type_param_ids: SmallVec<[StringId; 2]> =
-            type_params.iter().map(|p| arena.intern(p)).collect();
+        // Intern type parameters (constraints are ignored at runtime)
+        let type_param_ids: SmallVec<[StringId; 2]> = type_params
+            .iter()
+            .map(|tp| arena.intern(&tp.name))
+            .collect();
 
         match def {
             TypeDefAst::Sum(variants) => {
@@ -1868,7 +1873,7 @@ impl TypeRegistry {
     fn register_union(
         &mut self,
         name: &str,
-        type_params: &[String],
+        type_params: &[TypeParam],
         ast_members: &[AstTypeExprId],
         ctx: &mut UnionRegCtx,
         span: Span,
@@ -1883,8 +1888,11 @@ impl TypeRegistry {
             ))?;
         }
 
-        let type_param_ids: SmallVec<[StringId; 2]> =
-            type_params.iter().map(|p| ctx.arena.intern(p)).collect();
+        // Intern type parameters (constraints are ignored at runtime)
+        let type_param_ids: SmallVec<[StringId; 2]> = type_params
+            .iter()
+            .map(|tp| ctx.arena.intern(&tp.name))
+            .collect();
 
         // Convert AST type expressions to TypeExprIds
         let members: SmallVec<[TypeExprId; 8]> = ast_members
