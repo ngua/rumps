@@ -283,6 +283,12 @@ pub(crate) enum ExprKind {
     /// Queries the existence status of a node. The inner expression must be
     /// a `Local` or `Global`. Returns `DataStatus` enum.
     Data(Box<Expr>),
+
+    /// Order query: `ORDER var`.
+    ///
+    /// Returns the next subscript at a given level. The inner expression must
+    /// be a `Local` or `Global`. Returns `Option[Subscript]`.
+    Order(Box<Expr>),
 }
 
 /// The key specification for JSON access (CST form).

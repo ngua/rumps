@@ -200,6 +200,63 @@ impl<I: IoContext> Interpreter<'_, I> {
         Ok(Value::Tagged(type_expr_id, variant_idx, SmallVec::new()))
     }
 
+    /// `ORDER` primitive; returns the next subscript at a given level.
+    ///
+    /// The inner expression must be a `Local` or `Global`. Uses the active
+    /// transaction if one exists, otherwise reads directly from the database.
+    /// Returns `Option[Subscript]`.
+    #[async_recursion]
+    pub(super) async fn order(
+        &mut self,
+        inner: ExprId,
+        span: Span,
+    ) -> Result<Value> {
+        let inner_span = self.ast.expr_span(inner).unwrap_or(span);
+        let inner_expr = self
+            .ast
+            .get_expr(inner)
+            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+            .clone();
+
+        let (name, subs) = match inner_expr {
+            Expr::Local(n, s) => Ok((Name::local(&n), s)),
+            Expr::Global(n, s) => Ok((Name::global(&n), s)),
+            _ => Err(Error::runtime(
+                inner_span,
+                "ORDER requires a local or global",
+            )),
+        }?;
+
+        // Evaluate subscript expressions
+        let key = self.build_key(&subs).await?;
+
+        // `ORDER items(1)` means "find next subscript after `1` at root level",
+        // so we split the key: prefix = [] (root), after = `Some(1)`.
+        let (prefix, after): (Key, Option<Subscript>) =
+            match key.as_slice().split_last() {
+                None => (Key::new(), None),
+                Some((last, init)) => {
+                    (Key::from(init.to_vec()), Some(last.clone()))
+                }
+            };
+
+        let opt_sub = match &self.txn {
+            Some(txn) => txn.order(&name, &prefix, after.as_ref()).await,
+            None => self.db.order(&name, &prefix, after.as_ref()).await,
+        }
+        .map_err(|e| Error::runtime(span, format!("ORDER failed: {e}")))?;
+
+        // Convert Option<Subscript> to Option[Subscript] value
+        match opt_sub {
+            None => Ok(self.make_none()),
+            Some(sub) => {
+                let val = self.value_from_subscript(sub)?;
+                let val_id = self.arena.add(val, span);
+                Ok(self.make_some(val_id))
+            }
+        }
+    }
+
     /// Evaluate subscript expressions and build a `Key`.
     #[async_recursion]
     pub(super) async fn build_key(&mut self, subs: &[ExprId]) -> Result<Key> {

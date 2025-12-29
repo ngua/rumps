@@ -353,6 +353,10 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let inner_id = lower_expr(ast, *inner)?;
             Expr::Data(inner_id)
         }
+        cst::ExprKind::Order(inner) => {
+            let inner_id = lower_expr(ast, *inner)?;
+            Expr::Order(inner_id)
+        }
         cst::ExprKind::Error(msg) => {
             Err(crate::Error::parse(span, msg, vec![]))?
         }

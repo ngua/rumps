@@ -28,7 +28,7 @@ SET PATIENT-ID = 123
 ```
 
 **Reserved keywords** (cannot be used as variable names):
-`LET`, `SET`, `GET`, `KILL`, `COLLECT`, `FUN`, `TRANSACTION`, `IF`, `ELSE`, `WHERE`, `SELECT`, `INTO`, `OUTPUT`, `INTO` etc.
+`FUN`, `TRANSACTION`, `IF`, `ELSE`, `WHERE`, `SELECT`, `INTO`, `OUTPUT`, etc.
 
 ### Train-Case Support
 

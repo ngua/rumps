@@ -429,13 +429,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_str(*id)
                 .map(|s| Subscript::String(s.to_owned()))
                 .ok_or_else(|| Error::runtime_no_span("invalid string id")),
+            Value::Json(j) => Ok(Subscript::Json(j.clone())),
             Value::Unit
             | Value::Array(_, _)
             | Value::Object(_)
             | Value::Tuple(_, _)
             | Value::Map(_, _, _)
             | Value::Time(_)
-            | Value::Json(_)
             | Value::FilePath(_)
             | Value::Regex(_)
             | Value::Tagged(_, _, _)
@@ -446,6 +446,34 @@ impl<I: IoContext> Interpreter<'_, I> {
                 "complex values cannot be used as subscripts",
             )),
         }
+    }
+
+    /// Convert a subscript from storage to a runtime value.
+    ///
+    /// Inverse of `subscript`; used by `ORDER` to convert results.
+    pub(crate) fn value_from_subscript(
+        &mut self,
+        sub: Subscript,
+    ) -> Result<Value> {
+        Ok(match sub {
+            Subscript::Boolean(b) => Value::Bool(b),
+            Subscript::Number(n) => {
+                // Check if it's a whole number
+                let f = n.into_inner();
+                #[allow(clippy::float_cmp)]
+                let is_int = f.fract() == 0.0
+                    && f >= i64::MIN as f64
+                    && f <= i64::MAX as f64;
+                if is_int {
+                    Value::Int(f as i64)
+                } else {
+                    Value::Float(n)
+                }
+            }
+            Subscript::Char(c) => Value::Char(c),
+            Subscript::String(s) => Value::String(self.arena.intern(&s)),
+            Subscript::Json(j) => Value::Json(j),
+        })
     }
 
     /// Stringify a map key for display.

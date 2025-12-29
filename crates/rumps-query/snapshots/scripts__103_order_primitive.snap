@@ -1,0 +1,19 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: ORDER primitive\n; Returns next subscript at a given level\n; NOTE: Uses locals only; globals require TRANSACTION blocks\n\n; Set up test data\nSET items(1) = \"one\"\nSET items(2) = \"two\"\nSET items(10) = \"ten\"\nSET items(\"A\") = \"alpha\"\nSET items(\"B\") = \"beta\"\n\nSET nested(1, \"A\") = \"nested 1A\"\nSET nested(1, \"B\") = \"nested 1B\"\nSET nested(2, \"X\") = \"nested 2X\"\n\n; First subscript at root (no after value)\nLET first = ORDER items\nOUTPUT first\n\n; Next subscript after 1\nLET after-1 = ORDER items(1)\nOUTPUT after-1\n\n; Next subscript after 2\nLET after-2 = ORDER items(2)\nOUTPUT after-2\n\n; Next subscript after 10\nLET after-10 = ORDER items(10)\nOUTPUT after-10\n\n; Past the last numeric key\nLET after-a = ORDER items(\"A\")\nOUTPUT after-a\n\n; Past the last key entirely\nLET after-b = ORDER items(\"B\")\nOUTPUT after-b\n\n; First subscript under nested(1)\nLET nested-1-first = ORDER nested(1)\nOUTPUT nested-1-first\n\n; Next subscript under nested(1) after \"A\"\nLET nested-1-after-a = ORDER nested(1, \"A\")\nOUTPUT nested-1-after-a\n\n; Past last key under nested(1)\nLET nested-1-after-b = ORDER nested(1, \"B\")\nOUTPUT nested-1-after-b\n\n; First subscript under nested(2)\nLET nested-2-first = ORDER nested(2)\nOUTPUT nested-2-first\n\n; ORDER on non-existent variable\nLET no-keys = ORDER empty\nOUTPUT no-keys\n\n; ORDER with different subscript types\nSET mixed(true) = \"bool key\"\nSET mixed(42) = \"int key\"\nSET mixed(3.14) = \"float key\"\nSET mixed(\"str\") = \"string key\"\n\n; Bool comes first, then numbers, then strings\nLET mixed-first = ORDER mixed\nOUTPUT mixed-first\n\nLET mixed-after-true = ORDER mixed(true)\nOUTPUT mixed-after-true\n\n; Type annotation\nLET typed: Option[Subscript] = ORDER items\nOUTPUT typed\n\nOUTPUT \"ORDER test complete\"\n"
+---
+Option.Some(1)
+Option.Some(2)
+Option.Some(10)
+Option.Some("A")
+Option.Some("B")
+Option.None
+Option.Some(2)
+Option.Some("B")
+Option.None
+Option.None
+Option.None
+Option.Some(TRUE)
+Option.Some(3.14)
+Option.Some(1)
+"ORDER test complete"

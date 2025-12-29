@@ -32,6 +32,7 @@ pub(crate) enum Token {
     Union,
     Module,
     Data,
+    Order,
 
     // Literals
     Int(i64),
@@ -143,6 +144,7 @@ impl Token {
                 "UNION" => Some(Self::Union),
                 "MODULE" => Some(Self::Module),
                 "DATA" => Some(Self::Data),
+                "ORDER" => Some(Self::Order),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -176,6 +178,7 @@ impl fmt::Display for Token {
             Self::Union => write!(f, "UNION"),
             Self::Module => write!(f, "MODULE"),
             Self::Data => write!(f, "DATA"),
+            Self::Order => write!(f, "ORDER"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),

@@ -213,6 +213,9 @@ impl InferCtx<'_> {
 
             // Data query: `DATA local(...)` or `DATA ^global(...)`
             Expr::Data(inner) => self.data(*inner, span),
+
+            // Order query: `ORDER local(...)` or `ORDER ^global(...)`
+            Expr::Order(inner) => self.order(*inner, span),
         }
     }
 
@@ -1549,6 +1552,29 @@ impl InferCtx<'_> {
         });
 
         Ty::DataStatus
+    }
+
+    /// Infer type of `ORDER` expression.
+    ///
+    /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
+    fn order(&mut self, inner_id: ExprId, span: Span) -> Ty {
+        // Extract subscript IDs if Local or Global
+        let subs: SmallVec<[ExprId; 4]> = self
+            .ast
+            .get_expr(inner_id)
+            .and_then(|e| match e {
+                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        // Type-check subscript expressions
+        subs.iter().for_each(|sub_id| {
+            let sub_ty = self.expr(*sub_id);
+            self.constrain(Constraint::Subscriptable(sub_ty, span));
+        });
+
+        Ty::Option(Box::new(Ty::Named(TypeId::SUBSCRIPT, vec![])))
     }
 
     /// Infer type of type annotation expression `(expr) : Type`.

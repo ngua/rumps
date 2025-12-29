@@ -1233,7 +1233,15 @@ impl Parser {
                     cst::Expr::new(cst::ExprKind::Data(Box::new(inner)), span)
                 });
 
-            choice((with_op, get_expr, data_expr)).or(operand.clone())
+            // ORDER target
+            let order_expr = just(Token::Order)
+                .ignore_then(Self::gettable(expr.clone()))
+                .map_with_span(|inner, span| {
+                    cst::Expr::new(cst::ExprKind::Order(Box::new(inner)), span)
+                });
+
+            choice((with_op, get_expr, data_expr, order_expr))
+                .or(operand.clone())
         })
     }
 

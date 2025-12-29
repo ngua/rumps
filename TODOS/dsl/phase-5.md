@@ -699,21 +699,19 @@ This fixes the mismatch between `rumps_types::Subscript` (which includes `Json`)
 
 ### 5.3.11 Implementation Checklist
 
-- [ ] **Lexer**: Add `Token::Order` keyword
-- [ ] **CST**: Add `OrderExpr` type
-- [ ] **CST**: Add `ExprKind::Order` variant
-- [ ] **Parser**: Implement `order_expr` parser
-- [ ] **AST**: Add `OrderExpr` type
-- [ ] **AST**: Add `Expr::Order` variant
-- [ ] **Lowering**: Convert `cst::OrderExpr` to `ast::OrderExpr`
+- [x] **Lexer**: Add `Token::Order` keyword
+- [x] **CST**: Add `ExprKind::Order` variant
+- [x] **Parser**: Implement `order_expr` parser
+- [x] **AST**: Add `Expr::Order` variant
+- [x] **Lowering**: Convert CST `Order` to AST `Order`
 - [x] **TypeId**: Add `TypeId::SUBSCRIPT` constant
 - [x] **Type Registry**: Register `Subscript` as `TypeDef::Union` with 6 members
 - [x] **Type Names**: Add `"Subscript"` to `parse_ty_name` (via registry lookup)
-- [ ] **Typechecker**: Infer `Option[Subscript]` for `ORDER` expressions
-- [ ] **Interpreter**: Implement `ORDER` evaluation via `Database::order`/`Transaction::order`
-- [ ] **Interpreter**: Add `subscript_to_value` conversion
-- [ ] **Interpreter**: Fix `convert.rs` `subscript()` to support `Json` values
-- [ ] **Tests**: Integration test script (`103_order_primitive.rumps`)
+- [x] **Typechecker**: Infer `Option[Subscript]` for `ORDER` expressions
+- [x] **Interpreter**: Implement `ORDER` evaluation via `Database::order`/`Transaction::order`
+- [x] **Interpreter**: Add `subscript_to_value` conversion
+- [x] **Interpreter**: Fix `convert.rs` `subscript()` to support `Json` values
+- [x] **Tests**: Integration test script (`103_order_primitive.rumps`)
 
 ---
 
