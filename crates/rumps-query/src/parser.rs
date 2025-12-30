@@ -443,6 +443,173 @@ impl Parser {
             })
     }
 
+    /// `OUTPUT expr [JSON] [TO ERROR | TO FILE expr]` as expression.
+    ///
+    /// Same syntax as `output_stmt`, but returns `cst::Expr` instead of
+    /// `cst::Stmt`. Evaluates to `Unit` after performing the output.
+    fn output_expr(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let format = Self::ctx_ident("JSON")
+            .to(cst::OutputFormat::Json)
+            .or_not()
+            .map(|f| f.unwrap_or_default());
+
+        let to_error = Self::ctx_ident("TO")
+            .ignore_then(Self::ctx_ident("ERROR"))
+            .to(cst::OutputTarget::Stderr);
+
+        let to_file = Self::ctx_ident("TO")
+            .ignore_then(Self::ctx_ident("FILE"))
+            .ignore_then(expr.clone())
+            .map(|e| cst::OutputTarget::File(Box::new(e)));
+
+        let target =
+            to_error.or(to_file).or_not().map(|t| t.unwrap_or_default());
+
+        just(Token::Output)
+            .ignore_then(expr)
+            .then(format)
+            .then(target)
+            .map_with_span(|((inner, format), target), span| {
+                let output = cst::OutputStmt {
+                    expr: inner,
+                    format,
+                    target,
+                };
+                cst::Expr::new(cst::ExprKind::Output(Box::new(output)), span)
+            })
+    }
+
+    /// `$SET target = value` as expression.
+    ///
+    /// B-tree assignment that evaluates to `Unit`.
+    fn set_expr(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let local = just(Token::Set)
+            .ignore_then(Self::ident())
+            .then(Self::subscripts(expr.clone()).or_not())
+            .then_ignore(just(Token::Assign))
+            .then(expr.clone())
+            .map_with_span(|((name, subs), val), span| {
+                let subs = subs.unwrap_or_default();
+                let target =
+                    cst::Expr::new(cst::ExprKind::Local(name, subs), span);
+                cst::Expr::new(
+                    cst::ExprKind::Set(Box::new(target), Box::new(val)),
+                    span,
+                )
+            });
+
+        let global = just(Token::Set)
+            .ignore_then(Self::global_name())
+            .then(Self::subscripts(expr.clone()).or_not())
+            .then_ignore(just(Token::Assign))
+            .then(expr)
+            .map_with_span(|((name, subs), val), span| {
+                let subs = subs.unwrap_or_default();
+                let target =
+                    cst::Expr::new(cst::ExprKind::Global(name, subs), span);
+                cst::Expr::new(
+                    cst::ExprKind::Set(Box::new(target), Box::new(val)),
+                    span,
+                )
+            });
+
+        global.or(local)
+    }
+
+    /// `$KILL target` as expression.
+    ///
+    /// Deletes a variable or subtree and evaluates to `Unit`.
+    fn kill_expr(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let local = just(Token::Kill)
+            .ignore_then(Self::ident())
+            .then(Self::subscripts(expr.clone()).or_not())
+            .map_with_span(|(name, subs), span| {
+                let subs = subs.unwrap_or_default();
+                let target =
+                    cst::Expr::new(cst::ExprKind::Local(name, subs), span);
+                cst::Expr::new(cst::ExprKind::Kill(Box::new(target)), span)
+            });
+
+        let global = just(Token::Kill)
+            .ignore_then(Self::global_name())
+            .then(Self::subscripts(expr).or_not())
+            .map_with_span(|(name, subs), span| {
+                let subs = subs.unwrap_or_default();
+                let target =
+                    cst::Expr::new(cst::ExprKind::Global(name, subs), span);
+                cst::Expr::new(cst::ExprKind::Kill(Box::new(target)), span)
+            });
+
+        global.or(local)
+    }
+
+    /// `FOREVER seed (state, cont) => body`
+    ///
+    /// Parses the forever loop expression.
+    /// Uses `primary` for the seed (no postfix ops) to avoid parsing
+    /// `(state, cont)` as a call expression.
+    fn forever_expr(
+        primary: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        // Parameter: `name` or `name: Type`
+        let param = Self::ident().then(
+            just(Token::Colon)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(Self::type_expr())
+                .or_not(),
+        );
+
+        // Two parameters: `(state, cont)`
+        let params = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(param.clone())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::Comma))
+            .then_ignore(Self::opt_newlines())
+            .then(param)
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen));
+
+        // Use `primary` for seed (no postfix ops) to avoid parsing (state, cont) as call
+        just(Token::Forever)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(primary)
+            .then_ignore(Self::opt_newlines())
+            .then(params)
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::FatArrow))
+            .then_ignore(Self::opt_newlines())
+            .then(expr)
+            .map_with_span(|((seed, (state_param, cont_param)), body), span| {
+                cst::Expr::new(
+                    cst::ExprKind::Forever {
+                        seed: Box::new(seed),
+                        state_param,
+                        cont_param,
+                        body: Box::new(body),
+                    },
+                    span,
+                )
+            })
+    }
+
     /// `FUN name (params) { body }` or `FUN name[T](params) -> Type { body }`
     fn fun_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
@@ -722,8 +889,9 @@ impl Parser {
             // Use boxed() at strategic points to reduce stack depth during
             // parser construction. Each boxed() moves the parser to the heap.
             let primary = Self::primary_expr(expr.clone(), stmt.clone());
-            let postfix = Self::postfix_expr(expr.clone(), primary).boxed();
-            let unary = Self::unary_expr(expr, postfix);
+            let postfix =
+                Self::postfix_expr(expr.clone(), primary.clone()).boxed();
+            let unary = Self::unary_expr(expr, primary, postfix);
             let pow = Self::pow_expr(unary);
             let mul = Self::mul_expr(pow).boxed();
             let add = Self::add_expr(mul);
@@ -1198,6 +1366,9 @@ impl Parser {
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
+        primary: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
         operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
@@ -1240,8 +1411,24 @@ impl Parser {
                     cst::Expr::new(cst::ExprKind::Order(Box::new(inner)), span)
                 });
 
-            choice((with_op, get_expr, data_expr, order_expr))
-                .or(operand.clone())
+            // OUTPUT expr [JSON] [TO target]
+            let output = Self::output_expr(expr.clone());
+
+            // SET target = value
+            let set = Self::set_expr(expr.clone());
+
+            // KILL target
+            let kill = Self::kill_expr(expr.clone());
+
+            // FOREVER seed (state, cont) => body
+            // Use primary for seed (no postfix ops) to avoid parsing (state, cont) as a call
+            let forever = Self::forever_expr(primary, expr);
+
+            choice((
+                with_op, get_expr, data_expr, order_expr, output, set, kill,
+                forever,
+            ))
+            .or(operand.clone())
         })
     }
 

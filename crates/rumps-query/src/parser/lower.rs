@@ -357,6 +357,54 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let inner_id = lower_expr(ast, *inner)?;
             Expr::Order(inner_id)
         }
+        cst::ExprKind::Output(output) => {
+            let expr_id = lower_expr(ast, output.expr)?;
+            let format = match output.format {
+                cst::OutputFormat::Default => OutputFormat::Default,
+                cst::OutputFormat::Json => OutputFormat::Json,
+            };
+            let target = match output.target {
+                cst::OutputTarget::Stdout => OutputTarget::Stdout,
+                cst::OutputTarget::Stderr => OutputTarget::Stderr,
+                cst::OutputTarget::File(path_expr) => {
+                    let path_id = lower_expr(ast, *path_expr)?;
+                    OutputTarget::File(path_id)
+                }
+            };
+            Expr::Output(OutputStmt {
+                expr: expr_id,
+                format,
+                target,
+            })
+        }
+        cst::ExprKind::Set(target, value) => {
+            let target_id = lower_expr(ast, *target)?;
+            let value_id = lower_expr(ast, *value)?;
+            Expr::Set(target_id, value_id)
+        }
+        cst::ExprKind::Kill(target) => {
+            let target_id = lower_expr(ast, *target)?;
+            Expr::Kill(target_id)
+        }
+        cst::ExprKind::Forever {
+            seed,
+            state_param,
+            cont_param,
+            body,
+        } => {
+            let seed_id = lower_expr(ast, *seed)?;
+            let state_ty =
+                state_param.1.map(|t| lower_type_expr(ast, t)).transpose()?;
+            let cont_ty =
+                cont_param.1.map(|t| lower_type_expr(ast, t)).transpose()?;
+            let body_id = lower_expr(ast, *body)?;
+            Expr::Forever {
+                seed: seed_id,
+                state_param: (state_param.0, state_ty),
+                cont_param: (cont_param.0, cont_ty),
+                body: body_id,
+            }
+        }
         cst::ExprKind::Error(msg) => {
             Err(crate::Error::parse(span, msg, vec![]))?
         }

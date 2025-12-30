@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::ast::{Expr, ExprId, MatchArm, StmtId, TypePattern};
 use crate::io::IoContext;
-use crate::value::{TypeId, Value};
+use crate::value::{TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -391,5 +391,72 @@ impl<I: IoContext> Interpreter<'_, I> {
             end,
             inclusive,
         })
+    }
+
+    /// Evaluate a `FOREVER` loop expression.
+    ///
+    /// `FOREVER seed (state, cont) => body` is a continuation-passing loop:
+    /// - Evaluates `seed` to get initial state
+    /// - Binds `state` and `cont` in scope for each iteration
+    /// - If body returns `LoopContinue(new_state)`, recurses with new state
+    /// - Otherwise returns the body value
+    #[async_recursion]
+    pub(super) async fn forever(
+        &mut self,
+        seed: ExprId,
+        state_param: (String, Option<crate::ast::AstTypeExprId>),
+        cont_param: (String, Option<crate::ast::AstTypeExprId>),
+        body: ExprId,
+        span: Span,
+    ) -> Result<Value> {
+        // Evaluate seed
+        let init_state = self.eval(seed).await?;
+        let state_id = self.arena.add(init_state, span);
+
+        // Run the loop with initial state
+        self.forever_loop(state_id, &state_param.0, &cont_param.0, body, span)
+            .await
+    }
+
+    /// Inner loop for FOREVER, using async recursion.
+    #[async_recursion]
+    async fn forever_loop(
+        &mut self,
+        state_id: ValueId,
+        state_name: &str,
+        cont_name: &str,
+        body: ExprId,
+        span: Span,
+    ) -> Result<Value> {
+        // Push scope and bind parameters
+        self.env.scopes.push();
+
+        // Bind state parameter
+        let state_name_id = self.arena.intern(state_name);
+        self.env.scopes.bind(state_name_id, state_id);
+
+        // Bind continuation pseudo-function
+        let cont_name_id = self.arena.intern(cont_name);
+        let cont_id = self.arena.add(Value::ForeverContinuation, span);
+        self.env.scopes.bind(cont_name_id, cont_id);
+
+        // Evaluate body
+        let result = self.eval(body).await;
+        self.env.scopes.pop();
+
+        match result {
+            Ok(Value::LoopContinue(new_state_id)) => {
+                // Continue loop with new state
+                self.forever_loop(
+                    new_state_id,
+                    state_name,
+                    cont_name,
+                    body,
+                    span,
+                )
+                .await
+            }
+            other => other,
+        }
     }
 }

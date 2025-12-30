@@ -344,6 +344,27 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 Ok(Value::Regex(idx))
             }
             Expr::Matches(lhs, rhs) => self.matches(lhs, rhs).await,
+            Expr::Output(output) => {
+                self.output(&output).await?;
+                Ok(Value::Unit)
+            }
+            Expr::Set(target, value) => {
+                self.set(target, value, span).await?;
+                Ok(Value::Unit)
+            }
+            Expr::Kill(target) => {
+                self.kill(target, span).await?;
+                Ok(Value::Unit)
+            }
+            Expr::Forever {
+                seed,
+                state_param,
+                cont_param,
+                body,
+            } => {
+                self.forever(seed, state_param, cont_param, body, span)
+                    .await
+            }
         }
     }
 }

@@ -41,7 +41,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Err(Error::runtime_no_span("Regex cannot be stored"))
             }
             // Serialize to JSON for complex values (closures, module fns,
-            // and ranges will error in jsonify)
+            // ranges, and continuations will error in jsonify)
             Value::Array(_, _)
             | Value::Object(_)
             | Value::Tuple(_, _)
@@ -50,7 +50,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Closure { .. }
             | Value::Function { .. }
             | Value::ModuleFn { .. }
-            | Value::Range { .. } => {
+            | Value::Range { .. }
+            | Value::ForeverContinuation
+            | Value::LoopContinue(_) => {
                 self.jsonify(v).map(rumps_types::Value::Json)
             }
             Value::Time(t) => {
@@ -225,6 +227,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                     format!("{start}..{end}")
                 }
             }
+            // Internal loop control values; should not be stringified by user code
+            Value::ForeverContinuation => "<continuation>".into(),
+            Value::LoopContinue(_) => "<loop-continue>".into(),
         }
     }
 
@@ -358,6 +363,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Regex(_) => Err(Error::runtime_no_span(
                 "regex patterns cannot be serialized to JSON",
             )),
+            // Internal loop control values
+            Value::ForeverContinuation | Value::LoopContinue(_) => {
+                Err(Error::runtime_no_span(
+                    "loop continuations cannot be serialized to JSON",
+                ))
+            }
         }
     }
 
@@ -442,7 +453,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Closure { .. }
             | Value::Function { .. }
             | Value::ModuleFn { .. }
-            | Value::Range { .. } => Err(Error::runtime_no_span(
+            | Value::Range { .. }
+            | Value::ForeverContinuation
+            | Value::LoopContinue(_) => Err(Error::runtime_no_span(
                 "complex values cannot be used as subscripts",
             )),
         }

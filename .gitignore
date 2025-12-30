@@ -8,3 +8,5 @@ CLAUDE.md
 .pre-commit*
 # For temp dirs in benchmark runs
 /**/.tmp*
+/build
+/cargo

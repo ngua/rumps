@@ -99,9 +99,15 @@ $OUTPUT grade
 ; === Array of blocks ===
 
 LET computed = [
-  { LET x = 1; x + 1 },
-  { LET x = 2; x + 1 },
-  { LET x = 3; x + 1 }
+  { LET x = 1
+    x + 1
+  },
+  { LET x = 2
+    x + 1
+  },
+  { LET x = 3
+    x + 1
+  }
 ]
 $OUTPUT computed
 ; Expected: [ 2, 3, 4 ]

@@ -73,6 +73,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Module functions don't have a simple type expression
             Value::ModuleFn { .. } => self.type_exprs.named(TypeId::UNKNOWN),
             Value::Range { .. } => self.type_exprs.named(TypeId::RANGE),
+            // Internal loop control types; not exposed to users
+            Value::ForeverContinuation | Value::LoopContinue(_) => {
+                self.type_exprs.named(TypeId::UNIT)
+            }
         }
     }
 
@@ -875,6 +879,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Function { .. }
             | Value::ModuleFn { .. } => false,
             Value::Range { .. } => type_id == TypeId::RANGE,
+            // Internal loop control types; don't match user types
+            Value::ForeverContinuation | Value::LoopContinue(_) => false,
         }
     }
 

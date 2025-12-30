@@ -33,6 +33,7 @@ pub(crate) enum Token {
     Module,
     Data,
     Order,
+    Forever,
 
     // Literals
     Int(i64),
@@ -142,6 +143,7 @@ impl Token {
                 "MATCHES" => Some(Self::Matches),
                 "UNION" => Some(Self::Union),
                 "MODULE" => Some(Self::Module),
+                "FOREVER" => Some(Self::Forever),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -187,6 +189,7 @@ impl fmt::Display for Token {
             Self::Matches => write!(f, "MATCHES"),
             Self::Union => write!(f, "UNION"),
             Self::Module => write!(f, "MODULE"),
+            Self::Forever => write!(f, "FOREVER"),
             // MUMPS intrinsics (prefixed with `$`)
             Self::Set => write!(f, "$SET"),
             Self::Get => write!(f, "$GET"),

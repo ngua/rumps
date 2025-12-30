@@ -490,11 +490,11 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer types for a `SET` statement.
+    /// Infer types for a `SET` statement or expression.
     ///
     /// Type-checks subscript expressions and the value, adding appropriate
     /// constraints. Does not modify the environment (database write).
-    fn set(&mut self, target: ExprId, value: ExprId, span: Span) {
+    pub(super) fn set(&mut self, target: ExprId, value: ExprId, span: Span) {
         // Extract subscripts from target (Local or Global)
         let subs: SmallVec<[ExprId; 4]> = self
             .ast
@@ -516,11 +516,11 @@ impl InferCtx<'_> {
         self.constrain(Constraint::Storable(val_ty, span));
     }
 
-    /// Infer types for a `KILL` statement.
+    /// Infer types for a `KILL` statement or expression.
     ///
     /// Type-checks subscript expressions with `Subscriptable` constraints.
     /// Does not modify the environment (database delete).
-    fn kill(&mut self, target: ExprId, span: Span) {
+    pub(super) fn kill(&mut self, target: ExprId, span: Span) {
         // Extract subscripts from target (Local or Global)
         let subs: SmallVec<[ExprId; 4]> = self
             .ast
@@ -538,13 +538,13 @@ impl InferCtx<'_> {
         });
     }
 
-    /// Infer types for an `OUTPUT` statement.
+    /// Infer types for an `OUTPUT` statement or expression.
     ///
     /// Type-checks the expression and adds constraints based on format and target:
     /// - `Stringable` for default format
     /// - `Jsonable` for JSON format
     /// - `FilePath | String` for file target path
-    fn output(&mut self, output: &OutputStmt, span: Span) {
+    pub(super) fn output(&mut self, output: &OutputStmt, span: Span) {
         let expr_ty = self.expr(output.expr);
 
         // Format constraint

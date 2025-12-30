@@ -355,14 +355,17 @@ impl Array {
                         None
                     }
 
-                    // Unit, closures, functions, module functions, ranges, paths, and regex are not comparable
+                    // Unit, closures, functions, module functions, ranges, paths, regex,
+                    // and loop continuations are not comparable
                     Value::Unit
                     | Value::FilePath(_)
                     | Value::Regex(_)
                     | Value::Closure { .. }
                     | Value::Function { .. }
                     | Value::ModuleFn { .. }
-                    | Value::Range { .. } => None,
+                    | Value::Range { .. }
+                    | Value::ForeverContinuation
+                    | Value::LoopContinue(_) => None,
                 }
             }
 

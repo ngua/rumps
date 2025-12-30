@@ -757,11 +757,11 @@ pub(crate) enum Expr {
 
     /// JSON field access operators.
     ///
-    /// | Operator | Kind               | Returns                                |
-    /// |----------|--------------------|----------------------------------------|
-    /// | `.`      | `Field`            | `Json` (null if missing)               |
+    /// | Operator | Kind               | Returns                                  |
+    /// |----------|--------------------|------------------------------------------|
+    /// | `.`      | `Field`            | `Json` (null if missing)                 |
     /// | `..`     | `ScalarField`      | `Option[Bool \| Int \| Float \| String]` |
-    /// | `->`     | `Key`              | `Json` (null if missing)               |
+    /// | `->`     | `Key`              | `Json` (null if missing)                 |
     /// | `->>`    | `ScalarKey`        | `Option[Bool \| Int \| Float \| String]` |
     JsonAccess(ExprId, JsonAccessKind, JsonAccessKey),
 
@@ -791,6 +791,42 @@ pub(crate) enum Expr {
     /// Returns the next subscript at a given level. The inner expression must
     /// be a `Local` or `Global`. Returns `Option[Subscript]`.
     Order(ExprId),
+
+    /// Output expression: `$OUTPUT expr [JSON] [TO target]`.
+    ///
+    /// Executes the output side effect and evaluates to `Unit`.
+    /// This allows `$OUTPUT` in expression contexts like `f($OUTPUT x)`.
+    Output(OutputStmt),
+
+    /// Set expression: `$SET target = value`.
+    ///
+    /// Executes the B-tree assignment and evaluates to `Unit`.
+    /// This allows `$SET` in expression contexts like `f($SET x = 1)`.
+    Set(ExprId, ExprId),
+
+    /// Kill expression: `$KILL target`.
+    ///
+    /// Deletes a variable or subtree and evaluates to `Unit`.
+    /// This allows `$KILL` in expression contexts like `f($KILL x)`.
+    Kill(ExprId),
+
+    /// Forever loop: `FOREVER seed (state, cont) => body`.
+    ///
+    /// A functional looping construct using continuation-passing style:
+    /// - `seed`: Initial state value
+    /// - `state_param`: Name (and optional type) for the state parameter
+    /// - `cont_param`: Name (and optional type) for the continuation pseudo-function
+    /// - `body`: Loop body expression
+    ///
+    /// The continuation is a pseudo-function; calling it signals the loop should
+    /// continue with the provided value as the new state. If the body evaluates
+    /// without calling the continuation, the loop terminates and returns that value.
+    Forever {
+        seed: ExprId,
+        state_param: (String, Option<AstTypeExprId>),
+        cont_param: (String, Option<AstTypeExprId>),
+        body: ExprId,
+    },
 }
 
 /// The kind of JSON access operation.

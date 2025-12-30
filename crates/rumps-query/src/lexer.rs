@@ -968,6 +968,23 @@ mod tests {
     }
 
     #[test]
+    fn output_as_expr() {
+        // `$OUTPUT` after `=` should lex correctly
+        let tokens = lex_ok("LET x = $OUTPUT \"hello\"");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Let,
+                Token::Ident("x".into()),
+                Token::Assign,
+                Token::Output,
+                Token::String("hello".into()),
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
     fn spans_correct() {
         let result = lex_spanned("$SET x");
         assert_eq!(

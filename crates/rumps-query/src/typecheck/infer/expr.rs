@@ -216,6 +216,35 @@ impl InferCtx<'_> {
 
             // Order query: `ORDER local(...)` or `ORDER ^global(...)`
             Expr::Order(inner) => self.order(*inner, span),
+
+            // Output expression: `$OUTPUT expr [JSON] [TO target]`
+            // Same typing as statement version, but returns `Unit`
+            Expr::Output(output) => {
+                self.output(output, span);
+                Ty::Unit
+            }
+
+            // Set expression: `$SET target = value`
+            // Same typing as statement version, but returns `Unit`
+            Expr::Set(target, value) => {
+                self.set(*target, *value, span);
+                Ty::Unit
+            }
+
+            // Kill expression: `$KILL target`
+            // Same typing as statement version, but returns `Unit`
+            Expr::Kill(target) => {
+                self.kill(*target, span);
+                Ty::Unit
+            }
+
+            // Forever loop: `FOREVER seed (state, cont) => body`
+            Expr::Forever {
+                seed,
+                state_param,
+                cont_param,
+                body,
+            } => self.forever(*seed, state_param, cont_param, *body, span),
         }
     }
 
@@ -1677,5 +1706,62 @@ impl InferCtx<'_> {
         });
 
         Ty::Array(Box::new(expected_elem.clone()))
+    }
+
+    /// Infer type of `FOREVER` expression.
+    ///
+    /// `FOREVER seed (state, cont) => body` is a continuation-passing loop:
+    /// - `seed` is the initial state value
+    /// - `state` is bound to the current state in each iteration
+    /// - `cont` is a pseudo-function that, when called with a new state,
+    ///   continues the loop; not calling it exits and returns the body value
+    ///
+    /// Typing rules:
+    /// - `state` has the same type as `seed` (or its annotation)
+    /// - `cont` has type `(StateType) -> BodyType`
+    /// - The overall expression returns `BodyType`
+    pub(super) fn forever(
+        &mut self,
+        seed: ExprId,
+        state_param: &(String, Option<AstTypeExprId>),
+        cont_param: &(String, Option<AstTypeExprId>),
+        body: ExprId,
+        span: Span,
+    ) -> Ty {
+        // Infer seed type
+        let seed_ty = self.expr(seed);
+
+        // State parameter type: annotation or unify with seed
+        let state_ty = state_param
+            .1
+            .map(|id| self.ast_type_to_ty(id, &HashMap::new()))
+            .unwrap_or_else(|| seed_ty.clone());
+
+        // Unify seed with state type
+        self.unify(seed_ty, state_ty.clone(), span);
+
+        // Create fresh type variable for body/result type
+        let body_ty = self.fresh();
+
+        // Continuation type: (StateType) -> BodyType
+        let cont_ty = Ty::Fn(vec![state_ty.clone()], Box::new(body_ty.clone()));
+
+        // Check cont_param annotation if present
+        if let Some(ann_id) = cont_param.1 {
+            let ann_ty = self.ast_type_to_ty(ann_id, &HashMap::new());
+            self.unify(cont_ty.clone(), ann_ty, span);
+        }
+
+        // Push scope, bind parameters, infer body
+        self.env.push_scope();
+        self.env.bind(&state_param.0, Scheme::mono(state_ty));
+        self.env.bind(&cont_param.0, Scheme::mono(cont_ty));
+        let inferred_body_ty = self.expr(body);
+        self.env.pop_scope();
+
+        // Unify inferred body type with result type
+        self.unify(inferred_body_ty, body_ty.clone(), span);
+
+        body_ty
     }
 }

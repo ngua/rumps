@@ -1314,6 +1314,19 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let vals = self.eval_args(args).await?;
                 self.invoke_module_fn(&path, &vals, span).await
             }
+            // FOREVER continuation: calling it signals loop continuation
+            Value::ForeverContinuation => {
+                // Evaluate the single argument (new state)
+                let new_state_expr = args.first().ok_or_else(|| {
+                    Error::runtime(
+                        span,
+                        "continuation requires exactly one argument",
+                    )
+                })?;
+                let new_state = self.eval(*new_state_expr).await?;
+                let state_id = self.arena.add(new_state, span);
+                Ok(Value::LoopContinue(state_id))
+            }
             // Type checker guarantees callee is callable
             _ => typechecked!("call", "Callable"),
         }

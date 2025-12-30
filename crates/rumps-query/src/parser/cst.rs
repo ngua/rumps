@@ -289,6 +289,30 @@ pub(crate) enum ExprKind {
     /// Returns the next subscript at a given level. The inner expression must
     /// be a `Local` or `Global`. Returns `Option[Subscript]`.
     Order(Box<Expr>),
+
+    /// Output expression: `$OUTPUT expr [JSON] [TO target]`.
+    ///
+    /// Executes the output side effect and evaluates to `Unit`.
+    /// This allows `$OUTPUT` in expression contexts.
+    Output(Box<OutputStmt>),
+
+    /// Set expression: `$SET target = value`.
+    ///
+    /// Executes the B-tree assignment and evaluates to `Unit`.
+    Set(Box<Expr>, Box<Expr>),
+
+    /// Kill expression: `$KILL target`.
+    ///
+    /// Deletes a variable or subtree and evaluates to `Unit`.
+    Kill(Box<Expr>),
+
+    /// Forever loop: `FOREVER seed (state, cont) => body`.
+    Forever {
+        seed: Box<Expr>,
+        state_param: (String, Option<TypeExpr>),
+        cont_param: (String, Option<TypeExpr>),
+        body: Box<Expr>,
+    },
 }
 
 /// The key specification for JSON access (CST form).

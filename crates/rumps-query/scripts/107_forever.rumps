@@ -1,0 +1,95 @@
+; Test: FOREVER loop construct
+; Continuation-passing style loop with explicit state
+
+; Basic: count to 5
+LET count = FOREVER 1 (n, cont) => {
+    IF n > 5 {
+        n - 1  ; return last valid value
+    } ELSE {
+        cont(n + 1)
+    }
+}
+$OUTPUT count
+
+; Sum from 1 to 10
+LET sum = FOREVER { acc: 0, i: 1 } (state, cont) => {
+    IF state.i > 10 {
+        state.acc
+    } ELSE {
+        cont({ acc: state.acc + state.i, i: state.i + 1 })
+    }
+}
+$OUTPUT sum
+
+; Factorial of 5
+LET factorial = FOREVER { result: 1, n: 5 } (state, cont) => {
+    IF state.n <= 1 {
+        state.result
+    } ELSE {
+        cont({ result: state.result * state.n, n: state.n - 1 })
+    }
+}
+$OUTPUT factorial
+
+; Early exit based on condition
+LET early = FOREVER 0 (n, cont) => {
+    IF n == 3 {
+        "stopped at 3"
+    } ELSE {
+        cont(n + 1)
+    }
+}
+$OUTPUT early
+
+; Collect even numbers from 0 to 10
+LET evens = FOREVER { i: 0, acc: [] } (state, cont) => {
+    IF state.i > 10 {
+        state.acc
+    } ELSE {
+        IF state.i % 2 == 0 {
+            cont({ i: state.i + 1, acc: Array.concat(state.acc, [state.i]) })
+        } ELSE {
+            cont({ i: state.i + 1, acc: state.acc })
+        }
+    }
+}
+$OUTPUT evens
+
+; Using $ORDER to iterate through subscripts
+$SET data(1) = "one"
+$SET data(2) = "two"
+$SET data(3) = "three"
+$SET data(4) = "four"
+
+; Collect keys using $ORDER and FOREVER
+LET keys = FOREVER { key: $ORDER data, acc: [] } (state, cont) => {
+    MATCH state.key {
+        Option.None => state.acc
+        Option.Some(s) => {
+            LET s = (s READ Int)!
+            cont({
+                key: $ORDER data(s),
+                acc: Array.concat(state.acc, [s])
+            })
+        }
+    }
+}
+$OUTPUT keys
+
+; Collect all values using $ORDER
+LET vals = FOREVER { key: $ORDER data, acc: "" } (state, cont) => {
+    MATCH state.key {
+        Option.None => state.acc
+        Option.Some(k) => {
+            LET ki = (k READ Int)!
+            LET v = ($GET data(ki))!
+            cont({
+                key: $ORDER data(ki),
+                acc: state.acc ++ v ++ " "
+            })
+        }
+    }
+}
+$OUTPUT vals
+
+$OUTPUT "FOREVER test complete"

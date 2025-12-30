@@ -1,5 +1,21 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: deeply nested structures\n; Tests complex nesting of arrays, objects, and blocks\n\n; === Deeply nested arrays ===\n\nLET deep = [[[[1]]]]\n$OUTPUT deep[0][0][0][0]\n; Expected: 1\n\nLET matrix3d = [\n  [[1, 2], [3, 4]],\n  [[5, 6], [7, 8]]\n]\n$OUTPUT matrix3d[0][0][0]\n; Expected: 1\n\n$OUTPUT matrix3d[1][1][1]\n; Expected: 8\n\n$OUTPUT matrix3d[-1][-1][-1]\n; Expected: 8\n\n; === Deeply nested objects ===\n\nLET nested = {\n  level1: {\n    level2: {\n      level3: {\n        value: \"deep\"\n      }\n    }\n  }\n}\n$OUTPUT nested.level1.level2.level3.value\n; Expected: deep\n\n; === Mixed nesting ===\n\nLET complex = {\n  users: [\n    { name: \"Alice\", scores: [100, 95, 88] },\n    { name: \"Bob\", scores: [90, 85, 92] }\n  ],\n  meta: {\n    count: 2,\n    tags: [\"active\", \"verified\"]\n  }\n}\n\n$OUTPUT complex.users[0].name\n; Expected: Alice\n\n$OUTPUT complex.users[0].scores[0]\n; Expected: 100\n\n$OUTPUT complex.users[1].scores[-1]\n; Expected: 92\n\n$OUTPUT complex.meta.tags[0]\n; Expected: active\n\n$OUTPUT complex.users[1].name\n; Expected: Bob\n\n; === Nested blocks ===\n\nLET result = {\n  LET a = {\n    LET b = {\n      LET c = 10\n      c * 2\n    }\n    b + 5\n  }\n  a * 3\n}\n$OUTPUT result\n; Expected: 75 ((10 * 2 + 5) * 3 = 25 * 3)\n\n; === Nested conditionals ===\n\nLET score = 85\nLET grade = IF score >= 90 {\n  \"A\"\n} ELSE {\n  IF score >= 80 {\n    \"B\"\n  } ELSE {\n    IF score >= 70 {\n      \"C\"\n    } ELSE {\n      \"F\"\n    }\n  }\n}\n$OUTPUT grade\n; Expected: B\n\n; === Array of blocks ===\n\nLET computed = [\n  { LET x = 1; x + 1 },\n  { LET x = 2; x + 1 },\n  { LET x = 3; x + 1 }\n]\n$OUTPUT computed\n; Expected: [ 2, 3, 4 ]\n\n; === Object with computed values ===\n\nLET base = 10\nLET obj = {\n  double: base * 2,\n  triple: base * 3,\n  square: base * base\n}\n$OUTPUT obj.double\n; Expected: 20\n\n$OUTPUT obj.triple\n; Expected: 30\n\n$OUTPUT obj.square\n; Expected: 100\n\n$OUTPUT \"Nested structures test complete\"\n"
+description: "; Test: deeply nested structures\n; Tests complex nesting of arrays, objects, and blocks\n\n; === Deeply nested arrays ===\n\nLET deep = [[[[1]]]]\n$OUTPUT deep[0][0][0][0]\n; Expected: 1\n\nLET matrix3d = [\n  [[1, 2], [3, 4]],\n  [[5, 6], [7, 8]]\n]\n$OUTPUT matrix3d[0][0][0]\n; Expected: 1\n\n$OUTPUT matrix3d[1][1][1]\n; Expected: 8\n\n$OUTPUT matrix3d[-1][-1][-1]\n; Expected: 8\n\n; === Deeply nested objects ===\n\nLET nested = {\n  level1: {\n    level2: {\n      level3: {\n        value: \"deep\"\n      }\n    }\n  }\n}\n$OUTPUT nested.level1.level2.level3.value\n; Expected: deep\n\n; === Mixed nesting ===\n\nLET complex = {\n  users: [\n    { name: \"Alice\", scores: [100, 95, 88] },\n    { name: \"Bob\", scores: [90, 85, 92] }\n  ],\n  meta: {\n    count: 2,\n    tags: [\"active\", \"verified\"]\n  }\n}\n\n$OUTPUT complex.users[0].name\n; Expected: Alice\n\n$OUTPUT complex.users[0].scores[0]\n; Expected: 100\n\n$OUTPUT complex.users[1].scores[-1]\n; Expected: 92\n\n$OUTPUT complex.meta.tags[0]\n; Expected: active\n\n$OUTPUT complex.users[1].name\n; Expected: Bob\n\n; === Nested blocks ===\n\nLET result = {\n  LET a = {\n    LET b = {\n      LET c = 10\n      c * 2\n    }\n    b + 5\n  }\n  a * 3\n}\n$OUTPUT result\n; Expected: 75 ((10 * 2 + 5) * 3 = 25 * 3)\n\n; === Nested conditionals ===\n\nLET score = 85\nLET grade = IF score >= 90 {\n  \"A\"\n} ELSE {\n  IF score >= 80 {\n    \"B\"\n  } ELSE {\n    IF score >= 70 {\n      \"C\"\n    } ELSE {\n      \"F\"\n    }\n  }\n}\n$OUTPUT grade\n; Expected: B\n\n; === Array of blocks ===\n\nLET computed = [\n  { LET x = 1\n    x + 1\n  },\n  { LET x = 2\n    x + 1\n  },\n  { LET x = 3\n    x + 1\n  }\n]\n$OUTPUT computed\n; Expected: [ 2, 3, 4 ]\n\n; === Object with computed values ===\n\nLET base = 10\nLET obj = {\n  double: base * 2,\n  triple: base * 3,\n  square: base * base\n}\n$OUTPUT obj.double\n; Expected: 20\n\n$OUTPUT obj.triple\n; Expected: 30\n\n$OUTPUT obj.square\n; Expected: 100\n\n$OUTPUT \"Nested structures test complete\"\n"
 ---
-ERROR: parse error at 1538..1539: unexpected `]` (expected: TRUE, AND, /, ||, IS, <=, -, dedent, *, !=, $DATA, $KILL, !, $OUTPUT, MATCHES, >=, ..=, .., NOT, $GET, MODULE, }, $SET, $ORDER, FALSE, LET, (, UNION, MATCH, |>, +, null, &&, %, AS, IF, <, **, {, //, FUN, OR, [, TYPE, ++, ??, >, ==, newline, ?, READ, indent)
+1
+1
+8
+8
+"deep"
+"Alice"
+100
+92
+"active"
+"Bob"
+75
+"B"
+[ 2, 3, 4 ]
+20
+30
+100
+"Nested structures test complete"

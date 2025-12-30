@@ -509,6 +509,19 @@ pub(crate) enum Value {
         end: i64,
         inclusive: bool,
     },
+
+    /// A FOREVER loop continuation pseudo-function.
+    ///
+    /// Not a real callable; calling this triggers loop continuation in the
+    /// interpreter.
+    ForeverContinuation,
+
+    /// Signal to continue a FOREVER loop with a new state.
+    ///
+    /// This is never exposed to user code; it's an internal signal between
+    /// the continuation call and the FOREVER loop interpreter. The `ValueId`
+    /// points to the new state value.
+    LoopContinue(ValueId),
 }
 
 impl Value {
@@ -565,6 +578,8 @@ impl Value {
             Self::Function { .. } => Cow::Borrowed("Function"),
             Self::ModuleFn { .. } => Cow::Borrowed("ModuleFn"),
             Self::Range { .. } => Cow::Borrowed("Range"),
+            Self::ForeverContinuation => Cow::Borrowed("Continuation"),
+            Self::LoopContinue(_) => Cow::Borrowed("LoopContinue"),
         }
     }
 
@@ -671,6 +686,8 @@ impl Value {
             | Self::Function { .. }
             | Self::ModuleFn { .. } => TypeId::UNKNOWN,
             Self::Range { .. } => TypeId::RANGE,
+            // Internal types; not exposed to user code
+            Self::ForeverContinuation | Self::LoopContinue(_) => TypeId::UNIT,
         }
     }
 }
