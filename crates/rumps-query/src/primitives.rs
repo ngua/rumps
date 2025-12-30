@@ -1928,6 +1928,30 @@ impl Time {
         })
     }
 
+    /// `Time.sleep(us) -> Unit`
+    ///
+    /// Sleeps for `us` microseconds. Blocks execution.
+    pub(crate) fn sleep<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let us = ctx
+                .arena
+                .get(args[0])
+                .and_then(|v| match v {
+                    Value::Int(n) => Some(*n),
+                    _ => None,
+                })
+                .unwrap_or_else(|| typechecked!("Time.sleep", "Int"));
+
+            let dur = tokio::time::Duration::from_micros(us.max(0) as u64);
+            tokio::time::sleep(dur).await;
+
+            Ok(ctx.arena.add(Value::Unit, ctx.span))
+        })
+    }
+
     /// Helper to extract a `Time` value from an argument.
     fn get_time(
         ctx: &PrimCtx<'_>,

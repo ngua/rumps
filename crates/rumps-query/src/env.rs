@@ -985,6 +985,11 @@ impl Environment {
                     f: Time::second,
                     ty: scheme!((Time) -> Int),
                 },
+                PrimDef {
+                    name: "sleep",
+                    f: Time::sleep,
+                    ty: scheme!((Int) -> Unit),
+                },
             ]),
         );
 
