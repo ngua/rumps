@@ -8,10 +8,10 @@ use smallvec::SmallVec;
 
 use super::cst;
 use crate::ast::{
-    self, ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr,
-    ExprId, JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, ObjectEntry,
-    OutputFormat, OutputStmt, OutputTarget, RestPattern, Stmt, StmtId,
-    SubscriptElem, TypeDefAst, TypePattern, VariantAst,
+    self, ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
+    Expr, ExprId, JsonAccessKey, MatchArm, MatchPattern, MatchPatternId,
+    ObjectEntry, OutputFormat, OutputStmt, OutputTarget, RestPattern, Stmt,
+    StmtId, SubscriptElem, TypeDefAst, TypePattern, VariantAst,
 };
 use crate::Result;
 
@@ -66,14 +66,14 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
             let expr_id = lower_expr(ast, expr)?;
             Stmt::Let(pat, ty_id, expr_id)
         }
-        cst::StmtKind::Set(target, value) => {
-            let target_id = lower_expr(ast, target)?;
+        cst::StmtKind::Set(dbref, value) => {
+            let dbref = lower_db_ref(ast, dbref)?;
             let value_id = lower_expr(ast, value)?;
-            Stmt::Set(target_id, value_id)
+            Stmt::Set(dbref, value_id)
         }
-        cst::StmtKind::Kill(target) => {
-            let target_id = lower_expr(ast, target)?;
-            Stmt::Kill(target_id)
+        cst::StmtKind::Kill(dbref) => {
+            let dbref = lower_db_ref(ast, dbref)?;
+            Stmt::Kill(dbref)
         }
         cst::StmtKind::Output(output) => {
             let expr_id = lower_expr(ast, output.expr)?;
@@ -171,17 +171,9 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
     let e = match expr.kind {
         cst::ExprKind::Literal(lit) => Expr::Literal(lit),
         cst::ExprKind::Var(name) => Expr::Var(name),
-        cst::ExprKind::Local(name, subs) => {
-            let sub_ids = lower_subscript_elems(ast, subs)?;
-            Expr::Local(name, sub_ids)
-        }
-        cst::ExprKind::Global(name, subs) => {
-            let sub_ids = lower_subscript_elems(ast, subs)?;
-            Expr::Global(name, sub_ids)
-        }
-        cst::ExprKind::Get(inner) => {
-            let inner_id = lower_expr(ast, *inner)?;
-            Expr::Get(inner_id)
+        cst::ExprKind::Get(dbref) => {
+            let dbref = lower_db_ref(ast, dbref)?;
+            Expr::Get(dbref)
         }
         cst::ExprKind::Binary(lhs, op, rhs) => {
             let lhs_id = lower_expr(ast, *lhs)?;
@@ -349,13 +341,13 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let rhs_id = lower_expr(ast, *rhs)?;
             Expr::Matches(lhs_id, rhs_id)
         }
-        cst::ExprKind::Data(inner) => {
-            let inner_id = lower_expr(ast, *inner)?;
-            Expr::Data(inner_id)
+        cst::ExprKind::Data(dbref) => {
+            let dbref = lower_db_ref(ast, dbref)?;
+            Expr::Data(dbref)
         }
-        cst::ExprKind::Order(inner) => {
-            let inner_id = lower_expr(ast, *inner)?;
-            Expr::Order(inner_id)
+        cst::ExprKind::Order(dbref) => {
+            let dbref = lower_db_ref(ast, dbref)?;
+            Expr::Order(dbref)
         }
         cst::ExprKind::Output(output) => {
             let expr_id = lower_expr(ast, output.expr)?;
@@ -377,14 +369,14 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
                 target,
             })
         }
-        cst::ExprKind::Set(target, value) => {
-            let target_id = lower_expr(ast, *target)?;
+        cst::ExprKind::Set(dbref, value) => {
+            let dbref = lower_db_ref(ast, dbref)?;
             let value_id = lower_expr(ast, *value)?;
-            Expr::Set(target_id, value_id)
+            Expr::Set(dbref, value_id)
         }
-        cst::ExprKind::Kill(target) => {
-            let target_id = lower_expr(ast, *target)?;
-            Expr::Kill(target_id)
+        cst::ExprKind::Kill(dbref) => {
+            let dbref = lower_db_ref(ast, dbref)?;
+            Expr::Kill(dbref)
         }
         cst::ExprKind::Forever {
             seed,
@@ -615,6 +607,20 @@ fn lower_subscript_elems(
         .into_iter()
         .map(|e| lower_subscript_elem(ast, e))
         .collect()
+}
+
+/// Lower a CST database reference to AST.
+fn lower_db_ref(ast: &mut Ast, dbref: cst::DbRef) -> Result<DbRef> {
+    match dbref {
+        cst::DbRef::Local(name, subs) => {
+            let sub_ids = lower_subscript_elems(ast, subs)?;
+            Ok(DbRef::Local(name, sub_ids))
+        }
+        cst::DbRef::Global(name, subs) => {
+            let sub_ids = lower_subscript_elems(ast, subs)?;
+            Ok(DbRef::Global(name, sub_ids))
+        }
+    }
 }
 
 /// Lower a CST match pattern to AST, allocating into the pattern arena.

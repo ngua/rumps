@@ -9,9 +9,9 @@ use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
-    ArrayElem, AstTypeExprId, BindingPattern, Expr, ExprId, OutputFormat,
-    OutputStmt, OutputTarget, Stmt, StmtId, SubscriptElem, TypeParam,
-    UserConstraint,
+    ArrayElem, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
+    OutputFormat, OutputStmt, OutputTarget, Stmt, StmtId, SubscriptElem,
+    TypeParam, UserConstraint,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
@@ -42,9 +42,9 @@ impl InferCtx<'_> {
                 self.r#let(&pattern, ann.as_ref(), rhs, span)
             }
 
-            Some(Stmt::Set(target, value)) => self.set(target, value, span),
+            Some(Stmt::Set(ref dbref, value)) => self.set(dbref, value, span),
 
-            Some(Stmt::Kill(target)) => self.kill(target, span),
+            Some(Stmt::Kill(ref dbref)) => self.kill(dbref, span),
 
             Some(Stmt::Output(output)) => self.output(&output, span),
 
@@ -495,18 +495,11 @@ impl InferCtx<'_> {
     ///
     /// Type-checks subscript expressions and the value, adding appropriate
     /// constraints. Does not modify the environment (database write).
-    pub(super) fn set(&mut self, target: ExprId, value: ExprId, span: Span) {
-        // Extract subscripts from target (Local or Global)
-        let subs: SmallVec<[SubscriptElem; 4]> = self
-            .ast
-            .get_expr(target)
-            .and_then(|e| match e {
-                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        self.check_subscript_elems(&subs, span);
+    pub(super) fn set(&mut self, dbref: &DbRef, value: ExprId, span: Span) {
+        let subs = match dbref {
+            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
+        };
+        self.check_subscript_elems(subs, span);
 
         // Type-check value and add Storable constraint
         let val_ty = self.expr(value);
@@ -517,18 +510,11 @@ impl InferCtx<'_> {
     ///
     /// Type-checks subscript expressions with `Subscriptable` constraints.
     /// Does not modify the environment (database delete).
-    pub(super) fn kill(&mut self, target: ExprId, span: Span) {
-        // Extract subscripts from target (Local or Global)
-        let subs: SmallVec<[SubscriptElem; 4]> = self
-            .ast
-            .get_expr(target)
-            .and_then(|e| match e {
-                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        self.check_subscript_elems(&subs, span);
+    pub(super) fn kill(&mut self, dbref: &DbRef, span: Span) {
+        let subs = match dbref {
+            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
+        };
+        self.check_subscript_elems(subs, span);
     }
 
     /// Infer types for an `OUTPUT` statement or expression.

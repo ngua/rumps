@@ -10,7 +10,7 @@ use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
-    ArrayElem, AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey,
+    ArrayElem, AstTypeExprId, BinOp, DbRef, Expr, ExprId, JsonAccessKey,
     JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId, SubscriptElem,
     TypeParam, TypePattern, UnOp, UserConstraint,
 };
@@ -145,16 +145,10 @@ impl InferCtx<'_> {
             Expr::Read(inner, ty_id) => self.read_conv(*inner, *ty_id, span),
 
             // Database read: `GET local(...)` or `GET ^global(...)`
-            Expr::Get(inner) => self.get(*inner, span),
+            Expr::Get(dbref) => self.get(dbref, span),
 
             // Type annotation: `(expr) : Type`
             Expr::Annotate(inner, ty_id) => self.annotate(*inner, *ty_id, span),
-
-            // Local/Global B-tree variables (subscript expressions)
-            Expr::Local(_, _) | Expr::Global(_, _) => {
-                // These are always wrapped in GET; standalone is not typed
-                Ty::Error
-            }
 
             // Module path: `Module.function` or `Module.constant`
             Expr::Path(segments) => {
@@ -212,10 +206,10 @@ impl InferCtx<'_> {
             }
 
             // Data query: `DATA local(...)` or `DATA ^global(...)`
-            Expr::Data(inner) => self.data(*inner, span),
+            Expr::Data(dbref) => self.data(dbref, span),
 
             // Order query: `ORDER local(...)` or `ORDER ^global(...)`
-            Expr::Order(inner) => self.order(*inner, span),
+            Expr::Order(dbref) => self.order(dbref, span),
 
             // Output expression: `$OUTPUT expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
@@ -226,15 +220,15 @@ impl InferCtx<'_> {
 
             // Set expression: `$SET target = value`
             // Same typing as statement version, but returns `Unit`
-            Expr::Set(target, value) => {
-                self.set(*target, *value, span);
+            Expr::Set(dbref, value) => {
+                self.set(dbref, *value, span);
                 Ty::Unit
             }
 
             // Kill expression: `$KILL target`
             // Same typing as statement version, but returns `Unit`
-            Expr::Kill(target) => {
-                self.kill(*target, span);
+            Expr::Kill(dbref) => {
+                self.kill(dbref, span);
                 Ty::Unit
             }
 
@@ -1557,18 +1551,11 @@ impl InferCtx<'_> {
     ///
     /// Database reads return `Option[Storable]`; the value may not exist at the
     /// given path. Usage may narrow via `IS`/`AS` checks or arithmetic operations.
-    fn get(&mut self, inner_id: ExprId, span: Span) -> Ty {
-        // Extract subscripts if Local or Global
-        let subs: SmallVec<[SubscriptElem; 4]> = self
-            .ast
-            .get_expr(inner_id)
-            .and_then(|e| match e {
-                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        self.check_subscript_elems(&subs, span);
+    fn get(&mut self, dbref: &DbRef, span: Span) -> Ty {
+        let subs = match dbref {
+            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
+        };
+        self.check_subscript_elems(subs, span);
         Ty::Option(Box::new(Ty::Named(TypeId::STORABLE, vec![])))
     }
 
@@ -1599,36 +1586,22 @@ impl InferCtx<'_> {
     /// Infer type of `DATA` expression.
     ///
     /// Queries the existence status of a node. Returns `DataStatus` enum.
-    fn data(&mut self, inner_id: ExprId, span: Span) -> Ty {
-        // Extract subscripts if Local or Global
-        let subs: SmallVec<[SubscriptElem; 4]> = self
-            .ast
-            .get_expr(inner_id)
-            .and_then(|e| match e {
-                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        self.check_subscript_elems(&subs, span);
+    fn data(&mut self, dbref: &DbRef, span: Span) -> Ty {
+        let subs = match dbref {
+            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
+        };
+        self.check_subscript_elems(subs, span);
         Ty::DataStatus
     }
 
     /// Infer type of `ORDER` expression.
     ///
     /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
-    fn order(&mut self, inner_id: ExprId, span: Span) -> Ty {
-        // Extract subscripts if Local or Global
-        let subs: SmallVec<[SubscriptElem; 4]> = self
-            .ast
-            .get_expr(inner_id)
-            .and_then(|e| match e {
-                Expr::Local(_, s) | Expr::Global(_, s) => Some(s.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        self.check_subscript_elems(&subs, span);
+    fn order(&mut self, dbref: &DbRef, span: Span) -> Ty {
+        let subs = match dbref {
+            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
+        };
+        self.check_subscript_elems(subs, span);
         Ty::Option(Box::new(Ty::Named(TypeId::SUBSCRIPT, vec![])))
     }
 

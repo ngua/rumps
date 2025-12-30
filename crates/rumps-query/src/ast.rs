@@ -6,6 +6,7 @@
 
 #![allow(dead_code)]
 
+use rumps_types::Name;
 use smallvec::SmallVec;
 
 use crate::{Error, Result, Span};
@@ -538,7 +539,7 @@ pub(crate) enum ObjectEntry {
 
 /// A subscript element: either a single expression or a spread.
 ///
-/// Used in `Local` and `Global` B-tree variable references:
+/// Used in `DbRef` B-tree variable references:
 /// - `d(1, "key")` uses `Elem` for each subscript
 /// - `d(...keys)` uses `Spread` to expand an `Array[Subscript]`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -547,6 +548,29 @@ pub(crate) enum SubscriptElem {
     Elem(ExprId),
     /// A spread: `...expr`
     Spread(ExprId),
+}
+
+/// A reference to a B-tree variable (local or global) with subscripts.
+///
+/// This is NOT an expression; it can only appear in database operations like
+/// `GET`, `SET`, `KILL`, `DATA`, and `ORDER`. This ensures at the AST level
+/// that B-tree references cannot be used as values directly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DbRef {
+    /// Local B-tree variable: `data`, `data(1)`, `data(...keys)`.
+    Local(String, SmallVec<[SubscriptElem; 4]>),
+    /// Global B-tree variable: `^PATIENT`, `^DATA(1, ...rest)`.
+    Global(String, SmallVec<[SubscriptElem; 4]>),
+}
+
+impl DbRef {
+    /// Splits into the storage `Name` and subscript elements.
+    pub(crate) fn split(&self) -> (Name, &SmallVec<[SubscriptElem; 4]>) {
+        match self {
+            DbRef::Local(n, s) => (Name::local(n), s),
+            DbRef::Global(n, s) => (Name::global(n), s),
+        }
+    }
 }
 
 /// A literal value in the AST.
@@ -581,24 +605,11 @@ pub(crate) enum Expr {
     /// fall back to B-tree locals.
     Var(String),
 
-    /// A local B-tree variable with subscripts.
-    ///
-    /// `x(1, "KEY")` becomes `Local("x", [Elem(1), Elem("KEY")])`.
-    /// `x(...keys)` uses `Spread` to expand an `Array[Subscript]`.
-    /// Requires `GET` to read the value.
-    Local(String, SmallVec<[SubscriptElem; 4]>),
-
-    /// A global B-tree variable with subscripts.
-    ///
-    /// `^PATIENT(123, "NAME")` becomes `Global("PATIENT", [Elem(123), Elem("NAME")])`.
-    /// `^PATIENT(...keys)` uses `Spread` to expand an `Array[Subscript]`.
-    /// Requires `GET` to read the value.
-    Global(String, SmallVec<[SubscriptElem; 4]>),
-
     /// `GET` primitive.
     ///
-    /// Reads a value from a B-tree variable (`Local` or `Global`).
-    Get(ExprId),
+    /// Reads a value from a B-tree variable. The `DbRef` specifies the
+    /// variable name and subscripts.
+    Get(DbRef),
 
     /// A binary operation.
     Binary(ExprId, BinOp, ExprId),
@@ -797,15 +808,13 @@ pub(crate) enum Expr {
 
     /// Data query: `DATA var`.
     ///
-    /// Queries the existence status of a node. The inner expression must be
-    /// a `Local` or `Global`. Returns `DataStatus` enum.
-    Data(ExprId),
+    /// Queries the existence status of a node. Returns `DataStatus` enum.
+    Data(DbRef),
 
     /// Order query: `ORDER var`.
     ///
-    /// Returns the next subscript at a given level. The inner expression must
-    /// be a `Local` or `Global`. Returns `Option[Subscript]`.
-    Order(ExprId),
+    /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
+    Order(DbRef),
 
     /// Output expression: `$OUTPUT expr [JSON] [TO target]`.
     ///
@@ -817,13 +826,13 @@ pub(crate) enum Expr {
     ///
     /// Executes the B-tree assignment and evaluates to `Unit`.
     /// This allows `$SET` in expression contexts like `f($SET x = 1)`.
-    Set(ExprId, ExprId),
+    Set(DbRef, ExprId),
 
     /// Kill expression: `$KILL target`.
     ///
     /// Deletes a variable or subtree and evaluates to `Unit`.
     /// This allows `$KILL` in expression contexts like `f($KILL x)`.
-    Kill(ExprId),
+    Kill(DbRef),
 
     /// Forever loop: `FOREVER seed (state, cont) => body`.
     ///
@@ -909,14 +918,11 @@ pub(crate) enum Stmt {
 
     /// B-tree assignment: `SET x(subs...) = expr` or `SET ^NAME(subs...) = expr`.
     ///
-    /// The first `ExprId` must be a `Local` or `Global` expression (the target);
-    /// the second is the value expression.
-    Set(ExprId, ExprId),
+    /// The `DbRef` is the target; the `ExprId` is the value expression.
+    Set(DbRef, ExprId),
 
     /// Delete a variable or subtree: `KILL x(subs...)` or `KILL ^NAME(subs...)`.
-    ///
-    /// The `ExprId` must be a `Local` or `Global` expression.
-    Kill(ExprId),
+    Kill(DbRef),
 
     /// Output a value with optional format and target.
     ///
@@ -1052,10 +1058,10 @@ mod tests {
     }
 
     #[test]
-    fn arena_global_with_subscripts() {
+    fn arena_get_with_dbref() {
         let mut ast = Ast::new();
 
-        // Build: ^PATIENT(123, "NAME")
+        // Build: GET ^PATIENT(123, "NAME")
         let sub1 = ast
             .add_expr(Expr::Literal(Literal::Int(123)), Span::new(9, 12))
             .unwrap();
@@ -1065,26 +1071,24 @@ mod tests {
                 Span::new(14, 20),
             )
             .unwrap();
-        let global = ast
-            .add_expr(
-                Expr::Global(
-                    "PATIENT".into(),
-                    smallvec::smallvec![
-                        SubscriptElem::Elem(sub1),
-                        SubscriptElem::Elem(sub2)
-                    ],
-                ),
-                Span::new(0, 21),
-            )
+        let dbref = DbRef::Global(
+            "PATIENT".into(),
+            smallvec::smallvec![
+                SubscriptElem::Elem(sub1),
+                SubscriptElem::Elem(sub2)
+            ],
+        );
+        let get_expr = ast
+            .add_expr(Expr::Get(dbref.clone()), Span::new(0, 21))
             .unwrap();
 
         assert_eq!(ast.expr_count(), 3);
-        match ast.get_expr(global) {
-            Some(Expr::Global(name, subs)) => {
+        match ast.get_expr(get_expr) {
+            Some(Expr::Get(DbRef::Global(name, subs))) => {
                 assert_eq!(name, "PATIENT");
                 assert_eq!(subs.len(), 2);
             }
-            _ => panic!("expected Global"),
+            _ => panic!("expected Get(DbRef::Global(...))"),
         }
     }
 
@@ -1189,24 +1193,19 @@ mod tests {
                 Span::new(9, 14),
             )
             .unwrap();
-        let target = ast
-            .add_expr(
-                Expr::Local(
-                    "x".into(),
-                    smallvec::smallvec![
-                        SubscriptElem::Elem(sub1),
-                        SubscriptElem::Elem(sub2)
-                    ],
-                ),
-                Span::new(4, 15),
-            )
-            .unwrap();
+        let target = DbRef::Local(
+            "x".into(),
+            smallvec::smallvec![
+                SubscriptElem::Elem(sub1),
+                SubscriptElem::Elem(sub2)
+            ],
+        );
         let val = ast
             .add_expr(Expr::Literal(Literal::Int(30)), Span::new(18, 20))
             .unwrap();
 
         let stmt = ast
-            .add_stmt(Stmt::Set(target, val), Span::new(0, 20))
+            .add_stmt(Stmt::Set(target.clone(), val), Span::new(0, 20))
             .unwrap();
 
         match ast.get_stmt(stmt) {

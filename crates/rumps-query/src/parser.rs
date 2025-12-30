@@ -337,31 +337,13 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         let expr = Self::expr(stmt);
 
-        let local_set = just(Token::Set)
-            .ignore_then(Self::ident())
-            .then(Self::subscripts(expr.clone()).or_not())
-            .then_ignore(just(Token::Assign))
-            .then(expr.clone())
-            .map_with_span(|((name, subs), val), span| {
-                let subs = subs.unwrap_or_default();
-                let target =
-                    cst::Expr::new(cst::ExprKind::Local(name, subs), span);
-                cst::Stmt::new(cst::StmtKind::Set(target, val), span)
-            });
-
-        let global_set = just(Token::Set)
-            .ignore_then(Self::global_name())
-            .then(Self::subscripts(expr.clone()).or_not())
+        just(Token::Set)
+            .ignore_then(Self::db_ref(expr.clone()))
             .then_ignore(just(Token::Assign))
             .then(expr)
-            .map_with_span(|((name, subs), val), span| {
-                let subs = subs.unwrap_or_default();
-                let target =
-                    cst::Expr::new(cst::ExprKind::Global(name, subs), span);
-                cst::Stmt::new(cst::StmtKind::Set(target, val), span)
-            });
-
-        global_set.or(local_set)
+            .map_with_span(|(dbref, val), span| {
+                cst::Stmt::new(cst::StmtKind::Set(dbref, val), span)
+            })
     }
 
     /// `KILL name` or `KILL name(subs...)`
@@ -373,27 +355,11 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         let expr = Self::expr(stmt);
 
-        let local_kill = just(Token::Kill)
-            .ignore_then(Self::ident())
-            .then(Self::subscripts(expr.clone()).or_not())
-            .map_with_span(|(name, subs), span| {
-                let subs = subs.unwrap_or_default();
-                let target =
-                    cst::Expr::new(cst::ExprKind::Local(name, subs), span);
-                cst::Stmt::new(cst::StmtKind::Kill(target), span)
-            });
-
-        let global_kill = just(Token::Kill)
-            .ignore_then(Self::global_name())
-            .then(Self::subscripts(expr).or_not())
-            .map_with_span(|(name, subs), span| {
-                let subs = subs.unwrap_or_default();
-                let target =
-                    cst::Expr::new(cst::ExprKind::Global(name, subs), span);
-                cst::Stmt::new(cst::StmtKind::Kill(target), span)
-            });
-
-        global_kill.or(local_kill)
+        just(Token::Kill)
+            .ignore_then(Self::db_ref(expr))
+            .map_with_span(|dbref, span| {
+                cst::Stmt::new(cst::StmtKind::Kill(dbref), span)
+            })
     }
 
     /// Parse a contextual identifier (case-insensitive match).
@@ -491,37 +457,13 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
-        let local = just(Token::Set)
-            .ignore_then(Self::ident())
-            .then(Self::subscripts(expr.clone()).or_not())
-            .then_ignore(just(Token::Assign))
-            .then(expr.clone())
-            .map_with_span(|((name, subs), val), span| {
-                let subs = subs.unwrap_or_default();
-                let target =
-                    cst::Expr::new(cst::ExprKind::Local(name, subs), span);
-                cst::Expr::new(
-                    cst::ExprKind::Set(Box::new(target), Box::new(val)),
-                    span,
-                )
-            });
-
-        let global = just(Token::Set)
-            .ignore_then(Self::global_name())
-            .then(Self::subscripts(expr.clone()).or_not())
+        just(Token::Set)
+            .ignore_then(Self::db_ref(expr.clone()))
             .then_ignore(just(Token::Assign))
             .then(expr)
-            .map_with_span(|((name, subs), val), span| {
-                let subs = subs.unwrap_or_default();
-                let target =
-                    cst::Expr::new(cst::ExprKind::Global(name, subs), span);
-                cst::Expr::new(
-                    cst::ExprKind::Set(Box::new(target), Box::new(val)),
-                    span,
-                )
-            });
-
-        global.or(local)
+            .map_with_span(|(dbref, val), span| {
+                cst::Expr::new(cst::ExprKind::Set(dbref, Box::new(val)), span)
+            })
     }
 
     /// `$KILL target` as expression.
@@ -532,27 +474,11 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
-        let local = just(Token::Kill)
-            .ignore_then(Self::ident())
-            .then(Self::subscripts(expr.clone()).or_not())
-            .map_with_span(|(name, subs), span| {
-                let subs = subs.unwrap_or_default();
-                let target =
-                    cst::Expr::new(cst::ExprKind::Local(name, subs), span);
-                cst::Expr::new(cst::ExprKind::Kill(Box::new(target)), span)
-            });
-
-        let global = just(Token::Kill)
-            .ignore_then(Self::global_name())
-            .then(Self::subscripts(expr).or_not())
-            .map_with_span(|(name, subs), span| {
-                let subs = subs.unwrap_or_default();
-                let target =
-                    cst::Expr::new(cst::ExprKind::Global(name, subs), span);
-                cst::Expr::new(cst::ExprKind::Kill(Box::new(target)), span)
-            });
-
-        global.or(local)
+        just(Token::Kill)
+            .ignore_then(Self::db_ref(expr))
+            .map_with_span(|dbref, span| {
+                cst::Expr::new(cst::ExprKind::Kill(dbref), span)
+            })
     }
 
     /// `FOREVER seed (state, cont) => body`
@@ -1392,23 +1318,23 @@ impl Parser {
 
             // GET target
             let get_expr = just(Token::Get)
-                .ignore_then(Self::gettable(expr.clone()))
-                .map_with_span(|inner, span| {
-                    cst::Expr::new(cst::ExprKind::Get(Box::new(inner)), span)
+                .ignore_then(Self::db_ref(expr.clone()))
+                .map_with_span(|dbref, span| {
+                    cst::Expr::new(cst::ExprKind::Get(dbref), span)
                 });
 
             // DATA target
             let data_expr = just(Token::Data)
-                .ignore_then(Self::gettable(expr.clone()))
-                .map_with_span(|inner, span| {
-                    cst::Expr::new(cst::ExprKind::Data(Box::new(inner)), span)
+                .ignore_then(Self::db_ref(expr.clone()))
+                .map_with_span(|dbref, span| {
+                    cst::Expr::new(cst::ExprKind::Data(dbref), span)
                 });
 
             // ORDER target
             let order_expr = just(Token::Order)
-                .ignore_then(Self::gettable(expr.clone()))
-                .map_with_span(|inner, span| {
-                    cst::Expr::new(cst::ExprKind::Order(Box::new(inner)), span)
+                .ignore_then(Self::db_ref(expr.clone()))
+                .map_with_span(|dbref, span| {
+                    cst::Expr::new(cst::ExprKind::Order(dbref), span)
                 });
 
             // OUTPUT expr [JSON] [TO target]
@@ -1432,25 +1358,23 @@ impl Parser {
         })
     }
 
-    /// Target for `GET`: a local or global B-tree variable.
-    fn gettable(
+    /// Parse a B-tree variable reference (local or global with subscripts).
+    ///
+    /// Returns `cst::DbRef` for use in `GET`, `SET`, `KILL`, `DATA`, `ORDER`.
+    fn db_ref(
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, cst::DbRef, Error = ParseErr> + Clone {
         let global = Self::global_name()
             .then(Self::subscripts(expr.clone()).or_not())
-            .map_with_span(|(name, subs), span| {
-                let subs = subs.unwrap_or_default();
-                cst::Expr::new(cst::ExprKind::Global(name, subs), span)
+            .map(|(name, subs)| {
+                cst::DbRef::Global(name, subs.unwrap_or_default())
             });
 
-        let local = Self::ident()
-            .then(Self::subscripts(expr).or_not())
-            .map_with_span(|(name, subs), span| {
-                let subs = subs.unwrap_or_default();
-                cst::Expr::new(cst::ExprKind::Local(name, subs), span)
-            });
+        let local = Self::ident().then(Self::subscripts(expr).or_not()).map(
+            |(name, subs)| cst::DbRef::Local(name, subs.unwrap_or_default()),
+        );
 
         choice((global, local))
     }
@@ -1647,14 +1571,6 @@ impl Parser {
         let var = Self::ident().map_with_span(|name, span| {
             cst::Expr::new(cst::ExprKind::Var(name), span)
         });
-
-        // Global with optional subscripts
-        let global = Self::global_name()
-            .then(Self::subscripts(expr.clone()).or_not())
-            .map_with_span(|(name, subs), span| {
-                let subs = subs.unwrap_or_default();
-                cst::Expr::new(cst::ExprKind::Global(name, subs), span)
-            });
 
         // Parenthesized expression, tuple literal, or type annotation
         // - `(expr)` -> parenthesized expression
@@ -2002,7 +1918,6 @@ impl Parser {
             regex_lit,
             closure_single,
             closure_multi,
-            global,
             var,
             paren,
             array,
@@ -2571,7 +2486,7 @@ impl PostfixOp {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::ast::{BindingPattern, Expr, Stmt};
+    use crate::ast::{BindingPattern, DbRef, Expr, Stmt};
 
     fn parse_ok(src: &str) -> ParseResult {
         Parser::parse(src).expect("should parse")
@@ -2634,23 +2549,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_global() {
-        let (ast, id) = parse_expr_ok("^PATIENT");
-        assert_eq!(
-            ast.get_expr(id),
-            Some(&Expr::Global("PATIENT".into(), smallvec::smallvec![]))
-        );
+    fn parse_get_global() {
+        let (ast, id) = parse_expr_ok("$GET ^PATIENT");
+        match ast.get_expr(id) {
+            Some(Expr::Get(DbRef::Global(name, subs))) => {
+                assert_eq!(name, "PATIENT");
+                assert!(subs.is_empty());
+            }
+            _ => panic!("expected Get(DbRef::Global(...))"),
+        }
     }
 
     #[test]
-    fn parse_global_with_subscripts() {
-        let (ast, id) = parse_expr_ok("^PATIENT(123, \"NAME\")");
+    fn parse_get_global_with_subscripts() {
+        let (ast, id) = parse_expr_ok("$GET ^PATIENT(123, \"NAME\")");
         match ast.get_expr(id) {
-            Some(Expr::Global(name, subs)) => {
+            Some(Expr::Get(DbRef::Global(name, subs))) => {
                 assert_eq!(name, "PATIENT");
                 assert_eq!(subs.len(), 2);
             }
-            _ => panic!("expected Global"),
+            _ => panic!("expected Get(DbRef::Global(...))"),
         }
     }
 
@@ -2699,14 +2617,11 @@ mod tests {
         let result = parse_ok("$SET x = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
-            Some(Stmt::Set(target, _)) => match result.ast.get_expr(*target) {
-                Some(Expr::Local(name, subs)) => {
-                    assert_eq!(name, "x");
-                    assert!(subs.is_empty());
-                }
-                _ => panic!("expected Local"),
-            },
-            _ => panic!("expected Set"),
+            Some(Stmt::Set(DbRef::Local(name, subs), _)) => {
+                assert_eq!(name, "x");
+                assert!(subs.is_empty());
+            }
+            _ => panic!("expected Set with DbRef::Local"),
         }
     }
 
@@ -2715,11 +2630,10 @@ mod tests {
         let result = parse_ok("$SET ^DATA = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
-            Some(Stmt::Set(target, _)) => match result.ast.get_expr(*target) {
-                Some(Expr::Global(name, _)) => assert_eq!(name, "DATA"),
-                _ => panic!("expected Global"),
-            },
-            _ => panic!("expected Set"),
+            Some(Stmt::Set(DbRef::Global(name, _), _)) => {
+                assert_eq!(name, "DATA");
+            }
+            _ => panic!("expected Set with DbRef::Global"),
         }
     }
 

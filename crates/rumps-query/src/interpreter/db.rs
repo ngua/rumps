@@ -1,11 +1,11 @@
 //! Database primitives: GET, SET, KILL, DATA, and key construction.
 
 use async_recursion::async_recursion;
-use rumps_types::{DataStatus, Key, Name, Subscript};
+use rumps_types::{DataStatus, Key, Subscript};
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{Expr, ExprId, SubscriptElem};
+use crate::ast::{DbRef, ExprId, SubscriptElem};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
 use crate::{Error, Result, Span};
@@ -13,31 +13,16 @@ use crate::{Error, Result, Span};
 impl<I: IoContext> Interpreter<'_, I> {
     /// `$GET` primitive; reads a value from a B-tree variable.
     ///
-    /// The inner expression must be a `Local` or `Global`. Uses the active
-    /// transaction if one exists, otherwise reads directly from the database.
+    /// Uses the active transaction if one exists, otherwise reads directly
+    /// from the database.
     #[async_recursion]
     pub(super) async fn get(
         &mut self,
-        inner: ExprId,
+        dbref: &DbRef,
         span: Span,
     ) -> Result<Value> {
-        let inner_span = self.ast.expr_span(inner).unwrap_or(span);
-        let inner_expr = self
-            .ast
-            .get_expr(inner)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-            .clone();
-
-        let (name, subs) = match inner_expr {
-            Expr::Local(n, s) => Ok((Name::local(&n), s)),
-            Expr::Global(n, s) => Ok((Name::global(&n), s)),
-            _ => Err(Error::runtime(
-                inner_span,
-                "GET requires a local or global",
-            )),
-        }?;
-
-        let key = self.build_key(&subs).await?;
+        let (name, subs) = dbref.split();
+        let key = self.build_key(subs).await?;
 
         let opt_val = match &self.txn {
             Some(txn) => txn.get(&name, &key).await,
@@ -57,33 +42,17 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// `$SET` primitive; writes a value to a B-tree variable.
     ///
-    /// The target expression must be a `Local` or `Global`. Dispatches based
-    /// on the name type: globals require an active transaction, locals can
-    /// be set outside transactions.
+    /// Dispatches based on the name type: globals require an active
+    /// transaction, locals can be set outside transactions.
     #[async_recursion]
     pub(super) async fn set(
         &mut self,
-        target: ExprId,
+        dbref: &DbRef,
         expr_id: ExprId,
         span: Span,
     ) -> Result<()> {
-        let target_span = self.ast.expr_span(target).unwrap_or(span);
-        let target_expr = self
-            .ast
-            .get_expr(target)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-            .clone();
-
-        let (name, subs) = match target_expr {
-            Expr::Local(n, s) => Ok((Name::local(&n), s)),
-            Expr::Global(n, s) => Ok((Name::global(&n), s)),
-            _ => Err(Error::runtime(
-                target_span,
-                "SET requires a local or global",
-            )),
-        }?;
-
-        let key = self.build_key(&subs).await?;
+        let (name, subs) = dbref.split();
+        let key = self.build_key(subs).await?;
         let val = self.eval(expr_id).await?;
         let storage_val = self.store(&val)?;
 
@@ -109,32 +78,16 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// `$KILL` primitive; deletes a variable and its descendants.
     ///
-    /// The target expression must be a `Local` or `Global`. For globals,
-    /// requires an active transaction. For locals, operates directly on
-    /// the database.
+    /// For globals, requires an active transaction. For locals, operates
+    /// directly on the database.
     #[async_recursion]
     pub(super) async fn kill(
         &mut self,
-        target: ExprId,
+        dbref: &DbRef,
         span: Span,
     ) -> Result<()> {
-        let target_span = self.ast.expr_span(target).unwrap_or(span);
-        let target_expr = self
-            .ast
-            .get_expr(target)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-            .clone();
-
-        let (name, subs) = match target_expr {
-            Expr::Local(n, s) => Ok((Name::local(&n), s)),
-            Expr::Global(n, s) => Ok((Name::global(&n), s)),
-            _ => Err(Error::runtime(
-                target_span,
-                "KILL requires a local or global",
-            )),
-        }?;
-
-        let key = self.build_key(&subs).await?;
+        let (name, subs) = dbref.split();
+        let key = self.build_key(subs).await?;
 
         if name.is_global() {
             match self.txn.as_ref() {
@@ -156,32 +109,16 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// `$DATA` primitive; queries existence status of a B-tree node.
     ///
-    /// The inner expression must be a `Local` or `Global`. Uses the active
-    /// transaction if one exists, otherwise reads directly from the database.
-    /// Returns a `DataStatus` enum value (tagged variant).
+    /// Uses the active transaction if one exists, otherwise reads directly
+    /// from the database. Returns a `DataStatus` enum value (tagged variant).
     #[async_recursion]
     pub(super) async fn data(
         &mut self,
-        inner: ExprId,
+        dbref: &DbRef,
         span: Span,
     ) -> Result<Value> {
-        let inner_span = self.ast.expr_span(inner).unwrap_or(span);
-        let inner_expr = self
-            .ast
-            .get_expr(inner)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-            .clone();
-
-        let (name, subs) = match inner_expr {
-            Expr::Local(n, s) => Ok((Name::local(&n), s)),
-            Expr::Global(n, s) => Ok((Name::global(&n), s)),
-            _ => Err(Error::runtime(
-                inner_span,
-                "DATA requires a local or global",
-            )),
-        }?;
-
-        let key = self.build_key(&subs).await?;
+        let (name, subs) = dbref.split();
+        let key = self.build_key(subs).await?;
 
         let status = match &self.txn {
             Some(txn) => txn.data(&name, &key).await,
@@ -202,33 +139,16 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// `$ORDER` primitive; returns the next subscript at a given level.
     ///
-    /// The inner expression must be a `Local` or `Global`. Uses the active
-    /// transaction if one exists, otherwise reads directly from the database.
-    /// Returns `Option[Subscript]`.
+    /// Uses the active transaction if one exists, otherwise reads directly
+    /// from the database. Returns `Option[Subscript]`.
     #[async_recursion]
     pub(super) async fn order(
         &mut self,
-        inner: ExprId,
+        dbref: &DbRef,
         span: Span,
     ) -> Result<Value> {
-        let inner_span = self.ast.expr_span(inner).unwrap_or(span);
-        let inner_expr = self
-            .ast
-            .get_expr(inner)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
-            .clone();
-
-        let (name, subs) = match inner_expr {
-            Expr::Local(n, s) => Ok((Name::local(&n), s)),
-            Expr::Global(n, s) => Ok((Name::global(&n), s)),
-            _ => Err(Error::runtime(
-                inner_span,
-                "ORDER requires a local or global",
-            )),
-        }?;
-
-        // Evaluate subscript expressions
-        let key = self.build_key(&subs).await?;
+        let (name, subs) = dbref.split();
+        let key = self.build_key(subs).await?;
 
         // `ORDER items(1)` means "find next subscript after `1` at root level",
         // so we split the key: prefix = [] (root), after = `Some(1)`.

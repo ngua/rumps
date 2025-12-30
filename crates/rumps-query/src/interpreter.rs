@@ -282,15 +282,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         match expr {
             Expr::Literal(lit) => Ok(self.literal(&lit)),
             Expr::Var(name) => Ok(self.var(&name, span)),
-            Expr::Local(_, _) => {
-                Err(Error::runtime(span, "cannot use local as value; use GET"))
-            }
-            Expr::Global(_, _) => {
-                Err(Error::runtime(span, "cannot use global as value; use GET"))
-            }
-            Expr::Get(inner) => self.get(inner, span).await,
-            Expr::Data(inner) => self.data(inner, span).await,
-            Expr::Order(inner) => self.order(inner, span).await,
+            Expr::Get(ref dbref) => self.get(dbref, span).await,
+            Expr::Data(ref dbref) => self.data(dbref, span).await,
+            Expr::Order(ref dbref) => self.order(dbref, span).await,
             Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
             Expr::Unary(op, operand) => self.unary(op, operand, span).await,
             Expr::Call(callee, args) => self.call(callee, &args, span).await,
@@ -348,12 +342,12 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.output(&output).await?;
                 Ok(Value::Unit)
             }
-            Expr::Set(target, value) => {
-                self.set(target, value, span).await?;
+            Expr::Set(ref dbref, value) => {
+                self.set(dbref, value, span).await?;
                 Ok(Value::Unit)
             }
-            Expr::Kill(target) => {
-                self.kill(target, span).await?;
+            Expr::Kill(ref dbref) => {
+                self.kill(dbref, span).await?;
                 Ok(Value::Unit)
             }
             Expr::Forever {
@@ -399,8 +393,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             Stmt::Let(pat, ty_ann, expr_id) => {
                 self.r#let(&pat, ty_ann, expr_id, span).await
             }
-            Stmt::Set(target, expr_id) => self.set(target, expr_id, span).await,
-            Stmt::Kill(target) => self.kill(target, span).await,
+            Stmt::Set(ref dbref, expr_id) => {
+                self.set(dbref, expr_id, span).await
+            }
+            Stmt::Kill(ref dbref) => self.kill(dbref, span).await,
             Stmt::Output(output) => self.output(&output).await,
             Stmt::Expr(expr_id) => {
                 // Evaluate for side effects, discard result

@@ -124,7 +124,7 @@ pub(crate) enum ObjectEntry {
 
 /// A subscript element: either a single expression or a spread.
 ///
-/// Used in `Local` and `Global` B-tree variable references:
+/// Used in `DbRef` B-tree variable references:
 /// - `d(1, "key")` uses `Elem` for each subscript
 /// - `d(...keys)` uses `Spread` to expand an `Array[Subscript]`
 #[derive(Clone, Debug)]
@@ -133,6 +133,18 @@ pub(crate) enum SubscriptElem {
     Elem(Expr),
     /// A spread: `...expr`
     Spread(Expr),
+}
+
+/// A reference to a B-tree variable (local or global) with subscripts.
+///
+/// This is NOT an expression; it can only appear in database operations like
+/// `GET`, `SET`, `KILL`, `DATA`, and `ORDER`.
+#[derive(Clone, Debug)]
+pub(crate) enum DbRef {
+    /// Local B-tree variable: `data`, `data(1)`, `data(...keys)`.
+    Local(String, Vec<SubscriptElem>),
+    /// Global B-tree variable: `^PATIENT`, `^DATA(1, ...rest)`.
+    Global(String, Vec<SubscriptElem>),
 }
 
 /// A CST expression node with inline span.
@@ -167,18 +179,8 @@ pub(crate) enum ExprKind {
     /// A lexical variable reference.
     Var(String),
 
-    /// A local B-tree variable with subscripts.
-    ///
-    /// Subscripts can be individual expressions or spreads of `Array[Subscript]`.
-    Local(String, Vec<SubscriptElem>),
-
-    /// A global B-tree variable with subscripts.
-    ///
-    /// Subscripts can be individual expressions or spreads of `Array[Subscript]`.
-    Global(String, Vec<SubscriptElem>),
-
     /// `GET` primitive.
-    Get(Box<Expr>),
+    Get(DbRef),
 
     /// A binary operation.
     Binary(Box<Expr>, BinOp, Box<Expr>),
@@ -297,15 +299,13 @@ pub(crate) enum ExprKind {
 
     /// Data query: `DATA var`.
     ///
-    /// Queries the existence status of a node. The inner expression must be
-    /// a `Local` or `Global`. Returns `DataStatus` enum.
-    Data(Box<Expr>),
+    /// Queries the existence status of a node. Returns `DataStatus` enum.
+    Data(DbRef),
 
     /// Order query: `ORDER var`.
     ///
-    /// Returns the next subscript at a given level. The inner expression must
-    /// be a `Local` or `Global`. Returns `Option[Subscript]`.
-    Order(Box<Expr>),
+    /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
+    Order(DbRef),
 
     /// Output expression: `$OUTPUT expr [JSON] [TO target]`.
     ///
@@ -316,12 +316,12 @@ pub(crate) enum ExprKind {
     /// Set expression: `$SET target = value`.
     ///
     /// Executes the B-tree assignment and evaluates to `Unit`.
-    Set(Box<Expr>, Box<Expr>),
+    Set(DbRef, Box<Expr>),
 
     /// Kill expression: `$KILL target`.
     ///
     /// Deletes a variable or subtree and evaluates to `Unit`.
-    Kill(Box<Expr>),
+    Kill(DbRef),
 
     /// Forever loop: `FOREVER seed (state, cont) => body`.
     Forever {
@@ -390,10 +390,10 @@ pub(crate) enum StmtKind {
     Let(BindingPattern, Option<TypeExpr>, Expr),
 
     /// B-tree assignment.
-    Set(Expr, Expr),
+    Set(DbRef, Expr),
 
     /// Delete a variable or subtree.
-    Kill(Expr),
+    Kill(DbRef),
 
     /// Output a value with optional format and target.
     Output(OutputStmt),
