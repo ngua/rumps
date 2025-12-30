@@ -1175,7 +1175,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Execute an `OUTPUT` statement.
+    /// Execute an `$OUTPUT` statement.
     ///
     /// Writes to stdout, stderr, or a file via the I/O context, with optional
     /// JSON formatting.
@@ -1200,8 +1200,8 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Write to target
         match output.target {
-            OutputTarget::Stdout => self.io.stdout(&text, span).await,
-            OutputTarget::Stderr => self.io.stderr(&text, span).await,
+            OutputTarget::Stdout => self.io.stdoutline(&text, span).await,
+            OutputTarget::Stderr => self.io.stderrline(&text, span).await,
             OutputTarget::File(path_expr) => {
                 let path_val = self.eval(path_expr).await?;
                 let path = self.to_file_path(&path_val, span)?;

@@ -11,7 +11,7 @@ use crate::value::{TypeId, Value};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
-    /// `GET` primitive; reads a value from a B-tree variable.
+    /// `$GET` primitive; reads a value from a B-tree variable.
     ///
     /// The inner expression must be a `Local` or `Global`. Uses the active
     /// transaction if one exists, otherwise reads directly from the database.
@@ -55,7 +55,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         })
     }
 
-    /// `SET` primitive; writes a value to a B-tree variable.
+    /// `$SET` primitive; writes a value to a B-tree variable.
     ///
     /// The target expression must be a `Local` or `Global`. Dispatches based
     /// on the name type: globals require an active transaction, locals can
@@ -107,7 +107,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `KILL` primitive; deletes a variable and its descendants.
+    /// `$KILL` primitive; deletes a variable and its descendants.
     ///
     /// The target expression must be a `Local` or `Global`. For globals,
     /// requires an active transaction. For locals, operates directly on
@@ -154,7 +154,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `DATA` primitive; queries existence status of a B-tree node.
+    /// `$DATA` primitive; queries existence status of a B-tree node.
     ///
     /// The inner expression must be a `Local` or `Global`. Uses the active
     /// transaction if one exists, otherwise reads directly from the database.
@@ -200,7 +200,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         Ok(Value::Tagged(type_expr_id, variant_idx, SmallVec::new()))
     }
 
-    /// `ORDER` primitive; returns the next subscript at a given level.
+    /// `$ORDER` primitive; returns the next subscript at a given level.
     ///
     /// The inner expression must be a `Local` or `Global`. Uses the active
     /// transaction if one exists, otherwise reads directly from the database.

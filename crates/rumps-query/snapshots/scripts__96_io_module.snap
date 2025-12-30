@@ -1,9 +1,13 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Io module primitives\n; Tests Io.print, Io.println, Io.eprint, Io.eprintln\n;\n; NOTE: Io.get-line is not tested here because it blocks waiting for stdin.\n; It can be tested manually by running an interactive RUMPS session.\n\n; ============ Test Io.println ============\n\n; This will print to stdout during test execution\nLET result = Io.println(\"Hello from Io.println\")\nOUTPUT result IS Unit  ; true\n\n; ============ Test Io.print ============\n\nLET result2 = Io.print(\"Hello from Io.print (no newline)\")\nOUTPUT result2 IS Unit  ; true\n\n; Print a newline after the previous print\nLET _ = Io.println(\"\")\n\n; ============ Test Io.eprintln ============\n\n; This will print to stderr during test execution\nLET result3 = Io.eprintln(\"Hello from Io.eprintln\")\nOUTPUT result3 IS Unit  ; true\n\n; ============ Test Io.eprint ============\n\nLET result4 = Io.eprint(\"Hello from Io.eprint (no newline)\")\nOUTPUT result4 IS Unit  ; true\n\n; Print a newline to stderr after the previous eprint\nLET _ = Io.eprintln(\"\")\n\n; ============ Chaining Io operations ============\n\n; Use with pipeline\nLET msg = \"Hello world\"\nLET _ = msg |> Io.println\n\n; Use with semicolon sequencing\n{\n  Io.print(\"Line 1: \");\n  Io.println(\"value\")\n}\n\nOUTPUT \"All Io tests passed\"\n"
+description: "; Io module primitives\n; Tests Io.print, Io.println, Io.eprint, Io.eprintln\n;\n; NOTE: Io.get-line is not tested here because it blocks waiting for stdin.\n; It can be tested manually by running an interactive RUMPS session.\n\n; ============ Test Io.println ============\n\n; This will print to stdout during test execution\nLET result = Io.println(\"Hello from Io.println\")\n$OUTPUT result IS Unit  ; true\n\n; ============ Test Io.print ============\n\nLET result2 = Io.print(\"Hello from Io.print (no newline)\")\n$OUTPUT result2 IS Unit  ; true\n\n; Print a newline after the previous print\nLET _ = Io.println(\"\")\n\n; ============ Test Io.eprintln ============\n\n; This will print to stderr during test execution\nLET result3 = Io.eprintln(\"Hello from Io.eprintln\")\n$OUTPUT result3 IS Unit  ; true\n\n; ============ Test Io.eprint ============\n\nLET result4 = Io.eprint(\"Hello from Io.eprint (no newline)\")\n$OUTPUT result4 IS Unit  ; true\n\n; Print a newline to stderr after the previous eprint\nLET _ = Io.eprintln(\"\")\n\n; ============ Chaining Io operations ============\n\n; Use with pipeline\nLET msg = \"Hello world\"\nLET _ = msg |> Io.println\n\n; Use with semicolon sequencing\n{\n  Io.print(\"Line 1: \");\n  Io.println(\"value\")\n}\n\n$OUTPUT \"All Io tests passed\"\n"
 ---
+Hello from Io.println
+TRUE
+Hello from Io.print (no newline)TRUE
+
 TRUE
 TRUE
-TRUE
-TRUE
+Hello world
+Line 1: value
 "All Io tests passed"

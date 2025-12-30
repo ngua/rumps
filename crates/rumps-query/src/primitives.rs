@@ -2103,8 +2103,6 @@ impl Io {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            use tokio::io::AsyncWriteExt;
-
             let sid = ctx
                 .arena
                 .get_string_id(args[0])
@@ -2112,17 +2110,10 @@ impl Io {
             let s = ctx
                 .arena
                 .get_str(sid)
-                .ok_or_else(|| ctx.runtime_error("Io.print: invalid string"))?;
+                .ok_or_else(|| ctx.runtime_error("Io.print: invalid string"))?
+                .to_owned();
 
-            let mut stdout = tokio::io::stdout();
-            stdout
-                .write_all(s.as_bytes())
-                .await
-                .map_err(|e| ctx.runtime_error(format!("Io.print: {e}")))?;
-            stdout.flush().await.map_err(|e| {
-                ctx.runtime_error(format!("Io.print: flush: {e}"))
-            })?;
-
+            ctx.io.stdout(&s, ctx.span).await?;
             Ok(ctx.arena.add(Value::Unit, ctx.span))
         })
     }
@@ -2135,29 +2126,17 @@ impl Io {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            use tokio::io::AsyncWriteExt;
-
             let sid = ctx
                 .arena
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("Io.println", "String"));
-            let s = ctx.arena.get_str(sid).ok_or_else(|| {
-                ctx.runtime_error("Io.println: invalid string")
-            })?;
+            let s = ctx
+                .arena
+                .get_str(sid)
+                .ok_or_else(|| ctx.runtime_error("Io.println: invalid string"))?
+                .to_owned();
 
-            let mut stdout = tokio::io::stdout();
-            stdout
-                .write_all(s.as_bytes())
-                .await
-                .map_err(|e| ctx.runtime_error(format!("Io.println: {e}")))?;
-            stdout
-                .write_all(b"\n")
-                .await
-                .map_err(|e| ctx.runtime_error(format!("Io.println: {e}")))?;
-            stdout.flush().await.map_err(|e| {
-                ctx.runtime_error(format!("Io.println: flush: {e}"))
-            })?;
-
+            ctx.io.stdoutline(&s, ctx.span).await?;
             Ok(ctx.arena.add(Value::Unit, ctx.span))
         })
     }
@@ -2170,25 +2149,17 @@ impl Io {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            use tokio::io::AsyncWriteExt;
-
             let sid = ctx
                 .arena
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("Io.eprint", "String"));
-            let s = ctx.arena.get_str(sid).ok_or_else(|| {
-                ctx.runtime_error("Io.eprint: invalid string")
-            })?;
+            let s = ctx
+                .arena
+                .get_str(sid)
+                .ok_or_else(|| ctx.runtime_error("Io.eprint: invalid string"))?
+                .to_owned();
 
-            let mut stderr = tokio::io::stderr();
-            stderr
-                .write_all(s.as_bytes())
-                .await
-                .map_err(|e| ctx.runtime_error(format!("Io.eprint: {e}")))?;
-            stderr.flush().await.map_err(|e| {
-                ctx.runtime_error(format!("Io.eprint: flush: {e}"))
-            })?;
-
+            ctx.io.stderr(&s, ctx.span).await?;
             Ok(ctx.arena.add(Value::Unit, ctx.span))
         })
     }
@@ -2201,29 +2172,19 @@ impl Io {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            use tokio::io::AsyncWriteExt;
-
             let sid = ctx
                 .arena
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("Io.eprintln", "String"));
-            let s = ctx.arena.get_str(sid).ok_or_else(|| {
-                ctx.runtime_error("Io.eprintln: invalid string")
-            })?;
+            let s = ctx
+                .arena
+                .get_str(sid)
+                .ok_or_else(|| {
+                    ctx.runtime_error("Io.eprintln: invalid string")
+                })?
+                .to_owned();
 
-            let mut stderr = tokio::io::stderr();
-            stderr
-                .write_all(s.as_bytes())
-                .await
-                .map_err(|e| ctx.runtime_error(format!("Io.eprintln: {e}")))?;
-            stderr
-                .write_all(b"\n")
-                .await
-                .map_err(|e| ctx.runtime_error(format!("Io.eprintln: {e}")))?;
-            stderr.flush().await.map_err(|e| {
-                ctx.runtime_error(format!("Io.eprintln: flush: {e}"))
-            })?;
-
+            ctx.io.stderrline(&s, ctx.span).await?;
             Ok(ctx.arena.add(Value::Unit, ctx.span))
         })
     }
@@ -2237,8 +2198,8 @@ pub(crate) struct Directory;
 impl Prim for Directory {}
 
 impl Directory {
-    /// Helper: extract `StringId` from a `Value::FilePath`.
-    fn get_path_str<'a>(ctx: &'a PrimCtx<'a>, id: ValueId) -> &'a str {
+    /// Helper: extract path string from a `Value::FilePath`.
+    fn get_path_str(ctx: &PrimCtx<'_>, id: ValueId) -> String {
         ctx.arena
             .get(id)
             .and_then(|v| match v {
@@ -2246,6 +2207,7 @@ impl Directory {
                 _ => None,
             })
             .unwrap_or_else(|| typechecked!("Io.Directory", "FilePath"))
+            .to_owned()
     }
 
     /// Helper: create a `Path.File(filepath)` value.
@@ -2274,7 +2236,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let mut entries =
                 tokio::fs::read_dir(&path_str).await.map_err(|e| {
                     ctx.runtime_error(format!("Io.Directory.list-dir: {e}"))
@@ -2332,7 +2294,7 @@ impl Directory {
                             )
                         })?;
                     (
-                        Self::get_path_str(ctx, src_id).to_string(),
+                        Self::get_path_str(ctx, src_id),
                         Self::get_path_str(ctx, dest_id).to_string(),
                     )
                 }
@@ -2377,7 +2339,7 @@ impl Directory {
                             )
                         })?;
                     (
-                        Self::get_path_str(ctx, src_id).to_string(),
+                        Self::get_path_str(ctx, src_id),
                         Self::get_path_str(ctx, dest_id).to_string(),
                     )
                 }
@@ -2403,7 +2365,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
 
             // Try removing as file first, then as directory
             let result = tokio::fs::remove_file(&path_str).await;
@@ -2427,7 +2389,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
 
             // Try removing as file first
             let result = tokio::fs::remove_file(&path_str).await;
@@ -2455,7 +2417,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let exists =
                 tokio::fs::try_exists(&path_str).await.unwrap_or(false);
             Ok(ctx.arena.add(Value::Bool(exists), ctx.span))
@@ -2470,7 +2432,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let is_file = tokio::fs::metadata(&path_str)
                 .await
                 .map(|m| m.is_file())
@@ -2487,7 +2449,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let is_dir = tokio::fs::metadata(&path_str)
                 .await
                 .map(|m| m.is_dir())
@@ -2504,7 +2466,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let contents =
                 tokio::fs::read_to_string(&path_str).await.map_err(|e| {
                     ctx.runtime_error(format!("Io.Directory.read-file: {e}"))
@@ -2635,7 +2597,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             tokio::fs::create_dir(&path_str).await.map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.create-dir: {e}"))
             })?;
@@ -2651,7 +2613,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             tokio::fs::create_dir_all(&path_str).await.map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.create-dir-all: {e}"))
             })?;
@@ -2684,7 +2646,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             std::env::set_current_dir(&path_str).map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.set-pwd: {e}"))
             })?;
@@ -2785,7 +2747,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let canonical =
                 tokio::fs::canonicalize(&path_str).await.map_err(|e| {
                     ctx.runtime_error(format!("Io.Directory.canonicalize: {e}"))
@@ -2803,7 +2765,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let path = std::path::Path::new(&path_str);
 
             let fp_ty = ctx.type_exprs.named(TypeId::FILEPATH);
@@ -2828,7 +2790,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let path = std::path::Path::new(&path_str);
             let name_opt =
                 path.file_name().map(|n| n.to_string_lossy().to_string());
@@ -2855,7 +2817,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let path = std::path::Path::new(&path_str);
             let ext_opt =
                 path.extension().map(|e| e.to_string_lossy().to_string());
@@ -2882,7 +2844,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let base_str = Self::get_path_str(ctx, args[0]).to_string();
+            let base_str = Self::get_path_str(ctx, args[0]);
 
             let parts = ctx.arena.get(args[1]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.join: invalid array")
@@ -2937,7 +2899,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]).to_string();
+            let path_str = Self::get_path_str(ctx, args[0]);
             let ext = ctx
                 .arena
                 .get_string_id(args[1])
@@ -2961,6 +2923,7 @@ impl Directory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::NoopIo;
     use crate::value::TypeExprArena;
     use crate::Span;
 
@@ -2990,9 +2953,11 @@ mod tests {
             make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3, 4, 5]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::length(&mut ctx, smallvec![arr_id]).await.unwrap()
@@ -3009,9 +2974,11 @@ mod tests {
         let arr_id = make_int_array(&mut arena, &mut type_exprs, &[]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::length(&mut ctx, smallvec![arr_id]).await.unwrap()
@@ -3029,9 +2996,11 @@ mod tests {
         let val_id = arena.add(Value::Int(4), span());
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::push(&mut ctx, smallvec![arr_id, val_id])
@@ -3051,9 +3020,11 @@ mod tests {
         let arr_id = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::pop(&mut ctx, smallvec![arr_id]).await.unwrap()
@@ -3071,9 +3042,11 @@ mod tests {
         let arr_id = make_int_array(&mut arena, &mut type_exprs, &[42, 2, 3]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::head(&mut ctx, smallvec![arr_id]).await.unwrap()
@@ -3091,9 +3064,11 @@ mod tests {
         let arr_id = make_int_array(&mut arena, &mut type_exprs, &[]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::head(&mut ctx, smallvec![arr_id]).await.unwrap()
@@ -3111,9 +3086,11 @@ mod tests {
         let arr_id = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3, 4]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::tail(&mut ctx, smallvec![arr_id]).await.unwrap()
@@ -3131,9 +3108,11 @@ mod tests {
         let arr_id = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::reverse(&mut ctx, smallvec![arr_id]).await.unwrap()
@@ -3160,9 +3139,11 @@ mod tests {
             make_int_array(&mut arena, &mut type_exprs, &[3, 1, 4, 1, 5]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::sort(&mut ctx, smallvec![arr_id]).await.unwrap()
@@ -3191,9 +3172,11 @@ mod tests {
         let end = arena.add(Value::Int(4), span());
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::slice(&mut ctx, smallvec![arr_id, start, end])
@@ -3215,9 +3198,11 @@ mod tests {
         let needle = arena.add(Value::Int(3), span());
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::contains(&mut ctx, smallvec![arr_id, needle])
@@ -3238,9 +3223,11 @@ mod tests {
         let needle = arena.add(Value::Int(10), span());
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::contains(&mut ctx, smallvec![arr_id, needle])
@@ -3260,9 +3247,11 @@ mod tests {
         let arr_b = make_int_array(&mut arena, &mut type_exprs, &[4, 5, 6]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Array::concat(&mut ctx, smallvec![arr_a, arr_b])
@@ -3290,9 +3279,11 @@ mod tests {
         let s = make_string(&mut arena, "hello");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::length(&mut ctx, smallvec![s]).await.unwrap()
@@ -3310,9 +3301,11 @@ mod tests {
         let s = make_string(&mut arena, "cafe\u{0301}");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::length(&mut ctx, smallvec![s]).await.unwrap()
@@ -3330,9 +3323,11 @@ mod tests {
         let s = make_string(&mut arena, "hello");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::upper(&mut ctx, smallvec![s]).await.unwrap()
@@ -3350,9 +3345,11 @@ mod tests {
         let s = make_string(&mut arena, "HELLO");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::lower(&mut ctx, smallvec![s]).await.unwrap()
@@ -3370,9 +3367,11 @@ mod tests {
         let s = make_string(&mut arena, "  hello  ");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::trim(&mut ctx, smallvec![s]).await.unwrap()
@@ -3391,9 +3390,11 @@ mod tests {
         let d = make_string(&mut arena, ",");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::split(&mut ctx, smallvec![s, d]).await.unwrap()
@@ -3420,9 +3421,11 @@ mod tests {
         let arr = arena.add(Value::Array(str_ty, smallvec![a, b, c]), span());
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::join(&mut ctx, smallvec![arr, d]).await.unwrap()
@@ -3442,9 +3445,11 @@ mod tests {
         let end = arena.add(Value::Int(4), span());
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::slice(&mut ctx, smallvec![s, start, end])
@@ -3466,9 +3471,11 @@ mod tests {
         let end = arena.add(Value::Int(100), span());
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::slice(&mut ctx, smallvec![s, start, end])
@@ -3489,9 +3496,11 @@ mod tests {
         let sub = make_string(&mut arena, "wor");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::contains(&mut ctx, smallvec![s, sub]).await.unwrap()
@@ -3509,9 +3518,11 @@ mod tests {
         let sub = make_string(&mut arena, "xyz");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::contains(&mut ctx, smallvec![s, sub]).await.unwrap()
@@ -3530,9 +3541,11 @@ mod tests {
         let new = make_string(&mut arena, "a");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::replace(&mut ctx, smallvec![s, old, new])
@@ -3554,9 +3567,11 @@ mod tests {
         let new = make_string(&mut arena, "o");
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Str::replace(&mut ctx, smallvec![s, old, new])
@@ -3577,9 +3592,11 @@ mod tests {
 
         let n = arena.add(Value::Int(-42), span());
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Math::abs(&mut ctx, smallvec![n]).await.unwrap()
@@ -3595,9 +3612,11 @@ mod tests {
 
         let n = arena.add(Value::Float(OrderedFloat(-3.5)), span());
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Math::abs(&mut ctx, smallvec![n]).await.unwrap()
@@ -3614,9 +3633,11 @@ mod tests {
         let a = arena.add(Value::Int(5), span());
         let b = arena.add(Value::Int(3), span());
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Math::min(&mut ctx, smallvec![a, b]).await.unwrap()
@@ -3633,9 +3654,11 @@ mod tests {
         let a = arena.add(Value::Float(OrderedFloat(2.5)), span());
         let b = arena.add(Value::Float(OrderedFloat(7.3)), span());
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Math::max(&mut ctx, smallvec![a, b]).await.unwrap()
@@ -3651,9 +3674,11 @@ mod tests {
 
         let n = arena.add(Value::Float(OrderedFloat(3.7)), span());
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Math::floor(&mut ctx, smallvec![n]).await.unwrap()
@@ -3669,9 +3694,11 @@ mod tests {
 
         let n = arena.add(Value::Float(OrderedFloat(3.2)), span());
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Math::ceil(&mut ctx, smallvec![n]).await.unwrap()
@@ -3687,9 +3714,11 @@ mod tests {
 
         let n = arena.add(Value::Float(OrderedFloat(3.5)), span());
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Math::round(&mut ctx, smallvec![n]).await.unwrap()
@@ -3705,9 +3734,11 @@ mod tests {
 
         let n = arena.add(Value::Int(16), span());
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Math::sqrt(&mut ctx, smallvec![n]).await.unwrap()
@@ -3724,18 +3755,22 @@ mod tests {
         let n = arena.add(Value::Int(0), span());
 
         let sin_result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Trig::sin(&mut ctx, smallvec![n]).await.unwrap()
         };
 
         let cos_result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Trig::cos(&mut ctx, smallvec![n]).await.unwrap()
@@ -3759,9 +3794,11 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Random::random(&mut ctx, smallvec![]).await.unwrap()
@@ -3784,9 +3821,11 @@ mod tests {
         let max = arena.add(Value::Int(10), span());
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Random::int(&mut ctx, smallvec![min, max]).await.unwrap()
@@ -3806,9 +3845,11 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Random::bool(&mut ctx, smallvec![]).await.unwrap()
@@ -3828,9 +3869,11 @@ mod tests {
         let arr = make_int_array(&mut arena, &mut type_exprs, &[10, 20, 30]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Random::choice(&mut ctx, smallvec![arr]).await.unwrap()
@@ -3859,9 +3902,11 @@ mod tests {
         let arr = make_int_array(&mut arena, &mut type_exprs, &[]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Random::choice(&mut ctx, smallvec![arr]).await.unwrap()
@@ -3884,9 +3929,11 @@ mod tests {
         let arr = make_int_array(&mut arena, &mut type_exprs, &[1, 2, 3, 4, 5]);
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Random::shuffle(&mut ctx, smallvec![arr]).await.unwrap()
@@ -3902,9 +3949,11 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
 
         let result = {
+            let mut io = NoopIo;
             let mut ctx = PrimCtx {
                 arena: &mut arena,
                 type_exprs: &mut type_exprs,
+                io: &mut io,
                 span: span(),
             };
             Random::uuid(&mut ctx, smallvec![]).await.unwrap()

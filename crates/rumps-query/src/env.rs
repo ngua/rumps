@@ -24,6 +24,7 @@ use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
 
 use crate::intern::StringId;
+use crate::io::IoContext;
 use crate::value::{TypeId, Value, ValueArena, ValueId};
 use crate::{Error, Result, Span};
 
@@ -119,11 +120,14 @@ pub(crate) type PrimResult<'a> = BoxFuture<'a, Result<ValueId>>;
 /// Context passed to primitive functions during execution.
 ///
 /// Contains references to the value arena for creating/looking up values,
-/// the type expression arena for constructing type annotations, and the
-/// call-site span for error reporting.
+/// the type expression arena for constructing type annotations, the I/O
+/// context for output operations, and the call-site span for error reporting.
 pub(crate) struct PrimCtx<'a> {
     pub(crate) arena: &'a mut ValueArena,
     pub(crate) type_exprs: &'a mut crate::value::TypeExprArena,
+    // Required for `Io.* operations to work correctly, i.e. use the I/O`
+    // abstraction used elsewhere
+    pub(crate) io: &'a mut dyn IoContext,
     pub(crate) span: Span,
 }
 
