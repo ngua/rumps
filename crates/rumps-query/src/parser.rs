@@ -2289,16 +2289,27 @@ impl Parser {
         select! { Token::Global(s) => s }
     }
 
-    /// Parse subscripts: `(expr, expr, ...)`
+    /// Parse subscripts: `(expr, expr, ...)` with optional spread.
+    ///
+    /// Supports both regular subscript elements and spread syntax:
+    /// - `d(1, "key")` uses `Elem` for each subscript
+    /// - `d(...keys)` uses `Spread` to expand an `Array[Subscript]`
+    /// - `d(1, ...rest)` mixes both
     fn subscripts(
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-    ) -> impl chumsky::Parser<Token, Vec<cst::Expr>, Error = ParseErr> + Clone
+    ) -> impl chumsky::Parser<Token, Vec<cst::SubscriptElem>, Error = ParseErr> + Clone
     {
+        let spread = just(Token::DotDotDot)
+            .ignore_then(expr.clone())
+            .map(cst::SubscriptElem::Spread);
+        let single = expr.map(cst::SubscriptElem::Elem);
+        let elem = spread.or(single);
+
         just(Token::LParen)
             .ignore_then(
-                expr.separated_by(just(Token::Comma))
+                elem.separated_by(just(Token::Comma))
                     .at_least(1)
                     .allow_trailing(),
             )
@@ -2559,8 +2570,6 @@ impl PostfixOp {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use smallvec::smallvec;
-
     use super::*;
     use crate::ast::{BindingPattern, Expr, Stmt};
 
@@ -2629,7 +2638,7 @@ mod tests {
         let (ast, id) = parse_expr_ok("^PATIENT");
         assert_eq!(
             ast.get_expr(id),
-            Some(&Expr::Global("PATIENT".into(), smallvec![]))
+            Some(&Expr::Global("PATIENT".into(), smallvec::smallvec![]))
         );
     }
 

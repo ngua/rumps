@@ -10,7 +10,8 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExprId, BindingPattern, Expr, ExprId, OutputFormat,
-    OutputStmt, OutputTarget, Stmt, StmtId, TypeParam, UserConstraint,
+    OutputStmt, OutputTarget, Stmt, StmtId, SubscriptElem, TypeParam,
+    UserConstraint,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
@@ -496,7 +497,7 @@ impl InferCtx<'_> {
     /// constraints. Does not modify the environment (database write).
     pub(super) fn set(&mut self, target: ExprId, value: ExprId, span: Span) {
         // Extract subscripts from target (Local or Global)
-        let subs: SmallVec<[ExprId; 4]> = self
+        let subs: SmallVec<[SubscriptElem; 4]> = self
             .ast
             .get_expr(target)
             .and_then(|e| match e {
@@ -505,11 +506,7 @@ impl InferCtx<'_> {
             })
             .unwrap_or_default();
 
-        // Type-check subscript expressions
-        subs.iter().for_each(|sub_id| {
-            let sub_ty = self.expr(*sub_id);
-            self.constrain(Constraint::Subscriptable(sub_ty, span));
-        });
+        self.check_subscript_elems(&subs, span);
 
         // Type-check value and add Storable constraint
         let val_ty = self.expr(value);
@@ -522,7 +519,7 @@ impl InferCtx<'_> {
     /// Does not modify the environment (database delete).
     pub(super) fn kill(&mut self, target: ExprId, span: Span) {
         // Extract subscripts from target (Local or Global)
-        let subs: SmallVec<[ExprId; 4]> = self
+        let subs: SmallVec<[SubscriptElem; 4]> = self
             .ast
             .get_expr(target)
             .and_then(|e| match e {
@@ -531,11 +528,7 @@ impl InferCtx<'_> {
             })
             .unwrap_or_default();
 
-        // Type-check subscript expressions
-        subs.iter().for_each(|sub_id| {
-            let sub_ty = self.expr(*sub_id);
-            self.constrain(Constraint::Subscriptable(sub_ty, span));
-        });
+        self.check_subscript_elems(&subs, span);
     }
 
     /// Infer types for an `OUTPUT` statement or expression.

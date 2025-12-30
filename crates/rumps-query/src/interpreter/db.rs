@@ -5,7 +5,7 @@ use rumps_types::{DataStatus, Key, Name, Subscript};
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{Expr, ExprId};
+use crate::ast::{Expr, ExprId, SubscriptElem};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
 use crate::{Error, Result, Span};
@@ -257,26 +257,60 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate subscript expressions and build a `Key`.
+    /// Evaluate subscript elements and build a `Key`.
+    ///
+    /// Handles both regular subscripts (`Elem`) and spread syntax (`Spread`).
+    /// Spreads flatten an `Array[Subscript]` into the key.
     #[async_recursion]
-    pub(super) async fn build_key(&mut self, subs: &[ExprId]) -> Result<Key> {
+    pub(super) async fn build_key(
+        &mut self,
+        subs: &[SubscriptElem],
+    ) -> Result<Key> {
         self.build_key_acc(subs, Vec::with_capacity(subs.len()))
             .await
     }
 
-    /// Recursive helper for building a key from subscript expressions.
+    /// Recursive helper for building a key from subscript elements.
     #[async_recursion]
     async fn build_key_acc(
         &mut self,
-        subs: &[ExprId],
+        subs: &[SubscriptElem],
         mut acc: Vec<Subscript>,
     ) -> Result<Key> {
         match subs.split_first() {
             None => Ok(Key::from(acc)),
             Some((head, tail)) => {
-                let val = self.eval(*head).await?;
-                let sub = self.subscript(&val)?;
-                acc.push(sub);
+                match head {
+                    SubscriptElem::Elem(id) => {
+                        let val = self.eval(*id).await?;
+                        let sub = self.subscript(&val)?;
+                        acc.push(sub);
+                    }
+                    SubscriptElem::Spread(id) => {
+                        let val = self.eval(*id).await?;
+                        let span = self.ast.expr_span(*id).unwrap_or_default();
+                        // Extract subscripts from the array
+                        match &val {
+                            Value::Array(_, elems) => {
+                                elems.iter().try_for_each(|elem_id| {
+                                    let elem = self
+                                        .arena
+                                        .get(*elem_id)
+                                        .ok_or_else(|| {
+                                            Error::runtime(
+                                                span,
+                                                "invalid value id",
+                                            )
+                                        })?;
+                                    let sub = self.subscript(elem)?;
+                                    acc.push(sub);
+                                    Ok::<_, Error>(())
+                                })?;
+                            }
+                            _ => typechecked!("...spread", "Array[Subscript]"),
+                        }
+                    }
+                }
                 self.build_key_acc(tail, acc).await
             }
         }

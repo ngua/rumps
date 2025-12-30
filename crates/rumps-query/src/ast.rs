@@ -536,6 +536,19 @@ pub(crate) enum ObjectEntry {
     Spread(ExprId),
 }
 
+/// A subscript element: either a single expression or a spread.
+///
+/// Used in `Local` and `Global` B-tree variable references:
+/// - `d(1, "key")` uses `Elem` for each subscript
+/// - `d(...keys)` uses `Spread` to expand an `Array[Subscript]`
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubscriptElem {
+    /// A single subscript: `expr`
+    Elem(ExprId),
+    /// A spread: `...expr`
+    Spread(ExprId),
+}
+
 /// A literal value in the AST.
 ///
 /// This is the compile-time representation; runtime values (with arena
@@ -570,15 +583,17 @@ pub(crate) enum Expr {
 
     /// A local B-tree variable with subscripts.
     ///
-    /// `x(1, "KEY")` becomes `Local("x", [1, "KEY"])`.
+    /// `x(1, "KEY")` becomes `Local("x", [Elem(1), Elem("KEY")])`.
+    /// `x(...keys)` uses `Spread` to expand an `Array[Subscript]`.
     /// Requires `GET` to read the value.
-    Local(String, SmallVec<[ExprId; 4]>),
+    Local(String, SmallVec<[SubscriptElem; 4]>),
 
     /// A global B-tree variable with subscripts.
     ///
-    /// `^PATIENT(123, "NAME")` becomes `Global("PATIENT", [123, "NAME"])`.
+    /// `^PATIENT(123, "NAME")` becomes `Global("PATIENT", [Elem(123), Elem("NAME")])`.
+    /// `^PATIENT(...keys)` uses `Spread` to expand an `Array[Subscript]`.
     /// Requires `GET` to read the value.
-    Global(String, SmallVec<[ExprId; 4]>),
+    Global(String, SmallVec<[SubscriptElem; 4]>),
 
     /// `GET` primitive.
     ///
@@ -1052,7 +1067,13 @@ mod tests {
             .unwrap();
         let global = ast
             .add_expr(
-                Expr::Global("PATIENT".into(), smallvec::smallvec![sub1, sub2]),
+                Expr::Global(
+                    "PATIENT".into(),
+                    smallvec::smallvec![
+                        SubscriptElem::Elem(sub1),
+                        SubscriptElem::Elem(sub2)
+                    ],
+                ),
                 Span::new(0, 21),
             )
             .unwrap();
@@ -1170,7 +1191,13 @@ mod tests {
             .unwrap();
         let target = ast
             .add_expr(
-                Expr::Local("x".into(), smallvec::smallvec![sub1, sub2]),
+                Expr::Local(
+                    "x".into(),
+                    smallvec::smallvec![
+                        SubscriptElem::Elem(sub1),
+                        SubscriptElem::Elem(sub2)
+                    ],
+                ),
                 Span::new(4, 15),
             )
             .unwrap();

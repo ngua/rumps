@@ -11,7 +11,7 @@ use crate::ast::{
     self, ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, Expr,
     ExprId, JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, ObjectEntry,
     OutputFormat, OutputStmt, OutputTarget, RestPattern, Stmt, StmtId,
-    TypeDefAst, TypePattern, VariantAst,
+    SubscriptElem, TypeDefAst, TypePattern, VariantAst,
 };
 use crate::Result;
 
@@ -172,11 +172,11 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
         cst::ExprKind::Literal(lit) => Expr::Literal(lit),
         cst::ExprKind::Var(name) => Expr::Var(name),
         cst::ExprKind::Local(name, subs) => {
-            let sub_ids = lower_exprs(ast, subs)?;
+            let sub_ids = lower_subscript_elems(ast, subs)?;
             Expr::Local(name, sub_ids)
         }
         cst::ExprKind::Global(name, subs) => {
-            let sub_ids = lower_exprs(ast, subs)?;
+            let sub_ids = lower_subscript_elems(ast, subs)?;
             Expr::Global(name, sub_ids)
         }
         cst::ExprKind::Get(inner) => {
@@ -589,6 +589,32 @@ fn lower_object_entry(
             lower_expr(ast, e).map(ObjectEntry::Spread)
         }
     }
+}
+
+/// Lower a CST subscript element to AST.
+fn lower_subscript_elem(
+    ast: &mut Ast,
+    elem: cst::SubscriptElem,
+) -> Result<SubscriptElem> {
+    match elem {
+        cst::SubscriptElem::Elem(e) => {
+            lower_expr(ast, e).map(SubscriptElem::Elem)
+        }
+        cst::SubscriptElem::Spread(e) => {
+            lower_expr(ast, e).map(SubscriptElem::Spread)
+        }
+    }
+}
+
+/// Lower a list of CST subscript elements to AST.
+fn lower_subscript_elems(
+    ast: &mut Ast,
+    elems: Vec<cst::SubscriptElem>,
+) -> Result<SmallVec<[SubscriptElem; 4]>> {
+    elems
+        .into_iter()
+        .map(|e| lower_subscript_elem(ast, e))
+        .collect()
 }
 
 /// Lower a CST match pattern to AST, allocating into the pattern arena.

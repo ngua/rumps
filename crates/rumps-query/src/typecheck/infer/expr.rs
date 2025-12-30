@@ -11,8 +11,8 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExprId, BinOp, Expr, ExprId, JsonAccessKey,
-    JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId, TypeParam,
-    TypePattern, UnOp, UserConstraint,
+    JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId, SubscriptElem,
+    TypeParam, TypePattern, UnOp, UserConstraint,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
@@ -1558,8 +1558,8 @@ impl InferCtx<'_> {
     /// Database reads return `Option[Storable]`; the value may not exist at the
     /// given path. Usage may narrow via `IS`/`AS` checks or arithmetic operations.
     fn get(&mut self, inner_id: ExprId, span: Span) -> Ty {
-        // Extract subscript IDs if Local or Global; ExprId is Copy so cheap
-        let subs: SmallVec<[ExprId; 4]> = self
+        // Extract subscripts if Local or Global
+        let subs: SmallVec<[SubscriptElem; 4]> = self
             .ast
             .get_expr(inner_id)
             .and_then(|e| match e {
@@ -1568,21 +1568,40 @@ impl InferCtx<'_> {
             })
             .unwrap_or_default();
 
-        // Type-check subscript expressions
-        subs.iter().for_each(|sub_id| {
-            let sub_ty = self.expr(*sub_id);
-            self.constrain(Constraint::Subscriptable(sub_ty, span));
-        });
-
+        self.check_subscript_elems(&subs, span);
         Ty::Option(Box::new(Ty::Named(TypeId::STORABLE, vec![])))
+    }
+
+    /// Type-check subscript elements.
+    ///
+    /// For `Elem`, adds a `Subscriptable` constraint.
+    /// For `Spread`, constrains to `Array[Subscript]`.
+    pub(super) fn check_subscript_elems(
+        &mut self,
+        subs: &[SubscriptElem],
+        span: Span,
+    ) {
+        subs.iter().for_each(|elem| match elem {
+            SubscriptElem::Elem(id) => {
+                let ty = self.expr(*id);
+                self.constrain(Constraint::Subscriptable(ty, span));
+            }
+            SubscriptElem::Spread(id) => {
+                let ty = self.expr(*id);
+                // Spread must be Array[Subscript]
+                let expected =
+                    Ty::Array(Box::new(Ty::Named(TypeId::SUBSCRIPT, vec![])));
+                self.unify(ty, expected, span);
+            }
+        });
     }
 
     /// Infer type of `DATA` expression.
     ///
     /// Queries the existence status of a node. Returns `DataStatus` enum.
     fn data(&mut self, inner_id: ExprId, span: Span) -> Ty {
-        // Extract subscript IDs if Local or Global
-        let subs: SmallVec<[ExprId; 4]> = self
+        // Extract subscripts if Local or Global
+        let subs: SmallVec<[SubscriptElem; 4]> = self
             .ast
             .get_expr(inner_id)
             .and_then(|e| match e {
@@ -1591,12 +1610,7 @@ impl InferCtx<'_> {
             })
             .unwrap_or_default();
 
-        // Type-check subscript expressions
-        subs.iter().for_each(|sub_id| {
-            let sub_ty = self.expr(*sub_id);
-            self.constrain(Constraint::Subscriptable(sub_ty, span));
-        });
-
+        self.check_subscript_elems(&subs, span);
         Ty::DataStatus
     }
 
@@ -1604,8 +1618,8 @@ impl InferCtx<'_> {
     ///
     /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
     fn order(&mut self, inner_id: ExprId, span: Span) -> Ty {
-        // Extract subscript IDs if Local or Global
-        let subs: SmallVec<[ExprId; 4]> = self
+        // Extract subscripts if Local or Global
+        let subs: SmallVec<[SubscriptElem; 4]> = self
             .ast
             .get_expr(inner_id)
             .and_then(|e| match e {
@@ -1614,12 +1628,7 @@ impl InferCtx<'_> {
             })
             .unwrap_or_default();
 
-        // Type-check subscript expressions
-        subs.iter().for_each(|sub_id| {
-            let sub_ty = self.expr(*sub_id);
-            self.constrain(Constraint::Subscriptable(sub_ty, span));
-        });
-
+        self.check_subscript_elems(&subs, span);
         Ty::Option(Box::new(Ty::Named(TypeId::SUBSCRIPT, vec![])))
     }
 

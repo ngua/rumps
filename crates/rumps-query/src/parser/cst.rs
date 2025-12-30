@@ -122,6 +122,19 @@ pub(crate) enum ObjectEntry {
     Spread(Expr),
 }
 
+/// A subscript element: either a single expression or a spread.
+///
+/// Used in `Local` and `Global` B-tree variable references:
+/// - `d(1, "key")` uses `Elem` for each subscript
+/// - `d(...keys)` uses `Spread` to expand an `Array[Subscript]`
+#[derive(Clone, Debug)]
+pub(crate) enum SubscriptElem {
+    /// A single subscript: `expr`
+    Elem(Expr),
+    /// A spread: `...expr`
+    Spread(Expr),
+}
+
 /// A CST expression node with inline span.
 #[derive(Clone, Debug)]
 pub(crate) struct Expr {
@@ -155,10 +168,14 @@ pub(crate) enum ExprKind {
     Var(String),
 
     /// A local B-tree variable with subscripts.
-    Local(String, Vec<Expr>),
+    ///
+    /// Subscripts can be individual expressions or spreads of `Array[Subscript]`.
+    Local(String, Vec<SubscriptElem>),
 
     /// A global B-tree variable with subscripts.
-    Global(String, Vec<Expr>),
+    ///
+    /// Subscripts can be individual expressions or spreads of `Array[Subscript]`.
+    Global(String, Vec<SubscriptElem>),
 
     /// `GET` primitive.
     Get(Box<Expr>),

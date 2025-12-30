@@ -1,0 +1,16 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Spread subscripts in local/global variables\n; Allows spreading an Array[Subscript] into subscript position\n; Useful for $QUERY iteration where keys are returned as arrays\n\n; Set up test data\n$SET data(1, \"a\") = \"first\"\n$SET data(1, \"b\") = \"second\"\n$SET data(2, \"x\") = \"third\"\n$SET data(2, \"y\") = \"fourth\"\n\n; Regular subscripts (existing behavior)\nLET v1 = $GET data(1, \"a\")\n$OUTPUT v1\n\n; Spread an empty array: equivalent to data()\nLET empty: Array[Subscript] = []\nLET root = $GET data(...empty)\n$OUTPUT root\n\n; Spread a single-element array\nLET k1: Array[Subscript] = [1]\nLET partial = $GET data(...k1, \"a\")\n$OUTPUT partial\n\n; Spread a full key path\nLET key: Array[Subscript] = [1, \"b\"]\nLET v2 = $GET data(...key)\n$OUTPUT v2\n\n; Mix regular and spread subscripts\nLET suffix: Array[Subscript] = [\"x\"]\nLET v3 = $GET data(2, ...suffix)\n$OUTPUT v3\n\n; Spread with $SET\nLET set-key: Array[Subscript] = [3, \"z\"]\n$SET data(...set-key) = \"spread-set\"\nLET v4 = $GET data(3, \"z\")\n$OUTPUT v4\n\n; Spread with $KILL\n$SET data(99, \"del\") = \"to-delete\"\nLET kill-key: Array[Subscript] = [99, \"del\"]\n$KILL data(...kill-key)\nLET deleted = $GET data(99, \"del\")\n$OUTPUT deleted\n\n; Spread with $DATA\nLET data-key: Array[Subscript] = [1, \"a\"]\nLET status = $DATA data(...data-key)\n$OUTPUT status\n\n; Spread with $ORDER\n$SET items(1) = \"one\"\n$SET items(2) = \"two\"\n$SET items(10) = \"ten\"\nLET prefix: Array[Subscript] = [1]\nLET next = $ORDER items(...prefix)\n$OUTPUT next\n\n; Multiple spreads (concatenation)\nLET part1: Array[Subscript] = [1]\nLET part2: Array[Subscript] = [\"a\"]\nLET combined = $GET data(...part1, ...part2)\n$OUTPUT combined\n\n; Spread with dynamic subscript values\nLET n = 2\nLET s = \"y\"\nLET dyn-key: Array[Subscript] = [n, s]\nLET v5 = $GET data(...dyn-key)\n$OUTPUT v5\n\n$OUTPUT \"spread subscript test complete\"\n"
+---
+Option.Some("first")
+Option.None
+Option.Some("first")
+Option.Some("second")
+Option.Some("third")
+Option.Some("spread-set")
+Option.None
+DataStatus.HasValue
+Option.Some(2)
+Option.Some("first")
+Option.Some("fourth")
+"spread subscript test complete"
