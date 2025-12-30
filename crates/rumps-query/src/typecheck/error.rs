@@ -387,7 +387,7 @@ impl TypeError {
                     "type `{}` cannot be used as subscript key",
                     p.format(ty)
                 ),
-                Some("subscript keys must be `Bool`, `Int`, `Float`, `Char`, `String`, or `Json`".to_owned()),
+                Some("subscript keys must be `Bool`, `Int`, `Float`, `Char`, `String`, `Json`, or `Subscript`".to_owned()),
             ),
             Self::NotStorable(ty, _) => (
                 format!("type `{}` is not storable", p.format(ty)),

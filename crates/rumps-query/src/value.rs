@@ -154,7 +154,8 @@ impl TypeId {
     /// Builtin union: `Subscript = Bool | Int | Float | Char | String | Json`.
     ///
     /// The set of types that can be used as subscripts in variable references.
-    /// Semantically distinct from `Storable` (what can be stored) though currently identical.
+    /// Semantically distinct from `Storable` (what can be stored) though identical
+    /// in terms of actual representation.
     pub(crate) const SUBSCRIPT: Self = Self(22);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types

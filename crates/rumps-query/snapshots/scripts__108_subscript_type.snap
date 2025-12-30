@@ -1,0 +1,11 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Subscript type as subscript key\n; The `Subscript` union type can be used directly as a subscript key,\n; enabling seamless piping of `$ORDER` results into `$GET` without coercions.\n\n; Set up test data with mixed subscript types\n$SET data(1) = \"one\"\n$SET data(2) = \"two\"\n$SET data(3) = \"three\"\n$SET data(\"a\") = \"alpha\"\n$SET data(\"b\") = \"beta\"\n\n; Use $ORDER result directly as subscript (no READ coercion needed)\nLET first : Subscript = ($ORDER data)!\n$OUTPUT first\n$OUTPUT ($GET data(first))!\n\n; Chain through all keys using FOREVER\nLET vals = FOREVER { key: $ORDER data, acc: [] } (st, cont) => {\n    MATCH st.key {\n        Option.None => st.acc\n        Option.Some(k) => {\n            ; k is Subscript; use directly in $GET and $ORDER\n            LET v = ($GET data(k))!\n            cont({\n                key: $ORDER data(k),\n                acc: Array.concat(st.acc, [v])\n            })\n        }\n    }\n}\n$OUTPUT vals\n\n; Explicit Subscript annotation works\nLET sub : Subscript = 42\n$SET x(sub) = \"works\"\n$OUTPUT ($GET x(sub))!\n\n; Function that takes Subscript parameter\nFUN lookup (key: Subscript) -> Option[Storable] {\n    $GET data(key)\n}\n\n$OUTPUT lookup(1)\n$OUTPUT lookup(\"a\")\n\n$OUTPUT \"Subscript type test complete\"\n"
+---
+1
+"one"
+[ "one", "two", "three", "alpha", "beta" ]
+"works"
+Option.Some("one")
+Option.Some("alpha")
+"Subscript type test complete"

@@ -820,7 +820,8 @@ impl<'a> InferCtx<'a> {
 
     /// Check that a type can be used as a database subscript key.
     ///
-    /// Valid types: `Bool`, `Int`, `Float`, `Char`, `String`, `Json`.
+    /// Valid types: `Bool`, `Int`, `Float`, `Char`, `String`, `Json`, or the
+    /// `Subscript` union itself.
     fn check_subscriptable(&mut self, ty: &Ty, span: Span) {
         match ty {
             Ty::Bool
@@ -829,6 +830,8 @@ impl<'a> InferCtx<'a> {
             | Ty::Char
             | Ty::String
             | Ty::Json => {}
+            // Allow the `Subscript` union type itself
+            Ty::Named(id, _) if *id == crate::TypeId::SUBSCRIPT => {}
             Ty::Var(_) | Ty::Unknown | Ty::Error => {}
             _ => {
                 self.error(TypeError::NotSubscriptable(ty.clone(), span));
