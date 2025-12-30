@@ -775,19 +775,19 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Extract the Ok value from a Result.
-    fn unwrap_result_ok(&self, result: &Value, span: Span) -> Result<Value> {
+    ///
+    /// Callers must ensure this is only invoked on `Result.Ok` values.
+    fn unwrap_result_ok(&self, result: &Value, _span: Span) -> Result<Value> {
         match result {
             Value::Tagged(ty, 0, payloads)
                 if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT) =>
             {
-                payloads
+                Ok(payloads
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(span, "invalid Result.Ok payload")
-                    })
+                    .unwrap_or_else(|| typechecked!("Result.Ok", "payload")))
             }
-            _ => Err(Error::runtime(span, "expected Result.Ok")),
+            _ => typechecked!("unwrap_result_ok", "Result.Ok"),
         }
     }
 

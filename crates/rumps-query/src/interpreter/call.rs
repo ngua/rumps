@@ -319,19 +319,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        (args.len() == 2).then_some(()).ok_or_else(|| {
-            Error::runtime(
-                span,
-                format!("Array.map expects 2 arguments, got {}", args.len()),
-            )
-        })?;
-
-        let fn_id = *args.first().ok_or_else(|| {
-            Error::runtime(span, "Array.map: missing function")
-        })?;
+        let fn_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Array.map", "2 args"));
         let iterable_id = *args
             .get(1)
-            .ok_or_else(|| Error::runtime(span, "Array.map: missing array"))?;
+            .unwrap_or_else(|| typechecked!("Array.map", "2 args"));
 
         // Match on reference; only clone the `SmallVec`, not the whole `Value`
         match self.arena.get(iterable_id) {
@@ -347,7 +340,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }) => self.range_map(fn_id, *start, *end, *inclusive, span).await,
             // Type checker guarantees iterable is Array or Range
             Some(_) => typechecked!("Array.map", "Iterable"),
-            None => Err(Error::runtime(span, "Array.map: invalid iterable")),
+            None => typechecked!("Array.map", "valid iterable"),
         }
     }
 
@@ -464,19 +457,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        (args.len() == 2).then_some(()).ok_or_else(|| {
-            Error::runtime(
-                span,
-                format!("Array.filter expects 2 arguments, got {}", args.len()),
-            )
-        })?;
-
-        let pred_id = *args.first().ok_or_else(|| {
-            Error::runtime(span, "Array.filter: missing predicate")
-        })?;
-        let iterable_id = *args.get(1).ok_or_else(|| {
-            Error::runtime(span, "Array.filter: missing array")
-        })?;
+        let pred_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Array.filter", "2 args"));
+        let iterable_id = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Array.filter", "2 args"));
 
         // Match on reference; only clone the `SmallVec`, not the whole `Value`
         match self.arena.get(iterable_id) {
@@ -501,7 +487,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Type checker guarantees iterable is Array or Range
             Some(_) => typechecked!("Array.filter", "Iterable"),
-            None => Err(Error::runtime(span, "Array.filter: invalid iterable")),
+            None => typechecked!("Array.filter", "valid iterable"),
         }
     }
 
@@ -547,9 +533,9 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             let result = self.invoke_callable(pred_id, &[int_id], span).await?;
             let result_val =
-                self.arena.get(result).cloned().ok_or_else(|| {
-                    Error::runtime(span, "Array.filter: invalid result")
-                })?;
+                self.arena.get(result).cloned().unwrap_or_else(|| {
+                    typechecked!("Array.filter", "valid result")
+                });
 
             let keep = match result_val {
                 Value::Bool(b) => b,
@@ -589,9 +575,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let result =
                     self.invoke_callable(pred_id, &[*head], span).await?;
                 let result_val =
-                    self.arena.get(result).cloned().ok_or_else(|| {
-                        Error::runtime(span, "Array.filter: invalid result")
-                    })?;
+                    self.arena.get(result).cloned().unwrap_or_else(|| {
+                        typechecked!("Array.filter", "valid result")
+                    });
 
                 let keep = match result_val {
                     Value::Bool(b) => b,
@@ -617,22 +603,15 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        (args.len() == 3).then_some(()).ok_or_else(|| {
-            Error::runtime(
-                span,
-                format!("Array.reduce expects 3 arguments, got {}", args.len()),
-            )
-        })?;
-
-        let reducer_id = *args.first().ok_or_else(|| {
-            Error::runtime(span, "Array.reduce: missing reducer")
-        })?;
-        let init_id = *args.get(1).ok_or_else(|| {
-            Error::runtime(span, "Array.reduce: missing initial value")
-        })?;
-        let iterable_id = *args.get(2).ok_or_else(|| {
-            Error::runtime(span, "Array.reduce: missing array")
-        })?;
+        let reducer_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Array.reduce", "3 args"));
+        let init_id = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Array.reduce", "3 args"));
+        let iterable_id = *args
+            .get(2)
+            .unwrap_or_else(|| typechecked!("Array.reduce", "3 args"));
 
         // Match on reference; only clone the `SmallVec`, not the whole `Value`
         match self.arena.get(iterable_id) {
@@ -653,7 +632,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Type checker guarantees iterable is Array or Range
             Some(_) => typechecked!("Array.reduce", "Iterable"),
-            None => Err(Error::runtime(span, "Array.reduce: invalid iterable")),
+            None => typechecked!("Array.reduce", "valid iterable"),
         }
     }
 
@@ -683,9 +662,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         if current >= end {
-            self.arena.get(acc_id).cloned().ok_or_else(|| {
-                Error::runtime(span, "Array.reduce: invalid accumulator")
-            })
+            Ok(self.arena.get(acc_id).cloned().unwrap_or_else(|| {
+                typechecked!("Array.reduce", "valid accumulator")
+            }))
         } else {
             let int_val = Value::Int(current);
             let int_id = self.arena.add(int_val, span);
@@ -708,9 +687,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         match elems.split_first() {
-            None => self.arena.get(acc_id).cloned().ok_or_else(|| {
-                Error::runtime(span, "Array.reduce: invalid accumulator")
-            }),
+            None => Ok(self.arena.get(acc_id).cloned().unwrap_or_else(|| {
+                typechecked!("Array.reduce", "valid accumulator")
+            })),
             Some((head, tail)) => {
                 let new_acc = self
                     .invoke_callable(reducer_id, &[acc_id, *head], span)
@@ -730,22 +709,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        (args.len() == 2).then_some(()).ok_or_else(|| {
-            Error::runtime(
-                span,
-                format!(
-                    "Array.foreach expects 2 arguments, got {}",
-                    args.len()
-                ),
-            )
-        })?;
-
-        let fn_id = *args.first().ok_or_else(|| {
-            Error::runtime(span, "Array.foreach: missing function")
-        })?;
-        let iterable_id = *args.get(1).ok_or_else(|| {
-            Error::runtime(span, "Array.foreach: missing array")
-        })?;
+        let fn_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Array.foreach", "2 args"));
+        let iterable_id = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Array.foreach", "2 args"));
 
         match self.arena.get(iterable_id) {
             Some(Value::Array(_, elems)) => {
@@ -762,9 +731,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Type checker guarantees iterable is Array or Range
             Some(_) => typechecked!("Array.foreach", "Iterable"),
-            None => {
-                Err(Error::runtime(span, "Array.foreach: invalid iterable"))
-            }
+            None => typechecked!("Array.foreach", "valid iterable"),
         }
     }
 
@@ -999,24 +966,17 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        (args.len() == 2).then_some(()).ok_or_else(|| {
-            Error::runtime(
-                span,
-                format!("Option.map expects 2 arguments, got {}", args.len()),
-            )
-        })?;
-
-        let opt_id = *args.first().ok_or_else(|| {
-            Error::runtime(span, "Option.map: missing option")
-        })?;
-        let fn_id = *args.get(1).ok_or_else(|| {
-            Error::runtime(span, "Option.map: missing function")
-        })?;
+        let opt_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Option.map", "2 args"));
+        let fn_id = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Option.map", "2 args"));
 
         let opt = self
             .arena
             .get(opt_id)
-            .ok_or_else(|| Error::runtime(span, "Option.map: invalid value"))?;
+            .unwrap_or_else(|| typechecked!("Option.map", "valid value"));
 
         let is_some = opt.is_some(&self.type_exprs);
         let is_none = opt.is_none(&self.type_exprs);
@@ -1026,24 +986,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Option.Some(v) - apply fn and wrap in Some
                 let inner = match opt {
                     Value::Tagged(_, _, payloads) => {
-                        payloads.first().copied().ok_or_else(|| {
-                            Error::runtime(
-                                span,
-                                "Option.map: Some has no payload",
-                            )
-                        })?
+                        *payloads.first().unwrap_or_else(|| {
+                            typechecked!("Option.Some", "payload")
+                        })
                     }
-                    _ => Err(Error::runtime(
-                        span,
-                        "Option.map: expected Tagged value",
-                    ))?,
+                    _ => typechecked!("Option.Some", "Tagged"),
                 };
 
                 let result_id =
                     self.invoke_callable(fn_id, &[inner], span).await?;
-                self.arena.get(result_id).ok_or_else(|| {
-                    Error::runtime(span, "Option.map: invalid result")
-                })?;
+                self.arena.get(result_id).unwrap_or_else(|| {
+                    typechecked!("Option.map", "valid result")
+                });
 
                 // Wrap in Some with appropriate type
                 let result_ty = self
@@ -1077,24 +1031,17 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        (args.len() == 2).then_some(()).ok_or_else(|| {
-            Error::runtime(
-                span,
-                format!("Result.map expects 2 arguments, got {}", args.len()),
-            )
-        })?;
-
-        let res_id = *args.first().ok_or_else(|| {
-            Error::runtime(span, "Result.map: missing result")
-        })?;
-        let fn_id = *args.get(1).ok_or_else(|| {
-            Error::runtime(span, "Result.map: missing function")
-        })?;
+        let res_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Result.map", "2 args"));
+        let fn_id = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Result.map", "2 args"));
 
         let res = self
             .arena
             .get(res_id)
-            .ok_or_else(|| Error::runtime(span, "Result.map: invalid value"))?;
+            .unwrap_or_else(|| typechecked!("Result.map", "valid value"));
 
         let is_ok = res.is_ok(&self.type_exprs);
         let is_err = res.is_err(&self.type_exprs);
@@ -1104,24 +1051,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Result.Ok(v) - apply fn and wrap in Ok
                 let inner = match res {
                     Value::Tagged(_, _, payloads) => {
-                        payloads.first().copied().ok_or_else(|| {
-                            Error::runtime(
-                                span,
-                                "Result.map: Ok has no payload",
-                            )
-                        })?
+                        *payloads.first().unwrap_or_else(|| {
+                            typechecked!("Result.Ok", "payload")
+                        })
                     }
-                    _ => Err(Error::runtime(
-                        span,
-                        "Result.map: expected Tagged value",
-                    ))?,
+                    _ => typechecked!("Result.Ok", "Tagged"),
                 };
 
                 let result_id =
                     self.invoke_callable(fn_id, &[inner], span).await?;
-                self.arena.get(result_id).ok_or_else(|| {
-                    Error::runtime(span, "Result.map: invalid result")
-                })?;
+                self.arena.get(result_id).unwrap_or_else(|| {
+                    typechecked!("Result.map", "valid result")
+                });
 
                 // Wrap in Ok with appropriate type
                 let result_ty = self
@@ -1154,26 +1095,17 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        (args.len() == 2).then_some(()).ok_or_else(|| {
-            Error::runtime(
-                span,
-                format!(
-                    "Result.map-err expects 2 arguments, got {}",
-                    args.len()
-                ),
-            )
-        })?;
+        let res_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Result.map-err", "2 args"));
+        let fn_id = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Result.map-err", "2 args"));
 
-        let res_id = *args.first().ok_or_else(|| {
-            Error::runtime(span, "Result.map-err: missing result")
-        })?;
-        let fn_id = *args.get(1).ok_or_else(|| {
-            Error::runtime(span, "Result.map-err: missing function")
-        })?;
-
-        let res = self.arena.get(res_id).ok_or_else(|| {
-            Error::runtime(span, "Result.map-err: invalid value")
-        })?;
+        let res = self
+            .arena
+            .get(res_id)
+            .unwrap_or_else(|| typechecked!("Result.map-err", "valid value"));
 
         let is_ok = res.is_ok(&self.type_exprs);
         let is_err = res.is_err(&self.type_exprs);
@@ -1187,24 +1119,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Result.Err(e) - apply fn and wrap in Err
                 let inner = match res {
                     Value::Tagged(_, _, payloads) => {
-                        payloads.first().copied().ok_or_else(|| {
-                            Error::runtime(
-                                span,
-                                "Result.map-err: Err has no payload",
-                            )
-                        })?
+                        *payloads.first().unwrap_or_else(|| {
+                            typechecked!("Result.Err", "payload")
+                        })
                     }
-                    _ => Err(Error::runtime(
-                        span,
-                        "Result.map-err: expected Tagged value",
-                    ))?,
+                    _ => typechecked!("Result.Err", "Tagged"),
                 };
 
                 let result_id =
                     self.invoke_callable(fn_id, &[inner], span).await?;
-                self.arena.get(result_id).ok_or_else(|| {
-                    Error::runtime(span, "Result.map-err: invalid result")
-                })?;
+                self.arena.get(result_id).unwrap_or_else(|| {
+                    typechecked!("Result.map-err", "valid result")
+                });
 
                 // Wrap in Err with appropriate type
                 let result_ty = self
