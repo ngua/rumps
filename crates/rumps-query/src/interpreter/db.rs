@@ -177,6 +177,52 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    /// `$QUERY` primitive; returns the full key path to the next node.
+    ///
+    /// Uses the active transaction if one exists, otherwise reads directly
+    /// from the database. Returns `Option[Array[Subscript]]`.
+    #[async_recursion]
+    pub(super) async fn query(
+        &mut self,
+        dbref: &DbRef,
+        span: Span,
+    ) -> Result<Value> {
+        let (name, subs) = dbref.split();
+        let key = self.build_key(subs).await?;
+
+        // The `query` API takes `Option<&Key>` for the "after" position.
+        let after = if key.is_empty() { None } else { Some(&key) };
+
+        let opt_key = match &self.txn {
+            Some(txn) => txn.query(&name, after).await,
+            None => self.db.query(&name, after).await,
+        }
+        .map_err(|e| Error::runtime(span, format!("QUERY failed: {e}")))?;
+
+        // Convert Option<Key> to Option[Array[Subscript]] value
+        match opt_key {
+            None => Ok(self.make_none()),
+            Some(k) => {
+                let arr = self.key_to_array(k, span)?;
+                let arr_id = self.arena.add(arr, span);
+                Ok(self.make_some(arr_id))
+            }
+        }
+    }
+
+    /// Convert a `Key` to an `Array[Subscript]` value.
+    fn key_to_array(&mut self, key: Key, span: Span) -> Result<Value> {
+        let elem_ids = key
+            .into_iter()
+            .map(|sub| {
+                let v = self.value_from_subscript(sub)?;
+                Ok(self.arena.add(v, span))
+            })
+            .collect::<Result<SmallVec<_>>>()?;
+        let type_expr_id = self.type_exprs.named(TypeId::SUBSCRIPT);
+        Ok(Value::Array(type_expr_id, elem_ids))
+    }
+
     /// Evaluate subscript elements and build a `Key`.
     ///
     /// Handles both regular subscripts (`Elem`) and spread syntax (`Spread`).

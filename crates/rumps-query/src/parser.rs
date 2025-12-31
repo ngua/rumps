@@ -1337,6 +1337,13 @@ impl Parser {
                     cst::Expr::new(cst::ExprKind::Order(dbref), span)
                 });
 
+            // QUERY target
+            let query_expr = just(Token::Query)
+                .ignore_then(Self::db_ref(expr.clone()))
+                .map_with_span(|dbref, span| {
+                    cst::Expr::new(cst::ExprKind::Query(dbref), span)
+                });
+
             // OUTPUT expr [JSON] [TO target]
             let output = Self::output_expr(expr.clone());
 
@@ -1351,8 +1358,8 @@ impl Parser {
             let forever = Self::forever_expr(primary, expr);
 
             choice((
-                with_op, get_expr, data_expr, order_expr, output, set, kill,
-                forever,
+                with_op, get_expr, data_expr, order_expr, query_expr, output,
+                set, kill, forever,
             ))
             .or(operand.clone())
         })
@@ -1360,7 +1367,7 @@ impl Parser {
 
     /// Parse a B-tree variable reference (local or global with subscripts).
     ///
-    /// Returns `cst::DbRef` for use in `GET`, `SET`, `KILL`, `DATA`, `ORDER`.
+    /// Returns `cst::DbRef` for use in `GET`, `SET`, `KILL`, `DATA`, `ORDER`, `QUERY`.
     fn db_ref(
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone

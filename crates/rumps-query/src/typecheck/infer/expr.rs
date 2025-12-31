@@ -211,6 +211,9 @@ impl InferCtx<'_> {
             // Order query: `ORDER local(...)` or `ORDER ^global(...)`
             Expr::Order(dbref) => self.order(dbref, span),
 
+            // Query: `$QUERY local(...)` or `$QUERY ^global(...)`
+            Expr::Query(dbref) => self.query(dbref, span),
+
             // Output expression: `$OUTPUT expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
             Expr::Output(output) => {
@@ -1603,6 +1606,19 @@ impl InferCtx<'_> {
         };
         self.check_subscript_elems(subs, span);
         Ty::Option(Box::new(Ty::Named(TypeId::SUBSCRIPT, vec![])))
+    }
+
+    /// Infer type of `$QUERY` expression.
+    ///
+    /// Returns the full key path to the next node with a value.
+    /// Returns `Option[Array[Subscript]]`.
+    fn query(&mut self, dbref: &DbRef, span: Span) -> Ty {
+        let subs = match dbref {
+            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
+        };
+        self.check_subscript_elems(subs, span);
+        let subscript = Ty::Named(TypeId::SUBSCRIPT, vec![]);
+        Ty::Option(Box::new(Ty::Array(Box::new(subscript))))
     }
 
     /// Infer type of type annotation expression `(expr) : Type`.

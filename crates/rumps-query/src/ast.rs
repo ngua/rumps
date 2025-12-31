@@ -816,6 +816,12 @@ pub(crate) enum Expr {
     /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
     Order(DbRef),
 
+    /// Query: `$QUERY var`.
+    ///
+    /// Returns the full key path to the next node with a value.
+    /// Returns `Option[Array[Subscript]]`.
+    Query(DbRef),
+
     /// Output expression: `$OUTPUT expr [JSON] [TO target]`.
     ///
     /// Executes the output side effect and evaluates to `Unit`.

@@ -242,7 +242,7 @@ impl Lexer<'_> {
         ))
     }
 
-    /// MUMPS intrinsic: `$SET`, `$GET`, `$KILL`, `$OUTPUT`, `$DATA`, `$ORDER`.
+    /// MUMPS intrinsic: `$SET`, `$GET`, `$KILL`, `$OUTPUT`, `$DATA`, `$ORDER`, `$QUERY`.
     ///
     /// Case-insensitive (e.g., `$set`, `$SET`, `$Set` all work).
     fn intrinsic() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn all_intrinsics() {
-        let tokens = lex_ok("$SET $GET $KILL $OUTPUT $DATA $ORDER");
+        let tokens = lex_ok("$SET $GET $KILL $OUTPUT $DATA $ORDER $QUERY");
         assert_eq!(
             tokens,
             vec![
@@ -726,6 +726,7 @@ mod tests {
                 Token::Output,
                 Token::Data,
                 Token::Order,
+                Token::Query,
                 Token::Eof
             ]
         );
@@ -744,7 +745,7 @@ mod tests {
     #[test]
     fn intrinsics_are_not_keywords() {
         // Without `$` prefix, these are identifiers, not intrinsics
-        let tokens = lex_ok("SET GET KILL OUTPUT DATA ORDER");
+        let tokens = lex_ok("SET GET KILL OUTPUT DATA ORDER QUERY");
         assert_eq!(
             tokens,
             vec![
@@ -754,6 +755,7 @@ mod tests {
                 Token::Ident("OUTPUT".into()),
                 Token::Ident("DATA".into()),
                 Token::Ident("ORDER".into()),
+                Token::Ident("QUERY".into()),
                 Token::Eof
             ]
         );

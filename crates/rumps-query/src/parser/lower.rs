@@ -349,6 +349,10 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let dbref = lower_db_ref(ast, dbref)?;
             Expr::Order(dbref)
         }
+        cst::ExprKind::Query(dbref) => {
+            let dbref = lower_db_ref(ast, dbref)?;
+            Expr::Query(dbref)
+        }
         cst::ExprKind::Output(output) => {
             let expr_id = lower_expr(ast, output.expr)?;
             let format = match output.format {

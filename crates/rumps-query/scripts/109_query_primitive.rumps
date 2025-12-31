@@ -1,0 +1,67 @@
+; Test: $QUERY primitive
+; Returns full key path to the next node with a value
+; NOTE: Uses locals only; globals require TRANSACTION blocks
+;
+; KNOWN LIMITATION: The storage layer returns ancestor keys (nodes that only
+; have descendants but no value). This affects nested key iteration.
+; See the storage layer query_internal implementation for details.
+
+; Set up single-level test data (works correctly)
+$SET items(1) = "one"
+$SET items(2) = "two"
+$SET items(10) = "ten"
+
+; First key path (no after position)
+LET first = $QUERY items
+$OUTPUT first
+
+; Next key path after (1)
+LET after-1 = $QUERY items(1)
+$OUTPUT after-1
+
+; Next key path after (2)
+LET after-2 = $QUERY items(2)
+$OUTPUT after-2
+
+; Past the last key
+LET after-10 = $QUERY items(10)
+$OUTPUT after-10
+
+; $QUERY on non-existent variable
+LET no-keys = $QUERY empty
+$OUTPUT no-keys
+
+; Type annotation
+LET typed: Option[Array[Subscript]] = $QUERY items
+$OUTPUT typed
+
+; Use with MATCH
+LET msg = MATCH $QUERY items {
+    Option.Some(path) => { "found path of length: " ++ ((Array.length(path)) AS String) }
+    Option.None => { "no nodes" }
+}
+$OUTPUT msg
+
+; Use with coalesce
+LET path = $QUERY items ?? []
+$OUTPUT path
+
+; Using unwrap on result
+LET path2 = ($QUERY items(1))!
+$OUTPUT path2
+
+; Spread syntax to continue iteration
+$SET data(1) = "a"
+$SET data(2) = "b"
+$SET data(3) = "c"
+
+LET k1 = $QUERY data ?? []
+$OUTPUT k1
+LET k2 = $QUERY data(...k1) ?? []
+$OUTPUT k2
+LET k3 = $QUERY data(...k2) ?? []
+$OUTPUT k3
+LET k4 = $QUERY data(...k3)
+$OUTPUT k4
+
+$OUTPUT "$QUERY test complete"

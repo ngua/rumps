@@ -285,6 +285,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Get(ref dbref) => self.get(dbref, span).await,
             Expr::Data(ref dbref) => self.data(dbref, span).await,
             Expr::Order(ref dbref) => self.order(dbref, span).await,
+            Expr::Query(ref dbref) => self.query(dbref, span).await,
             Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
             Expr::Unary(op, operand) => self.unary(op, operand, span).await,
             Expr::Call(callee, args) => self.call(callee, &args, span).await,

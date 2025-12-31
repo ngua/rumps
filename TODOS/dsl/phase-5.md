@@ -745,3 +745,291 @@ They may diverge if storage adds new types that aren't valid subscripts.
 #### Number Representation
 
 `Subscript::Number(f64)` at the storage layer represents both `Int` and `Float`. When converting back to runtime values, we check if the number is a whole number and return `Int` if so. This preserves the user's likely intent when they used `$ORDER` with integer subscripts
+
+---
+
+## 5.4: $QUERY Primitive
+
+The `$QUERY` primitive returns the full key path to the next node with a value in sorted order. It wraps `Database::query` and `Transaction::query`.
+
+---
+
+### 5.4.1 Syntax
+
+```rumps
+; Get the first key path in the tree (root)
+LET first-key = $QUERY patients
+
+; Get the full key path to the next node after the current position
+LET next-key = $QUERY patients(123, "A")
+
+; Use in expressions with MATCH
+LET msg = MATCH $QUERY data {
+  Option.Some(k) => { "found: " ++ (k AS String) }
+  Option.None => { "no nodes" }
+}
+$OUTPUT msg
+
+; Unwrap with coalesce
+LET key = $QUERY patients ?? []
+```
+
+**Note**: Tree iteration uses the future `$COLLECT` primitive, not manual loops. `$QUERY` is primarily for single-step traversal or building custom iteration with `$COLLECT`.
+
+### 5.4.2 $QUERY vs $ORDER
+
+| Primitive | Returns                    | Use Case                              |
+|-----------|----------------------------|---------------------------------------|
+| `$ORDER`  | `Option[Subscript]`        | Next subscript at current level       |
+| `$QUERY`  | `Option[Array[Subscript]]` | Full key path to next node with value |
+
+`$ORDER` iterates siblings at a single level; `$QUERY` traverses the entire tree depth-first.
+
+```rumps
+; Given tree:
+;   patients(1, "age") = 30
+;   patients(1, "name") = "Alice"
+;   patients(2, "name") = "Bob"
+
+$ORDER patients(1, "age")     ; => Option.Some("name") - next sibling at level 2
+$QUERY patients(1, "age")     ; => Option.Some([1, "name"]) - next node with value
+
+$ORDER patients(1, "name")    ; => Option.None - no more siblings at level 2
+$QUERY patients(1, "name")    ; => Option.Some([2, "name"]) - next node in tree
+```
+
+### 5.4.3 Lexer
+
+Add `$QUERY` keyword to the lexer:
+
+```rust
+Token::Query  // new keyword
+```
+
+### 5.4.4 Parser / CST
+
+##### 5.4.4.1 Add Query Expression
+
+Add to `parser/cst.rs`:
+
+```rust
+/// Query expression; returns full key path to next node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QueryExpr {
+    pub(crate) var: VarRef,
+}
+```
+
+##### 5.4.4.2 Update ExprKind
+
+Add `ExprKind::Query(QueryExpr)` variant.
+
+##### 5.4.4.3 Parser Implementation
+
+```rust
+/// `$QUERY var_ref`
+fn query_expr(
+    stmt: impl Parser<Token, cst::Stmt, Error = ParseErr> + Clone + 'static,
+) -> impl Parser<Token, cst::Expr, Error = ParseErr> {
+    just(Token::Query)
+        .ignore_then(Self::var_ref(stmt))
+        .map_with_span(|var, span| {
+            cst::Expr::new(cst::ExprKind::Query(cst::QueryExpr { var }), span)
+        })
+}
+```
+
+### 5.4.5 AST
+
+##### 5.4.5.1 Add AST Type
+
+Add to `ast.rs`:
+
+```rust
+/// Query expression; returns full key path to next node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QueryExpr {
+    pub(crate) var: VarRef,
+}
+```
+
+##### 5.4.5.2 Update Expr Enum
+
+Add `Expr::Query(QueryExpr)` variant.
+
+### 5.4.6 Lowering (CST -> AST)
+
+```rust
+cst::ExprKind::Query(query) => {
+    let var = lower_var_ref(ast, query.var)?;
+    Expr::Query(ast::QueryExpr { var })
+}
+```
+
+### 5.4.7 Typechecker
+
+##### 5.4.7.1 $QUERY Expression
+
+The `$QUERY` expression returns `Option[Array[Subscript]]`:
+
+```rust
+fn query(&mut self, query: &QueryExpr, span: Span) -> TyId {
+    // Typecheck the variable reference subscripts
+    self.var_ref(&query.var, span);
+
+    // Returns Option[Array[Subscript]]
+    let subscript = self.ty(Ty::Named(TypeId::SUBSCRIPT, vec![]));
+    let arr = self.ty(Ty::Array(Box::new(subscript)));
+    self.ty(Ty::Option(Box::new(arr)))
+}
+```
+
+### 5.4.8 Interpreter
+
+##### 5.4.8.1 $QUERY Evaluation
+
+```rust
+async fn query(&mut self, query: &QueryExpr) -> Result<Value> {
+    let (name, key) = self.resolve_var_ref(&query.var).await?;
+
+    let opt_key = match &self.txn {
+        Some(txn) => txn.query(&name, &key).await?,
+        None => self.db.query(&name, &key).await?,
+    };
+
+    opt_key.map_or_else(
+        || Ok(self.none()),
+        |k| self.key_to_array(k).map(|v| self.some(v)),
+    )
+}
+```
+
+##### 5.4.8.2 Key to Array Conversion
+
+Convert `rumps_types::Key` to runtime `Array[Subscript]`:
+
+```rust
+fn key_to_array(&mut self, key: Key) -> Result<Value> {
+    let elems: Vec<Value> = key
+        .into_iter()
+        .map(|sub| self.subscript_to_value(sub))
+        .collect::<Result<_>>()?;
+
+    Ok(Value::Array(self.arena.alloc_slice(&elems)))
+}
+```
+
+### 5.4.9 Tests
+
+**NOTE**: Integration tests must use **locals** only; globals require `TRANSACTION` blocks.
+
+- [x] Parser tests for `$QUERY local` and `$QUERY ^global` (covered by integration test)
+- [x] Integration test script (`109_query_primitive.rumps`) using locals
+
+### 5.4.10 Implementation Checklist
+
+- [x] **Lexer**: Add `Token::Query` keyword
+- [x] **CST**: Add `ExprKind::Query` variant (uses `DbRef` directly, no separate type needed)
+- [x] **Parser**: Implement `query_expr` parser
+- [x] **AST**: Add `Expr::Query` variant (uses `DbRef` directly, no separate type needed)
+- [x] **Lowering**: Convert CST `Query` to AST `Query`
+- [x] **Typechecker**: Infer `Option[Array[Subscript]]` for `$QUERY` expressions
+- [x] **Interpreter**: Implement `$QUERY` evaluation via `Database::query`/`Transaction::query`
+- [x] **Interpreter**: Add `key_to_array` conversion
+- [x] **Spread syntax**: Already implemented in prior work (uses `SubscriptElem::Spread`)
+- [x] **Tests**: Integration test script (`109_query_primitive.rumps`)
+
+---
+
+### Design Notes
+
+#### Why Return `Array[Subscript]`?
+
+Returning the full key path as an array provides:
+
+1. **Complete information**: Know exactly where in the tree the next value lives
+2. **Composability**: Can use array operations to extract levels, compare paths, etc.
+3. **Integration**: Can be passed to `$COLLECT` or future primitives that accept key arrays
+
+#### $QUERY vs Cursor/Iterator Pattern
+
+An alternative design would be a cursor-based iterator. However, `$QUERY` with arrays:
+
+1. **Matches MUMPS semantics**: Traditional `$QUERY` returns a string representation of the full path
+2. **Stateless**: No cursor state to manage; each call is independent
+3. **Predictable**: The returned array can be inspected and manipulated
+
+#### Spread Syntax for Subscripts
+
+To make `$QUERY` useful for manual iteration, we need spread syntax to pass an `Array[Subscript]` as subscripts:
+
+```rumps
+LET k = $QUERY data ?? []
+LET next = $QUERY data(...k)   ; spread array as subscripts
+```
+
+**Implementation**: The parser must recognize `...expr` in subscript position and lower it to a form that the interpreter can expand. This transforms `name(...arr)` where `arr: Array[Subscript]` into the equivalent of `name(arr[0], arr[1], ...)`.
+
+This is orthogonal to `$QUERY` itself but required for practical use. Full tree iteration will also benefit from `$COLLECT` once implemented.
+
+#### Tree Iteration with FOREVER
+
+Using `$QUERY` with `FOREVER` and spread syntax enables depth-first traversal of an entire tree:
+
+```rumps
+; Set up nested data
+$SET patients(1, "name") = "Alice"
+$SET patients(1, "age") = 30
+$SET patients(2, "name") = "Bob"
+$SET patients(2, "age") = 25
+
+; Collect all key paths in depth-first order
+LET paths = FOREVER { k: $QUERY patients, acc: [] } (st, cont) => {
+    MATCH st.k {
+        Option.None => st.acc
+        Option.Some(path) => {
+            ; path is Array[Subscript]; spread into next $QUERY call
+            cont({
+                k: $QUERY patients(...path),
+                acc: Array.concat(st.acc, [path])
+            })
+        }
+    }
+}
+$OUTPUT paths
+; => [[1, "age"], [1, "name"], [2, "age"], [2, "name"]]
+
+; Collect all values in tree
+LET vals = FOREVER { k: $QUERY patients, acc: [] } (st, cont) => {
+    MATCH st.k {
+        Option.None => st.acc
+        Option.Some(path) => {
+            LET v = ($GET patients(...path))!
+            cont({
+                k: $QUERY patients(...path),
+                acc: Array.concat(st.acc, [v])
+            })
+        }
+    }
+}
+$OUTPUT vals
+; => [30, "Alice", 25, "Bob"]
+```
+
+This mirrors the `$ORDER` iteration pattern but traverses the entire tree depth-first rather than just siblings at one level. Compare with `$ORDER` iteration which only advances within a single subscript level:
+
+```rumps
+; $ORDER: iterate keys at level 1 only
+LET keys = FOREVER { k: $ORDER patients, acc: [] } (st, cont) => {
+    MATCH st.k {
+        Option.None => st.acc
+        Option.Some(sub) => {
+            cont({
+                k: $ORDER patients(sub),
+                acc: Array.concat(st.acc, [sub])
+            })
+        }
+    }
+}
+; => [1, 2]  (only top-level keys, not nested paths)
+```

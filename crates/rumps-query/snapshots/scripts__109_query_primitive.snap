@@ -1,0 +1,18 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: $QUERY primitive\n; Returns full key path to the next node with a value\n; NOTE: Uses locals only; globals require TRANSACTION blocks\n;\n; KNOWN LIMITATION: The storage layer returns ancestor keys (nodes that only\n; have descendants but no value). This affects nested key iteration.\n; See the storage layer query_internal implementation for details.\n\n; Set up single-level test data (works correctly)\n$SET items(1) = \"one\"\n$SET items(2) = \"two\"\n$SET items(10) = \"ten\"\n\n; First key path (no after position)\nLET first = $QUERY items\n$OUTPUT first\n\n; Next key path after (1)\nLET after-1 = $QUERY items(1)\n$OUTPUT after-1\n\n; Next key path after (2)\nLET after-2 = $QUERY items(2)\n$OUTPUT after-2\n\n; Past the last key\nLET after-10 = $QUERY items(10)\n$OUTPUT after-10\n\n; $QUERY on non-existent variable\nLET no-keys = $QUERY empty\n$OUTPUT no-keys\n\n; Type annotation\nLET typed: Option[Array[Subscript]] = $QUERY items\n$OUTPUT typed\n\n; Use with MATCH\nLET msg = MATCH $QUERY items {\n    Option.Some(path) => { \"found path of length: \" ++ ((Array.length(path)) AS String) }\n    Option.None => { \"no nodes\" }\n}\n$OUTPUT msg\n\n; Use with coalesce\nLET path = $QUERY items ?? []\n$OUTPUT path\n\n; Using unwrap on result\nLET path2 = ($QUERY items(1))!\n$OUTPUT path2\n\n; Spread syntax to continue iteration\n$SET data(1) = \"a\"\n$SET data(2) = \"b\"\n$SET data(3) = \"c\"\n\nLET k1 = $QUERY data ?? []\n$OUTPUT k1\nLET k2 = $QUERY data(...k1) ?? []\n$OUTPUT k2\nLET k3 = $QUERY data(...k2) ?? []\n$OUTPUT k3\nLET k4 = $QUERY data(...k3)\n$OUTPUT k4\n\n$OUTPUT \"$QUERY test complete\"\n"
+---
+Option.Some([ 1 ])
+Option.Some([ 2 ])
+Option.Some([ 10 ])
+Option.None
+Option.None
+Option.Some([ 1 ])
+"found path of length: 1"
+[ 1 ]
+[ 2 ]
+[ 1 ]
+[ 2 ]
+[ 3 ]
+Option.None
+"$QUERY test complete"
