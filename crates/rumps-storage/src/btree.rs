@@ -511,6 +511,18 @@ impl BTree {
     /// Unlike `$ORDER` which returns the next subscript at a level, `$QUERY`
     /// returns the complete path to the next node with a value.
     ///
+    /// # Intermediate Node Skipping
+    ///
+    /// Traditional MUMPS uses a B+-tree where values exist only at leaves,
+    /// so iteration naturally visits only nodes with values. RUMPS uses a
+    /// B-tree where intermediate ancestor nodes are stored explicitly (with
+    /// `has_descendants = true` but `value = None`) to maintain hierarchical
+    /// structure. This method skips such intermediate nodes to match MUMPS
+    /// `$QUERY` semantics.
+    ///
+    /// For example, inserting `key![1, "name"]` creates an intermediate node
+    /// at `key![1]`. Calling `$QUERY` will skip `[1]` and return `[1, "name"]`.
+    ///
     /// Always reads committed state. Transaction context for metadata only.
     ///
     /// # Examples
@@ -526,7 +538,30 @@ impl BTree {
     ) -> Result<Option<Key>> {
         // NOTE: Snapshot isolation at Transaction layer (merges write buffer
         // with committed state).
-        self.query_internal(root, after).await
+        self.query_with_value(root, after).await
+    }
+
+    /// Finds the next key that has a value, skipping intermediate ancestor nodes.
+    ///
+    /// Unlike a B+-tree where all keys at leaves have values, our B-tree stores
+    /// intermediate nodes (ancestors with `has_descendants = true` but no value).
+    /// This method uses `find_*_entry` to get key and data in a single traversal,
+    /// then skips entries without values to match MUMPS `$QUERY` semantics.
+    #[async_recursion]
+    async fn query_with_value(
+        &self,
+        root: NodeId,
+        after: Option<&Key>,
+    ) -> Result<Option<Key>> {
+        let entry = match after {
+            None => self.find_leftmost_entry(root).await?,
+            Some(key) => self.find_successor_entry(root, key).await?,
+        };
+        match entry {
+            None => Ok(None),
+            Some((key, data)) if data.value.is_some() => Ok(Some(key)),
+            Some((key, _)) => self.query_with_value(root, Some(&key)).await,
+        }
     }
 
     /// Returns the next subscript at a specific level (MUMPS `$ORDER`).
@@ -1521,6 +1556,97 @@ impl BTree {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Finds the leftmost (smallest) entry in the subtree, returning key and data.
+    ///
+    /// Like `find_leftmost_key` but returns the `NodeData` too, avoiding a
+    /// separate lookup when we need to check if the node has a value.
+    #[async_recursion]
+    async fn find_leftmost_entry(
+        &self,
+        node_id: NodeId,
+    ) -> Result<Option<(Key, Arc<NodeData>)>> {
+        let node = self.load_node(node_id).await?;
+
+        if node.is_leaf {
+            Ok(node.keys.first().cloned().zip(node.values.first().cloned()))
+        } else {
+            match node.children.first() {
+                Some(&child_id) => self.find_leftmost_entry(child_id).await,
+                None => Ok(node
+                    .keys
+                    .first()
+                    .cloned()
+                    .zip(node.values.first().cloned())),
+            }
+        }
+    }
+
+    /// Finds the successor entry (key + data) strictly greater than `target`.
+    ///
+    /// Like `find_successor_key` but returns the `NodeData` too, avoiding a
+    /// separate lookup when we need to check if the node has a value.
+    #[async_recursion]
+    async fn find_successor_entry(
+        &self,
+        node_id: NodeId,
+        target: &Key,
+    ) -> Result<Option<(Key, Arc<NodeData>)>> {
+        let node = self.load_node(node_id).await?;
+        let search_result = node.keys.binary_search(target);
+
+        if node.is_leaf {
+            let pos = match search_result {
+                Ok(p) => p + 1,
+                Err(p) => p,
+            };
+            Ok(node
+                .keys
+                .get(pos)
+                .cloned()
+                .zip(node.values.get(pos).cloned()))
+        } else {
+            match search_result {
+                Ok(pos) => match node.children.get(pos + 1) {
+                    Some(&child_id) => {
+                        match self.find_leftmost_entry(child_id).await? {
+                            Some(entry) => Ok(Some(entry)),
+                            None => Ok(node
+                                .keys
+                                .get(pos + 1)
+                                .cloned()
+                                .zip(node.values.get(pos + 1).cloned())),
+                        }
+                    }
+                    None => Ok(node
+                        .keys
+                        .get(pos + 1)
+                        .cloned()
+                        .zip(node.values.get(pos + 1).cloned())),
+                },
+                Err(pos) => match node.children.get(pos) {
+                    Some(&child_id) => {
+                        match self
+                            .find_successor_entry(child_id, target)
+                            .await?
+                        {
+                            Some(entry) => Ok(Some(entry)),
+                            None => Ok(node
+                                .keys
+                                .get(pos)
+                                .cloned()
+                                .zip(node.values.get(pos).cloned())),
+                        }
+                    }
+                    None => Ok(node
+                        .keys
+                        .get(pos)
+                        .cloned()
+                        .zip(node.values.get(pos).cloned())),
+                },
             }
         }
     }

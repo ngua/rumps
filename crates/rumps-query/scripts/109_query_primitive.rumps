@@ -1,12 +1,8 @@
 ; Test: $QUERY primitive
 ; Returns full key path to the next node with a value
 ; NOTE: Uses locals only; globals require TRANSACTION blocks
-;
-; KNOWN LIMITATION: The storage layer returns ancestor keys (nodes that only
-; have descendants but no value). This affects nested key iteration.
-; See the storage layer query_internal implementation for details.
 
-; Set up single-level test data (works correctly)
+; Set up single-level test data
 $SET items(1) = "one"
 $SET items(2) = "two"
 $SET items(10) = "ten"
@@ -63,5 +59,35 @@ LET k3 = $QUERY data(...k2) ?? []
 $OUTPUT k3
 LET k4 = $QUERY data(...k3)
 $OUTPUT k4
+
+; === Nested data tests ===
+; $QUERY should skip intermediate nodes (ancestors with no value)
+
+$SET patients(1, "age") = 30
+$SET patients(1, "name") = "Alice"
+$SET patients(2, "name") = "Bob"
+
+; First key should be [1, "age"], not [1]
+LET p1 = $QUERY patients ?? []
+$OUTPUT p1
+
+; After [1, "age"] should be [1, "name"], not [1] or [2]
+LET p2 = $QUERY patients(1, "age") ?? []
+$OUTPUT p2
+
+; After [1, "name"] should be [2, "name"], skipping intermediate [2]
+LET p3 = $QUERY patients(1, "name") ?? []
+$OUTPUT p3
+
+; After [2, "name"] should be None
+LET p4 = $QUERY patients(2, "name")
+$OUTPUT p4
+
+; Deep nesting test
+$SET deep(1, 2, 3, "leaf") = "value"
+
+; Should return [1, 2, 3, "leaf"], skipping [1], [1, 2], [1, 2, 3]
+LET d1 = $QUERY deep ?? []
+$OUTPUT d1
 
 $OUTPUT "$QUERY test complete"

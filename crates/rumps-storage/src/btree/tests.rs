@@ -955,6 +955,102 @@ mod tests {
     }
 
     #[cfg(test)]
+    mod query_at_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn skips_intermediate_nodes() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            // Insert nested keys; `ensure_ancestors` creates intermediate nodes
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "age"],
+                    NodeData::with_value(value!(30)),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "name"],
+                    NodeData::with_value(value!("Alice")),
+                )
+                .await
+                .unwrap();
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![2, "name"],
+                    NodeData::with_value(value!("Bob")),
+                )
+                .await
+                .unwrap();
+
+            // Verify intermediate node [2] exists but has no value
+            let intermediate =
+                btree.get_internal(root, &key![2]).await.unwrap();
+            assert!(intermediate.is_some());
+            assert!(intermediate.unwrap().value.is_none());
+
+            // query_at should skip [2] and return [2, "name"]
+            let result = btree
+                .query_at(root, Some(&key![1, "name"]), None)
+                .await
+                .unwrap();
+            assert_eq!(result, Some(key![2, "name"]));
+        }
+
+        #[tokio::test]
+        async fn first_key_skips_intermediate() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            // Insert only nested keys so [1] is intermediate
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, "data"],
+                    NodeData::with_value(value!("value")),
+                )
+                .await
+                .unwrap();
+
+            // Verify [1] exists as intermediate
+            let intermediate =
+                btree.get_internal(root, &key![1]).await.unwrap();
+            assert!(intermediate.is_some());
+            assert!(intermediate.unwrap().value.is_none());
+
+            // query_at(None) should skip [1] and return [1, "data"]
+            let result = btree.query_at(root, None, None).await.unwrap();
+            assert_eq!(result, Some(key![1, "data"]));
+        }
+
+        #[tokio::test]
+        async fn skips_multiple_intermediates() {
+            let btree = BTreeBuilder::default().build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            // Deep nesting: [1, 2, 3, "leaf"] creates intermediates [1], [1, 2], [1, 2, 3]
+            let root = btree
+                .set_internal(
+                    root,
+                    &key![1, 2, 3, "leaf"],
+                    NodeData::with_value(value!("deep")),
+                )
+                .await
+                .unwrap();
+
+            // query_at(None) should skip all intermediates
+            let result = btree.query_at(root, None, None).await.unwrap();
+            assert_eq!(result, Some(key![1, 2, 3, "leaf"]));
+        }
+    }
+
+    #[cfg(test)]
     mod order_internal_tests {
         use rumps_types::Subscript;
 
