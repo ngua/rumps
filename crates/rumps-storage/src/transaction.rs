@@ -1733,6 +1733,30 @@ impl Transaction {
         Ok(())
     }
 
+    /// Finishes the transaction based on the result: commits on `Ok`, rolls
+    /// back on `Err`.
+    ///
+    /// This is a convenience method for the common pattern of executing a body
+    /// and then committing or rolling back based on whether it succeeded.
+    pub async fn finish<T, E>(
+        self,
+        result: std::result::Result<T, E>,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<crate::error::StorageError>,
+    {
+        match result {
+            Ok(val) => {
+                self.commit().await?;
+                Ok(val)
+            }
+            Err(e) => {
+                let _ = self.rollback().await;
+                Err(e)
+            }
+        }
+    }
+
     /// Helper to create an error.
     fn err<T>(msg: &str) -> crate::error::Result<T> {
         Err(StorageError::InvalidConfiguration(msg.into()))

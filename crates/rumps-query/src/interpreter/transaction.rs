@@ -6,20 +6,35 @@ use crate::io::IoContext;
 use crate::value::Value;
 use crate::{Error, Result, Span};
 
+/// Wrapper to distinguish body errors from commit errors.
+enum TxnError {
+    Body(Error),
+    Commit(rumps_storage::StorageError),
+}
+
+impl From<rumps_storage::StorageError> for TxnError {
+    fn from(e: rumps_storage::StorageError) -> Self {
+        Self::Commit(e)
+    }
+}
+
 impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a transaction block expression.
     ///
     /// Returns `Result[T, String]` where `T` is the trailing expression type.
-    /// Nested transactions return an error wrapped in `Result.Err`.
+    /// Nested transactions are a runtime error that propagates up to rollback
+    /// the outer transaction.
     pub(super) async fn transaction(
         &mut self,
         txn: &TransactionExpr,
         span: Span,
     ) -> Result<Value> {
-        // Check for nested transaction
+        // Nested transactions are an error (causes outer transaction to rollback)
         if self.txn.is_some() {
-            let msg = "nested transactions are not supported";
-            Ok(self.make_result_err(msg, span))
+            Err(Error::runtime(
+                span,
+                "nested transactions are not supported",
+            ))
         } else {
             // Build transaction with modifiers
             let mut builder = self.db.build_transaction();
@@ -89,24 +104,19 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Pop scope
         self.env.scopes.pop();
 
-        // Take transaction (should always exist at this point)
-        match self.txn.take() {
-            Some(txn) => match body_result {
-                Ok(val) => {
-                    txn.commit().await.map_err(|e| {
-                        Error::runtime(span, format!("commit failed: {e}"))
-                    })?;
-                    Ok(val)
+        // Finish transaction: commit on Ok, rollback on Err
+        self.txn
+            .take()
+            .ok_or_else(|| {
+                Error::runtime(span, "transaction unexpectedly missing")
+            })?
+            .finish(body_result.map_err(TxnError::Body))
+            .await
+            .map_err(|e| match e {
+                TxnError::Body(e) => e,
+                TxnError::Commit(e) => {
+                    Error::runtime(span, format!("commit failed: {e}"))
                 }
-                Err(e) => {
-                    // Rollback on error; ignore rollback errors
-                    let _ = txn.rollback().await;
-                    Err(e)
-                }
-            },
-            None => {
-                Err(Error::runtime(span, "transaction unexpectedly missing"))
-            }
-        }
+            })
     }
 }
