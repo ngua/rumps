@@ -567,8 +567,8 @@ impl DbRef {
     /// Splits into the storage `Name` and subscript elements.
     pub(crate) fn split(&self) -> (Name, &SmallVec<[SubscriptElem; 4]>) {
         match self {
-            DbRef::Local(n, s) => (Name::local(n), s),
-            DbRef::Global(n, s) => (Name::global(n), s),
+            Self::Local(n, s) => (Name::local(n), s),
+            Self::Global(n, s) => (Name::global(n), s),
         }
     }
 }
@@ -857,6 +857,9 @@ pub(crate) enum Expr {
         cont_param: (String, Option<AstTypeExprId>),
         body: ExprId,
     },
+
+    /// Transaction block expression: `TRANSACTION { ... }`.
+    Transaction(TransactionExpr),
 }
 
 /// The kind of JSON access operation.
@@ -905,6 +908,28 @@ pub(crate) struct OutputStmt {
     pub(crate) expr: ExprId,
     pub(crate) format: OutputFormat,
     pub(crate) target: OutputTarget,
+}
+
+/// Transaction block expression.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TransactionExpr {
+    /// Statements in the transaction body.
+    pub(crate) stmts: Vec<StmtId>,
+    /// Optional trailing expression (return value).
+    pub(crate) expr: Option<ExprId>,
+    /// Transaction modifiers.
+    pub(crate) modifiers: TransactionModifiers,
+}
+
+/// Transaction configuration modifiers.
+///
+/// Uses storage layer types directly for conflict, priority, and isolation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TransactionModifiers {
+    pub(crate) conflict: Option<rumps_storage::ConflictStrategy>,
+    pub(crate) timeout: Option<ExprId>,
+    pub(crate) priority: Option<rumps_storage::TransactionPriority>,
+    pub(crate) isolation: Option<rumps_storage::IsolationLevel>,
 }
 
 /// A statement node.

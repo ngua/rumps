@@ -536,6 +536,49 @@ impl Parser {
             })
     }
 
+    /// `TRANSACTION { stmts... [expr] }`
+    ///
+    /// Transaction block expression; returns `Result[T, String]`.
+    fn transaction_expr(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        just(Token::Transaction)
+            .ignore_then(Self::block(stmt))
+            .map_with_span(|(stmts, _blk_span), span| {
+                // Split trailing expr statement from regular statements
+                let has_tail = stmts
+                    .last()
+                    .map(|s| matches!(&s.kind, cst::StmtKind::Expr(_)))
+                    .unwrap_or(false);
+
+                let (block_stmts, tail) = if has_tail {
+                    let n = stmts.len().saturating_sub(1);
+                    let mut iter = stmts.into_iter();
+                    let ss: Vec<_> = iter.by_ref().take(n).collect();
+                    let t = iter.next().and_then(|s| match s.kind {
+                        cst::StmtKind::Expr(e) => Some(Box::new(e)),
+                        _ => None,
+                    });
+                    (ss, t)
+                } else {
+                    (stmts, None)
+                };
+
+                cst::Expr::new(
+                    cst::ExprKind::Transaction(Box::new(
+                        cst::TransactionExpr {
+                            stmts: block_stmts,
+                            expr: tail,
+                            modifiers: cst::TransactionModifiers::default(),
+                        },
+                    )),
+                    span,
+                )
+            })
+    }
+
     /// `FUN name (params) { body }` or `FUN name[T](params) -> Type { body }`
     fn fun_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
@@ -1814,13 +1857,16 @@ impl Parser {
         let object_or_map = object_or_json.or(map_lit);
 
         // Block expression
-        let block_parser = Self::block(stmt);
+        let block_parser = Self::block(stmt.clone());
         let block_expr =
             block_parser
                 .clone()
                 .map_with_span(|(stmts, blk_span), span| {
                     Self::stmts_to_block(stmts, blk_span).with_span(span)
                 });
+
+        // Transaction expression
+        let txn_expr = Self::transaction_expr(stmt);
 
         // IF expression
         let if_expr = just(Token::If)
@@ -1930,6 +1976,7 @@ impl Parser {
             array,
             object_or_map,
             block_expr,
+            txn_expr,
             if_expr,
             match_expr,
         ))

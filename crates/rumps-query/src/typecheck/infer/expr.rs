@@ -12,7 +12,7 @@ use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExprId, BinOp, DbRef, Expr, ExprId, JsonAccessKey,
     JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId, SubscriptElem,
-    TypeParam, TypePattern, UnOp, UserConstraint,
+    TransactionExpr, TypeParam, TypePattern, UnOp, UserConstraint,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
@@ -242,6 +242,9 @@ impl InferCtx<'_> {
                 cont_param,
                 body,
             } => self.forever(*seed, state_param, cont_param, *body, span),
+
+            // Transaction block: `TRANSACTION { ... }`
+            Expr::Transaction(txn) => self.transaction(txn, span),
         }
     }
 
@@ -1778,5 +1781,37 @@ impl InferCtx<'_> {
         self.unify(inferred_body_ty, body_ty.clone(), span);
 
         body_ty
+    }
+
+    /// Typecheck a transaction block expression.
+    ///
+    /// Returns `Result[T, String]` where `T` is the trailing expression type
+    /// (or `Unit` if no trailing expression).
+    pub(super) fn transaction(
+        &mut self,
+        txn: &TransactionExpr,
+        span: Span,
+    ) -> Ty {
+        // Enter new scope for transaction body
+        self.env.push_scope();
+
+        // Typecheck all statements
+        txn.stmts.iter().for_each(|&stmt_id| {
+            self.stmt(stmt_id);
+        });
+
+        // Typecheck trailing expression or default to Unit
+        let inner_ty = txn.expr.map_or(Ty::Unit, |expr_id| self.expr(expr_id));
+
+        // Typecheck timeout modifier if present
+        txn.modifiers.timeout.iter().for_each(|&timeout_id| {
+            let timeout_ty = self.expr(timeout_id);
+            self.unify(timeout_ty, Ty::Int, span);
+        });
+
+        self.env.pop_scope();
+
+        // Return Result[T, String]
+        Ty::Result(Box::new(inner_ty), Box::new(Ty::String))
     }
 }

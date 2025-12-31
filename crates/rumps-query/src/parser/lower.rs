@@ -11,7 +11,8 @@ use crate::ast::{
     self, ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
     Expr, ExprId, JsonAccessKey, MatchArm, MatchPattern, MatchPatternId,
     ObjectEntry, OutputFormat, OutputStmt, OutputTarget, RestPattern, Stmt,
-    StmtId, SubscriptElem, TypeDefAst, TypePattern, VariantAst,
+    StmtId, SubscriptElem, TransactionModifiers, TypeDefAst, TypePattern,
+    VariantAst,
 };
 use crate::Result;
 
@@ -401,6 +402,20 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
                 body: body_id,
             }
         }
+        cst::ExprKind::Transaction(txn) => {
+            let stmts = txn
+                .stmts
+                .into_iter()
+                .map(|s| lower_stmt(ast, s))
+                .collect::<Result<Vec<_>>>()?;
+            let expr = txn.expr.map(|e| lower_expr(ast, *e)).transpose()?;
+            let modifiers = lower_txn_modifiers(ast, txn.modifiers)?;
+            Expr::Transaction(ast::TransactionExpr {
+                stmts,
+                expr,
+                modifiers,
+            })
+        }
         cst::ExprKind::Error(msg) => {
             Err(crate::Error::parse(span, msg, vec![]))?
         }
@@ -663,4 +678,40 @@ fn lower_match_pattern(
         }
     };
     ast.add_pattern(p)
+}
+
+/// Lower CST transaction modifiers to AST.
+fn lower_txn_modifiers(
+    ast: &mut Ast,
+    m: cst::TransactionModifiers,
+) -> Result<TransactionModifiers> {
+    let conflict = m.conflict.map(|c| match c {
+        cst::ConflictModifier::Abort => rumps_storage::ConflictStrategy::Abort,
+        cst::ConflictModifier::Retry(n) => {
+            rumps_storage::ConflictStrategy::Retry(n)
+        }
+        cst::ConflictModifier::Skip => rumps_storage::ConflictStrategy::Skip,
+        cst::ConflictModifier::Overwrite => {
+            rumps_storage::ConflictStrategy::Overwrite
+        }
+    });
+    let timeout = m.timeout.map(|e| lower_expr(ast, *e)).transpose()?;
+    let priority = m.priority.map(|p| match p {
+        cst::PriorityModifier::Low => rumps_storage::TransactionPriority::Low,
+        cst::PriorityModifier::Normal => {
+            rumps_storage::TransactionPriority::Normal
+        }
+        cst::PriorityModifier::High => rumps_storage::TransactionPriority::High,
+    });
+    let isolation = m.isolation.map(|i| match i {
+        cst::IsolationModifier::Snapshot => {
+            rumps_storage::IsolationLevel::SnapshotIsolation
+        }
+    });
+    Ok(TransactionModifiers {
+        conflict,
+        timeout,
+        priority,
+        isolation,
+    })
 }

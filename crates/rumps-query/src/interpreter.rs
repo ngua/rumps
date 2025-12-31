@@ -100,6 +100,7 @@ mod db;
 mod modules;
 mod ops;
 mod pattern;
+mod transaction;
 mod types;
 mod variant;
 
@@ -360,6 +361,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.forever(seed, state_param, cont_param, body, span)
                     .await
             }
+            Expr::Transaction(ref txn) => self.transaction(txn, span).await,
         }
     }
 }

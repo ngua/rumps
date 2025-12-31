@@ -35,6 +35,7 @@ pub(crate) enum Token {
     Order,
     Query,
     Forever,
+    Transaction,
 
     // Literals
     Int(i64),
@@ -145,6 +146,7 @@ impl Token {
                 "UNION" => Some(Self::Union),
                 "MODULE" => Some(Self::Module),
                 "FOREVER" => Some(Self::Forever),
+                "TRANSACTION" => Some(Self::Transaction),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -192,6 +194,7 @@ impl fmt::Display for Token {
             Self::Union => write!(f, "UNION"),
             Self::Module => write!(f, "MODULE"),
             Self::Forever => write!(f, "FOREVER"),
+            Self::Transaction => write!(f, "TRANSACTION"),
             // MUMPS intrinsics (prefixed with `$`)
             Self::Set => write!(f, "$SET"),
             Self::Get => write!(f, "$GET"),
@@ -296,6 +299,7 @@ mod tests {
         assert_eq!(Token::keyword("UNION"), Some(Token::Union));
         assert_eq!(Token::keyword("MODULE"), Some(Token::Module));
         assert_eq!(Token::keyword("TYPE"), Some(Token::Type));
+        assert_eq!(Token::keyword("TRANSACTION"), Some(Token::Transaction));
         // Case-sensitive: null
         assert_eq!(Token::keyword("null"), Some(Token::Null));
     }

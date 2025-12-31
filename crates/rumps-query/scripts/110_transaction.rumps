@@ -1,0 +1,60 @@
+; Test: TRANSACTION expression
+; Transactions wrap global writes and return Result[T, String]
+
+; Basic transaction with global write
+LET write-result = TRANSACTION {
+    $SET ^TEST(1, "name") = "Alice"
+    $SET ^TEST(1, "age") = 30
+    $GET ^TEST(1, "name")
+}
+$OUTPUT write-result
+
+; Verify write persisted
+$OUTPUT $GET ^TEST(1, "age")
+
+; Transaction returning unit (write-only)
+LET unit-result = TRANSACTION {
+    $SET ^TEST(2, "status") = "active"
+}
+$OUTPUT unit-result
+$OUTPUT $GET ^TEST(2, "status")
+
+; Nested transaction returns error
+LET outer = TRANSACTION {
+    LET inner = TRANSACTION {
+        $SET ^TEST(3, "x") = "nested"
+    }
+    inner
+}
+$OUTPUT outer
+
+; Transaction with multiple statements and computation
+LET multi = TRANSACTION {
+    LET a = 10
+    LET b = 20
+    $SET ^TEST(4, "sum") = a + b
+    a + b
+}
+$OUTPUT multi
+$OUTPUT $GET ^TEST(4, "sum")
+
+; Accessing outer scope from transaction
+LET x = 100
+LET access-outer = TRANSACTION {
+    $SET ^TEST(5, "val") = x + 1
+    x + 1
+}
+$OUTPUT access-outer
+
+; Transaction result matching
+LET txn-result = TRANSACTION {
+    $SET ^TEST(6, "m") = "success"
+    "success"
+}
+LET matched = MATCH txn-result {
+    Result.Ok(s) => { "got: " ++ s }
+    Result.Err(e) => { "error: " ++ e }
+}
+$OUTPUT matched
+
+$OUTPUT "TRANSACTION test complete"

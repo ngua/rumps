@@ -1109,7 +1109,7 @@ impl TransactionBuilder {
     /// a `Transaction` that must be manually committed or rolled back.
     ///
     /// [`begin`]: Self::begin
-    pub(crate) async fn start(self) -> Result<Transaction> {
+    pub async fn start(self) -> Result<Transaction> {
         let db = &self.db;
 
         // Allocate unique transaction ID from manager
@@ -1586,7 +1586,7 @@ impl Transaction {
     /// - Conflict detection fails (based on conflict strategy)
     /// - Any write operation fails
     /// - Flush to disk fails
-    pub(crate) async fn commit(self) -> crate::error::Result<()> {
+    pub async fn commit(self) -> crate::error::Result<()> {
         // Check transaction state
         {
             let state = self.state.read().await;
@@ -1618,17 +1618,23 @@ impl Transaction {
         // Apply all buffered writes using transaction-aware methods.
         // Group by Name to avoid concurrent modifications to the same B-tree.
         // Writes within each Name are applied sequentially; different Names run in parallel.
-        let writes = self.writes.read().await;
+        //
+        // Drain the write buffer to take ownership without cloning. This is safe
+        // because commit is terminal; the buffer is never accessed after commit.
+        let by_name: BTreeMap<Name, Vec<(Key, WriteOp)>> = {
+            let mut writes = self.writes.write().await;
+            let mut map: BTreeMap<Name, Vec<(Key, WriteOp)>> = BTreeMap::new();
+            std::mem::take(&mut *writes).into_iter().for_each(
+                |((name, key), op)| {
+                    map.entry(name).or_default().push((key, op));
+                },
+            );
+            map
+        };
+
         let db = self.db.clone();
         let txn_id = self.id;
         let start_ts = self.start_timestamp;
-
-        // Group writes by Name
-        let mut by_name: BTreeMap<&Name, Vec<(&Key, &WriteOp)>> =
-            BTreeMap::new();
-        writes.iter().for_each(|((name, key), op)| {
-            by_name.entry(name).or_default().push((key, op));
-        });
 
         // Process each Name's writes sequentially, but run Names in parallel
         stream::iter(by_name.into_iter())
@@ -1636,22 +1642,24 @@ impl Transaction {
                 let db = db.clone();
                 async move {
                     // Sequential within this Name (same B-tree)
+                    let name = Arc::new(name);
                     stream::iter(ops.into_iter().map(Ok))
                         .try_for_each(|(key, write_op)| {
                             let db = db.clone();
+                            let name = Arc::clone(&name);
                             async move {
                                 match write_op {
                                     WriteOp::Set(data) => {
-                                        let val = data.value.clone().ok_or_else(|| {
+                                        let val = data.value.ok_or_else(|| {
                                             StorageError::InvalidConfiguration(
                                                 "Set operation has no value".into(),
                                             )
                                         })?;
-                                        db.set_with_txn(name, key, val, txn_id, start_ts)
+                                        db.set_with_txn(&name, &key, val, txn_id, start_ts)
                                             .await
                                     }
                                     WriteOp::KillSubtree | WriteOp::Delete => {
-                                        db.kill_with_txn(name, key, txn_id, start_ts).await
+                                        db.kill_with_txn(&name, &key, txn_id, start_ts).await
                                     }
                                 }
                             }
@@ -1662,7 +1670,6 @@ impl Transaction {
             .buffer_unordered(16)
             .try_for_each(|()| future::ready(Ok(())))
             .await?;
-        drop(writes);
 
         // Flush with transaction ID (group commit batches concurrent flushes)
         self.db.flush_with_txn(self.id).await?;
@@ -1684,7 +1691,7 @@ impl Transaction {
     ///
     /// This is automatically called when a transaction is dropped without
     /// being committed.
-    pub(crate) async fn rollback(self) -> crate::error::Result<()> {
+    pub async fn rollback(self) -> crate::error::Result<()> {
         // Check transaction state
         {
             let state = self.state.read().await;

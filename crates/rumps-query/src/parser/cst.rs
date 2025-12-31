@@ -336,6 +336,9 @@ pub(crate) enum ExprKind {
         cont_param: (String, Option<TypeExpr>),
         body: Box<Expr>,
     },
+
+    /// Transaction block expression: `TRANSACTION { ... }`.
+    Transaction(Box<TransactionExpr>),
 }
 
 /// The key specification for JSON access (CST form).
@@ -390,6 +393,7 @@ pub(crate) enum BindingPattern {
 }
 
 /// The kind of a CST statement.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub(crate) enum StmtKind {
     /// Lexical binding with destructuring.
@@ -568,4 +572,47 @@ pub(crate) struct OutputStmt {
     pub(crate) expr: Expr,
     pub(crate) format: OutputFormat,
     pub(crate) target: OutputTarget,
+}
+
+/// Transaction block expression.
+#[derive(Clone, Debug)]
+pub(crate) struct TransactionExpr {
+    /// Statements in the transaction body.
+    pub(crate) stmts: Vec<Stmt>,
+    /// Optional trailing expression (return value).
+    pub(crate) expr: Option<Box<Expr>>,
+    /// Transaction modifiers (added in phase 6.2).
+    pub(crate) modifiers: TransactionModifiers,
+}
+
+/// Transaction configuration modifiers.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TransactionModifiers {
+    pub(crate) conflict: Option<ConflictModifier>,
+    pub(crate) timeout: Option<Box<Expr>>,
+    pub(crate) priority: Option<PriorityModifier>,
+    pub(crate) isolation: Option<IsolationModifier>,
+}
+
+/// Conflict resolution strategy.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ConflictModifier {
+    Abort,
+    Retry(u32),
+    Skip,
+    Overwrite,
+}
+
+/// Transaction priority.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PriorityModifier {
+    Low,
+    Normal,
+    High,
+}
+
+/// Isolation level.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IsolationModifier {
+    Snapshot,
 }

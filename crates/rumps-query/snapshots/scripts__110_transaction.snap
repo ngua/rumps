@@ -1,0 +1,14 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: TRANSACTION expression\n; Transactions wrap global writes and return Result[T, String]\n\n; Basic transaction with global write\nLET write-result = TRANSACTION {\n    $SET ^TEST(1, \"name\") = \"Alice\"\n    $SET ^TEST(1, \"age\") = 30\n    $GET ^TEST(1, \"name\")\n}\n$OUTPUT write-result\n\n; Verify write persisted\n$OUTPUT $GET ^TEST(1, \"age\")\n\n; Transaction returning unit (write-only)\nLET unit-result = TRANSACTION {\n    $SET ^TEST(2, \"status\") = \"active\"\n}\n$OUTPUT unit-result\n$OUTPUT $GET ^TEST(2, \"status\")\n\n; Nested transaction returns error\nLET outer = TRANSACTION {\n    LET inner = TRANSACTION {\n        $SET ^TEST(3, \"x\") = \"nested\"\n    }\n    inner\n}\n$OUTPUT outer\n\n; Transaction with multiple statements and computation\nLET multi = TRANSACTION {\n    LET a = 10\n    LET b = 20\n    $SET ^TEST(4, \"sum\") = a + b\n    a + b\n}\n$OUTPUT multi\n$OUTPUT $GET ^TEST(4, \"sum\")\n\n; Accessing outer scope from transaction\nLET x = 100\nLET access-outer = TRANSACTION {\n    $SET ^TEST(5, \"val\") = x + 1\n    x + 1\n}\n$OUTPUT access-outer\n\n; Transaction result matching\nLET txn-result = TRANSACTION {\n    $SET ^TEST(6, \"m\") = \"success\"\n    \"success\"\n}\nLET matched = MATCH txn-result {\n    Result.Ok(s) => { \"got: \" ++ s }\n    Result.Err(e) => { \"error: \" ++ e }\n}\n$OUTPUT matched\n\n$OUTPUT \"TRANSACTION test complete\"\n"
+---
+Result.Ok(Option.Some("Alice"))
+Option.Some(30)
+Result.Ok(Unit)
+Option.Some("active")
+Result.Ok(Result.Err("nested transactions are not supported"))
+Result.Ok(30)
+Option.Some(30)
+Result.Ok(101)
+"got: success"
+"TRANSACTION test complete"
