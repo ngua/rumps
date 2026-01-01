@@ -748,7 +748,6 @@ impl TransactionManager {
         &self,
         txn_id: TransactionId,
         start_ts: TransactionTimestamp,
-        _read_set: &HashSet<(Name, Key)>,
         write_set: &HashSet<(Name, Key)>,
     ) -> crate::error::Result<()> {
         let committed = self.committed_writes.read().await;
@@ -1135,7 +1134,6 @@ impl TransactionBuilder {
             retry_count: self.retry_count,
             writes: Arc::new(RwLock::new(BTreeMap::new())),
             deleted_subtrees: Arc::new(RwLock::new(HashSet::new())),
-            read_set: Arc::new(RwLock::new(HashSet::new())),
             snapshot,
             start_time: Instant::now(),
         })
@@ -1194,13 +1192,6 @@ pub struct Transaction {
     writes: Arc<RwLock<BTreeMap<(Name, Key), WriteOp>>>,
     deleted_subtrees: Arc<RwLock<HashSet<(Name, Key)>>>,
 
-    /// Read set for future Serializable Snapshot Isolation (SSI).
-    ///
-    /// Currently tracked but unused. Standard Snapshot Isolation only requires
-    /// write-write conflict detection (implemented in `validate_and_record`).
-    /// SSI would additionally check read-write conflicts to prevent write skew.
-    read_set: Arc<RwLock<HashSet<(Name, Key)>>>,
-
     // Snapshot Data
     snapshot: Arc<Snapshot>,
 
@@ -1250,12 +1241,8 @@ impl Transaction {
     ///
     /// - Buffered writes always take precedence (sets after kills are visible)
     /// - Keys under killed subtrees return `None` only if not in write buffer
-    /// - Reads are tracked in the read set for conflict detection
     pub async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>> {
         let lookup_key = (name.clone(), key.clone());
-
-        // Track read
-        self.read_set.write().await.insert(lookup_key.clone());
 
         // Check write buffer first; buffered writes always take precedence
         let writes = self.writes.read().await;
@@ -1768,10 +1755,6 @@ impl Transaction {
         {
             let mut deleted = self.deleted_subtrees.write().await;
             deleted.clear();
-        }
-        {
-            let mut reads = self.read_set.write().await;
-            reads.clear();
         }
 
         // Unregister transaction from manager
