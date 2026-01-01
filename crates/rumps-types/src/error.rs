@@ -156,4 +156,11 @@ pub enum StorageError {
         /// Key where conflict occurred.
         key: Key,
     },
+
+    /// Transaction timed out.
+    #[error("Transaction timed out after {ms}ms")]
+    TransactionTimeout {
+        /// Timeout duration in milliseconds.
+        ms: u64,
+    },
 }

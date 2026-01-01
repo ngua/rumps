@@ -1085,22 +1085,32 @@ impl TransactionBuilder {
     ///
     /// The transaction auto-commits if the closure returns `Ok`, and
     /// auto-rollbacks if it returns `Err`.
+    ///
+    /// If a timeout was configured via [`timeout()`], the entire transaction
+    /// (including the user closure) will be cancelled if it exceeds the limit.
+    ///
+    /// [`timeout()`]: Self::timeout
     pub async fn begin<F, Fut, R>(self, f: F) -> Result<R>
     where
         F: FnOnce(Transaction) -> Fut,
         Fut: future::Future<Output = Result<R>>,
     {
+        let ms = self.timeout;
         let txn = self.start().await?;
-        match f(txn.clone()).await {
-            Ok(result) => {
-                txn.commit().await?;
-                Ok(result)
+        let t = txn.clone();
+        txn.timed(ms, async {
+            match f(t.clone()).await {
+                Ok(result) => {
+                    t.commit().await?;
+                    Ok(result)
+                }
+                Err(e) => {
+                    t.rollback().await?;
+                    Err(e)
+                }
             }
-            Err(e) => {
-                txn.rollback().await?;
-                Err(e)
-            }
-        }
+        })
+        .await
     }
 
     /// Creates and initializes a new transaction with the configured settings.
@@ -1216,6 +1226,33 @@ pub struct Transaction {
 
 // Public API
 impl Transaction {
+    /// Wraps an async operation in a timeout.
+    ///
+    /// If `ms` is `Some`, the future is wrapped in `tokio::time::timeout`.
+    /// If `ms` is `None`, the future runs without a timeout.
+    ///
+    /// This is primarily exposed for the query layer (`rumps-query`), which
+    /// uses [`TransactionBuilder::start`] and needs manual timeout handling.
+    /// Users of [`TransactionBuilder::begin`] get timeout handling automatically.
+    pub async fn timed<F, T, E>(
+        &self,
+        ms: Option<u64>,
+        f: F,
+    ) -> std::result::Result<T, E>
+    where
+        F: future::Future<Output = std::result::Result<T, E>>,
+        E: From<StorageError>,
+    {
+        match ms {
+            Some(ms) => tokio::time::timeout(Duration::from_millis(ms), f)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(StorageError::TransactionTimeout { ms }.into())
+                }),
+            None => f.await,
+        }
+    }
+
     /// Gets a value from the database within this transaction's context.
     ///
     /// Checks the write buffer for pending changes, then delegates to the

@@ -113,4 +113,22 @@ LET r15 = TRANSACTION {
 $OUTPUT r15 IS Result.Ok(_)
 $OUTPUT $GET ^data(15)
 
+; === Timeout actually triggers ===
+; This tests that WITH TIMEOUT actually cancels long-running transactions
+LET timed-out = TRANSACTION {
+  FOREVER 0 (next, cont) => {
+    IF next > 100 {
+      next
+    } ELSE {
+      cont({
+        $SET ^d(next) = "a"
+        Time.sleep(10 * 10000)
+        next + 1
+      })
+    }
+  }
+} WITH TIMEOUT 1
+
+$OUTPUT timed-out
+
 $OUTPUT "Transaction modifiers test complete"

@@ -174,6 +174,12 @@ impl From<Simple<Token, Span>> for Error {
     }
 }
 
+impl From<rumps_types::StorageError> for Error {
+    fn from(e: rumps_types::StorageError) -> Self {
+        Self::runtime_no_span(e.to_string())
+    }
+}
+
 impl Diagnostic for Error {
     fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
         let code: &'static str = match self {

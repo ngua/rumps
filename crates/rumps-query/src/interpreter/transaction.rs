@@ -38,17 +38,19 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             // Build transaction with modifiers
             let mut builder = self.db.build_transaction();
+            let mut timeout_ms: Option<u64> = None;
 
             if let Some(conflict) = txn.modifiers.conflict {
                 builder = builder.conflict(conflict);
             }
             if let Some(timeout_id) = txn.modifiers.timeout {
                 let timeout_val = self.eval(timeout_id).await?;
-                let timeout_ms = match timeout_val {
-                    Value::Int(n) => n,
+                let ms = match timeout_val {
+                    Value::Int(n) => n as u64,
                     _ => typechecked!("timeout", "Int"),
                 };
-                builder = builder.timeout(timeout_ms as u64);
+                timeout_ms = Some(ms);
+                builder = builder.timeout(ms);
             }
             if let Some(priority) = txn.modifiers.priority {
                 builder = builder.priority(priority);
@@ -57,9 +59,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 builder = builder.isolation(isolation);
             }
 
-            // Execute transaction
+            // Execute transaction (with timeout wrapper if specified)
             let result = self
-                .execute_txn_body(builder, &txn.stmts, txn.expr, span)
+                .execute_txn_body(
+                    builder, &txn.stmts, txn.expr, timeout_ms, span,
+                )
                 .await;
 
             // Convert to Result[T, String]
@@ -76,6 +80,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         builder: rumps_storage::TransactionBuilder,
         stmts: &[StmtId],
         expr: Option<ExprId>,
+        ms: Option<u64>,
         span: Span,
     ) -> Result<Value> {
         // Start the transaction
@@ -84,22 +89,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         })?;
 
         // Set transaction context
-        self.txn = Some(txn);
+        self.txn = Some(txn.clone());
 
         // Enter new scope for local bindings
         self.env.scopes.push();
 
-        // Execute statements
-        let stmt_result = self.stmts(stmts).await;
-
-        // Evaluate trailing expression if statements succeeded
-        let body_result = match stmt_result {
-            Err(e) => Err(e),
-            Ok(()) => match expr {
-                None => Ok(Value::Unit),
-                Some(expr_id) => self.eval(expr_id).await,
-            },
-        };
+        // Execute body (with timeout if specified); timeout -> Err
+        let body_result =
+            txn.timed(ms, self.execute_txn_stmts(stmts, expr)).await;
 
         // Pop scope
         self.env.scopes.pop();
@@ -118,5 +115,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Error::runtime(span, format!("commit failed: {e}"))
                 }
             })
+    }
+
+    /// Execute transaction statements and trailing expression.
+    async fn execute_txn_stmts(
+        &mut self,
+        stmts: &[StmtId],
+        expr: Option<ExprId>,
+    ) -> Result<Value> {
+        self.stmts(stmts).await?;
+        match expr {
+            None => Ok(Value::Unit),
+            Some(id) => self.eval(id).await,
+        }
     }
 }
