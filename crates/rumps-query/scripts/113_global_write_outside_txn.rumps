@@ -1,0 +1,7 @@
+; Test: Global writes outside transaction are rejected at compile time
+; This test should fail during typechecking, not at runtime.
+
+; Direct global SET outside transaction
+$SET ^data(1) = "value"
+
+$OUTPUT "should not reach here"

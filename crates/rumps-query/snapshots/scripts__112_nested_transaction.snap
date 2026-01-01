@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Nested transactions are rejected at compile time\n; This test should fail during typechecking, not at runtime.\n\n; Directly nested transaction\nLET r = TRANSACTION {\n  TRANSACTION {\n    $SET ^data(1) = \"inner\"\n  }\n}\n\n$OUTPUT r\n"
+---
+ERROR: nested transactions are not supported

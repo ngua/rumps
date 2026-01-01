@@ -19,14 +19,6 @@ LET unit-result = TRANSACTION {
 $OUTPUT unit-result
 $OUTPUT $GET ^TEST(2, "status")
 
-; Nested transaction causes outer to rollback
-LET outer = TRANSACTION {
-    TRANSACTION {
-        $SET ^TEST(3, "x") = "nested"
-    }
-}
-$OUTPUT outer
-
 ; Transaction with multiple statements and computation
 LET multi = TRANSACTION {
     LET a = 10

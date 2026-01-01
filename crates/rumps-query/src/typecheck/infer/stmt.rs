@@ -494,8 +494,16 @@ impl InferCtx<'_> {
     /// Infer types for a `SET` statement or expression.
     ///
     /// Type-checks subscript expressions and the value, adding appropriate
-    /// constraints. Does not modify the environment (database write).
+    /// constraints. Global writes must be inside a transaction block.
     pub(super) fn set(&mut self, dbref: &DbRef, value: ExprId, span: Span) {
+        // Global writes require transaction context
+        if matches!(dbref, DbRef::Global(..)) && !self.in_transaction {
+            self.error(TypeError::Custom {
+                msg: "global writes require a transaction".to_string(),
+                span,
+            });
+        }
+
         let subs = match dbref {
             DbRef::Local(_, s) | DbRef::Global(_, s) => s,
         };
@@ -509,8 +517,16 @@ impl InferCtx<'_> {
     /// Infer types for a `KILL` statement or expression.
     ///
     /// Type-checks subscript expressions with `Subscriptable` constraints.
-    /// Does not modify the environment (database delete).
+    /// Global kills must be inside a transaction block.
     pub(super) fn kill(&mut self, dbref: &DbRef, span: Span) {
+        // Global writes require transaction context
+        if matches!(dbref, DbRef::Global(..)) && !self.in_transaction {
+            self.error(TypeError::Custom {
+                msg: "global writes require a transaction".to_string(),
+                span,
+            });
+        }
+
         let subs = match dbref {
             DbRef::Local(_, s) | DbRef::Global(_, s) => s,
         };

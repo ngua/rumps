@@ -344,14 +344,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.output(&output).await?;
                 Ok(Value::Unit)
             }
-            Expr::Set(ref dbref, value) => {
-                self.set(dbref, value, span).await?;
-                Ok(Value::Unit)
-            }
-            Expr::Kill(ref dbref) => {
-                self.kill(dbref, span).await?;
-                Ok(Value::Unit)
-            }
+            Expr::Set(ref dbref, value) => self.set(dbref, value, span).await,
+            Expr::Kill(ref dbref) => self.kill(dbref, span).await,
             Expr::Forever {
                 seed,
                 state_param,
@@ -397,9 +391,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.r#let(&pat, ty_ann, expr_id, span).await
             }
             Stmt::Set(ref dbref, expr_id) => {
-                self.set(dbref, expr_id, span).await
+                self.set(dbref, expr_id, span).await.map(|_| ())
             }
-            Stmt::Kill(ref dbref) => self.kill(dbref, span).await,
+            Stmt::Kill(ref dbref) => self.kill(dbref, span).await.map(|_| ()),
             Stmt::Output(output) => self.output(&output).await,
             Stmt::Expr(expr_id) => {
                 // Evaluate for side effects, discard result

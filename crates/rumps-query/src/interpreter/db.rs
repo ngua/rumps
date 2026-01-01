@@ -42,69 +42,74 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// `$SET` primitive; writes a value to a B-tree variable.
     ///
-    /// Dispatches based on the name type: globals require an active
-    /// transaction, locals can be set outside transactions.
+    /// Returns `Result[Unit, String]`. Globals require an active transaction
+    /// (enforced by typechecker). Locals can be set outside transactions.
     #[async_recursion]
     pub(super) async fn set(
         &mut self,
         dbref: &DbRef,
         expr_id: ExprId,
         span: Span,
-    ) -> Result<()> {
+    ) -> Result<Value> {
         let (name, subs) = dbref.split();
         let key = self.build_key(subs).await?;
         let val = self.eval(expr_id).await?;
         let storage_val = self.store(&val)?;
 
-        if name.is_global() {
-            match self.txn.as_ref() {
-                Some(txn) => {
-                    txn.set(&name, &key, storage_val).await.map_err(|e| {
-                        Error::runtime(span, format!("SET failed: {e}"))
-                    })
-                }
-                None => Err(Error::runtime(
-                    span,
-                    "global SET requires a transaction",
-                )),
-            }
+        // Global writes require transaction (typechecked); locals go direct
+        let res = if name.is_global() {
+            self.txn
+                .as_ref()
+                .unwrap_or_else(|| {
+                    typechecked!("global SET", "transaction context")
+                })
+                .set(&name, &key, storage_val)
+                .await
+                .map_err(|e| e.to_string())
         } else {
             self.db
                 .set(&name, &key, storage_val)
                 .await
-                .map_err(|e| Error::runtime(span, format!("SET failed: {e}")))
-        }
+                .map_err(|e| e.to_string())
+        };
+
+        Ok(match res {
+            Ok(()) => self.make_result_ok(Value::Unit, span),
+            Err(e) => self.make_result_err(&format!("SET failed: {e}"), span),
+        })
     }
 
     /// `$KILL` primitive; deletes a variable and its descendants.
     ///
-    /// For globals, requires an active transaction. For locals, operates
-    /// directly on the database.
+    /// Returns `Result[Unit, String]`. Globals require an active transaction
+    /// (enforced by typechecker). Locals can be killed outside transactions.
     #[async_recursion]
     pub(super) async fn kill(
         &mut self,
         dbref: &DbRef,
         span: Span,
-    ) -> Result<()> {
+    ) -> Result<Value> {
         let (name, subs) = dbref.split();
         let key = self.build_key(subs).await?;
 
-        if name.is_global() {
-            match self.txn.as_ref() {
-                Some(txn) => txn.kill(&name, &key).await.map_err(|e| {
-                    Error::runtime(span, format!("KILL failed: {e}"))
-                }),
-                None => Err(Error::runtime(
-                    span,
-                    "global KILL requires a transaction",
-                )),
-            }
-        } else {
-            self.db
+        // Global writes require transaction (typechecked); locals go direct
+        let res = if name.is_global() {
+            self.txn
+                .as_ref()
+                .unwrap_or_else(|| {
+                    typechecked!("global KILL", "transaction context")
+                })
                 .kill(&name, &key)
                 .await
-                .map_err(|e| Error::runtime(span, format!("KILL failed: {e}")))
-        }
+                .map_err(|e| e.to_string())
+        } else {
+            self.db.kill(&name, &key).await.map_err(|e| e.to_string())
+        };
+
+        Ok(match res {
+            Ok(()) => self.make_result_ok(Value::Unit, span),
+            Err(e) => self.make_result_err(&format!("KILL failed: {e}"), span),
+        })
     }
 
     /// `$DATA` primitive; queries existence status of a B-tree node.

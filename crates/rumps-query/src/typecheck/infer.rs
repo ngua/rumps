@@ -202,6 +202,12 @@ pub(crate) struct InferCtx<'a> {
     ///
     /// When interpreting an `Expr::Regex`, look up the cache index here.
     regex_indices: HashMap<ExprId, u32>,
+    /// Whether we are currently inside a transaction block.
+    ///
+    /// Used to enforce that global writes (`$SET ^...`, `$KILL ^...`) only
+    /// appear inside `TRANSACTION { ... }` blocks and that nested `TRANSACTION`s
+    /// cannot be created (not supported).
+    pub(super) in_transaction: bool,
 }
 
 impl<'a> InferCtx<'a> {
@@ -230,6 +236,7 @@ impl<'a> InferCtx<'a> {
             errors: Vec::new(),
             regex_cache: Vec::new(),
             regex_indices: HashMap::new(),
+            in_transaction: false,
         }
     }
 

@@ -222,17 +222,17 @@ impl InferCtx<'_> {
             }
 
             // Set expression: `$SET target = value`
-            // Same typing as statement version, but returns `Unit`
+            // Returns `Result[Unit, String]`
             Expr::Set(dbref, value) => {
                 self.set(dbref, *value, span);
-                Ty::Unit
+                Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
             // Kill expression: `$KILL target`
-            // Same typing as statement version, but returns `Unit`
+            // Returns `Result[Unit, String]`
             Expr::Kill(dbref) => {
                 self.kill(dbref, span);
-                Ty::Unit
+                Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
             // Forever loop: `FOREVER seed (state, cont) => body`
@@ -1787,11 +1787,24 @@ impl InferCtx<'_> {
     ///
     /// Returns `Result[T, String]` where `T` is the trailing expression type
     /// (or `Unit` if no trailing expression).
+    ///
+    /// Nested transactions are rejected at compile time (not runtime).
     pub(super) fn transaction(
         &mut self,
         txn: &TransactionExpr,
         span: Span,
     ) -> Ty {
+        // Nested transactions rejected at compile time
+        if self.in_transaction {
+            self.error(TypeError::Custom {
+                msg: "nested transactions are not supported".to_string(),
+                span,
+            });
+        }
+
+        // Mark transaction context for global write / nested transaction checks
+        self.in_transaction = true;
+
         // Enter new scope for transaction body
         self.env.push_scope();
 
@@ -1810,6 +1823,9 @@ impl InferCtx<'_> {
         });
 
         self.env.pop_scope();
+
+        // Restore transaction context
+        self.in_transaction = false;
 
         // Return Result[T, String]
         Ty::Result(Box::new(inner_ty), Box::new(Ty::String))
