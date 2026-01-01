@@ -2269,21 +2269,15 @@ async fn insert_batch(
     entries: Vec<(Key, Value)>,
 ) -> Result<()> {
     let name = name.clone();
-    let entries = Arc::new(entries);
-    db.transaction(move |txn| {
-        let entries = Arc::clone(&entries);
-        let name = name.clone();
-        async move {
-            // Use fold to insert each entry sequentially
-            stream::iter(entries.iter().cloned())
-                .map(Ok::<_, rumps_types::Error>)
-                .try_fold((), |(), (k, v)| {
-                    let txn = &txn;
-                    let nm = &name;
-                    async move { txn.set(nm, &k, v).await.map(|_| ()) }
-                })
-                .await
-        }
+    db.transaction(move |txn| async move {
+        stream::iter(entries)
+            .map(Ok::<_, rumps_types::Error>)
+            .try_fold((), |(), (k, v)| {
+                let txn = &txn;
+                let nm = &name;
+                async move { txn.set(nm, &k, v).await.map(|_| ()) }
+            })
+            .await
     })
     .await
 }
