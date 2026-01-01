@@ -536,17 +536,82 @@ impl Parser {
             })
     }
 
-    /// `TRANSACTION { stmts... [expr] }`
+    /// Parse transaction modifiers (contextual identifiers).
     ///
-    /// Transaction block expression; returns `Result[T, String]`.
+    /// Syntax: `[ON CONFLICT ...] [WITH TIMEOUT expr] [WITH PRIORITY ...] [WITH ISOLATION ...]`
+    fn transaction_modifiers(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::TransactionModifiers, Error = ParseErr>
+           + Clone {
+        // ON CONFLICT (ABORT | RETRY n | SKIP | OVERWRITE)
+        let conflict = Self::ctx_ident("ON")
+            .ignore_then(Self::ctx_ident("CONFLICT"))
+            .ignore_then(choice((
+                Self::ctx_ident("ABORT").to(cst::ConflictModifier::Abort),
+                Self::ctx_ident("RETRY")
+                    .ignore_then(select! { Token::Int(n) => n as u32 })
+                    .map(cst::ConflictModifier::Retry),
+                Self::ctx_ident("SKIP").to(cst::ConflictModifier::Skip),
+                Self::ctx_ident("OVERWRITE")
+                    .to(cst::ConflictModifier::Overwrite),
+            )));
+
+        // WITH TIMEOUT expr
+        let timeout = Self::ctx_ident("WITH")
+            .ignore_then(Self::ctx_ident("TIMEOUT"))
+            .ignore_then(expr)
+            .map(Box::new);
+
+        // WITH PRIORITY (LOW | NORMAL | HIGH)
+        let priority = Self::ctx_ident("WITH")
+            .ignore_then(Self::ctx_ident("PRIORITY"))
+            .ignore_then(choice((
+                Self::ctx_ident("LOW").to(cst::PriorityModifier::Low),
+                Self::ctx_ident("NORMAL").to(cst::PriorityModifier::Normal),
+                Self::ctx_ident("HIGH").to(cst::PriorityModifier::High),
+            )));
+
+        // WITH ISOLATION SNAPSHOT
+        let isolation = Self::ctx_ident("WITH")
+            .ignore_then(Self::ctx_ident("ISOLATION"))
+            .ignore_then(
+                Self::ctx_ident("SNAPSHOT")
+                    .to(cst::IsolationModifier::Snapshot),
+            );
+
+        // Modifiers must appear in this fixed order: conflict, timeout, priority,
+        // isolation. Each modifier can appear at most once. Out-of-order or
+        // duplicate modifiers will produce a parse error.
+        conflict
+            .or_not()
+            .then(timeout.or_not())
+            .then(priority.or_not())
+            .then(isolation.or_not())
+            .map(|(((conflict, timeout), priority), isolation)| {
+                cst::TransactionModifiers {
+                    conflict,
+                    timeout,
+                    priority,
+                    isolation,
+                }
+            })
+    }
+
+    /// `TRANSACTION { stmts... [expr] } [modifiers]`
     fn transaction_expr(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         just(Token::Transaction)
             .ignore_then(Self::block(stmt))
-            .map_with_span(|(stmts, _blk_span), span| {
+            .then(Self::transaction_modifiers(expr))
+            .map_with_span(|((stmts, _blk_span), modifiers), span| {
                 // Split trailing expr statement from regular statements
                 let has_tail = stmts
                     .last()
@@ -571,7 +636,7 @@ impl Parser {
                         cst::TransactionExpr {
                             stmts: block_stmts,
                             expr: tail,
-                            modifiers: cst::TransactionModifiers::default(),
+                            modifiers,
                         },
                     )),
                     span,
@@ -1866,7 +1931,7 @@ impl Parser {
                 });
 
         // Transaction expression
-        let txn_expr = Self::transaction_expr(stmt);
+        let txn_expr = Self::transaction_expr(stmt, expr.clone());
 
         // IF expression
         let if_expr = just(Token::If)
