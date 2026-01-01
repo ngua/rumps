@@ -364,22 +364,22 @@ impl Database {
 
     /// Creates a transaction builder for custom configuration.
     ///
-    /// Returns a [`BoundTransactionBuilder`] that provides a fluent API for
+    /// Returns a [`TransactionBuilder`] that provides a fluent API for
     /// configuring and executing transactions.
     ///
     /// # Examples
     ///
     /// ```
     /// # tokio_test::block_on(async {
-    /// use rumps_storage::{Database, TransactionPriority, ConflictStrategy};
+    /// use rumps_storage::{Database, ConflictStrategy};
     /// use rumps_types::{global, key, value};
     ///
     /// let db = Database::in_memory()?;
     ///
     /// db.build_transaction()
     ///     .timeout(5000)
-    ///     .priority(TransactionPriority::High)
-    ///     .conflict(ConflictStrategy::Retry(3))
+    ///     .retries(3)
+    ///     .conflict(ConflictStrategy::Overwrite)
     ///     .begin(|txn| async move {
     ///         txn.set(&global!("DATA"), &key![1], value!("test")).await?;
     ///         Ok(())
@@ -2269,12 +2269,13 @@ async fn insert_batch(
     entries: Vec<(Key, Value)>,
 ) -> Result<()> {
     let name = name.clone();
+    let entries = Arc::new(entries);
     db.transaction(move |txn| {
-        let entries = entries;
-        let name = name;
+        let entries = Arc::clone(&entries);
+        let name = name.clone();
         async move {
             // Use fold to insert each entry sequentially
-            stream::iter(entries.into_iter())
+            stream::iter(entries.iter().cloned())
                 .map(Ok::<_, rumps_types::Error>)
                 .try_fold((), |(), (k, v)| {
                     let txn = &txn;
@@ -2765,45 +2766,53 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn transaction_with_priority() {
-            use crate::TransactionPriority;
-
+        async fn transaction_with_retries() {
             let db = Database::in_memory().unwrap();
             let name = rumps_types::global!("TEST");
             let key = rumps_types::key![1];
 
-            let (n, k) = (name.clone(), key.clone());
+            let n = name.clone();
+            let k = key.clone();
             db.build_transaction()
-                .priority(TransactionPriority::High)
-                .begin(|txn| async move {
-                    txn.set(&n, &k, rumps_types::Value::from("high")).await?;
-                    Ok(())
+                .retries(3)
+                .begin(move |txn| {
+                    let n = n.clone();
+                    let k = k.clone();
+                    async move {
+                        txn.set(&n, &k, rumps_types::Value::from("retried"))
+                            .await?;
+                        Ok(())
+                    }
                 })
                 .await
                 .unwrap();
 
             let val = db.get(&name, &key).await.unwrap();
-            assert_eq!(val, Some(rumps_types::Value::from("high")));
+            assert_eq!(val, Some(rumps_types::Value::from("retried")));
         }
 
         #[tokio::test]
         async fn chained_config_works() {
-            use crate::{ConflictStrategy, TransactionPriority};
+            use crate::ConflictStrategy;
 
             let db = Database::in_memory().unwrap();
             let name = rumps_types::global!("TEST");
             let key = rumps_types::key![1];
 
-            let (n, k) = (name.clone(), key.clone());
+            let n = name.clone();
+            let k = key.clone();
             db.build_transaction()
                 .timeout(10000)
-                .priority(TransactionPriority::High)
-                .conflict(ConflictStrategy::Retry(3))
                 .retries(5)
-                .begin(|txn| async move {
-                    txn.set(&n, &k, rumps_types::Value::from("chained"))
-                        .await?;
-                    Ok(())
+                .conflict(ConflictStrategy::Overwrite)
+                .begin(move |txn| {
+                    let n = n.clone();
+                    let k = k.clone();
+                    async move {
+                        txn.set(&n, &k, rumps_types::Value::from("chained"))
+                            .await?;
+                        Ok(())
+                    }
                 })
                 .await
                 .unwrap();

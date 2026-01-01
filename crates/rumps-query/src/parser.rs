@@ -538,22 +538,18 @@ impl Parser {
 
     /// Parse transaction modifiers (contextual identifiers).
     ///
-    /// Syntax: `[ON CONFLICT ...] [WITH TIMEOUT expr] [WITH PRIORITY ...] [WITH ISOLATION ...]`
+    /// Syntax: `[ON CONFLICT ...] [WITH TIMEOUT expr] [WITH RETRIES n] [WITH ISOLATION ...]`
     fn transaction_modifiers(
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::TransactionModifiers, Error = ParseErr>
            + Clone {
-        // ON CONFLICT (ABORT | RETRY n | SKIP | OVERWRITE)
+        // ON CONFLICT (ABORT | OVERWRITE)
         let conflict = Self::ctx_ident("ON")
             .ignore_then(Self::ctx_ident("CONFLICT"))
             .ignore_then(choice((
                 Self::ctx_ident("ABORT").to(cst::ConflictModifier::Abort),
-                Self::ctx_ident("RETRY")
-                    .ignore_then(select! { Token::Int(n) => n as u32 })
-                    .map(cst::ConflictModifier::Retry),
-                Self::ctx_ident("SKIP").to(cst::ConflictModifier::Skip),
                 Self::ctx_ident("OVERWRITE")
                     .to(cst::ConflictModifier::Overwrite),
             )));
@@ -564,14 +560,10 @@ impl Parser {
             .ignore_then(expr)
             .map(Box::new);
 
-        // WITH PRIORITY (LOW | NORMAL | HIGH)
-        let priority = Self::ctx_ident("WITH")
-            .ignore_then(Self::ctx_ident("PRIORITY"))
-            .ignore_then(choice((
-                Self::ctx_ident("LOW").to(cst::PriorityModifier::Low),
-                Self::ctx_ident("NORMAL").to(cst::PriorityModifier::Normal),
-                Self::ctx_ident("HIGH").to(cst::PriorityModifier::High),
-            )));
+        // WITH RETRIES n
+        let retries = Self::ctx_ident("WITH")
+            .ignore_then(Self::ctx_ident("RETRIES"))
+            .ignore_then(select! { Token::Int(n) => n as u32 });
 
         // WITH ISOLATION SNAPSHOT
         let isolation = Self::ctx_ident("WITH")
@@ -581,19 +573,19 @@ impl Parser {
                     .to(cst::IsolationModifier::Snapshot),
             );
 
-        // Modifiers must appear in this fixed order: conflict, timeout, priority,
+        // Modifiers must appear in this fixed order: conflict, timeout, retries,
         // isolation. Each modifier can appear at most once. Out-of-order or
         // duplicate modifiers will produce a parse error.
         conflict
             .or_not()
             .then(timeout.or_not())
-            .then(priority.or_not())
+            .then(retries.or_not())
             .then(isolation.or_not())
-            .map(|(((conflict, timeout), priority), isolation)| {
+            .map(|(((conflict, timeout), retries), isolation)| {
                 cst::TransactionModifiers {
                     conflict,
                     timeout,
-                    priority,
+                    retries,
                     isolation,
                 }
             })

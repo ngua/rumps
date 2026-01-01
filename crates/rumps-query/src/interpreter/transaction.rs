@@ -52,8 +52,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 timeout_ms = Some(ms);
                 builder = builder.timeout(ms);
             }
-            if let Some(priority) = txn.modifiers.priority {
-                builder = builder.priority(priority);
+            if let Some(retries) = txn.modifiers.retries {
+                builder = builder.retries(retries);
             }
             if let Some(isolation) = txn.modifiers.isolation {
                 builder = builder.isolation(isolation);
@@ -88,6 +88,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             Error::runtime(span, format!("failed to start transaction: {e}"))
         })?;
 
+        // Get retry count before moving txn
+        let retries = txn.retry_count();
+
         // Set transaction context
         self.txn = Some(txn.clone());
 
@@ -101,13 +104,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Pop scope
         self.env.scopes.pop();
 
-        // Finish transaction: commit on Ok, rollback on Err
+        // Finish transaction: commit (with retry) on Ok, rollback on Err
         self.txn
             .take()
             .ok_or_else(|| {
                 Error::runtime(span, "transaction unexpectedly missing")
             })?
-            .finish(body_result.map_err(TxnError::Body))
+            .finish_with_retry(body_result.map_err(TxnError::Body), retries)
             .await
             .map_err(|e| match e {
                 TxnError::Body(e) => e,

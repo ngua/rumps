@@ -815,6 +815,7 @@ impl TransactionManager {
         txn_id: TransactionId,
         start_ts: TransactionTimestamp,
         write_set: HashSet<(Name, Key)>,
+        conflict_strategy: ConflictStrategy,
     ) -> crate::error::Result<TransactionTimestamp> {
         // Pre-allocate commit timestamp before taking the write lock
         // to avoid nested lock acquisition
@@ -828,22 +829,25 @@ impl TransactionManager {
             let mut committed = self.committed_writes.write().await;
 
             // Validate: check for write-write conflicts with transactions
-            // that committed after our start timestamp
-            committed
-                .iter()
-                .filter(|cws| cws.commit_ts > start_ts)
-                .try_for_each(|cws| {
-                    write_set.iter().find(|key| cws.keys.contains(key)).map_or(
-                        Ok(()),
-                        |(name, key)| {
-                            Err(StorageError::WriteConflict {
-                                txn_id: *txn_id,
-                                name: name.clone(),
-                                key: key.clone(),
+            // that committed after our start timestamp.
+            // Skip validation for Overwrite strategy (last-write-wins).
+            if conflict_strategy != ConflictStrategy::Overwrite {
+                committed
+                    .iter()
+                    .filter(|cws| cws.commit_ts > start_ts)
+                    .try_for_each(|cws| {
+                        write_set
+                            .iter()
+                            .find(|key| cws.keys.contains(key))
+                            .map_or(Ok(()), |(name, key)| {
+                                Err(StorageError::WriteConflict {
+                                    txn_id: *txn_id,
+                                    name: name.clone(),
+                                    key: key.clone(),
+                                })
                             })
-                        },
-                    )
-                })?;
+                    })?;
+            }
 
             // Record immediately (still holding lock)
             committed.push(CommittedWriteSet {
@@ -903,58 +907,16 @@ impl Default for TransactionManager {
 /// // Default is Abort
 /// assert_eq!(ConflictStrategy::default(), ConflictStrategy::Abort);
 ///
-/// // Retry up to 3 times on conflict
-/// let retry = ConflictStrategy::Retry(3);
+/// // Overwrite bypasses conflict detection entirely
+/// let overwrite = ConflictStrategy::Overwrite;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ConflictStrategy {
     /// Abort the transaction on conflict (default).
     #[default]
     Abort,
-    /// Retry the transaction up to `N` times on conflict.
-    Retry(u32),
-    /// Skip the transaction on conflict (discard changes).
-    Skip,
-    /// Last-write-wins: overwrite conflicting changes.
+    /// Last-write-wins: bypass conflict detection entirely.
     Overwrite,
-}
-
-/// Transaction priority for scheduling and deadlock resolution.
-///
-/// Higher priority transactions may be favored during conflict resolution
-/// or deadlock detection.
-///
-/// # Examples
-///
-/// ```
-/// use rumps_storage::TransactionPriority;
-///
-/// // Default is Normal
-/// assert_eq!(TransactionPriority::default(), TransactionPriority::Normal);
-///
-/// // Priorities can be compared
-/// assert!(TransactionPriority::Low < TransactionPriority::High);
-/// ```
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    Default
-)]
-pub enum TransactionPriority {
-    /// Low priority transaction.
-    Low,
-    /// Normal priority transaction (default).
-    #[default]
-    Normal,
-    /// High priority transaction.
-    High,
 }
 
 /// Builder for creating and configuring transactions.
@@ -962,21 +924,40 @@ pub enum TransactionPriority {
 /// Created via [`Database::build_transaction()`]. Provides a fluent API for
 /// configuring transaction properties before execution.
 ///
+/// # Retry Semantics
+///
+/// When `.retries(n)` is configured, the **commit phase** (not the entire
+/// closure) is retried on retriable errors like `WriteConflict`. The closure
+/// runs exactly once; only the final commit is retried.
+///
+/// For write-write conflicts with already-committed transactions, retries
+/// will still fail (the conflict is permanent for that snapshot). For
+/// transient errors, retries may help.
+///
 /// # Examples
 ///
 /// ```
 /// # tokio_test::block_on(async {
-/// use rumps_storage::{Database, TransactionPriority, ConflictStrategy};
+/// use rumps_storage::{Database, ConflictStrategy};
 /// use rumps_types::{global, key, value};
 ///
 /// let db = Database::in_memory()?;
 ///
+/// // Simple transaction
 /// db.build_transaction()
-///     .conflict(ConflictStrategy::Retry(3))
+///     .conflict(ConflictStrategy::Overwrite)
 ///     .timeout(5000)
-///     .priority(TransactionPriority::High)
 ///     .begin(|txn| async move {
 ///         txn.set(&global!("DATA"), &key![1], value!("test")).await?;
+///         Ok(())
+///     })
+///     .await?;
+///
+/// // With commit retries
+/// db.build_transaction()
+///     .retries(3)
+///     .begin(|txn| async move {
+///         txn.set(&global!("DATA"), &key![2], value!("retry")).await?;
 ///         Ok(())
 ///     })
 ///     .await?;
@@ -985,12 +966,12 @@ pub enum TransactionPriority {
 /// ```
 ///
 /// [`Database::build_transaction()`]: crate::Database::build_transaction
+#[derive(Clone)]
 pub struct TransactionBuilder {
     db: Database,
     isolation: IsolationLevel,
     conflict_strategy: ConflictStrategy,
     timeout: Option<u64>,
-    priority: TransactionPriority,
     retry_count: u32,
 }
 
@@ -1001,7 +982,6 @@ impl fmt::Debug for TransactionBuilder {
             .field("isolation", &self.isolation)
             .field("conflict_strategy", &self.conflict_strategy)
             .field("timeout", &self.timeout)
-            .field("priority", &self.priority)
             .field("retry_count", &self.retry_count)
             .finish()
     }
@@ -1046,7 +1026,6 @@ impl TransactionBuilder {
             isolation: IsolationLevel::SnapshotIsolation,
             conflict_strategy: ConflictStrategy::Abort,
             timeout: None,
-            priority: TransactionPriority::Normal,
             retry_count: 0,
         }
     }
@@ -1069,13 +1048,10 @@ impl TransactionBuilder {
         self
     }
 
-    /// Sets the transaction priority.
-    pub fn priority(mut self, prio: TransactionPriority) -> Self {
-        self.priority = prio;
-        self
-    }
-
-    /// Sets the number of retries on conflict.
+    /// Sets the number of times to retry the commit on retriable errors.
+    ///
+    /// When configured, only the **commit phase** is retried; the closure
+    /// runs exactly once. See the [struct-level docs](Self) for details.
     pub fn retries(mut self, cnt: u32) -> Self {
         self.retry_count = cnt;
         self
@@ -1096,16 +1072,18 @@ impl TransactionBuilder {
         Fut: future::Future<Output = Result<R>>,
     {
         let ms = self.timeout;
+        let retries = self.retry_count;
         let txn = self.start().await?;
         let t = txn.clone();
         txn.timed(ms, async {
             match f(t.clone()).await {
-                Ok(result) => {
-                    t.commit().await?;
-                    Ok(result)
-                }
+                Ok(result) => t
+                    .commit_with_retry(retries)
+                    .await
+                    .map(|()| result)
+                    .map_err(rumps_types::Error::from),
                 Err(e) => {
-                    t.rollback().await?;
+                    let _ = t.rollback().await;
                     Err(e)
                 }
             }
@@ -1117,6 +1095,9 @@ impl TransactionBuilder {
     ///
     /// This is the low-level method used internally by [`begin`]. It returns
     /// a `Transaction` that must be manually committed or rolled back.
+    ///
+    /// When using `start()` directly, commit retries are NOT automatic.
+    /// Use [`Transaction::commit_with_retry`] if you need retry behavior.
     ///
     /// [`begin`]: Self::begin
     pub async fn start(self) -> Result<Transaction> {
@@ -1150,7 +1131,6 @@ impl TransactionBuilder {
             db: self.db,
             isolation: self.isolation,
             conflict_strategy: self.conflict_strategy,
-            priority: self.priority,
             timeout,
             retry_count: self.retry_count,
             writes: Arc::new(RwLock::new(BTreeMap::new())),
@@ -1207,7 +1187,6 @@ pub struct Transaction {
     // Configuration (from builder)
     isolation: IsolationLevel,
     conflict_strategy: ConflictStrategy,
-    priority: TransactionPriority,
     timeout: Option<Instant>,
     retry_count: u32,
 
@@ -1215,7 +1194,11 @@ pub struct Transaction {
     writes: Arc<RwLock<BTreeMap<(Name, Key), WriteOp>>>,
     deleted_subtrees: Arc<RwLock<HashSet<(Name, Key)>>>,
 
-    // Read Tracking (for conflict detection)
+    /// Read set for future Serializable Snapshot Isolation (SSI).
+    ///
+    /// Currently tracked but unused. Standard Snapshot Isolation only requires
+    /// write-write conflict detection (implemented in `validate_and_record`).
+    /// SSI would additionally check read-write conflicts to prevent write skew.
     read_set: Arc<RwLock<HashSet<(Name, Key)>>>,
 
     // Snapshot Data
@@ -1226,6 +1209,11 @@ pub struct Transaction {
 
 // Public API
 impl Transaction {
+    /// Returns the configured retry count for this transaction.
+    pub fn retry_count(&self) -> u32 {
+        self.retry_count
+    }
+
     /// Wraps an async operation in a timeout.
     ///
     /// If `ms` is `Some`, the future is wrapped in `tokio::time::timeout`.
@@ -1649,7 +1637,12 @@ impl Transaction {
         // validation before either records their commit.
         self.db
             .txn_manager
-            .validate_and_record(self.id, self.start_timestamp, write_set)
+            .validate_and_record(
+                self.id,
+                self.start_timestamp,
+                write_set,
+                self.conflict_strategy,
+            )
             .await?;
 
         // Apply all buffered writes using transaction-aware methods.
@@ -1724,6 +1717,29 @@ impl Transaction {
         Ok(())
     }
 
+    /// Commits the transaction with retries on retriable errors.
+    ///
+    /// Like [`commit`](Self::commit), but retries the commit on retriable
+    /// errors (e.g., `WriteConflict`, `TransactionTimeout`) up to the
+    /// specified number of times.
+    ///
+    /// Since `Transaction` is `Clone` with shared `Arc` state, cloning for
+    /// each retry attempt is cheap and shares the same underlying buffers.
+    #[async_recursion]
+    pub(crate) async fn commit_with_retry(
+        self,
+        retries: u32,
+    ) -> crate::error::Result<()> {
+        let t = self.clone();
+        match self.commit().await {
+            Ok(()) => Ok(()),
+            Err(e) if e.is_retriable() && retries > 0 => {
+                t.commit_with_retry(retries - 1).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Rolls back the transaction, discarding all buffered writes.
     ///
     /// This is automatically called when a transaction is dropped without
@@ -1784,7 +1800,31 @@ impl Transaction {
     {
         match result {
             Ok(val) => {
-                self.commit().await?;
+                self.commit_with_retry(0).await?;
+                Ok(val)
+            }
+            Err(e) => {
+                let _ = self.rollback().await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Finishes a transaction with commit retries.
+    ///
+    /// Like [`finish`](Self::finish), but retries the commit on retriable
+    /// errors up to the specified number of times.
+    pub async fn finish_with_retry<T, E>(
+        self,
+        result: std::result::Result<T, E>,
+        retries: u32,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<crate::error::StorageError>,
+    {
+        match result {
+            Ok(val) => {
+                self.commit_with_retry(retries).await?;
                 Ok(val)
             }
             Err(e) => {

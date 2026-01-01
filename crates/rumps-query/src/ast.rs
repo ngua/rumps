@@ -923,12 +923,12 @@ pub(crate) struct TransactionExpr {
 
 /// Transaction configuration modifiers.
 ///
-/// Uses storage layer types directly for conflict, priority, and isolation.
+/// Uses storage layer types directly for conflict and isolation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TransactionModifiers {
     pub(crate) conflict: Option<rumps_storage::ConflictStrategy>,
     pub(crate) timeout: Option<ExprId>,
-    pub(crate) priority: Option<rumps_storage::TransactionPriority>,
+    pub(crate) retries: Option<u32>,
     pub(crate) isolation: Option<rumps_storage::IsolationLevel>,
 }
 

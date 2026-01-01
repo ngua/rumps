@@ -65,7 +65,6 @@ pub use rumps_storage::{
     Transaction,
     TransactionBuilder,
     TransactionContext,
-    TransactionPriority,
     WalWriterConfig,
 };
 // Re-export types from rumps-types

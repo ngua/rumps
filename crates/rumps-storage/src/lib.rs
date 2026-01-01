@@ -46,6 +46,6 @@ pub use page::PageCacheStats;
 pub use rumps_types::{DataStatus, Result};
 pub use transaction::{
     ConflictStrategy, IsolationLevel, Transaction, TransactionBuilder,
-    TransactionContext, TransactionPriority,
+    TransactionContext,
 };
 pub use wal::{SyncMode, WalWriterConfig};

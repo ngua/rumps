@@ -22,6 +22,19 @@ pub enum Error {
     Decode(#[from] DecodeError),
 }
 
+impl Error {
+    /// Returns `true` if this error is retriable.
+    ///
+    /// Delegates to [`StorageError::is_retriable()`] for storage errors;
+    /// other error variants are not retriable.
+    pub fn is_retriable(&self) -> bool {
+        match self {
+            Self::Storage(e) => e.is_retriable(),
+            Self::Decode(_) => false,
+        }
+    }
+}
+
 /// Result type for RUMPS operations.
 ///
 /// This is the standard result type returned by all public RUMPS APIs.
@@ -163,4 +176,18 @@ pub enum StorageError {
         /// Timeout duration in milliseconds.
         ms: u64,
     },
+}
+
+impl StorageError {
+    /// Returns `true` if this error is retriable.
+    ///
+    /// Retriable errors are those where retrying the transaction may succeed:
+    /// - `WriteConflict`: Another transaction committed first; retry may succeed
+    /// - `TransactionTimeout`: Transient timing issue; retry may succeed
+    pub fn is_retriable(&self) -> bool {
+        matches!(
+            self,
+            Self::WriteConflict { .. } | Self::TransactionTimeout { .. }
+        )
+    }
 }

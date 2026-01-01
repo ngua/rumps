@@ -687,22 +687,11 @@ fn lower_txn_modifiers(
 ) -> Result<TransactionModifiers> {
     let conflict = m.conflict.map(|c| match c {
         cst::ConflictModifier::Abort => rumps_storage::ConflictStrategy::Abort,
-        cst::ConflictModifier::Retry(n) => {
-            rumps_storage::ConflictStrategy::Retry(n)
-        }
-        cst::ConflictModifier::Skip => rumps_storage::ConflictStrategy::Skip,
         cst::ConflictModifier::Overwrite => {
             rumps_storage::ConflictStrategy::Overwrite
         }
     });
     let timeout = m.timeout.map(|e| lower_expr(ast, *e)).transpose()?;
-    let priority = m.priority.map(|p| match p {
-        cst::PriorityModifier::Low => rumps_storage::TransactionPriority::Low,
-        cst::PriorityModifier::Normal => {
-            rumps_storage::TransactionPriority::Normal
-        }
-        cst::PriorityModifier::High => rumps_storage::TransactionPriority::High,
-    });
     let isolation = m.isolation.map(|i| match i {
         cst::IsolationModifier::Snapshot => {
             rumps_storage::IsolationLevel::SnapshotIsolation
@@ -711,7 +700,7 @@ fn lower_txn_modifiers(
     Ok(TransactionModifiers {
         conflict,
         timeout,
-        priority,
+        retries: m.retries,
         isolation,
     })
 }

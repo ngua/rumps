@@ -590,7 +590,7 @@ pub(crate) struct TransactionExpr {
 pub(crate) struct TransactionModifiers {
     pub(crate) conflict: Option<ConflictModifier>,
     pub(crate) timeout: Option<Box<Expr>>,
-    pub(crate) priority: Option<PriorityModifier>,
+    pub(crate) retries: Option<u32>,
     pub(crate) isolation: Option<IsolationModifier>,
 }
 
@@ -598,17 +598,7 @@ pub(crate) struct TransactionModifiers {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ConflictModifier {
     Abort,
-    Retry(u32),
-    Skip,
     Overwrite,
-}
-
-/// Transaction priority.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum PriorityModifier {
-    Low,
-    Normal,
-    High,
 }
 
 /// Isolation level.
