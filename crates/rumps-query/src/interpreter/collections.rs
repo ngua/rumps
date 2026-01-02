@@ -442,25 +442,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         base: ExprId,
         idx: u32,
-        span: Span,
     ) -> Result<Value> {
         let base_val = self.eval(base).await?;
 
         match &base_val {
-            Value::Tuple(_, elems) => elems
+            Value::Tuple(_, elems) => Ok(elems
                 .get(idx as usize)
                 .and_then(|id| self.arena.get(*id).cloned())
-                .ok_or_else(|| {
-                    // Type checker should catch out-of-bounds, but keep as runtime
-                    // error in case of dynamic scenarios
-                    Error::runtime(
-                        span,
-                        format!(
-                            "tuple index `{idx}` out of bounds; tuple has {} element(s)",
-                            elems.len()
-                        ),
-                    )
-                }),
+                .unwrap_or_else(|| typechecked!(".N", "valid tuple index"))),
             _ => typechecked!(".N", "Tuple"),
         }
     }
@@ -617,9 +606,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let inner = payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(span, "Option.Some missing payload")
-                    })?;
+                    .unwrap_or_else(|| {
+                        typechecked!("?.field", "Option.Some has payload")
+                    });
                 let result = self.field_access(&inner, field, span)?;
                 let result_id = self.arena.add(result, span);
                 Ok(self.make_some(result_id))

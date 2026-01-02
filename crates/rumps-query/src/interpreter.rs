@@ -300,9 +300,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Array(elems) => self.array(&elems, span).await,
             Expr::Tuple(elems) => self.tuple(&elems, span).await,
             Expr::MapLit(entries) => self.map_lit(&entries, span).await,
-            Expr::TupleIndex(base, idx) => {
-                self.tuple_index(base, idx, span).await
-            }
+            Expr::TupleIndex(base, idx) => self.tuple_index(base, idx).await,
             Expr::Index(base, idx) => self.index(base, idx, span).await,
             Expr::Field(base, field) => self.field(base, &field, span).await,
             Expr::OptionalField(base, field) => {

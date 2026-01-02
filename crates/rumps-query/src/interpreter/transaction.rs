@@ -4,19 +4,7 @@ use super::Interpreter;
 use crate::ast::{ExprId, StmtId, TransactionExpr, TxnId};
 use crate::io::IoContext;
 use crate::value::Value;
-use crate::{Error, Result, Span};
-
-/// Wrapper to distinguish body errors from commit errors.
-enum TxnError {
-    Body(Error),
-    Commit(rumps_storage::StorageError),
-}
-
-impl From<rumps_storage::StorageError> for TxnError {
-    fn from(e: rumps_storage::StorageError) -> Self {
-        Self::Commit(e)
-    }
-}
+use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a transaction block expression.
@@ -59,25 +47,19 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
 
         // Execute transaction (with timeout wrapper if specified)
-        let result = self
-            .execute_txn_body(
-                id,
-                builder,
-                &txn_expr.stmts,
-                txn_expr.expr,
-                timeout_ms,
-                span,
-            )
-            .await;
-
-        // Convert to Result[T, String]
-        match result {
-            Ok(val) => Ok(self.make_result_ok(val, span)),
-            Err(e) => Ok(self.make_result_err(&e.to_string(), span)),
-        }
+        // Returns Result[T, String] directly
+        self.execute_txn_body(
+            id,
+            builder,
+            &txn_expr.stmts,
+            txn_expr.expr,
+            timeout_ms,
+            span,
+        )
+        .await
     }
 
-    /// Execute transaction body and return the result value or error.
+    /// Execute transaction body. Returns `Result[T, String]` directly.
     async fn execute_txn_body(
         &mut self,
         id: TxnId,
@@ -88,9 +70,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         // Start the transaction
-        let txn = builder.start().await.map_err(|e| {
-            Error::runtime(span, format!("failed to start transaction: {e}"))
-        })?;
+        let txn = match builder.start().await {
+            Ok(t) => t,
+            Err(e) => {
+                let msg = format!("failed to start transaction: {e}");
+                return Ok(self.make_result_err(&msg, span));
+            }
+        };
 
         // Get retry count before cloning
         let retries = txn.retry_count();
@@ -108,20 +94,17 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Pop scope
         self.env.scopes.pop();
 
-        // Remove from the transaction map
-        self.txns
+        // Remove from the transaction map and finish
+        let txn = self
+            .txns
             .remove(&id)
-            // The typechecker ALWAYS creates the transaction ID. If it's not
-            // in the map, something has seriously gone wrong
-            .unwrap_or_else(|| typechecked!("transaction", "TxnId in map"))
-            .finish_with_retry(body_result.map_err(TxnError::Body), retries)
-            .await
-            .map_err(|e| match e {
-                TxnError::Body(e) => e,
-                TxnError::Commit(e) => {
-                    Error::runtime(span, format!("commit failed: {e}"))
-                }
-            })
+            .unwrap_or_else(|| typechecked!("transaction", "TxnId in map"));
+
+        // Commit (or rollback on body error)
+        match txn.finish_with_retry(body_result, retries).await {
+            Ok(val) => Ok(self.make_result_ok(val, span)),
+            Err(e) => Ok(self.make_result_err(&e.to_string(), span)),
+        }
     }
 
     /// Execute transaction statements and trailing expression.

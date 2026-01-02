@@ -122,9 +122,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Option<TypeExprId>> {
         let ast_ty =
-            self.ast.get_type_expr(ast_id).cloned().ok_or_else(|| {
-                Error::runtime(span, "invalid type expression id")
-            })?;
+            self.ast.get_type_expr(ast_id).cloned().unwrap_or_else(|| {
+                typechecked!("type expr", "valid AstTypeExprId")
+            });
 
         match ast_ty {
             AstTypeExpr::Named(name) => {
@@ -937,11 +937,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         ast_id: AstTypeExprId,
         subst: &IndexMap<StringId, TypeExprId>,
     ) -> Result<TypeExprId> {
-        let span = self.ast.type_expr_span(ast_id).unwrap_or_default();
         let ast_ty =
-            self.ast.get_type_expr(ast_id).cloned().ok_or_else(|| {
-                Error::runtime(span, "invalid type expression id")
-            })?;
+            self.ast.get_type_expr(ast_id).cloned().unwrap_or_else(|| {
+                typechecked!("type expr", "valid AstTypeExprId")
+            });
 
         match ast_ty {
             AstTypeExpr::Named(name) => {

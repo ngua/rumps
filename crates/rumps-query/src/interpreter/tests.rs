@@ -1329,7 +1329,11 @@ async fn variant_result_err() {
     }
 }
 
+/// Type checker now catches unknown types; bypassing it panics.
 #[tokio::test]
+#[should_panic(
+    expected = "type checker guarantees `variant` satisfies `known type`"
+)]
 async fn variant_unknown_type_error() {
     let mut ast = Ast::new();
     let val = ast
@@ -1347,11 +1351,14 @@ async fn variant_unknown_type_error() {
         .unwrap();
 
     let mut interp = test_interp(&ast);
-    let result = interp.eval(variant).await;
-    assert!(result.is_err());
+    let _ = interp.eval(variant).await;
 }
 
+/// Type checker now catches unknown variants; bypassing it panics.
 #[tokio::test]
+#[should_panic(
+    expected = "type checker guarantees `variant` satisfies `known variant`"
+)]
 async fn variant_unknown_variant_error() {
     let mut ast = Ast::new();
     let val = ast
@@ -1369,11 +1376,14 @@ async fn variant_unknown_variant_error() {
         .unwrap();
 
     let mut interp = test_interp(&ast);
-    let result = interp.eval(variant).await;
-    assert!(result.is_err());
+    let _ = interp.eval(variant).await;
 }
 
+/// Type checker now catches arity mismatches; bypassing it panics.
 #[tokio::test]
+#[should_panic(
+    expected = "type checker guarantees `variant arity` satisfies `correct`"
+)]
 async fn variant_arity_mismatch_error() {
     // Option.Some expects 1 arg, giving 0
     let mut ast = Ast::new();
@@ -1389,8 +1399,7 @@ async fn variant_arity_mismatch_error() {
         .unwrap();
 
     let mut interp = test_interp(&ast);
-    let result = interp.eval(variant).await;
-    assert!(result.is_err());
+    let _ = interp.eval(variant).await;
 }
 
 /// Tests that `Option` is not a valid variable (it's a type name).

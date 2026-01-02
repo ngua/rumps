@@ -117,30 +117,25 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Look up a type and variant, returning their IDs.
+    ///
+    /// Typechecker validates that type and variant names are valid.
     pub(super) fn lookup_variant(
         &self,
         ty_name: &str,
         var_name: &str,
-        span: Span,
+        _span: Span,
     ) -> Result<(TypeId, crate::value::VariantDef)> {
         let ty_id = self.arena.lookup_string(ty_name);
         let var_id = self.arena.lookup_string(var_name);
 
         let type_id = ty_id
             .and_then(|id| self.registry.lookup(id))
-            .ok_or_else(|| {
-                Error::runtime(span, format!("unknown type `{ty_name}`"))
-            })?;
+            .unwrap_or_else(|| typechecked!("pattern", "known type"));
 
         let var_def = var_id
             .and_then(|id| self.registry.lookup_variant(type_id, id))
             .cloned()
-            .ok_or_else(|| {
-                Error::runtime(
-                    span,
-                    format!("unknown variant `{ty_name}.{var_name}`"),
-                )
-            })?;
+            .unwrap_or_else(|| typechecked!("pattern", "known variant"));
 
         Ok((type_id, var_def))
     }
@@ -178,11 +173,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
-        let pat = self
-            .ast
-            .get_pattern(pat_id)
-            .ok_or_else(|| Error::runtime(span, "invalid pattern id"))?
-            .clone();
+        let pat = self.ast.get_pattern(pat_id).cloned().unwrap_or_else(|| {
+            typechecked!("match pattern", "valid PatternId")
+        });
         match &pat {
             MatchPattern::Wildcard => Ok(Some(vec![])),
             MatchPattern::Var(name) => {
@@ -327,20 +320,19 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some(vec![]),
             |acc, (&pat_id, &val_id)| {
                 acc.map_or(Ok(None), |mut bindings| {
-                    self.arena
+                    let val = self
+                        .arena
                         .get(val_id)
                         .cloned()
-                        .ok_or_else(|| Error::runtime(span, "invalid value id"))
-                        .and_then(|val| {
-                            self.try_match_pattern(pat_id, &val, span).map(
-                                |maybe_sub| {
-                                    maybe_sub.map(|sub| {
-                                        bindings.extend(sub);
-                                        bindings
-                                    })
-                                },
-                            )
-                        })
+                        .unwrap_or_else(|| invariant!("ValueId in arena"));
+                    self.try_match_pattern(pat_id, &val, span).map(
+                        |maybe_sub| {
+                            maybe_sub.map(|sub| {
+                                bindings.extend(sub);
+                                bindings
+                            })
+                        },
+                    )
                 })
             },
         )

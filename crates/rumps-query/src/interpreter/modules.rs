@@ -30,7 +30,7 @@ use super::Interpreter;
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::value::Value;
-use crate::{Error, Result, Span};
+use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a namespace path to a module function.
@@ -48,18 +48,18 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         // Need at least two segments: module + function (or type + variant)
-        segments.split_first().map_or_else(
-            || Err(Error::runtime(span, "empty path")),
-            |(first, _)| {
-                // Check if the first segment is a module
-                if self.env.has_module(first) {
-                    self.module_path(segments, span)
-                } else {
-                    // Fall back to type + variant interpretation
-                    self.type_variant_path(segments, span)
-                }
-            },
-        )
+        // Typechecker validates path structure
+        let (first, _) = segments
+            .split_first()
+            .unwrap_or_else(|| typechecked!("path", "non-empty"));
+
+        // Check if the first segment is a module
+        if self.env.has_module(first) {
+            self.module_path(segments, span)
+        } else {
+            // Fall back to type + variant interpretation
+            self.type_variant_path(segments, span)
+        }
     }
 
     /// Resolve a path as a module function or constant.
@@ -70,7 +70,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn module_path(
         &mut self,
         segments: &[String],
-        span: Span,
+        _span: Span,
     ) -> Result<Value> {
         let path_strs: SmallVec<[&str; 4]> =
             segments.iter().map(String::as_str).collect();
@@ -83,31 +83,35 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
         // Check for builtin module constant
         else if let Some(const_id) = self.env.get_module_const(&path_strs) {
-            self.env.consts.get(const_id).cloned().ok_or_else(|| {
-                Error::runtime(span, "internal: missing constant")
-            })
+            Ok(self
+                .env
+                .consts
+                .get(const_id)
+                .cloned()
+                .unwrap_or_else(|| invariant!("ConstId in consts map")))
         }
         // Check for user module function
         else if let Some(fn_id) = self.env.get_user_module_fn(&path_strs) {
             // Get the closure value and clone it
-            self.arena.get(fn_id).cloned().ok_or_else(|| {
-                Error::runtime(span, "internal: missing user module function")
-            })
+            Ok(self
+                .arena
+                .get(fn_id)
+                .cloned()
+                .unwrap_or_else(|| invariant!("ValueId in arena")))
         }
         // Check for user module constant
         else if let Some(const_id) =
             self.env.get_user_module_const(&path_strs)
         {
-            self.arena.get(const_id).cloned().ok_or_else(|| {
-                Error::runtime(span, "internal: missing user module constant")
-            })
+            Ok(self
+                .arena
+                .get(const_id)
+                .cloned()
+                .unwrap_or_else(|| invariant!("ValueId in arena")))
         } else {
             // Path starts with a module but doesn't resolve
-            let path_str = segments.join(".");
-            Err(Error::runtime(
-                span,
-                format!("unknown module member `{path_str}`"),
-            ))
+            // Typechecker validates module paths
+            typechecked!("module path", "valid member")
         }
     }
 
@@ -118,46 +122,33 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn type_variant_path(
         &mut self,
         segments: &[String],
-        span: Span,
+        _span: Span,
     ) -> Result<Value> {
         match segments {
             [ty_name, var_name] => {
                 let ty_id = self.arena.intern(ty_name);
                 let var_id = self.arena.intern(var_name);
 
-                let type_id = self.registry.lookup(ty_id).ok_or_else(|| {
-                    Error::runtime(
-                        span,
-                        format!("unknown type or module `{ty_name}`"),
-                    )
-                })?;
+                // Typechecker validates type names
+                let type_id = self
+                    .registry
+                    .lookup(ty_id)
+                    .unwrap_or_else(|| typechecked!("type path", "known type"));
 
+                // Typechecker validates variant names
                 let v = self
                     .registry
                     .lookup_variant(type_id, var_id)
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!(
-                                "type `{ty_name}` has no variant `{var_name}`"
-                            ),
-                        )
-                    })?;
+                    .unwrap_or_else(|| {
+                        typechecked!("type path", "known variant")
+                    });
 
                 let idx = v.idx;
                 let ty_expr = self.build_variant_type_expr(type_id, idx, &[]);
                 Ok(Value::Tagged(ty_expr, idx, smallvec::SmallVec::new()))
             }
-            _ => {
-                let path_str = segments.join(".");
-                Err(Error::runtime(
-                    span,
-                    format!(
-                        "invalid path `{path_str}`; \
-                         expected module function or type variant"
-                    ),
-                ))
-            }
+            // Typechecker validates path structure
+            _ => typechecked!("type path", "two segments"),
         }
     }
 }

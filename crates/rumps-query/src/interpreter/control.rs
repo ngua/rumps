@@ -32,12 +32,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         match &val {
             // Option.Some(v) -> v
             Value::Tagged(ty_expr, 1, payload) if is_option(*ty_expr) => {
-                payload
+                Ok(payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(span, "Option.Some missing payload")
-                    })
+                    .unwrap_or_else(|| {
+                        typechecked!("!", "Option.Some has payload")
+                    }))
             }
             // Option.None -> runtime error (not type error)
             Value::Tagged(ty_expr, 0, _) if is_option(*ty_expr) => {
@@ -45,12 +45,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Result.Ok(v) -> v
             Value::Tagged(ty_expr, 0, payload) if is_result(*ty_expr) => {
-                payload
+                Ok(payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(span, "Result.Ok missing payload")
-                    })
+                    .unwrap_or_else(|| {
+                        typechecked!("!", "Result.Ok has payload")
+                    }))
             }
             // Result.Err(e) -> runtime error with stringified e
             Value::Tagged(ty_expr, 1, payload) if is_result(*ty_expr) => {
@@ -266,8 +266,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn eval_with_variant_bindings(
         &mut self,
         val: &Value,
-        ty_name: &str,
-        var_name: &str,
+        _ty_name: &str,
+        _var_name: &str,
         names: &[String],
         body: ExprId,
         span: Span,
@@ -277,19 +277,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             _ => SmallVec::new(),
         };
 
-        (payloads.len() == names.len())
-            .then_some(())
-            .ok_or_else(|| {
-                Error::runtime(
-                    span,
-                    format!(
-                        "`{ty_name}.{var_name}` has {} payload(s), \
-                     but {} binding(s) provided",
-                        payloads.len(),
-                        names.len()
-                    ),
-                )
-            })?;
+        // Typechecker validates pattern arity matches variant definition
+        if payloads.len() != names.len() {
+            typechecked!("variant bind", "arity match");
+        }
 
         self.env.scopes.push();
         self.bind_payloads(names, &payloads, span);
@@ -323,7 +314,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         match arms.split_first() {
-            None => Err(Error::runtime(span, "non-exhaustive match")),
+            // Typechecker validates exhaustiveness
+            None => typechecked!("MATCH", "exhaustive"),
             Some((arm, rest)) => {
                 // Try to match the pattern
                 match self.try_match_pattern(arm.pattern, val, span)? {

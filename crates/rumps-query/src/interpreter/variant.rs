@@ -7,7 +7,7 @@ use super::Interpreter;
 use crate::ast::ExprId;
 use crate::io::IoContext;
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
-use crate::{Error, Result, Span};
+use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Create an `Option.None` value with unknown type parameter.
@@ -95,31 +95,22 @@ impl<I: IoContext> Interpreter<'_, I> {
         let ty_id = self.arena.intern(ty_name);
         let var_id = self.arena.intern(var_name);
 
-        let type_id = self.registry.lookup(ty_id).ok_or_else(|| {
-            Error::runtime(span, format!("unknown type `{ty_name}`"))
-        })?;
+        // Typechecker validates type names
+        let type_id = self
+            .registry
+            .lookup(ty_id)
+            .unwrap_or_else(|| typechecked!("variant", "known type"));
 
+        // Typechecker validates variant names
         let var_def = self
             .registry
             .lookup_variant(type_id, var_id)
-            .ok_or_else(|| {
-                Error::runtime(
-                    span,
-                    format!("unknown variant `{ty_name}.{var_name}`"),
-                )
-            })?;
+            .unwrap_or_else(|| typechecked!("variant", "known variant"));
 
-        // Validate arity
-        let expected = var_def.arity as usize;
-        let got = args.len();
-        (expected == got).then_some(()).ok_or_else(|| {
-            Error::runtime(
-                span,
-                format!(
-                    "`{ty_name}.{var_name}` expects {expected} argument(s), got {got}"
-                ),
-            )
-        })?;
+        // Typechecker validates arity
+        if var_def.arity as usize != args.len() {
+            typechecked!("variant arity", "correct");
+        }
 
         let idx = var_def.idx;
 
