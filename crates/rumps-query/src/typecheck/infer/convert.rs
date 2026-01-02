@@ -511,4 +511,23 @@ impl InferCtx<'_> {
             }
         }
     }
+
+    /// Like `field_type`, but for optional field access (`?.`).
+    ///
+    /// For objects, missing fields return `Unknown` instead of erroring.
+    /// For other types, delegates to `field_type`.
+    pub(super) fn optional_field_type(
+        &mut self,
+        base_ty: &Ty,
+        field: &str,
+        span: Span,
+    ) -> Ty {
+        match base_ty {
+            Ty::Object(fields) => {
+                let field_id = self.env.intern(field);
+                fields.get(&field_id).cloned().unwrap_or(Ty::Unknown)
+            }
+            _ => self.field_type(base_ty, field, span),
+        }
+    }
 }

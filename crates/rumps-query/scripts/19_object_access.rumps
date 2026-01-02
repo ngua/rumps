@@ -44,4 +44,44 @@ $OUTPUT special.my-key
 $OUTPUT special.another-key
 ; Expected: value2
 
+; Optional field access (`?.`) on objects
+; Returns `Some(value)` if field exists, `None` if missing
+
+LET person = { name: "Carol", age: 25 }
+
+$OUTPUT person?.name
+; Expected: Option.Some("Carol")
+
+$OUTPUT person?.age
+; Expected: Option.Some(25)
+
+$OUTPUT person?.email
+; Expected: Option.None
+
+$OUTPUT person?.address
+; Expected: Option.None
+
+; Chained optional access
+LET nested = { user: { name: "Dan" } }
+$OUTPUT nested?.user?.name
+; Expected: Option.Some("Dan")
+
+$OUTPUT nested?.user?.missing
+; Expected: Option.None
+
+$OUTPUT nested?.missing?.anything
+; Expected: Option.None
+
+; Optional field access in function with typed parameter
+; The type `{ a: Int }` should allow `?.` on fields not in the type
+fun get_b(x: { a: Int }) {
+  x?.b
+}
+
+$OUTPUT get_b({ a: 1 })
+; Expected: Option.None
+
+$OUTPUT get_b({ a: 1, b: 2 })
+; Expected: Option.Some(2)
+
 $OUTPUT "Object access test complete"

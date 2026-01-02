@@ -593,7 +593,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             {
                 Ok(self.make_none_like(*ty_expr))
             }
-            // Option.Some(v) -> access field on v, wrap in Some
+            // Option.Some(v) -> try field on v; Some(field) if exists, None if not
             Value::Tagged(ty_expr, 1, payload)
                 if self
                     .type_exprs
@@ -606,16 +606,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| {
                         typechecked!("?.field", "Option.Some has payload")
                     });
-                let result = self.field_access(&inner, field);
-                let result_id = self.arena.add(result, span);
-                Ok(self.make_some(result_id))
+                self.try_field_access(&inner, field, span)
             }
-            // Non-Option value -> access field normally, wrap in Some
-            other => {
-                let result = self.field_access(other, field);
-                let result_id = self.arena.add(result, span);
-                Ok(self.make_some(result_id))
-            }
+            // Non-Option value -> try field; Some(field) if exists, None if not
+            other => self.try_field_access(other, field, span),
         }
     }
 
@@ -631,6 +625,30 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| typechecked!(".field", "field exists"))
             }
             // Type checker guarantees field access is on Object
+            _ => typechecked!(".field", "Object"),
+        }
+    }
+
+    /// Try to access a field; returns `Some(field)` or `None` if missing.
+    ///
+    /// For optional field access (`?.`) where field may not exist.
+    fn try_field_access(
+        &mut self,
+        val: &Value,
+        field: &str,
+        span: Span,
+    ) -> Result<Value> {
+        match val {
+            Value::Object(obj) => {
+                let field_id = self.arena.intern(field);
+                obj.get(&field_id)
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .map(|v| {
+                        let id = self.arena.add(v, span);
+                        self.make_some(id)
+                    })
+                    .map_or_else(|| Ok(self.make_none()), Ok)
+            }
             _ => typechecked!("?.field", "Object"),
         }
     }

@@ -625,12 +625,20 @@ impl InferCtx<'_> {
         match &base_ty {
             // Option[T]: unwrap, access field on T, rewrap
             Ty::Option(inner) => {
-                let field_ty = self.field_type(inner, field, span);
+                let field_ty = self.optional_field_type(inner, field, span);
                 Ty::Option(Box::new(field_ty))
             }
 
-            // Object/struct: access field directly, wrap in Option
-            Ty::Object(_) | Ty::Named(_, _) => {
+            // Object: field may or may not exist; missing → Unknown (no error)
+            Ty::Object(fields) => {
+                let field_id = self.env.intern(field);
+                let field_ty =
+                    fields.get(&field_id).cloned().unwrap_or(Ty::Unknown);
+                Ty::Option(Box::new(field_ty))
+            }
+
+            // Named struct: use strict field lookup (structs have defined schema)
+            Ty::Named(_, _) => {
                 let field_ty = self.field_type(&base_ty, field, span);
                 Ty::Option(Box::new(field_ty))
             }
