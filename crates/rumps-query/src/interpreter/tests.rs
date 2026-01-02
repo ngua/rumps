@@ -1512,8 +1512,9 @@ async fn optional_field_on_some_with_object() {
 }
 
 #[tokio::test]
-async fn optional_field_missing_field() {
-    // { x: 42 }?.y -> error (field not found)
+#[should_panic(expected = "type checker guarantees")]
+async fn field_access_missing_field() {
+    // { x: 42 }.y -> panics (type checker should catch missing field)
     let mut ast = Ast::new();
     let v = ast
         .add_expr(Expr::Literal(Literal::Int(42)), Span::new(6, 8))
@@ -1524,13 +1525,12 @@ async fn optional_field_missing_field() {
             Span::new(0, 10),
         )
         .unwrap();
-    let opt_field = ast
-        .add_expr(Expr::OptionalField(obj, "y".into()), Span::new(0, 13))
+    let field = ast
+        .add_expr(Expr::Field(obj, "y".into()), Span::new(0, 13))
         .unwrap();
 
     let mut interp = test_interp(&ast);
-    let result = interp.eval(opt_field).await;
-    assert!(result.is_err());
+    let _ = interp.eval(field).await;
 }
 
 // Removed: optional_field_on_non_object

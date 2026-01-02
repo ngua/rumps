@@ -136,3 +136,16 @@ $OUTPUT Map.lookup(float-map, 2.5)  ; Some("two-half")
 LET bool-map = { true => "yes", false => "no" }
 $OUTPUT Map.lookup(bool-map, true)  ; Some("yes")
 $OUTPUT Map.lookup(bool-map, false)  ; Some("no")
+
+; ============ Index syntax (returns Option) ============
+
+$OUTPUT m[1]  ; Some("one")
+$OUTPUT m[2]  ; Some("two")
+$OUTPUT m[99]  ; None (key not found)
+
+$OUTPUT str-keys["a"]  ; Some(1)
+$OUTPUT str-keys["missing"]  ; None
+
+; Chaining with optional unwrap
+$OUTPUT m[1] ?? "default"  ; "one"
+$OUTPUT m[99] ?? "default"  ; "default"

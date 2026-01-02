@@ -698,7 +698,7 @@ impl InferCtx<'_> {
 
             Ty::Map(key, val) => {
                 self.unify(idx_ty, key.as_ref().clone(), span);
-                val.as_ref().clone()
+                Ty::Option(val.clone())
             }
 
             Ty::Var(_) => {

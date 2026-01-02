@@ -2,7 +2,7 @@
 
 use async_recursion::async_recursion;
 use indexmap::IndexMap;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use super::Interpreter;
 use crate::ast::{ArrayElem, Expr, ExprId, ObjectEntry};
@@ -486,15 +486,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                         )
                     })
             }
-            (Value::Map(_, _, entries), key) => {
+            (Value::Map(_, v_ty, entries), key) => {
                 let map_key = self.value_to_map_key(key);
-                entries
+                let opt_ty =
+                    self.type_exprs.app(TypeId::OPTION, smallvec![*v_ty]);
+                Ok(entries
                     .get(&map_key)
-                    .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        // Key not found is a runtime error (not type error)
-                        Error::runtime(span, "key not found in map".to_string())
-                    })
+                    .map(|id| Value::some(opt_ty, *id))
+                    .unwrap_or_else(|| Value::none(opt_ty)))
             }
             (Value::String(sid), Value::Int(i)) => {
                 let s = self.arena.get_str(*sid).unwrap_or("");
@@ -553,14 +552,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             match &base_val {
                 Value::Object(obj) => {
                     let field_id = self.arena.intern(field);
-                    obj.get(&field_id)
+                    Ok(obj
+                        .get(&field_id)
                         .and_then(|id| self.arena.get(*id).cloned())
-                        .ok_or_else(|| {
-                            Error::runtime(
-                                span,
-                                format!("field `{field}` not found"),
-                            )
-                        })
+                        .unwrap_or_else(|| {
+                            typechecked!(".field", "field exists")
+                        }))
                 }
                 // JSON field access returns Json (null for missing)
                 Value::Json(j) => Ok(Value::Json(
@@ -609,13 +606,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| {
                         typechecked!("?.field", "Option.Some has payload")
                     });
-                let result = self.field_access(&inner, field, span)?;
+                let result = self.field_access(&inner, field);
                 let result_id = self.arena.add(result, span);
                 Ok(self.make_some(result_id))
             }
             // Non-Option value -> access field normally, wrap in Some
             other => {
-                let result = self.field_access(other, field, span)?;
+                let result = self.field_access(other, field);
                 let result_id = self.arena.add(result, span);
                 Ok(self.make_some(result_id))
             }
@@ -624,26 +621,14 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Helper for field access on a value (without wrapping in Option).
     ///
-    /// Type checker guarantees val is Object. Field not found remains
-    /// a runtime error since field presence isn't always statically known.
-    pub(super) fn field_access(
-        &mut self,
-        val: &Value,
-        field: &str,
-        span: Span,
-    ) -> Result<Value> {
+    /// Type checker guarantees val is Object and field exists.
+    pub(super) fn field_access(&mut self, val: &Value, field: &str) -> Value {
         match val {
             Value::Object(obj) => {
                 let field_id = self.arena.intern(field);
                 obj.get(&field_id)
                     .and_then(|id| self.arena.get(*id).cloned())
-                    .ok_or_else(|| {
-                        // Field not found is a runtime error (not type error)
-                        Error::runtime(
-                            span,
-                            format!("field `{field}` not found"),
-                        )
-                    })
+                    .unwrap_or_else(|| typechecked!(".field", "field exists"))
             }
             // Type checker guarantees field access is on Object
             _ => typechecked!("?.field", "Object"),

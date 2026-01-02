@@ -59,7 +59,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .and_then(|id| self.arena.get(*id))
                     .map(|v| self.stringify(v))
                     .unwrap_or_else(|| "unknown error".into());
-                Err(Error::runtime(span, format!("unwrap failed: {err_msg}")))
+                Err(Error::runtime(
+                    span,
+                    format!("cannot unwrap Result.Err: {err_msg}"),
+                ))
             }
             // Type checker guarantees Option or Result
             _ => typechecked!("!", "Unwrappable"),
