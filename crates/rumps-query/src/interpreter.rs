@@ -286,9 +286,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Literal(lit) => Ok(self.literal(&lit)),
             Expr::Var(name) => Ok(self.var(&name, span)),
             Expr::Get(ref dbref, txn_id) => self.get(dbref, txn_id, span).await,
-            Expr::Data(ref dbref, txn_id) => {
-                self.data(dbref, txn_id, span).await
-            }
+            Expr::Data(ref dbref, txn_id) => self.data(dbref, txn_id).await,
             Expr::Order(ref dbref, txn_id) => {
                 self.order(dbref, txn_id, span).await
             }

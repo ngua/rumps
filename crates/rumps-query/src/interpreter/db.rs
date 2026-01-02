@@ -26,10 +26,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let key = self.build_key(subs).await?;
 
         let opt_val = match txn_id.and_then(|id| self.txns.get(&id)) {
-            Some(txn) => txn.get(&name, &key).await,
-            None => self.db.get(&name, &key).await,
-        }
-        .map_err(|e| Error::runtime(span, format!("GET failed: {e}")))?;
+            Some(txn) => txn.get(&name, &key).await.ok().flatten(),
+            None => self.db.get(&name, &key).await.ok().flatten(),
+        };
 
         Ok(match opt_val {
             None => self.make_none_storable(),
@@ -124,7 +123,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         dbref: &DbRef,
         txn_id: Option<TxnId>,
-        span: Span,
     ) -> Result<Value> {
         let (name, subs) = dbref.split();
         let key = self.build_key(subs).await?;
@@ -133,7 +131,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some(txn) => txn.data(&name, &key).await,
             None => self.db.data(&name, &key).await,
         }
-        .map_err(|e| Error::runtime(span, format!("DATA failed: {e}")))?;
+        .unwrap_or(DataStatus::NoData);
 
         // Convert DataStatus to Tagged variant
         let type_expr_id = self.type_exprs.named(TypeId::DATA_STATUS);
@@ -171,10 +169,18 @@ impl<I: IoContext> Interpreter<'_, I> {
             };
 
         let opt_sub = match txn_id.and_then(|id| self.txns.get(&id)) {
-            Some(txn) => txn.order(&name, &prefix, after.as_ref()).await,
-            None => self.db.order(&name, &prefix, after.as_ref()).await,
-        }
-        .map_err(|e| Error::runtime(span, format!("ORDER failed: {e}")))?;
+            Some(txn) => txn
+                .order(&name, &prefix, after.as_ref())
+                .await
+                .ok()
+                .flatten(),
+            None => self
+                .db
+                .order(&name, &prefix, after.as_ref())
+                .await
+                .ok()
+                .flatten(),
+        };
 
         // Convert Option<Subscript> to Option[Subscript] value
         match opt_sub {
@@ -205,10 +211,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let after = if key.is_empty() { None } else { Some(&key) };
 
         let opt_key = match txn_id.and_then(|id| self.txns.get(&id)) {
-            Some(txn) => txn.query(&name, after).await,
-            None => self.db.query(&name, after).await,
-        }
-        .map_err(|e| Error::runtime(span, format!("QUERY failed: {e}")))?;
+            Some(txn) => txn.query(&name, after).await.ok().flatten(),
+            None => self.db.query(&name, after).await.ok().flatten(),
+        };
 
         // Convert Option<Key> to Option[Array[Subscript]] value
         match opt_key {
