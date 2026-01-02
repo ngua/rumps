@@ -10,7 +10,7 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
-    OutputFormat, OutputStmt, OutputTarget, Stmt, StmtId, SubscriptElem,
+    OutputFormat, OutputStmt, OutputTarget, Stmt, StmtId, SubscriptElem, TxnId,
     TypeParam, UserConstraint,
 };
 use crate::typecheck::error::TypeError;
@@ -42,9 +42,11 @@ impl InferCtx<'_> {
                 self.r#let(&pattern, ann.as_ref(), rhs, span)
             }
 
-            Some(Stmt::Set(ref dbref, value)) => self.set(dbref, value, span),
+            Some(Stmt::Set(ref dbref, value, _)) => {
+                self.set_stmt(id, dbref, value, span)
+            }
 
-            Some(Stmt::Kill(ref dbref)) => self.kill(dbref, span),
+            Some(Stmt::Kill(ref dbref, _)) => self.kill_stmt(id, dbref, span),
 
             Some(Stmt::Output(output)) => self.output(&output, span),
 
@@ -360,7 +362,9 @@ impl InferCtx<'_> {
                 let ann_ty = self.ast_type_to_ty(*id, &HashMap::new());
 
                 // Try special case: array literal with `Array[UnionType]`
-                let special = match (&ann_ty, self.ast.get_expr(rhs)) {
+                // Clone to avoid borrow issues with mutable self
+                let rhs_expr = self.ast.get_expr(rhs).cloned();
+                let special = match (&ann_ty, &rhs_expr) {
                     (Ty::Array(elem_ty), Some(Expr::Array(elems)))
                         if self.expand_union_members(elem_ty).is_some() =>
                     {
@@ -491,13 +495,13 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer types for a `SET` statement or expression.
+    /// Validate a `SET` operation (shared by statement and expression forms).
     ///
     /// Type-checks subscript expressions and the value, adding appropriate
     /// constraints. Global writes must be inside a transaction block.
-    pub(super) fn set(&mut self, dbref: &DbRef, value: ExprId, span: Span) {
+    fn set(&mut self, dbref: &DbRef, value: ExprId, span: Span) {
         // Global writes require transaction context
-        if matches!(dbref, DbRef::Global(..)) && !self.in_transaction {
+        if matches!(dbref, DbRef::Global(..)) && self.in_transaction.is_none() {
             self.error(TypeError::Custom {
                 msg: "global writes require a transaction".to_string(),
                 span,
@@ -514,13 +518,43 @@ impl InferCtx<'_> {
         self.constrain(Constraint::Storable(val_ty, span));
     }
 
-    /// Infer types for a `KILL` statement or expression.
+    /// Infer types for a `SET` statement.
+    ///
+    /// Calls validation, then populates the `TxnId` field in the AST.
+    pub(super) fn set_stmt(
+        &mut self,
+        id: StmtId,
+        dbref: &DbRef,
+        value: ExprId,
+        span: Span,
+    ) {
+        self.set(dbref, value, span);
+        self.ast
+            .set_stmt(id, Stmt::Set(dbref.clone(), value, self.in_transaction));
+    }
+
+    /// Infer types for a `$SET` expression.
+    ///
+    /// Calls validation, then populates the `TxnId` field in the AST.
+    pub(super) fn set_expr(
+        &mut self,
+        id: ExprId,
+        dbref: &DbRef,
+        value: ExprId,
+        span: Span,
+    ) {
+        self.set(dbref, value, span);
+        self.ast
+            .set_expr(id, Expr::Set(dbref.clone(), value, self.in_transaction));
+    }
+
+    /// Validate a `KILL` operation (shared by statement and expression forms).
     ///
     /// Type-checks subscript expressions with `Subscriptable` constraints.
     /// Global kills must be inside a transaction block.
-    pub(super) fn kill(&mut self, dbref: &DbRef, span: Span) {
+    fn kill(&mut self, dbref: &DbRef, span: Span) {
         // Global writes require transaction context
-        if matches!(dbref, DbRef::Global(..)) && !self.in_transaction {
+        if matches!(dbref, DbRef::Global(..)) && self.in_transaction.is_none() {
             self.error(TypeError::Custom {
                 msg: "global writes require a transaction".to_string(),
                 span,
@@ -531,6 +565,24 @@ impl InferCtx<'_> {
             DbRef::Local(_, s) | DbRef::Global(_, s) => s,
         };
         self.check_subscript_elems(subs, span);
+    }
+
+    /// Infer types for a `KILL` statement.
+    ///
+    /// Calls validation, then populates the `TxnId` field in the AST.
+    pub(super) fn kill_stmt(&mut self, id: StmtId, dbref: &DbRef, span: Span) {
+        self.kill(dbref, span);
+        self.ast
+            .set_stmt(id, Stmt::Kill(dbref.clone(), self.in_transaction));
+    }
+
+    /// Infer types for a `$KILL` expression.
+    ///
+    /// Calls validation, then populates the `TxnId` field in the AST.
+    pub(super) fn kill_expr(&mut self, id: ExprId, dbref: &DbRef, span: Span) {
+        self.kill(dbref, span);
+        self.ast
+            .set_expr(id, Expr::Kill(dbref.clone(), self.in_transaction));
     }
 
     /// Infer types for an `OUTPUT` statement or expression.

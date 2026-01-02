@@ -5,7 +5,7 @@ use rumps_types::{DataStatus, Key, Subscript};
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{DbRef, ExprId, SubscriptElem};
+use crate::ast::{DbRef, ExprId, SubscriptElem, TxnId};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
 use crate::{Error, Result, Span};
@@ -13,18 +13,19 @@ use crate::{Error, Result, Span};
 impl<I: IoContext> Interpreter<'_, I> {
     /// `$GET` primitive; reads a value from a B-tree variable.
     ///
-    /// Uses the active transaction if one exists, otherwise reads directly
-    /// from the database.
+    /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
+    /// directly from the database.
     #[async_recursion]
     pub(super) async fn get(
         &mut self,
         dbref: &DbRef,
+        txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
         let (name, subs) = dbref.split();
         let key = self.build_key(subs).await?;
 
-        let opt_val = match &self.txn {
+        let opt_val = match txn_id.and_then(|id| self.txns.get(&id)) {
             Some(txn) => txn.get(&name, &key).await,
             None => self.db.get(&name, &key).await,
         }
@@ -49,6 +50,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         dbref: &DbRef,
         expr_id: ExprId,
+        txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
         let (name, subs) = dbref.split();
@@ -58,8 +60,8 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Global writes require transaction (typechecked); locals go direct
         let res = if name.is_global() {
-            self.txn
-                .as_ref()
+            txn_id
+                .and_then(|id| self.txns.get(&id))
                 .unwrap_or_else(|| {
                     typechecked!("global SET", "transaction context")
                 })
@@ -87,6 +89,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn kill(
         &mut self,
         dbref: &DbRef,
+        txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
         let (name, subs) = dbref.split();
@@ -94,8 +97,8 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Global writes require transaction (typechecked); locals go direct
         let res = if name.is_global() {
-            self.txn
-                .as_ref()
+            txn_id
+                .and_then(|id| self.txns.get(&id))
                 .unwrap_or_else(|| {
                     typechecked!("global KILL", "transaction context")
                 })
@@ -114,18 +117,19 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// `$DATA` primitive; queries existence status of a B-tree node.
     ///
-    /// Uses the active transaction if one exists, otherwise reads directly
-    /// from the database. Returns a `DataStatus` enum value (tagged variant).
+    /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
+    /// directly from the database. Returns a `DataStatus` enum value.
     #[async_recursion]
     pub(super) async fn data(
         &mut self,
         dbref: &DbRef,
+        txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
         let (name, subs) = dbref.split();
         let key = self.build_key(subs).await?;
 
-        let status = match &self.txn {
+        let status = match txn_id.and_then(|id| self.txns.get(&id)) {
             Some(txn) => txn.data(&name, &key).await,
             None => self.db.data(&name, &key).await,
         }
@@ -144,12 +148,13 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// `$ORDER` primitive; returns the next subscript at a given level.
     ///
-    /// Uses the active transaction if one exists, otherwise reads directly
-    /// from the database. Returns `Option[Subscript]`.
+    /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
+    /// directly from the database. Returns `Option[Subscript]`.
     #[async_recursion]
     pub(super) async fn order(
         &mut self,
         dbref: &DbRef,
+        txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
         let (name, subs) = dbref.split();
@@ -165,7 +170,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             };
 
-        let opt_sub = match &self.txn {
+        let opt_sub = match txn_id.and_then(|id| self.txns.get(&id)) {
             Some(txn) => txn.order(&name, &prefix, after.as_ref()).await,
             None => self.db.order(&name, &prefix, after.as_ref()).await,
         }
@@ -184,12 +189,13 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// `$QUERY` primitive; returns the full key path to the next node.
     ///
-    /// Uses the active transaction if one exists, otherwise reads directly
-    /// from the database. Returns `Option[Array[Subscript]]`.
+    /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
+    /// directly from the database. Returns `Option[Array[Subscript]]`.
     #[async_recursion]
     pub(super) async fn query(
         &mut self,
         dbref: &DbRef,
+        txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
         let (name, subs) = dbref.split();
@@ -198,7 +204,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // The `query` API takes `Option<&Key>` for the "after" position.
         let after = if key.is_empty() { None } else { Some(&key) };
 
-        let opt_key = match &self.txn {
+        let opt_key = match txn_id.and_then(|id| self.txns.get(&id)) {
             Some(txn) => txn.query(&name, after).await,
             None => self.db.query(&name, after).await,
         }

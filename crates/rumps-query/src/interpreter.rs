@@ -115,7 +115,8 @@ use smallvec::SmallVec;
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
     JsonAccessKey, JsonAccessKind, Literal, OutputFormat, OutputStmt,
-    OutputTarget, Stmt, StmtId, TypeDefAst, TypeParam, TypePattern, UnOp,
+    OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam, TypePattern,
+    UnOp,
 };
 use crate::env::Environment;
 use crate::intern::StringId;
@@ -146,10 +147,11 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// `Database` is cheap to clone (internal `Arc`), so ownership has low overhead.
     db: Database,
 
-    /// Active transaction, if any.
+    /// Active transactions indexed by their unique ID.
     ///
-    /// Global writes require a transaction; local writes can happen outside.
-    txn: Option<Transaction>,
+    /// Each `TRANSACTION` block gets a unique `TxnId` during typecheck; DB
+    /// operations use this ID to look up the correct transaction context.
+    txns: HashMap<TxnId, Transaction>,
 
     /// Arena for runtime values with string interning.
     arena: ValueArena,
@@ -218,7 +220,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             ast,
             env,
             db,
-            txn: None,
+            txns: HashMap::new(),
             arena,
             registry,
             regex_cache,
@@ -259,7 +261,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             ast,
             env: Environment::new(),
             db,
-            txn: None,
+            txns: HashMap::new(),
             arena,
             registry,
             regex_cache: Vec::new(),
@@ -283,10 +285,16 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         match expr {
             Expr::Literal(lit) => Ok(self.literal(&lit)),
             Expr::Var(name) => Ok(self.var(&name, span)),
-            Expr::Get(ref dbref) => self.get(dbref, span).await,
-            Expr::Data(ref dbref) => self.data(dbref, span).await,
-            Expr::Order(ref dbref) => self.order(dbref, span).await,
-            Expr::Query(ref dbref) => self.query(dbref, span).await,
+            Expr::Get(ref dbref, txn_id) => self.get(dbref, txn_id, span).await,
+            Expr::Data(ref dbref, txn_id) => {
+                self.data(dbref, txn_id, span).await
+            }
+            Expr::Order(ref dbref, txn_id) => {
+                self.order(dbref, txn_id, span).await
+            }
+            Expr::Query(ref dbref, txn_id) => {
+                self.query(dbref, txn_id, span).await
+            }
             Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
             Expr::Unary(op, operand) => self.unary(op, operand, span).await,
             Expr::Call(callee, args) => self.call(callee, &args, span).await,
@@ -344,8 +352,12 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.output(&output).await?;
                 Ok(Value::Unit)
             }
-            Expr::Set(ref dbref, value) => self.set(dbref, value, span).await,
-            Expr::Kill(ref dbref) => self.kill(dbref, span).await,
+            Expr::Set(ref dbref, value, txn_id) => {
+                self.set(dbref, value, txn_id, span).await
+            }
+            Expr::Kill(ref dbref, txn_id) => {
+                self.kill(dbref, txn_id, span).await
+            }
             Expr::Forever {
                 seed,
                 state_param,
@@ -390,10 +402,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             Stmt::Let(pat, ty_ann, expr_id) => {
                 self.r#let(&pat, ty_ann, expr_id, span).await
             }
-            Stmt::Set(ref dbref, expr_id) => {
-                self.set(dbref, expr_id, span).await.map(|_| ())
+            Stmt::Set(ref dbref, expr_id, txn_id) => {
+                self.set(dbref, expr_id, txn_id, span).await.map(|_| ())
             }
-            Stmt::Kill(ref dbref) => self.kill(dbref, span).await.map(|_| ()),
+            Stmt::Kill(ref dbref, txn_id) => {
+                self.kill(dbref, txn_id, span).await.map(|_| ())
+            }
             Stmt::Output(output) => self.output(&output).await,
             Stmt::Expr(expr_id) => {
                 // Evaluate for side effects, discard result

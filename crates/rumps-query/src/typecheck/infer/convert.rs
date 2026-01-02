@@ -251,79 +251,94 @@ impl InferCtx<'_> {
         id: AstTypeExprId,
         subst: &HashMap<StringId, Ty>,
     ) -> Ty {
-        self.ast.get_type_expr(id).map_or(Ty::Error, |te| match te {
-            AstTypeExpr::Named(name) => {
-                let name_id = self.env.intern(name);
-                // Check substitution first (for type params)
-                let ty = subst
-                    .get(&name_id)
-                    .cloned()
-                    .unwrap_or_else(|| self.named_type_to_ty(name));
-                // Emit error for unknown types
-                if ty == Ty::Unknown {
-                    let span = self.ast.type_expr_span(id).unwrap_or_default();
-                    self.error(TypeError::UnknownType(name.clone(), span));
-                    Ty::Error
-                } else {
-                    ty
+        // Clone to avoid borrow issues with mutable ast reference
+        match self.ast.get_type_expr(id).cloned() {
+            None => {
+                let span = self.ast.type_expr_span(id).unwrap_or_default();
+                self.error(TypeError::UnknownType(
+                    "<unknown>".to_string(),
+                    span,
+                ));
+                Ty::Error
+            }
+            Some(te) => match &te {
+                AstTypeExpr::Named(name) => {
+                    let name_id = self.env.intern(name);
+                    // Check substitution first (for type params)
+                    let ty = subst
+                        .get(&name_id)
+                        .cloned()
+                        .unwrap_or_else(|| self.named_type_to_ty(name));
+                    // Emit error for unknown types
+                    if ty == Ty::Unknown {
+                        let span =
+                            self.ast.type_expr_span(id).unwrap_or_default();
+                        self.error(TypeError::UnknownType(name.clone(), span));
+                        Ty::Error
+                    } else {
+                        ty
+                    }
                 }
-            }
-            AstTypeExpr::App(name, args) => {
-                let arg_tys: Vec<_> = args
-                    .iter()
-                    .map(|a| self.ast_type_to_ty(*a, subst))
-                    .collect();
-                let ty = self.parameterized_type_to_ty(name, arg_tys);
-                // Emit error for unknown parameterized types
-                if ty == Ty::Unknown {
-                    let span = self.ast.type_expr_span(id).unwrap_or_default();
-                    self.error(TypeError::UnknownType(name.clone(), span));
-                    Ty::Error
-                } else {
-                    ty
-                }
-            }
-            AstTypeExpr::Fn(params, ret) => {
-                let param_tys: Vec<_> = params
-                    .iter()
-                    .map(|p| self.ast_type_to_ty(*p, subst))
-                    .collect();
-                let ret_ty = self.ast_type_to_ty(*ret, subst);
-                Ty::Fn(param_tys, Box::new(ret_ty))
-            }
-            AstTypeExpr::Tuple(elems) => {
-                let elem_tys: Vec<_> = elems
-                    .iter()
-                    .map(|e| self.ast_type_to_ty(*e, subst))
-                    .collect();
-                Ty::Tuple(elem_tys)
-            }
-            AstTypeExpr::Union(members) => {
-                if members.is_empty() {
-                    let span =
-                        self.ast.type_expr_span(id).unwrap_or(Span::new(0, 0));
-                    self.error(TypeError::EmptyUnion(span));
-                    Ty::Error
-                } else {
-                    let member_tys: Vec<_> = members
+                AstTypeExpr::App(name, args) => {
+                    let arg_tys: Vec<_> = args
                         .iter()
-                        .map(|m| self.ast_type_to_ty(*m, subst))
+                        .map(|a| self.ast_type_to_ty(*a, subst))
                         .collect();
-                    Ty::Union(member_tys)
+                    let ty = self.parameterized_type_to_ty(name, arg_tys);
+                    // Emit error for unknown parameterized types
+                    if ty == Ty::Unknown {
+                        let span =
+                            self.ast.type_expr_span(id).unwrap_or_default();
+                        self.error(TypeError::UnknownType(name.clone(), span));
+                        Ty::Error
+                    } else {
+                        ty
+                    }
                 }
-            }
-            AstTypeExpr::Object(fields) => {
-                let field_tys = fields
-                    .iter()
-                    .map(|(name, ty_id)| {
-                        let name_id = self.env.intern(name);
-                        let ty = self.ast_type_to_ty(*ty_id, subst);
-                        (name_id, ty)
-                    })
-                    .collect();
-                Ty::Object(field_tys)
-            }
-        })
+                AstTypeExpr::Fn(params, ret) => {
+                    let param_tys: Vec<_> = params
+                        .iter()
+                        .map(|p| self.ast_type_to_ty(*p, subst))
+                        .collect();
+                    let ret_ty = self.ast_type_to_ty(*ret, subst);
+                    Ty::Fn(param_tys, Box::new(ret_ty))
+                }
+                AstTypeExpr::Tuple(elems) => {
+                    let elem_tys: Vec<_> = elems
+                        .iter()
+                        .map(|e| self.ast_type_to_ty(*e, subst))
+                        .collect();
+                    Ty::Tuple(elem_tys)
+                }
+                AstTypeExpr::Union(members) => {
+                    if members.is_empty() {
+                        let span = self
+                            .ast
+                            .type_expr_span(id)
+                            .unwrap_or(Span::new(0, 0));
+                        self.error(TypeError::EmptyUnion(span));
+                        Ty::Error
+                    } else {
+                        let member_tys: Vec<_> = members
+                            .iter()
+                            .map(|m| self.ast_type_to_ty(*m, subst))
+                            .collect();
+                        Ty::Union(member_tys)
+                    }
+                }
+                AstTypeExpr::Object(fields) => {
+                    let field_tys = fields
+                        .iter()
+                        .map(|(name, ty_id)| {
+                            let name_id = self.env.intern(name);
+                            let ty = self.ast_type_to_ty(*ty_id, subst);
+                            (name_id, ty)
+                        })
+                        .collect();
+                    Ty::Object(field_tys)
+                }
+            },
+        }
     }
 
     /// Convert a simple named type to `Ty`.

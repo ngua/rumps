@@ -39,7 +39,7 @@ use crate::value::{TypeExprArena, TypeRegistry, ValueArena};
 ///
 /// # Arguments
 ///
-/// * `ast` - The AST after name resolution
+/// * `ast` - The AST after name resolution (mutable for `TxnId` population)
 /// * `stmts` - Top-level statement IDs to type-check
 /// * `registry` - Type registry with builtin and user-defined types
 /// * `type_exprs` - Type expression arena for union member lookups
@@ -47,7 +47,7 @@ use crate::value::{TypeExprArena, TypeRegistry, ValueArena};
 /// * `arena` - Value arena for string lookups in error messages
 /// * `strings` - String interner shared with the registry
 pub(crate) fn check(
-    ast: &Ast,
+    ast: &mut Ast,
     stmts: &[StmtId],
     registry: &TypeRegistry,
     type_exprs: &TypeExprArena,

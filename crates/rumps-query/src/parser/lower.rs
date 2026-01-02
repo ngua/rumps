@@ -70,11 +70,11 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
         cst::StmtKind::Set(dbref, value) => {
             let dbref = lower_db_ref(ast, dbref)?;
             let value_id = lower_expr(ast, value)?;
-            Stmt::Set(dbref, value_id)
+            Stmt::Set(dbref, value_id, None)
         }
         cst::StmtKind::Kill(dbref) => {
             let dbref = lower_db_ref(ast, dbref)?;
-            Stmt::Kill(dbref)
+            Stmt::Kill(dbref, None)
         }
         cst::StmtKind::Output(output) => {
             let expr_id = lower_expr(ast, output.expr)?;
@@ -174,7 +174,7 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
         cst::ExprKind::Var(name) => Expr::Var(name),
         cst::ExprKind::Get(dbref) => {
             let dbref = lower_db_ref(ast, dbref)?;
-            Expr::Get(dbref)
+            Expr::Get(dbref, None)
         }
         cst::ExprKind::Binary(lhs, op, rhs) => {
             let lhs_id = lower_expr(ast, *lhs)?;
@@ -344,15 +344,15 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
         }
         cst::ExprKind::Data(dbref) => {
             let dbref = lower_db_ref(ast, dbref)?;
-            Expr::Data(dbref)
+            Expr::Data(dbref, None)
         }
         cst::ExprKind::Order(dbref) => {
             let dbref = lower_db_ref(ast, dbref)?;
-            Expr::Order(dbref)
+            Expr::Order(dbref, None)
         }
         cst::ExprKind::Query(dbref) => {
             let dbref = lower_db_ref(ast, dbref)?;
-            Expr::Query(dbref)
+            Expr::Query(dbref, None)
         }
         cst::ExprKind::Output(output) => {
             let expr_id = lower_expr(ast, output.expr)?;
@@ -377,11 +377,11 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
         cst::ExprKind::Set(dbref, value) => {
             let dbref = lower_db_ref(ast, dbref)?;
             let value_id = lower_expr(ast, *value)?;
-            Expr::Set(dbref, value_id)
+            Expr::Set(dbref, value_id, None)
         }
         cst::ExprKind::Kill(dbref) => {
             let dbref = lower_db_ref(ast, dbref)?;
-            Expr::Kill(dbref)
+            Expr::Kill(dbref, None)
         }
         cst::ExprKind::Forever {
             seed,
@@ -411,6 +411,7 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let expr = txn.expr.map(|e| lower_expr(ast, *e)).transpose()?;
             let modifiers = lower_txn_modifiers(ast, txn.modifiers)?;
             Expr::Transaction(ast::TransactionExpr {
+                id: None,
                 stmts,
                 expr,
                 modifiers,

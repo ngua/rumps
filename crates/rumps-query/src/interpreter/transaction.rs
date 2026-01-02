@@ -1,7 +1,7 @@
 //! Transaction block evaluation.
 
 use super::Interpreter;
-use crate::ast::{ExprId, StmtId, TransactionExpr};
+use crate::ast::{ExprId, StmtId, TransactionExpr, TxnId};
 use crate::io::IoContext;
 use crate::value::Value;
 use crate::{Error, Result, Span};
@@ -27,17 +27,22 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// see `InferCtx::transaction` in `typecheck/infer/expr.rs`.
     pub(super) async fn transaction(
         &mut self,
-        txn: &TransactionExpr,
+        txn_expr: &TransactionExpr,
         span: Span,
     ) -> Result<Value> {
+        // Get the unique ID assigned during typecheck
+        let id = txn_expr
+            .id
+            .unwrap_or_else(|| typechecked!("transaction", "TxnId assigned"));
+
         // Build transaction with modifiers
         let mut builder = self.db.build_transaction();
         let mut timeout_ms: Option<u64> = None;
 
-        if let Some(conflict) = txn.modifiers.conflict {
+        if let Some(conflict) = txn_expr.modifiers.conflict {
             builder = builder.conflict(conflict);
         }
-        if let Some(timeout_id) = txn.modifiers.timeout {
+        if let Some(timeout_id) = txn_expr.modifiers.timeout {
             let timeout_val = self.eval(timeout_id).await?;
             let ms = match timeout_val {
                 Value::Int(n) => n as u64,
@@ -46,16 +51,23 @@ impl<I: IoContext> Interpreter<'_, I> {
             timeout_ms = Some(ms);
             builder = builder.timeout(ms);
         }
-        if let Some(retries) = txn.modifiers.retries {
+        if let Some(retries) = txn_expr.modifiers.retries {
             builder = builder.retries(retries);
         }
-        if let Some(isolation) = txn.modifiers.isolation {
+        if let Some(isolation) = txn_expr.modifiers.isolation {
             builder = builder.isolation(isolation);
         }
 
         // Execute transaction (with timeout wrapper if specified)
         let result = self
-            .execute_txn_body(builder, &txn.stmts, txn.expr, timeout_ms, span)
+            .execute_txn_body(
+                id,
+                builder,
+                &txn_expr.stmts,
+                txn_expr.expr,
+                timeout_ms,
+                span,
+            )
             .await;
 
         // Convert to Result[T, String]
@@ -68,6 +80,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Execute transaction body and return the result value or error.
     async fn execute_txn_body(
         &mut self,
+        id: TxnId,
         builder: rumps_storage::TransactionBuilder,
         stmts: &[StmtId],
         expr: Option<ExprId>,
@@ -79,11 +92,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             Error::runtime(span, format!("failed to start transaction: {e}"))
         })?;
 
-        // Get retry count before moving txn
+        // Get retry count before cloning
         let retries = txn.retry_count();
 
-        // Set transaction context
-        self.txn = Some(txn.clone());
+        // Insert into the transaction map
+        self.txns.insert(id, txn.clone());
 
         // Enter new scope for local bindings
         self.env.scopes.push();
@@ -95,12 +108,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Pop scope
         self.env.scopes.pop();
 
-        // Finish transaction: commit (with retry) on Ok, rollback on Err
-        self.txn
-            .take()
-            .ok_or_else(|| {
-                Error::runtime(span, "transaction unexpectedly missing")
-            })?
+        // Remove from the transaction map
+        self.txns
+            .remove(&id)
+            // The typechecker ALWAYS creates the transaction ID. If it's not
+            // in the map, something has seriously gone wrong
+            .unwrap_or_else(|| typechecked!("transaction", "TxnId in map"))
             .finish_with_retry(body_result.map_err(TxnError::Body), retries)
             .await
             .map_err(|e| match e {

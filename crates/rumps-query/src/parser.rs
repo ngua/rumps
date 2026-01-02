@@ -2663,7 +2663,7 @@ mod tests {
     fn parse_get_global() {
         let (ast, id) = parse_expr_ok("$GET ^PATIENT");
         match ast.get_expr(id) {
-            Some(Expr::Get(DbRef::Global(name, subs))) => {
+            Some(Expr::Get(DbRef::Global(name, subs), _)) => {
                 assert_eq!(name, "PATIENT");
                 assert!(subs.is_empty());
             }
@@ -2675,7 +2675,7 @@ mod tests {
     fn parse_get_global_with_subscripts() {
         let (ast, id) = parse_expr_ok("$GET ^PATIENT(123, \"NAME\")");
         match ast.get_expr(id) {
-            Some(Expr::Get(DbRef::Global(name, subs))) => {
+            Some(Expr::Get(DbRef::Global(name, subs), _)) => {
                 assert_eq!(name, "PATIENT");
                 assert_eq!(subs.len(), 2);
             }
@@ -2728,7 +2728,7 @@ mod tests {
         let result = parse_ok("$SET x = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
-            Some(Stmt::Set(DbRef::Local(name, subs), _)) => {
+            Some(Stmt::Set(DbRef::Local(name, subs), _, _)) => {
                 assert_eq!(name, "x");
                 assert!(subs.is_empty());
             }
@@ -2741,7 +2741,7 @@ mod tests {
         let result = parse_ok("$SET ^DATA = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
-            Some(Stmt::Set(DbRef::Global(name, _), _)) => {
+            Some(Stmt::Set(DbRef::Global(name, _), _, _)) => {
                 assert_eq!(name, "DATA");
             }
             _ => panic!("expected Set with DbRef::Global"),

@@ -34,7 +34,7 @@ use smallvec::SmallVec;
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::ty::{Scheme, Subst, Ty, TyVar};
-use crate::ast::ExprId;
+use crate::ast::{ExprId, TxnId};
 use crate::env::Environment;
 use crate::intern::StringInterner;
 use crate::value::{TypeExprArena, TypeRegistry};
@@ -175,8 +175,8 @@ impl Constraint {
 /// types, type variable bindings, and constraints. After inference completes,
 /// constraints are solved via unification to produce final types.
 pub(crate) struct InferCtx<'a> {
-    /// The AST being type-checked.
-    pub(super) ast: &'a crate::ast::Ast,
+    /// Mutable AST for populating `TxnId` fields during typecheck.
+    pub(super) ast: &'a mut crate::ast::Ast,
     /// Registry of user-defined and builtin types.
     pub(super) registry: &'a TypeRegistry,
     /// Arena of type expressions (for converting `TypeExprId -> Ty`).
@@ -202,12 +202,15 @@ pub(crate) struct InferCtx<'a> {
     ///
     /// When interpreting an `Expr::Regex`, look up the cache index here.
     regex_indices: HashMap<ExprId, u32>,
-    /// Whether we are currently inside a transaction block.
+    /// Current transaction ID, if inside a `TRANSACTION` block.
     ///
     /// Used to enforce that global writes (`$SET ^...`, `$KILL ^...`) only
-    /// appear inside `TRANSACTION { ... }` blocks and that nested `TRANSACTION`s
-    /// cannot be created (not supported).
-    pub(super) in_transaction: bool,
+    /// appear inside `TRANSACTION { ... }` blocks, that nested `TRANSACTION`s
+    /// cannot be created (not supported), and to populate `TxnId` fields in
+    /// the AST for DB operations.
+    pub(super) in_transaction: Option<TxnId>,
+    /// Counter for generating unique `TxnId` values.
+    next_txn_id: u32,
 }
 
 impl<'a> InferCtx<'a> {
@@ -218,7 +221,7 @@ impl<'a> InferCtx<'a> {
     /// is used to look up module function type schemes. The `type_exprs`
     /// arena is used to convert `TypeExprId` to `Ty` for user-defined unions.
     pub(crate) fn new(
-        ast: &'a crate::ast::Ast,
+        ast: &'a mut crate::ast::Ast,
         registry: &'a TypeRegistry,
         type_exprs: &'a TypeExprArena,
         runtime_env: &'a Environment,
@@ -236,7 +239,8 @@ impl<'a> InferCtx<'a> {
             errors: Vec::new(),
             regex_cache: Vec::new(),
             regex_indices: HashMap::new(),
-            in_transaction: false,
+            in_transaction: None,
+            next_txn_id: 0,
         }
     }
 

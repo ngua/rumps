@@ -12,7 +12,7 @@ use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExprId, BinOp, DbRef, Expr, ExprId, JsonAccessKey,
     JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId, SubscriptElem,
-    TransactionExpr, TypeParam, TypePattern, UnOp, UserConstraint,
+    TransactionExpr, TxnId, TypeParam, TypePattern, UnOp, UserConstraint,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
@@ -30,10 +30,11 @@ impl InferCtx<'_> {
     /// Other expression types will be added in subsequent phases.
     pub(crate) fn expr(&mut self, id: ExprId) -> Ty {
         let span = self.ast.expr_span(id).unwrap_or(Span::new(0, 0));
-        let ty = self
-            .ast
-            .get_expr(id)
-            .map_or_else(|| Ty::Error, |expr| self.expr_inner(id, expr, span));
+        // Clone the expression to avoid borrow issues with mutable ast reference
+        let ty = match self.ast.get_expr(id).cloned() {
+            None => Ty::Error,
+            Some(expr) => self.expr_inner(id, &expr, span),
+        };
         self.record_type(id, ty.clone());
         ty
     }
@@ -145,7 +146,7 @@ impl InferCtx<'_> {
             Expr::Read(inner, ty_id) => self.read_conv(*inner, *ty_id, span),
 
             // Database read: `GET local(...)` or `GET ^global(...)`
-            Expr::Get(dbref) => self.get(dbref, span),
+            Expr::Get(ref dbref, _) => self.get(id, dbref, span),
 
             // Type annotation: `(expr) : Type`
             Expr::Annotate(inner, ty_id) => self.annotate(*inner, *ty_id, span),
@@ -206,13 +207,13 @@ impl InferCtx<'_> {
             }
 
             // Data query: `DATA local(...)` or `DATA ^global(...)`
-            Expr::Data(dbref) => self.data(dbref, span),
+            Expr::Data(ref dbref, _) => self.data(id, dbref, span),
 
             // Order query: `ORDER local(...)` or `ORDER ^global(...)`
-            Expr::Order(dbref) => self.order(dbref, span),
+            Expr::Order(ref dbref, _) => self.order(id, dbref, span),
 
             // Query: `$QUERY local(...)` or `$QUERY ^global(...)`
-            Expr::Query(dbref) => self.query(dbref, span),
+            Expr::Query(ref dbref, _) => self.query(id, dbref, span),
 
             // Output expression: `$OUTPUT expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
@@ -223,15 +224,15 @@ impl InferCtx<'_> {
 
             // Set expression: `$SET target = value`
             // Returns `Result[Unit, String]`
-            Expr::Set(dbref, value) => {
-                self.set(dbref, *value, span);
+            Expr::Set(ref dbref, value, _) => {
+                self.set_expr(id, dbref, *value, span);
                 Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
             // Kill expression: `$KILL target`
             // Returns `Result[Unit, String]`
-            Expr::Kill(dbref) => {
-                self.kill(dbref, span);
+            Expr::Kill(ref dbref, _) => {
+                self.kill_expr(id, dbref, span);
                 Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
@@ -244,7 +245,7 @@ impl InferCtx<'_> {
             } => self.forever(*seed, state_param, cont_param, *body, span),
 
             // Transaction block: `TRANSACTION { ... }`
-            Expr::Transaction(txn) => self.transaction(txn, span),
+            Expr::Transaction(ref txn) => self.transaction(id, txn, span),
         }
     }
 
@@ -1557,11 +1558,14 @@ impl InferCtx<'_> {
     ///
     /// Database reads return `Option[Storable]`; the value may not exist at the
     /// given path. Usage may narrow via `IS`/`AS` checks or arithmetic operations.
-    fn get(&mut self, dbref: &DbRef, span: Span) -> Ty {
+    /// Populates the `TxnId` field in the AST based on current transaction context.
+    fn get(&mut self, id: ExprId, dbref: &DbRef, span: Span) -> Ty {
         let subs = match dbref {
             DbRef::Local(_, s) | DbRef::Global(_, s) => s,
         };
         self.check_subscript_elems(subs, span);
+        self.ast
+            .set_expr(id, Expr::Get(dbref.clone(), self.in_transaction));
         Ty::Option(Box::new(Ty::Named(TypeId::STORABLE, vec![])))
     }
 
@@ -1592,22 +1596,28 @@ impl InferCtx<'_> {
     /// Infer type of `DATA` expression.
     ///
     /// Queries the existence status of a node. Returns `DataStatus` enum.
-    fn data(&mut self, dbref: &DbRef, span: Span) -> Ty {
+    /// Populates the `TxnId` field in the AST based on current transaction context.
+    fn data(&mut self, id: ExprId, dbref: &DbRef, span: Span) -> Ty {
         let subs = match dbref {
             DbRef::Local(_, s) | DbRef::Global(_, s) => s,
         };
         self.check_subscript_elems(subs, span);
+        self.ast
+            .set_expr(id, Expr::Data(dbref.clone(), self.in_transaction));
         Ty::DataStatus
     }
 
     /// Infer type of `ORDER` expression.
     ///
     /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
-    fn order(&mut self, dbref: &DbRef, span: Span) -> Ty {
+    /// Populates the `TxnId` field in the AST based on current transaction context.
+    fn order(&mut self, id: ExprId, dbref: &DbRef, span: Span) -> Ty {
         let subs = match dbref {
             DbRef::Local(_, s) | DbRef::Global(_, s) => s,
         };
         self.check_subscript_elems(subs, span);
+        self.ast
+            .set_expr(id, Expr::Order(dbref.clone(), self.in_transaction));
         Ty::Option(Box::new(Ty::Named(TypeId::SUBSCRIPT, vec![])))
     }
 
@@ -1615,11 +1625,14 @@ impl InferCtx<'_> {
     ///
     /// Returns the full key path to the next node with a value.
     /// Returns `Option[Array[Subscript]]`.
-    fn query(&mut self, dbref: &DbRef, span: Span) -> Ty {
+    /// Populates the `TxnId` field in the AST based on current transaction context.
+    fn query(&mut self, id: ExprId, dbref: &DbRef, span: Span) -> Ty {
         let subs = match dbref {
             DbRef::Local(_, s) | DbRef::Global(_, s) => s,
         };
         self.check_subscript_elems(subs, span);
+        self.ast
+            .set_expr(id, Expr::Query(dbref.clone(), self.in_transaction));
         let subscript = Ty::Named(TypeId::SUBSCRIPT, vec![]);
         Ty::Option(Box::new(Ty::Array(Box::new(subscript))))
     }
@@ -1642,8 +1655,11 @@ impl InferCtx<'_> {
     ) -> Ty {
         let ann_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
 
+        // Clone inner expression to avoid borrow issues
+        let inner_expr = self.ast.get_expr(inner_id).cloned();
+
         // Try special case: array literal with `Array[UnionType]`
-        match (&ann_ty, self.ast.get_expr(inner_id)) {
+        match (&ann_ty, inner_expr.as_ref()) {
             (Ty::Array(elem_ty), Some(Expr::Array(elems)))
                 if self.expand_union_members(elem_ty).is_some() =>
             {
@@ -1783,7 +1799,7 @@ impl InferCtx<'_> {
         body_ty
     }
 
-    /// Typecheck a transaction block expression.
+    /// Typecheck a transaction block expression; assigns a unique `TxnId`.
     ///
     /// Returns `Result[T, String]` where `T` is the trailing expression type
     /// (or `Unit` if no trailing expression).
@@ -1791,19 +1807,25 @@ impl InferCtx<'_> {
     /// Nested transactions are rejected at compile time (not runtime).
     pub(super) fn transaction(
         &mut self,
+        id: ExprId,
         txn: &TransactionExpr,
         span: Span,
     ) -> Ty {
         // Nested transactions rejected at compile time
-        if self.in_transaction {
+        if self.in_transaction.is_some() {
             self.error(TypeError::Custom {
                 msg: "nested transactions are not supported".to_string(),
                 span,
             });
+            // Continue with a fresh ID anyway to allow further inference
         }
 
-        // Mark transaction context for global write / nested transaction checks
-        self.in_transaction = true;
+        // Assign unique ID
+        let txn_id = TxnId::new(self.next_txn_id);
+        self.next_txn_id += 1;
+
+        // Set transaction context
+        let prev = self.in_transaction.replace(txn_id);
 
         // Enter new scope for transaction body
         self.env.push_scope();
@@ -1824,8 +1846,17 @@ impl InferCtx<'_> {
 
         self.env.pop_scope();
 
-        // Restore transaction context
-        self.in_transaction = false;
+        // Restore previous transaction context
+        self.in_transaction = prev;
+
+        // Update AST with assigned ID
+        let updated = TransactionExpr {
+            id: Some(txn_id),
+            stmts: txn.stmts.clone(),
+            expr: txn.expr,
+            modifiers: txn.modifiers,
+        };
+        self.ast.set_expr(id, Expr::Transaction(updated));
 
         // Return Result[T, String]
         Ty::Result(Box::new(inner_ty), Box::new(Ty::String))

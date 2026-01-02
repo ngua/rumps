@@ -355,21 +355,23 @@ impl InferCtx<'_> {
                 }
 
                 Ty::Union(members) => {
-                    // Collect covered types (small N, Vec is fine)
-                    let covered: Vec<Ty> = unguarded
+                    // Collect type IDs from Is patterns first (to avoid borrow)
+                    let ty_ids: Vec<_> = unguarded
                         .iter()
                         .filter_map(|arm| {
-                            self.ast.get_pattern(arm.pattern).and_then(|p| {
-                                match p {
-                                    MatchPattern::Is(_, ty_id) => {
-                                        Some(self.ast_type_to_ty(
-                                            *ty_id,
-                                            &HashMap::new(),
-                                        ))
-                                    }
-                                    _ => None,
-                                }
-                            })
+                            self.ast.get_pattern(arm.pattern).cloned()
+                        })
+                        .filter_map(|p| match p {
+                            MatchPattern::Is(_, ty_id) => Some(ty_id),
+                            _ => None,
+                        })
+                        .collect();
+
+                    // Now convert each to Ty (requires mutable self)
+                    let covered: Vec<Ty> = ty_ids
+                        .into_iter()
+                        .map(|ty_id| {
+                            self.ast_type_to_ty(ty_id, &HashMap::new())
                         })
                         .collect();
 

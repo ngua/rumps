@@ -11,6 +11,19 @@ use smallvec::SmallVec;
 
 use crate::{Error, Result, Span};
 
+/// Unique identifier for a `TRANSACTION` block.
+///
+/// Assigned during typechecking; used at runtime to look up the active
+/// transaction in a `HashMap<TxnId, Transaction>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct TxnId(u32);
+
+impl TxnId {
+    pub(crate) const fn new(id: u32) -> Self {
+        Self(id)
+    }
+}
+
 /// A collection of items with parallel span storage.
 ///
 /// Stores items and their spans in separate vectors for cache efficiency;
@@ -226,6 +239,13 @@ impl Ast {
     pub(crate) fn set_expr(&mut self, id: ExprId, e: Expr) {
         if let Some(slot) = self.exprs.get_mut(id.0) {
             *slot = e
+        }
+    }
+
+    /// Replace a statement in place (for typecheck TxnId assignment).
+    pub(crate) fn set_stmt(&mut self, id: StmtId, s: Stmt) {
+        if let Some(slot) = self.stmts.get_mut(id.0) {
+            *slot = s
         }
     }
 
@@ -608,8 +628,9 @@ pub(crate) enum Expr {
     /// `GET` primitive.
     ///
     /// Reads a value from a B-tree variable. The `DbRef` specifies the
-    /// variable name and subscripts.
-    Get(DbRef),
+    /// variable name and subscripts. The `Option<TxnId>` is assigned during
+    /// typecheck; `Some(id)` means use transaction `id`, `None` means direct DB.
+    Get(DbRef, Option<TxnId>),
 
     /// A binary operation.
     Binary(ExprId, BinOp, ExprId),
@@ -809,18 +830,21 @@ pub(crate) enum Expr {
     /// Data query: `DATA var`.
     ///
     /// Queries the existence status of a node. Returns `DataStatus` enum.
-    Data(DbRef),
+    /// The `Option<TxnId>` is assigned during typecheck.
+    Data(DbRef, Option<TxnId>),
 
     /// Order query: `ORDER var`.
     ///
     /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
-    Order(DbRef),
+    /// The `Option<TxnId>` is assigned during typecheck.
+    Order(DbRef, Option<TxnId>),
 
     /// Query: `$QUERY var`.
     ///
     /// Returns the full key path to the next node with a value.
     /// Returns `Option[Array[Subscript]]`.
-    Query(DbRef),
+    /// The `Option<TxnId>` is assigned during typecheck.
+    Query(DbRef, Option<TxnId>),
 
     /// Output expression: `$OUTPUT expr [JSON] [TO target]`.
     ///
@@ -832,13 +856,15 @@ pub(crate) enum Expr {
     ///
     /// Executes the B-tree assignment and evaluates to `Unit`.
     /// This allows `$SET` in expression contexts like `f($SET x = 1)`.
-    Set(DbRef, ExprId),
+    /// The `Option<TxnId>` is assigned during typecheck; globals require it.
+    Set(DbRef, ExprId, Option<TxnId>),
 
     /// Kill expression: `$KILL target`.
     ///
     /// Deletes a variable or subtree and evaluates to `Unit`.
     /// This allows `$KILL` in expression contexts like `f($KILL x)`.
-    Kill(DbRef),
+    /// The `Option<TxnId>` is assigned during typecheck; globals require it.
+    Kill(DbRef, Option<TxnId>),
 
     /// Forever loop: `FOREVER seed (state, cont) => body`.
     ///
@@ -913,6 +939,8 @@ pub(crate) struct OutputStmt {
 /// Transaction block expression.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TransactionExpr {
+    /// Unique ID for this transaction block (assigned during typecheck).
+    pub(crate) id: Option<TxnId>,
     /// Statements in the transaction body.
     pub(crate) stmts: Vec<StmtId>,
     /// Optional trailing expression (return value).
@@ -950,10 +978,12 @@ pub(crate) enum Stmt {
     /// B-tree assignment: `SET x(subs...) = expr` or `SET ^NAME(subs...) = expr`.
     ///
     /// The `DbRef` is the target; the `ExprId` is the value expression.
-    Set(DbRef, ExprId),
+    /// The `Option<TxnId>` is assigned during typecheck; globals require it.
+    Set(DbRef, ExprId, Option<TxnId>),
 
     /// Delete a variable or subtree: `KILL x(subs...)` or `KILL ^NAME(subs...)`.
-    Kill(DbRef),
+    /// The `Option<TxnId>` is assigned during typecheck; globals require it.
+    Kill(DbRef, Option<TxnId>),
 
     /// Output a value with optional format and target.
     ///
@@ -1110,12 +1140,12 @@ mod tests {
             ],
         );
         let get_expr = ast
-            .add_expr(Expr::Get(dbref.clone()), Span::new(0, 21))
+            .add_expr(Expr::Get(dbref.clone(), None), Span::new(0, 21))
             .unwrap();
 
         assert_eq!(ast.expr_count(), 3);
         match ast.get_expr(get_expr) {
-            Some(Expr::Get(DbRef::Global(name, subs))) => {
+            Some(Expr::Get(DbRef::Global(name, subs), _)) => {
                 assert_eq!(name, "PATIENT");
                 assert_eq!(subs.len(), 2);
             }
@@ -1236,11 +1266,11 @@ mod tests {
             .unwrap();
 
         let stmt = ast
-            .add_stmt(Stmt::Set(target.clone(), val), Span::new(0, 20))
+            .add_stmt(Stmt::Set(target.clone(), val, None), Span::new(0, 20))
             .unwrap();
 
         match ast.get_stmt(stmt) {
-            Some(Stmt::Set(t, v)) => {
+            Some(Stmt::Set(t, v, _)) => {
                 assert_eq!(*t, target);
                 assert_eq!(*v, val);
             }
