@@ -1,4 +1,4 @@
 ; Error: unknown constraint name
 FUN bad[T: Unknown](x: T) -> T {
-    x
+  x
 }

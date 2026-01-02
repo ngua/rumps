@@ -1,6 +1,6 @@
 ; Error: constraint violation; calling a Numeric function with String
 FUN add-numeric[T: Numeric](a: T, b: T) -> T {
-    a + b
+  a + b
 }
 
 $OUTPUT add-numeric("foo", "bar")

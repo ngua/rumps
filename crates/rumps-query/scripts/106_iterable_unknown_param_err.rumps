@@ -2,7 +2,7 @@
 
 ; Function case
 FUN bad[T: Iterable[X]](coll: T) -> Int {
-    0
+  0
 }
 
 ; Closure case

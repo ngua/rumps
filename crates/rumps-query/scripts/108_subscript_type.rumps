@@ -16,17 +16,17 @@ $OUTPUT ($GET data(first))!
 
 ; Chain through all keys using FOREVER
 LET vals = FOREVER { key: $ORDER data, acc: [] } (st, cont) => {
-    MATCH st.key {
-        Option.None => st.acc
-        Option.Some(k) => {
-            ; k is Subscript; use directly in $GET and $ORDER
-            LET v = ($GET data(k))!
-            cont({
-                key: $ORDER data(k),
-                acc: Array.concat(st.acc, [v])
-            })
-        }
+  MATCH st.key {
+    Option.None => st.acc
+    Option.Some(k) => {
+      ; k is Subscript; use directly in $GET and $ORDER
+      LET v = ($GET data(k))!
+      cont({
+        key: $ORDER data(k),
+        acc: Array.concat(st.acc, [v])
+      })
     }
+  }
 }
 $OUTPUT vals
 
@@ -37,7 +37,7 @@ $OUTPUT ($GET x(sub))!
 
 ; Function that takes Subscript parameter
 FUN lookup (key: Subscript) -> Option[Storable] {
-    $GET data(key)
+  $GET data(key)
 }
 
 $OUTPUT lookup(1)

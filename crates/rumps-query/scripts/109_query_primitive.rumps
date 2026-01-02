@@ -33,8 +33,8 @@ $OUTPUT typed
 
 ; Use with MATCH
 LET msg = MATCH $QUERY items {
-    Option.Some(path) => { "found path of length: " ++ ((Array.length(path)) AS String) }
-    Option.None => { "no nodes" }
+  Option.Some(path) => { "found path of length: " ++ ((Array.length(path)) AS String) }
+  Option.None => { "no nodes" }
 }
 $OUTPUT msg
 

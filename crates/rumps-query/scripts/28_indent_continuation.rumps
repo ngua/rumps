@@ -4,59 +4,59 @@
 ; === Basic continuation ===
 
 LET x = 1
-    + 2
+  + 2
 $OUTPUT x
 ; Expected: 3
 
 LET y = 10
-    - 3
-    - 2
+  - 3
+  - 2
 $OUTPUT y
 ; Expected: 5
 
 ; === Multi-operator continuation ===
 
 LET sum = 1
-    + 2
-    + 3
-    + 4
+  + 2
+  + 3
+  + 4
 $OUTPUT sum
 ; Expected: 10
 
 ; === Mixed operators with precedence ===
 
 LET expr = 1
-    + 2
-    * 3
+  + 2
+  * 3
 $OUTPUT expr
 ; Expected: 7 (1 + (2 * 3))
 
 LET expr2 = 2
-    * 3
-    + 4
+  * 3
+  + 4
 $OUTPUT expr2
 ; Expected: 10 ((2 * 3) + 4)
 
 ; === Comparison continuation ===
 
 LET cmp = 10
-    > 5
+  > 5
 $OUTPUT cmp
 ; Expected: true
 
 ; === Logical continuation ===
 
 LET logic = TRUE
-    AND TRUE
-    AND FALSE
+  AND TRUE
+  AND FALSE
 $OUTPUT logic
 ; Expected: false
 
 ; === String concat continuation ===
 
 LET msg = "Hello"
-    ++ " "
-    ++ "World"
+  ++ " "
+  ++ "World"
 $OUTPUT msg
 ; Expected: Hello World
 
@@ -64,25 +64,25 @@ $OUTPUT msg
 
 ; Arrays can have newlines freely
 LET arr = [
-    1,
-    2,
-    3
+  1,
+  2,
+  3
 ]
 $OUTPUT arr[0]
 ; Expected: 1
 
 ; Objects can have newlines freely
 LET obj = {
-    a: 1,
-    b: 2
+  a: 1,
+  b: 2
 }
 $OUTPUT obj.a
 ; Expected: 1
 
 ; Blocks use braces, not indentation
 LET blk = {
-    LET inner = 5
-    inner * 2
+  LET inner = 5
+  inner * 2
 }
 $OUTPUT blk
 ; Expected: 10
@@ -90,7 +90,7 @@ $OUTPUT blk
 ; === Continuation ends at dedent ===
 
 LET a = 1
-    + 2
+  + 2
 LET b = 3
 $OUTPUT a + b
 ; Expected: 6
