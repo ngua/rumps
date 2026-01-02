@@ -10,38 +10,37 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::io::IoContext;
 use crate::value::{MapKey, TypeExprArena, TypeExprId, TypeId, Value};
-use crate::{Error, Result, Span};
+use crate::Span;
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a runtime value to a storage value.
     ///
     /// Scalars convert directly; complex values serialize to JSON.
-    pub(crate) fn store(&self, v: &Value) -> Result<rumps_types::Value> {
+    pub(crate) fn store(&self, v: &Value) -> rumps_types::Value {
         match v {
-            Value::Unit => Err(Error::runtime_no_span("Unit cannot be stored")),
-            Value::Bool(b) => Ok(rumps_types::Value::Boolean(*b)),
-            Value::Int(i) => Ok(rumps_types::Value::Integer(*i)),
-            Value::Float(f) => Ok(rumps_types::Value::Double(*f)),
-            Value::Char(c) => Ok(rumps_types::Value::Char(*c)),
-            Value::String(id) => self
-                .arena
-                .get_str(*id)
-                .map(|s| rumps_types::Value::String(s.to_owned()))
-                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            // Json values store directly
-            Value::Json(j) => Ok(rumps_types::Value::Json(j.clone())),
-            // FilePath stores as string
-            Value::FilePath(id) => self
-                .arena
-                .get_str(*id)
-                .map(|s| rumps_types::Value::String(s.to_owned()))
-                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            // Regex cannot be stored
-            Value::Regex(_) => {
-                Err(Error::runtime_no_span("Regex cannot be stored"))
+            Value::Unit => typechecked!("store", "Storable (not Unit)"),
+            Value::Bool(b) => rumps_types::Value::Boolean(*b),
+            Value::Int(i) => rumps_types::Value::Integer(*i),
+            Value::Float(f) => rumps_types::Value::Double(*f),
+            Value::Char(c) => rumps_types::Value::Char(*c),
+            Value::String(id) => {
+                let s = self
+                    .arena
+                    .get_str(*id)
+                    .unwrap_or_else(|| invariant!("StringId in arena"));
+                rumps_types::Value::String(s.to_owned())
             }
+            Value::Json(j) => rumps_types::Value::Json(j.clone()),
+            Value::FilePath(id) => {
+                let s = self
+                    .arena
+                    .get_str(*id)
+                    .unwrap_or_else(|| invariant!("StringId in arena"));
+                rumps_types::Value::String(s.to_owned())
+            }
+            Value::Regex(_) => typechecked!("store", "Storable (not Regex)"),
             // Serialize to JSON for complex values (closures, module fns,
-            // ranges, and continuations will error in jsonify)
+            // ranges, and continuations will panic in jsonify via typechecked!)
             Value::Array(_, _)
             | Value::Object(_)
             | Value::Tuple(_, _)
@@ -53,12 +52,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Range { .. }
             | Value::ForeverContinuation
             | Value::LoopContinue(_) => {
-                self.jsonify(v).map(rumps_types::Value::Json)
+                rumps_types::Value::Json(self.jsonify(v))
             }
-            Value::Time(t) => {
-                // Store time as ISO 8601 string
-                Ok(rumps_types::Value::String(t.to_rfc3339()))
-            }
+            Value::Time(t) => rumps_types::Value::String(t.to_rfc3339()),
         }
     }
 
@@ -236,50 +232,67 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a value to JSON.
     ///
     /// Used for JSON output and storage serialization.
-    /// Returns an error for values that cannot be serialized (e.g., closures).
-    pub(crate) fn jsonify(&self, v: &Value) -> Result<serde_json::Value> {
+    pub(crate) fn jsonify(&self, v: &Value) -> serde_json::Value {
         match v {
-            Value::Unit => Ok(serde_json::Value::Null),
-            Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
-            Value::Int(n) => Ok(serde_json::json!(*n)),
-            Value::Float(f) => Ok(serde_json::json!(f.0)),
-            Value::Char(c) => Ok(serde_json::Value::String(c.to_string())),
+            Value::Unit => serde_json::Value::Null,
+            Value::Bool(b) => serde_json::Value::Bool(*b),
+            Value::Int(n) => serde_json::json!(*n),
+            Value::Float(f) => serde_json::json!(f.0),
+            Value::Char(c) => serde_json::Value::String(c.to_string()),
             Value::String(id) => {
-                let s = self.arena.get_str(*id).unwrap_or("");
-                Ok(serde_json::Value::String(s.to_owned()))
+                let s = self
+                    .arena
+                    .get_str(*id)
+                    .unwrap_or_else(|| invariant!("StringId in arena"));
+                serde_json::Value::String(s.to_owned())
             }
             Value::FilePath(id) => {
-                let s = self.arena.get_str(*id).unwrap_or("");
-                Ok(serde_json::Value::String(s.to_owned()))
+                let s = self
+                    .arena
+                    .get_str(*id)
+                    .unwrap_or_else(|| invariant!("StringId in arena"));
+                serde_json::Value::String(s.to_owned())
             }
             Value::Array(_, arr) => {
-                let elems: Result<Vec<_>> = arr
+                let elems: Vec<_> = arr
                     .iter()
-                    .filter_map(|id| self.arena.get(*id))
+                    .map(|id| {
+                        self.arena
+                            .get(*id)
+                            .unwrap_or_else(|| invariant!("ValueId in arena"))
+                    })
                     .map(|v| self.jsonify(v))
                     .collect();
-                Ok(serde_json::Value::Array(elems?))
+                serde_json::Value::Array(elems)
             }
             Value::Tuple(_, elems) => {
-                // Tuples serialize as JSON arrays
-                let items: Result<Vec<_>> = elems
+                let items: Vec<_> = elems
                     .iter()
-                    .filter_map(|id| self.arena.get(*id))
+                    .map(|id| {
+                        self.arena
+                            .get(*id)
+                            .unwrap_or_else(|| invariant!("ValueId in arena"))
+                    })
                     .map(|v| self.jsonify(v))
                     .collect();
-                Ok(serde_json::Value::Array(items?))
+                serde_json::Value::Array(items)
             }
             Value::Object(obj) => {
-                let map: Result<serde_json::Map<_, _>> = obj
+                let map: serde_json::Map<_, _> = obj
                     .iter()
-                    .filter_map(|(k, vid)| {
-                        let key = self.arena.get_str(*k)?;
-                        let val = self.arena.get(*vid)?;
-                        Some((key.to_owned(), val))
+                    .map(|(k, vid)| {
+                        let key = self
+                            .arena
+                            .get_str(*k)
+                            .unwrap_or_else(|| invariant!("StringId in arena"));
+                        let val = self
+                            .arena
+                            .get(*vid)
+                            .unwrap_or_else(|| invariant!("ValueId in arena"));
+                        (key.to_owned(), self.jsonify(val))
                     })
-                    .map(|(k, v)| self.jsonify(v).map(|jv| (k, jv)))
                     .collect();
-                Ok(serde_json::Value::Object(map?))
+                serde_json::Value::Object(map)
             }
             // Sum type encoding: tagged object (with special handling for Option)
             Value::Tagged(ty_expr, idx, payloads) => {
@@ -289,14 +302,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if base_ty.is_some_and(|ty| ty == TypeId::OPTION) {
                     if *idx == 0 {
                         // Option.None -> null
-                        Ok(serde_json::Value::Null)
+                        serde_json::Value::Null
                     } else {
                         // Option.Some(v) -> jsonify(v)
                         payloads
                             .first()
                             .and_then(|id| self.arena.get(*id))
                             .map(|v| self.jsonify(v))
-                            .unwrap_or(Ok(serde_json::Value::Null))
+                            .unwrap_or(serde_json::Value::Null)
                     }
                 } else {
                     let ty_name = base_ty
@@ -307,39 +320,39 @@ impl<I: IoContext> Interpreter<'_, I> {
                             self.registry.variant_name(ty, *idx, &self.arena)
                         })
                         .unwrap_or("?");
-                    let payload_json: Result<Vec<_>> = payloads
+                    let payload_json: Vec<_> = payloads
                         .iter()
-                        .filter_map(|id| self.arena.get(*id))
+                        .map(|id| {
+                            self.arena.get(*id).unwrap_or_else(|| {
+                                invariant!("ValueId in arena")
+                            })
+                        })
                         .map(|v| self.jsonify(v))
                         .collect();
 
-                    Ok(serde_json::json!({
+                    serde_json::json!({
                         "_type": ty_name,
                         "_variant": var_name,
-                        "_payload": payload_json?
-                    }))
+                        "_payload": payload_json
+                    })
                 }
             }
             Value::Map(_, _, entries) => {
-                // Maps serialize as JSON objects with stringified keys
-                let map: Result<serde_json::Map<_, _>> = entries
+                let map: serde_json::Map<_, _> = entries
                     .iter()
                     .map(|(k, vid)| {
                         let key = self.stringify_map_key(k);
-                        let val = self.arena.get(*vid).ok_or_else(|| {
-                            Error::runtime_no_span("invalid value id")
-                        })?;
-                        self.jsonify(val).map(|jv| (key, jv))
+                        let val = self
+                            .arena
+                            .get(*vid)
+                            .unwrap_or_else(|| invariant!("ValueId in arena"));
+                        (key, self.jsonify(val))
                     })
                     .collect();
-                Ok(serde_json::Value::Object(map?))
+                serde_json::Value::Object(map)
             }
-            Value::Time(t) => {
-                // Times serialize as ISO 8601 strings
-                Ok(serde_json::Value::String(t.to_rfc3339()))
-            }
-            // Json is already JSON
-            Value::Json(j) => Ok(j.clone()),
+            Value::Time(t) => serde_json::Value::String(t.to_rfc3339()),
+            Value::Json(j) => j.clone(),
             Value::Range {
                 start,
                 end,
@@ -349,25 +362,20 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let arr: Vec<_> = (*start..end)
                     .map(|n| serde_json::Value::Number(n.into()))
                     .collect();
-                Ok(serde_json::Value::Array(arr))
+                serde_json::Value::Array(arr)
             }
-            Value::Closure { .. } => Err(Error::runtime_no_span(
-                "closures cannot be serialized to JSON",
-            )),
-            Value::Function { .. } => Err(Error::runtime_no_span(
-                "functions cannot be serialized to JSON",
-            )),
-            Value::ModuleFn { .. } => Err(Error::runtime_no_span(
-                "module functions cannot be serialized to JSON",
-            )),
-            Value::Regex(_) => Err(Error::runtime_no_span(
-                "regex patterns cannot be serialized to JSON",
-            )),
-            // Internal loop control values
+            Value::Closure { .. } => {
+                typechecked!("jsonify", "Jsonable (not Closure)")
+            }
+            Value::Function { .. } => {
+                typechecked!("jsonify", "Jsonable (not Function)")
+            }
+            Value::ModuleFn { .. } => {
+                typechecked!("jsonify", "Jsonable (not ModuleFn)")
+            }
+            Value::Regex(_) => typechecked!("jsonify", "Jsonable (not Regex)"),
             Value::ForeverContinuation | Value::LoopContinue(_) => {
-                Err(Error::runtime_no_span(
-                    "loop continuations cannot be serialized to JSON",
-                ))
+                typechecked!("jsonify", "Jsonable (not continuation)")
             }
         }
     }
@@ -428,19 +436,21 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a value to a subscript for key construction.
     ///
-    /// Only scalar types (Bool, Int, Float, Char, String) can be subscripts.
-    pub(crate) fn subscript(&self, v: &Value) -> Result<Subscript> {
+    /// Only scalar types (Bool, Int, Float, Char, String, Json) can be subscripts.
+    pub(crate) fn subscript(&self, v: &Value) -> Subscript {
         match v {
-            Value::Bool(b) => Ok(Subscript::Boolean(*b)),
-            Value::Int(i) => Ok(Subscript::Number(OrderedFloat(*i as f64))),
-            Value::Float(f) => Ok(Subscript::Number(*f)),
-            Value::Char(c) => Ok(Subscript::String(c.to_string())),
-            Value::String(id) => self
-                .arena
-                .get_str(*id)
-                .map(|s| Subscript::String(s.to_owned()))
-                .ok_or_else(|| Error::runtime_no_span("invalid string id")),
-            Value::Json(j) => Ok(Subscript::Json(j.clone())),
+            Value::Bool(b) => Subscript::Boolean(*b),
+            Value::Int(i) => Subscript::Number(OrderedFloat(*i as f64)),
+            Value::Float(f) => Subscript::Number(*f),
+            Value::Char(c) => Subscript::String(c.to_string()),
+            Value::String(id) => {
+                let s = self
+                    .arena
+                    .get_str(*id)
+                    .unwrap_or_else(|| invariant!("StringId in arena"));
+                Subscript::String(s.to_owned())
+            }
+            Value::Json(j) => Subscript::Json(j.clone()),
             Value::Unit
             | Value::Array(_, _)
             | Value::Object(_)
@@ -455,9 +465,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::ModuleFn { .. }
             | Value::Range { .. }
             | Value::ForeverContinuation
-            | Value::LoopContinue(_) => Err(Error::runtime_no_span(
-                "complex values cannot be used as subscripts",
-            )),
+            | Value::LoopContinue(_) => {
+                typechecked!("subscript", "Subscriptable")
+            }
         }
     }
 
@@ -504,17 +514,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a value to a file path string.
     ///
     /// Accepts `FilePath` or `String` values; returns the path as a `String`.
-    pub(super) fn to_file_path(
-        &self,
-        val: &Value,
-        span: Span,
-    ) -> Result<String> {
+    pub(super) fn filepath(&self, val: &Value) -> String {
         match val {
             Value::FilePath(id) | Value::String(id) => self
                 .arena
                 .get_str(*id)
-                .map(|s| s.to_owned())
-                .ok_or_else(|| Error::runtime(span, "invalid string id")),
+                .unwrap_or_else(|| invariant!("StringId in arena"))
+                .to_owned(),
             _ => typechecked!("file path", "FilePath | String"),
         }
     }

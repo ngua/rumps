@@ -8,7 +8,7 @@ use super::Interpreter;
 use crate::ast::{DbRef, ExprId, SubscriptElem, TxnId};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
-use crate::{Error, Result, Span};
+use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// `$GET` primitive; reads a value from a B-tree variable.
@@ -55,7 +55,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let (name, subs) = dbref.split();
         let key = self.build_key(subs).await?;
         let val = self.eval(expr_id).await?;
-        let storage_val = self.store(&val)?;
+        let storage_val = self.store(&val);
 
         // Global writes require transaction (typechecked); locals go direct
         let res = if name.is_global() {
@@ -265,29 +265,24 @@ impl<I: IoContext> Interpreter<'_, I> {
                 match head {
                     SubscriptElem::Elem(id) => {
                         let val = self.eval(*id).await?;
-                        let sub = self.subscript(&val)?;
+                        let sub = self.subscript(&val);
                         acc.push(sub);
                     }
                     SubscriptElem::Spread(id) => {
                         let val = self.eval(*id).await?;
-                        let span = self.ast.expr_span(*id).unwrap_or_default();
                         // Extract subscripts from the array
                         match &val {
                             Value::Array(_, elems) => {
-                                elems.iter().try_for_each(|elem_id| {
+                                elems.iter().for_each(|elem_id| {
                                     let elem = self
                                         .arena
                                         .get(*elem_id)
-                                        .ok_or_else(|| {
-                                            Error::runtime(
-                                                span,
-                                                "invalid value id",
-                                            )
-                                        })?;
-                                    let sub = self.subscript(elem)?;
+                                        .unwrap_or_else(|| {
+                                            invariant!("ValueId in arena")
+                                        });
+                                    let sub = self.subscript(elem);
                                     acc.push(sub);
-                                    Ok::<_, Error>(())
-                                })?;
+                                });
                             }
                             _ => typechecked!("...spread", "Array[Subscript]"),
                         }

@@ -9,7 +9,7 @@ use crate::env::{PrimCtx, PrimFn};
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::value::{CapturedEnv, TypeExprId, TypeId, Value, ValueId};
-use crate::{Error, Result, Span};
+use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Pipeline operator implementation.
@@ -61,33 +61,27 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
+        // Type checker guarantees arity matches
         if params.len() != args.len() {
-            Err(Error::runtime(
-                span,
-                format!(
-                    "expected {} arguments, got {}",
-                    params.len(),
-                    args.len()
-                ),
-            ))
-        } else {
-            // Save current scope stack and replace with captured environment
-            let saved = self.env.scopes.save();
-            self.env.scopes.restore_from_captured(env);
-
-            // Push new scope for parameters
-            self.env.scopes.push();
-            self.bind_params(params, args, span)?;
-
-            // Evaluate body
-            let result = self.eval(body).await;
-
-            // Restore original scope stack
-            self.env.scopes.restore(saved);
-
-            // Validate return type if annotated
-            result.and_then(|val| self.check_return_type(val, ret))
+            typechecked!("closure call", "correct arity")
         }
+
+        // Save current scope stack and replace with captured environment
+        let saved = self.env.scopes.save();
+        self.env.scopes.restore_from_captured(env);
+
+        // Push new scope for parameters
+        self.env.scopes.push();
+        self.bind_params(params, args, span)?;
+
+        // Evaluate body
+        let result = self.eval(body).await;
+
+        // Restore original scope stack
+        self.env.scopes.restore(saved);
+
+        // Validate return type if annotated
+        result.and_then(|val| self.check_return_type(val, ret))
     }
 
     /// Invoke a named function with pre-evaluated arguments.
@@ -100,29 +94,23 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
+        // Type checker guarantees arity matches
         if params.len() != args.len() {
-            Err(Error::runtime(
-                span,
-                format!(
-                    "expected {} arguments, got {}",
-                    params.len(),
-                    args.len()
-                ),
-            ))
-        } else {
-            // Push new scope for parameters
-            self.env.scopes.push();
-            self.bind_params(params, args, span)?;
-
-            // Evaluate body
-            let result = self.eval(body).await;
-
-            // Pop parameter scope
-            self.env.scopes.pop();
-
-            // Validate return type if annotated
-            result.and_then(|val| self.check_return_type(val, ret))
+            typechecked!("function call", "correct arity")
         }
+
+        // Push new scope for parameters
+        self.env.scopes.push();
+        self.bind_params(params, args, span)?;
+
+        // Evaluate body
+        let result = self.eval(body).await;
+
+        // Pop parameter scope
+        self.env.scopes.pop();
+
+        // Validate return type if annotated
+        result.and_then(|val| self.check_return_type(val, ret))
     }
 
     /// Call a function with an expression-based callee.
@@ -139,10 +127,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
-        let callee_expr =
-            self.ast.get_expr(callee).cloned().ok_or_else(|| {
-                Error::runtime(span, "invalid callee expression")
-            })?;
+        let callee_expr = self
+            .ast
+            .get_expr(callee)
+            .cloned()
+            .unwrap_or_else(|| invariant!("ExprId in AST"));
 
         // For variable callees, use name-based resolution (functions first)
         match callee_expr {
@@ -217,10 +206,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .await
             }
             (None, Some(callee)) => self.call_value(callee, args, span).await,
-            (None, None) => Err(Error::runtime(
-                span,
-                format!("undefined function `{name}`"),
-            )),
+            // Type checker / resolver guarantees function exists
+            (None, None) => typechecked!("call_by_name", "defined function"),
         }
     }
 
@@ -248,9 +235,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         let result_id = prim(&mut ctx, arg_ids).await?;
 
         // Look up and clone the result value
-        self.arena.get(result_id).cloned().ok_or_else(|| {
-            Error::runtime(span, "primitive returned invalid value")
-        })
+        Ok(self
+            .arena
+            .get(result_id)
+            .cloned()
+            .unwrap_or_else(|| invariant!("ValueId in arena")))
     }
 
     /// Invoke a module function with pre-evaluated arguments.
@@ -269,9 +258,6 @@ impl<I: IoContext> Interpreter<'_, I> {
             .iter()
             .filter_map(|id| self.arena.get_str(*id).map(String::from))
             .collect();
-
-        // Format path for error messages
-        let path_display = path_strs.join(".");
 
         // Convert to &str for lookup
         let path_refs: SmallVec<[&str; 4]> =
@@ -293,16 +279,16 @@ impl<I: IoContext> Interpreter<'_, I> {
             ["Result", "map"] => self.result_map(args, span).await,
             ["Result", "map-err"] => self.result_map_err(args, span).await,
             _ => {
-                // Regular module function
+                // Regular module function; resolver guarantees it exists
                 let prim =
-                    self.env.get_module_fn(&path_refs).copied().ok_or_else(
+                    self.env.get_module_fn(&path_refs).copied().unwrap_or_else(
                         || {
-                            Error::runtime(
-                                span,
-                                format!("unknown function `{path_display}`"),
+                            typechecked!(
+                                "invoke_module_fn",
+                                "known module function"
                             )
                         },
-                    )?;
+                    );
 
                 self.invoke_primitive(prim, args, span).await
             }
@@ -929,12 +915,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             (Some((l, ls)), Some((r, rs))) => {
                 let ord = self.invoke_callable(cmp_fn, &[*l, *r], span).await?;
-                let ord_val = self.arena.get(ord).ok_or_else(|| {
-                    Error::runtime(
-                        span,
-                        "Array.sort-by: invalid comparison result",
-                    )
-                })?;
+                let ord_val = self
+                    .arena
+                    .get(ord)
+                    .unwrap_or_else(|| invariant!("ValueId in arena"));
 
                 // Check if it's Ordering.Gt (take right first if left > right)
                 let is_gt = matches!(ord_val, Value::Tagged(ty, 2, _)
@@ -1163,7 +1147,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             .arena
             .get(callee_id)
             .cloned()
-            .ok_or_else(|| Error::runtime(span, "invalid callable"))?;
+            .unwrap_or_else(|| invariant!("ValueId in arena"));
 
         match callee {
             Value::Closure {
@@ -1212,9 +1196,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         };
         let result_id = prim(&mut ctx, arg_ids).await?;
 
-        self.arena.get(result_id).cloned().ok_or_else(|| {
-            Error::runtime(span, "primitive returned invalid value")
-        })
+        Ok(self
+            .arena
+            .get(result_id)
+            .cloned()
+            .unwrap_or_else(|| invariant!("ValueId in arena")))
     }
 
     /// Call a function or closure value.
@@ -1244,13 +1230,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // FOREVER continuation: calling it signals loop continuation
             Value::ForeverContinuation => {
-                // Evaluate the single argument (new state)
-                let new_state_expr = args.first().ok_or_else(|| {
-                    Error::runtime(
-                        span,
-                        "continuation requires exactly one argument",
-                    )
-                })?;
+                // Type checker guarantees exactly one argument
+                let new_state_expr = args
+                    .first()
+                    .unwrap_or_else(|| typechecked!("continuation", "1 arg"));
                 let new_state = self.eval(*new_state_expr).await?;
                 let state_id = self.arena.add(new_state, span);
                 Ok(Value::LoopContinue(state_id))
@@ -1270,19 +1253,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
+        // Type checker guarantees arity matches
         if params.len() != args.len() {
-            Err(Error::runtime(
-                span,
-                format!(
-                    "expected {} arguments, got {}",
-                    params.len(),
-                    args.len()
-                ),
-            ))
-        } else {
-            let vals = self.eval_args(args).await?;
-            self.invoke_function(params, ret, body, &vals, span).await
+            typechecked!("call_function", "correct arity")
         }
+        let vals = self.eval_args(args).await?;
+        self.invoke_function(params, ret, body, &vals, span).await
     }
 
     /// Call a closure with expression arguments.
@@ -1296,20 +1272,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
+        // Type checker guarantees arity matches
         if params.len() != args.len() {
-            Err(Error::runtime(
-                span,
-                format!(
-                    "expected {} arguments, got {}",
-                    params.len(),
-                    args.len()
-                ),
-            ))
-        } else {
-            let vals = self.eval_args(args).await?;
-            self.invoke_closure(params, ret, body, env, &vals, span)
-                .await
+            typechecked!("call_closure", "correct arity")
         }
+        let vals = self.eval_args(args).await?;
+        self.invoke_closure(params, ret, body, env, &vals, span)
+            .await
     }
 
     /// Check that a return value matches the declared return type.

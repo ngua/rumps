@@ -47,6 +47,16 @@ macro_rules! typechecked {
     };
 }
 
+/// Marks a branch as unreachable due to interpreter invariants.
+///
+/// Use for internal consistency guarantees that aren't type-level constraints.
+/// E.g., "if we have a `StringId`, the string exists in the arena."
+macro_rules! invariant {
+    ($desc:expr) => {
+        unreachable!("invariant violated: {}", $desc)
+    };
+}
+
 mod ast;
 mod env;
 mod error;

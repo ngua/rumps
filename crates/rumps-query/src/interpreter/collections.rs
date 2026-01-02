@@ -116,7 +116,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let json_acc: Vec<serde_json::Value> = first_vals
                         .into_iter()
                         .map(|v| self.jsonify(&v))
-                        .collect::<Result<Vec<_>>>()?;
+                        .collect();
                     self.array_elems_json_tail_spread(rest, json_acc, span)
                         .await
                 } else {
@@ -191,11 +191,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .iter()
                         .filter_map(|vid| self.arena.get(*vid))
                         .map(|v| self.jsonify(v))
-                        .collect::<Result<Vec<_>>>()?;
-                    vals.iter().try_for_each(|v| -> Result<()> {
-                        json_arr.push(self.jsonify(v)?);
-                        Ok(())
-                    })?;
+                        .collect();
+                    vals.iter().for_each(|v| {
+                        json_arr.push(self.jsonify(v));
+                    });
                     self.array_elems_json_tail_spread(tail, json_arr, span)
                         .await
                 } else {
@@ -212,11 +211,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                             .iter()
                             .filter_map(|vid| self.arena.get(*vid))
                             .map(|v| self.jsonify(v))
-                            .collect::<Result<Vec<_>>>()?;
-                        vals.iter().try_for_each(|v| -> Result<()> {
-                            json_arr.push(self.jsonify(v)?);
-                            Ok(())
-                        })?;
+                            .collect();
+                        vals.iter().for_each(|v| {
+                            json_arr.push(self.jsonify(v));
+                        });
                         self.array_elems_json_tail_spread(tail, json_arr, span)
                             .await
                     } else {
@@ -247,23 +245,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                 match elem {
                     ArrayElem::Elem(id) => {
                         let val = self.eval(*id).await?;
-                        acc.push(self.jsonify(&val)?);
+                        acc.push(self.jsonify(&val));
                     }
                     ArrayElem::Spread(id) => {
                         let val = self.eval(*id).await?;
                         match val {
                             Value::Array(_, elems) => {
-                                elems.iter().try_for_each(
-                                    |vid| -> Result<()> {
-                                        self.arena.get(*vid).map_or(
-                                            Ok(()),
-                                            |v| {
-                                                acc.push(self.jsonify(v)?);
-                                                Ok(())
-                                            },
-                                        )
-                                    },
-                                )?;
+                                elems.iter().for_each(|vid| {
+                                    self.arena.get(*vid).iter().for_each(|v| {
+                                        acc.push(self.jsonify(v))
+                                    });
+                                });
                             }
                             Value::Json(serde_json::Value::Array(arr)) => {
                                 arr.iter().for_each(|v| acc.push(v.clone()));

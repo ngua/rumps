@@ -1193,7 +1193,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let text = match output.format {
             OutputFormat::Default => self.display(&val),
             OutputFormat::Json => {
-                let json = self.jsonify(&val)?;
+                let json = self.jsonify(&val);
                 serde_json::to_string_pretty(&json).map_err(|e| {
                     Error::runtime(
                         span,
@@ -1209,7 +1209,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             OutputTarget::Stderr => self.io.stderrline(&text, span).await,
             OutputTarget::File(path_expr) => {
                 let path_val = self.eval(path_expr).await?;
-                let path = self.to_file_path(&path_val, span)?;
+                let path = self.filepath(&path_val);
                 self.io.write(&path, &text, span).await
             }
         }
@@ -1231,7 +1231,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut it = fields.iter();
         while let Some((key, expr_id)) = it.next() {
             let val = self.eval(*expr_id).await?;
-            let json_val = self.jsonify(&val)?;
+            let json_val = self.jsonify(&val);
             obj.insert(key.clone(), json_val);
         }
         Ok(Value::Json(serde_json::Value::Object(obj)))
