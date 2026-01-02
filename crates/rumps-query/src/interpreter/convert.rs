@@ -464,11 +464,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a subscript from storage to a runtime value.
     ///
     /// Inverse of `subscript`; used by `ORDER` to convert results.
-    pub(crate) fn value_from_subscript(
-        &mut self,
-        sub: Subscript,
-    ) -> Result<Value> {
-        Ok(match sub {
+    pub(crate) fn value_from_subscript(&mut self, sub: Subscript) -> Value {
+        match sub {
             Subscript::Boolean(b) => Value::Bool(b),
             Subscript::Number(n) => {
                 // Check if it's a whole number
@@ -486,7 +483,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Subscript::Char(c) => Value::Char(c),
             Subscript::String(s) => Value::String(self.arena.intern(&s)),
             Subscript::Json(j) => Value::Json(j),
-        })
+        }
     }
 
     /// Stringify a map key for display.

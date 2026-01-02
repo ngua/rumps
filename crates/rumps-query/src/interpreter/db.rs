@@ -186,7 +186,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         match opt_sub {
             None => Ok(self.make_none()),
             Some(sub) => {
-                let val = self.value_from_subscript(sub)?;
+                let val = self.value_from_subscript(sub);
                 let val_id = self.arena.add(val, span);
                 Ok(self.make_some(val_id))
             }
@@ -219,7 +219,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         match opt_key {
             None => Ok(self.make_none()),
             Some(k) => {
-                let arr = self.key_to_array(k, span)?;
+                let arr = self.key_to_array(k, span);
                 let arr_id = self.arena.add(arr, span);
                 Ok(self.make_some(arr_id))
             }
@@ -227,16 +227,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Convert a `Key` to an `Array[Subscript]` value.
-    fn key_to_array(&mut self, key: Key, span: Span) -> Result<Value> {
+    fn key_to_array(&mut self, key: Key, span: Span) -> Value {
         let elem_ids = key
             .into_iter()
             .map(|sub| {
-                let v = self.value_from_subscript(sub)?;
-                Ok(self.arena.add(v, span))
+                let v = self.value_from_subscript(sub);
+                self.arena.add(v, span)
             })
-            .collect::<Result<SmallVec<_>>>()?;
+            .collect();
         let type_expr_id = self.type_exprs.named(TypeId::SUBSCRIPT);
-        Ok(Value::Array(type_expr_id, elem_ids))
+        Value::Array(type_expr_id, elem_ids)
     }
 
     /// Evaluate subscript elements and build a `Key`.
