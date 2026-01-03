@@ -1,45 +1,45 @@
-; Test: $OUTPUT statement
-; Tests various $OUTPUT scenarios
+; Test: @OUTPUT statement
+; Tests various @OUTPUT scenarios
 
 ; Output literal integer
-$OUTPUT 42
+@OUTPUT 42
 ; Expected: 42
 
 ; Output literal float
-$OUTPUT 3.14159
+@OUTPUT 3.14159
 ; Expected: 3.14159
 
 ; Output literal string
-$OUTPUT "Hello, World!"
+@OUTPUT "Hello, World!"
 ; Expected: Hello, World!
 
 ; Output literal boolean
-$OUTPUT TRUE
-$OUTPUT FALSE
+@OUTPUT TRUE
+@OUTPUT FALSE
 ; Expected: true, false
 
 ; Output variable
 LET x = 123
-$OUTPUT x
+@OUTPUT x
 ; Expected: 123
 
 ; Output expression result
-$OUTPUT 10 + 20 * 3
+@OUTPUT 10 + 20 * 3
 ; Expected: 70
 
 ; Output string concatenation
-$OUTPUT "Hello" ++ " " ++ "RUMPS"
+@OUTPUT "Hello" ++ " " ++ "RUMPS"
 ; Expected: Hello RUMPS
 
 ; Output comparison result
-$OUTPUT 5 < 10
+@OUTPUT 5 < 10
 ; Expected: true
 
 ; Output logical result
-$OUTPUT TRUE AND FALSE
+@OUTPUT TRUE AND FALSE
 ; Expected: false
 
-$OUTPUT NOT FALSE
+@OUTPUT NOT FALSE
 ; Expected: true
 
 ; Output from block result
@@ -48,12 +48,12 @@ LET result = {
   LET b = 10
   a + b
 }
-$OUTPUT result
+@OUTPUT result
 ; Expected: 15
 
 ; Multiple outputs in sequence
-$OUTPUT "Line 1"
-$OUTPUT "Line 2"
-$OUTPUT "Line 3"
+@OUTPUT "Line 1"
+@OUTPUT "Line 2"
+@OUTPUT "Line 3"
 
-$OUTPUT "$OUTPUT test complete"
+@OUTPUT "@OUTPUT test complete"

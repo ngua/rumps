@@ -1203,7 +1203,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Execute an `$OUTPUT` statement.
+    /// Execute an `@OUTPUT` statement.
     ///
     /// Writes to stdout, stderr, or a file via the I/O context, with optional
     /// JSON formatting.

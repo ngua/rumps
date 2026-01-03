@@ -66,7 +66,7 @@ LET x = 1
     + 2       ; Indent after newline = continuation
     + 3       ; Same indent level = still continuing
 
-$OUTPUT x      ; Should print 6
+@OUTPUT x      ; Should print 6
 ```
 
 Currently fails with: `parse error: unexpected '+' (expected statement)`
@@ -83,9 +83,9 @@ Currently fails with: `parse error: unexpected '+' (expected statement)`
 Unwraps a "success" container (`Option.Some` or `Result.Ok`), or falls back to the right operand.
 
 ```rumps
-$SET name = $GET ^PATIENT(id, "NAME") ?? "Unknown"
-$SET config = user-config ?? default-config
-$SET value = risky-operation() ?? "fallback"  ; works with Result too
+@SET name = @GET ^PATIENT(id, "NAME") ?? "Unknown"
+@SET config = user-config ?? default-config
+@SET value = risky-operation() ?? "fallback"  ; works with Result too
 ```
 
 - [x] Add `Token::QuestionQuestion` to lexer
@@ -105,7 +105,7 @@ $SET value = risky-operation() ?? "fallback"  ; works with Result too
 Safe field/subscript access that short-circuits to `Option.None` if the base is `None`.
 
 ```rumps
-$SET city = patient?.address?.city ?? "N/A"
+@SET city = patient?.address?.city ?? "N/A"
 ```
 
 - [x] Add `Token::QuestionDot` to lexer
@@ -125,43 +125,43 @@ Runtime type checking that returns a boolean. Supports optional pattern binding 
 ```rumps
 ; Simple type check
 IF value is Int {
-  $OUTPUT "It's an integer"
+  @OUTPUT "It's an integer"
 }
 
 ; Variant check without binding
 IF x is Option.None {
-  $OUTPUT "No value"
+  @OUTPUT "No value"
 }
 
 ; Variant check with binding (like Rust's if let)
 IF x is Option.Some(val) {
-  $OUTPUT "Got: " ++ val    ; val is bound in this scope
+  @OUTPUT "Got: " ++ val    ; val is bound in this scope
 }
 
 IF result is Result.Ok(data) {
-  $OUTPUT data.name         ; data is bound
+  @OUTPUT data.name         ; data is bound
 }
 
 IF result is Result.Err(e) {
-  $OUTPUT "Error: " ++ e
+  @OUTPUT "Error: " ++ e
 }
 
 ; Wildcard to check variant without binding payload
 IF x is Option.Some(_) {
-  $OUTPUT "Has a value"
+  @OUTPUT "Has a value"
 }
 
 ; With ELSE branch (bindings NOT visible in ELSE)
 IF x is Option.Some(val) {
-  $OUTPUT "Got: " ++ val
+  @OUTPUT "Got: " ++ val
 } ELSE {
-  $OUTPUT "No value"
+  @OUTPUT "No value"
   ; `val` is NOT in scope here
 }
 
 ; Multiple payloads (if we ever have them)
 IF pair is Pair(a, b) {
-  $OUTPUT a ++ ", " ++ b
+  @OUTPUT a ++ ", " ++ b
 }
 ```
 
@@ -197,7 +197,7 @@ Explicit type conversion with runtime validation.
 ```rumps
 LET f = 42 as Float
 LET s = 3.14 as String
-; $SET arr = json-data as Array[Int] (FUTURE; can't implement now, haven't done JSON yet)
+; @SET arr = json-data as Array[Int] (FUTURE; can't implement now, haven't done JSON yet)
 ```
 
 - [x] Add `Token::As` keyword to lexer
@@ -235,7 +235,7 @@ LET port = env-port read Int ?? 8080
 ; Chain with is for error handling
 LET parsed = user-input read Int
 IF parsed is Result.Err(e) {
-  $OUTPUT "Parse error: " ++ e
+  @OUTPUT "Parse error: " ++ e
 }
 ```
 
@@ -254,8 +254,8 @@ IF parsed is Result.Err(e) {
 Exponentiation.
 
 ```rumps
-$SET squared = x ** 2
-$SET cubed = 2 ** 10
+@SET squared = x ** 2
+@SET cubed = 2 ** 10
 ```
 
 - [x] Add `Token::StarStar` to lexer
@@ -392,7 +392,7 @@ User-defined named functions with optional type annotations. Type annotations ca
 ```rumps
 ; Untyped (types inferred/unchecked)
 FUN greet (name) {
-  $OUTPUT "Hello, " ++ name ++ "!"
+  @OUTPUT "Hello, " ++ name ++ "!"
 }
 
 ; Typed parameters
@@ -458,40 +458,40 @@ Complete the existing `Expr::Call` implementation and support named functions as
 ```rumps
 ; Direct calls to named functions
 greet("World")
-$SET sum = add(10, 20)
-$SET area = square(side) * 4
+@SET sum = add(10, 20)
+@SET area = square(side) * 4
 
 ; Named function as value (no parens = reference, not call)
 LET f = square         ; f is now a function value
-$OUTPUT f(5)            ; 25
+@OUTPUT f(5)            ; 25
 
 ; Pass named function to higher-order function
-$OUTPUT apply(square, 5)           ; 25
-$OUTPUT apply(double, 5)           ; 10
+@OUTPUT apply(square, 5)           ; 25
+@OUTPUT apply(double, 5)           ; 10
 
 ; Compose named functions
 LET sq-then-dbl = compose(double, square)
-$OUTPUT sq-then-dbl(3)             ; 18 (square(3)=9, double(9)=18)
+@OUTPUT sq-then-dbl(3)             ; 18 (square(3)=9, double(9)=18)
 
 ; Calling closures bound to variables
 LET double = x => x * 2
-$OUTPUT double(10)                 ; 20 (looks up `double` in scope, finds closure)
+@OUTPUT double(10)                 ; 20 (looks up `double` in scope, finds closure)
 
 ; Calling closure with captured variable
 LET factor = 3
 LET scale = (x: Int) -> Int => x * factor
-$OUTPUT scale(10)                  ; 30
+@OUTPUT scale(10)                  ; 30
 
 ; Closures in objects (requires expression-based callee)
 LET ops = { inc: x => x + 1, dec: x => x - 1 }
-$OUTPUT ops.inc(5)                 ; 6 (field access yields closure, then call)
+@OUTPUT ops.inc(5)                 ; 6 (field access yields closure, then call)
 
 ; Chained calls (requires expression-based callee)
 FUN make_adder (n) { x => x + n }
-$OUTPUT make_adder(5)(10)          ; 15
+@OUTPUT make_adder(5)(10)          ; 15
 
 ; IIFE (requires expression-based callee)
-$OUTPUT (x => x * 2)(21)           ; 42
+@OUTPUT (x => x * 2)(21)           ; 42
 ```
 
 **Implemented in Step 8:**
@@ -558,7 +558,7 @@ value |> transform |> validate |> save
 
 ### Spread Operator (`...`)
 ```rumps
-$SET combined = [...arr1, ...arr2]
+@SET combined = [...arr1, ...arr2]
 ```
 **Reason**: Needs more collection/array infrastructure and clear semantics for objects vs arrays.
 
@@ -599,12 +599,12 @@ The coalesce operator unwraps `Option.Some(v)` or `Result.Ok(v)` to `v`, returni
 
 ```rumps
 ; Option
-$SET x = Some(42) ?? 0   ; x = 42, not Some(42)
-$SET y = None ?? 0       ; y = 0
+@SET x = Some(42) ?? 0   ; x = 42, not Some(42)
+@SET y = None ?? 0       ; y = 0
 
 ; Result
-$SET a = Ok(42) ?? 0     ; a = 42
-$SET b = Err("oops") ?? 0  ; b = 0 (error discarded)
+@SET a = Ok(42) ?? 0     ; a = 42
+@SET b = Err("oops") ?? 0  ; b = 0 (error discarded)
 ```
 
 For `Option`, this matches Rust's `unwrap_or` semantics. For `Result`, the error is intentionally discarded; if you need to handle the error, use `is Result.Err(e)` pattern binding instead.
@@ -614,8 +614,8 @@ For `Option`, this matches Rust's `unwrap_or` semantics. For `Result`, the error
 Optional chaining always returns an `Option`, even if the base was not an Option:
 
 ```rumps
-$SET patient = { name: "John" }
-$SET name = patient?.name   ; name = Some("John"), not "John"
+@SET patient = { name: "John" }
+@SET name = patient?.name   ; name = Some("John"), not "John"
 ```
 
 This ensures consistent typing and composability with `??`.
@@ -625,7 +625,7 @@ This ensures consistent typing and composability with `??`.
 For sum types, `is` checks the variant and optionally binds the payload:
 
 ```rumps
-$SET x = Option.Some(42)
+@SET x = Option.Some(42)
 
 ; Variant check (no binding)
 x is Option.Some       ; true (checks variant)
@@ -633,12 +633,12 @@ x is Int               ; false (x is an Option, not an Int)
 
 ; Variant check with binding (like Rust's if let)
 IF x is Option.Some(val) {
-  $OUTPUT val           ; val = 42, bound in this scope only
+  @OUTPUT val           ; val = 42, bound in this scope only
 }
 
 ; Wildcard: check variant, ignore payload
 IF x is Option.Some(_) {
-  $OUTPUT "has value"
+  @OUTPUT "has value"
 }
 ```
 
@@ -646,11 +646,11 @@ IF x is Option.Some(_) {
 
 ```rumps
 IF x is Option.Some(val) {
-  $OUTPUT val           ; `val` is bound here
+  @OUTPUT val           ; `val` is bound here
 } ELSE {
-  $OUTPUT "none"        ; `val` is NOT in scope; using it here is an error
+  @OUTPUT "none"        ; `val` is NOT in scope; using it here is an error
 }
-$OUTPUT val             ; ERROR: `val` not in scope (binding expired)
+@OUTPUT val             ; ERROR: `val` not in scope (binding expired)
 ```
 
 **Arity checking:** The number of binding names must match the variant's payload arity:
@@ -706,7 +706,7 @@ For side-effect-only functions, the result is `Option.None`:
 
 ```rumps
 FUN log (msg) {
-  $OUTPUT msg     ; $OUTPUT returns None
+  @OUTPUT msg     ; @OUTPUT returns None
 }
 ```
 
@@ -718,7 +718,7 @@ Closures capture their environment at creation time (by value, not reference):
 LET x = 10
 LET f = n => n + x
 LET x = 20           ; rebind x
-$OUTPUT f(5)          ; outputs 15, not 25
+@OUTPUT f(5)          ; outputs 15, not 25
 ```
 
 This avoids complexity around mutable captures and matches the immutable-by-default style.
@@ -778,7 +778,7 @@ When a named function is referenced without being called, it produces a function
 FUN double (x: Int) -> Int { x * 2 }
 
 LET f = double    ; f is a function value, not a call
-$OUTPUT f(5)       ; 10
+@OUTPUT f(5)       ; 10
 
 ; Equivalent to:
 LET g = (x: Int) -> Int => x * 2
@@ -801,98 +801,98 @@ The following should work:
 
 ```rumps
 ; Null coalesce
-LET name = $GET ^PATIENT(999, "NAME") ?? "Unknown"
-$OUTPUT name  ; "Unknown"
+LET name = @GET ^PATIENT(999, "NAME") ?? "Unknown"
+@OUTPUT name  ; "Unknown"
 
 ; Optional chaining
 LET patient = { address: { city: "NYC" } }
 LET city = patient?.address?.city ?? "N/A"
-$OUTPUT city  ; "NYC"
+@OUTPUT city  ; "NYC"
 
 LET empty = Option.None
 LET missing = empty?.field ?? "default"
-$OUTPUT missing  ; "default"
+@OUTPUT missing  ; "default"
 
 ; Type checking
 LET x = 42
 IF x is Int {
-  $OUTPUT "integer"
+  @OUTPUT "integer"
 }
 
 LET opt = Option.Some(10)
 IF opt is Option.Some {
-  $OUTPUT "has value"
+  @OUTPUT "has value"
 }
 
 ; Pattern binding with is (like Rust's if let)
 IF opt is Option.Some(val) {
-  $OUTPUT "Got: " ++ (val as String)  ; val = 10, bound in this scope
+  @OUTPUT "Got: " ++ (val as String)  ; val = 10, bound in this scope
 }
 
 LET result = Result.Ok({ name: "Alice", age: 30 })
 IF result is Result.Ok(data) {
-  $OUTPUT data.name    ; "Alice"
+  @OUTPUT data.name    ; "Alice"
 }
 
 IF result is Result.Err(e) {
-  $OUTPUT "Error: " ++ e
+  @OUTPUT "Error: " ++ e
 } ELSE {
-  $OUTPUT "Success!"
+  @OUTPUT "Success!"
   ; `e` is NOT in scope here
 }
 
 ; Chained pattern matching with ELSE
 LET maybe = Option.None
 IF maybe is Option.Some(v) {
-  $OUTPUT "Got: " ++ (v as String)
+  @OUTPUT "Got: " ++ (v as String)
 } ELSE {
-  $OUTPUT "Nothing there"
+  @OUTPUT "Nothing there"
 }
 
 ; Wildcard: check variant without binding
 IF opt is Option.Some(_) {
-  $OUTPUT "Has some value"
+  @OUTPUT "Has some value"
 }
 
 ; Type casting (infallible)
 LET s = 3.14 as String
-$OUTPUT "Pi is " ++ s
+@OUTPUT "Pi is " ++ s
 
 LET f = 42 as Float
-$OUTPUT f + 0.5  ; 42.5
+@OUTPUT f + 0.5  ; 42.5
 
 ; Fallible conversion with read
 LET parsed = "123" read Int
 IF parsed is Result.Ok(n) {
-  $OUTPUT n + 1  ; 124
+  @OUTPUT n + 1  ; 124
 }
 
 LET bad = "abc" read Int
 IF bad is Result.Err(e) {
-  $OUTPUT "Error: " ++ e  ; "Error: invalid integer: abc"
+  @OUTPUT "Error: " ++ e  ; "Error: invalid integer: abc"
 }
 
 ; read with ?? for defaults
 LET port = "8080" read Int ?? 3000
-$OUTPUT port  ; 8080
+@OUTPUT port  ; 8080
 
 LET fallback = "invalid" read Int ?? 3000
-$OUTPUT fallback  ; 3000
+@OUTPUT fallback  ; 3000
 
 ; Strict bool conversion
 LET b = 1 read Bool ?? false
-$OUTPUT b  ; true
+@OUTPUT b  ; true
 
 ; Power
-$OUTPUT 2 ** 10  ; 1024
-$OUTPUT 3.0 ** 0.5  ; ~1.732
+@OUTPUT 2 ** 10  ; 1024
+@OUTPUT 3.0 ** 0.5  ; ~1.732
 
 ; Named functions (untyped)
 FUN square (x) {
   x * x
 }
 
-$OUTPUT square(5)      ; 25
+@OUTPUT square(5)      ; 25
 
 ; Named functions (typed)
 FUN add (a: Int, b: Int) -> Int {
@@ -903,8 +903,8 @@ FUN greet (name: String) -> String {
   "Hello, " ++ name ++ "!"
 }
 
-$OUTPUT add(10, 20)    ; 30
-$OUTPUT greet("World") ; "Hello, World!"
+@OUTPUT add(10, 20)    ; 30
+@OUTPUT greet("World") ; "Hello, World!"
 
 ; Type error example (would fail at runtime)
 ; add("x", "y")  ; ERROR: expected Int, got String for parameter 'a'
@@ -915,28 +915,28 @@ FUN factorial (n: Int) -> Int {
   ELSE { n * factorial(n - 1) }
 }
 
-$OUTPUT factorial(5)   ; 120
+@OUTPUT factorial(5)   ; 120
 
 ; Closures (untyped)
 LET double = x => x * 2
-$OUTPUT double(21)     ; 42
+@OUTPUT double(21)     ; 42
 
 ; Closures (typed)
 LET add-typed = (a: Int, b: Int) -> Int => a + b
-$OUTPUT add-typed(10, 20)  ; 30
+@OUTPUT add-typed(10, 20)  ; 30
 
 ; Closure with captured variable
 LET multiplier = 3
 LET triple = (x: Int) -> Int => x * multiplier
-$OUTPUT triple(10)     ; 30
+@OUTPUT triple(10)     ; 30
 
 ; Higher-order function: function as parameter
 FUN apply (f: (Int) -> Int, x: Int) -> Int {
   f(x)
 }
 
-$OUTPUT apply(square, 5)       ; 25 (pass named function)
-$OUTPUT apply(x => x + 1, 5)   ; 6  (pass closure)
+@OUTPUT apply(square, 5)       ; 25 (pass named function)
+@OUTPUT apply(x => x + 1, 5)   ; 6  (pass closure)
 
 ; Higher-order function: returns a function
 FUN make-adder (n: Int) -> (Int) -> Int {
@@ -944,7 +944,7 @@ FUN make-adder (n: Int) -> (Int) -> Int {
 }
 
 LET add5 = make-adder(5)
-$OUTPUT add5(10)               ; 15
+@OUTPUT add5(10)               ; 15
 
 ; Function composition
 FUN compose (f: (Int) -> Int, g: (Int) -> Int) -> (Int) -> Int {
@@ -953,24 +953,24 @@ FUN compose (f: (Int) -> Int, g: (Int) -> Int) -> (Int) -> Int {
 
 LET double = x => x * 2
 LET sq-then-dbl = compose(double, square)
-$OUTPUT sq-then-dbl(3)         ; 18 (square(3)=9, double(9)=18)
+@OUTPUT sq-then-dbl(3)         ; 18 (square(3)=9, double(9)=18)
 
 ; Named function as first-class value
 LET f = square                ; reference, not call
-$OUTPUT f(4)                   ; 16
+@OUTPUT f(4)                   ; 16
 
 ; Higher-order with typed closure
 LET apply-twice = (f: (Int) -> Int, x: Int) -> Int => f(f(x))
-$OUTPUT apply-twice(double, 5) ; 20
+@OUTPUT apply-twice(double, 5) ; 20
 
 ; Pipeline
 LET result = 5 |> double |> square
-$OUTPUT result         ; 100
+@OUTPUT result         ; 100
 
 ; Pipeline with inline closure
 LET nums = 10
 LET result2 = nums |> (x => x + 1) |> (x => x * 2)
-$OUTPUT result2        ; 22
+@OUTPUT result2        ; 22
 ```
 
 ## Implementation Notes

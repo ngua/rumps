@@ -4,50 +4,50 @@
 ; === Option.None coalesces to fallback ===
 
 ; Option.None falls back to right operand
-$OUTPUT Option.None ?? "fallback1"
+@OUTPUT Option.None ?? "fallback1"
 ; Expected: fallback1
 
 ; Option.Some unwraps to its value
-$OUTPUT Option.Some(42) ?? 0
+@OUTPUT Option.Some(42) ?? 0
 ; Expected: 42
 
 ; === Chained coalesce ===
 
 ; Chain of None values falls through to final fallback
 LET result = Option.None ?? Option.None ?? 3
-$OUTPUT result
+@OUTPUT result
 ; Expected: 3
 
 ; First non-None wins
 LET chain-2 = Option.None ?? Option.Some("found") ?? "default"
-$OUTPUT chain-2
+@OUTPUT chain-2
 ; Expected: found
 
 ; === Result coalesce ===
 
 ; Result.Ok unwraps to its value
-$OUTPUT Result.Ok(100) ?? 0
+@OUTPUT Result.Ok(100) ?? 0
 ; Expected: 100
 
 ; Result.Err falls back to right operand
-$OUTPUT Result.Err("oops") ?? 999
+@OUTPUT Result.Err("oops") ?? 999
 ; Expected: 999
 
 ; === Coalesce in expressions ===
 
 ; Coalesce result can be used in further expressions
 LET val = (Option.None ?? 5) + 1
-$OUTPUT val
+@OUTPUT val
 ; Expected: 6
 
 ; Coalesce with string concatenation
 LET greeting = Option.None ?? "Hello"
-$OUTPUT greeting ++ " World"
+@OUTPUT greeting ++ " World"
 ; Expected: Hello World
 
 ; Coalesce with Option.Some in expression
 LET num = (Option.Some(10) ?? 0) * 2
-$OUTPUT num
+@OUTPUT num
 ; Expected: 20
 
-$OUTPUT "Coalesce tests complete"
+@OUTPUT "Coalesce tests complete"

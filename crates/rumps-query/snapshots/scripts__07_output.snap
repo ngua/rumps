@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: $OUTPUT statement\n; Tests various $OUTPUT scenarios\n\n; Output literal integer\n$OUTPUT 42\n; Expected: 42\n\n; Output literal float\n$OUTPUT 3.14159\n; Expected: 3.14159\n\n; Output literal string\n$OUTPUT \"Hello, World!\"\n; Expected: Hello, World!\n\n; Output literal boolean\n$OUTPUT TRUE\n$OUTPUT FALSE\n; Expected: true, false\n\n; Output variable\nLET x = 123\n$OUTPUT x\n; Expected: 123\n\n; Output expression result\n$OUTPUT 10 + 20 * 3\n; Expected: 70\n\n; Output string concatenation\n$OUTPUT \"Hello\" ++ \" \" ++ \"RUMPS\"\n; Expected: Hello RUMPS\n\n; Output comparison result\n$OUTPUT 5 < 10\n; Expected: true\n\n; Output logical result\n$OUTPUT TRUE AND FALSE\n; Expected: false\n\n$OUTPUT NOT FALSE\n; Expected: true\n\n; Output from block result\nLET result = {\n  LET a = 5\n  LET b = 10\n  a + b\n}\n$OUTPUT result\n; Expected: 15\n\n; Multiple outputs in sequence\n$OUTPUT \"Line 1\"\n$OUTPUT \"Line 2\"\n$OUTPUT \"Line 3\"\n\n$OUTPUT \"$OUTPUT test complete\"\n"
+description: "; Test: @OUTPUT statement\n; Tests various @OUTPUT scenarios\n\n; Output literal integer\n@OUTPUT 42\n; Expected: 42\n\n; Output literal float\n@OUTPUT 3.14159\n; Expected: 3.14159\n\n; Output literal string\n@OUTPUT \"Hello, World!\"\n; Expected: Hello, World!\n\n; Output literal boolean\n@OUTPUT TRUE\n@OUTPUT FALSE\n; Expected: true, false\n\n; Output variable\nLET x = 123\n@OUTPUT x\n; Expected: 123\n\n; Output expression result\n@OUTPUT 10 + 20 * 3\n; Expected: 70\n\n; Output string concatenation\n@OUTPUT \"Hello\" ++ \" \" ++ \"RUMPS\"\n; Expected: Hello RUMPS\n\n; Output comparison result\n@OUTPUT 5 < 10\n; Expected: true\n\n; Output logical result\n@OUTPUT TRUE AND FALSE\n; Expected: false\n\n@OUTPUT NOT FALSE\n; Expected: true\n\n; Output from block result\nLET result = {\n  LET a = 5\n  LET b = 10\n  a + b\n}\n@OUTPUT result\n; Expected: 15\n\n; Multiple outputs in sequence\n@OUTPUT \"Line 1\"\n@OUTPUT \"Line 2\"\n@OUTPUT \"Line 3\"\n\n@OUTPUT \"@OUTPUT test complete\"\n"
 ---
 42
 3.14159
@@ -17,4 +17,4 @@ TRUE
 "Line 1"
 "Line 2"
 "Line 3"
-"$OUTPUT test complete"
+"@OUTPUT test complete"

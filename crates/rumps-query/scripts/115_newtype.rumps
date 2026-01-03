@@ -4,29 +4,29 @@
 
 NEWTYPE MyInt = Int
 LET x: MyInt = 42
-$OUTPUT x
+@OUTPUT x
 
 NEWTYPE MyStr = String
 LET s: MyStr = "hello"
-$OUTPUT s
+@OUTPUT s
 
 NEWTYPE MyBool = Bool
 LET b: MyBool = TRUE
-$OUTPUT b
+@OUTPUT b
 
 ; ============ Parameterized aliases ============
 
 NEWTYPE List[T] = Array[T]
 LET xs: List[Int] = [1, 2, 3]
-$OUTPUT Array.length(xs)
+@OUTPUT Array.length(xs)
 
 NEWTYPE Maybe[T] = Option[T]
 LET opt: Maybe[Int] = Option.Some(42)
-$OUTPUT opt ?? 0
+@OUTPUT opt ?? 0
 
 NEWTYPE IntMap[V] = Map[Int, V]
 LET m: IntMap[String] = { 1 => "one" }
-$OUTPUT m
+@OUTPUT m
 
 ; ============ Phantom type parameters ============
 
@@ -34,19 +34,19 @@ $OUTPUT m
 NEWTYPE Tagged[Tag] = Int
 LET user-id: Tagged[String] = 100
 LET post-id: Tagged[Bool] = 200
-$OUTPUT user-id
-$OUTPUT post-id
+@OUTPUT user-id
+@OUTPUT post-id
 
 ; Phantom with multiple params; only some used
 NEWTYPE Partial[A, B] = Array[A]
 LET ps: Partial[Int, String] = [1, 2, 3]
-$OUTPUT Array.length(ps)
+@OUTPUT Array.length(ps)
 
 ; Nested phantom
 NEWTYPE Wrapper[T] = Int
 NEWTYPE DoubleWrap[A, B] = Wrapper[A]
 LET dw: DoubleWrap[String, Bool] = 42
-$OUTPUT dw
+@OUTPUT dw
 
 ; ============ IS operator with aliases ============
 
@@ -54,26 +54,26 @@ NEWTYPE Person = { name: String, age: Int }
 LET p1: Person = { name: "Alice", age: 30 }
 
 ; Basic IS checks
-$OUTPUT p1 IS Person
-$OUTPUT p1 IS { name: String }
-$OUTPUT p1 IS { name: String, age: Int }
-$OUTPUT p1 IS { name: String, age: Int, extra: Bool }
+@OUTPUT p1 IS Person
+@OUTPUT p1 IS { name: String }
+@OUTPUT p1 IS { name: String, age: Int }
+@OUTPUT p1 IS { name: String, age: Int, extra: Bool }
 
 ; IS with extra fields on value
 LET p2: Person = { name: "Bob", age: 25, job: "Engineer" }
-$OUTPUT p2 IS Person
-$OUTPUT p2 IS { name: String, job: String }
-$OUTPUT p2 IS { name: String, age: Int, job: String }
+@OUTPUT p2 IS Person
+@OUTPUT p2 IS { name: String, job: String }
+@OUTPUT p2 IS { name: String, age: Int, job: String }
 
 ; ============ Object alias features ============
 
 ; Field access on object aliases
-$OUTPUT p1.name
-$OUTPUT p1.age
+@OUTPUT p1.name
+@OUTPUT p1.age
 
 ; Extra fields are accessible (extensible-record style)
-$OUTPUT p2.name
-$OUTPUT p2.job
+@OUTPUT p2.name
+@OUTPUT p2.job
 
 ; Nested alias types
 NEWTYPE Address = { street: String, city: String }
@@ -83,47 +83,47 @@ LET rec: PatientRecord = {
   patient: { id: 1, name: "Charlie", age: 40 },
   address: { street: "456 Oak Ave", city: "LA" }
 }
-$OUTPUT rec.patient.name
-$OUTPUT rec.address.city
+@OUTPUT rec.patient.name
+@OUTPUT rec.address.city
 
 ; Function with alias type parameter
 FUN greet (p: Person) -> String {
   "Hello, " ++ p.name ++ "!"
 }
-$OUTPUT greet({ name: "Diana", age: 28 })
+@OUTPUT greet({ name: "Diana", age: 28 })
 
 ; Function returning structural object
 FUN make-person (name: String, age: Int) -> { name: String, age: Int } {
   { name: name, age: age }
 }
 LET p3 = make-person("Eve", 35)
-$OUTPUT p3.name
-$OUTPUT p3.age
+@OUTPUT p3.name
+@OUTPUT p3.age
 
 ; ============ Parametric object aliases ============
 
 ; Single type parameter
 NEWTYPE Box[T] = { value: T }
 LET int-box: Box[Int] = { value: 42 }
-$OUTPUT int-box.value
+@OUTPUT int-box.value
 
 LET str-box: Box[String] = { value: "hello" }
-$OUTPUT str-box.value
+@OUTPUT str-box.value
 
 ; Two type parameters
 NEWTYPE Pair[L, R] = { left: L, right: R }
 LET pair: Pair[Int, String] = { left: 1, right: "one" }
-$OUTPUT pair.left
-$OUTPUT pair.right
+@OUTPUT pair.left
+@OUTPUT pair.right
 
 ; Nested type parameters
 LET nested: Box[Pair[Int, Bool]] = { value: { left: 99, right: true } }
-$OUTPUT nested.value.left
-$OUTPUT nested.value.right
+@OUTPUT nested.value.left
+@OUTPUT nested.value.right
 
 ; NEWTYPE wrapping Option
 NEWTYPE MaybeBox[T] = { inner: Option[T] }
 LET some-val: MaybeBox[Int] = { inner: Option.Some(123) }
 LET none-val: MaybeBox[Int] = { inner: Option.None }
-$OUTPUT some-val.inner!
-$OUTPUT none-val.inner ?? 0
+@OUTPUT some-val.inner!
+@OUTPUT none-val.inner ?? 0

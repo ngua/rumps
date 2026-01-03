@@ -3,16 +3,16 @@
 
 ; === Single-arm IF returns Unit ===
 ; Single-arm IF always evaluates to Unit (for side effects only)
-LET res = IF TRUE { $OUTPUT "side effect" }
-$OUTPUT res
+LET res = IF TRUE { @OUTPUT "side effect" }
+@OUTPUT res
 ; Expected: Unit
 
 ; === IF/ELSE expression in LET binding ===
 LET a = IF TRUE { "yes" } ELSE { "no" }
-$OUTPUT a
+@OUTPUT a
 
 LET b = IF FALSE { "yes" } ELSE { "no" }
-$OUTPUT b
+@OUTPUT b
 
 ; Nested IF/ELSE expressions
 LET nested = IF TRUE {
@@ -20,31 +20,31 @@ LET nested = IF TRUE {
 } ELSE {
   3
 }
-$OUTPUT nested
+@OUTPUT nested
 
 ; IF/ELSE in arithmetic
 LET sum = 10 + IF TRUE { 5 } ELSE { 0 }
-$OUTPUT sum
+@OUTPUT sum
 
 ; IF/ELSE as argument
-$OUTPUT IF TRUE { "direct if" } ELSE { "nope" }
+@OUTPUT IF TRUE { "direct if" } ELSE { "nope" }
 
 ; === Block expressions ===
 
 ; Block expression in LET binding
 LET blk = { 1 + 2 }
-$OUTPUT blk
+@OUTPUT blk
 
 ; Block with statements and tail
 LET computed = {
   LET tmp = 10
   tmp * 2
 }
-$OUTPUT computed
+@OUTPUT computed
 
 ; Block in arithmetic
 LET expr = { 5 } + { 3 }
-$OUTPUT expr
+@OUTPUT expr
 
 ; IF/ELSE with block that has statements
 LET complex = IF TRUE {
@@ -53,7 +53,7 @@ LET complex = IF TRUE {
 } ELSE {
   0
 }
-$OUTPUT complex
+@OUTPUT complex
 
 ; Chained conditionals (all IF/ELSE)
 LET grade = 85
@@ -62,14 +62,14 @@ LET letter = IF grade >= 90 { "A" } ELSE {
     IF grade >= 70 { "C" } ELSE { "F" }
   }
 }
-$OUTPUT letter
+@OUTPUT letter
 
 ; === Blocks without tail return Unit ===
 LET no-tail = {
   LET tmp = 42
-  $OUTPUT tmp
+  @OUTPUT tmp
 }
-$OUTPUT no-tail
+@OUTPUT no-tail
 ; Expected: Unit
 
-$OUTPUT "Block expressions test complete"
+@OUTPUT "Block expressions test complete"

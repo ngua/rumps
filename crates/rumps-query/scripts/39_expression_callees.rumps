@@ -8,30 +8,30 @@ FUN make-adder (n) {
 }
 
 LET add5 = make-adder(5)
-$OUTPUT add5(10)
+@OUTPUT add5(10)
 ; Expected: 15
 
-$OUTPUT make-adder(100)(42)
+@OUTPUT make-adder(100)(42)
 ; Expected: 142
 
 FUN make-multiplier (n) {
   x => x * n
 }
 
-$OUTPUT make-multiplier(2)(7)
+@OUTPUT make-multiplier(2)(7)
 ; Expected: 14
 
 ; === IIFE (Immediately Invoked Function Expression) ===
 
-$OUTPUT (x => x * 2)(21)
+@OUTPUT (x => x * 2)(21)
 ; Expected: 42
 
-$OUTPUT ((a, b) => a + b)(10, 32)
+@OUTPUT ((a, b) => a + b)(10, 32)
 ; Expected: 42
 
 ; IIFE with captured variable
 LET factor = 10
-$OUTPUT (x => x * factor)(5)
+@OUTPUT (x => x * factor)(5)
 ; Expected: 50
 
 ; === Higher-order functions ===
@@ -40,14 +40,14 @@ FUN apply (f, x) {
   f(x)
 }
 
-$OUTPUT apply(x => x + 1, 41)
+@OUTPUT apply(x => x + 1, 41)
 ; Expected: 42
 
 FUN square (x) {
   x * x
 }
 
-$OUTPUT apply(square, 6)
+@OUTPUT apply(square, 6)
 ; Expected: 36
 
 ; === Function composition ===
@@ -60,11 +60,11 @@ FUN double (x) { x * 2 }
 FUN inc (x) { x + 1 }
 
 LET double-then-inc = compose(inc, double)
-$OUTPUT double-then-inc(20)
+@OUTPUT double-then-inc(20)
 ; Expected: 41 (double(20)=40, inc(40)=41)
 
 LET inc-then-double = compose(double, inc)
-$OUTPUT inc-then-double(20)
+@OUTPUT inc-then-double(20)
 ; Expected: 42 (inc(20)=21, double(21)=42)
 
 ; === Typed functions with valid calls ===
@@ -73,14 +73,14 @@ FUN add-typed (a: Int, b: Int) -> Int {
   a + b
 }
 
-$OUTPUT add-typed(10, 32)
+@OUTPUT add-typed(10, 32)
 ; Expected: 42
 
 FUN greet (name: String) -> String {
   "Hello, " ++ name ++ "!"
 }
 
-$OUTPUT greet("World")
+@OUTPUT greet("World")
 ; Expected: Hello, World!
 
 ; === Higher-order with typed parameters ===
@@ -89,10 +89,10 @@ FUN apply-twice (f: (Int) -> Int, x: Int) -> Int {
   f(f(x))
 }
 
-$OUTPUT apply-twice(x => x + 1, 40)
+@OUTPUT apply-twice(x => x + 1, 40)
 ; Expected: 42
 
-$OUTPUT apply-twice(x => x * 2, 5)
+@OUTPUT apply-twice(x => x * 2, 5)
 ; Expected: 20
 
 ; === Functions returning functions with types ===
@@ -102,36 +102,36 @@ FUN make-scaler (n: Int) -> (Int) -> Int {
 }
 
 LET triple = make-scaler(3)
-$OUTPUT triple(14)
+@OUTPUT triple(14)
 ; Expected: 42
 
-$OUTPUT make-scaler(7)(6)
+@OUTPUT make-scaler(7)(6)
 ; Expected: 42
 
 ; === Complex nested calls ===
 
-$OUTPUT make-multiplier(2)(make-adder(3)(4))
+@OUTPUT make-multiplier(2)(make-adder(3)(4))
 ; Expected: 14 (add3(4)=7, mult2(7)=14)
 
 FUN chain-a (x) { x + 1 }
 FUN chain-b (x) { x * 2 }
 FUN chain-c (x) { x - 3 }
 
-$OUTPUT chain-c(chain-b(chain-a(10)))
+@OUTPUT chain-c(chain-b(chain-a(10)))
 ; Expected: 19 ((10+1)*2-3 = 22-3 = 19)
 
 ; === Passing named functions to higher-order functions ===
 
-$OUTPUT apply(double, 21)
+@OUTPUT apply(double, 21)
 ; Expected: 42
 
-$OUTPUT apply(inc, 41)
+@OUTPUT apply(inc, 41)
 ; Expected: 42
 
-$OUTPUT apply-twice(double, 3)
+@OUTPUT apply-twice(double, 3)
 ; Expected: 12 (double(3)=6, double(6)=12)
 
-$OUTPUT apply-twice(inc, 40)
+@OUTPUT apply-twice(inc, 40)
 ; Expected: 42
 
 ; === Closure capturing multiple variables ===
@@ -139,7 +139,7 @@ $OUTPUT apply-twice(inc, 40)
 LET a = 10
 LET b = 20
 LET sum-with-ab = x => x + a + b
-$OUTPUT sum-with-ab(12)
+@OUTPUT sum-with-ab(12)
 ; Expected: 42
 
 ; === Factorial via currying ===
@@ -152,21 +152,21 @@ FUN make-factorial () {
 }
 
 LET factorial = make-factorial()
-$OUTPUT factorial(5)
+@OUTPUT factorial(5)
 ; Expected: 120
 
 ; === Object field closures ===
 
 LET ops = { inc: x => x + 1, mul: x => x * 2 }
-$OUTPUT ops.inc(5)
+@OUTPUT ops.inc(5)
 ; Expected: 6
 
-$OUTPUT ops.mul(21)
+@OUTPUT ops.mul(21)
 ; Expected: 42
 
 ; Nullary closure in object
 LET counter = { value: () => 42 }
-$OUTPUT counter.value()
+@OUTPUT counter.value()
 ; Expected: 42
 
 ; Chained object field calls
@@ -174,7 +174,7 @@ LET math = {
   add: (a, b) => a + b,
   sq: x => x * x
 }
-$OUTPUT math.sq(math.add(3, 4))
+@OUTPUT math.sq(math.add(3, 4))
 ; Expected: 49 (3+4=7, 7*7=49)
 
-$OUTPUT "Expression callees test complete"
+@OUTPUT "Expression callees test complete"

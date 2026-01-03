@@ -11,7 +11,7 @@ use crate::value::{TypeId, Value};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
-    /// `$GET` primitive; reads a value from a B-tree variable.
+    /// `@GET` primitive; reads a value from a B-tree variable.
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database.
@@ -40,7 +40,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         })
     }
 
-    /// `$SET` primitive; writes a value to a B-tree variable.
+    /// `@SET` primitive; writes a value to a B-tree variable.
     ///
     /// Returns `Result[Unit, String]`. Globals require an active transaction
     /// (enforced by typechecker). Locals can be set outside transactions.
@@ -80,7 +80,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         })
     }
 
-    /// `$KILL` primitive; deletes a variable and its descendants.
+    /// `@KILL` primitive; deletes a variable and its descendants.
     ///
     /// Returns `Result[Unit, String]`. Globals require an active transaction
     /// (enforced by typechecker). Locals can be killed outside transactions.
@@ -114,7 +114,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         })
     }
 
-    /// `$DATA` primitive; queries existence status of a B-tree node.
+    /// `@DATA` primitive; queries existence status of a B-tree node.
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database. Returns a `DataStatus` enum value.
@@ -144,7 +144,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         Ok(Value::Tagged(type_expr_id, variant_idx, SmallVec::new()))
     }
 
-    /// `$ORDER` primitive; returns the next subscript at a given level.
+    /// `@ORDER` primitive; returns the next subscript at a given level.
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database. Returns `Option[Subscript]`.
@@ -193,7 +193,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `$QUERY` primitive; returns the full key path to the next node.
+    /// `@QUERY` primitive; returns the full key path to the next node.
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database. Returns `Option[Array[Subscript]]`.

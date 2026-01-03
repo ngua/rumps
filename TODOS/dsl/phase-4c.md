@@ -381,16 +381,16 @@ Pattern matching with regex literals.
 
 ```rumps
 IF email MATCHES /^[^@]+@[^@]+\.[^@]+$/ {
-  $OUTPUT "Valid email"
+  @OUTPUT "Valid email"
 }
 
 IF ssn MATCHES /^\d{3}-\d{2}-\d{4}$/ {
-  $OUTPUT "Valid SSN format"
+  @OUTPUT "Valid SSN format"
 }
 
 ; Negation via NOT
 IF NOT (input MATCHES /[<>]/) {
-  $OUTPUT "No angle brackets"
+  @OUTPUT "No angle brackets"
 }
 ```
 

@@ -6,25 +6,25 @@
 ; Success case
 LET s1 = "42"
 LET r1 = s1 READ Int
-$OUTPUT r1
+@OUTPUT r1
 ; Expected: Result.Ok(42)
 
 ; Negative number
 LET s2 = "-123"
 LET r2 = s2 READ Int
-$OUTPUT r2
+@OUTPUT r2
 ; Expected: Result.Ok(-123)
 
 ; Failure case (not a valid int)
 LET s3 = "hello"
 LET r3 = s3 READ Int
-$OUTPUT r3
+@OUTPUT r3
 ; Expected: Result.Err(...)
 
 ; Failure case (float string -> int)
 LET s4 = "3.14"
 LET r4 = s4 READ Int
-$OUTPUT r4
+@OUTPUT r4
 ; Expected: Result.Err(...)
 
 ; === String -> Float ===
@@ -32,60 +32,60 @@ $OUTPUT r4
 ; Success case
 LET f1 = "3.14"
 LET rf1 = f1 READ Float
-$OUTPUT rf1
+@OUTPUT rf1
 ; Expected: Result.Ok(3.14)
 
 ; Integer string to float
 LET f2 = "42"
 LET rf2 = f2 READ Float
-$OUTPUT rf2
+@OUTPUT rf2
 ; Expected: Result.Ok(42)
 
 ; Negative float
 LET f3 = "-2.5"
 LET rf3 = f3 READ Float
-$OUTPUT rf3
+@OUTPUT rf3
 ; Expected: Result.Ok(-2.5)
 
 ; Failure case
 LET f4 = "not-a-number"
 LET rf4 = f4 READ Float
-$OUTPUT rf4
+@OUTPUT rf4
 ; Expected: Result.Err(...)
 
 ; === Int -> Bool ===
 
 ; Zero -> false
 LET b1 = 0 READ Bool
-$OUTPUT b1
+@OUTPUT b1
 ; Expected: Result.Ok(FALSE)
 
 ; One -> true
 LET b2 = 1 READ Bool
-$OUTPUT b2
+@OUTPUT b2
 ; Expected: Result.Ok(TRUE)
 
 ; Invalid int (not 0 or 1)
 LET b3 = 42 READ Bool
-$OUTPUT b3
+@OUTPUT b3
 ; Expected: Result.Err(...)
 
 LET b4 = -1 READ Bool
-$OUTPUT b4
+@OUTPUT b4
 ; Expected: Result.Err(...)
 
 ; === Chained operations ===
 
 ; Chain read with as
 LET chain = ("42" READ Int) AS String
-$OUTPUT chain
+@OUTPUT chain
 ; Expected: Result.Ok(42)
 
 ; === Read with expressions ===
 
 LET concat = "1" ++ "23"
 LET parsed = concat READ Int
-$OUTPUT parsed
+@OUTPUT parsed
 ; Expected: Result.Ok(123)
 
-$OUTPUT "Fallible read test complete"
+@OUTPUT "Fallible read test complete"

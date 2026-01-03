@@ -1,74 +1,74 @@
 ; Test: Spread subscripts in local/global variables
 ; Allows spreading an Array[Subscript] into subscript position
-; Useful for $QUERY iteration where keys are returned as arrays
+; Useful for @QUERY iteration where keys are returned as arrays
 
 ; Set up test data
-$SET data(1, "a") = "first"
-$SET data(1, "b") = "second"
-$SET data(2, "x") = "third"
-$SET data(2, "y") = "fourth"
+@SET data(1, "a") = "first"
+@SET data(1, "b") = "second"
+@SET data(2, "x") = "third"
+@SET data(2, "y") = "fourth"
 
 ; Regular subscripts (existing behavior)
-LET v1 = $GET data(1, "a")
-$OUTPUT v1
+LET v1 = @GET data(1, "a")
+@OUTPUT v1
 
 ; Spread an empty array: equivalent to data()
 LET empty: Array[Subscript] = []
-LET root = $GET data(...empty)
-$OUTPUT root
+LET root = @GET data(...empty)
+@OUTPUT root
 
 ; Spread a single-element array
 LET k1: Array[Subscript] = [1]
-LET partial = $GET data(...k1, "a")
-$OUTPUT partial
+LET partial = @GET data(...k1, "a")
+@OUTPUT partial
 
 ; Spread a full key path
 LET key: Array[Subscript] = [1, "b"]
-LET v2 = $GET data(...key)
-$OUTPUT v2
+LET v2 = @GET data(...key)
+@OUTPUT v2
 
 ; Mix regular and spread subscripts
 LET suffix: Array[Subscript] = ["x"]
-LET v3 = $GET data(2, ...suffix)
-$OUTPUT v3
+LET v3 = @GET data(2, ...suffix)
+@OUTPUT v3
 
-; Spread with $SET
+; Spread with @SET
 LET set-key: Array[Subscript] = [3, "z"]
-$SET data(...set-key) = "spread-set"
-LET v4 = $GET data(3, "z")
-$OUTPUT v4
+@SET data(...set-key) = "spread-set"
+LET v4 = @GET data(3, "z")
+@OUTPUT v4
 
-; Spread with $KILL
-$SET data(99, "del") = "to-delete"
+; Spread with @KILL
+@SET data(99, "del") = "to-delete"
 LET kill-key: Array[Subscript] = [99, "del"]
-$KILL data(...kill-key)
-LET deleted = $GET data(99, "del")
-$OUTPUT deleted
+@KILL data(...kill-key)
+LET deleted = @GET data(99, "del")
+@OUTPUT deleted
 
-; Spread with $DATA
+; Spread with @DATA
 LET data-key: Array[Subscript] = [1, "a"]
-LET status = $DATA data(...data-key)
-$OUTPUT status
+LET status = @DATA data(...data-key)
+@OUTPUT status
 
-; Spread with $ORDER
-$SET items(1) = "one"
-$SET items(2) = "two"
-$SET items(10) = "ten"
+; Spread with @ORDER
+@SET items(1) = "one"
+@SET items(2) = "two"
+@SET items(10) = "ten"
 LET prefix: Array[Subscript] = [1]
-LET next = $ORDER items(...prefix)
-$OUTPUT next
+LET next = @ORDER items(...prefix)
+@OUTPUT next
 
 ; Multiple spreads (concatenation)
 LET part1: Array[Subscript] = [1]
 LET part2: Array[Subscript] = ["a"]
-LET combined = $GET data(...part1, ...part2)
-$OUTPUT combined
+LET combined = @GET data(...part1, ...part2)
+@OUTPUT combined
 
 ; Spread with dynamic subscript values
 LET n = 2
 LET s = "y"
 LET dyn-key: Array[Subscript] = [n, s]
-LET v5 = $GET data(...dyn-key)
-$OUTPUT v5
+LET v5 = @GET data(...dyn-key)
+@OUTPUT v5
 
-$OUTPUT "spread subscript test complete"
+@OUTPUT "spread subscript test complete"

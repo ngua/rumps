@@ -6,7 +6,7 @@ Add a Hindley-Milner style type inference and checking phase. The type checker r
 
 | Decision         | Choice                                   | Rationale                                                                               |
 |------------------|------------------------------------------|-----------------------------------------------------------------------------------------|
-| DB operations    | Infer from usage, fallback to `Storable` | `LET x = $GET local(1); x + 1` infers `Int`; ambiguous cases resolve to `Storable` union |
+| DB operations    | Infer from usage, fallback to `Storable` | `LET x = @GET local(1); x + 1` infers `Int`; ambiguous cases resolve to `Storable` union |
 | Object typing    | Structural                               | Objects compatible if they have required fields                                         |
 | Error handling   | Reject at compile                        | Type errors prevent execution                                                           |
 | Numeric coercion | Float result                             | `Int + Float = Float` (widening); `Int -> Float` only, not bidirectional                |
@@ -53,9 +53,9 @@ Lexer -> CST -> AST -> Name Resolution -> [TYPE CHECK] -> Interpreter
 
 **Phase 4.0.x (Json, Union Types, Expression Annotations, Error Rename, Struct Type Params, Structural Objects) blocks all later phases.** The type checker requires:
 - `Ty::Json` for database values and JSON literals
-- `UNION Storable` for `$GET` return type and `$SET` value type
+- `UNION Storable` for `@GET` return type and `@SET` value type
 - Union type syntax for function signatures
-- Expression type annotations for disambiguation (e.g., `($GET local("key")) : Int`)
+- Expression type annotations for disambiguation (e.g., `(@GET local("key")) : Int`)
 - `Error::RuntimeType` distinct from `Error::StaticType`
 - Struct types with type parameters (e.g., `TYPE Pair[L, R] = { left: L, right: R }`)
 - Structural object types for anonymous records (e.g., `{ name: String, age: Int }`)
@@ -74,7 +74,7 @@ Parentheses required around annotated expressions (like Haskell):
 
 ```rumps
 ; Annotate any expression
-LET x = ($GET local("key")) : Int      ; disambiguate DB read
+LET x = (@GET local("key")) : Int      ; disambiguate DB read
 LET y = (1 + 2) : Float               ; force widening
 LET z = (Option.None) : Option[String] ; specify type parameter
 
@@ -160,17 +160,17 @@ Currently, `Object` is a primitive type with no field information:
 
 ```rumps
 LET obj = { name: "Alice", age: 30 }
-$OUTPUT obj IS Object        ; TRUE, but says nothing about fields
+@OUTPUT obj IS Object        ; TRUE, but says nothing about fields
 ```
 
 With structural object types:
 
 ```rumps
 LET obj = { name: "Alice", age: 30 }
-$OUTPUT obj IS { name: String, age: Int }     ; TRUE
-$OUTPUT obj IS { name: String }               ; TRUE (extensible-record)
-$OUTPUT obj IS { name: Int }                  ; FALSE (wrong field type)
-$OUTPUT obj IS { missing: String }            ; FALSE (missing field)
+@OUTPUT obj IS { name: String, age: Int }     ; TRUE
+@OUTPUT obj IS { name: String }               ; TRUE (extensible-record)
+@OUTPUT obj IS { name: Int }                  ; FALSE (wrong field type)
+@OUTPUT obj IS { missing: String }            ; FALSE (missing field)
 ```
 
 ### Extensible Record Semantics
@@ -180,10 +180,10 @@ Structural object types use extensible-record semantics: an object matches a typ
 ```rumps
 LET x = { a: 1, b: 2, c: 3 }
 
-$OUTPUT x IS { a: Int }                  ; TRUE (has field `a: Int`)
-$OUTPUT x IS { a: Int, b: Int }          ; TRUE (has both fields)
-$OUTPUT x IS { a: Int, b: Int, c: Int }  ; TRUE (exact match)
-$OUTPUT x IS { d: Int }                  ; FALSE (missing `d`)
+@OUTPUT x IS { a: Int }                  ; TRUE (has field `a: Int`)
+@OUTPUT x IS { a: Int, b: Int }          ; TRUE (has both fields)
+@OUTPUT x IS { a: Int, b: Int, c: Int }  ; TRUE (exact match)
+@OUTPUT x IS { d: Int }                  ; FALSE (missing `d`)
 ```
 
 This is consistent with how named struct types already work:
@@ -191,7 +191,7 @@ This is consistent with how named struct types already work:
 ```rumps
 TYPE Point = { x: Int, y: Int }
 LET p = { x: 1, y: 2, z: 3 }  ; extra field `z`
-$OUTPUT p IS Point             ; TRUE (has required fields)
+@OUTPUT p IS Point             ; TRUE (has required fields)
 ```
 
 ### Syntax
@@ -214,7 +214,7 @@ FUN make-point(x: Int, y: Int) -> { x: Int, y: Int } {
 
 ; IS checks
 IF val IS { id: Int, data: String } {
-  $OUTPUT val.id
+  @OUTPUT val.id
 }
 
 ; In union types
@@ -228,15 +228,15 @@ The `Object` type name becomes unavailable to users:
 ```rumps
 ; BEFORE (removed)
 LET obj: Object = { a: 1 }
-$OUTPUT obj IS Object
+@OUTPUT obj IS Object
 
 ; AFTER (error)
 LET obj: Object = { a: 1 }    ; ERROR: unknown type `Object`
-$OUTPUT obj IS Object          ; ERROR: unknown type `Object`
+@OUTPUT obj IS Object          ; ERROR: unknown type `Object`
 
 ; Use structural types instead
 LET obj: { a: Int } = { a: 1 }
-$OUTPUT obj IS { a: Int }
+@OUTPUT obj IS { a: Int }
 ```
 
 **Internal note**: `TypeId::OBJECT` and `Value::Object` remain for runtime representation. Only the user-facing type name is removed.
@@ -328,9 +328,9 @@ For dynamic key-value iteration, use `Map[String, V]` instead of structural obje
 - [x] Object module still works with structural types
 
 #### Migration
-- [x] Update `scripts/86_json.rumps` line 47: `$OUTPUT obj IS Object` → `$OUTPUT obj IS { name: String, age: Int }`
+- [x] Update `scripts/86_json.rumps` line 47: `@OUTPUT obj IS Object` → `@OUTPUT obj IS { name: String, age: Int }`
 - [x] Update any other test scripts using `IS Object`
-- [x] Update any other test scripts that `$OUTPUT` and object (`Value::type_name` has changed)
+- [x] Update any other test scripts that `@OUTPUT` and object (`Value::type_name` has changed)
 
 ---
 
@@ -389,8 +389,8 @@ LET active = data..active         ; Option.Some(true) : Option[Bool]
 LET missing-val = data..foo       ; Option.None
 
 ; Unwrap with !
-$OUTPUT data..name!                ; "John"
-$OUTPUT data..age! + 1             ; 31 (Int arithmetic works)
+@OUTPUT data..name!                ; "John"
+@OUTPUT data..age! + 1             ; 31 (Int arithmetic works)
 
 ; Dynamic access with -> and ->>
 LET key = "name"
@@ -399,7 +399,7 @@ LET dyn-scalar = data->>(key)     ; Option[String]
 
 ; Coalesce with ??
 LET miss = data..missing ?? Option.Some("default")
-$OUTPUT miss!                      ; "default"
+@OUTPUT miss!                      ; "default"
 
 ; Use READ to convert Json to native types (see "JSON is Opaque" section)
 LET age-result = data.age READ Int   ; Result.Ok(30)
@@ -538,7 +538,7 @@ LET box = boxed READ Box[Int]              ; Result[Box[Int], String]
 
 ## Phase 4.0.1: Add Union Types
 
-Add genuine union types to the language. This enables typed database operations where `$GET` returns `UNION Storable = Bool | Int | Float | Char | String | Json`.
+Add genuine union types to the language. This enables typed database operations where `@GET` returns `UNION Storable = Bool | Int | Float | Char | String | Json`.
 
 **NOTE**: `UNION`s must support _all_ RUMPS types, including user-defined `TYPE` declarations. They should also be able to take type parameters, e.g. `UNION F[T] = Int | Option[T]`
 
@@ -549,13 +549,13 @@ Add genuine union types to the language. This enables typed database operations 
 UNION Storable = Bool | Int | Float | Char | String | Json
 
 ; Use in annotations
-LET x: Storable = $GET local("key")
+LET x: Storable = @GET local("key")
 
 ; Check with IS
 IF x IS String {
-  $OUTPUT x ++ " is a string"
+  @OUTPUT x ++ " is a string"
 } ELSE {
-  $OUTPUT "not a string"
+  @OUTPUT "not a string"
 }
 
 ; Cast with AS (runtime, may fail)
@@ -592,7 +592,7 @@ FUN double(x: Int | Float) -> Float {
 
 ; Function returning different union members
 FUN fetch-value(key: String) -> Storable {
-  LET raw = $GET local(key)
+  LET raw = @GET local(key)
   raw  ; returns Storable (whatever was stored)
 }
 
@@ -619,7 +619,7 @@ Define a built-in union for database-storable values:
 UNION Storable = Bool | Int | Float | Char | String | Json
 ```
 
-This is the return type of `$GET` and element type of `COLLECT` (pre-`SELECT`).
+This is the return type of `@GET` and element type of `COLLECT` (pre-`SELECT`).
 
 ### Built-in Scalar Union
 
@@ -654,7 +654,7 @@ The `->>` operator returns `Option[Scalar]`; the inner type is one of the scalar
     - This is ergonomic choice for making DB access easier
 - [x] Tests: Union declaration, IS checks, AS casts
 
-**NOTE**: `$GET` return type is a type-checker concern (no runtime change); see Phase 4.10.
+**NOTE**: `@GET` return type is a type-checker concern (no runtime change); see Phase 4.10.
 
 ---
 
@@ -729,8 +729,8 @@ crates/rumps-query/src/typecheck/
     - [x] `ArityMismatch { expected: usize, got: usize, span: Span }`
     - [x] `NotNumeric(Ty, Span)`
     - [x] `NotJsonable(Ty, Span)` - for `as Json`, `store`, etc.
-    - [x] `NotSubscript(Ty, Span)` - for $SET/$GET subscript keys
-    - [x] `NotStorable(Ty, Span)` - for $SET value (must be DB-storable)
+    - [x] `NotSubscript(Ty, Span)` - for @SET/@GET subscript keys
+    - [x] `NotStorable(Ty, Span)` - for @SET value (must be DB-storable)
     - [x] `MissingField { ty: TypeId, field: String, span: Span }` - struct missing required field
     - [x] `FieldTypeMismatch { ty: TypeId, field: String, expected: Ty, got: Ty, span: Span }`
     - [x] `InfiniteType(TyVar, Ty, Span)`
@@ -1085,7 +1085,7 @@ LET z = IF cond { 42 } ELSE { "hello" }
 
 ```rumps
 ; OK: body is Unit (statement-like)
-IF cond { $OUTPUT "hello" }
+IF cond { @OUTPUT "hello" }
 
 ; ERROR: body is Int, but no ELSE branch
 LET x = IF cond { 42 }
@@ -1186,7 +1186,7 @@ Infer types for variant constructors and pattern matching.
 
 ## Phase 4.10: Special Expressions [x]
 
-Handle unwrap, IS, AS, READ, $GET, and other special cases.
+Handle unwrap, IS, AS, READ, @GET, and other special cases.
 
 ### Special Rules
 
@@ -1196,7 +1196,7 @@ Handle unwrap, IS, AS, READ, $GET, and other special cases.
 | `e IS T`       | `Bool`              | runtime check; may introduce bindings (see below)                  |
 | `e AS T`       | `T`                 | infallible cast                                                    |
 | `e READ T`     | `Result[T, String]` | fallible conversion                                                |
-| `$GET local(k)` | `Storable`          | returns `Storable` union; narrow with `IS`/`AS` or usage inference |
+| `@GET local(k)` | `Storable`          | returns `Storable` union; narrow with `IS`/`AS` or usage inference |
 
 #### Note on `IS` with Pattern Bindings
 
@@ -1205,9 +1205,9 @@ Handle unwrap, IS, AS, READ, $GET, and other special cases.
 ```rumps
 LET r = Result.Ok(999)
 IF r IS Result.Ok(data) {
-    $OUTPUT data          ; `data` is bound here with type Int
+    @OUTPUT data          ; `data` is bound here with type Int
 } ELSE {
-    $OUTPUT "error"
+    @OUTPUT "error"
 }
 ```
 
@@ -1264,9 +1264,9 @@ Infer types for all statement types.
 |--------------------|-------------------------------------------------------------------------------|
 | `LET x = e`        | bind `x` to `typeof(e)` in env                                                |
 | `LET x: T = e`     | unify `typeof(e) ~ T`, bind `x` to `T`                                        |
-| `$SET local(k) = e` | no env binding (db write)                                                     |
-| `$KILL local(k)`    | no env binding (db delete); infer subscripts with `Subscript` constraint      |
-| `$OUTPUT e`         | infer `e`, no constraint on type (all types satisfy `Constraint::Stringable`) |
+| `@SET local(k) = e` | no env binding (db write)                                                     |
+| `@KILL local(k)`    | no env binding (db delete); infer subscripts with `Subscript` constraint      |
+| `@OUTPUT e`         | infer `e`, no constraint on type (all types satisfy `Constraint::Stringable`) |
 | `expr`             | infer `e` for side effects; no env binding                                    |
 | `TYPE T = ...`     | register in type registry                                                     |
 | `UNION T = ...`    | register in type registry                                                     |

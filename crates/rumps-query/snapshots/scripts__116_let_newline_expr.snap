@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; LET with expression on next line (after `=`)\n\nLET x =\n  MATCH Unit {\n    Unit => Unit\n  }\n\n@OUTPUT x\n\n; Also test with other expressions\nLET y =\n  1\n  + 2\n  + 3\n\n@OUTPUT y\n\n; Nested\nLET z =\n  IF true {\n    \"yes\"\n  } ELSE {\n    \"no\"\n  }\n\n@OUTPUT z\n"
+---
+Unit
+6
+"yes"

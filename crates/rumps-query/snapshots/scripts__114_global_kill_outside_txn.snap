@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "$KILL ^data(1)\n"
+description: "@KILL ^data(1)\n"
 ---
 ERROR: global writes require a transaction

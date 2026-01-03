@@ -9,7 +9,7 @@ LET count = FOREVER 1 (n, cont) => {
     cont(n + 1)
   }
 }
-$OUTPUT count
+@OUTPUT count
 
 ; Sum from 1 to 10
 LET sum = FOREVER { acc: 0, i: 1 } (state, cont) => {
@@ -19,7 +19,7 @@ LET sum = FOREVER { acc: 0, i: 1 } (state, cont) => {
     cont({ acc: state.acc + state.i, i: state.i + 1 })
   }
 }
-$OUTPUT sum
+@OUTPUT sum
 
 ; Factorial of 5
 LET factorial = FOREVER { result: 1, n: 5 } (state, cont) => {
@@ -29,7 +29,7 @@ LET factorial = FOREVER { result: 1, n: 5 } (state, cont) => {
     cont({ result: state.result * state.n, n: state.n - 1 })
   }
 }
-$OUTPUT factorial
+@OUTPUT factorial
 
 ; Early exit based on condition
 LET early = FOREVER 0 (n, cont) => {
@@ -39,7 +39,7 @@ LET early = FOREVER 0 (n, cont) => {
     cont(n + 1)
   }
 }
-$OUTPUT early
+@OUTPUT early
 
 ; Collect even numbers from 0 to 10
 LET evens = FOREVER { i: 0, acc: [] } (state, cont) => {
@@ -53,44 +53,44 @@ LET evens = FOREVER { i: 0, acc: [] } (state, cont) => {
     }
   }
 }
-$OUTPUT evens
+@OUTPUT evens
 
-; Using $ORDER to iterate through subscripts
-$SET data(1) = "one"
-$SET data(2) = "two"
-$SET data(3) = "three"
-$SET data(4) = "four"
+; Using @ORDER to iterate through subscripts
+@SET data(1) = "one"
+@SET data(2) = "two"
+@SET data(3) = "three"
+@SET data(4) = "four"
 
-; Collect keys using $ORDER and FOREVER
-LET keys = FOREVER { key: $ORDER data, acc: [] } (state, cont) => {
+; Collect keys using @ORDER and FOREVER
+LET keys = FOREVER { key: @ORDER data, acc: [] } (state, cont) => {
   MATCH state.key {
     Option.None => state.acc
     Option.Some(s) => {
       LET s = (s READ Int)!
       cont({
-        key: $ORDER data(s),
+        key: @ORDER data(s),
         acc: Array.concat(state.acc, [s])
       })
     }
   }
 }
-$OUTPUT keys
+@OUTPUT keys
 
-; Collect all values using $ORDER
-LET vals = FOREVER { key: $ORDER data, acc: "" } (state, cont) => {
+; Collect all values using @ORDER
+LET vals = FOREVER { key: @ORDER data, acc: "" } (state, cont) => {
   MATCH state.key {
     Option.None => state.acc
     Option.Some(k) => {
       LET ki = (k READ Int)!
-      LET v = ($GET data(ki))!
+      LET v = (@GET data(ki))!
       cont({
-        key: $ORDER data(ki),
+        key: @ORDER data(ki),
         acc: state.acc ++ v ++ " "
       })
     }
   }
 }
-$OUTPUT vals
+@OUTPUT vals
 
 ; Large iteration count (previously caused stack overflow at ~100k)
 LET big = FOREVER 0 (n, cont) => {
@@ -100,6 +100,6 @@ LET big = FOREVER 0 (n, cont) => {
     cont(n + 1)
   }
 }
-$OUTPUT big
+@OUTPUT big
 
-$OUTPUT "FOREVER test complete"
+@OUTPUT "FOREVER test complete"

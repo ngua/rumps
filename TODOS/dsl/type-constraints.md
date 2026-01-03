@@ -264,12 +264,12 @@ FUN sum[T: Numeric](arr: Array[T]) -> T {
 
 ; Generic serialize and log
 FUN log-json[T: Jsonable + Stringable](label: String, val: T) {
-    $OUTPUT label ++ ": " ++ (val AS Json)
+    @OUTPUT label ++ ": " ++ (val AS Json)
 }
 
 ; Generic DB utilities
 FUN cache-get[K: Subscriptable, V: Storable](key: K) -> Option[V] {
-    $GET cache(key)
+    @GET cache(key)
 }
 
 ; Generic collection transform

@@ -2,4 +2,4 @@
 ; Type checker should catch use of undefined type names
 
 ; This should fail: `Florbl` is not a defined type
-$OUTPUT "3.14" READ Florbl
+@OUTPUT "3.14" READ Florbl

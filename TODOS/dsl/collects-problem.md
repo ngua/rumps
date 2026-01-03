@@ -1,41 +1,41 @@
-# $COLLECT and Writes: Design Analysis
+# @COLLECT and Writes: Design Analysis
 
 ## Problem Statement
 
-Looking at `TODOS/dsl.md`, the DSL design shows `$COLLECT` streams that include writes:
+Looking at `TODOS/dsl.md`, the DSL design shows `@COLLECT` streams that include writes:
 
 ```rumps
 ; INTO pattern - write collected results to a global
-$COLLECT ^DATA
+@COLLECT ^DATA
   SELECT value
   INTO ^PROCESSED  ; Global variable (requires transaction)
 
 ; FOREACH with nested transaction
-$COLLECT ^ORDER(id,"ITEMS")
+@COLLECT ^ORDER(id,"ITEMS")
   FOREACH item => {
     TRANSACTION {
-      $SET ^INVENTORY(item.id,"COUNT") = ^INVENTORY(item.id,"COUNT") - item.qty
+      @SET ^INVENTORY(item.id,"COUNT") = ^INVENTORY(item.id,"COUNT") - item.qty
     } ON CONFLICT ROLLBACK TO process-items
   }
 ```
 
 However, the Rust implementations (`Database::collects` and `Transaction::collects`) are read-only operations. The callbacks receive `(&Key, &Option<Value>)` and can only extract data, not modify it.
 
-**Question**: Do we need to pass a transaction context into the `$COLLECT` callbacks to allow writes?
+**Question**: Do we need to pass a transaction context into the `@COLLECT` callbacks to allow writes?
 
 ## Analysis: The Current Design Is Correct
 
 Looking more carefully at the DSL syntax, **`INTO` and `FOREACH` are terminal operations** that *consume* the stream—they are not transformations within it.
 
 ```
-$COLLECT ^RAW-$DATA           ┐
+@COLLECT ^RAW-@DATA           ┐
   WHERE key[0] >= last-id   │ Read-only stream
   MAP transform-record      │ production
   SELECT {...}              ┘
-  INTO ^PROCESSED-$DATA      ← Terminal write operation (consumes stream)
+  INTO ^PROCESSED-@DATA      ← Terminal write operation (consumes stream)
 ```
 
-The `$COLLECT...WHERE...SELECT` chain produces a read-only stream. `INTO` and `FOREACH` are sinks that consume that stream and perform side effects.
+The `@COLLECT...WHERE...SELECT` chain produces a read-only stream. `INTO` and `FOREACH` are sinks that consume that stream and perform side effects.
 
 **The `collects()` methods don't need to support writes—they produce streams.** The DSL interpreter handles `INTO` and `FOREACH` as separate terminal operations that:
 
@@ -44,10 +44,10 @@ The `$COLLECT...WHERE...SELECT` chain produces a read-only stream. `INTO` and `F
 
 ### What the DSL Interpreter Would Do
 
-The DSL interpreter maintains a transaction context. User-defined functions that call `$SET ^GLOBAL(...)` are evaluated by the interpreter, which translates them to `txn.set(...)` calls.
+The DSL interpreter maintains a transaction context. User-defined functions that call `@SET ^GLOBAL(...)` are evaluated by the interpreter, which translates them to `txn.set(...)` calls.
 
 ```rust
-// $COLLECT ^DATA SELECT value INTO ^PROCESSED
+// @COLLECT ^DATA SELECT value INTO ^PROCESSED
 //
 // Interpreter has `txn: Transaction` (Clone is cheap - Arc fields)
 
@@ -67,13 +67,13 @@ stream::iter(results)
     .await?;
 ```
 
-**Key point**: The `FOREACH` callback in the DSL *does* need transaction context. The interpreter provides this—when evaluating user code like `process-task` that contains `$SET ^GLOBAL(...)`, the interpreter has the transaction in scope and uses it.
+**Key point**: The `FOREACH` callback in the DSL *does* need transaction context. The interpreter provides this—when evaluating user code like `process-task` that contains `@SET ^GLOBAL(...)`, the interpreter has the transaction in scope and uses it.
 
 This works because the interpreter controls execution. User DSL code doesn't directly call Rust functions; the interpreter evaluates it and makes the appropriate `txn.set()` calls.
 
 ### Nested Transactions (Savepoints)
 
-This is a separate concern. The DSL will need `SAVEPOINT` support, but that's orthogonal to `$COLLECT`. The interpreter wraps the inner `FOREACH` body in a nested transaction scope.
+This is a separate concern. The DSL will need `SAVEPOINT` support, but that's orthogonal to `@COLLECT`. The interpreter wraps the inner `FOREACH` body in a nested transaction scope.
 
 ## Alternatives Considered
 
@@ -163,7 +163,7 @@ txn.collect_into(
 ### Alternative C: Fluent Builder Pattern
 
 ```rust
-txn.collect(&global!("$DATA"))
+txn.collect(&global!("@DATA"))
     .after(&start_key)
     .filter(|k, v| k.len() == 2)
     .map(|k, v| (k.clone(), v.clone().unwrap()))

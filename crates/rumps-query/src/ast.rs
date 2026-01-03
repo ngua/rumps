@@ -835,30 +835,30 @@ pub(crate) enum Expr {
     /// The `Option<TxnId>` is assigned during typecheck.
     Order(DbRef, Option<TxnId>),
 
-    /// Query: `$QUERY var`.
+    /// Query: `@QUERY var`.
     ///
     /// Returns the full key path to the next node with a value.
     /// Returns `Option[Array[Subscript]]`.
     /// The `Option<TxnId>` is assigned during typecheck.
     Query(DbRef, Option<TxnId>),
 
-    /// Output expression: `$OUTPUT expr [JSON] [TO target]`.
+    /// Output expression: `@OUTPUT expr [JSON] [TO target]`.
     ///
     /// Executes the output side effect and evaluates to `Unit`.
-    /// This allows `$OUTPUT` in expression contexts like `f($OUTPUT x)`.
+    /// This allows `@OUTPUT` in expression contexts like `f(@OUTPUT x)`.
     Output(OutputStmt),
 
-    /// Set expression: `$SET target = value`.
+    /// Set expression: `@SET target = value`.
     ///
     /// Executes the B-tree assignment and evaluates to `Unit`.
-    /// This allows `$SET` in expression contexts like `f($SET x = 1)`.
+    /// This allows `@SET` in expression contexts like `f(@SET x = 1)`.
     /// The `Option<TxnId>` is assigned during typecheck; globals require it.
     Set(DbRef, ExprId, Option<TxnId>),
 
-    /// Kill expression: `$KILL target`.
+    /// Kill expression: `@KILL target`.
     ///
     /// Deletes a variable or subtree and evaluates to `Unit`.
-    /// This allows `$KILL` in expression contexts like `f($KILL x)`.
+    /// This allows `@KILL` in expression contexts like `f(@KILL x)`.
     /// The `Option<TxnId>` is assigned during typecheck; globals require it.
     Kill(DbRef, Option<TxnId>),
 

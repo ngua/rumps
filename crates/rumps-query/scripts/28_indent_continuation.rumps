@@ -5,13 +5,13 @@
 
 LET x = 1
   + 2
-$OUTPUT x
+@OUTPUT x
 ; Expected: 3
 
 LET y = 10
   - 3
   - 2
-$OUTPUT y
+@OUTPUT y
 ; Expected: 5
 
 ; === Multi-operator continuation ===
@@ -20,7 +20,7 @@ LET sum = 1
   + 2
   + 3
   + 4
-$OUTPUT sum
+@OUTPUT sum
 ; Expected: 10
 
 ; === Mixed operators with precedence ===
@@ -28,20 +28,20 @@ $OUTPUT sum
 LET expr = 1
   + 2
   * 3
-$OUTPUT expr
+@OUTPUT expr
 ; Expected: 7 (1 + (2 * 3))
 
 LET expr2 = 2
   * 3
   + 4
-$OUTPUT expr2
+@OUTPUT expr2
 ; Expected: 10 ((2 * 3) + 4)
 
 ; === Comparison continuation ===
 
 LET cmp = 10
   > 5
-$OUTPUT cmp
+@OUTPUT cmp
 ; Expected: true
 
 ; === Logical continuation ===
@@ -49,7 +49,7 @@ $OUTPUT cmp
 LET logic = TRUE
   AND TRUE
   AND FALSE
-$OUTPUT logic
+@OUTPUT logic
 ; Expected: false
 
 ; === String concat continuation ===
@@ -57,7 +57,7 @@ $OUTPUT logic
 LET msg = "Hello"
   ++ " "
   ++ "World"
-$OUTPUT msg
+@OUTPUT msg
 ; Expected: Hello World
 
 ; === Continuation does NOT apply inside delimiters ===
@@ -68,7 +68,7 @@ LET arr = [
   2,
   3
 ]
-$OUTPUT arr[0]
+@OUTPUT arr[0]
 ; Expected: 1
 
 ; Objects can have newlines freely
@@ -76,7 +76,7 @@ LET obj = {
   a: 1,
   b: 2
 }
-$OUTPUT obj.a
+@OUTPUT obj.a
 ; Expected: 1
 
 ; Blocks use braces, not indentation
@@ -84,7 +84,7 @@ LET blk = {
   LET inner = 5
   inner * 2
 }
-$OUTPUT blk
+@OUTPUT blk
 ; Expected: 10
 
 ; === Continuation ends at dedent ===
@@ -92,7 +92,7 @@ $OUTPUT blk
 LET a = 1
   + 2
 LET b = 3
-$OUTPUT a + b
+@OUTPUT a + b
 ; Expected: 6
 
-$OUTPUT "Indent continuation test complete"
+@OUTPUT "Indent continuation test complete"

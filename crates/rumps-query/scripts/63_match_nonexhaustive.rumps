@@ -9,4 +9,4 @@ LET result = MATCH x {
   3 => { "three" }
 }
 
-$OUTPUT result
+@OUTPUT result

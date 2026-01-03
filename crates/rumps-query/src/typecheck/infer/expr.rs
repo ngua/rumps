@@ -213,24 +213,24 @@ impl InferCtx<'_> {
             // Order query: `ORDER local(...)` or `ORDER ^global(...)`
             Expr::Order(ref dbref, _) => self.order(id, dbref, span),
 
-            // Query: `$QUERY local(...)` or `$QUERY ^global(...)`
+            // Query: `@QUERY local(...)` or `@QUERY ^global(...)`
             Expr::Query(ref dbref, _) => self.query(id, dbref, span),
 
-            // Output expression: `$OUTPUT expr [JSON] [TO target]`
+            // Output expression: `@OUTPUT expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
             Expr::Output(output) => {
                 self.output(output, span);
                 Ty::Unit
             }
 
-            // Set expression: `$SET target = value`
+            // Set expression: `@SET target = value`
             // Returns `Result[Unit, String]`
             Expr::Set(ref dbref, value, _) => {
                 self.set_expr(id, dbref, *value, span);
                 Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
-            // Kill expression: `$KILL target`
+            // Kill expression: `@KILL target`
             // Returns `Result[Unit, String]`
             Expr::Kill(ref dbref, _) => {
                 self.kill_expr(id, dbref, span);
@@ -1653,7 +1653,7 @@ impl InferCtx<'_> {
         Ty::Option(Box::new(Ty::Named(TypeId::SUBSCRIPT, vec![])))
     }
 
-    /// Infer type of `$QUERY` expression.
+    /// Infer type of `@QUERY` expression.
     ///
     /// Returns the full key path to the next node with a value.
     /// Returns `Option[Array[Subscript]]`.

@@ -1,93 +1,93 @@
-; Test: $QUERY primitive
+; Test: @QUERY primitive
 ; Returns full key path to the next node with a value
 ; NOTE: Uses locals only; globals require TRANSACTION blocks
 
 ; Set up single-level test data
-$SET items(1) = "one"
-$SET items(2) = "two"
-$SET items(10) = "ten"
+@SET items(1) = "one"
+@SET items(2) = "two"
+@SET items(10) = "ten"
 
 ; First key path (no after position)
-LET first = $QUERY items
-$OUTPUT first
+LET first = @QUERY items
+@OUTPUT first
 
 ; Next key path after (1)
-LET after-1 = $QUERY items(1)
-$OUTPUT after-1
+LET after-1 = @QUERY items(1)
+@OUTPUT after-1
 
 ; Next key path after (2)
-LET after-2 = $QUERY items(2)
-$OUTPUT after-2
+LET after-2 = @QUERY items(2)
+@OUTPUT after-2
 
 ; Past the last key
-LET after-10 = $QUERY items(10)
-$OUTPUT after-10
+LET after-10 = @QUERY items(10)
+@OUTPUT after-10
 
-; $QUERY on non-existent variable
-LET no-keys = $QUERY empty
-$OUTPUT no-keys
+; @QUERY on non-existent variable
+LET no-keys = @QUERY empty
+@OUTPUT no-keys
 
 ; Type annotation
-LET typed: Option[Array[Subscript]] = $QUERY items
-$OUTPUT typed
+LET typed: Option[Array[Subscript]] = @QUERY items
+@OUTPUT typed
 
 ; Use with MATCH
-LET msg = MATCH $QUERY items {
+LET msg = MATCH @QUERY items {
   Option.Some(path) => { "found path of length: " ++ ((Array.length(path)) AS String) }
   Option.None => { "no nodes" }
 }
-$OUTPUT msg
+@OUTPUT msg
 
 ; Use with coalesce
-LET path = $QUERY items ?? []
-$OUTPUT path
+LET path = @QUERY items ?? []
+@OUTPUT path
 
 ; Using unwrap on result
-LET path2 = ($QUERY items(1))!
-$OUTPUT path2
+LET path2 = (@QUERY items(1))!
+@OUTPUT path2
 
 ; Spread syntax to continue iteration
-$SET data(1) = "a"
-$SET data(2) = "b"
-$SET data(3) = "c"
+@SET data(1) = "a"
+@SET data(2) = "b"
+@SET data(3) = "c"
 
-LET k1 = $QUERY data ?? []
-$OUTPUT k1
-LET k2 = $QUERY data(...k1) ?? []
-$OUTPUT k2
-LET k3 = $QUERY data(...k2) ?? []
-$OUTPUT k3
-LET k4 = $QUERY data(...k3)
-$OUTPUT k4
+LET k1 = @QUERY data ?? []
+@OUTPUT k1
+LET k2 = @QUERY data(...k1) ?? []
+@OUTPUT k2
+LET k3 = @QUERY data(...k2) ?? []
+@OUTPUT k3
+LET k4 = @QUERY data(...k3)
+@OUTPUT k4
 
 ; === Nested data tests ===
-; $QUERY should skip intermediate nodes (ancestors with no value)
+; @QUERY should skip intermediate nodes (ancestors with no value)
 
-$SET patients(1, "age") = 30
-$SET patients(1, "name") = "Alice"
-$SET patients(2, "name") = "Bob"
+@SET patients(1, "age") = 30
+@SET patients(1, "name") = "Alice"
+@SET patients(2, "name") = "Bob"
 
 ; First key should be [1, "age"], not [1]
-LET p1 = $QUERY patients ?? []
-$OUTPUT p1
+LET p1 = @QUERY patients ?? []
+@OUTPUT p1
 
 ; After [1, "age"] should be [1, "name"], not [1] or [2]
-LET p2 = $QUERY patients(1, "age") ?? []
-$OUTPUT p2
+LET p2 = @QUERY patients(1, "age") ?? []
+@OUTPUT p2
 
 ; After [1, "name"] should be [2, "name"], skipping intermediate [2]
-LET p3 = $QUERY patients(1, "name") ?? []
-$OUTPUT p3
+LET p3 = @QUERY patients(1, "name") ?? []
+@OUTPUT p3
 
 ; After [2, "name"] should be None
-LET p4 = $QUERY patients(2, "name")
-$OUTPUT p4
+LET p4 = @QUERY patients(2, "name")
+@OUTPUT p4
 
 ; Deep nesting test
-$SET deep(1, 2, 3, "leaf") = "value"
+@SET deep(1, 2, 3, "leaf") = "value"
 
 ; Should return [1, 2, 3, "leaf"], skipping [1], [1, 2], [1, 2, 3]
-LET d1 = $QUERY deep ?? []
-$OUTPUT d1
+LET d1 = @QUERY deep ?? []
+@OUTPUT d1
 
-$OUTPUT "$QUERY test complete"
+@OUTPUT "@QUERY test complete"

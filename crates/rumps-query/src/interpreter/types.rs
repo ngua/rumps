@@ -243,7 +243,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if self.type_exprs.base_type(*ty)
                     == Some(TypeId::DATA_STATUS) =>
             {
-                // `mumps_val` for compatibility with MUMPS, i.e. `$DATA` in
+                // `mumps_val` for compatibility with MUMPS, i.e. `@DATA` in
                 // MUMPS returns an integer
                 let mumps_val = match idx {
                     0 => 0,  // NoData

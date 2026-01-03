@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: $KILL statement\n; Tests deletion of variables and subtrees\n\n; Set up test data\n$SET items(1) = \"one\"\n$SET items(2) = \"two\"\n$SET items(3) = \"three\"\n$SET items(1, \"a\") = \"nested a\"\n$SET items(1, \"b\") = \"nested b\"\n\n; Verify items exists\nLET v1 = $GET items(1)\n$OUTPUT v1\n; Expected: one\n\n; $KILL single node\n$KILL items(2)\n\n; Verify deleted\nLET v2 = $GET items(2)\n$OUTPUT v2\n; Expected: Option.None\n\n; $KILL subtree\n$KILL items(1)\n\n; Verify subtree deleted\nLET v3 = $GET items(1)\n$OUTPUT v3\n; Expected: Option.None\n\nLET v4 = $GET items(1, \"a\")\n$OUTPUT v4\n; Expected: Option.None\n\n; items(3) should still exist\nLET v5 = $GET items(3)\n$OUTPUT v5\n; Expected: three\n\n; $KILL entire variable\n$SET temp = 999\nLET before = $GET temp\n$OUTPUT before\n; Expected: 999\n\n$KILL temp\nLET after = $GET temp\n$OUTPUT after\n; Expected: Option.None\n\n$OUTPUT \"$KILL test complete\"\n"
+description: "; Test: @KILL statement\n; Tests deletion of variables and subtrees\n\n; Set up test data\n@SET items(1) = \"one\"\n@SET items(2) = \"two\"\n@SET items(3) = \"three\"\n@SET items(1, \"a\") = \"nested a\"\n@SET items(1, \"b\") = \"nested b\"\n\n; Verify items exists\nLET v1 = @GET items(1)\n@OUTPUT v1\n; Expected: one\n\n; @KILL single node\n@KILL items(2)\n\n; Verify deleted\nLET v2 = @GET items(2)\n@OUTPUT v2\n; Expected: Option.None\n\n; @KILL subtree\n@KILL items(1)\n\n; Verify subtree deleted\nLET v3 = @GET items(1)\n@OUTPUT v3\n; Expected: Option.None\n\nLET v4 = @GET items(1, \"a\")\n@OUTPUT v4\n; Expected: Option.None\n\n; items(3) should still exist\nLET v5 = @GET items(3)\n@OUTPUT v5\n; Expected: three\n\n; @KILL entire variable\n@SET temp = 999\nLET before = @GET temp\n@OUTPUT before\n; Expected: 999\n\n@KILL temp\nLET after = @GET temp\n@OUTPUT after\n; Expected: Option.None\n\n@OUTPUT \"@KILL test complete\"\n"
 ---
 Option.Some("one")
 Option.None
@@ -9,4 +9,4 @@ Option.None
 Option.Some("three")
 Option.Some(999)
 Option.None
-"$KILL test complete"
+"@KILL test complete"

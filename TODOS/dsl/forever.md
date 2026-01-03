@@ -28,7 +28,7 @@ LET result = FOREVER 1 (x, f) => {
 
 ; Infinite loop (outputs forever)
 FOREVER Unit (_, f) => {
-  $OUTPUT "tick"
+  @OUTPUT "tick"
   f(Unit)
 }
 ```
@@ -69,7 +69,7 @@ This allows natural syntax like:
 
 ```rumps
 FOREVER Unit (x, f) => {
-  f($OUTPUT x)   ; OUTPUT executes, returns Unit, loop continues with Unit
+  f(@OUTPUT x)   ; OUTPUT executes, returns Unit, loop continues with Unit
 }
 ```
 
@@ -79,43 +79,43 @@ The argument to `f` is evaluated for its side effects, and its value becomes the
 
 ## Implementation Plan
 
-### Phase 1: Make `$OUTPUT` Expressionable
+### Phase 1: Make `@OUTPUT` Expressionable
 
-Currently `OUTPUT` is only a `Stmt`. For `f($OUTPUT x)` to work, we need `Expr::Output`.
+Currently `OUTPUT` is only a `Stmt`. For `f(@OUTPUT x)` to work, we need `Expr::Output`.
 
 #### 1.1 AST Changes (`ast.rs`)
 
 Add `Expr::Output(OutputStmt)` variant:
 
 ```rust
-/// Output expression: `$OUTPUT expr [JSON] [TO target]`.
+/// Output expression: `@OUTPUT expr [JSON] [TO target]`.
 ///
 /// Executes the output side effect and evaluates to `Unit`.
-/// This allows `$OUTPUT` in expression contexts like `f($OUTPUT x)`.
+/// This allows `@OUTPUT` in expression contexts like `f(@OUTPUT x)`.
 Output(OutputStmt),
 ```
 
 #### 1.2 Parser Changes (`parser.rs`)
 
-Allow `$OUTPUT` in expression position. Currently `output_stmt` creates `StmtKind::Output`. Add `output_expr` that creates `ExprKind::Output` and integrate into primary expression parsing.
+Allow `@OUTPUT` in expression position. Currently `output_stmt` creates `StmtKind::Output`. Add `output_expr` that creates `ExprKind::Output` and integrate into primary expression parsing.
 
 Parsing strategy:
-- In expression context: `$OUTPUT expr ...` parses as `Expr::Output`
-- In statement context: `$OUTPUT expr ...` as before (can use the same underlying parser)
+- In expression context: `@OUTPUT expr ...` parses as `Expr::Output`
+- In statement context: `@OUTPUT expr ...` as before (can use the same underlying parser)
 
 **Alternative**: Keep OUTPUT as statement-only, but allow blocks in continuation argument position:
 
 
 ```rumps
 f({ 
-  $OUTPUT x 
+  @OUTPUT x 
   Unit 
 })
 ```
 
 This is more verbose but avoids adding `Expr::Output`. **Recommendation**: Add `Expr::Output` for cleaner syntax.
 
-**NOTE**: The same was done to `$KILL` and `$SET` as part of the implementation
+**NOTE**: The same was done to `@KILL` and `@SET` as part of the implementation
 
 #### 1.3 Typechecker Changes (`typecheck/infer/expr.rs`)
 
@@ -494,18 +494,18 @@ LET sum = FOREVER 0 (acc, next) => {
     acc
   }
 }
-$OUTPUT sum  ; 10
+@OUTPUT sum  ; 10
 
 ; Countdown
 LET countdown = FOREVER 5 (n, cont) => {
   IF n > 0 {
-    $OUTPUT n
+    @OUTPUT n
     cont(n - 1)
   } ELSE {
     "blast off"
   }
 }
-$OUTPUT countdown  ; "blast off"
+@OUTPUT countdown  ; "blast off"
 
 ; With type annotations
 LET typed = FOREVER (0: Int) (x: Int, f: (Int) -> String) => {
@@ -515,7 +515,7 @@ LET typed = FOREVER (0: Int) (x: Int, f: (Int) -> String) => {
     "done"
   }
 }
-$OUTPUT typed  ; "done"
+@OUTPUT typed  ; "done"
 
 ; Building a list (using OUTPUT as expression)
 LET trace = FOREVER ([], 1) ((list, n), cont) => {
@@ -525,7 +525,7 @@ LET trace = FOREVER ([], 1) ((list, n), cont) => {
     list
   }
 }
-$OUTPUT trace  ; [1, 2, 3]
+@OUTPUT trace  ; [1, 2, 3]
 ```
 
 Note: The last example uses a tuple as state, which is a common pattern.
@@ -552,14 +552,14 @@ FOREVER 1 (x, f) => {
 
 ## Implementation Checklist
 
-### Phase 1: `$OUTPUT` as Expression
+### Phase 1: `@OUTPUT` as Expression
 - [ ] **AST**: Add `Expr::Output(OutputStmt)` variant
 - [ ] **Parser/CST**: Add `ExprKind::Output`
-- [ ] **Parser**: Allow `$OUTPUT` in expression position
+- [ ] **Parser**: Allow `@OUTPUT` in expression position
 - [ ] **Lowering**: Handle `ExprKind::Output`
 - [ ] **Typechecker**: `Expr::Output` has type `Unit`
 - [ ] **Interpreter**: Evaluate `Expr::Output` with side effect, return `Unit`
-- [ ] **Tests**: Script test for `$OUTPUT` in expression context
+- [ ] **Tests**: Script test for `@OUTPUT` in expression context
 
 ### Phase 2: Token
 - [ ] **Lexer/Token**: Add `Token::Forever` keyword
@@ -608,15 +608,15 @@ By making the continuation a pseudo-function, we:
 2. Keep the syntax familiar (looks like a function call)
 3. Avoid the complexity of first-class continuations
 
-### Why Allow `$OUTPUT` as Expression?
+### Why Allow `@OUTPUT` as Expression?
 
-We probably want to allow e.g. `f($OUTPUT x)` syntax. This requires `$OUTPUT` to be:
+We probably want to allow e.g. `f(@OUTPUT x)` syntax. This requires `@OUTPUT` to be:
 1. Evaluable (produces `Unit`)
 2. Usable in argument position
 
-Making `$OUTPUT` an expression is a small language change with benefits:
+Making `@OUTPUT` an expression is a small language change with benefits:
 - Cleaner `FOREVER` syntax
-- Useful in other contexts (e.g., `let _ = $OUTPUT x`)
+- Useful in other contexts (e.g., `let _ = @OUTPUT x`)
 - Consistent with functional style (everything is an expression)
 
 ### Tuple State Pattern

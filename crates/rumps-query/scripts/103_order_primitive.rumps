@@ -1,77 +1,77 @@
-; Test: $ORDER primitive
+; Test: @ORDER primitive
 ; Returns next subscript at a given level
 ; NOTE: Uses locals only; globals require TRANSACTION blocks
 
 ; Set up test data
-$SET items(1) = "one"
-$SET items(2) = "two"
-$SET items(10) = "ten"
-$SET items("A") = "alpha"
-$SET items("B") = "beta"
+@SET items(1) = "one"
+@SET items(2) = "two"
+@SET items(10) = "ten"
+@SET items("A") = "alpha"
+@SET items("B") = "beta"
 
-$SET nested(1, "A") = "nested 1A"
-$SET nested(1, "B") = "nested 1B"
-$SET nested(2, "X") = "nested 2X"
+@SET nested(1, "A") = "nested 1A"
+@SET nested(1, "B") = "nested 1B"
+@SET nested(2, "X") = "nested 2X"
 
 ; First subscript at root (no after value)
-LET first = $ORDER items
-$OUTPUT first
+LET first = @ORDER items
+@OUTPUT first
 
 ; Next subscript after 1
-LET after-1 = $ORDER items(1)
-$OUTPUT after-1
+LET after-1 = @ORDER items(1)
+@OUTPUT after-1
 
 ; Next subscript after 2
-LET after-2 = $ORDER items(2)
-$OUTPUT after-2
+LET after-2 = @ORDER items(2)
+@OUTPUT after-2
 
 ; Next subscript after 10
-LET after-10 = $ORDER items(10)
-$OUTPUT after-10
+LET after-10 = @ORDER items(10)
+@OUTPUT after-10
 
 ; Past the last numeric key
-LET after-a = $ORDER items("A")
-$OUTPUT after-a
+LET after-a = @ORDER items("A")
+@OUTPUT after-a
 
 ; Past the last key entirely
-LET after-b = $ORDER items("B")
-$OUTPUT after-b
+LET after-b = @ORDER items("B")
+@OUTPUT after-b
 
 ; Next subscript at root after 1 (which is 2)
-LET nested-after-1 = $ORDER nested(1)
-$OUTPUT nested-after-1
+LET nested-after-1 = @ORDER nested(1)
+@OUTPUT nested-after-1
 
 ; Next subscript under nested(1) after "A"
-LET nested-1-after-a = $ORDER nested(1, "A")
-$OUTPUT nested-1-after-a
+LET nested-1-after-a = @ORDER nested(1, "A")
+@OUTPUT nested-1-after-a
 
 ; Past last key under nested(1)
-LET nested-1-after-b = $ORDER nested(1, "B")
-$OUTPUT nested-1-after-b
+LET nested-1-after-b = @ORDER nested(1, "B")
+@OUTPUT nested-1-after-b
 
 ; Next subscript at root after 2 (none)
-LET nested-after-2 = $ORDER nested(2)
-$OUTPUT nested-after-2
+LET nested-after-2 = @ORDER nested(2)
+@OUTPUT nested-after-2
 
-; $ORDER on non-existent variable
-LET no-keys = $ORDER empty
-$OUTPUT no-keys
+; @ORDER on non-existent variable
+LET no-keys = @ORDER empty
+@OUTPUT no-keys
 
-; $ORDER with different subscript types
-$SET mixed(true) = "bool key"
-$SET mixed(42) = "int key"
-$SET mixed(3.14) = "float key"
-$SET mixed("str") = "string key"
+; @ORDER with different subscript types
+@SET mixed(true) = "bool key"
+@SET mixed(42) = "int key"
+@SET mixed(3.14) = "float key"
+@SET mixed("str") = "string key"
 
 ; Bool comes first, then numbers, then strings
-LET mixed-first = $ORDER mixed
-$OUTPUT mixed-first
+LET mixed-first = @ORDER mixed
+@OUTPUT mixed-first
 
-LET mixed-after-true = $ORDER mixed(true)
-$OUTPUT mixed-after-true
+LET mixed-after-true = @ORDER mixed(true)
+@OUTPUT mixed-after-true
 
 ; Type annotation
-LET typed: Option[Subscript] = $ORDER items
-$OUTPUT typed
+LET typed: Option[Subscript] = @ORDER items
+@OUTPUT typed
 
-$OUTPUT "$ORDER test complete"
+@OUTPUT "@ORDER test complete"

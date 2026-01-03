@@ -1,73 +1,73 @@
-; Test: Extended $OUTPUT statement
-; Tests $OUTPUT with JSON format and TO ERROR/FILE targets
+; Test: Extended @OUTPUT statement
+; Tests @OUTPUT with JSON format and TO ERROR/FILE targets
 
-; === Basic $OUTPUT (unchanged behavior) ===
-$OUTPUT "Hello, World!"
+; === Basic @OUTPUT (unchanged behavior) ===
+@OUTPUT "Hello, World!"
 ; Expected: Hello, World!
 
 LET my-x = 42
-$OUTPUT my-x
+@OUTPUT my-x
 ; Expected: 42
 
 LET my-obj = { name: "Alice", age: 30 }
-$OUTPUT my-obj
+@OUTPUT my-obj
 ; Expected: { name: Alice, age: 30 }
 
-; === $OUTPUT JSON (format modifier) ===
-$OUTPUT "Test JSON format" JSON
+; === @OUTPUT JSON (format modifier) ===
+@OUTPUT "Test JSON format" JSON
 ; Expected: "Test JSON format"
 
-$OUTPUT 42 JSON
+@OUTPUT 42 JSON
 ; Expected: 42
 
-$OUTPUT TRUE JSON
+@OUTPUT TRUE JSON
 ; Expected: true
 
 LET my-arr = [1, 2, 3]
-$OUTPUT my-arr JSON
+@OUTPUT my-arr JSON
 ; Expected: [1, 2, 3] (or pretty-printed)
 
 LET my-data = { name: "Bob", scores: [90, 85, 95] }
-$OUTPUT my-data JSON
+@OUTPUT my-data JSON
 ; Expected: pretty-printed JSON object
 
-; === $OUTPUT TO ERROR (target modifier) ===
-$OUTPUT "This goes to stderr" TO ERROR
+; === @OUTPUT TO ERROR (target modifier) ===
+@OUTPUT "This goes to stderr" TO ERROR
 ; Expected: (on stderr) This goes to stderr
 
-$OUTPUT 123 TO ERROR
+@OUTPUT 123 TO ERROR
 ; Expected: (on stderr) 123
 
-; === $OUTPUT JSON TO ERROR (format + target) ===
-$OUTPUT { status: "error", code: 500 } JSON TO ERROR
+; === @OUTPUT JSON TO ERROR (format + target) ===
+@OUTPUT { status: "error", code: 500 } JSON TO ERROR
 ; Expected: (on stderr) pretty-printed JSON
 
 ; === Contextual identifiers as variable names ===
 ; These must work as regular identifiers
 LET json = "my json var"
-$OUTPUT json
+@OUTPUT json
 ; Expected: my json var
 
 LET to = 10
-$OUTPUT to
+@OUTPUT to
 ; Expected: 10
 
 LET error = "an error message"
-$OUTPUT error
+@OUTPUT error
 ; Expected: an error message
 
 LET file = "/path/to/file"
-$OUTPUT file
+@OUTPUT file
 ; Expected: /path/to/file
 
 ; === Verify case-insensitivity of modifiers ===
-$OUTPUT "lowercase json" json
+@OUTPUT "lowercase json" json
 ; Expected: "lowercase json"
 
-$OUTPUT "mixed case" Json
+@OUTPUT "mixed case" Json
 ; Expected: "mixed case"
 
-$OUTPUT "uppercase error" TO error
+@OUTPUT "uppercase error" TO error
 ; Expected: (on stderr) uppercase error
 
-$OUTPUT "Complete!"
+@OUTPUT "Complete!"

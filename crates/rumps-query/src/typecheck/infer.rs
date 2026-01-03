@@ -204,7 +204,7 @@ pub(crate) struct InferCtx<'a> {
     regex_indices: HashMap<ExprId, u32>,
     /// Current transaction ID, if inside a `TRANSACTION` block.
     ///
-    /// Used to enforce that global writes (`$SET ^...`, `$KILL ^...`) only
+    /// Used to enforce that global writes (`@SET ^...`, `@KILL ^...`) only
     /// appear inside `TRANSACTION { ... }` blocks, that nested `TRANSACTION`s
     /// cannot be created (not supported), and to populate `TxnId` fields in
     /// the AST for DB operations.

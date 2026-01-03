@@ -143,9 +143,9 @@ These concepts are borrowed from MUMPS; where RUMPS differs explicitly from MUMP
 In most languages, a "variable" is a name bound to a single value. In RUMPS, a variable is a /name bound to an entire tree/. The name (=^PATIENT= or =TEMP=) identifies the tree root; subscripts (=(123, "NAME")=) navigate to /nodes/ within it. A variable can be bound at the root node or any arbitrary key path under it. Using the query language syntax:
 
 #+begin_src rumps
-$SET ^P = "root"              ; value at root node (empty path)
-$SET ^P(1) = "child"          ; value at node [1]
-$SET ^P(1,"A") = "deeper"     ; value at node [1, "A"]
+@SET ^P = "root"              ; value at root node (empty path)
+@SET ^P(1) = "child"          ; value at node [1]
+@SET ^P(1,"A") = "deeper"     ; value at node [1, "A"]
 #+end_src
 
 All three are "the variable =^P=", i.e. nodes in the same tree. A node can hold a value /and/ have children simultaneously (=^P(1)= stores ="child"= while =^P(1,"A")= exists beneath it).
@@ -233,7 +233,7 @@ Because subscripts participate in /ordering and traversal/, we require this dist
 Another way to think about it: in a filesystem analogy, subscripts are like directory and file names (they form the path, or /key/), while values are like file contents (what's stored there).
 
 #+begin_src rumps
-$SET ^PATIENT(1,"NAME") = "Alice"
+@SET ^PATIENT(1,"NAME") = "Alice"
 ;
 ;             ^^^^^^^^    ^^^^^^^
 ;             subscripts  value
@@ -451,7 +451,7 @@ assert_eq!(db.get(&global!("DATA"), &key![1, "B"]).await?, None);
 assert_eq!(db.get(&global!("DATA"), &key![1, "B", "C"]).await?, None);
 #+end_src
 *** =DATA=
-Checks the /existence status/ of a node: does it have a value? Does it have descendants? Both? Neither? This corresponds to MUMPS's =$DATA= function and returns one of four states:
+Checks the /existence status/ of a node: does it have a value? Does it have descendants? Both? Neither? This corresponds to MUMPS's =@DATA= function and returns one of four states:
 | Status                  | Meaning                              |
 |-------------------------+--------------------------------------|
 | =NoData= (~0~)          | Key doesn't exist                    |
@@ -475,7 +475,7 @@ let status = db.data(&global!("P"), &key![999]).await?;
 assert_eq!(status, DataStatus::NoData);  // doesn't exist
 #+end_src
 *** =ORDER=
-Returns the /next subscript/ at a specific level. This matches traditional MUMPS =$ORDER= semantics: given a prefix and a subscript, it returns the next subscript that exists at that level.
+Returns the /next subscript/ at a specific level. This matches traditional MUMPS =@ORDER= semantics: given a prefix and a subscript, it returns the next subscript that exists at that level.
 
 *Transaction context*: Not required. Works outside transactions.
 
@@ -534,7 +534,7 @@ This mimics traditional MUMPS iteration. However, for most use cases, =COLLECT= 
 *** =COLLECT=
 =COLLECT= takes a predicate (which entries to include) and an extractor (how to transform them), then produces a stream of results. Results are /always/ in sorted key order.
 
-*This is a RUMPS extension*; traditional MUMPS doesn't have this. Instead, you'd write imperative loops with =$ORDER=. RUMPS provides =COLLECT= as a declarative, stream-based alternative that's more idiomatic for Rust and modern programming.
+*This is a RUMPS extension*; traditional MUMPS doesn't have this. Instead, you'd write imperative loops with =@ORDER=. RUMPS provides =COLLECT= as a declarative, stream-based alternative that's more idiomatic for Rust and modern programming.
 
 Why the extension? A few reasons:
 1. *Composability*: Streams chain naturally with =.map()=, =.filter()=, =.take()=, etc.

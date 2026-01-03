@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Global writes outside transaction are rejected at compile time\n; This test should fail during typechecking, not at runtime.\n\n; Direct global SET outside transaction\n$SET ^data(1) = \"value\"\n\n$OUTPUT \"should not reach here\"\n"
+description: "; Test: Global writes outside transaction are rejected at compile time\n; This test should fail during typechecking, not at runtime.\n\n; Direct global SET outside transaction\n@SET ^data(1) = \"value\"\n\n@OUTPUT \"should not reach here\"\n"
 ---
 ERROR: global writes require a transaction

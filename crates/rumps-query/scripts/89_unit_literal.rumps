@@ -2,21 +2,21 @@
 ; Tests the `Unit` value literal
 
 ; Unit equals itself
-$OUTPUT Unit IS Unit
+@OUTPUT Unit IS Unit
 ; Expected: true
 
 ; Unit in variable
 LET u = Unit
-$OUTPUT u
+@OUTPUT u
 ; Expected: Unit
 
 ; Unit equality via variable
-$OUTPUT u IS Unit
+@OUTPUT u IS Unit
 ; Expected: true
 
 ; Unit in tuple
 LET pair = (1, Unit)
-$OUTPUT pair
+@OUTPUT pair
 ; Expected: (1, Unit)
 
-$OUTPUT "Unit literal test complete"
+@OUTPUT "Unit literal test complete"

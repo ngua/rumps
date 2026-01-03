@@ -1,0 +1,26 @@
+; LET with expression on next line (after `=`)
+
+LET x =
+  MATCH Unit {
+    Unit => Unit
+  }
+
+@OUTPUT x
+
+; Also test with other expressions
+LET y =
+  1
+  + 2
+  + 3
+
+@OUTPUT y
+
+; Nested
+LET z =
+  IF true {
+    "yes"
+  } ELSE {
+    "no"
+  }
+
+@OUTPUT z

@@ -2,4 +2,4 @@
 ; This tests that `(a, b) : T` produces a parse error
 
 LET x = (1, 2) : (Int, Int)
-$OUTPUT x
+@OUTPUT x

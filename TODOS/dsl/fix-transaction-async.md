@@ -268,7 +268,7 @@ Some(Stmt::Kill(ref dbref, _)) => {
 
 **File**: `crates/rumps-query/src/typecheck/infer/expr.rs`
 
-Similarly for expression forms; `$SET` and `$KILL` in expression contexts:
+Similarly for expression forms; `@SET` and `@KILL` in expression contexts:
 
 ```rust
 // In expr_inner match:

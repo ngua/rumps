@@ -2,6 +2,6 @@
 ; This test should fail during typechecking, not at runtime.
 
 ; Direct global SET outside transaction
-$SET ^data(1) = "value"
+@SET ^data(1) = "value"
 
-$OUTPUT "should not reach here"
+@OUTPUT "should not reach here"

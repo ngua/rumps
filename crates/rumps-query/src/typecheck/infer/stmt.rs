@@ -550,7 +550,7 @@ impl InferCtx<'_> {
             .set_stmt(id, Stmt::Set(dbref.clone(), value, self.in_transaction));
     }
 
-    /// Infer types for a `$SET` expression.
+    /// Infer types for a `@SET` expression.
     ///
     /// Calls validation, then populates the `TxnId` field in the AST.
     pub(super) fn set_expr(
@@ -593,7 +593,7 @@ impl InferCtx<'_> {
             .set_stmt(id, Stmt::Kill(dbref.clone(), self.in_transaction));
     }
 
-    /// Infer types for a `$KILL` expression.
+    /// Infer types for a `@KILL` expression.
     ///
     /// Calls validation, then populates the `TxnId` field in the AST.
     pub(super) fn kill_expr(&mut self, id: ExprId, dbref: &DbRef, span: Span) {

@@ -120,7 +120,7 @@ impl Token {
     /// Keywords are case-insensitive (e.g., `LET`, `let`, `Let`).
     /// Exception: `null` is case-sensitive (JSON literal).
     ///
-    /// Note: MUMPS intrinsics (`$SET`, `$GET`, etc.) are handled by
+    /// Note: DB intrinsics (`@SET`, `@GET`, etc.) are handled by
     /// [`Token::intrinsic`] instead.
     pub(crate) fn keyword(s: &str) -> Option<Self> {
         // `null` is case-sensitive (JSON requires lowercase)
@@ -156,10 +156,10 @@ impl Token {
         }
     }
 
-    /// Returns the token for a MUMPS intrinsic (prefixed with `$`).
+    /// Returns the token for a DB intrinsic (prefixed with `@`).
     ///
-    /// Case-insensitive (e.g., `$SET`, `$set`, `$Set` all work).
-    /// The `$` prefix is already stripped by the lexer.
+    /// Case-insensitive (e.g., `@SET`, `@set`, `@Set` all work).
+    /// The `@` prefix is already stripped by the lexer.
     pub(crate) fn intrinsic(s: &str) -> Option<Self> {
         match s.to_ascii_uppercase().as_str() {
             "SET" => Some(Self::Set),
@@ -198,14 +198,14 @@ impl fmt::Display for Token {
             Self::Module => write!(f, "MODULE"),
             Self::Forever => write!(f, "FOREVER"),
             Self::Transaction => write!(f, "TRANSACTION"),
-            // MUMPS intrinsics (prefixed with `$`)
-            Self::Set => write!(f, "$SET"),
-            Self::Get => write!(f, "$GET"),
-            Self::Kill => write!(f, "$KILL"),
-            Self::Output => write!(f, "$OUTPUT"),
-            Self::Data => write!(f, "$DATA"),
-            Self::Order => write!(f, "$ORDER"),
-            Self::Query => write!(f, "$QUERY"),
+            // DB intrinsics (prefixed with `@`)
+            Self::Set => write!(f, "@SET"),
+            Self::Get => write!(f, "@GET"),
+            Self::Kill => write!(f, "@KILL"),
+            Self::Output => write!(f, "@OUTPUT"),
+            Self::Data => write!(f, "@DATA"),
+            Self::Order => write!(f, "@ORDER"),
+            Self::Query => write!(f, "@QUERY"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),
@@ -346,14 +346,14 @@ mod tests {
 
     #[test]
     fn display_tokens() {
-        // MUMPS intrinsics display with `$` prefix
-        assert_eq!(Token::Set.to_string(), "$SET");
-        assert_eq!(Token::Get.to_string(), "$GET");
-        assert_eq!(Token::Kill.to_string(), "$KILL");
-        assert_eq!(Token::Output.to_string(), "$OUTPUT");
-        assert_eq!(Token::Data.to_string(), "$DATA");
-        assert_eq!(Token::Order.to_string(), "$ORDER");
-        assert_eq!(Token::Query.to_string(), "$QUERY");
+        // DB intrinsics display with `@` prefix
+        assert_eq!(Token::Set.to_string(), "@SET");
+        assert_eq!(Token::Get.to_string(), "@GET");
+        assert_eq!(Token::Kill.to_string(), "@KILL");
+        assert_eq!(Token::Output.to_string(), "@OUTPUT");
+        assert_eq!(Token::Data.to_string(), "@DATA");
+        assert_eq!(Token::Order.to_string(), "@ORDER");
+        assert_eq!(Token::Query.to_string(), "@QUERY");
         // Keywords display without prefix
         assert_eq!(Token::Let.to_string(), "LET");
         assert_eq!(Token::Read.to_string(), "READ");

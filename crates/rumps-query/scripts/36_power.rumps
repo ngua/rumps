@@ -4,49 +4,49 @@
 ; === Int ** Int ===
 
 LET sq = 2 ** 10
-$OUTPUT sq
+@OUTPUT sq
 ; Expected: 1024
 
 LET cube = 3 ** 3
-$OUTPUT cube
+@OUTPUT cube
 ; Expected: 27
 
 LET zero-pow = 5 ** 0
-$OUTPUT zero-pow
+@OUTPUT zero-pow
 ; Expected: 1
 
 LET one-pow = 7 ** 1
-$OUTPUT one-pow
+@OUTPUT one-pow
 ; Expected: 7
 
 ; === Float ** Float ===
 
 LET sqrt2 = 2.0 ** 0.5
-$OUTPUT sqrt2
+@OUTPUT sqrt2
 ; Expected: 1.4142135623730951 (approximately)
 
 LET cubert = 8.0 ** (1.0 / 3.0)
-$OUTPUT cubert
+@OUTPUT cubert
 ; Expected: 2.0
 
 ; === Negative exponent (Int -> Float) ===
 
 LET half = 2 ** -1
-$OUTPUT half
+@OUTPUT half
 ; Expected: 0.5
 
 LET quarter = 2 ** -2
-$OUTPUT quarter
+@OUTPUT quarter
 ; Expected: 0.25
 
 ; === Mixed Int/Float ===
 
 LET mixed1 = 4 ** 0.5
-$OUTPUT mixed1
+@OUTPUT mixed1
 ; Expected: 2
 
 LET mixed2 = 2.0 ** 3
-$OUTPUT mixed2
+@OUTPUT mixed2
 ; Expected: 8
 
 ; === Right-associativity ===
@@ -54,7 +54,7 @@ $OUTPUT mixed2
 ; NOT (2 ** 3) ** 2 = 8 ** 2 = 64
 
 LET right-assoc = 2 ** 3 ** 2
-$OUTPUT right-assoc
+@OUTPUT right-assoc
 ; Expected: 512
 
 ; === Precedence: higher than multiplication ===
@@ -62,17 +62,17 @@ $OUTPUT right-assoc
 ; NOT (2 * 3) ** 2 = 6 ** 2 = 36
 
 LET prec = 2 * 3 ** 2
-$OUTPUT prec
+@OUTPUT prec
 ; Expected: 18
 
 ; === Combinations ===
 
 LET combo = 10 ** 2 + 5
-$OUTPUT combo
+@OUTPUT combo
 ; Expected: 105
 
 LET combo2 = (2 + 3) ** 2
-$OUTPUT combo2
+@OUTPUT combo2
 ; Expected: 25
 
-$OUTPUT "Power test complete"
+@OUTPUT "Power test complete"

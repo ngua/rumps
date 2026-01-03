@@ -194,6 +194,7 @@ impl Parser {
             .ignore_then(Self::binding_pattern())
             .then(type_ann)
             .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
             .then(Self::expr(stmt))
             .map_with_span(|((pat, ty_ann), val), span| {
                 cst::Stmt::new(cst::StmtKind::Let(pat, ty_ann, val), span)
@@ -342,6 +343,7 @@ impl Parser {
         just(Token::Set)
             .ignore_then(Self::db_ref(expr.clone()))
             .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
             .then(expr)
             .map_with_span(|(dbref, val), span| {
                 cst::Stmt::new(cst::StmtKind::Set(dbref, val), span)
@@ -451,7 +453,7 @@ impl Parser {
             })
     }
 
-    /// `$SET target = value` as expression.
+    /// `@SET target = value` as expression.
     ///
     /// B-tree assignment that evaluates to `Unit`.
     fn set_expr(
@@ -462,13 +464,14 @@ impl Parser {
         just(Token::Set)
             .ignore_then(Self::db_ref(expr.clone()))
             .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
             .then(expr)
             .map_with_span(|(dbref, val), span| {
                 cst::Expr::new(cst::ExprKind::Set(dbref, Box::new(val)), span)
             })
     }
 
-    /// `$KILL target` as expression.
+    /// `@KILL target` as expression.
     ///
     /// Deletes a variable or subtree and evaluates to `Unit`.
     fn kill_expr(
@@ -2662,7 +2665,7 @@ mod tests {
 
     #[test]
     fn parse_get_global() {
-        let (ast, id) = parse_expr_ok("$GET ^PATIENT");
+        let (ast, id) = parse_expr_ok("@GET ^PATIENT");
         match ast.get_expr(id) {
             Some(Expr::Get(DbRef::Global(name, subs), _)) => {
                 assert_eq!(name, "PATIENT");
@@ -2674,7 +2677,7 @@ mod tests {
 
     #[test]
     fn parse_get_global_with_subscripts() {
-        let (ast, id) = parse_expr_ok("$GET ^PATIENT(123, \"NAME\")");
+        let (ast, id) = parse_expr_ok("@GET ^PATIENT(123, \"NAME\")");
         match ast.get_expr(id) {
             Some(Expr::Get(DbRef::Global(name, subs), _)) => {
                 assert_eq!(name, "PATIENT");
@@ -2726,7 +2729,7 @@ mod tests {
 
     #[test]
     fn parse_set_local() {
-        let result = parse_ok("$SET x = 10");
+        let result = parse_ok("@SET x = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
             Some(Stmt::Set(DbRef::Local(name, subs), _, _)) => {
@@ -2739,7 +2742,7 @@ mod tests {
 
     #[test]
     fn parse_set_global() {
-        let result = parse_ok("$SET ^DATA = 10");
+        let result = parse_ok("@SET ^DATA = 10");
         let stmt = result.ast.get_stmt(result.stmts[0]);
         match stmt {
             Some(Stmt::Set(DbRef::Global(name, _), _, _)) => {

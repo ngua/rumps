@@ -100,11 +100,11 @@ This separation enables clean module support later:
 ```rumps
 IMPORT Math
 
-$OUTPUT Math.sin(3.14)   ; Path resolves to module export
-$OUTPUT Math.PI          ; Path resolves to module constant
+@OUTPUT Math.sin(3.14)   ; Path resolves to module export
+@OUTPUT Math.PI          ; Path resolves to module constant
 
 LET obj = { sin: x => x }
-$OUTPUT obj.sin(3.14)    ; Field access on object (different!)
+@OUTPUT obj.sin(3.14)    ; Field access on object (different!)
 ```
 
 Both use `.` syntax, but:
@@ -135,13 +135,13 @@ LET point: (Int, Int) = (10, 20)
 LET result: (Bool, String) = (true, "success")
 
 ; Access by index (0-based)
-$OUTPUT pair.0    ; 1
-$OUTPUT pair.1    ; "hello"
-$OUTPUT triple.2  ; "world"
+@OUTPUT pair.0    ; 1
+@OUTPUT pair.1    ; "hello"
+@OUTPUT triple.2  ; "world"
 
 ; Destructuring in LET
 LET (x, y) = point
-$OUTPUT x  ; 10
+@OUTPUT x  ; 10
 
 ; In function signatures
 FUN swap (p: (Int, Int)) -> (Int, Int) {
@@ -196,40 +196,40 @@ Bind multiple variables at once by destructuring tuples, objects, and arrays. Th
 ```rumps
 ; Tuple destructuring
 LET (a, b) = (1, 2)
-$OUTPUT a  ; 1
-$OUTPUT b  ; 2
+@OUTPUT a  ; 1
+@OUTPUT b  ; 2
 
 ; Nested tuple destructuring
 LET ((x, y), z) = ((1, 2), 3)
 
 ; Object destructuring (shorthand: field name = variable name)
 LET { name, age } = { name: "Alice", age: 30, extra: true }
-$OUTPUT name  ; "Alice"
-$OUTPUT age   ; 30
+@OUTPUT name  ; "Alice"
+@OUTPUT age   ; 30
 
 ; Object destructuring with rename
 LET { name: n, age: a } = { name: "Bob", age: 25 }
-$OUTPUT n  ; "Bob"
+@OUTPUT n  ; "Bob"
 
 ; Array destructuring (exact match)
 LET [first, second, third] = [1, 2, 3]
-$OUTPUT first   ; 1
-$OUTPUT second  ; 2
+@OUTPUT first   ; 1
+@OUTPUT second  ; 2
 
 ; Array destructuring with ignored rest
 LET [head, ..] = [1, 2, 3, 4]
-$OUTPUT head  ; 1
+@OUTPUT head  ; 1
 
 ; Array destructuring with bound rest
 LET [first, ...tail] = [1, 2, 3, 4]
-$OUTPUT first  ; 1
-$OUTPUT tail   ; [2, 3, 4]
+@OUTPUT first  ; 1
+@OUTPUT tail   ; [2, 3, 4]
 
 ; Combining with functions
 FUN divmod (a: Int, b: Int) -> (Int, Int) { (a / b, a % b) }
 LET (quot, rem) = divmod(17, 5)
-$OUTPUT quot  ; 3
-$OUTPUT rem   ; 2
+@OUTPUT quot  ; 3
+@OUTPUT rem   ; 2
 ```
 
 #### 2.1 AST
@@ -313,7 +313,7 @@ LET e = Event.Click(100, 200)
 LET val = Either.Left("error")
 
 IF s IS Status.Active {
-  $OUTPUT "Active!"
+  @OUTPUT "Active!"
 }
 ```
 
@@ -401,8 +401,8 @@ TYPE Address = {
 LET p: Patient = { id: 1, name: "Alice", age: 30, active: true }
 
 ; Direct field access (NOT requiring MATCH)
-$OUTPUT p.name    ; "Alice"
-$OUTPUT p.age     ; 30
+@OUTPUT p.name    ; "Alice"
+@OUTPUT p.age     ; 30
 
 ; In function signatures
 FUN greet (p: Patient) -> String {
@@ -420,7 +420,7 @@ LET rec: PatientRecord = {
   address: { street: "123 Main", city: "NYC", zip: "10001" }
 }
 
-$OUTPUT rec.patient.name  ; "Bob"
+@OUTPUT rec.patient.name  ; "Bob"
 ```
 
 #### 4.1 TypeDef Extension
@@ -491,10 +491,10 @@ LET label = MATCH status {
   Status.Completed => { "done" }
   Status.Failed => { "error" }
 }
-$OUTPUT label
+@OUTPUT label
 
 ; Use directly in expressions
-$OUTPUT "Status: " ++ MATCH s {
+@OUTPUT "Status: " ++ MATCH s {
   Status.Pending => { "pending" }
   _ => { "other" }
 }
@@ -520,16 +520,16 @@ LET doubled = MATCH get-value() {
 LET status = get-status()
 
 MATCH status {
-  Status.Pending => { $OUTPUT "Waiting..." }
-  Status.Active => { $OUTPUT "In progress" }
-  Status.Completed => { $OUTPUT "Done!" }
-  Status.Failed => { $OUTPUT "Error occurred" }
+  Status.Pending => { @OUTPUT "Waiting..." }
+  Status.Active => { @OUTPUT "In progress" }
+  Status.Completed => { @OUTPUT "Done!" }
+  Status.Failed => { @OUTPUT "Error occurred" }
 }
 
 ; With payload binding
 MATCH event {
-  Event.Click(x, y) => { $OUTPUT "Click at " ++ x ++ ", " ++ y }
-  Event.KeyPress(c) => { $OUTPUT "Key: " ++ c }
+  Event.Click(x, y) => { @OUTPUT "Click at " ++ x ++ ", " ++ y }
+  Event.KeyPress(c) => { @OUTPUT "Key: " ++ c }
   Event.Resize(w, h) => { resize-window(w, h) }
 }
 ```
@@ -537,17 +537,17 @@ MATCH event {
 #### 5.2 Matching Option and Result
 
 ```rumps
-LET name = $GET ^PATIENT(id, "NAME")
+LET name = @GET ^PATIENT(id, "NAME")
 
 MATCH name {
-  Option.Some(n) => { $OUTPUT "Patient: " ++ n }
-  Option.None => { $OUTPUT "Unknown patient" }
+  Option.Some(n) => { @OUTPUT "Patient: " ++ n }
+  Option.None => { @OUTPUT "Unknown patient" }
 }
 
 MATCH try-parse(input) {
   Result.Ok(n) => { n * 2 }
   Result.Err(e) => {
-    $OUTPUT TO ERROR "Parse failed: " ++ e
+    @OUTPUT TO ERROR "Parse failed: " ++ e
     0
   }
 }
@@ -565,7 +565,7 @@ MATCH count {
 MATCH cmd {
   "quit" => { exit() }
   "help" => { show-help() }
-  _ => { $OUTPUT "Unknown command" }  ; wildcard
+  _ => { @OUTPUT "Unknown command" }  ; wildcard
 }
 ```
 
@@ -586,27 +586,27 @@ Destructure objects by field name:
 
 ```rumps
 MATCH person {
-  { name, age } => { $OUTPUT name ++ " is " ++ age }
+  { name, age } => { @OUTPUT name ++ " is " ++ age }
 }
 
 ; With nested patterns
 MATCH record {
   { patient: { name }, address: { city } } => {
-    $OUTPUT name ++ " lives in " ++ city
+    @OUTPUT name ++ " lives in " ++ city
   }
 }
 
 ; Partial matching (only extract some fields)
 MATCH user {
-  { name, role: "admin" } => { $OUTPUT name ++ " is admin" }
-  { name } => { $OUTPUT name ++ " is regular user" }
+  { name, role: "admin" } => { @OUTPUT name ++ " is admin" }
+  { name } => { @OUTPUT name ++ " is regular user" }
 }
 
 ; With wildcards
 MATCH event {
   { type: "click", x, y } => { handle-click(x, y) }
   { type: "key", key } => { handle-key(key) }
-  _ => { $OUTPUT "unknown event" }
+  _ => { @OUTPUT "unknown event" }
 }
 ```
 
@@ -626,8 +626,8 @@ MATCH nested {
 
 ; With literals
 MATCH result {
-  (true, msg) => { $OUTPUT "Success: " ++ msg }
-  (false, err) => { $OUTPUT "Error: " ++ err }
+  (true, msg) => { @OUTPUT "Success: " ++ msg }
+  (false, err) => { @OUTPUT "Error: " ++ err }
 }
 ```
 
@@ -643,13 +643,13 @@ MATCH nested {
 ; Variant containing tuple
 MATCH result {
   Result.Ok((a, b)) => { process(a, b) }
-  Result.Err(e) => { $OUTPUT "Error: " ++ e }
+  Result.Err(e) => { @OUTPUT "Error: " ++ e }
 }
 
 ; Variant containing object
 MATCH result {
   Result.Ok({ data, status }) => { process(data, status) }
-  Result.Err({ code, message }) => { $OUTPUT "Error " ++ code ++ ": " ++ message }
+  Result.Err({ code, message }) => { @OUTPUT "Error " ++ code ++ ": " ++ message }
 }
 ```
 
@@ -813,7 +813,7 @@ MODULE Utils {
   FUN triple (x: Int) -> Int { x * 3 }
 }
 
-$OUTPUT Utils.double(5)  ; 10
+@OUTPUT Utils.double(5)  ; 10
 ```
 
 **Nested modules** (infrastructure in place):
@@ -866,8 +866,8 @@ obj.field        → Expr::Field (unchanged)
 **First-class module functions**: Module functions can be used as values:
 ```rumps
 LET keys-fn = Object.keys       ; Value::ModuleFn { path: ["Object", "keys"] }
-$OUTPUT obj |> keys-fn           ; Pipeline works
-$OUTPUT keys-fn({ a: 1, b: 2 })  ; Direct call works
+@OUTPUT obj |> keys-fn           ; Pipeline works
+@OUTPUT keys-fn({ a: 1, b: 2 })  ; Direct call works
 ```
 
 ##### 6.2.3 Interpreter Changes
@@ -1018,8 +1018,8 @@ LET empty = Map.empty()
 LET typed: Map[Int, String] = {}
 
 ; Operations
-$OUTPUT Map.lookup(ages, "Alice")     ; Option.Some(30)
-$OUTPUT Map.has(num-lookup, 2)        ; true
+@OUTPUT Map.lookup(ages, "Alice")     ; Option.Some(30)
+@OUTPUT Map.has(num-lookup, 2)        ; true
 LET updated = Map.insert(ages, "Carol", 28)
 ```
 
@@ -1112,16 +1112,16 @@ LET now = Time.now()
 
 ; Parsing and formatting (strftime format)
 LET t = Time.parse("%Y-%m-%d", "2024-01-15")!
-$OUTPUT Time.format("%Y-%m-%d %H:%M:%S", t)
+@OUTPUT Time.format("%Y-%m-%d %H:%M:%S", t)
 
 ; Arithmetic
 LET later = Time.add-seconds(now, 3600.0)  ; 1 hour later
 LET diff = Time.diff-seconds(later, now)   ; 3600.0
 
 ; Components
-$OUTPUT Time.year(now)    ; e.g., 2024
-$OUTPUT Time.month(now)   ; e.g., 1 (January)
-$OUTPUT Time.day(now)     ; e.g., 15
+@OUTPUT Time.year(now)    ; e.g., 2024
+@OUTPUT Time.month(now)   ; e.g., 1 (January)
+@OUTPUT Time.day(now)     ; e.g., 15
 ```
 
 **Format strings** use strftime syntax (like Haskell's `time` package):
@@ -1278,8 +1278,8 @@ Single-arm `IF` (no `ELSE`) always evaluates to `Unit`. The body is evaluated fo
 
 ```rumps
 ; Single-arm IF always returns Unit
-LET x = IF TRUE { $OUTPUT "hello" }
-$OUTPUT x  ; Unit
+LET x = IF TRUE { @OUTPUT "hello" }
+@OUTPUT x  ; Unit
 
 ; Use IF/ELSE to get a value
 LET y = IF cond { 42 } ELSE { 0 }
@@ -1345,10 +1345,10 @@ Variables bound in patterns are only visible in that arm's body:
 
 ```rumps
 MATCH opt {
-  Option.Some(x) => { $OUTPUT x }  ; x visible here
-  Option.None => { $OUTPUT "none" }  ; x NOT visible here
+  Option.Some(x) => { @OUTPUT x }  ; x visible here
+  Option.None => { @OUTPUT "none" }  ; x NOT visible here
 }
-$OUTPUT x  ; ERROR: x not in scope
+@OUTPUT x  ; ERROR: x not in scope
 ```
 
 ### MATCH vs IS
@@ -1359,7 +1359,7 @@ $OUTPUT x  ; ERROR: x not in scope
 ```rumps
 ; Simple check: use `IS`
 IF x IS Option.Some(v) {
-  $OUTPUT v
+  @OUTPUT v
 }
 
 ; Multi-way: use MATCH
@@ -1378,24 +1378,24 @@ The following should work:
 ```rumps
 ; Tuples
 LET point = (10, 20)
-$OUTPUT point.0  ; 10
-$OUTPUT point.1  ; 20
+@OUTPUT point.0  ; 10
+@OUTPUT point.1  ; 20
 
 LET (x, y) = point
-$OUTPUT x  ; 10
+@OUTPUT x  ; 10
 
 FUN divmod (a: Int, b: Int) -> (Int, Int) {
   (a / b, a % b)
 }
 LET (quot, rem) = divmod(17, 5)
-$OUTPUT quot  ; 3
-$OUTPUT rem   ; 2
+@OUTPUT quot  ; 3
+@OUTPUT rem   ; 2
 
 ; MATCH on tuples
 MATCH point {
-  (0, y) => { $OUTPUT "On y-axis at " ++ y }
-  (x, 0) => { $OUTPUT "On x-axis at " ++ x }
-  (x, y) => { $OUTPUT "At " ++ x ++ ", " ++ y }
+  (0, y) => { @OUTPUT "On y-axis at " ++ y }
+  (x, 0) => { @OUTPUT "On x-axis at " ++ x }
+  (x, y) => { @OUTPUT "At " ++ x ++ ", " ++ y }
 }
 
 ; User-defined sum type
@@ -1408,7 +1408,7 @@ TYPE Status =
 LET s = Status.InProgress("step 1")
 
 IF s IS Status.InProgress(msg) {
-  $OUTPUT "Working: " ++ msg
+  @OUTPUT "Working: " ++ msg
 }
 
 ; Struct type alias
@@ -1418,14 +1418,14 @@ TYPE Person = {
 }
 
 LET p: Person = { name: "Alice", age: 30 }
-$OUTPUT p.name  ; "Alice" (direct access, no MATCH)
+@OUTPUT p.name  ; "Alice" (direct access, no MATCH)
 
 ; MATCH on sum type
 MATCH s {
-  Status.Pending => { $OUTPUT "Waiting" }
-  Status.InProgress(msg) => { $OUTPUT "Progress: " ++ msg }
-  Status.Completed => { $OUTPUT "Done" }
-  Status.Failed(err) => { $OUTPUT "Error: " ++ err }
+  Status.Pending => { @OUTPUT "Waiting" }
+  Status.InProgress(msg) => { @OUTPUT "Progress: " ++ msg }
+  Status.Completed => { @OUTPUT "Done" }
+  Status.Failed(err) => { @OUTPUT "Error: " ++ err }
 }
 
 ; MATCH with guards
@@ -1440,29 +1440,29 @@ MATCH n {
 ; MATCH on objects (destructuring)
 LET user = { name: "Bob", role: "admin", id: 42 }
 MATCH user {
-  { name, role: "admin" } => { $OUTPUT name ++ " is an admin" }
-  { name } => { $OUTPUT name ++ " is a regular user" }
+  { name, role: "admin" } => { @OUTPUT name ++ " is an admin" }
+  { name } => { @OUTPUT name ++ " is a regular user" }
 }
 
 ; Regex matching (MATCHES is a keyword)
 LET email = "user@example.com"
 IF email MATCHES /^[^@]+@[^@]+\.[^@]+$/ {
-  $OUTPUT "Valid email"
+  @OUTPUT "Valid email"
 }
 
 ; Collection operations (module-qualified functions)
 LET doubled = Array.map(x => x * 2, [1, 2, 3])
-$OUTPUT doubled  ; [2, 4, 6]
+@OUTPUT doubled  ; [2, 4, 6]
 
 LET evens = Array.filter(x => x % 2 == 0, [1, 2, 3, 4])
-$OUTPUT evens  ; [2, 4]
+@OUTPUT evens  ; [2, 4]
 
 LET sum = Array.reduce((acc, x) => acc + x, 0, [1, 2, 3, 4])
-$OUTPUT sum  ; 10
+@OUTPUT sum  ; 10
 
 ; Object utilities
-$OUTPUT Object.keys({ a: 1, b: 2 })  ; ["a", "b"]
-$OUTPUT { a: 1 } |> Object.keys      ; Pipeline with module fn
+@OUTPUT Object.keys({ a: 1, b: 2 })  ; ["a", "b"]
+@OUTPUT { a: 1 } |> Object.keys      ; Pipeline with module fn
 
 ; Ranges
 LET r = 1..5  ; [1, 2, 3, 4] (exclusive end)
@@ -1472,11 +1472,11 @@ LET squares = Array.map(x => x * x, 1..=5)  ; [1, 4, 9, 16, 25]
 LET arr1 = [1, 2, 3]
 LET arr2 = [4, 5, 6]
 LET combined = [...arr1, ...arr2]
-$OUTPUT combined  ; [1, 2, 3, 4, 5, 6]
+@OUTPUT combined  ; [1, 2, 3, 4, 5, 6]
 
 LET base = { name: "Alice", age: 30 }
 LET updated = { ...base, age: 31 }
-$OUTPUT updated.age  ; 31
+@OUTPUT updated.age  ; 31
 ```
 
 ---
@@ -1487,13 +1487,13 @@ Postfix `!` operator for unwrapping `Option` and `Result` values was implemented
 
 ```rumps
 LET val = Option.Some(42)
-$OUTPUT val!              ; 42
+@OUTPUT val!              ; 42
 
 LET ok = Result.Ok("success")
-$OUTPUT ok!               ; success
+@OUTPUT ok!               ; success
 
 LET entries = Object.entries({ a: 1 })!
-$OUTPUT entries           ; [ (a, 1) ]
+@OUTPUT entries           ; [ (a, 1) ]
 ```
 
 Semantics:

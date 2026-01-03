@@ -4,4 +4,4 @@
 LET double = (x: Int) -> Int => x * 2
 
 ; Pass string to Int parameter
-$OUTPUT double("hello")
+@OUTPUT double("hello")

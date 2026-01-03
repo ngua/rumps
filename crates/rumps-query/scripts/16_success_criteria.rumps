@@ -5,17 +5,17 @@
 LET x = 10
 LET y = 20
 LET sum = x + y
-$OUTPUT sum
+@OUTPUT sum
 
-; $SET for B-tree locals (async, subscriptable)
-$SET z = 100
-$SET z(1, "ABC") = 30
+; @SET for B-tree locals (async, subscriptable)
+@SET z = 100
+@SET z(1, "ABC") = 30
 
 ; Comparison and branching
 IF sum > 25 {
-  $OUTPUT "Large sum"
+  @OUTPUT "Large sum"
 } ELSE {
-  $OUTPUT "Small sum"
+  @OUTPUT "Small sum"
 }
 
 ; Expected output:

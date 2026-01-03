@@ -5,4 +5,4 @@ FUN get-number () -> Int {
   "not a number"
 }
 
-$OUTPUT get-number()
+@OUTPUT get-number()

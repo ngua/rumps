@@ -95,14 +95,14 @@ The minimal transaction block without modifiers.
 ```rumps
 ; Basic transaction block
 TRANSACTION {
-    $SET ^PATIENT(123, "NAME") = "John"
-    $SET ^PATIENT(123, "AGE") = 30
+    @SET ^PATIENT(123, "NAME") = "John"
+    @SET ^PATIENT(123, "AGE") = 30
 }
 
 ; Transaction as expression
 LET result = TRANSACTION {
-    $SET ^DATA(1) = "value"
-    $GET ^DATA(1)
+    @SET ^DATA(1) = "value"
+    @GET ^DATA(1)
 }
 ; result is Result[Option[Storable], String]
 ```
@@ -499,52 +499,52 @@ Create `crates/rumps-query/scripts/110_transaction_basic.rumps`:
 
 ; === Transaction with no trailing expression ===
 LET r1 = TRANSACTION {
-    $SET ^data(1) = "one"
-    $SET ^data(2) = "two"
+    @SET ^data(1) = "one"
+    @SET ^data(2) = "two"
 }
-$OUTPUT r1 IS Result.Ok(_)
+@OUTPUT r1 IS Result.Ok(_)
 ; Expected: true
 
 ; === Transaction with trailing expression ===
 LET r2 = TRANSACTION {
-    $SET ^data(3) = "three"
-    $GET ^data(3)
+    @SET ^data(3) = "three"
+    @GET ^data(3)
 }
-$OUTPUT r2 IS Result.Ok(_)
+@OUTPUT r2 IS Result.Ok(_)
 ; Expected: true
 
 ; Unwrap and check value
 MATCH r2 {
-    Result.Ok(v) => { $OUTPUT v }
-    Result.Err(_) => { $OUTPUT "error" }
+    Result.Ok(v) => { @OUTPUT v }
+    Result.Err(_) => { @OUTPUT "error" }
 }
 ; Expected: Option.Some("three")
 
 ; === Read committed data ===
 ; After commit, data should be visible
-LET v1 = $GET ^data(1)
-$OUTPUT v1
+LET v1 = @GET ^data(1)
+@OUTPUT v1
 ; Expected: Option.Some("one")
 
 ; === Transaction scope ===
 ; LET bindings inside transaction should not leak
 LET r3 = TRANSACTION {
     LET inner = "inside"
-    $SET ^data(4) = inner
+    @SET ^data(4) = inner
 }
 ; `inner` should not be accessible here
 
 ; === Multiple transactions ===
 LET r4 = TRANSACTION {
-    $SET ^data(5) = "five"
+    @SET ^data(5) = "five"
 }
 LET r5 = TRANSACTION {
-    $SET ^data(6) = "six"
+    @SET ^data(6) = "six"
 }
-$OUTPUT (r4 IS Result.Ok(_)) AND (r5 IS Result.Ok(_))
+@OUTPUT (r4 IS Result.Ok(_)) AND (r5 IS Result.Ok(_))
 ; Expected: true
 
-$OUTPUT "Complete!"
+@OUTPUT "Complete!"
 ```
 
 ### 6.1.10 Implementation Checklist
@@ -573,49 +573,49 @@ $OUTPUT "Complete!"
 
 ## 6.2: Transaction Modifiers
 
-Extend transaction blocks with configuration modifiers using contextual parsing (same pattern as `$OUTPUT`).
+Extend transaction blocks with configuration modifiers using contextual parsing (same pattern as `@OUTPUT`).
 
 ### 6.2.1 Syntax
 
 ```rumps
 ; Conflict resolution
 TRANSACTION {
-    $SET ^DATA(k) = v
+    @SET ^DATA(k) = v
 } ON CONFLICT ABORT           ; Default; fail on conflict
 
 TRANSACTION {
-    $SET ^DATA(k) = v
+    @SET ^DATA(k) = v
 } ON CONFLICT RETRY 3         ; Retry up to 3 times
 
 TRANSACTION {
-    $SET ^DATA(k) = v
+    @SET ^DATA(k) = v
 } ON CONFLICT SKIP            ; Skip transaction on conflict
 
 TRANSACTION {
-    $SET ^DATA(k) = v
+    @SET ^DATA(k) = v
 } ON CONFLICT OVERWRITE       ; Last-write-wins
 
 ; Timeout
 TRANSACTION {
-    $SET ^DATA(k) = v
+    @SET ^DATA(k) = v
 } WITH TIMEOUT 5000           ; 5 second timeout (milliseconds)
 
 ; Priority
 TRANSACTION {
-    $SET ^DATA(k) = v
+    @SET ^DATA(k) = v
 } WITH PRIORITY HIGH          ; High priority
 TRANSACTION {
-    $SET ^DATA(k) = v
+    @SET ^DATA(k) = v
 } WITH PRIORITY LOW           ; Low priority
 
 ; Isolation (only SNAPSHOT currently supported)
 TRANSACTION {
-    $SET ^DATA(k) = v
+    @SET ^DATA(k) = v
 } WITH ISOLATION SNAPSHOT     ; Snapshot isolation (default)
 
 ; Combined modifiers
 TRANSACTION {
-    $SET ^DATA(k) = v
+    @SET ^DATA(k) = v
 } ON CONFLICT RETRY 3 WITH TIMEOUT 5000 WITH PRIORITY HIGH
 ```
 
@@ -632,7 +632,7 @@ isolation_mod  := WITH ISOLATION SNAPSHOT
 
 ### 6.2.2 Contextual Identifiers
 
-Like `$OUTPUT`, modifier keywords are NOT global keywords:
+Like `@OUTPUT`, modifier keywords are NOT global keywords:
 
 | Contextual Identifier                 | Context                                               |
 |---------------------------------------|-------------------------------------------------------|
@@ -661,7 +661,7 @@ LET timeout = 3    ; OK
 LET with = 4       ; OK
 ```
 
-Note this is exactly how `$OUTPUT` modifiers work.
+Note this is exactly how `@OUTPUT` modifiers work.
 
 ### 6.2.3 Parser Implementation
 
@@ -744,64 +744,64 @@ Create `crates/rumps-query/scripts/111_transaction_modifiers.rumps`:
 
 ; === ON CONFLICT ABORT (default) ===
 LET r1 = TRANSACTION {
-    $SET ^data(1) = "one"
+    @SET ^data(1) = "one"
 } ON CONFLICT ABORT
-$OUTPUT r1 IS Result.Ok(_)
+@OUTPUT r1 IS Result.Ok(_)
 ; Expected: true
 
 ; === ON CONFLICT SKIP ===
 LET r2 = TRANSACTION {
-    $SET ^data(2) = "two"
+    @SET ^data(2) = "two"
 } ON CONFLICT SKIP
-$OUTPUT r2 IS Result.Ok(_)
+@OUTPUT r2 IS Result.Ok(_)
 ; Expected: true
 
 ; === ON CONFLICT OVERWRITE ===
 LET r3 = TRANSACTION {
-    $SET ^data(3) = "three"
+    @SET ^data(3) = "three"
 } ON CONFLICT OVERWRITE
-$OUTPUT r3 IS Result.Ok(_)
+@OUTPUT r3 IS Result.Ok(_)
 ; Expected: true
 
 ; === ON CONFLICT RETRY n ===
 LET r4 = TRANSACTION {
-    $SET ^data(4) = "four"
+    @SET ^data(4) = "four"
 } ON CONFLICT RETRY 3
-$OUTPUT r4 IS Result.Ok(_)
+@OUTPUT r4 IS Result.Ok(_)
 ; Expected: true
 
 ; === WITH TIMEOUT ===
 LET r5 = TRANSACTION {
-    $SET ^data(5) = "five"
+    @SET ^data(5) = "five"
 } WITH TIMEOUT 5000
-$OUTPUT r5 IS Result.Ok(_)
+@OUTPUT r5 IS Result.Ok(_)
 ; Expected: true
 
 ; === WITH PRIORITY ===
 LET r6 = TRANSACTION {
-    $SET ^data(6) = "six"
+    @SET ^data(6) = "six"
 } WITH PRIORITY HIGH
-$OUTPUT r6 IS Result.Ok(_)
+@OUTPUT r6 IS Result.Ok(_)
 ; Expected: true
 
 LET r7 = TRANSACTION {
-    $SET ^data(7) = "seven"
+    @SET ^data(7) = "seven"
 } WITH PRIORITY LOW
-$OUTPUT r7 IS Result.Ok(_)
+@OUTPUT r7 IS Result.Ok(_)
 ; Expected: true
 
 ; === WITH ISOLATION SNAPSHOT ===
 LET r8 = TRANSACTION {
-    $SET ^data(8) = "eight"
+    @SET ^data(8) = "eight"
 } WITH ISOLATION SNAPSHOT
-$OUTPUT r8 IS Result.Ok(_)
+@OUTPUT r8 IS Result.Ok(_)
 ; Expected: true
 
 ; === Combined modifiers ===
 LET r9 = TRANSACTION {
-    $SET ^data(9) = "nine"
+    @SET ^data(9) = "nine"
 } ON CONFLICT RETRY 3 WITH TIMEOUT 5000 WITH PRIORITY HIGH
-$OUTPUT r9 IS Result.Ok(_)
+@OUTPUT r9 IS Result.Ok(_)
 ; Expected: true
 
 ; === Contextual identifiers as variables ===
@@ -812,10 +812,10 @@ LET with = "with"
 LET priority = "priority"
 LET isolation = "isolation"
 
-$OUTPUT on ++ " " ++ conflict
+@OUTPUT on ++ " " ++ conflict
 ; Expected: on conflict
 
-$OUTPUT "Complete!"
+@OUTPUT "Complete!"
 ```
 
 ### 6.2.5 Implementation Checklist
@@ -833,7 +833,7 @@ $OUTPUT "Complete!"
 
 ## 6.3: Global Writes Require Transaction
 
-Enforce that writes to globals (`$SET ^NAME(...)`) require an active transaction.
+Enforce that writes to globals (`@SET ^NAME(...)`) require an active transaction.
 
 ### 6.3.1 Current Behavior
 
@@ -850,7 +850,7 @@ if name.is_global() {
 
 ### 6.3.2 Type Checker Enhancement
 
-Add a warning or error during type checking when `$SET ^NAME(...)` is used outside a transaction context.
+Add a warning or error during type checking when `@SET ^NAME(...)` is used outside a transaction context.
 
 This requires tracking whether we're inside a `TRANSACTION` block during type inference. Add a flag to the inference context:
 
@@ -861,7 +861,7 @@ struct InferContext {
 }
 ```
 
-Set `in_transaction = true` when entering a transaction expression, and warn/error on global `$SET`/`$KILL` when `in_transaction = false`.
+Set `in_transaction = true` when entering a transaction expression, and warn/error on global `@SET`/`@KILL` when `in_transaction = false`.
 
 ### 6.3.3 Tests
 
@@ -871,34 +871,34 @@ Create `crates/rumps-query/scripts/112_transaction_required.rumps`:
 ; Test: Global writes require transaction
 
 ; === Local writes work outside transaction ===
-$SET local-data(1) = "local"
-$OUTPUT $GET local-data(1)
+@SET local-data(1) = "local"
+@OUTPUT @GET local-data(1)
 ; Expected: Option.Some("local")
 
 ; === Global writes inside transaction succeed ===
 LET r1 = TRANSACTION {
-    $SET ^GLOBAL(1) = "global"
-    $GET ^GLOBAL(1)
+    @SET ^GLOBAL(1) = "global"
+    @GET ^GLOBAL(1)
 }
 MATCH r1 {
-    Result.Ok(v) => { $OUTPUT v }
-    Result.Err(e) => { $OUTPUT "Error: " ++ e }
+    Result.Ok(v) => { @OUTPUT v }
+    Result.Err(e) => { @OUTPUT "Error: " ++ e }
 }
 ; Expected: Option.Some("global")
 
-; === $KILL inside transaction ===
+; === @KILL inside transaction ===
 LET r2 = TRANSACTION {
-    $SET ^TEMP(1) = "temp"
-    $KILL ^TEMP(1)
-    $GET ^TEMP(1)
+    @SET ^TEMP(1) = "temp"
+    @KILL ^TEMP(1)
+    @GET ^TEMP(1)
 }
 MATCH r2 {
-    Result.Ok(v) => { $OUTPUT v }
-    Result.Err(_) => { $OUTPUT "error" }
+    Result.Ok(v) => { @OUTPUT v }
+    Result.Err(_) => { @OUTPUT "error" }
 }
 ; Expected: Option.None
 
-$OUTPUT "Complete!"
+@OUTPUT "Complete!"
 ```
 
 **Note**: Testing global writes *outside* a transaction would produce a runtime error. Since errors terminate the script, this should be tested in a separate script that expects failure, or using the error handling pattern.
@@ -907,7 +907,7 @@ $OUTPUT "Complete!"
 
 - [ ] **Typechecker**: Add `in_transaction` flag to context
 - [ ] **Typechecker**: Set flag on entering `Transaction` expression
-- [ ] **Typechecker**: Warn on global `$SET`/`$KILL` outside transaction
+- [ ] **Typechecker**: Warn on global `@SET`/`@KILL` outside transaction
 - [ ] **Tests**: Integration test script (`112_transaction_required.rumps`)
 
 ---
@@ -920,16 +920,16 @@ Document recommended patterns for handling transaction failures.
 
 ```rumps
 LET result = TRANSACTION {
-    $SET ^DATA(key) = value
-    $GET ^DATA(key)
+    @SET ^DATA(key) = value
+    @GET ^DATA(key)
 }
 
 MATCH result {
     Result.Ok(v) => {
-        $OUTPUT "Success: " ++ (v AS String)
+        @OUTPUT "Success: " ++ (v AS String)
     }
     Result.Err(e) => {
-        $OUTPUT "Failed: " ++ e TO ERROR
+        @OUTPUT "Failed: " ++ e TO ERROR
     }
 }
 ```
@@ -938,8 +938,8 @@ MATCH result {
 
 ```rumps
 LET val = TRANSACTION {
-    $SET ^COUNTER(1) = ($GET ^COUNTER(1) ?? 0) + 1
-    $GET ^COUNTER(1)
+    @SET ^COUNTER(1) = (@GET ^COUNTER(1) ?? 0) + 1
+    @GET ^COUNTER(1)
 } ?? Option.None
 ; On transaction failure, val = Option.None
 ```
@@ -963,8 +963,8 @@ FUN with-retry[T] (action: () -> Result[T, String], max-attempts: Int): Result[T
 
 ; Use with a transaction
 LET result = with-retry(() => TRANSACTION {
-    $SET ^DATA(k) = v
-    $GET ^DATA(k)
+    @SET ^DATA(k) = v
+    @GET ^DATA(k)
 }, 3)
 ```
 
@@ -977,32 +977,32 @@ Create `crates/rumps-query/scripts/113_transaction_errors.rumps`:
 
 ; === Match on Result ===
 LET r1 = TRANSACTION {
-    $SET ^data(1) = "success"
+    @SET ^data(1) = "success"
 }
 LET msg1 = MATCH r1 {
     Result.Ok(_) => "ok"
     Result.Err(e) => "err: " ++ e
 }
-$OUTPUT msg1
+@OUTPUT msg1
 ; Expected: ok
 
 ; === Coalesce on failure ===
 LET r2 = TRANSACTION {
-    $SET ^data(2) = "val"
-    $GET ^data(2)
+    @SET ^data(2) = "val"
+    @GET ^data(2)
 }
 LET val2 = r2 ?? Option.None
-$OUTPUT val2
+@OUTPUT val2
 ; Expected: Option.Some("val")
 
 ; === Check is Result.Ok ===
 LET r3 = TRANSACTION {
-    $SET ^data(3) = "test"
+    @SET ^data(3) = "test"
 }
-$OUTPUT r3 IS Result.Ok(_)
+@OUTPUT r3 IS Result.Ok(_)
 ; Expected: true
 
-$OUTPUT "Complete!"
+@OUTPUT "Complete!"
 ```
 
 ### 6.4.5 Implementation Checklist

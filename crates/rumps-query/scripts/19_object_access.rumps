@@ -4,13 +4,13 @@
 LET obj = { name: "Alice", age: 30, active: TRUE }
 
 ; Dot notation
-$OUTPUT obj.name
+@OUTPUT obj.name
 ; Expected: Alice
 
-$OUTPUT obj.age
+@OUTPUT obj.age
 ; Expected: 30
 
-$OUTPUT obj.active
+@OUTPUT obj.active
 ; Expected: TRUE
 
 ; Nested object access (dot notation)
@@ -24,24 +24,24 @@ LET rec = {
   }
 }
 
-$OUTPUT rec.user.profile.first-name
+@OUTPUT rec.user.profile.first-name
 ; Expected: Bob
 
-$OUTPUT rec.user.profile.last-name
+@OUTPUT rec.user.profile.last-name
 ; Expected: Smith
 
-$OUTPUT rec.user.scores[0]
+@OUTPUT rec.user.scores[0]
 ; Expected: 90
 
-$OUTPUT rec.user.scores[-1]
+@OUTPUT rec.user.scores[-1]
 ; Expected: 95
 
 ; Object with dashed keys (valid RUMPS identifiers)
 LET special = { my-key: "value1", another-key: "value2" }
-$OUTPUT special.my-key
+@OUTPUT special.my-key
 ; Expected: value1
 
-$OUTPUT special.another-key
+@OUTPUT special.another-key
 ; Expected: value2
 
 ; Optional field access (`?.`) on objects
@@ -49,27 +49,27 @@ $OUTPUT special.another-key
 
 LET person = { name: "Carol", age: 25 }
 
-$OUTPUT person?.name
+@OUTPUT person?.name
 ; Expected: Option.Some("Carol")
 
-$OUTPUT person?.age
+@OUTPUT person?.age
 ; Expected: Option.Some(25)
 
-$OUTPUT person?.email
+@OUTPUT person?.email
 ; Expected: Option.None
 
-$OUTPUT person?.address
+@OUTPUT person?.address
 ; Expected: Option.None
 
 ; Chained optional access
 LET nested = { user: { name: "Dan" } }
-$OUTPUT nested?.user?.name
+@OUTPUT nested?.user?.name
 ; Expected: Option.Some("Dan")
 
-$OUTPUT nested?.user?.missing
+@OUTPUT nested?.user?.missing
 ; Expected: Option.None
 
-$OUTPUT nested?.missing?.anything
+@OUTPUT nested?.missing?.anything
 ; Expected: Option.None
 
 ; Optional field access in function with typed parameter
@@ -78,10 +78,10 @@ fun get_b(x: { a: Int }) {
   x?.b
 }
 
-$OUTPUT get_b({ a: 1 })
+@OUTPUT get_b({ a: 1 })
 ; Expected: Option.None
 
-$OUTPUT get_b({ a: 1, b: 2 })
+@OUTPUT get_b({ a: 1, b: 2 })
 ; Expected: Option.Some(2)
 
-$OUTPUT "Object access test complete"
+@OUTPUT "Object access test complete"

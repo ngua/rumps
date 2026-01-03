@@ -6,4 +6,4 @@ FUN add (a: Int, b: Int) -> Int {
 }
 
 ; Too few arguments
-$OUTPUT add(5)
+@OUTPUT add(5)

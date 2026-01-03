@@ -3,8 +3,8 @@
 
 ; Error: spreading a non-array
 LET num = 42
-LET v1 = $GET data(...num)
+LET v1 = @GET data(...num)
 
 ; Error: spreading an array of wrong element type
 LET units: Array[Unit] = [Unit, Unit]
-LET v2 = $GET data(...units)
+LET v2 = @GET data(...units)

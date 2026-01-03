@@ -307,24 +307,24 @@ pub(crate) enum ExprKind {
     /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
     Order(DbRef),
 
-    /// Query: `$QUERY var`.
+    /// Query: `@QUERY var`.
     ///
     /// Returns the full key path to the next node with a value.
     /// Returns `Option[Array[Subscript]]`.
     Query(DbRef),
 
-    /// Output expression: `$OUTPUT expr [JSON] [TO target]`.
+    /// Output expression: `@OUTPUT expr [JSON] [TO target]`.
     ///
     /// Executes the output side effect and evaluates to `Unit`.
-    /// This allows `$OUTPUT` in expression contexts.
+    /// This allows `@OUTPUT` in expression contexts.
     Output(Box<OutputStmt>),
 
-    /// Set expression: `$SET target = value`.
+    /// Set expression: `@SET target = value`.
     ///
     /// Executes the B-tree assignment and evaluates to `Unit`.
     Set(DbRef, Box<Expr>),
 
-    /// Kill expression: `$KILL target`.
+    /// Kill expression: `@KILL target`.
     ///
     /// Deletes a variable or subtree and evaluates to `Unit`.
     Kill(DbRef),
