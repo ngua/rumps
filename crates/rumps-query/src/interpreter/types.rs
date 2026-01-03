@@ -495,7 +495,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Perform typed conversion for `READ` with full type expression support.
     ///
-    /// Handles struct types (with type parameters), arrays, options, and
+    /// Handles object alias types (with type parameters), arrays, options, and
     /// delegates to `read_value` for primitive types.
     pub(super) fn read_value_expr(
         &mut self,
@@ -509,9 +509,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Identity: if value already matches target type, return as-is
         if self.value_matches_type_expr(val, target) {
             Ok(self.make_result_ok(val.clone(), span))
-        } else if let Some(fields) = self.get_struct_fields_resolved(target) {
-            // Struct type: read object into struct
-            self.read_to_struct(val, &fields, target, span)
+        } else if let Some(fields) = self.resolve_object_alias_fields(target) {
+            // Object alias type: read into object
+            self.read_to_object(val, &fields, target, span)
         } else if base_ty == Some(TypeId::ARRAY) {
             // Array[T]: read JSON array with element type
             let elem_ty = type_args
@@ -533,8 +533,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.type_exprs.object_fields(target).cloned()
         {
             // Anonymous structural object type: `{ field: Type, ... }`
-            // Reuse read_to_struct with the structural fields.
-            self.read_to_struct(val, &fields, target, span)
+            // Reuse read_to_object with the structural fields.
+            self.read_to_object(val, &fields, target, span)
         } else {
             let tgt_name = self.format_type_expr(target);
             let msg = format!("cannot read into type `{tgt_name}`");
@@ -542,15 +542,15 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Read an object (JSON or native) into a struct type.
+    /// Read an object (JSON or native) into an object alias type.
     ///
     /// Accepts both `Value::Json(Object)` and `Value::Object`. The object must
     /// have all required fields with compatible types (extra fields are allowed).
-    fn read_to_struct(
+    fn read_to_object(
         &mut self,
         val: &Value,
         fields: &IndexMap<StringId, TypeExprId>,
-        struct_ty: TypeExprId,
+        obj_ty: TypeExprId,
         span: Span,
     ) -> Result<Value> {
         // Extract object source; soft error if not an object
@@ -569,7 +569,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     &self.type_exprs,
                     &self.arena,
                 );
-                let tgt = self.format_type_expr(struct_ty);
+                let tgt = self.format_type_expr(obj_ty);
                 let msg = format!("cannot read `{src}` as `{tgt}`");
                 Ok(self.make_result_err(&msg, span))
             }
@@ -899,7 +899,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Check if an object matches resolved struct field requirements.
+    /// Check if an object matches resolved object alias field requirements.
     ///
     /// Takes already-resolved field types (after type parameter substitution).
     pub(super) fn object_matches_resolved_fields(
@@ -916,14 +916,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         })
     }
 
-    /// Check if a field value matches its expected type (recursive for nested structs).
+    /// Check if a field value matches its expected type (recursive for nested objects).
     pub(super) fn field_matches_type(
         &mut self,
         val: &Value,
         expected_ty: TypeExprId,
     ) -> bool {
-        // Get resolved nested struct fields if this is a struct type
-        let nested = self.get_struct_fields_resolved(expected_ty);
+        // Get resolved nested object fields if this is an object alias type
+        let nested = self.resolve_object_alias_fields(expected_ty);
         if let Some(nested_fields) = nested {
             match val {
                 Value::Object(nested_obj) => self
@@ -1031,7 +1031,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// For function types, checks arity and param/return type compatibility.
     /// For union types, checks if value matches ANY member.
     /// For tuple types, checks element-wise matching.
-    /// For struct types, checks field presence and types with substitution.
+    /// For object alias types, checks field presence and types with substitution.
     pub(super) fn value_matches_type_expr(
         &mut self,
         val: &Value,
@@ -1079,9 +1079,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => false,
             }
         } else if let Some(resolved_fields) =
-            self.get_struct_fields_resolved(ty)
+            self.resolve_object_alias_fields(ty)
         {
-            // Named struct type: check field presence and types
+            // Named object alias type: check field presence and types
             match val {
                 Value::Object(obj) => {
                     self.object_matches_resolved_fields(obj, &resolved_fields)
@@ -1160,15 +1160,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             .unwrap_or_else(|| "?".to_owned())
     }
 
-    /// Extract struct field definitions from a type expression.
+    /// Get object fields from an alias type expression.
     ///
-    /// Returns `Some((&fields, &type_params, type_args))` if `ty` resolves to
-    /// a struct type, `None` otherwise. The type_args are from the type expression
-    /// (e.g., `[Int]` for `Box[Int]`).
-    /// Get object fields from a type expression.
-    ///
-    /// If `ty` is an alias to an object type, returns the object fields.
-    /// Returns `None` if `ty` is not an alias to an object.
+    /// Returns `Some((fields, type_params, type_args))` if `ty` resolves to
+    /// an object alias type, `None` otherwise. The type_args are from the type
+    /// expression (e.g., `[Int]` for `Box[Int]`).
     fn get_alias_object_fields(
         &self,
         ty: TypeExprId,
@@ -1202,7 +1198,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Resolves AST field types with type parameter substitution.
     /// Returns `None` if `ty` is not an alias to an object type.
-    pub(super) fn get_struct_fields_resolved(
+    pub(super) fn resolve_object_alias_fields(
         &mut self,
         ty: TypeExprId,
     ) -> Option<IndexMap<StringId, TypeExprId>> {
@@ -1225,7 +1221,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             .collect()
     }
 
-    /// Validate an object against struct field requirements.
+    /// Validate an object against object alias field requirements.
     ///
     /// Checks both field presence AND field types recursively.
     /// Extensible-record style: extra fields in the object are allowed.
@@ -1240,7 +1236,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let obj = obj.clone();
         expected_fields.iter().try_for_each(|(fname_id, fty)| {
             obj.get(fname_id).map_or_else(
-                || typechecked!("struct field", "present"),
+                || typechecked!("object field", "present"),
                 |val_id| {
                     self.arena.get(*val_id).cloned().map_or(Ok(()), |val| {
                         self.validate_field_type(&val, *fty, span, ctx)
@@ -1258,10 +1254,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
         ctx: Option<&str>,
     ) -> Result<()> {
-        // Check for nested struct (get resolved fields)
-        let nested = self.get_struct_fields_resolved(expected_ty);
+        // Check for nested object alias (get resolved fields)
+        let nested = self.resolve_object_alias_fields(expected_ty);
         if let Some(nested_fields) = nested {
-            // Nested struct: recursively validate
+            // Nested object: recursively validate
             match val {
                 Value::Object(nested_obj) => self.validate_object_fields(
                     nested_obj,
@@ -1269,7 +1265,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                     ctx,
                 ),
-                _ => typechecked!("struct field", "Object"),
+                _ => typechecked!("object field", "Object"),
             }
         } else if self.value_matches_type_expr(val, expected_ty) {
             Ok(())
@@ -1280,7 +1276,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Validate that a value conforms to an expected type.
     ///
-    /// For struct types, validates extensible-record style: the object must
+    /// For object alias types, validates extensible-record style: the object must
     /// have at least the declared fields with correct types (extra fields OK).
     pub(super) fn validate_type(
         &mut self,
@@ -1288,15 +1284,15 @@ impl<I: IoContext> Interpreter<'_, I> {
         expected_ty: TypeExprId,
         span: Span,
     ) -> Result<()> {
-        // Check if this is a struct type and get resolved fields
-        let resolved_fields = self.get_struct_fields_resolved(expected_ty);
+        // Check if this is an object alias type and get resolved fields
+        let resolved_fields = self.resolve_object_alias_fields(expected_ty);
 
         if let Some(fields) = resolved_fields {
             match val {
                 Value::Object(obj) => {
                     self.validate_object_fields(obj, &fields, span, None)
                 }
-                _ => typechecked!("struct value", "Object"),
+                _ => typechecked!("object value", "Object"),
             }
         } else if self.value_matches_type_expr(val, expected_ty) {
             Ok(())

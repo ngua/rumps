@@ -529,9 +529,9 @@ impl<'a> InferCtx<'a> {
             .map_or_else(UnifyResult::Err, UnifyResult::Ok)
     }
 
-    /// Unify a named struct type with a structural object type.
+    /// Unify a named object alias type with a structural object type.
     ///
-    /// The struct must have all required fields present in the object.
+    /// The alias must have all required fields present in the object.
     /// Extra fields in the object are allowed (extensible record semantics).
     fn unify_named_with_object(
         &mut self,
@@ -540,7 +540,7 @@ impl<'a> InferCtx<'a> {
         obj_fields: &IndexMap<StringId, Ty>,
         span: Span,
     ) -> UnifyResult {
-        // Look up struct definition
+        // Look up alias definition
         let def = self.registry().get_def(type_id);
 
         match def {
@@ -996,7 +996,7 @@ impl<'a> InferCtx<'a> {
     ///
     /// Looks up the field in the resolved base type and unifies the expected
     /// field type with the actual field type. Unlike `unify_named_with_object`,
-    /// this only checks the single accessed field, not all struct fields.
+    /// this only checks the single accessed field, not all object fields.
     fn check_has_field(
         &mut self,
         base: &Ty,

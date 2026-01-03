@@ -86,7 +86,7 @@ pub(crate) enum Ty {
     ///    rather than the expanded member list.
     Union(Vec<Self>),
 
-    /// User-defined type (sum types, structs, unions) with type parameters.
+    /// User-defined type (sum types, aliases, unions) with type parameters.
     Named(TypeId, Vec<Self>),
 
     /// Unresolved; database reads before inference narrows.

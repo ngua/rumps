@@ -1352,7 +1352,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Validate a function parameter against its expected type.
     ///
-    /// Provides detailed error messages, especially for struct types.
+    /// Provides detailed error messages, especially for object alias types.
     fn validate_param(
         &mut self,
         val: &Value,
@@ -1362,11 +1362,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<()> {
         let pname = self.arena.get_str(param_name).unwrap_or("?").to_owned();
 
-        // Check if this is a struct type and get resolved fields
-        let resolved_fields = self.get_struct_fields_resolved(expected_ty);
+        // Check if this is an object alias type and get resolved fields
+        let resolved_fields = self.resolve_object_alias_fields(expected_ty);
 
         if let Some(fields) = resolved_fields {
-            // Struct type: validate with detailed errors
+            // Object alias type: validate with detailed errors
             match val {
                 Value::Object(obj) => self.validate_object_fields(
                     obj,
@@ -1374,7 +1374,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                     Some(&pname),
                 ),
-                _ => typechecked!("parameter type", "Object (struct)"),
+                _ => typechecked!("parameter type", "Object"),
             }
         } else if self.value_matches_type_expr(val, expected_ty) {
             Ok(())

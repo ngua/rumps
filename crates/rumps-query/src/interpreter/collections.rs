@@ -14,7 +14,7 @@ use crate::{Error, Result, Span};
 impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate an object literal with potential spread entries.
     ///
-    /// Type checker guarantees spreads are on object/struct types.
+    /// Type checker guarantees spreads are on object types.
     #[async_recursion]
     pub(super) async fn object(
         &mut self,

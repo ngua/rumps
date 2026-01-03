@@ -256,11 +256,11 @@ pub(crate) enum TypeError {
     #[error("type `{0}` cannot be unwrapped; expected `Option` or `Result`")]
     NotUnwrappable(Ty, Span),
 
-    /// Field access on non-object/struct type.
+    /// Field access on non-object type.
     #[error("type `{0}` has no fields")]
     NotAnObject(Ty, Span),
 
-    /// Field not found on object or struct type.
+    /// Field not found on object type.
     #[error("field `{field}` not found on type `{ty}`")]
     FieldNotFound { ty: Ty, field: String, span: Span },
 
@@ -281,7 +281,7 @@ pub(crate) enum TypeError {
     NotAnArray(Ty, Span),
 
     /// Spread on non-object type.
-    #[error("cannot spread type `{0}` in object literal; expected `Object` or struct")]
+    #[error("cannot spread type `{0}` in object literal; expected `Object`")]
     NotAnObjectSpread(Ty, Span),
 
     /// JSON access on non-JSON type.
@@ -477,7 +477,7 @@ impl TypeError {
                     "cannot spread type `{}` in object literal",
                     p.format(ty)
                 ),
-                Some("spread requires an `Object` or struct type".to_owned()),
+                Some("spread requires an `Object` type".to_owned()),
             ),
             Self::NotJson(ty, _) => (
                 format!(
