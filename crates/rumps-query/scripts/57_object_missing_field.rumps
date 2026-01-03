@@ -1,0 +1,6 @@
+; Error: missing required field in object alias
+
+NEWTYPE Person = { name: String, age: Int }
+
+; Missing `age` field
+LET p: Person = { name: "Alice" }

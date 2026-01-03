@@ -271,7 +271,7 @@ $OUTPUT chars IS Array
 ; ============================================================
 
 ; Define a struct type
-TYPE Person = { name: String, age: Int }
+NEWTYPE Person = { name: String, age: Int }
 
 ; Read JSON into struct
 LET person-json = { "name": "Alice", "age": 30 }
@@ -314,7 +314,7 @@ $OUTPUT wrong-result IS Result.Err(_)
 ; ============================================================
 
 ; Define parametric struct
-TYPE Box[T] = { value: T }
+NEWTYPE Box[T] = { value: T }
 
 ; Read into Box[Int]
 LET box-json = { "value": 42 }
@@ -336,7 +336,7 @@ $OUTPUT str-box-result!.value
 ; Expected: hello
 
 ; Multi-param struct
-TYPE Pair[A, B] = { first: A, second: B }
+NEWTYPE Pair[A, B] = { first: A, second: B }
 
 LET pair-json = { "first": 1, "second": "one" }
 LET pair-result = pair-json READ Pair[Int, String]
@@ -400,8 +400,8 @@ $OUTPUT null-opt-val IS Option.None
 ; NESTED STRUCTS IN JSON READ
 ; ============================================================
 
-TYPE Address = { city: String, zip: Int }
-TYPE Employee = { name: String, addr: Address }
+NEWTYPE Address = { city: String, zip: Int }
+NEWTYPE Employee = { name: String, addr: Address }
 
 LET emp-json = {
   "name": "Dave",

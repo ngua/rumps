@@ -524,19 +524,15 @@ pub(crate) struct VariantAst {
     pub payloads: SmallVec<[AstTypeExprId; 2]>,
 }
 
-/// A type definition body for user-defined types.
+/// A type definition body for user-defined sum types.
+///
+/// Note: Struct aliases now use `Stmt::NewType` instead.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum TypeDefAst {
     /// Sum type: `Variant1 | Variant2(T) | ...`
     ///
     /// Each variant is a named constructor with optional payload types.
     Sum(SmallVec<[VariantAst; 4]>),
-
-    /// Structural object type alias: `{ field1: Type1, field2: Type2, ... }`
-    ///
-    /// Each entry is `(field_name, field_type)`. At runtime these map to
-    /// `Value::Object`; the struct type enables optional validation.
-    Struct(Vec<(String, AstTypeExprId)>),
 }
 
 /// An array element: either a single expression or a spread.
@@ -1012,11 +1008,7 @@ pub(crate) enum Stmt {
         body: ExprId,
     },
 
-    /// User-defined type declaration: `TYPE Name = ...` or `TYPE Name[T] = ...`.
-    ///
-    /// - `name`: the type's identifier (e.g., `Status`, `Event`)
-    /// - `type_params`: optional type parameters with constraints (e.g., `[T]`, `[T: Numeric]`)
-    /// - `def`: the type definition body (sum type or struct)
+    /// User-defined sum type declaration: `TYPE Name = Variant1 | Variant2(T)`.
     ///
     /// Examples:
     /// - `TYPE Status = Pending | Active | Completed`
@@ -1026,6 +1018,21 @@ pub(crate) enum Stmt {
         name: String,
         type_params: SmallVec<[TypeParam; 2]>,
         def: TypeDefAst,
+    },
+
+    /// Transparent type alias: `NEWTYPE Name = Type` or `NEWTYPE Name[T] = Type`.
+    ///
+    /// Creates a fully transparent alias; `NEWTYPE I = Int` makes `I`
+    /// interchangeable with `Int`. Supports parametric polymorphism.
+    ///
+    /// Examples:
+    /// - `NEWTYPE Person = { name: String, age: Int }`
+    /// - `NEWTYPE I = Int`
+    /// - `NEWTYPE IntMap[V] = Map[Int, V]`
+    NewType {
+        name: String,
+        type_params: SmallVec<[TypeParam; 2]>,
+        target: AstTypeExprId,
     },
 
     /// Union type declaration: `UNION Name = Type1 | Type2 | ...`.

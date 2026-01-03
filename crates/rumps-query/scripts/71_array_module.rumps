@@ -184,7 +184,7 @@ LET signed = [-5, 3, -1, 4, -2]
 $OUTPUT Array.sort-by(cmp-abs, signed)
 
 ; Sort objects by field
-TYPE SortPerson = { name: String, age: Int }
+NEWTYPE SortPerson = { name: String, age: Int }
 
 FUN cmp-by-age(pa: SortPerson, pb: SortPerson) -> Ordering {
   cmp-int(pa.age, pb.age)

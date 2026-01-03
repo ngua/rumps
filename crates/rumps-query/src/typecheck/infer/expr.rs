@@ -10,9 +10,10 @@ use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
-    ArrayElem, AstTypeExprId, BinOp, DbRef, Expr, ExprId, JsonAccessKey,
-    JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId, SubscriptElem,
-    TransactionExpr, TxnId, TypeParam, TypePattern, UnOp, UserConstraint,
+    ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
+    JsonAccessKey, JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId,
+    SubscriptElem, TransactionExpr, TxnId, TypeParam, TypePattern, UnOp,
+    UserConstraint,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
@@ -517,23 +518,37 @@ impl InferCtx<'_> {
                         });
                     }
                     Ty::Named(ty_id, _args) => {
-                        // Spreading a struct: get its fields
-                        if let Some(TypeDef::Struct { fields, .. }) =
-                            self.registry.get_def(*ty_id)
-                        {
-                            // Remember we spread this struct (for potential preservation)
+                        // Spreading an alias to object: get its fields
+                        let spread_ok =
+                            self.registry.get_def(*ty_id).and_then(|def| {
+                                match def {
+                                    TypeDef::Alias { target, .. } => self
+                                        .ast
+                                        .get_type_expr(*target)
+                                        .and_then(|te| match te {
+                                            AstTypeExpr::Object(fields) => {
+                                                Some(fields.clone())
+                                            }
+                                            _ => None,
+                                        }),
+                                    _ => None,
+                                }
+                            });
+                        if let Some(fields) = spread_ok {
+                            // Remember we spread this (for potential preservation)
                             if spread_struct.is_none() && acc.is_empty() {
                                 spread_struct = Some(*ty_id);
                             } else {
-                                // Multiple spreads or fields before spread; no preservation
+                                // Multiple spreads or fields before; no preservation
                                 spread_struct = None;
                             }
-                            // Merge struct fields (convert AstTypeExprId -> Ty)
+                            // Merge fields (convert AstTypeExprId -> Ty)
                             let empty_subst = HashMap::new();
-                            fields.iter().for_each(|(k, ast_ty_id)| {
+                            fields.iter().for_each(|(name, ast_ty_id)| {
+                                let k = self.env.intern(name);
                                 let field_ty = self
                                     .ast_type_to_ty(*ast_ty_id, &empty_subst);
-                                acc.insert(*k, field_ty);
+                                acc.insert(k, field_ty);
                             });
                         } else {
                             self.error(TypeError::NotAnObjectSpread(
@@ -1380,11 +1395,20 @@ impl InferCtx<'_> {
                 match &scrutinee_ty {
                     Ty::Object(_) | Ty::Var(_) | Ty::Unknown | Ty::Error => {}
                     Ty::Named(type_id, _) => {
-                        // Check it's a struct
-                        if !matches!(
-                            self.registry.get_def(*type_id),
-                            Some(TypeDef::Struct { .. })
-                        ) {
+                        // Check it's an alias to object
+                        let is_obj_alias = self
+                            .registry
+                            .get_def(*type_id)
+                            .is_some_and(|def| match def {
+                                TypeDef::Alias { target, .. } => self
+                                    .ast
+                                    .get_type_expr(*target)
+                                    .is_some_and(|te| {
+                                        matches!(te, AstTypeExpr::Object(_))
+                                    }),
+                                _ => false,
+                            });
+                        if !is_obj_alias {
                             self.error(TypeError::NotAnObject(
                                 scrutinee_ty.clone(),
                                 span,

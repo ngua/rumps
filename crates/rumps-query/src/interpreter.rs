@@ -107,7 +107,6 @@ mod variant;
 use std::collections::HashMap;
 
 use async_recursion::async_recursion;
-use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
 use smallvec::SmallVec;
@@ -421,6 +420,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 type_params,
                 def,
             } => self.type_decl(&name, &type_params, &def, span),
+            Stmt::NewType {
+                name,
+                type_params,
+                target,
+            } => self.newtype_decl(&name, &type_params, target, span),
             Stmt::Union {
                 name,
                 type_params,
@@ -519,6 +523,23 @@ impl<I: IoContext> Interpreter<'_, I> {
                             )?;
                         }
 
+                        Stmt::NewType {
+                            name: alias_name,
+                            type_params,
+                            target,
+                        } => {
+                            // Aliases are already registered with qualified names
+                            // by register_from_ast. The idempotent newtype_decl
+                            // will skip if already present.
+                            let qname = format!("{}.{}", mod_path, alias_name);
+                            self.newtype_decl(
+                                &qname,
+                                &type_params,
+                                target,
+                                item_span,
+                            )?;
+                        }
+
                         Stmt::Union {
                             name: union_name,
                             type_params,
@@ -601,10 +622,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         Ok(())
     }
 
-    /// Register a user-defined type declaration.
+    /// Register a user-defined sum type declaration.
     ///
-    /// Processes `TYPE Name = Variant1 | Variant2(T) | ...` (sum type) or
-    /// `TYPE Name = { field: Type, ... }` (struct type) and registers
+    /// Processes `TYPE Name = Variant1 | Variant2(T) | ...` and registers
     /// the type in the type registry. Errors if a type with the same name
     /// already exists or if referenced types are undeclared.
     fn type_decl(
@@ -619,80 +639,85 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Skip if already registered (from register_from_ast before type
         // checking). This makes type registration idempotent.
         if self.registry.lookup(name_id).is_none() {
-            match def {
-                TypeDefAst::Sum(variants) => {
-                    // Validate payload types reference only declared type params
-                    variants.iter().try_for_each(|v| {
-                        v.payloads.iter().try_for_each(|ty_id| {
-                            self.validate_type_params(*ty_id, type_params, span)
-                        })
-                    })?;
+            let TypeDefAst::Sum(variants) = def;
 
-                    // Build VariantDef entries
-                    let variant_defs: SmallVec<[crate::value::VariantDef; 4]> =
-                        variants
-                            .iter()
-                            .enumerate()
-                            .map(|(idx, v)| {
-                                let vname_id = self.arena.intern(&v.name);
-                                crate::value::VariantDef {
-                                    name: vname_id,
-                                    idx: idx as u8,
-                                    arity: v.payloads.len() as u8,
-                                    payloads: v.payloads.clone(),
-                                }
-                            })
-                            .collect();
+            // Validate payload types reference only declared type params
+            variants.iter().try_for_each(|v| {
+                v.payloads.iter().try_for_each(|ty_id| {
+                    self.validate_type_params(*ty_id, type_params, span)
+                })
+            })?;
 
-                    // Intern type parameters (constraints are ignored at runtime)
-                    let type_param_ids: SmallVec<[StringId; 2]> = type_params
-                        .iter()
-                        .map(|tp| self.arena.intern(&tp.name))
-                        .collect();
+            // Build VariantDef entries
+            let variant_defs: SmallVec<[crate::value::VariantDef; 4]> =
+                variants
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, v)| {
+                        let vname_id = self.arena.intern(&v.name);
+                        crate::value::VariantDef {
+                            name: vname_id,
+                            idx: idx as u8,
+                            arity: v.payloads.len() as u8,
+                            payloads: v.payloads.clone(),
+                        }
+                    })
+                    .collect();
 
-                    // Register the type
-                    self.registry.register(
-                        crate::value::TypeDef::Sum {
-                            name: name_id,
-                            type_params: type_param_ids,
-                            variants: variant_defs,
-                        },
-                        name_id,
-                    );
-                }
-                TypeDefAst::Struct(fields) => {
-                    // Validate field types reference only declared type params
-                    fields.iter().try_for_each(|(_, ty_id)| {
-                        self.validate_type_params(*ty_id, type_params, span)
-                    })?;
+            // Intern type parameters (constraints are ignored at runtime)
+            let type_param_ids: SmallVec<[StringId; 2]> = type_params
+                .iter()
+                .map(|tp| self.arena.intern(&tp.name))
+                .collect();
 
-                    // Build field map with AST type expressions (not resolved);
-                    // resolution happens at usage site with type param substitution
-                    let field_map: IndexMap<StringId, AstTypeExprId> = fields
-                        .iter()
-                        .map(|(fname, ast_ty_id)| {
-                            let fname_id = self.arena.intern(fname);
-                            (fname_id, *ast_ty_id)
-                        })
-                        .collect();
+            // Register the type
+            self.registry.register(
+                crate::value::TypeDef::Sum {
+                    name: name_id,
+                    type_params: type_param_ids,
+                    variants: variant_defs,
+                },
+                name_id,
+            );
+        }
 
-                    // Intern type parameters (constraints are ignored at runtime)
-                    let type_param_ids: SmallVec<[StringId; 2]> = type_params
-                        .iter()
-                        .map(|tp| self.arena.intern(&tp.name))
-                        .collect();
+        Ok(())
+    }
 
-                    // Register the struct type
-                    self.registry.register(
-                        crate::value::TypeDef::Struct {
-                            name: name_id,
-                            type_params: type_param_ids,
-                            fields: field_map,
-                        },
-                        name_id,
-                    );
-                }
-            }
+    /// Register a type alias declaration.
+    ///
+    /// Processes `NEWTYPE Name = Type` and registers the alias in the type
+    /// registry. The alias is transparent; `NEWTYPE I = Int` makes `I`
+    /// interchangeable with `Int`.
+    fn newtype_decl(
+        &mut self,
+        name: &str,
+        type_params: &[TypeParam],
+        target: AstTypeExprId,
+        span: Span,
+    ) -> Result<()> {
+        let name_id = self.arena.intern(name);
+
+        // Skip if already registered (idempotent)
+        if self.registry.lookup(name_id).is_none() {
+            // Validate target type references only declared type params
+            self.validate_type_params(target, type_params, span)?;
+
+            // Intern type parameters
+            let type_param_ids: SmallVec<[StringId; 2]> = type_params
+                .iter()
+                .map(|tp| self.arena.intern(&tp.name))
+                .collect();
+
+            // Register the alias
+            self.registry.register(
+                crate::value::TypeDef::Alias {
+                    name: name_id,
+                    type_params: type_param_ids,
+                    target,
+                },
+                name_id,
+            );
         }
 
         Ok(())

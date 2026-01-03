@@ -1,6 +1,6 @@
 ; Error: passing object missing required fields to function
 
-TYPE Person = { name: String, age: Int }
+NEWTYPE Person = { name: String, age: Int }
 
 FUN greet (p: Person) -> String {
   "Hello, " ++ p.name ++ "!"

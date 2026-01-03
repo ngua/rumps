@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
-    ArrayElem, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
+    ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
     OutputFormat, OutputStmt, OutputTarget, Stmt, StmtId, SubscriptElem, TxnId,
     TypeParam, UserConstraint,
 };
@@ -62,6 +62,12 @@ impl InferCtx<'_> {
             Some(Stmt::Union { .. }) => {
                 // Union declarations are processed by the registry; nothing to
                 // infer here. The unions are registered before type checking.
+            }
+
+            Some(Stmt::NewType { .. }) => {
+                // NewType declarations are processed by the registry; nothing
+                // to infer here. The type aliases are registered before type
+                // checking.
             }
 
             Some(Stmt::Module { name, body }) => {
@@ -184,6 +190,11 @@ impl InferCtx<'_> {
                 Some(Stmt::Union { .. }) => {
                     // Union declarations are processed by the registry with
                     // qualified names (e.g., `ModuleName.UnionName`); nothing
+                    // to infer here.
+                }
+                Some(Stmt::NewType { .. }) => {
+                    // NewType declarations are processed by the registry with
+                    // qualified names (e.g., `ModuleName.AliasName`); nothing
                     // to infer here.
                 }
                 None => {}
@@ -384,13 +395,19 @@ impl InferCtx<'_> {
                     self.unify(rhs_ty.clone(), ann_ty.clone(), span);
 
                     // Extensible records: if rhs is an object and annotation
-                    // is a struct, keep the full object type to preserve extra
-                    // fields
-                    let is_struct = matches!(&ann_ty, Ty::Named(id, _)
-                        if matches!(self.registry.get_def(*id), Some(TypeDef::Struct { .. })));
+                    // is an alias to object, keep the full object type to
+                    // preserve extra fields
+                    let is_obj_alias = matches!(&ann_ty, Ty::Named(id, _)
+                    if self.registry.get_def(*id).is_some_and(|def| match def {
+                        TypeDef::Alias { target, .. } => self
+                            .ast
+                            .get_type_expr(*target)
+                            .is_some_and(|te| matches!(te, AstTypeExpr::Object(_))),
+                        _ => false,
+                    }));
 
                     Some(
-                        if matches!(&rhs_ty, Ty::Object(_)) && is_struct {
+                        if matches!(&rhs_ty, Ty::Object(_)) && is_obj_alias {
                             rhs_ty
                         } else {
                             ann_ty

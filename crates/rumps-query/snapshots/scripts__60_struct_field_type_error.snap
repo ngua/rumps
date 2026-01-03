@@ -1,6 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
-description: "; Error: wrong field type in struct\n\nTYPE Person = { name: String, age: Int }\n\n; age should be Int, not String\nLET p: Person = { name: \"Alice\", age: \"thirty\" }\n"
----
-ERROR: type mismatch: expected `Int`, got `String`

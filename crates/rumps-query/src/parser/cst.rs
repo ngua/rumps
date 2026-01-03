@@ -420,11 +420,18 @@ pub(crate) enum StmtKind {
         body: Expr,
     },
 
-    /// User-defined type declaration.
+    /// User-defined sum type declaration: `TYPE Name = Variant1 | Variant2(T)`.
     Type {
         name: String,
         type_params: Vec<TypeParam>,
         def: TypeDefCst,
+    },
+
+    /// Transparent type alias: `NEWTYPE Name = Type` or `NEWTYPE Name[T] = Type`.
+    NewType {
+        name: String,
+        type_params: Vec<TypeParam>,
+        target: TypeExpr,
     },
 
     /// Union type declaration: `UNION Name = Type1 | Type2 | ...`.
@@ -500,13 +507,12 @@ pub(crate) struct VariantCst {
 }
 
 /// A type definition body (CST form).
+///
+/// Note: Only sum types remain; struct aliases now use `NEWTYPE`.
 #[derive(Clone, Debug)]
 pub(crate) enum TypeDefCst {
     /// Sum type: `Variant1 | Variant2(T) | ...`
     Sum(Vec<VariantCst>),
-
-    /// Structural object type alias: `{ field1: Type1, field2: Type2, ... }`
-    Struct(Vec<(String, TypeExpr)>),
 }
 
 /// A match pattern (CST form).

@@ -105,8 +105,8 @@ $OUTPUT made.outer.inner
 ; COMBINED WITH NAMED STRUCT TYPES
 ; ============================================================
 
-TYPE Inner = { value: Int }
-TYPE Outer = { child: Inner }
+NEWTYPE Inner = { value: Int }
+NEWTYPE Outer = { child: Inner }
 
 LET named: Outer = { child: { value: 42 } }
 $OUTPUT named.child.value

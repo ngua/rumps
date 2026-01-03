@@ -342,7 +342,7 @@ impl InferCtx<'_> {
     }
 
     /// Convert a simple named type to `Ty`.
-    pub(super) fn named_type_to_ty(&self, name: &str) -> Ty {
+    pub(super) fn named_type_to_ty(&mut self, name: &str) -> Ty {
         match name {
             "Bool" => Ty::Bool,
             "Int" => Ty::Int,
@@ -357,19 +357,31 @@ impl InferCtx<'_> {
             "DataStatus" => Ty::DataStatus,
             "FilePath" => Ty::FilePath,
             "Path" => Ty::Path,
+            "Regex" => Ty::Regex,
             _ => {
                 // Look up in registry
                 self.env
                     .lookup_str(name)
                     .and_then(|id| self.registry.lookup(id))
-                    .map_or(Ty::Unknown, |ty_id| Ty::Named(ty_id, vec![]))
+                    .map_or(Ty::Unknown, |ty_id| {
+                        self.expand_alias_or_named(ty_id, vec![])
+                    })
             }
         }
     }
 
+    /// Convert a `TypeId` to `Ty::Named`.
+    ///
+    /// Aliases are NOT expanded here; they remain as `Ty::Named` so we can
+    /// detect them later (e.g., for extensible record semantics). Expansion
+    /// happens in unification and field access as needed.
+    fn expand_alias_or_named(&mut self, type_id: TypeId, args: Vec<Ty>) -> Ty {
+        Ty::Named(type_id, args)
+    }
+
     /// Convert a parameterized type to `Ty`.
     pub(super) fn parameterized_type_to_ty(
-        &self,
+        &mut self,
         name: &str,
         args: Vec<Ty>,
     ) -> Ty {
@@ -403,7 +415,9 @@ impl InferCtx<'_> {
                 self.env
                     .lookup_str(name)
                     .and_then(|id| self.registry.lookup(id))
-                    .map_or(Ty::Unknown, |ty_id| Ty::Named(ty_id, args))
+                    .map_or(Ty::Unknown, |ty_id| {
+                        self.expand_alias_or_named(ty_id, args)
+                    })
             }
         }
     }
@@ -431,35 +445,53 @@ impl InferCtx<'_> {
                 })
             }
 
-            // Named type: check if it's a struct and look up field
+            // Named type: check if it's an alias to object and look up field
             Ty::Named(type_id, type_args) => {
                 let field_id = self.env.intern(field);
                 let def = self.registry.get_def(*type_id);
                 match def {
-                    Some(TypeDef::Struct {
+                    Some(TypeDef::Alias {
                         type_params,
-                        fields,
+                        target,
                         ..
                     }) => {
-                        // Copy what we need before borrowing self mutably
-                        let field_ty_id = fields.get(&field_id).copied();
+                        // Check if target is an object type
+                        let target = *target;
                         let params: smallvec::SmallVec<[_; 2]> =
                             type_params.clone();
-                        match field_ty_id {
-                            Some(ty_id) => {
-                                let subst: HashMap<_, _> = params
+                        match self.ast.get_type_expr(target).cloned() {
+                            Some(AstTypeExpr::Object(fields)) => {
+                                // Find field in object
+                                let field_ty_id = fields
                                     .iter()
-                                    .zip(type_args.iter())
-                                    .map(|(p, a)| (*p, a.clone()))
-                                    .collect();
-                                self.ast_type_to_ty(ty_id, &subst)
+                                    .find(|(n, _)| {
+                                        self.env.intern(n) == field_id
+                                    })
+                                    .map(|(_, ty)| *ty);
+                                match field_ty_id {
+                                    Some(ty_id) => {
+                                        let subst: HashMap<_, _> = params
+                                            .iter()
+                                            .zip(type_args.iter())
+                                            .map(|(p, a)| (*p, a.clone()))
+                                            .collect();
+                                        self.ast_type_to_ty(ty_id, &subst)
+                                    }
+                                    None => {
+                                        self.error(TypeError::FieldNotFound {
+                                            ty: base_ty.clone(),
+                                            field: field.to_string(),
+                                            span,
+                                        });
+                                        Ty::Error
+                                    }
+                                }
                             }
-                            None => {
-                                self.error(TypeError::FieldNotFound {
-                                    ty: base_ty.clone(),
-                                    field: field.to_string(),
+                            _ => {
+                                self.error(TypeError::NotAnObject(
+                                    base_ty.clone(),
                                     span,
-                                });
+                                ));
                                 Ty::Error
                             }
                         }

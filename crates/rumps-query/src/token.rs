@@ -27,6 +27,7 @@ pub(crate) enum Token {
     False,
     Fun,
     Type,
+    NewType,
     Match,
     Matches,
     Union,
@@ -141,6 +142,7 @@ impl Token {
                 "FALSE" => Some(Self::False),
                 "FUN" => Some(Self::Fun),
                 "TYPE" => Some(Self::Type),
+                "NEWTYPE" => Some(Self::NewType),
                 "MATCH" => Some(Self::Match),
                 "MATCHES" => Some(Self::Matches),
                 "UNION" => Some(Self::Union),
@@ -189,6 +191,7 @@ impl fmt::Display for Token {
             Self::False => write!(f, "FALSE"),
             Self::Fun => write!(f, "FUN"),
             Self::Type => write!(f, "TYPE"),
+            Self::NewType => write!(f, "NEWTYPE"),
             Self::Match => write!(f, "MATCH"),
             Self::Matches => write!(f, "MATCHES"),
             Self::Union => write!(f, "UNION"),
@@ -299,6 +302,7 @@ mod tests {
         assert_eq!(Token::keyword("UNION"), Some(Token::Union));
         assert_eq!(Token::keyword("MODULE"), Some(Token::Module));
         assert_eq!(Token::keyword("TYPE"), Some(Token::Type));
+        assert_eq!(Token::keyword("NEWTYPE"), Some(Token::NewType));
         assert_eq!(Token::keyword("TRANSACTION"), Some(Token::Transaction));
         // Case-sensitive: null
         assert_eq!(Token::keyword("null"), Some(Token::Null));

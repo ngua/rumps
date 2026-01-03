@@ -24,6 +24,7 @@ use smallvec::SmallVec;
 use super::error::TypeError;
 use super::infer::{Constraint, InferCtx};
 use super::ty::{Subst, Ty, TyVar};
+use crate::ast::AstTypeExpr;
 use crate::intern::StringId;
 use crate::value::TypeDef;
 use crate::Span;
@@ -68,8 +69,77 @@ impl<'a> InferCtx<'a> {
         self.unify_inner(t1, t2, span)
     }
 
+    /// Expand a `Ty::Named` alias fully to its target type.
+    ///
+    /// Recursively expands chained aliases (e.g., `A = B`, `B = Int`) until
+    /// reaching a non-alias type. Object aliases are NOT expanded; they need
+    /// special handling in `unify_named_with_object`.
+    fn expand_alias_fully(&mut self, ty: &Ty) -> Option<Ty> {
+        let mut current = ty.clone();
+        let mut expanded = false;
+        // Expand until we hit a non-alias or object alias
+        while let Some(next) = self.expand_alias_once(&current) {
+            current = next;
+            expanded = true;
+        }
+        if expanded {
+            Some(current)
+        } else {
+            None
+        }
+    }
+
+    /// Expand a `Ty::Named` alias one level.
+    ///
+    /// If `ty` is `Ty::Named(id, args)` where `id` refers to a `TypeDef::Alias`,
+    /// returns the expanded target type with type args substituted. Otherwise
+    /// returns `None`.
+    ///
+    /// Note: Aliases to object types are NOT expanded here; they need special
+    /// handling in `unify_named_with_object` to check all required fields.
+    fn expand_alias_once(&mut self, ty: &Ty) -> Option<Ty> {
+        match ty {
+            Ty::Named(type_id, args) => {
+                match self.registry().get_def(*type_id) {
+                    Some(TypeDef::Alias {
+                        type_params,
+                        target,
+                        ..
+                    }) => {
+                        // Don't expand if target is an object type; let
+                        // `unify_named_with_object` handle it for proper
+                        // required-field checking
+                        let is_obj =
+                            self.ast().get_type_expr(*target).is_some_and(
+                                |te| matches!(te, AstTypeExpr::Object(_)),
+                            );
+                        if is_obj {
+                            None
+                        } else {
+                            let subst: HashMap<StringId, Ty> = type_params
+                                .iter()
+                                .zip(args.iter())
+                                .map(|(p, a)| (*p, a.clone()))
+                                .collect();
+                            let target = *target;
+                            Some(self.ast_type_to_ty(target, &subst))
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Core unification logic.
     fn unify_inner(&mut self, t1: &Ty, t2: &Ty, span: Span) -> UnifyResult {
+        // Expand aliases fully before unifying (transparent type aliases)
+        let exp1 = self.expand_alias_fully(t1);
+        let exp2 = self.expand_alias_fully(t2);
+        let t1 = exp1.as_ref().unwrap_or(t1);
+        let t2 = exp2.as_ref().unwrap_or(t2);
+
         match (t1, t2) {
             // Error recovery: Error unifies with anything
             (Ty::Error, _) | (_, Ty::Error) => UnifyResult::Ok(Subst::empty()),
@@ -474,62 +544,80 @@ impl<'a> InferCtx<'a> {
         let def = self.registry().get_def(type_id);
 
         match def {
-            Some(TypeDef::Struct {
+            Some(TypeDef::Alias {
                 type_params,
-                fields: struct_fields,
+                target,
                 ..
             }) => {
-                // Build substitution from type params to type args
-                let param_subst: HashMap<StringId, Ty> = type_params
-                    .iter()
-                    .zip(type_args.iter())
-                    .map(|(p, a)| (*p, a.clone()))
-                    .collect();
+                // Check if target is an object type
+                let target = *target;
+                let type_params = type_params.clone();
+                match self.ast().get_type_expr(target).cloned() {
+                    Some(AstTypeExpr::Object(alias_fields)) => {
+                        // Build substitution from type params to type args
+                        let param_subst: HashMap<StringId, Ty> = type_params
+                            .iter()
+                            .zip(type_args.iter())
+                            .map(|(p, a)| (*p, a.clone()))
+                            .collect();
 
-                // Clone struct fields before mutable borrow of self
-                let struct_fields = struct_fields.clone();
+                        // Pre-intern field names before the fold
+                        let fields_with_ids: Vec<_> = alias_fields
+                            .iter()
+                            .map(|(name, ty)| {
+                                let id = self.env_mut().intern(name);
+                                (name.clone(), id, *ty)
+                            })
+                            .collect();
 
-                // Check that object has all required struct fields
-                struct_fields
-                    .iter()
-                    .try_fold(
-                        Subst::empty(),
-                        |acc, (field_name, field_ty_id)| {
-                            let expected_ty =
-                                self.ast_type_to_ty(*field_ty_id, &param_subst);
-                            let expected_ty = expected_ty.apply(&acc);
+                        // Check that object has all required fields
+                        fields_with_ids
+                            .iter()
+                            .try_fold(
+                                Subst::empty(),
+                                |acc, (field_name, field_name_id, field_ty_id)| {
+                                    let expected_ty = self.ast_type_to_ty(
+                                        *field_ty_id,
+                                        &param_subst,
+                                    );
+                                    let expected_ty = expected_ty.apply(&acc);
 
-                            match obj_fields.get(field_name) {
-                                Some(obj_ty) => {
-                                    let obj_ty = obj_ty.apply(&acc);
-                                    match self.unify_inner(
-                                        &expected_ty,
-                                        &obj_ty,
-                                        span,
-                                    ) {
-                                        UnifyResult::Ok(s) => {
-                                            Ok(acc.compose(&s))
+                                    match obj_fields.get(field_name_id) {
+                                        Some(obj_ty) => {
+                                            let obj_ty = obj_ty.apply(&acc);
+                                            match self.unify_inner(
+                                                &expected_ty,
+                                                &obj_ty,
+                                                span,
+                                            ) {
+                                                UnifyResult::Ok(s) => {
+                                                    Ok(acc.compose(&s))
+                                                }
+                                                UnifyResult::Err(e) => Err(e),
+                                            }
                                         }
-                                        UnifyResult::Err(e) => Err(e),
+                                        None => {
+                                            // Missing required field
+                                            Err(TypeError::MissingField {
+                                                ty: type_id,
+                                                field: field_name.clone(),
+                                                span,
+                                            })
+                                        }
                                     }
-                                }
-                                None => {
-                                    // Missing required field
-                                    let field_str = self
-                                        .env()
-                                        .get_str(*field_name)
-                                        .unwrap_or("<unknown>")
-                                        .to_string();
-                                    Err(TypeError::MissingField {
-                                        ty: type_id,
-                                        field: field_str,
-                                        span,
-                                    })
-                                }
-                            }
-                        },
-                    )
-                    .map_or_else(UnifyResult::Err, UnifyResult::Ok)
+                                },
+                            )
+                            .map_or_else(UnifyResult::Err, UnifyResult::Ok)
+                    }
+                    _ => {
+                        // Not an object alias, can't unify with object
+                        UnifyResult::Err(TypeError::Mismatch {
+                            expected: Ty::Named(type_id, type_args.to_vec()),
+                            got: Ty::Object(obj_fields.clone()),
+                            span,
+                        })
+                    }
+                }
             }
 
             Some(TypeDef::Union { .. }) => {
@@ -867,6 +955,10 @@ impl<'a> InferCtx<'a> {
         span: Span,
         subst: &mut Subst,
     ) {
+        // Expand aliases (e.g., `Maybe[T]` -> `Option[T]`)
+        let expanded = self.expand_alias_fully(ty);
+        let ty = expanded.as_ref().unwrap_or(ty);
+
         match ty {
             Ty::Option(opt_inner) => {
                 match self.unify_types(inner, opt_inner, span) {
@@ -940,50 +1032,63 @@ impl<'a> InferCtx<'a> {
                 }
             },
 
-            // Named struct: look up field in struct definition
+            // Named alias to object: look up field in alias definition
             Ty::Named(type_id, type_args) => {
                 let def = self.registry().get_def(*type_id);
                 match def {
-                    Some(TypeDef::Struct {
+                    Some(TypeDef::Alias {
                         type_params,
-                        fields: struct_fields,
+                        target,
                         ..
                     }) => {
                         let params: SmallVec<[StringId; 2]> =
                             type_params.clone();
-                        let struct_fields = struct_fields.clone();
-
-                        match struct_fields.get(&field) {
-                            Some(ast_ty_id) => {
-                                let param_subst: HashMap<StringId, Ty> = params
+                        let target = *target;
+                        match self.ast().get_type_expr(target).cloned() {
+                            Some(AstTypeExpr::Object(alias_fields)) => {
+                                // Find field in alias object
+                                let field_str =
+                                    self.env().get_str(field).unwrap_or("");
+                                let field_ty_id = alias_fields
                                     .iter()
-                                    .zip(type_args.iter())
-                                    .map(|(p, a)| (*p, a.clone()))
-                                    .collect();
-                                let actual_ty = self
-                                    .ast_type_to_ty(*ast_ty_id, &param_subst);
-                                match self
-                                    .unify_types(field_ty, &actual_ty, span)
-                                {
-                                    UnifyResult::Ok(s) => {
-                                        *subst = subst.compose(&s);
+                                    .find(|(n, _)| n == field_str)
+                                    .map(|(_, ty)| *ty);
+                                match field_ty_id {
+                                    Some(ast_ty_id) => {
+                                        let param_subst: HashMap<_, _> = params
+                                            .iter()
+                                            .zip(type_args.iter())
+                                            .map(|(p, a)| (*p, a.clone()))
+                                            .collect();
+                                        let actual_ty = self.ast_type_to_ty(
+                                            ast_ty_id,
+                                            &param_subst,
+                                        );
+                                        match self.unify_types(
+                                            field_ty, &actual_ty, span,
+                                        ) {
+                                            UnifyResult::Ok(s) => {
+                                                *subst = subst.compose(&s);
+                                            }
+                                            UnifyResult::Err(e) => {
+                                                self.error(e);
+                                            }
+                                        }
                                     }
-                                    UnifyResult::Err(e) => {
-                                        self.error(e);
+                                    None => {
+                                        self.error(TypeError::FieldNotFound {
+                                            ty: base.clone(),
+                                            field: field_str.to_string(),
+                                            span,
+                                        });
                                     }
                                 }
                             }
-                            None => {
-                                let name = self
-                                    .env()
-                                    .get_str(field)
-                                    .unwrap_or("<unknown>")
-                                    .to_string();
-                                self.error(TypeError::FieldNotFound {
-                                    ty: base.clone(),
-                                    field: name,
+                            _ => {
+                                self.error(TypeError::NotAnObject(
+                                    base.clone(),
                                     span,
-                                });
+                                ));
                             }
                         }
                     }

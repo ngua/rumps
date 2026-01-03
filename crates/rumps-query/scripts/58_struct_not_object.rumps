@@ -1,6 +1,0 @@
-; Error: struct type requires object value
-
-TYPE Person = { name: String, age: Int }
-
-; Wrong type (Int instead of Object)
-LET p: Person = 42

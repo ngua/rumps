@@ -817,21 +817,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         val: &Value,
         type_id: TypeId,
     ) -> bool {
-        // Check if target is a union type; if so, test each member
-        if let Some(members) =
-            self.registry.get_def(type_id).and_then(|def| match def {
-                crate::value::TypeDef::Union { members, .. } => {
-                    Some(members.clone())
-                }
-                _ => None,
-            })
-        {
-            members
-                .iter()
-                .any(|&m| self.value_matches_type_expr(val, m))
-        } else {
-            self.value_matches_type_direct(val, type_id)
-        }
+        // Delegate to expand_alias_and_match with no type args
+        self.expand_alias_and_match(val, type_id, None)
     }
 
     /// Check if a type expression represents a union type.
@@ -878,6 +865,37 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Range { .. } => type_id == TypeId::RANGE,
             // Internal loop control types; don't match user types
             Value::ForeverContinuation | Value::LoopContinue(_) => false,
+        }
+    }
+
+    /// Expand an alias with type args and match, or fall back to simple match.
+    fn expand_alias_and_match(
+        &mut self,
+        val: &Value,
+        type_id: TypeId,
+        type_args: Option<SmallVec<[TypeExprId; 2]>>,
+    ) -> bool {
+        match self.registry.get_def(type_id) {
+            Some(crate::value::TypeDef::Alias {
+                type_params,
+                target,
+                ..
+            }) => {
+                let type_params = type_params.clone();
+                let target = *target;
+                // Build substitution from type params to type args
+                let subst = Self::build_subst(&type_params, type_args.as_ref());
+                self.resolve_ast_type_with_subst(target, &subst)
+                    .ok()
+                    .is_some_and(|ty| self.value_matches_type_expr(val, ty))
+            }
+            Some(crate::value::TypeDef::Union { members, .. }) => {
+                let members = members.clone();
+                members
+                    .iter()
+                    .any(|&m| self.value_matches_type_expr(val, m))
+            }
+            _ => self.value_matches_type_direct(val, type_id),
         }
     }
 
@@ -1076,10 +1094,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.fn_value_matches(val, &params, ret)
         } else if let Some(type_id) = self.type_exprs.base_type(ty) {
             // Parameterized types: compare stored type args with expected
-            match (
-                type_id,
-                self.type_exprs.type_args(ty).map(SmallVec::as_slice),
-            ) {
+            let type_args = self.type_exprs.type_args(ty).cloned();
+            match (type_id, type_args.as_ref().map(SmallVec::as_slice)) {
                 (TypeId::ARRAY, Some(&[expected_elem])) => match val {
                     Value::Array(actual_elem, _) => {
                         self.type_exprs.eq(*actual_elem, expected_elem)
@@ -1093,7 +1109,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     }
                     _ => false,
                 },
-                _ => self.value_matches_type(val, type_id),
+                _ => {
+                    // Check if this is an alias; if so, expand with type args
+                    self.expand_alias_and_match(val, type_id, type_args)
+                }
             }
         } else {
             false
@@ -1146,39 +1165,50 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Returns `Some((&fields, &type_params, type_args))` if `ty` resolves to
     /// a struct type, `None` otherwise. The type_args are from the type expression
     /// (e.g., `[Int]` for `Box[Int]`).
-    pub(super) fn get_struct_def(
+    /// Get object fields from a type expression.
+    ///
+    /// If `ty` is an alias to an object type, returns the object fields.
+    /// Returns `None` if `ty` is not an alias to an object.
+    fn get_alias_object_fields(
         &self,
         ty: TypeExprId,
     ) -> Option<(
-        &IndexMap<StringId, AstTypeExprId>,
-        &SmallVec<[StringId; 2]>,
-        Option<&SmallVec<[TypeExprId; 2]>>,
+        SmallVec<[(String, AstTypeExprId); 4]>,
+        SmallVec<[StringId; 2]>,
+        Option<SmallVec<[TypeExprId; 2]>>,
     )> {
         let base_ty = self.type_exprs.base_type(ty)?;
-        let type_args = self.type_exprs.type_args(ty);
+        let type_args = self.type_exprs.type_args(ty).cloned();
         self.registry.get_def(base_ty).and_then(|def| match def {
-            crate::value::TypeDef::Struct {
-                fields,
+            crate::value::TypeDef::Alias {
+                target,
                 type_params,
                 ..
-            } => Some((fields, type_params, type_args)),
+            } => {
+                // Check if the target is an object type
+                let target_expr = self.ast.get_type_expr(*target)?;
+                match target_expr {
+                    crate::ast::AstTypeExpr::Object(fields) => {
+                        Some((fields.clone(), type_params.clone(), type_args))
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         })
     }
 
-    /// Get resolved struct fields for a type expression.
+    /// Get resolved object fields for a type expression.
     ///
     /// Resolves AST field types with type parameter substitution.
-    /// Returns `None` if `ty` is not a struct type.
+    /// Returns `None` if `ty` is not an alias to an object type.
     pub(super) fn get_struct_fields_resolved(
         &mut self,
         ty: TypeExprId,
     ) -> Option<IndexMap<StringId, TypeExprId>> {
-        // Get struct definition and extract what we need
-        let (fields, type_params, type_args) = {
-            let def = self.get_struct_def(ty)?;
-            (def.0.clone(), def.1.clone(), def.2.cloned())
-        };
+        // Get alias object definition and extract what we need
+        let (fields, type_params, type_args) =
+            self.get_alias_object_fields(ty)?;
 
         // Build substitution map
         let subst = Self::build_subst(&type_params, type_args.as_ref());
@@ -1186,8 +1216,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Resolve each field type with substitution
         fields
             .iter()
-            .map(|(&fname_id, &ast_ty)| {
-                self.resolve_ast_type_with_subst(ast_ty, &subst)
+            .map(|(fname, ast_ty)| {
+                let fname_id = self.arena.intern(fname);
+                self.resolve_ast_type_with_subst(*ast_ty, &subst)
                     .ok()
                     .map(|resolved| (fname_id, resolved))
             })

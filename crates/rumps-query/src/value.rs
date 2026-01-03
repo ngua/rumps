@@ -570,7 +570,7 @@ impl Value {
                     .map(|def| match def {
                         TypeDef::Builtin(b) => b.name(),
                         TypeDef::Sum { .. } => "Tagged",
-                        TypeDef::Struct { .. } => "Struct",
+                        TypeDef::Alias { .. } => "Alias",
                         TypeDef::Union { .. } => "Union",
                     })
                     .unwrap_or("Unknown"),
@@ -755,17 +755,16 @@ pub(crate) enum TypeDef {
         type_params: SmallVec<[StringId; 2]>,
         variants: SmallVec<[VariantDef; 4]>,
     },
-    /// Structural object type alias.
+    /// Transparent type alias.
     ///
-    /// Maps field names to their expected types. At runtime, values are
-    /// `Value::Object`; the struct type is used for optional validation
-    /// when assigning to a typed variable (`LET x: StructName = ...`).
-    Struct {
+    /// `NEWTYPE I = Int` makes `I` fully interchangeable with `Int`.
+    /// The target is stored as an AST type expression to support
+    /// type parameters; resolution happens at usage site with substitution.
+    Alias {
         name: StringId,
         type_params: SmallVec<[StringId; 2]>,
-        /// Field types stored as AST expressions (not resolved) to support
-        /// type parameters. Resolution happens at usage site with substitution.
-        fields: IndexMap<StringId, AstTypeExprId>,
+        /// The target type (AST expression, not resolved).
+        target: AstTypeExprId,
     },
     /// Named union type definition.
     ///
@@ -1264,7 +1263,7 @@ impl TypeRegistry {
         self.get_def(id).and_then(|def| match def {
             TypeDef::Builtin(b) => Some(b.name()),
             TypeDef::Sum { name, .. }
-            | TypeDef::Struct { name, .. }
+            | TypeDef::Alias { name, .. }
             | TypeDef::Union { name, .. } => arena.get_str(*name),
         })
     }
@@ -1278,7 +1277,7 @@ impl TypeRegistry {
     ) -> Option<&'a str> {
         self.get_def(ty).and_then(|def| match def {
             TypeDef::Builtin(_)
-            | TypeDef::Struct { .. }
+            | TypeDef::Alias { .. }
             | TypeDef::Union { .. } => None,
             TypeDef::Sum { variants, .. } => variants
                 .iter()
@@ -1295,7 +1294,7 @@ impl TypeRegistry {
     ) -> Option<&VariantDef> {
         self.get_def(ty).and_then(|def| match def {
             TypeDef::Builtin(_)
-            | TypeDef::Struct { .. }
+            | TypeDef::Alias { .. }
             | TypeDef::Union { .. } => None,
             TypeDef::Sum { variants, .. } => {
                 variants.iter().find(|v| v.name == name)
@@ -1798,6 +1797,23 @@ impl TypeRegistry {
                             span,
                         )
                     }
+                    Stmt::NewType {
+                        name,
+                        type_params,
+                        target,
+                    } => {
+                        let qname = prefix.map_or_else(
+                            || name.clone(),
+                            |p| format!("{}.{}", p, name),
+                        );
+                        self.register_alias(
+                            &qname,
+                            &type_params,
+                            target,
+                            ctx.arena,
+                            span,
+                        )
+                    }
                     Stmt::Module { name, body } => {
                         let new_prefix = prefix.map_or_else(
                             || name.clone(),
@@ -1839,50 +1855,29 @@ impl TypeRegistry {
             .map(|tp| arena.intern(&tp.name))
             .collect();
 
-        match def {
-            TypeDefAst::Sum(variants) => {
-                let variant_defs: SmallVec<[VariantDef; 4]> = variants
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, v)| {
-                        let vname_id = arena.intern(&v.name);
-                        VariantDef {
-                            name: vname_id,
-                            idx: idx as u8,
-                            arity: v.payloads.len() as u8,
-                            payloads: v.payloads.clone(),
-                        }
-                    })
-                    .collect();
+        let TypeDefAst::Sum(variants) = def;
+        let variant_defs: SmallVec<[VariantDef; 4]> = variants
+            .iter()
+            .enumerate()
+            .map(|(idx, v)| {
+                let vname_id = arena.intern(&v.name);
+                VariantDef {
+                    name: vname_id,
+                    idx: idx as u8,
+                    arity: v.payloads.len() as u8,
+                    payloads: v.payloads.clone(),
+                }
+            })
+            .collect();
 
-                self.register(
-                    TypeDef::Sum {
-                        name: name_id,
-                        type_params: type_param_ids,
-                        variants: variant_defs,
-                    },
-                    name_id,
-                );
-            }
-            TypeDefAst::Struct(fields) => {
-                let field_map: IndexMap<StringId, AstTypeExprId> = fields
-                    .iter()
-                    .map(|(fname, ast_ty_id)| {
-                        let fname_id = arena.intern(fname);
-                        (fname_id, *ast_ty_id)
-                    })
-                    .collect();
-
-                self.register(
-                    TypeDef::Struct {
-                        name: name_id,
-                        type_params: type_param_ids,
-                        fields: field_map,
-                    },
-                    name_id,
-                );
-            }
-        }
+        self.register(
+            TypeDef::Sum {
+                name: name_id,
+                type_params: type_param_ids,
+                variants: variant_defs,
+            },
+            name_id,
+        );
 
         Ok(())
     }
@@ -1933,6 +1928,43 @@ impl TypeRegistry {
                 name: name_id,
                 type_params: type_param_ids,
                 members,
+            },
+            name_id,
+        );
+
+        Ok(())
+    }
+
+    /// Register a single NEWTYPE alias declaration.
+    fn register_alias(
+        &mut self,
+        name: &str,
+        type_params: &[TypeParam],
+        target: AstTypeExprId,
+        arena: &mut ValueArena,
+        span: Span,
+    ) -> Result<()> {
+        let name_id = arena.intern(name);
+
+        // Check for duplicate
+        if self.lookup(name_id).is_some() {
+            Err(crate::Error::runtime(
+                span,
+                format!("type alias `{name}` is already defined"),
+            ))?;
+        }
+
+        // Intern type parameters (constraints are ignored at runtime)
+        let type_param_ids: SmallVec<[StringId; 2]> = type_params
+            .iter()
+            .map(|tp| arena.intern(&tp.name))
+            .collect();
+
+        self.register(
+            TypeDef::Alias {
+                name: name_id,
+                type_params: type_param_ids,
+                target,
             },
             name_id,
         );

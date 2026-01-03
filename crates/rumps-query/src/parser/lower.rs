@@ -137,6 +137,18 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 def: def_lowered,
             }
         }
+        cst::StmtKind::NewType {
+            name,
+            type_params,
+            target,
+        } => {
+            let target_id = lower_type_expr(ast, target)?;
+            Stmt::NewType {
+                name,
+                type_params: lower_type_params(type_params),
+                target: target_id,
+            }
+        }
         cst::StmtKind::Union {
             name,
             type_params,
@@ -544,13 +556,6 @@ fn lower_type_def(ast: &mut Ast, def: cst::TypeDefCst) -> Result<TypeDefAst> {
                 .map(|v| lower_variant(ast, v))
                 .collect::<Result<SmallVec<_>>>()?;
             Ok(TypeDefAst::Sum(lowered))
-        }
-        cst::TypeDefCst::Struct(fields) => {
-            let lowered = fields
-                .into_iter()
-                .map(|(name, ty)| lower_type_expr(ast, ty).map(|id| (name, id)))
-                .collect::<Result<Vec<_>>>()?;
-            Ok(TypeDefAst::Struct(lowered))
         }
     }
 }

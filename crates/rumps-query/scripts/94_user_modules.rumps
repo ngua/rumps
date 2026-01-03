@@ -180,10 +180,10 @@ $OUTPUT Shapes.describe(r)  ; rectangle
 $OUTPUT Shapes.area(c) > 12  ; true (approx 12.56)
 $OUTPUT Shapes.area(r) > 11  ; true (12.0)
 
-; ============ Module with struct TYPE ============
+; ============ Module with NEWTYPE ============
 
 MODULE Users {
-  TYPE User = { name: String, age: Int }
+  NEWTYPE User = { name: String, age: Int }
 
   FUN greet(u: Users.User) -> String {
     "Hello, " ++ u.name

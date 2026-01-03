@@ -76,7 +76,7 @@ $OUTPUT inline-arr IS Array[Int]
 
 ; === User-defined parameterized types ===
 
-TYPE Box[T] = { inner: T }
+NEWTYPE Box[T] = { inner: T }
 
 LET box-int = { inner: 42 }
 $OUTPUT box-int IS Box[Int]

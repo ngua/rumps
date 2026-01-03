@@ -58,7 +58,7 @@ $OUTPUT spread-empty-obj.x
 ; ====== Struct Spread with Preservation ======
 
 ; Define a struct
-TYPE Person = { name: String, age: Int }
+NEWTYPE Person = { name: String, age: Int }
 
 ; Spread a struct value (should preserve type)
 LET alice: Person = { name: "Alice", age: 30 }
