@@ -22,8 +22,7 @@ fn test_interp(ast: &Ast) -> Interpreter<'_, TestIo> {
     let db = Database::in_memory().expect("in-memory db");
     let mut arena = ValueArena::new();
     let mut type_exprs = TypeExprArena::new();
-    let registry =
-        TypeRegistry::new(&mut arena, &mut type_exprs).expect("registry");
+    let registry = TypeRegistry::new(&mut arena, &mut type_exprs);
     Interpreter::with_arena(ast, db, TestIo::new(), arena, registry, type_exprs)
 }
 

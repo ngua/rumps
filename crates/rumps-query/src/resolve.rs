@@ -254,8 +254,7 @@ mod tests {
         let mut result = Parser::parse(src).expect("parse failed");
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
-        let registry = TypeRegistry::new(&mut arena, &mut type_exprs)
-            .expect("registry failed");
+        let registry = TypeRegistry::new(&mut arena, &mut type_exprs);
         resolve(&mut result.ast, &mut arena, &registry);
         result.ast
     }

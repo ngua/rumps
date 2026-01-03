@@ -124,7 +124,7 @@ use crate::value::{
     CapturedEnv, FunctionDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry,
     Value, ValueArena,
 };
-use crate::{Error, Result, Span};
+use crate::{Result, Span};
 
 /// The RUMPS interpreter.
 ///
@@ -194,11 +194,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     ) -> Result<Self> {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
-        let mut registry = TypeRegistry::new(&mut arena, &mut type_exprs)?;
+        let mut registry = TypeRegistry::new(&mut arena, &mut type_exprs);
 
         // Register user-defined types BEFORE resolution so the resolver can
         // convert `Status.Pending` to `Expr::Variant` for user types
-        registry.register_from_ast(ast, stmts, &mut arena, &mut type_exprs)?;
+        registry.register_from_ast(ast, stmts, &mut arena, &mut type_exprs);
 
         crate::resolve::resolve(ast, &mut arena, &registry);
 
@@ -278,7 +278,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let expr = self
             .ast
             .get_expr(id)
-            .ok_or_else(|| Error::runtime(span, "invalid expression id"))?
+            .unwrap_or_else(|| invariant!("valid expression id"))
             .clone();
 
         match expr {
@@ -336,10 +336,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             }
             Expr::Regex(_, _) => {
                 // Look up the cache index set during typechecking
-                let idx =
-                    self.regex_indices.get(&id).copied().ok_or_else(|| {
-                        Error::runtime(span, "regex not compiled")
-                    })?;
+                let idx = self
+                    .regex_indices
+                    .get(&id)
+                    .copied()
+                    .unwrap_or_else(|| invariant!("regex compiled"));
                 Ok(Value::Regex(idx))
             }
             Expr::Matches(lhs, rhs) => self.matches(lhs, rhs).await,
@@ -390,7 +391,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let stmt = self
             .ast
             .get_stmt(id)
-            .ok_or_else(|| Error::runtime(span, "invalid statement id"))?
+            .unwrap_or_else(|| invariant!("valid statement id"))
             .clone();
 
         match stmt {
@@ -789,10 +790,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if is_registered || is_declared {
                     Ok(())
                 } else {
-                    Err(Error::runtime(
-                        span,
-                        format!("undeclared type parameter `{n}`"),
-                    ))
+                    typechecked!("type param", "declared")
                 }
             }
             AstTypeExpr::App(_, args) => args.iter().try_for_each(|a| {
@@ -1029,10 +1027,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             // For non-named types (function types, tuple types, inline unions),
             // AS is not supported; use READ instead
-            Err(Error::runtime(
-                span,
-                "cannot use AS with compound types; use READ for fallible conversion",
-            ))
+            typechecked!("AS", "named type target")
         }
     }
 
@@ -1217,12 +1212,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             OutputFormat::Default => self.display(&val),
             OutputFormat::Json => {
                 let json = self.jsonify(&val);
-                serde_json::to_string_pretty(&json).map_err(|e| {
-                    Error::runtime(
-                        span,
-                        format!("JSON serialization failed: {e}"),
-                    )
-                })?
+                serde_json::to_string_pretty(&json)
+                    .unwrap_or_else(|_| invariant!("JSON serializable"))
             }
         };
 

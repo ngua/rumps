@@ -1,7 +1,0 @@
-; Test: duplicate type declaration error
-; Declaring a type with the same name twice should fail
-
-TYPE Status = Pending | Active
-
-; This should fail: Status already defined
-TYPE Status = Open | Closed

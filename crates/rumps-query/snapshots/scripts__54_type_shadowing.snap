@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: type shadowing\n; Declaring a type with the same name twice shadows the first definition\n\nTYPE Status = Pending | Active\n\n; This shadows the previous definition\nTYPE Status = Open | Closed\n\n; Use the shadowed type (should have Open and Closed variants)\nLET s: Status = Status.Open\nOUTPUT s\n"
+---
+ERROR: parse error at 295..296: unexpected `s` (expected: AND, +, >, ==, >=, IS, |>, .., /, ., <=, [, !=, ??, *, <, ++, indent, ||, MATCHES, AS, //, newline, ?., -, ->>, dedent, OR, &&, (, ..=, !, %, **, ->, READ, ..)

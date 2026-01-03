@@ -49,7 +49,6 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::env::{PrimCtx, PrimResult};
 use crate::value::{MapKey, TypeExprArena, TypeId, Value, ValueArena, ValueId};
-use crate::Error;
 
 /// Shared utilities for primitive function implementations.
 ///
@@ -84,12 +83,17 @@ pub(crate) trait Prim {
         _ctx: &'a mut PrimCtx<'a>,
         _args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
-        Box::pin(async move {
-            Err(Error::runtime_no_span(
-                "internal error: HoF placeholder called directly; \
-                 this should be intercepted by invoke_module_fn",
-            ))
-        })
+        invariant!("HoF placeholder intercepted by invoke_module_fn")
+    }
+
+    /// Look up an interned string by `StringId`.
+    ///
+    /// Since the `StringId` is already validated (via `get_string_id` +
+    /// `typechecked!`), the lookup should always succeed.
+    fn valid_str<'a>(arena: &'a ValueArena, sid: crate::StringId) -> &'a str {
+        arena
+            .get_str(sid)
+            .unwrap_or_else(|| invariant!("StringId lookup"))
     }
 
     /// Convert a value to `f64`, accepting `Int` or `Float`.
@@ -669,9 +673,7 @@ impl Str {
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("String.length", "String"));
 
-            let s = ctx.arena.get_str(sid).ok_or_else(|| {
-                ctx.runtime_error("String.length: invalid string")
-            })?;
+            let s = Self::valid_str(ctx.arena, sid);
 
             let len = s.graphemes(true).count() as i64;
             Ok(ctx.arena.add(Value::Int(len), ctx.span))
@@ -691,9 +693,7 @@ impl Str {
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("String.upper", "String"));
 
-            let s = ctx.arena.get_str(sid).ok_or_else(|| {
-                ctx.runtime_error("String.upper: invalid string")
-            })?;
+            let s = Self::valid_str(ctx.arena, sid);
 
             let upper = s.to_uppercase();
             let new_sid = ctx.arena.intern(&upper);
@@ -714,9 +714,7 @@ impl Str {
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("String.lower", "String"));
 
-            let s = ctx.arena.get_str(sid).ok_or_else(|| {
-                ctx.runtime_error("String.lower: invalid string")
-            })?;
+            let s = Self::valid_str(ctx.arena, sid);
 
             let lower = s.to_lowercase();
             let new_sid = ctx.arena.intern(&lower);
@@ -738,14 +736,7 @@ impl Str {
                 .unwrap_or_else(|| typechecked!("String.trim", "String"));
 
             // Copy to owned String to release borrow before interning
-            let trimmed = ctx
-                .arena
-                .get_str(sid)
-                .ok_or_else(|| {
-                    ctx.runtime_error("String.trim: invalid string")
-                })?
-                .trim()
-                .to_owned();
+            let trimmed = Self::valid_str(ctx.arena, sid).trim().to_owned();
 
             let new_sid = ctx.arena.intern(&trimmed);
             Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
@@ -770,21 +761,8 @@ impl Str {
             });
 
             // Copy strings to owned values to release borrow before iteration
-            let s = ctx
-                .arena
-                .get_str(s_sid)
-                .ok_or_else(|| {
-                    ctx.runtime_error("String.split: invalid string")
-                })?
-                .to_owned();
-
-            let d = ctx
-                .arena
-                .get_str(d_sid)
-                .ok_or_else(|| {
-                    ctx.runtime_error("String.split: invalid delimiter")
-                })?
-                .to_owned();
+            let s = Self::valid_str(ctx.arena, s_sid).to_owned();
+            let d = Self::valid_str(ctx.arena, d_sid).to_owned();
 
             // Split and collect parts; intern each part
             let parts: SmallVec<[ValueId; 4]> = s
@@ -878,9 +856,7 @@ impl Str {
                     typechecked!("String.slice", "end must be Int")
                 });
 
-            let s = ctx.arena.get_str(sid).ok_or_else(|| {
-                ctx.runtime_error("String.slice: invalid string")
-            })?;
+            let s = Self::valid_str(ctx.arena, sid);
 
             // Single-pass: skip, take, join graphemes
             let start_idx = start.max(0) as usize;
@@ -914,13 +890,8 @@ impl Str {
                     typechecked!("String.contains", "substring must be String")
                 });
 
-            let s = ctx.arena.get_str(s_sid).ok_or_else(|| {
-                ctx.runtime_error("String.contains: invalid string")
-            })?;
-
-            let sub = ctx.arena.get_str(sub_sid).ok_or_else(|| {
-                ctx.runtime_error("String.contains: invalid substring")
-            })?;
+            let s = Self::valid_str(ctx.arena, s_sid);
+            let sub = Self::valid_str(ctx.arena, sub_sid);
 
             Ok(ctx.arena.add(Value::Bool(s.contains(sub)), ctx.span))
         })
@@ -949,17 +920,9 @@ impl Str {
                     typechecked!("String.replace", "replacement must be String")
                 });
 
-            let s = ctx.arena.get_str(s_sid).ok_or_else(|| {
-                ctx.runtime_error("String.replace: invalid string")
-            })?;
-
-            let old = ctx.arena.get_str(old_sid).ok_or_else(|| {
-                ctx.runtime_error("String.replace: invalid pattern")
-            })?;
-
-            let new = ctx.arena.get_str(new_sid).ok_or_else(|| {
-                ctx.runtime_error("String.replace: invalid replacement")
-            })?;
+            let s = Self::valid_str(ctx.arena, s_sid);
+            let old = Self::valid_str(ctx.arena, old_sid);
+            let new = Self::valid_str(ctx.arena, new_sid);
 
             let replaced = s.replace(old, new);
             let result_sid = ctx.arena.intern(&replaced);
@@ -2131,11 +2094,7 @@ impl Io {
                 .arena
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("Io.print", "String"));
-            let s = ctx
-                .arena
-                .get_str(sid)
-                .ok_or_else(|| ctx.runtime_error("Io.print: invalid string"))?
-                .to_owned();
+            let s = Self::valid_str(ctx.arena, sid).to_owned();
 
             ctx.io.stdout(&s, ctx.span).await?;
             Ok(ctx.arena.add(Value::Unit, ctx.span))
@@ -2154,11 +2113,7 @@ impl Io {
                 .arena
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("Io.println", "String"));
-            let s = ctx
-                .arena
-                .get_str(sid)
-                .ok_or_else(|| ctx.runtime_error("Io.println: invalid string"))?
-                .to_owned();
+            let s = Self::valid_str(ctx.arena, sid).to_owned();
 
             ctx.io.stdoutline(&s, ctx.span).await?;
             Ok(ctx.arena.add(Value::Unit, ctx.span))
@@ -2177,11 +2132,7 @@ impl Io {
                 .arena
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("Io.eprint", "String"));
-            let s = ctx
-                .arena
-                .get_str(sid)
-                .ok_or_else(|| ctx.runtime_error("Io.eprint: invalid string"))?
-                .to_owned();
+            let s = Self::valid_str(ctx.arena, sid).to_owned();
 
             ctx.io.stderr(&s, ctx.span).await?;
             Ok(ctx.arena.add(Value::Unit, ctx.span))
@@ -2200,13 +2151,7 @@ impl Io {
                 .arena
                 .get_string_id(args[0])
                 .unwrap_or_else(|| typechecked!("Io.eprintln", "String"));
-            let s = ctx
-                .arena
-                .get_str(sid)
-                .ok_or_else(|| {
-                    ctx.runtime_error("Io.eprintln: invalid string")
-                })?
-                .to_owned();
+            let s = Self::valid_str(ctx.arena, sid).to_owned();
 
             ctx.io.stderrline(&s, ctx.span).await?;
             Ok(ctx.arena.add(Value::Unit, ctx.span))
@@ -2690,9 +2635,7 @@ impl Directory {
                 ctx.arena.get_string_id(args[0]).unwrap_or_else(|| {
                     typechecked!("Io.Directory.get-env", "String")
                 });
-            let name = ctx.arena.get_str(name_sid).ok_or_else(|| {
-                ctx.runtime_error("Io.Directory.get-env: invalid string")
-            })?;
+            let name = Self::valid_str(ctx.arena, name_sid);
 
             let str_ty = ctx.type_exprs.named(TypeId::STRING);
             let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![str_ty]);
@@ -2879,17 +2822,18 @@ impl Directory {
                 Value::Array(_, elems) => elems
                     .iter()
                     .map(|elem_id| {
-                        ctx.arena
+                        let sid = ctx
+                            .arena
                             .get_string_id(*elem_id)
-                            .and_then(|sid| ctx.arena.get_str(sid))
-                            .map(String::from)
-                            .ok_or_else(|| {
-                                ctx.runtime_error(
-                                    "Io.Directory.join: invalid string in array",
+                            .unwrap_or_else(|| {
+                                typechecked!(
+                                    "Io.Directory.join",
+                                    "String element"
                                 )
-                            })
+                            });
+                        Self::valid_str(ctx.arena, sid).to_owned()
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect(),
                 _ => typechecked!("Io.Directory.join", "Array[String]"),
             };
 

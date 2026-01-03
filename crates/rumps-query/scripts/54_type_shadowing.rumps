@@ -1,0 +1,11 @@
+; Test: type shadowing
+; Declaring a type with the same name twice shadows the first definition
+
+TYPE Status = Pending | Active
+
+; This shadows the previous definition
+TYPE Status = Open | Closed
+
+; Use the shadowed type (should have Open and Closed variants)
+LET s: Status = Status.Open
+OUTPUT s

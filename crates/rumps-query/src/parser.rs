@@ -2945,8 +2945,7 @@ mod tests {
         let (mut ast, id) = parse_expr_ok("Option.Some(42)");
         let mut arena = crate::ValueArena::new();
         let mut type_exprs = crate::TypeExprArena::new();
-        let registry = crate::TypeRegistry::new(&mut arena, &mut type_exprs)
-            .expect("registry failed");
+        let registry = crate::TypeRegistry::new(&mut arena, &mut type_exprs);
         crate::resolve::resolve(&mut ast, &mut arena, &registry);
         match ast.get_expr(id) {
             Some(Expr::Variant(ty, var, args)) => {

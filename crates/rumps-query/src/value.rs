@@ -24,7 +24,7 @@ use crate::ast::{
 };
 use crate::intern::{StringId, StringInterner};
 use crate::typecheck::Ty;
-use crate::{Result, Span};
+use crate::Span;
 
 /// A hashable key for `Map` values.
 ///
@@ -1225,13 +1225,13 @@ impl TypeRegistry {
     pub(crate) fn new(
         arena: &mut ValueArena,
         type_exprs: &mut TypeExprArena,
-    ) -> Result<Self> {
+    ) -> Self {
         let mut reg = Self {
             defs: Vec::new(),
             by_name: HashMap::new(),
         };
-        reg.register_builtins(arena, type_exprs)?;
-        Ok(reg)
+        reg.register_builtins(arena, type_exprs);
+        reg
     }
 
     pub(crate) fn register(
@@ -1310,7 +1310,7 @@ impl TypeRegistry {
         &mut self,
         arena: &mut ValueArena,
         type_exprs: &mut TypeExprArena,
-    ) -> Result<()> {
+    ) {
         // Primitives (indices 0-5)
         let bool_name = arena.intern("Bool");
         self.register(TypeDef::Builtin(BuiltinType::Bool), bool_name);
@@ -1361,13 +1361,9 @@ impl TypeRegistry {
             },
             option_name,
         );
-        (opt == TypeId::OPTION).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Option at index {}, expected {}",
-                opt.0,
-                TypeId::OPTION.0
-            ))
-        })?;
+        if opt != TypeId::OPTION {
+            invariant!("Option registered at expected index");
+        }
 
         // Result[T, E] at index 7
         let result_name = arena.intern("Result");
@@ -1398,96 +1394,64 @@ impl TypeRegistry {
             },
             result_name,
         );
-        (res == TypeId::RESULT).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Result at index {}, expected {}",
-                res.0,
-                TypeId::RESULT.0
-            ))
-        })?;
+        if res != TypeId::RESULT {
+            invariant!("Result registered at expected index");
+        }
 
         // Char at index 8
         let char_name = arena.intern("Char");
         let ch = self.register(TypeDef::Builtin(BuiltinType::Char), char_name);
-        (ch == TypeId::CHAR).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Char at index {}, expected {}",
-                ch.0,
-                TypeId::CHAR.0
-            ))
-        })?;
+        if ch != TypeId::CHAR {
+            invariant!("Char registered at expected index");
+        }
 
         // Tuple at index 9 (registered for type lookup, though Tuple types use
         // TypeExpr::Tuple rather than TypeExpr::App)
         let tuple_name = arena.intern("Tuple");
         let tup =
             self.register(TypeDef::Builtin(BuiltinType::Tuple), tuple_name);
-        (tup == TypeId::TUPLE).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Tuple at index {}, expected {}",
-                tup.0,
-                TypeId::TUPLE.0
-            ))
-        })?;
+        if tup != TypeId::TUPLE {
+            invariant!("Tuple registered at expected index");
+        }
 
         // Map[K, V] at index 10
         let map_name = arena.intern("Map");
         let map = self.register(TypeDef::Builtin(BuiltinType::Map), map_name);
-        (map == TypeId::MAP).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Map at index {}, expected {}",
-                map.0,
-                TypeId::MAP.0
-            ))
-        })?;
+        if map != TypeId::MAP {
+            invariant!("Map registered at expected index");
+        }
 
         // Time at index 11
         let time_name = arena.intern("Time");
         let time =
             self.register(TypeDef::Builtin(BuiltinType::Time), time_name);
-        (time == TypeId::TIME).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Time at index {}, expected {}",
-                time.0,
-                TypeId::TIME.0
-            ))
-        })?;
+        if time != TypeId::TIME {
+            invariant!("Time registered at expected index");
+        }
 
         // Range at index 12
         let range_name = arena.intern("Range");
         let range =
             self.register(TypeDef::Builtin(BuiltinType::Range), range_name);
-        (range == TypeId::RANGE).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Range at index {}, expected {}",
-                range.0,
-                TypeId::RANGE.0
-            ))
-        })?;
+        if range != TypeId::RANGE {
+            invariant!("Range registered at expected index");
+        }
 
         // Unit at index 13
         let unit_name = arena.intern("Unit");
         let unit =
             self.register(TypeDef::Builtin(BuiltinType::Unit), unit_name);
-        (unit == TypeId::UNIT).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Unit at index {}, expected {}",
-                unit.0,
-                TypeId::UNIT.0
-            ))
-        })?;
+        if unit != TypeId::UNIT {
+            invariant!("Unit registered at expected index");
+        }
 
         // Json at index 14
         let json_name = arena.intern("Json");
         let json =
             self.register(TypeDef::Builtin(BuiltinType::Json), json_name);
-        (json == TypeId::JSON).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Json at index {}, expected {}",
-                json.0,
-                TypeId::JSON.0
-            ))
-        })?;
+        if json != TypeId::JSON {
+            invariant!("Json registered at expected index");
+        }
 
         // Storable union at index 15: Bool | Int | Float | Char | String | Json
         let storable_name = arena.intern("Storable");
@@ -1507,15 +1471,9 @@ impl TypeRegistry {
             },
             storable_name,
         );
-        (storable == TypeId::STORABLE)
-            .then_some(())
-            .ok_or_else(|| {
-                crate::Error::runtime_no_span(format!(
-                    "Storable at index {}, expected {}",
-                    storable.0,
-                    TypeId::STORABLE.0
-                ))
-            })?;
+        if storable != TypeId::STORABLE {
+            invariant!("Storable registered at expected index");
+        }
 
         // Scalar union at index 16: Bool | Int | Float | String
         let scalar_name = arena.intern("Scalar");
@@ -1533,13 +1491,9 @@ impl TypeRegistry {
             },
             scalar_name,
         );
-        (scalar == TypeId::SCALAR).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Scalar at index {}, expected {}",
-                scalar.0,
-                TypeId::SCALAR.0
-            ))
-        })?;
+        if scalar != TypeId::SCALAR {
+            invariant!("Scalar registered at expected index");
+        }
 
         // Ordering at index 17
         let ordering_name = arena.intern("Ordering");
@@ -1574,29 +1528,17 @@ impl TypeRegistry {
             },
             ordering_name,
         );
-        (ordering == TypeId::ORDERING)
-            .then_some(())
-            .ok_or_else(|| {
-                crate::Error::runtime_no_span(format!(
-                    "Ordering at index {}, expected {}",
-                    ordering.0,
-                    TypeId::ORDERING.0
-                ))
-            })?;
+        if ordering != TypeId::ORDERING {
+            invariant!("Ordering registered at expected index");
+        }
 
         // FilePath at index 18
         let filepath_name = arena.intern("FilePath");
         let filepath = self
             .register(TypeDef::Builtin(BuiltinType::FilePath), filepath_name);
-        (filepath == TypeId::FILEPATH)
-            .then_some(())
-            .ok_or_else(|| {
-                crate::Error::runtime_no_span(format!(
-                    "FilePath at index {}, expected {}",
-                    filepath.0,
-                    TypeId::FILEPATH.0
-                ))
-            })?;
+        if filepath != TypeId::FILEPATH {
+            invariant!("FilePath registered at expected index");
+        }
 
         // Path at index 19: File(FilePath) | Dir(FilePath)
         let path_name = arena.intern("Path");
@@ -1626,25 +1568,17 @@ impl TypeRegistry {
             },
             path_name,
         );
-        (path == TypeId::PATH).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Path at index {}, expected {}",
-                path.0,
-                TypeId::PATH.0
-            ))
-        })?;
+        if path != TypeId::PATH {
+            invariant!("Path registered at expected index");
+        }
 
         // Regex at index 20
         let regex_name = arena.intern("Regex");
         let regex =
             self.register(TypeDef::Builtin(BuiltinType::Regex), regex_name);
-        (regex == TypeId::REGEX).then_some(()).ok_or_else(|| {
-            crate::Error::runtime_no_span(format!(
-                "Regex at index {}, expected {}",
-                regex.0,
-                TypeId::REGEX.0
-            ))
-        })?;
+        if regex != TypeId::REGEX {
+            invariant!("Regex registered at expected index");
+        }
 
         // DataStatus at index 21: NoData | HasValue | HasDescendants | Both
         let data_status_name = arena.intern("DataStatus");
@@ -1686,15 +1620,9 @@ impl TypeRegistry {
             },
             data_status_name,
         );
-        (data_status == TypeId::DATA_STATUS)
-            .then_some(())
-            .ok_or_else(|| {
-                crate::Error::runtime_no_span(format!(
-                    "DataStatus at index {}, expected {}",
-                    data_status.0,
-                    TypeId::DATA_STATUS.0
-                ))
-            })?;
+        if data_status != TypeId::DATA_STATUS {
+            invariant!("DataStatus registered at expected index");
+        }
 
         // Subscript union at index 22: Bool | Int | Float | Char | String | Json
         let subscript_name = arena.intern("Subscript");
@@ -1714,17 +1642,9 @@ impl TypeRegistry {
             },
             subscript_name,
         );
-        (subscript == TypeId::SUBSCRIPT)
-            .then_some(())
-            .ok_or_else(|| {
-                crate::Error::runtime_no_span(format!(
-                    "Subscript at index {}, expected {}",
-                    subscript.0,
-                    TypeId::SUBSCRIPT.0
-                ))
-            })?;
-
-        Ok(())
+        if subscript != TypeId::SUBSCRIPT {
+            invariant!("Subscript registered at expected index");
+        }
     }
 
     /// Pre-register user-defined types from AST before type checking.
@@ -1739,13 +1659,13 @@ impl TypeRegistry {
         stmts: &[StmtId],
         arena: &mut ValueArena,
         type_exprs: &mut TypeExprArena,
-    ) -> Result<()> {
+    ) {
         let mut ctx = UnionRegCtx {
             arena,
             type_exprs,
             ast,
         };
-        self.register_stmts_with_prefix(stmts, None, &mut ctx)
+        self.register_stmts_with_prefix(stmts, None, &mut ctx);
     }
 
     /// Register types from statements with an optional module path prefix.
@@ -1756,98 +1676,74 @@ impl TypeRegistry {
         stmts: &[StmtId],
         prefix: Option<&str>,
         ctx: &mut UnionRegCtx,
-    ) -> Result<()> {
-        stmts.iter().try_for_each(|id| {
-            let span = ctx.ast.stmt_span(*id).unwrap_or_default();
-            ctx.ast
-                .get_stmt(*id)
-                .cloned()
-                .map_or(Ok(()), |stmt| match stmt {
-                    Stmt::Type {
-                        name,
+    ) {
+        stmts.iter().for_each(|id| {
+            ctx.ast.get_stmt(*id).cloned().inspect(|stmt| match stmt {
+                Stmt::Type {
+                    name,
+                    type_params,
+                    def,
+                } => {
+                    let qname = prefix.map_or_else(
+                        || name.clone(),
+                        |p| format!("{}.{}", p, name),
+                    );
+                    self.register_type(&qname, type_params, def, ctx.arena);
+                }
+                Stmt::Union {
+                    name,
+                    type_params,
+                    members,
+                } => {
+                    let qname = prefix.map_or_else(
+                        || name.clone(),
+                        |p| format!("{}.{}", p, name),
+                    );
+                    self.register_union(&qname, type_params, members, ctx);
+                }
+                Stmt::NewType {
+                    name,
+                    type_params,
+                    target,
+                } => {
+                    let qname = prefix.map_or_else(
+                        || name.clone(),
+                        |p| format!("{}.{}", p, name),
+                    );
+                    self.register_alias(
+                        &qname,
                         type_params,
-                        def,
-                    } => {
-                        let qname = prefix.map_or_else(
-                            || name.clone(),
-                            |p| format!("{}.{}", p, name),
-                        );
-                        self.register_type(
-                            &qname,
-                            &type_params,
-                            &def,
-                            ctx.arena,
-                            span,
-                        )
-                    }
-                    Stmt::Union {
-                        name,
-                        type_params,
-                        members,
-                    } => {
-                        let qname = prefix.map_or_else(
-                            || name.clone(),
-                            |p| format!("{}.{}", p, name),
-                        );
-                        self.register_union(
-                            &qname,
-                            &type_params,
-                            &members,
-                            ctx,
-                            span,
-                        )
-                    }
-                    Stmt::NewType {
-                        name,
-                        type_params,
-                        target,
-                    } => {
-                        let qname = prefix.map_or_else(
-                            || name.clone(),
-                            |p| format!("{}.{}", p, name),
-                        );
-                        self.register_alias(
-                            &qname,
-                            &type_params,
-                            target,
-                            ctx.arena,
-                            span,
-                        )
-                    }
-                    Stmt::Module { name, body } => {
-                        let new_prefix = prefix.map_or_else(
-                            || name.clone(),
-                            |p| format!("{}.{}", p, name),
-                        );
-                        self.register_stmts_with_prefix(
-                            &body,
-                            Some(&new_prefix),
-                            ctx,
-                        )
-                    }
-                    _ => Ok(()),
-                })
-        })
+                        *target,
+                        ctx.arena,
+                    );
+                }
+                Stmt::Module { name, body } => {
+                    let new_prefix = prefix.map_or_else(
+                        || name.clone(),
+                        |p| format!("{}.{}", p, name),
+                    );
+                    self.register_stmts_with_prefix(
+                        body,
+                        Some(&new_prefix),
+                        ctx,
+                    );
+                }
+                _ => {}
+            });
+        });
     }
 
     /// Register a single TYPE declaration.
+    ///
+    /// If a type with the same name already exists, it is shadowed.
     fn register_type(
         &mut self,
         name: &str,
         type_params: &[TypeParam],
         def: &TypeDefAst,
         arena: &mut ValueArena,
-        span: Span,
-    ) -> Result<()> {
+    ) {
         let name_id = arena.intern(name);
-
-        // Check for duplicate
-        if self.lookup(name_id).is_some() {
-            Err(crate::Error::runtime(
-                span,
-                format!("type `{name}` is already defined"),
-            ))?;
-        }
 
         // Intern type parameters (constraints are ignored at runtime)
         let type_param_ids: SmallVec<[StringId; 2]> = type_params
@@ -1878,28 +1774,19 @@ impl TypeRegistry {
             },
             name_id,
         );
-
-        Ok(())
     }
 
     /// Register a single UNION declaration.
+    ///
+    /// If a type with the same name already exists, it is shadowed.
     fn register_union(
         &mut self,
         name: &str,
         type_params: &[TypeParam],
         ast_members: &[AstTypeExprId],
         ctx: &mut UnionRegCtx,
-        span: Span,
-    ) -> Result<()> {
+    ) {
         let name_id = ctx.arena.intern(name);
-
-        // Check for duplicate
-        if self.lookup(name_id).is_some() {
-            Err(crate::Error::runtime(
-                span,
-                format!("union `{name}` is already defined"),
-            ))?;
-        }
 
         // Intern type parameters (constraints are ignored at runtime)
         let type_param_ids: SmallVec<[StringId; 2]> = type_params
@@ -1910,16 +1797,8 @@ impl TypeRegistry {
         // Convert AST type expressions to TypeExprIds
         let members: SmallVec<[TypeExprId; 8]> = ast_members
             .iter()
-            .filter_map(|m| {
-                resolve_type_expr(
-                    ctx.ast,
-                    ctx.arena,
-                    self,
-                    ctx.type_exprs,
-                    *m,
-                    span,
-                )
-                .ok()
+            .map(|m| {
+                resolve_type_expr(ctx.ast, ctx.arena, self, ctx.type_exprs, *m)
             })
             .collect();
 
@@ -1931,28 +1810,19 @@ impl TypeRegistry {
             },
             name_id,
         );
-
-        Ok(())
     }
 
     /// Register a single NEWTYPE alias declaration.
+    ///
+    /// If a type with the same name already exists, it is shadowed.
     fn register_alias(
         &mut self,
         name: &str,
         type_params: &[TypeParam],
         target: AstTypeExprId,
         arena: &mut ValueArena,
-        span: Span,
-    ) -> Result<()> {
+    ) {
         let name_id = arena.intern(name);
-
-        // Check for duplicate
-        if self.lookup(name_id).is_some() {
-            Err(crate::Error::runtime(
-                span,
-                format!("type alias `{name}` is already defined"),
-            ))?;
-        }
 
         // Intern type parameters (constraints are ignored at runtime)
         let type_param_ids: SmallVec<[StringId; 2]> = type_params
@@ -1968,8 +1838,6 @@ impl TypeRegistry {
             },
             name_id,
         );
-
-        Ok(())
     }
 
     fn len(&self) -> usize {
@@ -1990,98 +1858,77 @@ fn resolve_type_expr(
     registry: &TypeRegistry,
     type_exprs: &mut TypeExprArena,
     id: AstTypeExprId,
-    span: Span,
-) -> Result<TypeExprId> {
+) -> TypeExprId {
     use crate::ast::AstTypeExpr;
 
-    ast.get_type_expr(id).map_or_else(
-        || Err(crate::Error::runtime(span, "invalid type expression id")),
-        |te| match te {
-            AstTypeExpr::Named(name) => {
-                let name_id = arena.intern(name);
-                registry.lookup(name_id).map_or_else(
-                    || {
-                        Err(crate::Error::runtime(
-                            span,
-                            format!("unknown type `{name}`"),
-                        ))
-                    },
-                    |ty_id| Ok(type_exprs.named(ty_id)),
-                )
-            }
-            AstTypeExpr::App(name, args) => {
-                let name_id = arena.intern(name);
-                registry.lookup(name_id).map_or_else(
-                    || {
-                        Err(crate::Error::runtime(
-                            span,
-                            format!("unknown type `{name}`"),
-                        ))
-                    },
-                    |base| {
-                        let arg_ids: Result<SmallVec<[TypeExprId; 2]>> = args
-                            .iter()
-                            .map(|a| {
-                                resolve_type_expr(
-                                    ast, arena, registry, type_exprs, *a, span,
-                                )
-                            })
-                            .collect();
-                        Ok(type_exprs.app(base, arg_ids?))
-                    },
-                )
-            }
-            AstTypeExpr::Tuple(elems) => {
-                let elem_ids: Result<SmallVec<[TypeExprId; 4]>> = elems
-                    .iter()
-                    .map(|e| {
-                        resolve_type_expr(
-                            ast, arena, registry, type_exprs, *e, span,
-                        )
-                    })
-                    .collect();
-                Ok(type_exprs.tuple(elem_ids?))
-            }
-            AstTypeExpr::Fn(params, ret) => {
-                let param_ids: Result<SmallVec<[TypeExprId; 4]>> = params
-                    .iter()
-                    .map(|p| {
-                        resolve_type_expr(
-                            ast, arena, registry, type_exprs, *p, span,
-                        )
-                    })
-                    .collect();
-                let ret_id = resolve_type_expr(
-                    ast, arena, registry, type_exprs, *ret, span,
-                )?;
-                Ok(type_exprs.fn_type(param_ids?, ret_id))
-            }
-            AstTypeExpr::Union(members) => {
-                let member_ids: Result<SmallVec<[TypeExprId; 4]>> = members
-                    .iter()
-                    .map(|m| {
-                        resolve_type_expr(
-                            ast, arena, registry, type_exprs, *m, span,
-                        )
-                    })
-                    .collect();
-                Ok(type_exprs.union(member_ids?))
-            }
-            AstTypeExpr::Object(fields) => {
-                let field_ids: Result<IndexMap<StringId, TypeExprId>> = fields
-                    .iter()
-                    .map(|(name, ty)| {
-                        let name_id = arena.intern(name);
-                        let ty_id = resolve_type_expr(
-                            ast, arena, registry, type_exprs, *ty, span,
-                        )?;
-                        Ok((name_id, ty_id))
-                    })
-                    .collect();
-                Ok(type_exprs.object(field_ids?))
-            }
-        },
-    )
+    let te = ast
+        .get_type_expr(id)
+        .unwrap_or_else(|| invariant!("AST type expression ID exists"));
+
+    match te {
+        AstTypeExpr::Named(name) => {
+            let name_id = arena.intern(name);
+            let ty_id = registry.lookup(name_id).unwrap_or_else(|| {
+                typechecked!("type reference", "type is defined")
+            });
+            type_exprs.named(ty_id)
+        }
+        AstTypeExpr::App(name, args) => {
+            let name_id = arena.intern(name);
+            let base = registry.lookup(name_id).unwrap_or_else(|| {
+                typechecked!("type reference", "type is defined")
+            });
+            let arg_ids: SmallVec<[TypeExprId; 2]> = args
+                .iter()
+                .map(|a| {
+                    resolve_type_expr(ast, arena, registry, type_exprs, *a)
+                })
+                .collect();
+            type_exprs.app(base, arg_ids)
+        }
+        AstTypeExpr::Tuple(elems) => {
+            let elem_ids: SmallVec<[TypeExprId; 4]> = elems
+                .iter()
+                .map(|e| {
+                    resolve_type_expr(ast, arena, registry, type_exprs, *e)
+                })
+                .collect();
+            type_exprs.tuple(elem_ids)
+        }
+        AstTypeExpr::Fn(params, ret) => {
+            let param_ids: SmallVec<[TypeExprId; 4]> = params
+                .iter()
+                .map(|p| {
+                    resolve_type_expr(ast, arena, registry, type_exprs, *p)
+                })
+                .collect();
+            let ret_id =
+                resolve_type_expr(ast, arena, registry, type_exprs, *ret);
+            type_exprs.fn_type(param_ids, ret_id)
+        }
+        AstTypeExpr::Union(members) => {
+            let member_ids: SmallVec<[TypeExprId; 4]> = members
+                .iter()
+                .map(|m| {
+                    resolve_type_expr(ast, arena, registry, type_exprs, *m)
+                })
+                .collect();
+            type_exprs.union(member_ids)
+        }
+        AstTypeExpr::Object(fields) => {
+            let field_ids: IndexMap<StringId, TypeExprId> = fields
+                .iter()
+                .map(|(name, ty)| {
+                    let name_id = arena.intern(name);
+                    let ty_id = resolve_type_expr(
+                        ast, arena, registry, type_exprs, *ty,
+                    );
+                    (name_id, ty_id)
+                })
+                .collect();
+            type_exprs.object(field_ids)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2141,7 +1988,7 @@ mod tests {
     fn builtin_types() {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
-        let reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
+        let reg = TypeRegistry::new(&mut arena, &mut type_exprs);
 
         // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex + DataStatus + Subscript = 23
         assert_eq!(reg.len(), 23);
@@ -2163,7 +2010,7 @@ mod tests {
     fn option_values() {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
-        let _reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
+        let _reg = TypeRegistry::new(&mut arena, &mut type_exprs);
 
         // Option[Unknown] for None
         let unknown = type_exprs.named(TypeId::UNKNOWN);
@@ -2190,7 +2037,7 @@ mod tests {
     fn result_values() {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
-        let _reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
+        let _reg = TypeRegistry::new(&mut arena, &mut type_exprs);
 
         // Result[Int, Unknown] for Ok(42)
         let int_ty = type_exprs.named(TypeId::INT);
@@ -2221,7 +2068,7 @@ mod tests {
     fn variant_name_lookup() {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
-        let reg = TypeRegistry::new(&mut arena, &mut type_exprs).unwrap();
+        let reg = TypeRegistry::new(&mut arena, &mut type_exprs);
 
         assert_eq!(reg.variant_name(TypeId::OPTION, 0, &arena), Some("None"));
         assert_eq!(reg.variant_name(TypeId::OPTION, 1, &arena), Some("Some"));
