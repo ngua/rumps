@@ -1994,6 +1994,41 @@ impl Opt {
             }
         })
     }
+
+    /// `Option.flatten(o: Option[Option[T]]) -> Option[T]`
+    ///
+    /// Flattens a nested `Option`. Returns `Some(v)` if input is `Some(Some(v))`,
+    /// otherwise returns `None`.
+    pub(crate) fn flatten<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let opt =
+                ctx.arena.get(args[0]).cloned().unwrap_or_else(|| {
+                    typechecked!("Option.flatten", "valid arg")
+                });
+
+            let is_some = opt.is_some(ctx.type_exprs);
+            let is_none = opt.is_none(ctx.type_exprs);
+
+            match (is_some, is_none) {
+                (true, false) => {
+                    // Option.Some(inner) - return the inner Option
+                    match opt {
+                        Value::Tagged(_, _, ref payloads) => {
+                            Ok(*payloads.first().unwrap_or_else(|| {
+                                typechecked!("Option.flatten", "Some payload")
+                            }))
+                        }
+                        _ => typechecked!("Option.flatten", "Tagged"),
+                    }
+                }
+                (false, true) => Ok(ctx.option_none()),
+                _ => typechecked!("Option.flatten", "Option"),
+            }
+        })
+    }
 }
 
 /// Primitives for the `Result` module.
@@ -2041,6 +2076,41 @@ impl Res {
                     Ok(args[1])
                 }
                 _ => typechecked!("Result.unwrap-or", "Result"),
+            }
+        })
+    }
+
+    /// `Result.flatten(r: Result[Result[T, E], E]) -> Result[T, E]`
+    ///
+    /// Flattens a nested `Result`. Returns `Ok(v)` if input is `Ok(Ok(v))`,
+    /// `Err(e)` if input is `Ok(Err(e))` or `Err(e)`.
+    pub(crate) fn flatten<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let res =
+                ctx.arena.get(args[0]).cloned().unwrap_or_else(|| {
+                    typechecked!("Result.flatten", "valid arg")
+                });
+
+            let is_ok = res.is_ok(ctx.type_exprs);
+            let is_err = res.is_err(ctx.type_exprs);
+
+            match (is_ok, is_err) {
+                (true, false) => {
+                    // Result.Ok(inner) - return the inner Result
+                    match res {
+                        Value::Tagged(_, _, ref payloads) => {
+                            Ok(*payloads.first().unwrap_or_else(|| {
+                                typechecked!("Result.flatten", "Ok payload")
+                            }))
+                        }
+                        _ => typechecked!("Result.flatten", "Tagged"),
+                    }
+                }
+                (false, true) => Ok(args[0]),
+                _ => typechecked!("Result.flatten", "Result"),
             }
         })
     }

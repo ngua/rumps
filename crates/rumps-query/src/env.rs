@@ -1013,6 +1013,11 @@ impl Environment {
                     f: Opt::unwrap_or,
                     ty: scheme!(forall T. (Option[T], T) -> T),
                 },
+                PrimDef {
+                    name: "flatten",
+                    f: Opt::flatten,
+                    ty: scheme!(forall T. (Option[Option[T]]) -> Option[T]),
+                },
             ]),
         );
 
@@ -1040,6 +1045,11 @@ impl Environment {
                     name: "unwrap-or",
                     f: Res::unwrap_or,
                     ty: scheme!(forall T E. (Result[T, E], T) -> T),
+                },
+                PrimDef {
+                    name: "flatten",
+                    f: Res::flatten,
+                    ty: scheme!(forall T E. (Result[Result[T, E], E]) -> Result[T, E]),
                 },
             ]),
         );

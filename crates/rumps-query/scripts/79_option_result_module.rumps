@@ -137,3 +137,49 @@ FUN halve-res(x) {
 @OUTPUT Result.flat-map(Result.flat-map(Result.Ok(8), validate), halve-res)  ; Ok(4)
 @OUTPUT Result.flat-map(Result.flat-map(Result.Ok(-1), validate), halve-res)  ; Err("negative")
 @OUTPUT Result.flat-map(Result.flat-map(Result.Ok(7), validate), halve-res)  ; Err("odd")
+
+; ============ Option.flatten ============
+
+; Some(Some(v)) -> Some(v)
+@OUTPUT Option.flatten(Option.Some(Option.Some(42)))  ; Some(42)
+@OUTPUT Option.flatten(Option.Some(Option.Some("hello")))  ; Some("hello")
+
+; Some(None) -> None
+@OUTPUT Option.flatten(Option.Some(Option.None))  ; None
+
+; None -> None
+@OUTPUT Option.flatten(Option.None)  ; None
+
+; Practical: flatten after map that returns Option
+LET maybe-find = arr => Array.head(arr)
+LET nested = Option.map(Option.Some([1, 2, 3]), maybe-find)
+@OUTPUT nested  ; Some(Some(1))
+@OUTPUT Option.flatten(nested)  ; Some(1)
+
+LET empty-nested = Option.map(Option.Some([]), maybe-find)
+@OUTPUT empty-nested  ; Some(None)
+@OUTPUT Option.flatten(empty-nested)  ; None
+
+; ============ Result.flatten ============
+
+; Ok(Ok(v)) -> Ok(v)
+@OUTPUT Result.flatten(Result.Ok(Result.Ok(42)))  ; Ok(42)
+@OUTPUT Result.flatten(Result.Ok(Result.Ok("success")))  ; Ok("success")
+
+; Ok(Err(e)) -> Err(e)
+@OUTPUT Result.flatten(Result.Ok(Result.Err("inner error")))  ; Err("inner error")
+
+; Err(e) -> Err(e)
+@OUTPUT Result.flatten(Result.Err("outer error"))  ; Err("outer error")
+
+; Practical: flatten after map that returns Result
+FUN try-parse(s) {
+  IF s == "42" { Result.Ok(42) } ELSE { Result.Err("parse failed") }
+}
+LET nested-res = Result.map(Result.Ok("42"), try-parse)
+@OUTPUT nested-res  ; Ok(Ok(42))
+@OUTPUT Result.flatten(nested-res)  ; Ok(42)
+
+LET nested-err = Result.map(Result.Ok("bad"), try-parse)
+@OUTPUT nested-err  ; Ok(Err("parse failed"))
+@OUTPUT Result.flatten(nested-err)  ; Err("parse failed")
