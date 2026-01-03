@@ -173,6 +173,43 @@ impl InferCtx<'_> {
                     );
                 }
 
+                MatchPattern::Array(pats, rest) => {
+                    // Extract element type from array type
+                    let elem_ty = match scrutinee_ty {
+                        Ty::Array(inner) => inner.as_ref().clone(),
+                        Ty::Var(_) => {
+                            let elem = self.fresh();
+                            self.unify(
+                                scrutinee_ty.clone(),
+                                Ty::Array(Box::new(elem.clone())),
+                                span,
+                            );
+                            elem
+                        }
+                        _ => {
+                            self.error(TypeError::NotAnArray(
+                                scrutinee_ty.clone(),
+                                span,
+                            ));
+                            Ty::Error
+                        }
+                    };
+
+                    // Bind prefix patterns
+                    pats.iter().for_each(|pat_id| {
+                        self.pattern_bindings(*pat_id, &elem_ty, span);
+                    });
+
+                    // Bind rest pattern if present
+                    if let Some(crate::ast::RestPattern::Bind(name)) = rest {
+                        // Rest has type `Array[T]` where `T` is the element type
+                        self.env.bind(
+                            name,
+                            Scheme::mono(Ty::Array(Box::new(elem_ty.clone()))),
+                        );
+                    }
+                }
+
                 MatchPattern::Is(name, ty_id) => {
                     let narrowed_ty =
                         self.ast_type_to_ty(*ty_id, &HashMap::new());
@@ -396,6 +433,7 @@ impl InferCtx<'_> {
     /// - `(a, b, ...)` where all elements are irrefutable
     /// - `{ field1, field2, ... }` where all field patterns are irrefutable
     ///   (object patterns are partial; extra fields allowed)
+    /// - `[..]` or `[...rest]` (array with rest and no prefix)
     pub(super) fn is_irrefutable_pattern(
         &self,
         pat_id: MatchPatternId,
@@ -407,6 +445,10 @@ impl InferCtx<'_> {
             }
             MatchPattern::Object(fields) => {
                 fields.iter().all(|(_, p)| self.is_irrefutable_pattern(*p))
+            }
+            // Array with rest and no prefix patterns is irrefutable (`[..]` or `[...rest]`)
+            MatchPattern::Array(pats, rest) => {
+                pats.is_empty() && rest.is_some()
             }
             // Literals, variants, and IS patterns are refutable
             MatchPattern::Literal(_)

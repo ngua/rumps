@@ -28,25 +28,8 @@ LET { x: px, y: py } = point
 @OUTPUT px
 @OUTPUT py
 
-; === Array destructuring ===
-
-LET arr = [1, 2, 3]
-LET [first, second, third] = arr
-@OUTPUT first
-@OUTPUT second
-@OUTPUT third
-
-; Array with rest (bind)
-LET nums = [1, 2, 3, 4, 5]
-LET [head, ...tail] = nums
-@OUTPUT head
-@OUTPUT tail
-
-; Array with rest (ignore)
-LET long = [10, 20, 30, 40, 50]
-LET [first2, second2, ..] = long
-@OUTPUT first2
-@OUTPUT second2
+; NOTE: Array destructuring is only supported in MATCH expressions, not in LET bindings.
+; See 62_match.rumps for array pattern matching examples.
 
 ; === Wildcard ===
 

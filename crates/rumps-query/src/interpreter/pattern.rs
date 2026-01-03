@@ -3,13 +3,11 @@
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{
-    BindingPattern, MatchPattern, MatchPatternId, RestPattern, TypePattern,
-};
+use crate::ast::{BindingPattern, MatchPattern, MatchPatternId, TypePattern};
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::value::{TypeId, Value, ValueId};
-use crate::{Error, Result, Span};
+use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Check if a value matches a type pattern (without binding).
@@ -194,6 +192,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.try_match_object(fields, val, span)
             }
             MatchPattern::Tuple(pats) => self.try_match_tuple(pats, val, span),
+            MatchPattern::Array(pats, rest) => {
+                self.try_match_array(pats, rest.as_ref(), val, span)
+            }
             MatchPattern::Is(name, ty_id) => {
                 self.try_match_is(name, *ty_id, val, span)
             }
@@ -307,6 +308,65 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    /// Try to match an array pattern against a value.
+    ///
+    /// - Without rest: matches arrays of exactly `pats.len()` elements
+    /// - With rest: matches arrays of at least `pats.len()` elements
+    fn try_match_array(
+        &mut self,
+        pats: &[MatchPatternId],
+        rest: Option<&crate::ast::RestPattern>,
+        val: &Value,
+        span: Span,
+    ) -> Result<Option<Vec<(StringId, ValueId)>>> {
+        match val {
+            Value::Array(ty_id, elems) => {
+                // Check length constraints
+                let len_ok = rest.map_or_else(
+                    || elems.len() == pats.len(),
+                    |_| elems.len() >= pats.len(),
+                );
+                if !len_ok {
+                    Ok(None)
+                } else {
+                    // Match prefix elements
+                    let prefix_vals: SmallVec<[ValueId; 4]> =
+                        elems.iter().take(pats.len()).copied().collect();
+                    self.try_match_all(pats, &prefix_vals, span).map(
+                        |maybe_bindings| {
+                            maybe_bindings.map(|mut bindings| {
+                                // Handle rest pattern
+                                match rest {
+                                    None
+                                    | Some(crate::ast::RestPattern::Ignore) => {
+                                    }
+                                    Some(crate::ast::RestPattern::Bind(
+                                        name,
+                                    )) => {
+                                        // Bind remaining elements to `name`
+                                        let rest_elems: SmallVec<_> = elems
+                                            .iter()
+                                            .skip(pats.len())
+                                            .copied()
+                                            .collect();
+                                        let rest_arr =
+                                            Value::Array(*ty_id, rest_elems);
+                                        let name_id = self.arena.intern(name);
+                                        let val_id =
+                                            self.arena.add(rest_arr, span);
+                                        bindings.push((name_id, val_id));
+                                    }
+                                }
+                                bindings
+                            })
+                        },
+                    )
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Try to match multiple patterns against corresponding values.
     ///
     /// Returns `Some(bindings)` if all patterns match, `None` if any fails.
@@ -375,138 +435,41 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.env.scopes.bind(name_id, val_id);
                 Ok(())
             }
-            BindingPattern::Wildcard => Ok(()), // discard value
-            BindingPattern::Tuple(pats) => {
-                self.destructure_tuple(pats, val, span)
-            }
-            BindingPattern::Object(fields) => {
-                self.destructure_object(fields, val, span)
-            }
-            BindingPattern::Array(pats, rest) => {
-                self.destructure_array(pats, rest.as_ref(), val, span)
-            }
-        }
-    }
-
-    /// Destructure a tuple value.
-    ///
-    /// Type checker guarantees pattern and value have matching sizes.
-    fn destructure_tuple(
-        &mut self,
-        pats: &[BindingPattern],
-        val: &Value,
-        span: Span,
-    ) -> Result<()> {
-        match val {
-            Value::Tuple(_, elems) => {
-                // Type checker guarantees pattern and value have matching sizes
-                if elems.len() != pats.len() {
-                    typechecked!("destructure tuple", "matching size");
-                }
-                pats.iter().zip(elems.iter()).try_for_each(|(p, elem_id)| {
-                    let elem =
-                        self.arena.get(*elem_id).cloned().unwrap_or_else(
-                            || typechecked!("tuple elem", "ValueId"),
-                        );
-                    self.destructure(p, &elem, span)
-                })
-            }
-            // Type checker guarantees destructure target is a Tuple
-            _ => typechecked!("destructure", "Tuple"),
-        }
-    }
-
-    /// Destructure an object value.
-    ///
-    /// Type checker guarantees pattern fields exist in the object.
-    fn destructure_object(
-        &mut self,
-        fields: &[(String, BindingPattern)],
-        val: &Value,
-        span: Span,
-    ) -> Result<()> {
-        match val {
-            Value::Object(obj) => fields.iter().try_for_each(|(name, pat)| {
-                let fid = self.arena.intern(name);
-                // Type checker guarantees field exists
-                let val_id = obj.get(&fid).copied().unwrap_or_else(|| {
-                    typechecked!("destructure object", "field")
-                });
-                let field_val =
-                    self.arena.get(val_id).cloned().unwrap_or_else(|| {
-                        typechecked!("field value", "ValueId")
-                    });
-                self.destructure(pat, &field_val, span)
-            }),
-            // Type checker guarantees destructure target is an Object
-            _ => typechecked!("destructure", "Object"),
-        }
-    }
-
-    /// Destructure an array value.
-    ///
-    /// Size constraints are runtime checks (array length is not in the type).
-    fn destructure_array(
-        &mut self,
-        pats: &[BindingPattern],
-        rest: Option<&RestPattern>,
-        val: &Value,
-        span: Span,
-    ) -> Result<()> {
-        match val {
-            Value::Array(ty_id, elems) => {
-                // Array length is runtime-only; size mismatches are runtime errors
-                if rest.is_none() && elems.len() != pats.len() {
-                    Err(Error::runtime(
-                        span,
-                        format!(
-                            "array size mismatch: pattern has {} elements, \
-                             value has {}",
-                            pats.len(),
-                            elems.len()
-                        ),
-                    ))?;
-                }
-                if rest.is_some() && elems.len() < pats.len() {
-                    Err(Error::runtime(
-                        span,
-                        format!(
-                            "array too short: pattern needs at least {} elements, \
-                             value has {}",
-                            pats.len(),
-                            elems.len()
-                        ),
-                    ))?;
-                }
-
-                // Bind prefix elements
-                pats.iter()
-                    .zip(elems.iter().take(pats.len()))
-                    .try_for_each(|(p, elem_id)| {
+            BindingPattern::Wildcard => Ok(()),
+            BindingPattern::Tuple(pats) => match val {
+                Value::Tuple(_, elems) => {
+                    if elems.len() != pats.len() {
+                        typechecked!("destructure tuple", "matching size");
+                    }
+                    pats.iter().zip(elems.iter()).try_for_each(|(p, eid)| {
                         let elem =
-                            self.arena.get(*elem_id).cloned().unwrap_or_else(
-                                || typechecked!("array elem", "ValueId"),
+                            self.arena.get(*eid).cloned().unwrap_or_else(
+                                || typechecked!("tuple elem", "ValueId"),
                             );
                         self.destructure(p, &elem, span)
-                    })?;
-
-                // Handle rest pattern
-                match rest {
-                    None => Ok(()),
-                    Some(RestPattern::Ignore) => Ok(()),
-                    Some(RestPattern::Bind(name)) => {
-                        let rest_elems: SmallVec<_> =
-                            elems.iter().skip(pats.len()).copied().collect();
-                        let rest_arr = Value::Array(*ty_id, rest_elems);
-                        let name_id = self.arena.intern(name);
-                        let val_id = self.arena.add(rest_arr, span);
-                        self.env.scopes.bind(name_id, val_id);
-                        Ok(())
-                    }
+                    })
                 }
+                _ => typechecked!("destructure", "Tuple"),
+            },
+            BindingPattern::Object(fields) => match val {
+                Value::Object(obj) => {
+                    fields.iter().try_for_each(|(name, pat)| {
+                        let fid = self.arena.intern(name);
+                        let vid = obj.get(&fid).copied().unwrap_or_else(|| {
+                            typechecked!("object field", "exists")
+                        });
+                        let fval =
+                            self.arena.get(vid).cloned().unwrap_or_else(|| {
+                                typechecked!("field value", "ValueId")
+                            });
+                        self.destructure(pat, &fval, span)
+                    })
+                }
+                _ => typechecked!("destructure", "Object"),
+            },
+            BindingPattern::Array(..) => {
+                typechecked!("destructure", "no array pattern in LET")
             }
-            // Type checker guarantees destructure target is an Array
-            _ => typechecked!("destructure", "Array"),
         }
     }
 }

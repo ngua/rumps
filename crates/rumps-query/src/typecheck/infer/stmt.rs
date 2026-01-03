@@ -481,33 +481,9 @@ impl InferCtx<'_> {
                 });
             }
 
-            BindingPattern::Array(pats, rest) => {
-                let elem_ty = match ty {
-                    Ty::Array(e) => e.as_ref().clone(),
-                    Ty::Var(_) => {
-                        let fresh = self.fresh();
-                        self.unify(
-                            ty.clone(),
-                            Ty::Array(Box::new(fresh.clone())),
-                            span,
-                        );
-                        fresh
-                    }
-                    Ty::Error => Ty::Error,
-                    _ => {
-                        self.error(TypeError::NotIndexable(ty.clone(), span));
-                        Ty::Error
-                    }
-                };
-
-                // Bind each fixed-position pattern
-                pats.iter()
-                    .for_each(|p| self.bind_pattern(p, &elem_ty, span));
-
-                // Bind rest pattern if present
-                if let Some(crate::ast::RestPattern::Bind(name)) = rest {
-                    self.env.bind(name, Scheme::mono(ty.clone()));
-                }
+            BindingPattern::Array(_, _) => {
+                // Array destructuring is only allowed in MATCH expressions
+                self.error(TypeError::ArrayPatternInLet(span));
             }
         }
     }

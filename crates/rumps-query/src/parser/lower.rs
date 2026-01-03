@@ -678,6 +678,13 @@ fn lower_match_pattern(
                 .collect::<Result<SmallVec<_>>>()?;
             MatchPattern::Tuple(elem_ids)
         }
+        cst::MatchPattern::Array(pats, rest) => {
+            let elem_ids = pats
+                .into_iter()
+                .map(|p| lower_match_pattern(ast, p))
+                .collect::<Result<SmallVec<_>>>()?;
+            MatchPattern::Array(elem_ids, rest.map(lower_rest_pattern))
+        }
         cst::MatchPattern::Is(name, ty) => {
             let ty_id = lower_type_expr(ast, ty)?;
             MatchPattern::Is(name, ty_id)

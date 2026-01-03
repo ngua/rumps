@@ -536,6 +536,12 @@ pub(crate) enum MatchPattern {
     /// Tuple pattern: `(a, b, c)`
     Tuple(Vec<Self>),
 
+    /// Array pattern: `[a, b]`, `[a, b, ..]`, or `[head, ...tail]`
+    ///
+    /// - First vec: patterns for fixed-position elements
+    /// - `Option<RestPattern>`: optional rest handling
+    Array(Vec<Self>, Option<RestPattern>),
+
     /// Type-narrowing pattern: `x IS Int`, `val IS String`
     ///
     /// Matches if the value is of the specified type and binds it to the name.

@@ -195,3 +195,100 @@ FUN describe(opt: Option[Int]) -> String {
 }
 @OUTPUT describe(Option.Some(7))
 @OUTPUT describe(Option.None)
+
+; === Array matching ===
+
+; Exact length match
+LET arr = [1, 2, 3]
+LET arr-sum = MATCH arr {
+  [a, b, c] => { a + b + c }
+  [..] => { 0 }
+}
+@OUTPUT arr-sum
+
+; Single element
+LET single = [42]
+LET single-val = MATCH single {
+  [x] => { x }
+  [..] => { -1 }
+}
+@OUTPUT single-val
+
+; With rest (ignore)
+LET long = [10, 20, 30, 40, 50]
+LET first-two-sum = MATCH long {
+  [a, b, ..] => { a + b }
+  [..] => { 0 }
+}
+@OUTPUT first-two-sum
+
+; With rest (bind)
+LET nums = [1, 2, 3, 4, 5]
+LET head-tail = MATCH nums {
+  [h, ...t] => {
+    LET strs = Array.map((x: Int) => x as String, t)
+    (h as String) ++ ":" ++ String.join(strs, ",")
+  }
+  [..] => { "empty" }
+}
+@OUTPUT head-tail
+
+; Empty array with rest
+LET empty: Array[Int] = []
+LET empty-result = MATCH empty {
+  [x, ..] => { "has elements" }
+  [..] => { "empty" }
+}
+@OUTPUT empty-result
+
+; Nested patterns in array
+LET pairs = [(1, 2), (3, 4)]
+LET first-pair-sum = MATCH pairs {
+  [(a, b), ..] => { a + b }
+  [..] => { 0 }
+}
+@OUTPUT first-pair-sum
+
+; Array of Options
+LET opts = [Option.Some(1), Option.None, Option.Some(2)]
+LET first-opt = MATCH opts {
+  [Option.Some(x), ..] => { "first is Some(" ++ (x as String) ++ ")" }
+  [Option.None, ..] => { "first is None" }
+  [..] => { "empty" }
+}
+@OUTPUT first-opt
+
+; Wildcard in array
+LET mixed = [1, 2, 3]
+LET second-elem = MATCH mixed {
+  [_, x, ..] => { x }
+  [..] => { 0 }
+}
+@OUTPUT second-elem
+
+; Multiple exact lengths
+LET len2 = [10, 20]
+LET len-check = MATCH len2 {
+  [] => { "zero" }
+  [_] => { "one" }
+  [_, _] => { "two" }
+  [..] => { "many" }
+}
+@OUTPUT len-check
+
+; Guard with array
+LET arr2 = [5, 10, 15]
+LET arr-guard = MATCH arr2 {
+  [a, ..] IF a > 10 => { "first > 10" }
+  [a, ..] IF a > 0 => { "first positive" }
+  [..] => { "other" }
+}
+@OUTPUT arr-guard
+
+; Rest binding produces correct array
+LET rest-test = [100, 200, 300, 400]
+LET rest-len = MATCH rest-test {
+  [_, ...rest] => { Array.length(rest) }
+  [..] => { 0 }
+}
+@OUTPUT rest-len

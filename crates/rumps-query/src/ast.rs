@@ -486,6 +486,16 @@ pub(crate) enum MatchPattern {
     /// Matches a tuple of the same arity and recursively matches elements.
     Tuple(SmallVec<[MatchPatternId; 4]>),
 
+    /// Array pattern: `[a, b]`, `[a, b, ..]`, or `[head, ...tail]`
+    ///
+    /// Matches an array by position with optional rest handling.
+    /// - First vec: patterns for fixed-position elements
+    /// - `Option<RestPattern>`: optional rest handling (`..` or `...name`)
+    ///
+    /// Without rest: matches arrays of exactly the specified length.
+    /// With rest: matches arrays of at least the specified prefix length.
+    Array(SmallVec<[MatchPatternId; 4]>, Option<RestPattern>),
+
     /// Type-narrowing pattern: `x IS Int`, `val IS String`
     ///
     /// Matches if the value is of the specified type and binds it to the name.

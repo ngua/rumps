@@ -1,4 +1,4 @@
 ; Destructuring error cases
 
-; Array size mismatch (too few elements)
-LET [a, b, c] = [1, 2]
+; Array destructuring not allowed in LET (only in MATCH)
+LET [a, b, c] = [1, 2, 3]

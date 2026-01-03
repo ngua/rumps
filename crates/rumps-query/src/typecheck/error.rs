@@ -268,6 +268,10 @@ pub(crate) enum TypeError {
     #[error("type `{0}` is not a tuple")]
     NotATuple(Ty, Span),
 
+    /// Array pattern in LET binding (only allowed in MATCH).
+    #[error("array destructuring is only allowed in MATCH expressions")]
+    ArrayPatternInLet(Span),
+
     /// Tuple index out of bounds.
     #[error("tuple index {idx} is out of bounds for tuple of length {len}")]
     TupleIndexOutOfBounds { idx: u32, len: usize, span: Span },
@@ -340,6 +344,7 @@ impl TypeError {
             | Self::NotAnObject(_, span)
             | Self::FieldNotFound { span, .. }
             | Self::NotATuple(_, span)
+            | Self::ArrayPatternInLet(span)
             | Self::TupleIndexOutOfBounds { span, .. }
             | Self::NotIndexable(_, span)
             | Self::NotAnArray(_, span)
@@ -454,6 +459,10 @@ impl TypeError {
             Self::NotATuple(ty, _) => (
                 format!("type `{}` is not a tuple", p.format(ty)),
                 None,
+            ),
+            Self::ArrayPatternInLet(_) => (
+                "array destructuring is only allowed in MATCH expressions".to_owned(),
+                Some("use `MATCH arr { [a, b, ..] => ... }` instead".to_owned()),
             ),
             Self::TupleIndexOutOfBounds { idx, len, .. } => (
                 format!(

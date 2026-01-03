@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Array too short for rest pattern\nLET [a, b, ...rest] = [1]\n"
+description: "; Array destructuring not allowed in LET (only in MATCH)\nLET [a, b, ...rest] = [1, 2, 3]\n"
 ---
-ERROR: runtime error at 35..60: array too short: pattern needs at least 2 elements, value has 1
+ERROR: array destructuring is only allowed in MATCH expressions

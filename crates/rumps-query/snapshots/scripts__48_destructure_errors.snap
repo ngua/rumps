@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Destructuring error cases\n\n; Array size mismatch (too few elements)\nLET [a, b, c] = [1, 2]\n"
+description: "; Destructuring error cases\n\n; Array destructuring not allowed in LET (only in MATCH)\nLET [a, b, c] = [1, 2, 3]\n"
 ---
-ERROR: runtime error at 70..92: array size mismatch: pattern has 3 elements, value has 2
+ERROR: array destructuring is only allowed in MATCH expressions

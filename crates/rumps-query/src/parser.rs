@@ -331,6 +331,55 @@ impl Parser {
         Ok(cst::BindingPattern::Array(pats, rest))
     }
 
+    /// Build a match array pattern from parsed elements.
+    ///
+    /// The rest pattern (`..` or `...name`) must be the last element if present.
+    fn build_match_array_pattern(
+        elems: Vec<MatchArrayPatElem>,
+        span: Span,
+    ) -> std::result::Result<cst::MatchPattern, ParseErr> {
+        let mut pats = Vec::new();
+        let mut rest: Option<cst::RestPattern> = None;
+
+        elems.into_iter().try_for_each(|e| match e {
+            MatchArrayPatElem::Pat(p) => {
+                if rest.is_some() {
+                    Err(Simple::custom(
+                        span,
+                        "rest pattern must be last in array pattern",
+                    ))
+                } else {
+                    pats.push(p);
+                    Ok(())
+                }
+            }
+            MatchArrayPatElem::RestIgnore => {
+                if rest.is_some() {
+                    Err(Simple::custom(
+                        span,
+                        "only one rest pattern allowed in array pattern",
+                    ))
+                } else {
+                    rest = Some(cst::RestPattern::Ignore);
+                    Ok(())
+                }
+            }
+            MatchArrayPatElem::RestBind(name) => {
+                if rest.is_some() {
+                    Err(Simple::custom(
+                        span,
+                        "only one rest pattern allowed in array pattern",
+                    ))
+                } else {
+                    rest = Some(cst::RestPattern::Bind(name));
+                    Ok(())
+                }
+            }
+        })?;
+
+        Ok(cst::MatchPattern::Array(pats, rest))
+    }
+
     /// `SET name = expr` or `SET name(subs...) = expr`
     /// `SET ^global = expr` or `SET ^global(subs...) = expr`
     fn set_stmt(
@@ -2150,6 +2199,29 @@ impl Parser {
                 .then_ignore(just(Token::RBrace))
                 .map(cst::MatchPattern::Object);
 
+            // Rest patterns for arrays: `..` (ignore) or `...name` (bind)
+            let arr_rest_bind = just(Token::DotDotDot)
+                .ignore_then(select! { Token::Ident(s) if s != "_" => s })
+                .map(MatchArrayPatElem::RestBind);
+            // Accept both DotDot and DotDotNoSpace for rest ignore in patterns
+            let arr_rest_ignore = just(Token::DotDot)
+                .or(just(Token::DotDotNoSpace))
+                .to(MatchArrayPatElem::RestIgnore);
+
+            // Array element: rest-bind, rest-ignore, or regular pattern
+            let arr_elem = arr_rest_bind
+                .or(arr_rest_ignore)
+                .or(pat.clone().map(MatchArrayPatElem::Pat));
+
+            // Array pattern: `[a, b]`, `[a, b, ..]`, or `[head, ...tail]`
+            let arr_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+            let arr_pat = just(Token::LBracket)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(arr_elem.separated_by(arr_sep).allow_trailing())
+                .then_ignore(Self::opt_newlines())
+                .then_ignore(just(Token::RBracket))
+                .try_map(Self::build_match_array_pattern);
+
             // Variable: any identifier except `_`
             let var_pat = select! { Token::Ident(s) if s != "_" => s }
                 .map(cst::MatchPattern::Var);
@@ -2164,12 +2236,14 @@ impl Parser {
 
             // Order: is_pat before var (so `x IS Type` is parsed correctly)
             // variant before var (so `Type.Variant` is parsed correctly)
+            // arr_pat before literal (so `[1, 2]` parses as pattern)
             choice((
                 wildcard,
                 literal,
                 variant_pat,
                 tuple_pat,
                 obj_pat,
+                arr_pat,
                 is_pat,
                 var_pat,
             ))
@@ -2575,6 +2649,17 @@ enum PostfixOp {
 enum ArrayPatElem {
     /// Regular pattern: `a`, `(x, y)`, etc.
     Pat(cst::BindingPattern),
+    /// Rest ignore: `..`
+    RestIgnore,
+    /// Rest bind: `...name`
+    RestBind(String),
+}
+
+/// Helper enum for match array pattern elements during parsing.
+#[derive(Clone)]
+enum MatchArrayPatElem {
+    /// Regular pattern: `a`, `(x, y)`, `Option.Some(x)`, etc.
+    Pat(cst::MatchPattern),
     /// Rest ignore: `..`
     RestIgnore,
     /// Rest bind: `...name`
