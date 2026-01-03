@@ -91,3 +91,49 @@ LET res-ok-check = Result.Ok(1)
 LET res-err-check = Result.Err("x")
 @OUTPUT res-ok-check IS Result.Ok(_)  ; true
 @OUTPUT res-err-check IS Result.Err(_)  ; true
+
+; ============ Option.flat-map ============
+
+; Returns the inner Option when Some
+FUN safe-div(n, d) {
+  IF d == 0 { Option.None } ELSE { Option.Some(n // d) }
+}
+
+@OUTPUT Option.flat-map(Option.Some(10), x => safe-div(x, 2))  ; Some(5)
+@OUTPUT Option.flat-map(Option.Some(10), x => safe-div(x, 0))  ; None
+@OUTPUT Option.flat-map(Option.None, x => safe-div(x, 2))  ; None
+
+; Chaining flat-map
+FUN parse-positive(x) {
+  IF x > 0 { Option.Some(x) } ELSE { Option.None }
+}
+FUN halve(x) {
+  IF x % 2 == 0 { Option.Some(x // 2) } ELSE { Option.None }
+}
+
+@OUTPUT Option.flat-map(Option.flat-map(Option.Some(8), parse-positive), halve)  ; Some(4)
+@OUTPUT Option.flat-map(Option.flat-map(Option.Some(-1), parse-positive), halve)  ; None
+@OUTPUT Option.flat-map(Option.flat-map(Option.Some(7), parse-positive), halve)  ; None (7 is odd)
+
+; ============ Result.flat-map ============
+
+; Returns the inner Result when Ok
+FUN safe-div-res(n, d) {
+  IF d == 0 { Result.Err("div by zero") } ELSE { Result.Ok(n // d) }
+}
+
+@OUTPUT Result.flat-map(Result.Ok(10), x => safe-div-res(x, 2))  ; Ok(5)
+@OUTPUT Result.flat-map(Result.Ok(10), x => safe-div-res(x, 0))  ; Err("div by zero")
+@OUTPUT Result.flat-map(Result.Err("bad input"), x => safe-div-res(x, 2))  ; Err("bad input")
+
+; Chaining flat-map
+FUN validate(x) {
+  IF x >= 0 { Result.Ok(x) } ELSE { Result.Err("negative") }
+}
+FUN halve-res(x) {
+  IF x % 2 == 0 { Result.Ok(x // 2) } ELSE { Result.Err("odd") }
+}
+
+@OUTPUT Result.flat-map(Result.flat-map(Result.Ok(8), validate), halve-res)  ; Ok(4)
+@OUTPUT Result.flat-map(Result.flat-map(Result.Ok(-1), validate), halve-res)  ; Err("negative")
+@OUTPUT Result.flat-map(Result.flat-map(Result.Ok(7), validate), halve-res)  ; Err("odd")

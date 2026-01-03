@@ -996,11 +996,16 @@ impl Environment {
         self.modules.insert(
             "Option".to_string(),
             Module::from_prims(&[
-                // Higher-order function placeholder
+                // Higher-order function placeholders
                 PrimDef {
                     name: "map",
                     f: Opt::placeholder,
                     ty: scheme!(forall T U. (Option[T], (T) -> U) -> Option[U]),
+                },
+                PrimDef {
+                    name: "flat-map",
+                    f: Opt::placeholder,
+                    ty: scheme!(forall T U. (Option[T], (T) -> Option[U]) -> Option[U]),
                 },
                 // Regular primitives
                 PrimDef {
@@ -1024,6 +1029,11 @@ impl Environment {
                     name: "map-err",
                     f: Res::placeholder,
                     ty: scheme!(forall T E F. (Result[T, E], (E) -> F) -> Result[T, F]),
+                },
+                PrimDef {
+                    name: "flat-map",
+                    f: Res::placeholder,
+                    ty: scheme!(forall T U E. (Result[T, E], (T) -> Result[U, E]) -> Result[U, E]),
                 },
                 // Regular primitives
                 PrimDef {
