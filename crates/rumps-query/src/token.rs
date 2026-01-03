@@ -151,7 +151,6 @@ impl Token {
                 "MODULE" => Some(Self::Module),
                 "FOREVER" => Some(Self::Forever),
                 "TRANSACTION" => Some(Self::Transaction),
-                "CATCH" => Some(Self::Catch),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -173,6 +172,7 @@ impl Token {
             "ORDER" => Some(Self::Order),
             "QUERY" => Some(Self::Query),
             "RAISE" => Some(Self::Raise),
+            "CATCH" => Some(Self::Catch),
             _ => None,
         }
     }
@@ -202,7 +202,6 @@ impl fmt::Display for Token {
             Self::Module => write!(f, "MODULE"),
             Self::Forever => write!(f, "FOREVER"),
             Self::Transaction => write!(f, "TRANSACTION"),
-            Self::Catch => write!(f, "CATCH"),
             // DB intrinsics (prefixed with `@`)
             Self::Set => write!(f, "@SET"),
             Self::Get => write!(f, "@GET"),
@@ -212,6 +211,7 @@ impl fmt::Display for Token {
             Self::Order => write!(f, "@ORDER"),
             Self::Query => write!(f, "@QUERY"),
             Self::Raise => write!(f, "@RAISE"),
+            Self::Catch => write!(f, "@CATCH"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),
@@ -310,7 +310,6 @@ mod tests {
         assert_eq!(Token::keyword("TYPE"), Some(Token::Type));
         assert_eq!(Token::keyword("NEWTYPE"), Some(Token::NewType));
         assert_eq!(Token::keyword("TRANSACTION"), Some(Token::Transaction));
-        assert_eq!(Token::keyword("CATCH"), Some(Token::Catch));
         // Case-sensitive: null
         assert_eq!(Token::keyword("null"), Some(Token::Null));
     }
@@ -333,6 +332,7 @@ mod tests {
         assert_eq!(Token::intrinsic("ORDER"), Some(Token::Order));
         assert_eq!(Token::intrinsic("QUERY"), Some(Token::Query));
         assert_eq!(Token::intrinsic("RAISE"), Some(Token::Raise));
+        assert_eq!(Token::intrinsic("CATCH"), Some(Token::Catch));
         // READ is a keyword, not an intrinsic
         assert_eq!(Token::intrinsic("READ"), None);
     }
@@ -363,10 +363,10 @@ mod tests {
         assert_eq!(Token::Order.to_string(), "@ORDER");
         assert_eq!(Token::Query.to_string(), "@QUERY");
         assert_eq!(Token::Raise.to_string(), "@RAISE");
+        assert_eq!(Token::Catch.to_string(), "@CATCH");
         // Keywords display without prefix
         assert_eq!(Token::Let.to_string(), "LET");
         assert_eq!(Token::Read.to_string(), "READ");
-        assert_eq!(Token::Catch.to_string(), "CATCH");
         // Other tokens
         assert_eq!(Token::Int(42).to_string(), "42");
         assert_eq!(Token::Float(OrderedFloat(3.14)).to_string(), "3.14");
