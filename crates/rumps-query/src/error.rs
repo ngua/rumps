@@ -31,6 +31,9 @@ pub enum Error {
     #[error("runtime error{}: {msg}", fmt_span(span))]
     Runtime { span: Option<Span>, msg: String },
 
+    #[error("@RAISE at {span}: {msg}")]
+    Raise { span: Span, msg: String },
+
     #[error("runtime type error at {span}: {msg}")]
     RuntimeType { span: Span, msg: String },
 
@@ -114,6 +117,13 @@ impl Error {
         }
     }
 
+    pub(crate) fn raise(span: Span, msg: impl Into<String>) -> Self {
+        Self::Raise {
+            span,
+            msg: msg.into(),
+        }
+    }
+
     pub(crate) fn coercion(
         from: &'static str,
         to: &'static str,
@@ -143,6 +153,7 @@ impl Error {
         match self {
             Self::Lex { span, .. }
             | Self::Parse { span, .. }
+            | Self::Raise { span, .. }
             | Self::RuntimeType { span, .. } => Some(*span),
             Self::Runtime { span, .. } => *span,
             Self::Type(e) => Some(e.span()),
@@ -186,6 +197,7 @@ impl Diagnostic for Error {
             Self::Lex { .. } => "rumps::lex",
             Self::Parse { .. } => "rumps::parse",
             Self::Runtime { .. } => "rumps::runtime",
+            Self::Raise { .. } => "rumps::raise",
             Self::RuntimeType { .. } => "rumps::runtime_type",
             Self::Coercion { .. } => "rumps::coercion",
             Self::Multiple { .. } => "rumps::multiple",
@@ -208,6 +220,9 @@ impl Diagnostic for Error {
             }
             Self::RuntimeType { span, .. } => {
                 Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
+            }
+            Self::Raise { span, .. } => {
+                Some(Box::new(std::iter::once(span_to_label(*span, "@RAISE"))))
             }
             Self::Runtime { span: Some(s), .. } => {
                 Some(Box::new(std::iter::once(span_to_label(*s, "here"))))
@@ -298,6 +313,9 @@ impl fmt::Display for ErrorDisplay<'_> {
             }
             Error::Runtime { span: None, msg } => {
                 write!(f, "runtime error: {msg}")
+            }
+            Error::Raise { span, msg } => {
+                write!(f, "@RAISE at {}: {msg}", loc(*span))
             }
             Error::RuntimeType { span, msg } => {
                 write!(f, "runtime type error at {}: {msg}", loc(*span))

@@ -237,6 +237,14 @@ impl InferCtx<'_> {
                 Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
+            // Raise expression: `@RAISE expr`
+            // Never returns; can unify with any expected type.
+            Expr::Raise(inner) => {
+                let ty = self.expr(*inner);
+                self.constrain(Constraint::Stringable(ty, span));
+                self.fresh()
+            }
+
             // Forever loop: `FOREVER seed (state, cont) => body`
             Expr::Forever {
                 seed,

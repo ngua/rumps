@@ -354,6 +354,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Kill(ref dbref, txn_id) => {
                 self.kill(dbref, txn_id, span).await
             }
+            Expr::Raise(inner) => {
+                let val = self.eval(inner).await?;
+                let msg = self.stringify(&val);
+                Err(crate::Error::raise(span, msg))
+            }
             Expr::Forever {
                 seed,
                 state_param,

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test @RAISE with an object (stringified)\n@RAISE { error: \"not found\", code: 404 }\n"
+---
+ERROR: @RAISE at 43..83: { error: "not found", code: 404 }

@@ -35,6 +35,7 @@ pub(crate) enum Token {
     Data,
     Order,
     Query,
+    Raise,
     Forever,
     Transaction,
 
@@ -169,6 +170,7 @@ impl Token {
             "DATA" => Some(Self::Data),
             "ORDER" => Some(Self::Order),
             "QUERY" => Some(Self::Query),
+            "RAISE" => Some(Self::Raise),
             _ => None,
         }
     }
@@ -206,6 +208,7 @@ impl fmt::Display for Token {
             Self::Data => write!(f, "@DATA"),
             Self::Order => write!(f, "@ORDER"),
             Self::Query => write!(f, "@QUERY"),
+            Self::Raise => write!(f, "@RAISE"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),
@@ -325,6 +328,7 @@ mod tests {
         assert_eq!(Token::intrinsic("DATA"), Some(Token::Data));
         assert_eq!(Token::intrinsic("ORDER"), Some(Token::Order));
         assert_eq!(Token::intrinsic("QUERY"), Some(Token::Query));
+        assert_eq!(Token::intrinsic("RAISE"), Some(Token::Raise));
         // READ is a keyword, not an intrinsic
         assert_eq!(Token::intrinsic("READ"), None);
     }
@@ -354,6 +358,7 @@ mod tests {
         assert_eq!(Token::Data.to_string(), "@DATA");
         assert_eq!(Token::Order.to_string(), "@ORDER");
         assert_eq!(Token::Query.to_string(), "@QUERY");
+        assert_eq!(Token::Raise.to_string(), "@RAISE");
         // Keywords display without prefix
         assert_eq!(Token::Let.to_string(), "LET");
         assert_eq!(Token::Read.to_string(), "READ");

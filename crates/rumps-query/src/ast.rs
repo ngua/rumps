@@ -872,6 +872,12 @@ pub(crate) enum Expr {
     /// The `Option<TxnId>` is assigned during typecheck; globals require it.
     Kill(DbRef, Option<TxnId>),
 
+    /// Raise a runtime error: `@RAISE expr`.
+    ///
+    /// Evaluates `expr` (must be `Stringable`) and raises a runtime error.
+    /// Never returns; can unify with any expected type.
+    Raise(ExprId),
+
     /// Forever loop: `FOREVER seed (state, cont) => body`.
     ///
     /// A functional looping construct using continuation-passing style:

@@ -535,6 +535,21 @@ impl Parser {
             })
     }
 
+    /// `@RAISE expr` as expression.
+    ///
+    /// Raises a runtime error with the stringified value.
+    fn raise_expr(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        just(Token::Raise)
+            .ignore_then(expr)
+            .map_with_span(|e, span| {
+                cst::Expr::new(cst::ExprKind::Raise(Box::new(e)), span)
+            })
+    }
+
     /// `FOREVER seed (state, cont) => body`
     ///
     /// Parses the forever loop expression.
@@ -1506,13 +1521,16 @@ impl Parser {
             // KILL target
             let kill = Self::kill_expr(expr.clone());
 
+            // RAISE expr
+            let raise = Self::raise_expr(expr.clone());
+
             // FOREVER seed (state, cont) => body
             // Use primary for seed (no postfix ops) to avoid parsing (state, cont) as a call
             let forever = Self::forever_expr(primary, expr);
 
             choice((
                 with_op, get_expr, data_expr, order_expr, query_expr, output,
-                set, kill, forever,
+                set, kill, raise, forever,
             ))
             .or(operand.clone())
         })

@@ -1,0 +1,2 @@
+; Test @RAISE with a string message
+@RAISE "something went wrong"

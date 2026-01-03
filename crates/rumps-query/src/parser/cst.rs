@@ -329,6 +329,12 @@ pub(crate) enum ExprKind {
     /// Deletes a variable or subtree and evaluates to `Unit`.
     Kill(DbRef),
 
+    /// Raise a runtime error: `@RAISE expr`.
+    ///
+    /// Evaluates `expr` (must be `Stringable`) and raises a runtime error.
+    /// Never returns; can unify with any expected type.
+    Raise(Box<Expr>),
+
     /// Forever loop: `FOREVER seed (state, cont) => body`.
     Forever {
         seed: Box<Expr>,

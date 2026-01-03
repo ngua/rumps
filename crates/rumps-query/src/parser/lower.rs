@@ -395,6 +395,10 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let dbref = lower_db_ref(ast, dbref)?;
             Expr::Kill(dbref, None)
         }
+        cst::ExprKind::Raise(inner) => {
+            let id = lower_expr(ast, *inner)?;
+            Expr::Raise(id)
+        }
         cst::ExprKind::Forever {
             seed,
             state_param,
