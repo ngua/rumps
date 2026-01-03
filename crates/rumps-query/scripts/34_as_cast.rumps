@@ -85,6 +85,16 @@ LET s = "hello" AS String
 @OUTPUT s
 ; Expected: hello
 
+; Tuple identity cast
+LET tup = (1, 2)
+@OUTPUT tup AS (Int, Int)
+; Expected: (1, 2)
+
+; Object identity cast
+LET obj2 = { a: 1, b: 2 }
+@OUTPUT obj2 AS { a: Int, b: Int }
+; Expected: { a: 1, b: 2 }
+
 ; === Chained casts ===
 
 ; Note: Chained casts like `3.7 AS Int AS Float` require parentheses

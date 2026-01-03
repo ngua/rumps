@@ -1014,7 +1014,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let val = self.eval(expr).await?;
         let target_ty = self.resolve_type_expr(ast_ty, span)?;
 
-        // Check for named union types (like Storable)
+        // Check for named types (like Storable, Int, etc.)
         if let Some(target_base) = self.type_exprs.base_type(target_ty) {
             // Special case: `AS Storable` is infallible if value is already Storable
             if target_base == TypeId::STORABLE
@@ -1025,9 +1025,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.coerce(&val, target_base, span)
             }
         } else {
-            // For non-named types (function types, tuple types, inline unions),
-            // AS is not supported; use READ instead
-            typechecked!("AS", "named type target")
+            // For compound types (tuples, objects, inline unions), the typechecker
+            // only allows identity casts; just return the value unchanged
+            Ok(val)
         }
     }
 
