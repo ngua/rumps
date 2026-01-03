@@ -354,6 +354,11 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let rhs_id = lower_expr(ast, *rhs)?;
             Expr::Matches(lhs_id, rhs_id)
         }
+        cst::ExprKind::Catch(expr, handler) => {
+            let expr_id = lower_expr(ast, *expr)?;
+            let handler_id = lower_expr(ast, *handler)?;
+            Expr::Catch(expr_id, handler_id)
+        }
         cst::ExprKind::Data(dbref) => {
             let dbref = lower_db_ref(ast, dbref)?;
             Expr::Data(dbref, None)

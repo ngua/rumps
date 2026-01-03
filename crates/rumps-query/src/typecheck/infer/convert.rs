@@ -43,6 +43,7 @@ impl InferCtx<'_> {
             | Ty::FilePath
             | Ty::Path
             | Ty::Regex
+            | Ty::RuntimeError
             | Ty::Error => false,
             // Option, Result, Array, Map, and Fn with unresolved type params are
             // OK. These are intentionally polymorphic (e.g., `Option.None`,

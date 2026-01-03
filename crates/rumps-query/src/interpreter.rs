@@ -344,6 +344,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 Ok(Value::Regex(idx))
             }
             Expr::Matches(lhs, rhs) => self.matches(lhs, rhs).await,
+            Expr::Catch(expr_id, handler_id) => {
+                self.catch(expr_id, handler_id, span).await
+            }
             Expr::Output(output) => {
                 self.output(&output).await?;
                 Ok(Value::Unit)
@@ -356,7 +359,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             }
             Expr::Raise(inner) => {
                 let val = self.eval(inner).await?;
-                let msg = self.stringify(&val);
+                let msg = if let Value::String(id) = &val {
+                    self.arena.get_str(*id).unwrap_or("").to_owned()
+                } else {
+                    self.stringify(&val)
+                };
                 Err(crate::Error::raise(span, msg))
             }
             Expr::Forever {

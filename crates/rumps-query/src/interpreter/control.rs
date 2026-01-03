@@ -1,4 +1,4 @@
-//! Control flow expressions: `IF`, `MATCH`, blocks, coalesce, unwrap.
+//! Control flow expressions: `IF`, `MATCH`, `CATCH`, blocks, coalesce, unwrap.
 
 use async_recursion::async_recursion;
 use smallvec::SmallVec;
@@ -386,6 +386,58 @@ impl<I: IoContext> Interpreter<'_, I> {
             end,
             inclusive,
         })
+    }
+
+    /// Evaluate a `CATCH` expression.
+    ///
+    /// `expr CATCH e => handler` evaluates `expr`; if it raises a catchable
+    /// runtime error, invokes `handler` with the `Error` value. Non-catchable
+    /// errors (lex, parse, type) propagate.
+    #[async_recursion]
+    pub(super) async fn catch(
+        &mut self,
+        expr: ExprId,
+        handler: ExprId,
+        span: Span,
+    ) -> Result<Value> {
+        match self.eval(expr).await {
+            Ok(val) => Ok(val),
+            Err(e) => match e.runtime_variant() {
+                Some((idx, msg)) => {
+                    let h = self.eval(handler).await?;
+                    let msg_id = self.arena.intern(msg);
+                    let payload_id =
+                        self.arena.add(Value::String(msg_id), span);
+                    let err_ty = self.type_exprs.named(TypeId::ERROR);
+                    let err_val = Value::Tagged(
+                        err_ty,
+                        idx,
+                        smallvec::smallvec![payload_id],
+                    );
+                    let arg_id = self.arena.add(err_val, span);
+                    match h {
+                        Value::Closure {
+                            params,
+                            ret,
+                            body,
+                            env,
+                        } => {
+                            self.invoke_closure(
+                                &params,
+                                ret,
+                                body,
+                                &env,
+                                &[arg_id],
+                                span,
+                            )
+                            .await
+                        }
+                        _ => typechecked!("CATCH handler", "Closure"),
+                    }
+                }
+                None => Err(e),
+            },
+        }
     }
 
     /// Evaluate a `FOREVER` loop expression.

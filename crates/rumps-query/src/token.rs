@@ -38,6 +38,7 @@ pub(crate) enum Token {
     Raise,
     Forever,
     Transaction,
+    Catch,
 
     // Literals
     Int(i64),
@@ -150,6 +151,7 @@ impl Token {
                 "MODULE" => Some(Self::Module),
                 "FOREVER" => Some(Self::Forever),
                 "TRANSACTION" => Some(Self::Transaction),
+                "CATCH" => Some(Self::Catch),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -200,6 +202,7 @@ impl fmt::Display for Token {
             Self::Module => write!(f, "MODULE"),
             Self::Forever => write!(f, "FOREVER"),
             Self::Transaction => write!(f, "TRANSACTION"),
+            Self::Catch => write!(f, "CATCH"),
             // DB intrinsics (prefixed with `@`)
             Self::Set => write!(f, "@SET"),
             Self::Get => write!(f, "@GET"),
@@ -307,6 +310,7 @@ mod tests {
         assert_eq!(Token::keyword("TYPE"), Some(Token::Type));
         assert_eq!(Token::keyword("NEWTYPE"), Some(Token::NewType));
         assert_eq!(Token::keyword("TRANSACTION"), Some(Token::Transaction));
+        assert_eq!(Token::keyword("CATCH"), Some(Token::Catch));
         // Case-sensitive: null
         assert_eq!(Token::keyword("null"), Some(Token::Null));
     }
@@ -362,6 +366,7 @@ mod tests {
         // Keywords display without prefix
         assert_eq!(Token::Let.to_string(), "LET");
         assert_eq!(Token::Read.to_string(), "READ");
+        assert_eq!(Token::Catch.to_string(), "CATCH");
         // Other tokens
         assert_eq!(Token::Int(42).to_string(), "42");
         assert_eq!(Token::Float(OrderedFloat(3.14)).to_string(), "3.14");

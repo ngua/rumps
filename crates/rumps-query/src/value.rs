@@ -157,6 +157,8 @@ impl TypeId {
     /// Semantically distinct from `Storable` (what can be stored) though identical
     /// in terms of actual representation.
     pub(crate) const SUBSCRIPT: Self = Self(22);
+    /// Runtime error type: `Error.Runtime(msg)`, `Error.Raise(msg)`, etc.
+    pub(crate) const ERROR: Self = Self(23);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -1145,6 +1147,7 @@ impl TypeExprArena {
             Ty::FilePath => self.named(TypeId::FILEPATH),
             Ty::Path => self.named(TypeId::PATH),
             Ty::Regex => self.named(TypeId::REGEX),
+            Ty::RuntimeError => self.named(TypeId::ERROR),
             Ty::Array(elem) => {
                 let elem_id = self.intern_ty(elem);
                 self.app(TypeId::ARRAY, smallvec![elem_id])
@@ -1645,6 +1648,50 @@ impl TypeRegistry {
         if subscript != TypeId::SUBSCRIPT {
             invariant!("Subscript registered at expected index");
         }
+
+        // Error at index 23: Runtime(String) | Raise(String) | Type(String) | Coerce(String)
+        let error_name = arena.intern("Error");
+        let runtime_name = arena.intern("Runtime");
+        let raise_name = arena.intern("Raise");
+        let type_name = arena.intern("Type");
+        let coerce_name = arena.intern("Coerce");
+
+        let error = self.register(
+            TypeDef::Sum {
+                name: error_name,
+                type_params: SmallVec::new(),
+                variants: smallvec::smallvec![
+                    VariantDef {
+                        name: runtime_name,
+                        idx: 0,
+                        arity: 1,
+                        payloads: SmallVec::new(),
+                    },
+                    VariantDef {
+                        name: raise_name,
+                        idx: 1,
+                        arity: 1,
+                        payloads: SmallVec::new(),
+                    },
+                    VariantDef {
+                        name: type_name,
+                        idx: 2,
+                        arity: 1,
+                        payloads: SmallVec::new(),
+                    },
+                    VariantDef {
+                        name: coerce_name,
+                        idx: 3,
+                        arity: 1,
+                        payloads: SmallVec::new(),
+                    },
+                ],
+            },
+            error_name,
+        );
+        if error != TypeId::ERROR {
+            invariant!("Error registered at expected index");
+        }
     }
 
     /// Pre-register user-defined types from AST before type checking.
@@ -1990,8 +2037,8 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
         let reg = TypeRegistry::new(&mut arena, &mut type_exprs);
 
-        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex + DataStatus + Subscript = 23
-        assert_eq!(reg.len(), 23);
+        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex + DataStatus + Subscript + Error = 24
+        assert_eq!(reg.len(), 24);
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

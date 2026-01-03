@@ -136,6 +136,20 @@ impl Error {
         }
     }
 
+    /// Returns the variant index and message for catchable runtime errors.
+    ///
+    /// Variant indices match `TypeId::ERROR` registration order:
+    /// 0 = Runtime, 1 = Raise, 2 = Type, 3 = Coerce.
+    pub(crate) fn runtime_variant(&self) -> Option<(u8, &str)> {
+        match self {
+            Self::Runtime { msg, .. } => Some((0, msg)),
+            Self::Raise { msg, .. } => Some((1, msg)),
+            Self::RuntimeType { msg, .. } => Some((2, msg)),
+            Self::Coercion { msg, .. } => Some((3, msg)),
+            _ => None,
+        }
+    }
+
     /// Create an error from one or more errors.
     ///
     /// If exactly one error, returns it directly; otherwise wraps in `Multiple`.

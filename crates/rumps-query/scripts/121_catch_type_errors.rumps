@@ -1,0 +1,5 @@
+; Test CATCH type errors
+
+; Handler must return same type as expression
+; This should fail: expression is Int, handler returns String
+LET x: Int = 42 CATCH e => "not an int"

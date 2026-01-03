@@ -62,6 +62,9 @@ impl InferCtx<'_> {
                         (1, Ty::Result(_, err)) => vec![err.as_ref().clone()],
                         _ => vec![self.fresh()],
                     }
+                } else if type_id == TypeId::ERROR {
+                    // All Error variants have a String payload
+                    vec![Ty::String]
                 } else {
                     // User-defined sum types
                     let type_args: Vec<Ty> = match scrutinee_ty {
@@ -387,6 +390,20 @@ impl InferCtx<'_> {
                         })
                     });
                     if !has_no_data || !has_value || !has_desc || !has_both {
+                        self.error(TypeError::NonExhaustiveMatch(span));
+                    }
+                }
+
+                Ty::RuntimeError => {
+                    let dominated =
+                        ["Runtime", "Raise", "Type", "Coerce"].iter().all(|v| {
+                            unguarded.iter().any(|arm| {
+                                self.ast.get_pattern(arm.pattern).is_some_and(
+                                    |p| matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Error" && var == v),
+                                )
+                            })
+                        });
+                    if !dominated {
                         self.error(TypeError::NonExhaustiveMatch(span));
                     }
                 }

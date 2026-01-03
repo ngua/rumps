@@ -52,7 +52,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Invoke a closure with pre-evaluated arguments.
     #[async_recursion]
-    async fn invoke_closure(
+    pub(super) async fn invoke_closure(
         &mut self,
         params: &[(StringId, Option<TypeExprId>)],
         ret: Option<TypeExprId>,

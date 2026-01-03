@@ -833,6 +833,12 @@ pub(crate) enum Expr {
     /// `String`); the right operand must be `Regex`.
     Matches(ExprId, ExprId),
 
+    /// Catch expression: `expr CATCH e => handler`.
+    ///
+    /// Evaluates `expr`; on runtime error, calls handler closure with `Error`
+    /// value. Handler must return the same type as `expr`.
+    Catch(ExprId, ExprId),
+
     /// Data query: `DATA var`.
     ///
     /// Queries the existence status of a node. Returns `DataStatus` enum.

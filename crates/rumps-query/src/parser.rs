@@ -980,29 +980,42 @@ impl Parser {
         let ty_pat = Self::type_pattern();
 
         recursive(move |expr| {
-            // Use boxed() at strategic points to reduce stack depth during
-            // parser construction. Each boxed() moves the parser to the heap.
-            let primary = Self::primary_expr(expr.clone(), stmt.clone());
-            let postfix =
-                Self::postfix_expr(expr.clone(), primary.clone()).boxed();
-            let unary = Self::unary_expr(expr, primary, postfix);
-            let pow = Self::pow_expr(unary);
-            let mul = Self::mul_expr(pow).boxed();
-            let add = Self::add_expr(mul);
-            let range = Self::range_expr(add);
-            let cmp = Self::cmp_expr(range).boxed();
-            let is = Self::is_expr(cmp, ty_pat.clone());
-            let matches = Self::matches_expr(is);
-            let as_cast = Self::as_expr(matches, ty.clone());
-            let read = Self::read_expr(as_cast, ty.clone()).boxed();
-            let and = Self::and_expr(read);
-            let or = Self::or_expr(and);
-            let coalesce = Self::coalesce_expr(or);
-            Self::pipe_expr(coalesce)
+            // Define `pipe` (expr without CATCH) using nested recursive.
+            // Intrinsics use `pipe` for operands so they don't consume CATCH.
+            let pipe = recursive({
+                let expr = expr.clone();
+                let stmt = stmt.clone();
+                let ty = ty.clone();
+                let ty_pat = ty_pat.clone();
+                move |pipe| {
+                    let primary =
+                        Self::primary_expr(expr.clone(), stmt.clone());
+                    let postfix =
+                        Self::postfix_expr(expr.clone(), primary.clone())
+                            .boxed();
+                    // Pass `pipe` to `unary_expr` for intrinsic operands
+                    let unary = Self::unary_expr(pipe, primary, postfix);
+                    let pow = Self::pow_expr(unary);
+                    let mul = Self::mul_expr(pow).boxed();
+                    let add = Self::add_expr(mul);
+                    let range = Self::range_expr(add);
+                    let cmp = Self::cmp_expr(range).boxed();
+                    let is = Self::is_expr(cmp, ty_pat.clone());
+                    let matches = Self::matches_expr(is);
+                    let as_cast = Self::as_expr(matches, ty.clone());
+                    let read = Self::read_expr(as_cast, ty.clone()).boxed();
+                    let and = Self::and_expr(read);
+                    let or = Self::or_expr(and);
+                    let coalesce = Self::coalesce_expr(or);
+                    Self::pipe_expr(coalesce)
+                }
+            });
+
+            Self::catch_expr(pipe)
         })
     }
 
-    /// Pipeline: `expr |> expr` (lowest precedence, left-associative)
+    /// Pipeline: `expr |> expr`
     fn pipe_expr(
         operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
@@ -1015,6 +1028,30 @@ impl Parser {
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
             |(first, rest), span| Self::fold_binary(first, rest, span),
+        )
+    }
+
+    /// Catch: `expr CATCH handler` (loosest precedence)
+    ///
+    /// The handler is typically a closure: `expr CATCH e => handle(e)`.
+    fn catch_expr(
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let catch_rhs = Self::opt_newlines()
+            .ignore_then(just(Token::Catch))
+            .then_ignore(Self::opt_newlines())
+            .ignore_then(operand.clone());
+
+        operand.clone().then(catch_rhs.or_not()).map_with_span(
+            |(expr, handler), span| match handler {
+                Some(h) => cst::Expr::new(
+                    cst::ExprKind::Catch(Box::new(expr), Box::new(h)),
+                    span,
+                ),
+                None => expr,
+            },
         )
     }
 
@@ -1455,9 +1492,12 @@ impl Parser {
         })
     }
 
-    /// Unary: `NOT`, `!`, `-`, `GET`
+    /// Unary: `NOT`, `!`, `-`, and intrinsics (`GET`, `SET`, `RAISE`, etc.).
+    ///
+    /// `intrinsic_op` is the operand parser for intrinsics; it excludes `CATCH`
+    /// so that `@RAISE x CATCH ...` parses as `(@RAISE x) CATCH ...`.
     fn unary_expr(
-        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+        intrinsic_op: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
         primary: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
@@ -1486,47 +1526,47 @@ impl Parser {
 
             // GET target
             let get_expr = just(Token::Get)
-                .ignore_then(Self::db_ref(expr.clone()))
+                .ignore_then(Self::db_ref(intrinsic_op.clone()))
                 .map_with_span(|dbref, span| {
                     cst::Expr::new(cst::ExprKind::Get(dbref), span)
                 });
 
             // DATA target
             let data_expr = just(Token::Data)
-                .ignore_then(Self::db_ref(expr.clone()))
+                .ignore_then(Self::db_ref(intrinsic_op.clone()))
                 .map_with_span(|dbref, span| {
                     cst::Expr::new(cst::ExprKind::Data(dbref), span)
                 });
 
             // ORDER target
             let order_expr = just(Token::Order)
-                .ignore_then(Self::db_ref(expr.clone()))
+                .ignore_then(Self::db_ref(intrinsic_op.clone()))
                 .map_with_span(|dbref, span| {
                     cst::Expr::new(cst::ExprKind::Order(dbref), span)
                 });
 
             // QUERY target
             let query_expr = just(Token::Query)
-                .ignore_then(Self::db_ref(expr.clone()))
+                .ignore_then(Self::db_ref(intrinsic_op.clone()))
                 .map_with_span(|dbref, span| {
                     cst::Expr::new(cst::ExprKind::Query(dbref), span)
                 });
 
             // OUTPUT expr [JSON] [TO target]
-            let output = Self::output_expr(expr.clone());
+            let output = Self::output_expr(intrinsic_op.clone());
 
             // SET target = value
-            let set = Self::set_expr(expr.clone());
+            let set = Self::set_expr(intrinsic_op.clone());
 
             // KILL target
-            let kill = Self::kill_expr(expr.clone());
+            let kill = Self::kill_expr(intrinsic_op.clone());
 
             // RAISE expr
-            let raise = Self::raise_expr(expr.clone());
+            let raise = Self::raise_expr(intrinsic_op.clone());
 
             // FOREVER seed (state, cont) => body
             // Use primary for seed (no postfix ops) to avoid parsing (state, cont) as a call
-            let forever = Self::forever_expr(primary, expr);
+            let forever = Self::forever_expr(primary, intrinsic_op);
 
             choice((
                 with_op, get_expr, data_expr, order_expr, query_expr, output,

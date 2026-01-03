@@ -207,6 +207,19 @@ impl InferCtx<'_> {
                 Ty::Bool
             }
 
+            // Catch expression: `expr CATCH handler`
+            Expr::Catch(expr_id, handler_id) => {
+                let expr_ty = self.expr(*expr_id);
+                let handler_ty = self.expr(*handler_id);
+
+                // Handler must be `(Error) -> T` where `T` matches expr type
+                let expected =
+                    Ty::Fn(vec![Ty::RuntimeError], Box::new(expr_ty.clone()));
+                self.unify(handler_ty, expected, span);
+
+                expr_ty
+            }
+
             // Data query: `DATA local(...)` or `DATA ^global(...)`
             Expr::Data(ref dbref, _) => self.data(id, dbref, span),
 
