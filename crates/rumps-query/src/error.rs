@@ -13,7 +13,7 @@ use crate::typecheck::{FormattedTypeError, TypeError};
 use crate::{Span, Token};
 
 /// Crate-wide result type.
-pub type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 /// Errors produced during lexing, parsing, or interpretation.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

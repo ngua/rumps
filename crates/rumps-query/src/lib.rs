@@ -78,14 +78,15 @@ pub(crate) use ast::{
 };
 #[allow(unused_imports)]
 pub(crate) use env::{Environment, PrimCtx, PrimFn, PrimResult, Scopes};
+pub use error::Error;
 #[allow(unused_imports)]
 pub(crate) use error::ErrorDisplay;
-pub use error::{Error, Result};
+pub(crate) use error::Result;
 #[allow(unused_imports)]
 pub(crate) use intern::{StringId, StringInterner};
 #[allow(unused_imports)]
 pub(crate) use interpreter::Interpreter;
-pub use io::{Io, IoContext, TestIo};
+pub(crate) use io::{Io, IoContext, TestIo};
 #[allow(unused_imports)]
 pub(crate) use lexer::{Lexer, Spanned};
 #[allow(unused_imports)]
@@ -108,7 +109,7 @@ pub async fn run(src: &str, db: Database) -> Result<()> {
 ///
 /// Parses the source, interprets it against the given database, and uses the
 /// provided I/O context for output operations.
-pub async fn run_with_io<I: IoContext>(
+async fn run_with_io<I: IoContext>(
     src: &str,
     db: Database,
     io: I,

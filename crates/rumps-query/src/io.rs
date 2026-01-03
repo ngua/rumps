@@ -15,7 +15,7 @@ use crate::{Error, Result, Span};
 ///
 /// Abstracts stdout, stderr, and file writes for testability.
 #[async_trait]
-pub trait IoContext: Send {
+pub(crate) trait IoContext: Send {
     /// Write to stdout without appending a newline.
     async fn stdout(&mut self, s: &str, span: Span) -> Result<()>;
 
@@ -38,7 +38,7 @@ pub trait IoContext: Send {
 }
 
 /// Standard I/O context that writes to actual stdout/files.
-pub struct Io;
+pub(crate) struct Io;
 
 #[async_trait]
 impl IoContext for Io {
@@ -94,29 +94,24 @@ impl IoContext for Io {
 
 /// Test I/O context that captures output to buffers.
 #[derive(Default)]
-pub struct TestIo {
+pub(crate) struct TestIo {
     /// Captured stdout output.
-    pub stdout_buf: Vec<u8>,
+    pub(crate) stdout_buf: Vec<u8>,
     /// Captured stderr output.
-    pub stderr_buf: Vec<u8>,
+    pub(crate) stderr_buf: Vec<u8>,
     /// Captured file writes: (path, content).
-    pub file_writes: Vec<(String, String)>,
+    pub(crate) file_writes: Vec<(String, String)>,
 }
 
 impl TestIo {
     /// Create a new test I/O context.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Get captured stdout as a string.
-    pub fn stdout_str(&self) -> &str {
+    pub(crate) fn stdout_str(&self) -> &str {
         std::str::from_utf8(&self.stdout_buf).unwrap_or("<invalid utf8>")
-    }
-
-    /// Get captured stderr as a string.
-    pub fn stderr_str(&self) -> &str {
-        std::str::from_utf8(&self.stderr_buf).unwrap_or("<invalid utf8>")
     }
 }
 
