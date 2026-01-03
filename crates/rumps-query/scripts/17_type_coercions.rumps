@@ -62,22 +62,22 @@ LET m = 10.5 % 3
 @OUTPUT m
 ; Expected: 1.5 (Float; 10.5 % 3 = 1.5)
 
-; === String Coercion (for concat) ===
+; === String Conversion (for concat) ===
 
 ; Int to string
-@OUTPUT "Number: " ++ 42
+@OUTPUT "Number: " ++ (42 AS String)
 ; Expected: Number: 42
 
 ; Float to string
-@OUTPUT "Pi: " ++ 3.14159
+@OUTPUT "Pi: " ++ (3.14159 AS String)
 ; Expected: Pi: 3.14159
 
 ; Bool to string
-@OUTPUT "Flag: " ++ TRUE
-; Expected: Flag: TRUE
+@OUTPUT "Flag: " ++ (TRUE AS String)
+; Expected: Flag: true
 
-@OUTPUT "Flag: " ++ FALSE
-; Expected: Flag: FALSE
+@OUTPUT "Flag: " ++ (FALSE AS String)
+; Expected: Flag: false
 
 ; === Cross-type Numeric Comparison ===
 

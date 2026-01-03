@@ -85,7 +85,7 @@ LET vals = FOREVER { key: @ORDER data, acc: "" } (state, cont) => {
       LET v = (@GET data(ki))!
       cont({
         key: @ORDER data(ki),
-        acc: state.acc ++ v ++ " "
+        acc: state.acc ++ (v AS String) ++ " "
       })
     }
   }

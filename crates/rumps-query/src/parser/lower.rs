@@ -29,6 +29,7 @@ fn lower_constraint(c: cst::UserConstraint) -> ast::UserConstraint {
         cst::UserConstraint::Iterable(elem) => {
             ast::UserConstraint::Iterable(elem)
         }
+        cst::UserConstraint::Monoid => ast::UserConstraint::Monoid,
     }
 }
 

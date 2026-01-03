@@ -2392,12 +2392,13 @@ impl Parser {
                 "Subscriptable" => Ok(cst::UserConstraint::Subscriptable),
                 "Storable" => Ok(cst::UserConstraint::Storable),
                 "Iterable" => Ok(cst::UserConstraint::Iterable(elem)),
+                "Monoid" => Ok(cst::UserConstraint::Monoid),
                 _ => Err(Simple::custom(
                     span,
                     format!(
                         "unknown constraint `{name}`; valid constraints are: \
                          Numeric, Stringable, Jsonable, Subscriptable, \
-                         Storable, Iterable[T]"
+                         Storable, Iterable[T], Monoid"
                     ),
                 )),
             })

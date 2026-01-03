@@ -295,6 +295,9 @@ impl InferCtx<'_> {
                             span,
                         }
                     }
+                    UserConstraint::Monoid => {
+                        Constraint::Monoid(ty.clone(), span)
+                    }
                 };
                 self.constrain(constraint);
             });

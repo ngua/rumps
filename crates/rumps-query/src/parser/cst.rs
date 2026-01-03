@@ -71,6 +71,10 @@ pub(crate) enum UserConstraint {
     /// represents the element type (e.g., `Iterable[T]` stores `Some("T")`).
     /// If `None`, element type is unconstrained (fresh variable).
     Iterable(Option<String>),
+    /// Type supports monoidal concatenation (`++`).
+    ///
+    /// Satisfied by `String`, `Array[T]`, and `Map[K, V]`.
+    Monoid,
 }
 
 /// A type parameter with optional constraints.

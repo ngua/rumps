@@ -36,7 +36,7 @@ LET resize = Event.Resize(1920, 1080)
 
 ; Test is with bindings
 IF click is Event.Click(x, y) {
-  @OUTPUT "Click at: " ++ x ++ ", " ++ y
+  @OUTPUT "Click at: " ++ (x AS String) ++ ", " ++ (y AS String)
 }
 
 IF key is Event.KeyPress(k) {
@@ -58,7 +58,7 @@ IF left is Either.Left(msg) {
 }
 
 IF right is Either.Right(val) {
-  @OUTPUT "Got right: " ++ val
+  @OUTPUT "Got right: " ++ (val AS String)
 }
 
 ; Multi-line syntax (use Outcome to avoid conflict with builtin Result)

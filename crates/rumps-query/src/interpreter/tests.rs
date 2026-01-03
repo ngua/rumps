@@ -502,26 +502,29 @@ async fn eval_concat() {
 }
 
 #[tokio::test]
-async fn eval_concat_coercion() {
+async fn eval_concat_strings() {
     let mut ast = Ast::new();
     let lhs = ast
         .add_expr(
-            Expr::Literal(Literal::String("value: ".into())),
+            Expr::Literal(Literal::String("Hello, ".into())),
             Span::new(0, 9),
         )
         .unwrap();
     let rhs = ast
-        .add_expr(Expr::Literal(Literal::Int(42)), Span::new(13, 15))
+        .add_expr(
+            Expr::Literal(Literal::String("World!".into())),
+            Span::new(13, 21),
+        )
         .unwrap();
     let cat = ast
-        .add_expr(Expr::Binary(lhs, BinOp::Concat, rhs), Span::new(0, 15))
+        .add_expr(Expr::Binary(lhs, BinOp::Concat, rhs), Span::new(0, 21))
         .unwrap();
 
     let mut interp = test_interp(&ast);
     let result = interp.eval(cat).await.unwrap();
     match result {
         Value::String(id) => {
-            assert_eq!(interp.arena.get_str(id), Some("value: 42"));
+            assert_eq!(interp.arena.get_str(id), Some("Hello, World!"));
         }
         _ => panic!("expected string"),
     }

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use smallvec::SmallVec;
 
-use super::error::TypeError;
+use super::error::{ConstraintKind, TypeError};
 use super::infer::{Constraint, InferCtx};
 use super::ty::{Subst, Ty, TyVar};
 use crate::ast::AstTypeExpr;
@@ -761,6 +761,10 @@ impl<'a> InferCtx<'a> {
                 Constraint::Storable(ty, span) => {
                     self.check_storable(&ty.apply(&subst), *span);
                 }
+
+                Constraint::Monoid(ty, span) => {
+                    self.check_monoid(&ty.apply(&subst), *span);
+                }
             }
         });
 
@@ -781,7 +785,11 @@ impl<'a> InferCtx<'a> {
             }
             Ty::Error | Ty::Unknown => {}
             _ => {
-                self.error(TypeError::NotNumeric(ty.clone(), span));
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Numeric,
+                    ty.clone(),
+                    span,
+                ));
             }
         }
     }
@@ -893,7 +901,11 @@ impl<'a> InferCtx<'a> {
 
             // Functions and regex cannot be serialized to JSON
             Ty::Fn(_, _) | Ty::Regex => {
-                self.error(TypeError::NotJsonable(ty.clone(), span));
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Jsonable,
+                    ty.clone(),
+                    span,
+                ));
             }
 
             // Deferred types
@@ -926,7 +938,11 @@ impl<'a> InferCtx<'a> {
             Ty::Named(id, _) if *id == crate::TypeId::SUBSCRIPT => {}
             Ty::Var(_) | Ty::Unknown | Ty::Error => {}
             _ => {
-                self.error(TypeError::NotSubscriptable(ty.clone(), span));
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Subscriptable,
+                    ty.clone(),
+                    span,
+                ));
             }
         }
     }
@@ -944,7 +960,30 @@ impl<'a> InferCtx<'a> {
             | Ty::Json => {}
             Ty::Var(_) | Ty::Unknown | Ty::Error => {}
             _ => {
-                self.error(TypeError::NotStorable(ty.clone(), span));
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Storable,
+                    ty.clone(),
+                    span,
+                ));
+            }
+        }
+    }
+
+    /// Check that a type is monoidal (supports `++` concatenation).
+    ///
+    /// Valid monoidal types are `String`, `Array[T]`, and `Map[K, V]`.
+    /// Unresolved type variables are left polymorphic (no defaulting).
+    fn check_monoid(&mut self, ty: &Ty, span: Span) {
+        match ty {
+            Ty::String | Ty::Array(_) | Ty::Map(_, _) => {}
+            // Type variables remain polymorphic; caller provides concrete type
+            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+            _ => {
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Monoid,
+                    ty.clone(),
+                    span,
+                ));
             }
         }
     }

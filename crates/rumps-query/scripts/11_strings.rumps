@@ -27,15 +27,15 @@ LET c = a ++ " " ++ b
 @OUTPUT "foo" ++ "bar"
 ; Expected: foobar
 
-; Concatenate with numbers (coercion)
-@OUTPUT "Value: " ++ 42
+; Concatenate with numbers (explicit conversion)
+@OUTPUT "Value: " ++ (42 AS String)
 ; Expected: Value: 42
 
-@OUTPUT "Pi is " ++ 3.14
+@OUTPUT "Pi is " ++ (3.14 AS String)
 ; Expected: Pi is 3.14
 
 ; Concatenate with booleans
-@OUTPUT "Flag is " ++ TRUE
+@OUTPUT "Flag is " ++ (TRUE AS String)
 ; Expected: Flag is true
 
 ; Multiple concatenations

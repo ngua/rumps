@@ -1,0 +1,40 @@
+; Test: Monoid concatenation (`++` operator)
+; Tests polymorphic `++` on String, Array, and Map
+
+; === String concatenation ===
+LET s1 = "Hello"
+LET s2 = "World"
+@OUTPUT s1 ++ ", " ++ s2
+
+; === Array concatenation ===
+LET a1 = [1, 2, 3]
+LET a2 = [4, 5, 6]
+@OUTPUT a1 ++ a2
+
+; Nested arrays
+LET nested1 = [[1, 2], [3, 4]]
+LET nested2 = [[5, 6]]
+@OUTPUT nested1 ++ nested2
+
+; === Map concatenation (RHS bias) ===
+LET m1 = { "a" => 1, "b" => 2 }
+LET m2 = { "c" => 3, "d" => 4 }
+@OUTPUT m1 ++ m2
+
+; RHS bias: right value wins for duplicate keys
+LET left = { "x" => 10, "y" => 20 }
+LET right = { "y" => 999, "z" => 30 }
+LET merged = left ++ right
+@OUTPUT Map.lookup(merged, "x")  ; Some(10)
+@OUTPUT Map.lookup(merged, "y")  ; Some(999) - right wins
+@OUTPUT Map.lookup(merged, "z")  ; Some(30)
+
+; === Type constraint: Monoid ===
+; This function works on any Monoid type
+FUN concat3[T: Monoid](a: T, b: T, c: T) -> T { a ++ b ++ c }
+
+@OUTPUT concat3("a", "b", "c")
+@OUTPUT concat3([1], [2], [3])
+@OUTPUT concat3({ 1 => "x" }, { 2 => "y" }, { 3 => "z" })
+
+@OUTPUT "Monoid concatenation complete"

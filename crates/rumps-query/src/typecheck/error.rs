@@ -5,6 +5,57 @@
 
 use std::fmt;
 
+/// The kind of type constraint that was violated.
+///
+/// Used in `TypeError::UnsatisfiedConstraint` to report which constraint
+/// a type failed to satisfy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConstraintKind {
+    /// Type must be `Int` or `Float`.
+    Numeric,
+    /// Type must be serializable to JSON.
+    Jsonable,
+    /// Type must be usable as a database subscript key.
+    Subscriptable,
+    /// Type must be storable in the database.
+    Storable,
+    /// Type must support concatenation/append (`++`).
+    Monoid,
+}
+
+impl fmt::Display for ConstraintKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Numeric => write!(f, "Numeric"),
+            Self::Jsonable => write!(f, "Jsonable"),
+            Self::Subscriptable => write!(f, "Subscriptable"),
+            Self::Storable => write!(f, "Storable"),
+            Self::Monoid => write!(f, "Monoid"),
+        }
+    }
+}
+
+impl ConstraintKind {
+    /// Returns a help message describing what types satisfy this constraint.
+    fn help(self) -> Option<&'static str> {
+        match self {
+            Self::Numeric => Some("numeric types are `Int` and `Float`"),
+            Self::Jsonable => {
+                Some("closures and functions cannot be converted to JSON")
+            }
+            Self::Subscriptable => Some(
+                "subscript keys must be `Bool`, `Int`, `Float`, `Char`, \
+                 `String`, `Json`, or `Subscript`",
+            ),
+            Self::Storable => Some(
+                "storable types are `Bool`, `Int`, `Float`, `Char`, \
+                 `String`, or `Json`",
+            ),
+            Self::Monoid => Some("`++` works on `String`, `Array`, and `Map`"),
+        }
+    }
+}
+
 use thiserror::Error;
 
 use super::ty::{Ty, TyVar};
@@ -204,21 +255,9 @@ pub(crate) enum TypeError {
         span: Span,
     },
 
-    /// Numeric operation on non-numeric type.
-    #[error("expected numeric type, got `{0}`")]
-    NotNumeric(Ty, Span),
-
-    /// Type cannot be converted to JSON.
-    #[error("type `{0}` cannot be converted to JSON")]
-    NotJsonable(Ty, Span),
-
-    /// Type cannot be used as database subscript key.
-    #[error("type `{0}` cannot be used as subscript key")]
-    NotSubscriptable(Ty, Span),
-
-    /// Type cannot be stored in database.
-    #[error("type `{0}` is not storable")]
-    NotStorable(Ty, Span),
+    /// Type does not satisfy a constraint (Numeric, Jsonable, etc.).
+    #[error("type `{1}` does not satisfy `{0}` constraint")]
+    UnsatisfiedConstraint(ConstraintKind, Ty, Span),
 
     /// Struct literal missing a required field.
     #[error("missing required field `{field}` for type `{ty:?}`")]
@@ -331,10 +370,7 @@ impl TypeError {
             | Self::UndefinedVar(_, span)
             | Self::NotCallable(_, span)
             | Self::ArityMismatch { span, .. }
-            | Self::NotNumeric(_, span)
-            | Self::NotJsonable(_, span)
-            | Self::NotSubscriptable(_, span)
-            | Self::NotStorable(_, span)
+            | Self::UnsatisfiedConstraint(_, _, span)
             | Self::MissingField { span, .. }
             | Self::FieldTypeMismatch { span, .. }
             | Self::InfiniteType(_, _, span)
@@ -380,24 +416,13 @@ impl TypeError {
                 format!("expected {expected} argument(s), got {got}"),
                 None,
             ),
-            Self::NotNumeric(ty, _) => (
-                format!("expected numeric type, got `{}`", p.format(ty)),
-                Self::numeric_help(ty),
-            ),
-            Self::NotJsonable(ty, _) => (
-                format!("type `{}` cannot be converted to JSON", p.format(ty)),
-                None,
-            ),
-            Self::NotSubscriptable(ty, _) => (
+            Self::UnsatisfiedConstraint(kind, ty, _) => (
                 format!(
-                    "type `{}` cannot be used as subscript key",
-                    p.format(ty)
+                    "type `{}` does not satisfy `{}` constraint",
+                    p.format(ty),
+                    kind
                 ),
-                Some("subscript keys must be `Bool`, `Int`, `Float`, `Char`, `String`, `Json`, or `Subscript`".to_owned()),
-            ),
-            Self::NotStorable(ty, _) => (
-                format!("type `{}` is not storable", p.format(ty)),
-                Some("storable types are `Bool`, `Int`, `Float`, `Char`, `String`, or `Json`".to_owned()),
+                kind.help().map(str::to_owned),
             ),
             Self::MissingField { ty, field, .. } => (
                 format!(
@@ -550,20 +575,6 @@ impl TypeError {
                     "use `!` to unwrap the `Result`, or handle with `MATCH`"
                         .to_owned(),
                 )
-            }
-            _ => None,
-        }
-    }
-
-    /// Generate help text for numeric type errors.
-    fn numeric_help(ty: &Ty) -> Option<String> {
-        match ty {
-            Ty::String => Some(
-                "cannot use `+` on strings; use `++` for concatenation"
-                    .to_owned(),
-            ),
-            Ty::Bool => {
-                Some("cannot use arithmetic operators on `Bool`".to_owned())
             }
             _ => None,
         }

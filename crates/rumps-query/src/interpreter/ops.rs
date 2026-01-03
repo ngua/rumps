@@ -83,25 +83,40 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// String concatenation.
+    /// Monoid concatenation (`++`).
+    ///
+    /// Type checker guarantees both operands are `Monoid` (String, Array, Map)
+    /// and have the same type.
     pub(super) fn binop_concat(
         &mut self,
         left: &Value,
         right: &Value,
     ) -> Value {
-        let result = match (left, right) {
+        match (left, right) {
+            // String concatenation
             (Value::String(l), Value::String(r)) => {
                 let ls = self.arena.get_str(*l).unwrap_or("");
                 let rs = self.arena.get_str(*r).unwrap_or("");
-                format!("{ls}{rs}")
+                let result = format!("{ls}{rs}");
+                Value::String(self.arena.intern(&result))
             }
-            _ => format!(
-                "{}{}",
-                self.coerce_to_str(left),
-                self.coerce_to_str(right)
-            ),
-        };
-        Value::String(self.arena.intern(&result))
+
+            // Array concatenation
+            (Value::Array(ty, l), Value::Array(_, r)) => {
+                let mut elems = l.clone();
+                elems.extend(r.iter().copied());
+                Value::Array(*ty, elems)
+            }
+
+            // Map merge (RHS bias: right values win for duplicate keys)
+            (Value::Map(k_ty, v_ty, l), Value::Map(_, _, r)) => {
+                let mut merged = l.clone();
+                merged.extend(r.iter().map(|(k, v)| (k.clone(), *v)));
+                Value::Map(*k_ty, *v_ty, merged)
+            }
+
+            _ => typechecked!("++", "Monoid"),
+        }
     }
 
     /// Addition with numeric coercion.

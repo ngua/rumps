@@ -382,11 +382,12 @@ impl InferCtx<'_> {
                 Ty::Bool
             }
 
-            // String concatenation: lhs is String, rhs is Stringable
+            // Monoid concatenation: both operands are Monoid, same type
             BinOp::Concat => {
-                self.unify(lhs_ty, Ty::String, span);
-                self.constrain(Constraint::Stringable(rhs_ty, span));
-                Ty::String
+                self.constrain(Constraint::Monoid(lhs_ty.clone(), span));
+                self.constrain(Constraint::Monoid(rhs_ty.clone(), span));
+                self.unify(lhs_ty.clone(), rhs_ty, span);
+                lhs_ty
             }
 
             // Coalesce: lhs is Option[T] or Result[T, E], rhs unifies with T
@@ -949,6 +950,9 @@ impl InferCtx<'_> {
                                 elem,
                                 span,
                             }
+                        }
+                        UserConstraint::Monoid => {
+                            Constraint::Monoid(tv.clone(), span)
                         }
                     };
                     self.constrain(constraint);
