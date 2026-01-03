@@ -1,0 +1,28 @@
+; Test: Empty array with annotation + polymorphic function
+; Regression test for type variable collision bug where empty arrays
+; caused subsequent polymorphic function instantiation to fail
+
+; Empty array creates a fresh type var that could collide with scheme vars
+LET nums: Array[Int] = []
+LET left = { "x" => 10, "y" => 20 }
+@OUTPUT Map.lookup(left, "x")
+@OUTPUT Map.lookup(left, "y")
+
+; Non-empty array for comparison (always worked)
+LET nums2: Array[Int] = [1, 2, 3]
+LET right = { "a" => 100, "b" => 200 }
+@OUTPUT Map.lookup(right, "a")
+
+; Multiple empty collections in sequence
+LET empty1: Array[String] = []
+LET empty2: Array[Bool] = []
+LET empty3: Map[Int, String] = Map.empty()
+LET m = { "key" => 42 }
+@OUTPUT Map.lookup(m, "key")
+
+; Polymorphic functions after empty arrays
+LET arr: Array[Float] = []
+@OUTPUT Array.length(arr)
+@OUTPUT Array.map(x => x * 2, [1, 2, 3])
+
+@OUTPUT "empty array + polymorphic OK"

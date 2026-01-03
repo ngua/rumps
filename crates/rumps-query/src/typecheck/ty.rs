@@ -341,15 +341,21 @@ impl Scheme {
         if self.vars.is_empty() {
             (self.ty.clone(), SmallVec::new())
         } else {
+            // Ensure fresh vars don't overlap with scheme vars to avoid
+            // transitive collapse during apply (since apply recursively
+            // substitutes, {v0 -> v1, v1 -> v2} would map v0 to v2)
+            //
+            // Note that this caused actual bugs previously
+            let max_scheme = self.vars.iter().map(|v| v.0).max().unwrap_or(0);
+            *next = (*next).max(max_scheme + 1);
+
             let subst = Subst(
                 self.vars
                     .iter()
-                    .filter_map(|v| {
+                    .map(|v| {
                         let fresh = TyVar::new(*next);
                         *next += 1;
-                        // Skip identity mappings (v -> Var(v)) to avoid
-                        // infinite recursion in apply
-                        (*v != fresh).then_some((*v, Ty::Var(fresh)))
+                        (*v, Ty::Var(fresh))
                     })
                     .collect(),
             );
