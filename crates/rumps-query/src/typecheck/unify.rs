@@ -172,13 +172,16 @@ impl<'a> InferCtx<'a> {
                 UnifyResult::Ok(Subst::empty())
             }
 
-            // Numeric coercion: Int and Float unify (widening)
-            (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) => {
-                UnifyResult::Ok(Subst::empty())
-            }
-            (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {
-                UnifyResult::Ok(Subst::empty())
-            }
+            // Numeric coercion: Int, Word, and Float unify (widening)
+            (Ty::Int, Ty::Int)
+            | (Ty::Word, Ty::Word)
+            | (Ty::Float, Ty::Float) => UnifyResult::Ok(Subst::empty()),
+            (Ty::Int, Ty::Float)
+            | (Ty::Float, Ty::Int)
+            | (Ty::Word, Ty::Int)
+            | (Ty::Int, Ty::Word)
+            | (Ty::Word, Ty::Float)
+            | (Ty::Float, Ty::Word) => UnifyResult::Ok(Subst::empty()),
 
             // Array: unify element types
             (Ty::Array(a), Ty::Array(b)) => self.unify_inner(a, b, span),
@@ -771,14 +774,14 @@ impl<'a> InferCtx<'a> {
         subst
     }
 
-    /// Check that a type is numeric (`Int` or `Float`).
+    /// Check that a type is numeric (`Int`, `Word`, or `Float`).
     ///
     /// If the type is an unresolved type variable, defaults it to `Int` (like
     /// Haskell's defaulting rules). This enables inference for expressions
     /// like `x => x + 1` when passed to HOFs with polymorphic empty arrays.
     fn check_numeric(&mut self, ty: &Ty, span: Span, subst: &mut Subst) {
         match ty {
-            Ty::Int | Ty::Float => {}
+            Ty::Int | Ty::Word | Ty::Float => {}
             Ty::Var(v) => {
                 // Default unresolved numeric type variables to Int
                 *subst = subst.compose(&Subst::singleton(*v, Ty::Int));
@@ -869,6 +872,7 @@ impl<'a> InferCtx<'a> {
             // Primitives are JSON-serializable
             Ty::Bool
             | Ty::Int
+            | Ty::Word
             | Ty::Float
             | Ty::Char
             | Ty::String

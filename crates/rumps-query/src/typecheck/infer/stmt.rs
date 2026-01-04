@@ -11,7 +11,7 @@ use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
     OutputFormat, OutputStmt, OutputTarget, Stmt, StmtId, SubscriptElem, TxnId,
-    TypeParam, UserConstraint,
+    TypeParam, UnOp, UserConstraint,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
@@ -375,47 +375,32 @@ impl InferCtx<'_> {
             Some(id) => {
                 let ann_ty = self.ast_type_to_ty(*id, &HashMap::new());
 
-                // Try special case: array literal with `Array[UnionType]`
                 // Clone to avoid borrow issues with mutable self
                 let rhs_expr = self.ast.get_expr(rhs).cloned();
-                let special = match (&ann_ty, &rhs_expr) {
-                    (Ty::Array(elem_ty), Some(Expr::Array(elems)))
-                        if self.expand_union_members(elem_ty).is_some() =>
-                    {
+
+                // Reject negative literals for Word type
+                if let (Ty::Word, Some(Expr::Unary(UnOp::Neg, _))) =
+                    (&ann_ty, &rhs_expr)
+                {
+                    self.error(TypeError::NegativeWord(span));
+                    self.expr(rhs);
+                    self.bind_pattern(pattern, &Ty::Word, span);
+                    None
+                // Try special case: array literal with `Array[UnionType]`
+                } else if let (Ty::Array(elem_ty), Some(Expr::Array(elems))) =
+                    (&ann_ty, &rhs_expr)
+                {
+                    if self.expand_union_members(elem_ty).is_some() {
                         let result =
                             self.array_with_expected(elems, elem_ty, span);
                         self.record_type(rhs, result.clone());
                         self.bind_pattern(pattern, &result, span);
-                        true
+                        None // Already bound
+                    } else {
+                        self.infer_default_let(&ann_ty, rhs, span)
                     }
-                    _ => false,
-                };
-
-                if special {
-                    None // Already bound
                 } else {
-                    let rhs_ty = self.expr(rhs);
-                    self.unify(rhs_ty.clone(), ann_ty.clone(), span);
-
-                    // Extensible records: if rhs is an object and annotation
-                    // is an alias to object, keep the full object type to
-                    // preserve extra fields
-                    let is_obj_alias = matches!(&ann_ty, Ty::Named(id, _)
-                    if self.registry.get_def(*id).is_some_and(|def| match def {
-                        TypeDef::Alias { target, .. } => self
-                            .ast
-                            .get_type_expr(*target)
-                            .is_some_and(|te| matches!(te, AstTypeExpr::Object(_))),
-                        _ => false,
-                    }));
-
-                    Some(
-                        if matches!(&rhs_ty, Ty::Object(_)) && is_obj_alias {
-                            rhs_ty
-                        } else {
-                            ann_ty
-                        },
-                    )
+                    self.infer_default_let(&ann_ty, rhs, span)
                 }
             }
         };
@@ -424,6 +409,37 @@ impl InferCtx<'_> {
         if let Some(ty) = ty {
             self.bind_pattern(pattern, &ty, span);
         }
+    }
+
+    /// Default inference for `LET` with type annotation.
+    fn infer_default_let(
+        &mut self,
+        ann_ty: &Ty,
+        rhs: ExprId,
+        span: Span,
+    ) -> Option<Ty> {
+        let rhs_ty = self.expr(rhs);
+        self.unify(rhs_ty.clone(), ann_ty.clone(), span);
+
+        // Extensible records: if rhs is an object and annotation
+        // is an alias to object, keep the full object type to
+        // preserve extra fields
+        let is_obj_alias = matches!(ann_ty, Ty::Named(id, _)
+        if self.registry.get_def(*id).is_some_and(|def| match def {
+            TypeDef::Alias { target, .. } => self
+                .ast
+                .get_type_expr(*target)
+                .is_some_and(|te| matches!(te, AstTypeExpr::Object(_))),
+            _ => false,
+        }));
+
+        Some(
+            if matches!(&rhs_ty, Ty::Object(_)) && is_obj_alias {
+                rhs_ty
+            } else {
+                ann_ty.clone()
+            },
+        )
     }
 
     /// Bind variables from a binding pattern to types in the environment.

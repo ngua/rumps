@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Word with negative literal (type error)\n; This should produce a type error at compile time\n\nLET x: Word = -42\n@OUTPUT x\n"
+---
+ERROR: `Word` cannot hold negative values

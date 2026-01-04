@@ -57,7 +57,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Unary operation application.
     ///
     /// Type checker guarantees:
-    /// - `-` is only applied to `Int` or `Float`
+    /// - `-` is only applied to `Int`, `Word`, or `Float`
     /// - `!` is only applied to `Bool`
     /// - `?` can wrap any value in `Option.Some`
     pub(super) fn apply_unop(
@@ -69,6 +69,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         match op {
             UnOp::Neg => match &v {
                 Value::Int(n) => Value::Int(-n),
+                // Negating a Word coerces to Int
+                Value::Word(n) => Value::Int(-(*n as i64)),
                 Value::Float(f) => Value::Float(OrderedFloat(-f.0)),
                 _ => typechecked!("-", "Numeric"),
             },
@@ -121,10 +123,20 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Addition with numeric coercion.
     ///
-    /// Type checker guarantees both operands are `Int` or `Float`.
+    /// Type checker guarantees both operands are `Int`, `Word`, or `Float`.
+    /// Mixed `Word`/`Int` coerces to `Int`; `Word + Word` stays `Word`.
     fn binop_add(&self, left: &Value, right: &Value) -> Value {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_add(*b)),
+            (Value::Word(a), Value::Word(b)) => {
+                Value::Word(a.saturating_add(*b))
+            }
+            (Value::Word(a), Value::Int(b)) => {
+                Value::Int((*a as i64).wrapping_add(*b))
+            }
+            (Value::Int(a), Value::Word(b)) => {
+                Value::Int(a.wrapping_add(*b as i64))
+            }
             (Value::Float(a), Value::Float(b)) => {
                 Value::Float(OrderedFloat(a.0 + b.0))
             }
@@ -134,16 +146,33 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Value::Float(OrderedFloat(a.0 + *b as f64))
             }
+            (Value::Word(a), Value::Float(b)) => {
+                Value::Float(OrderedFloat(*a as f64 + b.0))
+            }
+            (Value::Float(a), Value::Word(b)) => {
+                Value::Float(OrderedFloat(a.0 + *b as f64))
+            }
             _ => typechecked!("+", "Numeric"),
         }
     }
 
     /// Subtraction with numeric coercion.
     ///
-    /// Type checker guarantees both operands are `Int` or `Float`.
+    /// Type checker guarantees both operands are `Int`, `Word`, or `Float`.
+    /// `Word - Word` uses saturating subtraction (wraps to `0`).
+    /// Other `Word` combinations coerce to `Int`.
     fn binop_sub(&self, left: &Value, right: &Value) -> Value {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_sub(*b)),
+            (Value::Word(a), Value::Word(b)) => {
+                Value::Word(a.saturating_sub(*b))
+            }
+            (Value::Word(a), Value::Int(b)) => {
+                Value::Int((*a as i64).wrapping_sub(*b))
+            }
+            (Value::Int(a), Value::Word(b)) => {
+                Value::Int(a.wrapping_sub(*b as i64))
+            }
             (Value::Float(a), Value::Float(b)) => {
                 Value::Float(OrderedFloat(a.0 - b.0))
             }
@@ -153,16 +182,32 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Value::Float(OrderedFloat(a.0 - *b as f64))
             }
+            (Value::Word(a), Value::Float(b)) => {
+                Value::Float(OrderedFloat(*a as f64 - b.0))
+            }
+            (Value::Float(a), Value::Word(b)) => {
+                Value::Float(OrderedFloat(a.0 - *b as f64))
+            }
             _ => typechecked!("-", "Numeric"),
         }
     }
 
     /// Multiplication with numeric coercion.
     ///
-    /// Type checker guarantees both operands are `Int` or `Float`.
+    /// Type checker guarantees both operands are `Int`, `Word`, or `Float`.
+    /// Mixed `Word`/`Int` coerces to `Int`; `Word * Word` stays `Word`.
     fn binop_mul(&self, left: &Value, right: &Value) -> Value {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_mul(*b)),
+            (Value::Word(a), Value::Word(b)) => {
+                Value::Word(a.saturating_mul(*b))
+            }
+            (Value::Word(a), Value::Int(b)) => {
+                Value::Int((*a as i64).wrapping_mul(*b))
+            }
+            (Value::Int(a), Value::Word(b)) => {
+                Value::Int(a.wrapping_mul(*b as i64))
+            }
             (Value::Float(a), Value::Float(b)) => {
                 Value::Float(OrderedFloat(a.0 * b.0))
             }
@@ -172,13 +217,19 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Float(a), Value::Int(b)) => {
                 Value::Float(OrderedFloat(a.0 * *b as f64))
             }
+            (Value::Word(a), Value::Float(b)) => {
+                Value::Float(OrderedFloat(*a as f64 * b.0))
+            }
+            (Value::Float(a), Value::Word(b)) => {
+                Value::Float(OrderedFloat(a.0 * *b as f64))
+            }
             _ => typechecked!("*", "Numeric"),
         }
     }
 
     /// Division (always returns float).
     ///
-    /// Type checker guarantees both operands are `Int` or `Float`.
+    /// Type checker guarantees both operands are `Int`, `Word`, or `Float`.
     /// Division by zero remains a runtime error (not type-level).
     fn binop_div(
         &self,
@@ -188,9 +239,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         let (a, b) = match (left, right) {
             (Value::Int(a), Value::Int(b)) => (*a as f64, *b as f64),
+            (Value::Word(a), Value::Word(b)) => (*a as f64, *b as f64),
+            (Value::Word(a), Value::Int(b)) => (*a as f64, *b as f64),
+            (Value::Int(a), Value::Word(b)) => (*a as f64, *b as f64),
             (Value::Float(a), Value::Float(b)) => (a.0, b.0),
             (Value::Int(a), Value::Float(b)) => (*a as f64, b.0),
             (Value::Float(a), Value::Int(b)) => (a.0, *b as f64),
+            (Value::Word(a), Value::Float(b)) => (*a as f64, b.0),
+            (Value::Float(a), Value::Word(b)) => (a.0, *b as f64),
             _ => typechecked!("/", "Numeric"),
         };
         if b == 0.0 {
@@ -202,7 +258,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Floor division (integer division).
     ///
-    /// Type checker guarantees both operands are `Int` or `Float`.
+    /// Type checker guarantees both operands are `Int`, `Word`, or `Float`.
     /// Division by zero remains a runtime error (not type-level).
     fn binop_floor_div(
         &self,
@@ -216,6 +272,27 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Err(Error::runtime(span, "division by zero"))
                 } else {
                     Ok(Value::Int(a.div_euclid(*b)))
+                }
+            }
+            (Value::Word(a), Value::Word(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "division by zero"))
+                } else {
+                    Ok(Value::Word(a / b))
+                }
+            }
+            (Value::Word(a), Value::Int(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "division by zero"))
+                } else {
+                    Ok(Value::Int((*a as i64).div_euclid(*b)))
+                }
+            }
+            (Value::Int(a), Value::Word(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "division by zero"))
+                } else {
+                    Ok(Value::Int(a.div_euclid(*b as i64)))
                 }
             }
             (Value::Float(a), Value::Float(b)) => {
@@ -239,13 +316,27 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Ok(Value::Int((a.0 / *b as f64).floor() as i64))
                 }
             }
+            (Value::Word(a), Value::Float(b)) => {
+                if b.0 == 0.0 {
+                    Err(Error::runtime(span, "division by zero"))
+                } else {
+                    Ok(Value::Int((*a as f64 / b.0).floor() as i64))
+                }
+            }
+            (Value::Float(a), Value::Word(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "division by zero"))
+                } else {
+                    Ok(Value::Int((a.0 / *b as f64).floor() as i64))
+                }
+            }
             _ => typechecked!("//", "Numeric"),
         }
     }
 
     /// Modulo operation.
     ///
-    /// Type checker guarantees both operands are `Int` or `Float`.
+    /// Type checker guarantees both operands are `Int`, `Word`, or `Float`.
     /// Modulo by zero remains a runtime error (not type-level).
     fn binop_mod(
         &self,
@@ -259,6 +350,27 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Err(Error::runtime(span, "modulo by zero"))
                 } else {
                     Ok(Value::Int(a.rem_euclid(*b)))
+                }
+            }
+            (Value::Word(a), Value::Word(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "modulo by zero"))
+                } else {
+                    Ok(Value::Word(a % b))
+                }
+            }
+            (Value::Word(a), Value::Int(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "modulo by zero"))
+                } else {
+                    Ok(Value::Int((*a as i64).rem_euclid(*b)))
+                }
+            }
+            (Value::Int(a), Value::Word(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "modulo by zero"))
+                } else {
+                    Ok(Value::Int(a.rem_euclid(*b as i64)))
                 }
             }
             (Value::Float(a), Value::Float(b)) => {
@@ -282,13 +394,27 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Ok(Value::Float(OrderedFloat(a.0 % *b as f64)))
                 }
             }
+            (Value::Word(a), Value::Float(b)) => {
+                if b.0 == 0.0 {
+                    Err(Error::runtime(span, "modulo by zero"))
+                } else {
+                    Ok(Value::Float(OrderedFloat(*a as f64 % b.0)))
+                }
+            }
+            (Value::Float(a), Value::Word(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(span, "modulo by zero"))
+                } else {
+                    Ok(Value::Float(OrderedFloat(a.0 % *b as f64)))
+                }
+            }
             _ => typechecked!("%", "Numeric"),
         }
     }
 
     /// Power/exponentiation.
     ///
-    /// Type checker guarantees both operands are `Int` or `Float`.
+    /// Type checker guarantees both operands are `Int`, `Word`, or `Float`.
     fn binop_pow(&self, left: &Value, right: &Value) -> Value {
         match (left, right) {
             // Int ** Int: use checked_pow with u32 exponent
@@ -312,6 +438,43 @@ impl<I: IoContext> Interpreter<'_, I> {
                         )
                 }
             }
+            // Word ** Word: stay Word, saturate on overflow
+            (Value::Word(base), Value::Word(exp)) => Value::Word(
+                u32::try_from(*exp)
+                    .ok()
+                    .and_then(|e| base.checked_pow(e))
+                    .unwrap_or(usize::MAX),
+            ),
+            // Word ** Int
+            (Value::Word(base), Value::Int(exp)) => {
+                if *exp < 0 {
+                    Value::Float(OrderedFloat((*base as f64).powf(*exp as f64)))
+                } else {
+                    u32::try_from(*exp)
+                        .ok()
+                        .and_then(|e| (*base as i64).checked_pow(e))
+                        .map_or_else(
+                            || {
+                                Value::Float(OrderedFloat(
+                                    (*base as f64).powf(*exp as f64),
+                                ))
+                            },
+                            Value::Int,
+                        )
+                }
+            }
+            // Int ** Word
+            (Value::Int(base), Value::Word(exp)) => u32::try_from(*exp)
+                .ok()
+                .and_then(|e| base.checked_pow(e))
+                .map_or_else(
+                    || {
+                        Value::Float(OrderedFloat(
+                            (*base as f64).powf(*exp as f64),
+                        ))
+                    },
+                    Value::Int,
+                ),
             // Float ** Float
             (Value::Float(a), Value::Float(b)) => {
                 Value::Float(OrderedFloat(a.0.powf(b.0)))
@@ -321,6 +484,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Value::Float(OrderedFloat((*a as f64).powf(b.0)))
             }
             (Value::Float(a), Value::Int(b)) => {
+                Value::Float(OrderedFloat(a.0.powf(*b as f64)))
+            }
+            (Value::Word(a), Value::Float(b)) => {
+                Value::Float(OrderedFloat((*a as f64).powf(b.0)))
+            }
+            (Value::Float(a), Value::Word(b)) => {
                 Value::Float(OrderedFloat(a.0.powf(*b as f64)))
             }
             _ => typechecked!("**", "Numeric"),
@@ -336,9 +505,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     {
         let ord = match (left, right) {
             (Value::Int(a), Value::Int(b)) => a.cmp(b),
+            (Value::Word(a), Value::Word(b)) => a.cmp(b),
+            (Value::Word(a), Value::Int(b)) => (*a as i64).cmp(b),
+            (Value::Int(a), Value::Word(b)) => a.cmp(&(*b as i64)),
             (Value::Float(a), Value::Float(b)) => a.cmp(b),
             (Value::Int(a), Value::Float(b)) => OrderedFloat(*a as f64).cmp(b),
             (Value::Float(a), Value::Int(b)) => a.cmp(&OrderedFloat(*b as f64)),
+            (Value::Word(a), Value::Float(b)) => OrderedFloat(*a as f64).cmp(b),
+            (Value::Float(a), Value::Word(b)) => {
+                a.cmp(&OrderedFloat(*b as f64))
+            }
             (Value::String(a), Value::String(b)) => {
                 let sa = self.arena.get_str(*a).unwrap_or("");
                 let sb = self.arena.get_str(*b).unwrap_or("");
@@ -358,9 +534,14 @@ impl<I: IoContext> Interpreter<'_, I> {
             (Value::Unit, Value::Unit) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Word(a), Value::Word(b)) => a == b,
+            (Value::Word(a), Value::Int(b)) => (*a as i64) == *b,
+            (Value::Int(a), Value::Word(b)) => *a == (*b as i64),
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Int(a), Value::Float(b)) => (*a as f64) == b.0,
             (Value::Float(a), Value::Int(b)) => a.0 == (*b as f64),
+            (Value::Word(a), Value::Float(b)) => (*a as f64) == b.0,
+            (Value::Float(a), Value::Word(b)) => a.0 == (*b as f64),
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Array(_, a), Value::Array(_, b)) => {
                 a.len() == b.len() && self.arrays_equal(a, b)

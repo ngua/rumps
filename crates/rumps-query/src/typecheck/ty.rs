@@ -40,6 +40,7 @@ pub(crate) enum Ty {
     // Primitives
     Bool,
     Int,
+    Word,
     Float,
     Char,
     String,
@@ -136,6 +137,7 @@ impl Ty {
             }
             Self::Bool
             | Self::Int
+            | Self::Word
             | Self::Float
             | Self::Char
             | Self::String
@@ -183,6 +185,7 @@ impl Ty {
             Self::Var(w) => *w == v,
             Self::Bool
             | Self::Int
+            | Self::Word
             | Self::Float
             | Self::Char
             | Self::String
@@ -220,6 +223,7 @@ impl Ty {
                 .map_or_else(|| self.clone(), |t| t.apply(subst)),
             Self::Bool => Self::Bool,
             Self::Int => Self::Int,
+            Self::Word => Self::Word,
             Self::Float => Self::Float,
             Self::Char => Self::Char,
             Self::String => Self::String,

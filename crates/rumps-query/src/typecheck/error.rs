@@ -39,7 +39,9 @@ impl ConstraintKind {
     /// Returns a help message describing what types satisfy this constraint.
     fn help(self) -> Option<&'static str> {
         match self {
-            Self::Numeric => Some("numeric types are `Int` and `Float`"),
+            Self::Numeric => {
+                Some("numeric types are `Int`, `Word`, and `Float`")
+            }
             Self::Jsonable => {
                 Some("closures and functions cannot be converted to JSON")
             }
@@ -101,6 +103,7 @@ impl<'a> TyPrinter<'a> {
             Ty::Var(v) => namer.name(*v),
             Ty::Bool => "Bool".to_owned(),
             Ty::Int => "Int".to_owned(),
+            Ty::Word => "Word".to_owned(),
             Ty::Float => "Float".to_owned(),
             Ty::Char => "Char".to_owned(),
             Ty::String => "String".to_owned(),
@@ -336,6 +339,10 @@ pub(crate) enum TypeError {
     #[error("union type must have at least one member")]
     EmptyUnion(Span),
 
+    /// Negative literal assigned to `Word` type.
+    #[error("`Word` cannot hold negative values")]
+    NegativeWord(Span),
+
     /// Type is not a member of the union being matched.
     #[error("type `{member}` is not a member of union `{union_ty}`")]
     NotAUnionMember {
@@ -388,6 +395,7 @@ impl TypeError {
             | Self::NotAnObjectSpread(_, span)
             | Self::NotJson(_, span)
             | Self::EmptyUnion(span)
+            | Self::NegativeWord(span)
             | Self::NotAUnionMember { span, .. }
             | Self::InvalidCast { span, .. }
             | Self::Custom { span, .. }
@@ -525,6 +533,10 @@ impl TypeError {
                 "union type must have at least one member".to_owned(),
                 None,
             ),
+            Self::NegativeWord(_) => (
+                "`Word` cannot hold negative values".to_owned(),
+                Some("use `Int` for signed integers".to_owned()),
+            ),
             Self::NotAUnionMember { member, union_ty, .. } => (
                 format!(
                     "type `{}` is not a member of union `{}`",
@@ -610,6 +622,7 @@ impl fmt::Display for Ty {
             Self::Var(v) => write!(f, "?{}", v.idx()),
             Self::Bool => write!(f, "Bool"),
             Self::Int => write!(f, "Int"),
+            Self::Word => write!(f, "Word"),
             Self::Float => write!(f, "Float"),
             Self::Char => write!(f, "Char"),
             Self::String => write!(f, "String"),

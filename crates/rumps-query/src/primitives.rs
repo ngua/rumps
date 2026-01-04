@@ -297,6 +297,8 @@ impl Array {
                 match v {
                     Value::Bool(b) => Some(Self::Bool(*b)),
                     Value::Int(n) => Some(Self::Int(*n)),
+                    // Word sorts as Int (coerced)
+                    Value::Word(n) => Some(Self::Int(*n as i64)),
                     Value::Float(f) => Some(Self::Float(*f)),
                     Value::Char(c) => Some(Self::Char(*c)),
                     Value::String(sid) => arena.get_str(*sid).map(Self::String),

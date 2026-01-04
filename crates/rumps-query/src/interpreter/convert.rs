@@ -21,6 +21,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Unit => typechecked!("store", "Storable (not Unit)"),
             Value::Bool(b) => rumps_types::Value::Boolean(*b),
             Value::Int(i) => rumps_types::Value::Integer(*i),
+            // Word is stored as Int (converted)
+            Value::Word(w) => rumps_types::Value::Integer(*w as i64),
             Value::Float(f) => rumps_types::Value::Double(*f),
             Value::Char(c) => rumps_types::Value::Char(*c),
             Value::String(id) => {
@@ -104,6 +106,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // produce `TRUE`/`FALSE`, even though they are not really keywords
             Value::Bool(b) => b.to_string().to_uppercase(),
             Value::Int(n) => n.to_string(),
+            Value::Word(n) => n.to_string(),
             Value::Float(f) => f.to_string(),
             Value::Char(c) => format!("'{c}'"),
             Value::String(id) | Value::FilePath(id) => {
@@ -237,6 +240,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Unit => serde_json::Value::Null,
             Value::Bool(b) => serde_json::Value::Bool(*b),
             Value::Int(n) => serde_json::json!(*n),
+            Value::Word(n) => serde_json::json!(*n),
             Value::Float(f) => serde_json::json!(f.0),
             Value::Char(c) => serde_json::Value::String(c.to_string()),
             Value::String(id) => {
@@ -436,11 +440,12 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a value to a subscript for key construction.
     ///
-    /// Only scalar types (Bool, Int, Float, Char, String, Json) can be subscripts.
+    /// Only scalar types (Bool, Int, Word, Float, Char, String, Json) can be subscripts.
     pub(crate) fn subscript(&self, v: &Value) -> Subscript {
         match v {
             Value::Bool(b) => Subscript::Boolean(*b),
             Value::Int(i) => Subscript::Number(OrderedFloat(*i as f64)),
+            Value::Word(w) => Subscript::Number(OrderedFloat(*w as f64)),
             Value::Float(f) => Subscript::Number(*f),
             Value::Char(c) => Subscript::String(c.to_string()),
             Value::String(id) => {

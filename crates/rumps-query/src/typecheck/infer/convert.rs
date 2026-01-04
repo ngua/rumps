@@ -31,6 +31,7 @@ impl InferCtx<'_> {
             Ty::Var(_)
             | Ty::Bool
             | Ty::Int
+            | Ty::Word
             | Ty::Float
             | Ty::Char
             | Ty::String
@@ -83,6 +84,7 @@ impl InferCtx<'_> {
         match id {
             TypeId::BOOL => Ty::Bool,
             TypeId::INT => Ty::Int,
+            TypeId::WORD => Ty::Word,
             TypeId::FLOAT => Ty::Float,
             TypeId::CHAR => Ty::Char,
             TypeId::STRING => Ty::String,
@@ -183,6 +185,7 @@ impl InferCtx<'_> {
             // Same primitive types
             (Ty::Bool, Ty::Bool)
             | (Ty::Int, Ty::Int)
+            | (Ty::Word, Ty::Word)
             | (Ty::Float, Ty::Float)
             | (Ty::Char, Ty::Char)
             | (Ty::String, Ty::String)
@@ -194,6 +197,13 @@ impl InferCtx<'_> {
             | (Ty::DataStatus, Ty::DataStatus)
             | (Ty::FilePath, Ty::FilePath)
             | (Ty::Path, Ty::Path) => true,
+            // Numeric coercion: Int, Word, Float are compatible
+            (Ty::Int, Ty::Word)
+            | (Ty::Word, Ty::Int)
+            | (Ty::Int, Ty::Float)
+            | (Ty::Float, Ty::Int)
+            | (Ty::Word, Ty::Float)
+            | (Ty::Float, Ty::Word) => true,
 
             // Type variables are compatible with anything
             (Ty::Var(_), _) | (_, Ty::Var(_)) => true,
@@ -347,6 +357,7 @@ impl InferCtx<'_> {
         match name {
             "Bool" => Ty::Bool,
             "Int" => Ty::Int,
+            "Word" => Ty::Word,
             "Float" => Ty::Float,
             "Char" => Ty::Char,
             "String" => Ty::String,

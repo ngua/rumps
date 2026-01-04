@@ -18,6 +18,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Unit => self.type_exprs.named(TypeId::UNIT),
             Value::Bool(_) => self.type_exprs.named(TypeId::BOOL),
             Value::Int(_) => self.type_exprs.named(TypeId::INT),
+            Value::Word(_) => self.type_exprs.named(TypeId::WORD),
             Value::Float(_) => self.type_exprs.named(TypeId::FLOAT),
             Value::Char(_) => self.type_exprs.named(TypeId::CHAR),
             Value::String(_) => self.type_exprs.named(TypeId::STRING),
@@ -206,6 +207,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         match (val, target) {
             // Identity casts
             (Value::Int(_), TypeId::INT)
+            | (Value::Word(_), TypeId::WORD)
             | (Value::Float(_), TypeId::FLOAT)
             | (Value::Bool(_), TypeId::BOOL)
             | (Value::Char(_), TypeId::CHAR)
@@ -213,6 +215,14 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             // Int -> Float (widen)
             (Value::Int(n), TypeId::FLOAT) => {
+                Ok(Value::Float(OrderedFloat(*n as f64)))
+            }
+
+            // Word -> Int (always safe)
+            (Value::Word(n), TypeId::INT) => Ok(Value::Int(*n as i64)),
+
+            // Word -> Float (widen)
+            (Value::Word(n), TypeId::FLOAT) => {
                 Ok(Value::Float(OrderedFloat(*n as f64)))
             }
 
@@ -356,6 +366,29 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Ok(self.make_result_err(&msg, span))
                 }
             },
+
+            // Int -> Word (fallible: must be non-negative)
+            (Value::Int(n), TypeId::WORD) => {
+                if *n >= 0 {
+                    Ok(self.make_result_ok(Value::Word(*n as usize), span))
+                } else {
+                    let msg =
+                        format!("expected non-negative Int for Word, got {n}");
+                    Ok(self.make_result_err(&msg, span))
+                }
+            }
+
+            // String -> Word
+            (Value::String(sid), TypeId::WORD) => {
+                let s = self.arena.get_str(*sid).unwrap_or("");
+                match s.parse::<usize>() {
+                    Ok(n) => Ok(self.make_result_ok(Value::Word(n), span)),
+                    Err(_) => {
+                        let msg = format!("invalid unsigned integer: {s}");
+                        Ok(self.make_result_err(&msg, span))
+                    }
+                }
+            }
 
             // Json -> Bool
             (Value::Json(j), TypeId::BOOL) => match j {
@@ -843,6 +876,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Unit => type_id == TypeId::UNIT,
             Value::Bool(_) => type_id == TypeId::BOOL,
             Value::Int(_) => type_id == TypeId::INT,
+            Value::Word(_) => type_id == TypeId::WORD,
             Value::Float(_) => type_id == TypeId::FLOAT,
             Value::Char(_) => type_id == TypeId::CHAR,
             Value::String(_) => type_id == TypeId::STRING,
@@ -1295,6 +1329,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => typechecked!("object value", "Object"),
             }
         } else if self.value_matches_type_expr(val, expected_ty) {
+            Ok(())
+        // Allow Int -> Word coercion (type checker validates non-negative)
+        } else if let (Value::Int(_), Some(TypeId::WORD)) =
+            (val, self.type_exprs.base_type(expected_ty))
+        {
             Ok(())
         } else {
             typechecked!("value type", "matches declaration")

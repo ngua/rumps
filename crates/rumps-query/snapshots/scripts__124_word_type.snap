@@ -1,0 +1,34 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Word type (unsigned machine word)\n; Tests `Word` type creation, operations, and conversions\n;\n; `Word` uses SATURATING arithmetic:\n;   - Overflow clamps to `Word.MAX` (e.g., large `Word ** Word`)\n;   - Underflow clamps to `0` (e.g., `5w - 10w` => `0`)\n; This differs from `Int`, which uses WRAPPING arithmetic.\n;\n; Mixed operations (`Word` + `Int`, `Word` - `Int`, etc.) coerce to `Int`.\n\n; === Basic Word Literals ===\n\n; Word annotation with positive integer\nLET w1: Word = 42\n@OUTPUT w1\n; Expected: 42\n\n; Word with zero\nLET w2: Word = 0\n@OUTPUT w2\n; Expected: 0\n\n; === Arithmetic Operations ===\n\n; Word + Word -> Word (saturating)\nLET w10: Word = 10\nLET w5: Word = 5\nLET a: Word = w10 + w5\n@OUTPUT a\n; Expected: 15\n\n; Word + Int -> Int (coerced)\nLET b = w10 + 5\n@OUTPUT b\n; Expected: 15\n\n; Int + Word -> Int (coerced)\nLET c = 10 + w5\n@OUTPUT c\n; Expected: 15\n\n; Word * Word -> Word (saturating)\nLET w3: Word = 3\nLET w4: Word = 4\nLET d: Word = w3 * w4\n@OUTPUT d\n; Expected: 12\n\n; === Saturating Subtraction (Word - Word) ===\n\n; Word - Word with positive result\nLET e = w10 - w3\n@OUTPUT e\n; Expected: 7 (Word, stays Word)\n\n; Word - Word at boundary (saturates to 0)\nLET f = w5 - w10\n@OUTPUT f\n; Expected: 0 (saturating subtraction)\n\nLET wz: Word = 0\nLET w1a: Word = 1\nLET g = wz - w1a\n@OUTPUT g\n; Expected: 0 (saturating subtraction)\n\n; === Mixed Subtraction (coerces to Int) ===\n\n; Word - Int -> Int (can go negative)\nLET h = w5 - 10\n@OUTPUT h\n; Expected: -5 (Int, not Word)\n\n; Int - Word -> Int\nLET i = 5 - w10\n@OUTPUT i\n; Expected: -5 (Int)\n\n; === Comparisons ===\n\nLET w20: Word = 20\n@OUTPUT w10 == w10\n; Expected: TRUE\n\n@OUTPUT w10 == 10\n; Expected: TRUE\n\n@OUTPUT w10 < w20\n; Expected: TRUE\n\n@OUTPUT w10 > w5\n; Expected: TRUE\n\n; === Conversion: Word AS Int (infallible) ===\n\nLET w100: Word = 100\nLET as_int = w100 AS Int\n@OUTPUT as_int\n; Expected: 100\n\n; === Conversion: Int READ Word (fallible) ===\n\n; Positive Int -> Word (success)\nLET res1 = 42 READ Word\n@OUTPUT res1\n; Expected: Result.Ok(42)\n\n; Zero -> Word (success)\nLET res2 = 0 READ Word\n@OUTPUT res2\n; Expected: Result.Ok(0)\n\n; Negative Int -> Word (failure)\nLET res3 = (-5) READ Word\n@OUTPUT res3\n; Expected: Result.Err(\"expected non-negative Int for Word, got -5\")\n\n; === String READ Word ===\n\nLET res4 = \"123\" READ Word\n@OUTPUT res4\n; Expected: Result.Ok(123)\n\nLET res5 = \"abc\" READ Word\n@OUTPUT res5\n; Expected: Result.Err(\"invalid unsigned integer: abc\")\n\nLET res6 = \"-42\" READ Word\n@OUTPUT res6\n; Expected: Result.Err(\"invalid unsigned integer: -42\")\n\n; === Unary negation (coerces to Int) ===\n\nLET w42: Word = 42\nLET neg = -w42\n@OUTPUT neg\n; Expected: -42 (Int, not Word)\n\n; === Word with Float operations ===\n\nLET fsum = w10 + 2.5\n@OUTPUT fsum\n; Expected: 12.5 (Float)\n\nLET fprod = w3 * 2.0\n@OUTPUT fprod\n; Expected: 6.0 (Float)\n\n; === Division (always returns Float) ===\n\nLET div = w10 / w4\n@OUTPUT div\n; Expected: 2.5\n\n; === Floor division (Word // Word -> Word) ===\n\nLET fdiv: Word = w10 // w3\n@OUTPUT fdiv\n; Expected: 3\n\n; === Modulo (Word % Word -> Word) ===\n\nLET m: Word = w10 % w3\n@OUTPUT m\n; Expected: 1\n\n; === Power (Word ** Word -> Word, saturating) ===\n\nLET w2p: Word = 2\nLET w10p: Word = 10\nLET p: Word = w2p ** w10p\n@OUTPUT p\n; Expected: 1024\n\n@OUTPUT \"Word type test complete\"\n"
+---
+42
+0
+15
+15
+15
+12
+7
+0
+0
+-5
+-5
+TRUE
+TRUE
+TRUE
+TRUE
+100
+Result.Ok(42)
+Result.Ok(0)
+Result.Err("expected non-negative Int for Word, got -5")
+Result.Ok(123)
+Result.Err("invalid unsigned integer: abc")
+Result.Err("invalid unsigned integer: -42")
+-42
+12.5
+6
+2.5
+3
+1
+1024
+"Word type test complete"

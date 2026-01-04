@@ -159,6 +159,10 @@ impl TypeId {
     pub(crate) const SUBSCRIPT: Self = Self(22);
     /// Runtime error type: `Error.Runtime(msg)`, `Error.Raise(msg)`, etc.
     pub(crate) const ERROR: Self = Self(23);
+    /// Builtin type: `Word` (unsigned machine word).
+    ///
+    /// An unsigned integral type mapping to `usize`. Satisfies `Numeric` constraint.
+    pub(crate) const WORD: Self = Self(24);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -400,6 +404,9 @@ pub(crate) enum Value {
     /// A 64-bit integer.
     Int(i64),
 
+    /// An unsigned machine word (`usize`).
+    Word(usize),
+
     /// A 64-bit floating-point number (ordered via `OrderedFloat`;
     /// NaN cannot be represented).
     Float(OrderedFloat<f64>),
@@ -542,6 +549,7 @@ impl Value {
             Self::Unit => Cow::Borrowed("Unit"),
             Self::Bool(_) => Cow::Borrowed("Bool"),
             Self::Int(_) => Cow::Borrowed("Int"),
+            Self::Word(_) => Cow::Borrowed("Word"),
             Self::Float(_) => Cow::Borrowed("Float"),
             Self::Char(_) => Cow::Borrowed("Char"),
             Self::String(_) => Cow::Borrowed("String"),
@@ -671,6 +679,7 @@ impl Value {
             Self::Unit => TypeId::UNIT,
             Self::Bool(_) => TypeId::BOOL,
             Self::Int(_) => TypeId::INT,
+            Self::Word(_) => TypeId::WORD,
             Self::Float(_) => TypeId::FLOAT,
             Self::Char(_) => TypeId::CHAR,
             Self::String(_) => TypeId::STRING,
@@ -700,6 +709,7 @@ impl Value {
 pub(crate) enum BuiltinType {
     Bool,
     Int,
+    Word,
     Float,
     Char,
     String,
@@ -720,6 +730,7 @@ impl BuiltinType {
         match self {
             Self::Bool => "Bool",
             Self::Int => "Int",
+            Self::Word => "Word",
             Self::Float => "Float",
             Self::Char => "Char",
             Self::String => "String",
@@ -1135,6 +1146,7 @@ impl TypeExprArena {
         match ty {
             Ty::Bool => self.named(TypeId::BOOL),
             Ty::Int => self.named(TypeId::INT),
+            Ty::Word => self.named(TypeId::WORD),
             Ty::Float => self.named(TypeId::FLOAT),
             Ty::Char => self.named(TypeId::CHAR),
             Ty::String => self.named(TypeId::STRING),
@@ -1692,6 +1704,14 @@ impl TypeRegistry {
         if error != TypeId::ERROR {
             invariant!("Error registered at expected index");
         }
+
+        // Word at index 24
+        let word_name = arena.intern("Word");
+        let word =
+            self.register(TypeDef::Builtin(BuiltinType::Word), word_name);
+        if word != TypeId::WORD {
+            invariant!("Word registered at expected index");
+        }
     }
 
     /// Pre-register user-defined types from AST before type checking.
@@ -2037,8 +2057,8 @@ mod tests {
         let mut type_exprs = TypeExprArena::new();
         let reg = TypeRegistry::new(&mut arena, &mut type_exprs);
 
-        // 13 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex + DataStatus + Subscript + Error = 24
-        assert_eq!(reg.len(), 24);
+        // 14 primitives + Option + Result + Storable + Scalar + Ordering + FilePath + Path + Regex + DataStatus + Subscript + Error = 25
+        assert_eq!(reg.len(), 25);
 
         let bool_name = arena.intern("Bool");
         let option_name = arena.intern("Option");

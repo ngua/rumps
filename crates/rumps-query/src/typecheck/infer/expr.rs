@@ -320,19 +320,20 @@ impl InferCtx<'_> {
         match op {
             // Arithmetic: both numeric, result depends on operand types
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod | BinOp::Pow => {
-                // If either is concrete Int/Float, unify the other with it
-                // Otherwise add Numeric constraints for both
+                // If either is concrete Int/Float/Word, determine result type
+                // Word op Word => Word; mixed Word/Int => Int; any Float => Float
                 match (&lhs_ty, &rhs_ty) {
                     (Ty::Float, _) | (_, Ty::Float) => {
                         self.constrain(Constraint::Numeric(lhs_ty, span));
                         self.constrain(Constraint::Numeric(rhs_ty, span));
                         Ty::Float
                     }
-                    (Ty::Int, _) => {
+                    (Ty::Word, Ty::Word) => Ty::Word,
+                    (Ty::Int, _) | (Ty::Word, _) => {
                         self.unify(rhs_ty, Ty::Int, span);
                         Ty::Int
                     }
-                    (_, Ty::Int) => {
+                    (_, Ty::Int) | (_, Ty::Word) => {
                         self.unify(lhs_ty, Ty::Int, span);
                         Ty::Int
                     }
@@ -357,11 +358,15 @@ impl InferCtx<'_> {
                 Ty::Float
             }
 
-            // Floor division always returns Int
+            // Floor division: Word // Word => Word, otherwise Int
             BinOp::FloorDiv => {
-                self.constrain(Constraint::Numeric(lhs_ty, span));
-                self.constrain(Constraint::Numeric(rhs_ty, span));
-                Ty::Int
+                self.constrain(Constraint::Numeric(lhs_ty.clone(), span));
+                self.constrain(Constraint::Numeric(rhs_ty.clone(), span));
+                if matches!((&lhs_ty, &rhs_ty), (Ty::Word, Ty::Word)) {
+                    Ty::Word
+                } else {
+                    Ty::Int
+                }
             }
 
             // Comparison: operands must unify, result is Bool
@@ -1485,6 +1490,12 @@ impl InferCtx<'_> {
                 // Numeric coercions
                 (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => target_ty,
 
+                // Word -> Int (always safe)
+                (Ty::Word, Ty::Int) => target_ty,
+
+                // Word -> Float (widen)
+                (Ty::Word, Ty::Float) => target_ty,
+
                 // Bool <-> Int
                 (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => target_ty,
 
@@ -1585,6 +1596,7 @@ impl InferCtx<'_> {
         match &target_ty {
             Ty::Bool
             | Ty::Int
+            | Ty::Word
             | Ty::Float
             | Ty::Char
             | Ty::String
@@ -1715,21 +1727,33 @@ impl InferCtx<'_> {
         // Clone inner expression to avoid borrow issues
         let inner_expr = self.ast.get_expr(inner_id).cloned();
 
+        // Reject negative literals for Word type
+        if let (Ty::Word, Some(Expr::Unary(UnOp::Neg, _))) =
+            (&ann_ty, inner_expr.as_ref())
+        {
+            self.error(TypeError::NegativeWord(span));
+            self.expr(inner_id);
+            Ty::Word
+        }
         // Try special case: array literal with `Array[UnionType]`
-        match (&ann_ty, inner_expr.as_ref()) {
-            (Ty::Array(elem_ty), Some(Expr::Array(elems)))
-                if self.expand_union_members(elem_ty).is_some() =>
-            {
+        else if let (Ty::Array(elem_ty), Some(Expr::Array(elems))) =
+            (&ann_ty, inner_expr.as_ref())
+        {
+            if self.expand_union_members(elem_ty).is_some() {
                 let result = self.array_with_expected(elems, elem_ty, span);
                 self.record_type(inner_id, result.clone());
                 result
-            }
-            _ => {
+            } else {
                 // Default: infer then unify
                 let inner_ty = self.expr(inner_id);
                 self.unify(inner_ty, ann_ty.clone(), span);
                 ann_ty
             }
+        } else {
+            // Default: infer then unify
+            let inner_ty = self.expr(inner_id);
+            self.unify(inner_ty, ann_ty.clone(), span);
+            ann_ty
         }
     }
 

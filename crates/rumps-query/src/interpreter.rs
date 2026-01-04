@@ -1169,6 +1169,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn refine_type(&self, val: Value, expected: TypeExprId) -> Value {
         let args = self.type_exprs.type_args(expected).map(SmallVec::as_slice);
         match (&val, self.type_exprs.base_type(expected), args) {
+            // Int -> Word coercion (type checker validates non-negative)
+            (Value::Int(n), Some(TypeId::WORD), _) => Value::Word(*n as usize),
             (
                 Value::Array(elem_ty, elems),
                 Some(TypeId::ARRAY),
