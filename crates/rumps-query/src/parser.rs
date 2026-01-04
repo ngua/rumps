@@ -997,14 +997,17 @@ impl Parser {
                     let unary = Self::unary_expr(pipe, primary, postfix);
                     let pow = Self::pow_expr(unary);
                     let mul = Self::mul_expr(pow).boxed();
-                    let add = Self::add_expr(mul);
+                    let shift = Self::shift_expr(mul);
+                    let add = Self::add_expr(shift);
                     let range = Self::range_expr(add);
                     let cmp = Self::cmp_expr(range).boxed();
                     let is = Self::is_expr(cmp, ty_pat.clone());
                     let matches = Self::matches_expr(is);
                     let as_cast = Self::as_expr(matches, ty.clone());
                     let read = Self::read_expr(as_cast, ty.clone()).boxed();
-                    let and = Self::and_expr(read);
+                    let bitand = Self::bitand_expr(read);
+                    let bitor = Self::bitor_expr(bitand);
+                    let and = Self::and_expr(bitor);
                     let or = Self::or_expr(and);
                     let coalesce = Self::coalesce_expr(or);
                     Self::pipe_expr(coalesce)
@@ -1094,6 +1097,38 @@ impl Parser {
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let op = choice((just(Token::AmpAmp), just(Token::And))).to(BinOp::And);
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            |(first, rest), span| Self::fold_binary(first, rest, span),
+        )
+    }
+
+    /// Bitwise OR: `expr | expr`
+    fn bitor_expr(
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let op = just(Token::SinglePipe).to(BinOp::BitOr);
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            |(first, rest), span| Self::fold_binary(first, rest, span),
+        )
+    }
+
+    /// Bitwise AND: `expr & expr`
+    fn bitand_expr(
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let op = just(Token::Amp).to(BinOp::BitAnd);
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
@@ -1467,6 +1502,25 @@ impl Parser {
             just(Token::FloorDiv).to(BinOp::FloorDiv),
             just(Token::Div).to(BinOp::Div),
             just(Token::Modulo).to(BinOp::Mod),
+        ));
+        let op_rhs = Self::opt_newlines()
+            .ignore_then(op)
+            .then_ignore(Self::opt_newlines())
+            .then(operand.clone());
+        operand.clone().then(op_rhs.repeated()).map_with_span(
+            |(first, rest), span| Self::fold_binary(first, rest, span),
+        )
+    }
+
+    /// Shift: `<<`, `>>`
+    fn shift_expr(
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let op = choice((
+            just(Token::Shl).to(BinOp::Shl),
+            just(Token::Shr).to(BinOp::Shr),
         ));
         let op_rhs = Self::opt_newlines()
             .ignore_then(op)
@@ -2408,12 +2462,13 @@ impl Parser {
                 "Storable" => Ok(cst::UserConstraint::Storable),
                 "Iterable" => Ok(cst::UserConstraint::Iterable(elem)),
                 "Monoid" => Ok(cst::UserConstraint::Monoid),
+                "BitLike" => Ok(cst::UserConstraint::BitLike),
                 _ => Err(Simple::custom(
                     span,
                     format!(
                         "unknown constraint `{name}`; valid constraints are: \
                          Numeric, Stringable, Jsonable, Subscriptable, \
-                         Storable, Iterable[T], Monoid"
+                         Storable, Iterable[T], Monoid, BitLike"
                     ),
                 )),
             })

@@ -298,6 +298,9 @@ impl InferCtx<'_> {
                     UserConstraint::Monoid => {
                         Constraint::Monoid(ty.clone(), span)
                     }
+                    UserConstraint::BitLike => {
+                        Constraint::BitLike(ty.clone(), span)
+                    }
                 };
                 self.constrain(constraint);
             });

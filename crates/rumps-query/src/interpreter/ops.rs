@@ -51,6 +51,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 unreachable!("handled in binary")
             }
             BinOp::Concat => Ok(self.binop_concat(left, right)),
+            BinOp::BitAnd => Ok(self.binop_bitand(left, right)),
+            BinOp::BitOr => Ok(self.binop_bitor(left, right)),
+            BinOp::Shl => Ok(self.binop_shl(left, right)),
+            BinOp::Shr => Ok(self.binop_shr(left, right)),
         }
     }
 
@@ -605,6 +609,69 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .zip(self.arena.get(*bv))
                 .is_some_and(|(va, vb)| self.values_equal(va, vb))
         })
+    }
+
+    /// Bitwise AND.
+    ///
+    /// Type checker guarantees both operands are `Bool`, `Int`, or `Word`.
+    fn binop_bitand(&self, left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a && *b),
+            (Value::Int(a), Value::Int(b)) => Value::Int(a & b),
+            (Value::Word(a), Value::Word(b)) => Value::Word(a & b),
+            _ => typechecked!("&", "BitLike"),
+        }
+    }
+
+    /// Bitwise OR.
+    ///
+    /// Type checker guarantees both operands are `Bool`, `Int`, or `Word`.
+    fn binop_bitor(&self, left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a || *b),
+            (Value::Int(a), Value::Int(b)) => Value::Int(a | b),
+            (Value::Word(a), Value::Word(b)) => Value::Word(a | b),
+            _ => typechecked!("|", "BitLike"),
+        }
+    }
+
+    /// Shift left.
+    ///
+    /// Type checker guarantees both operands are `Bool`, `Int`, or `Word`.
+    /// For `Bool`, shift left by any amount produces `false` (shifts out the bit).
+    fn binop_shl(&self, left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Bool(_), Value::Bool(_)) => Value::Bool(false),
+            (Value::Int(a), Value::Int(b)) => {
+                let shift = (*b as u32) & 63;
+                Value::Int(a.wrapping_shl(shift))
+            }
+            (Value::Word(a), Value::Word(b)) => {
+                let shift = (*b as u32) & (usize::BITS - 1);
+                Value::Word(a.wrapping_shl(shift))
+            }
+            _ => typechecked!("<<", "BitLike"),
+        }
+    }
+
+    /// Shift right.
+    ///
+    /// Type checker guarantees both operands are `Bool`, `Int`, or `Word`.
+    /// For `Bool`, shift right by any amount produces `false` (shifts out the bit).
+    /// For `Int`, this is an arithmetic (signed) shift.
+    fn binop_shr(&self, left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Bool(_), Value::Bool(_)) => Value::Bool(false),
+            (Value::Int(a), Value::Int(b)) => {
+                let shift = (*b as u32) & 63;
+                Value::Int(a.wrapping_shr(shift))
+            }
+            (Value::Word(a), Value::Word(b)) => {
+                let shift = (*b as u32) & (usize::BITS - 1);
+                Value::Word(a.wrapping_shr(shift))
+            }
+            _ => typechecked!(">>", "BitLike"),
+        }
     }
 
     /// Evaluate a `MATCHES` expression.

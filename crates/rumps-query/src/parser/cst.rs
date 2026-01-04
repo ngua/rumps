@@ -75,6 +75,10 @@ pub(crate) enum UserConstraint {
     ///
     /// Satisfied by `String`, `Array[T]`, and `Map[K, V]`.
     Monoid,
+    /// Type supports bitwise operations (`&`, `|`, `<<`, `>>`).
+    ///
+    /// Satisfied by `Bool`, `Int`, and `Word`.
+    BitLike,
 }
 
 /// A type parameter with optional constraints.

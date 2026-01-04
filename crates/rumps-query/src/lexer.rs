@@ -478,6 +478,8 @@ impl Lexer<'_> {
             just("!=").to(Token::Ne),
             just("<=").to(Token::Le),
             just(">=").to(Token::Ge),
+            just("<<").to(Token::Shl),
+            just(">>").to(Token::Shr),
             just("&&").to(Token::AmpAmp),
             just("||").to(Token::PipePipe),
             just("|>").to(Token::Pipe),
@@ -504,6 +506,7 @@ impl Lexer<'_> {
             just('>').to(Token::Gt),
             just('.').to(Token::Dot),
             just('|').to(Token::SinglePipe),
+            just('&').to(Token::Amp),
             just('?').to(Token::Question),
         ));
 

@@ -23,6 +23,8 @@ pub(crate) enum ConstraintKind {
     Monoid,
     /// Type must be indexable (`[]` access).
     Indexable,
+    /// Type must support bitwise operations (`&`, `|`, `<<`, `>>`).
+    BitLike,
 }
 
 impl fmt::Display for ConstraintKind {
@@ -34,6 +36,7 @@ impl fmt::Display for ConstraintKind {
             Self::Storable => write!(f, "Storable"),
             Self::Monoid => write!(f, "Monoid"),
             Self::Indexable => write!(f, "Indexable"),
+            Self::BitLike => write!(f, "BitLike"),
         }
     }
 }
@@ -59,6 +62,9 @@ impl ConstraintKind {
             Self::Monoid => Some("`++` works on `String`, `Array`, and `Map`"),
             Self::Indexable => {
                 Some("indexable types are `Array`, `Map`, and `String`")
+            }
+            Self::BitLike => {
+                Some("bitwise types are `Bool`, `Int`, and `Word`")
             }
         }
     }

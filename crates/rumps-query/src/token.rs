@@ -77,6 +77,11 @@ pub(crate) enum Token {
     PipePipe, // ||
     Bang,     // !
 
+    // Bitwise operators
+    Amp, // &
+    Shl, // <<
+    Shr, // >>
+
     // Assignment
     Assign, // =
 
@@ -237,6 +242,9 @@ impl fmt::Display for Token {
             Self::AmpAmp => write!(f, "&&"),
             Self::PipePipe => write!(f, "||"),
             Self::Bang => write!(f, "!"),
+            Self::Amp => write!(f, "&"),
+            Self::Shl => write!(f, "<<"),
+            Self::Shr => write!(f, ">>"),
             Self::Assign => write!(f, "="),
             Self::Concat => write!(f, "++"),
             Self::LParen => write!(f, "("),

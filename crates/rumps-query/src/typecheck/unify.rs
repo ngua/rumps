@@ -780,6 +780,10 @@ impl<'a> InferCtx<'a> {
                 Constraint::Monoid(ty, span) => {
                     self.check_monoid(&ty.apply(&subst), *span);
                 }
+
+                Constraint::BitLike(ty, span) => {
+                    self.check_bitlike(&ty.apply(&subst), *span);
+                }
             }
         });
 
@@ -802,6 +806,22 @@ impl<'a> InferCtx<'a> {
             _ => {
                 self.error(TypeError::UnsatisfiedConstraint(
                     ConstraintKind::Numeric,
+                    ty.clone(),
+                    span,
+                ));
+            }
+        }
+    }
+
+    /// Check that a type is bitlike (`Bool`, `Int`, or `Word`).
+    fn check_bitlike(&mut self, ty: &Ty, span: Span) {
+        match ty {
+            Ty::Bool | Ty::Int | Ty::Word => {}
+            // Type variables remain polymorphic; caller provides concrete type
+            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+            _ => {
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::BitLike,
                     ty.clone(),
                     span,
                 ));

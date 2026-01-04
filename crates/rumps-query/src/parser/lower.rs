@@ -30,6 +30,7 @@ fn lower_constraint(c: cst::UserConstraint) -> ast::UserConstraint {
             ast::UserConstraint::Iterable(elem)
         }
         cst::UserConstraint::Monoid => ast::UserConstraint::Monoid,
+        cst::UserConstraint::BitLike => ast::UserConstraint::BitLike,
     }
 }
 

@@ -392,6 +392,14 @@ impl InferCtx<'_> {
                 Ty::Bool
             }
 
+            // Bitwise: both operands are BitLike, same type
+            BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
+                self.constrain(Constraint::BitLike(lhs_ty.clone(), span));
+                self.constrain(Constraint::BitLike(rhs_ty.clone(), span));
+                self.unify(lhs_ty.clone(), rhs_ty, span);
+                lhs_ty
+            }
+
             // Monoid concatenation: both operands are Monoid, same type
             BinOp::Concat => {
                 self.constrain(Constraint::Monoid(lhs_ty.clone(), span));
@@ -1031,6 +1039,9 @@ impl InferCtx<'_> {
                         }
                         UserConstraint::Monoid => {
                             Constraint::Monoid(tv.clone(), span)
+                        }
+                        UserConstraint::BitLike => {
+                            Constraint::BitLike(tv.clone(), span)
                         }
                     };
                     self.constrain(constraint);

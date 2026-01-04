@@ -1,0 +1,33 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Bitwise operators\n; Tests `&`, `|`, `<<`, `>>` for `BitLike` types (`Bool`, `Int`, `Word`)\n\n; === Bool bitwise operations ===\n\n; Bool AND (bitwise and logical are the same for Bool)\n@OUTPUT TRUE & TRUE\n; Expected: TRUE\n\n@OUTPUT TRUE & FALSE\n; Expected: FALSE\n\n@OUTPUT FALSE & FALSE\n; Expected: FALSE\n\n; Bool OR\n@OUTPUT TRUE | TRUE\n; Expected: TRUE\n\n@OUTPUT TRUE | FALSE\n; Expected: TRUE\n\n@OUTPUT FALSE | FALSE\n; Expected: FALSE\n\n; Bool shift (always produces FALSE; shifts out the single bit)\n@OUTPUT TRUE << TRUE\n; Expected: FALSE\n\n@OUTPUT TRUE >> TRUE\n; Expected: FALSE\n\n; === Int bitwise operations ===\n\n; Basic AND: 12 & 10 = 8 (binary: 1100 & 1010 = 1000)\nLET a = 12 & 10\n@OUTPUT a\n; Expected: 8\n\n; Basic OR: 12 | 10 = 14 (binary: 1100 | 1010 = 1110)\nLET b = 12 | 10\n@OUTPUT b\n; Expected: 14\n\n; Shift left\nLET c = 1 << 4\n@OUTPUT c\n; Expected: 16\n\nLET d = 3 << 2\n@OUTPUT d\n; Expected: 12\n\n; Shift right\nLET e = 16 >> 2\n@OUTPUT e\n; Expected: 4\n\nLET f = 12 >> 2\n@OUTPUT f\n; Expected: 3\n\n; Negative Int shift right (arithmetic shift; preserves sign)\nLET g = (-8) >> 1\n@OUTPUT g\n; Expected: -4\n\n; Combined operations\nLET h = (1 << 8) | (1 << 4) | (1 << 0)\n@OUTPUT h\n; Expected: 273\n\n; === Word bitwise operations ===\n\nLET w1: Word = 12\nLET w2: Word = 10\nLET w3: Word = 8\n\n; Word AND\nLET wa: Word = w1 & w2\n@OUTPUT wa\n; Expected: 8\n\n; Word OR\nLET wb: Word = w1 | w2\n@OUTPUT wb\n; Expected: 14\n\n; Word shift left\nLET w4: Word = 1\nLET w5: Word = 4\nLET wc: Word = w4 << w5\n@OUTPUT wc\n; Expected: 16\n\n; Word shift right\nLET w16: Word = 16\nLET w2a: Word = 2\nLET we: Word = w16 >> w2a\n@OUTPUT we\n; Expected: 4\n\n; === Operator precedence ===\n\n; `&` binds tighter than `|`\n; (15 & 10) | 5 = 10 | 5 = 15\nLET p1 = 15 & 10 | 5\n@OUTPUT p1\n; Expected: 15\n\n; Shifts bind tighter than addition\n; (1 << 4) + 2 = 16 + 2 = 18\nLET p2 = 1 << 4 + 2\n@OUTPUT p2\n; Expected: 18\n\n; Shift binds tighter than addition, so: 2 + (1 << 4) = 2 + 16 = 18\nLET p3 = 2 + 1 << 4\n@OUTPUT p3\n; Expected: 18\n\n; === BitLike constraint on generic functions ===\n\n; Each generic function only works with one type per call due to monomorphization\nFUN bitwise_and_int[T: BitLike](a: T, b: T) -> T {\n  a & b\n}\n\n@OUTPUT bitwise_and_int(12, 10)\n; Expected: 8\n\nFUN bitwise_and_bool[T: BitLike](a: T, b: T) -> T {\n  a & b\n}\n\n@OUTPUT bitwise_and_bool(TRUE, FALSE)\n; Expected: FALSE\n\nFUN bitwise_and_word[T: BitLike](a: T, b: T) -> T {\n  a & b\n}\n\nLET w10: Word = 10\nLET w6: Word = 6\n@OUTPUT bitwise_and_word(w10, w6)\n; Expected: 2\n\nFUN bitwise_or_int[T: BitLike](a: T, b: T) -> T {\n  a | b\n}\n\n@OUTPUT bitwise_or_int(12, 10)\n; Expected: 14\n\nFUN bitwise_or_bool[T: BitLike](a: T, b: T) -> T {\n  a | b\n}\n\n@OUTPUT bitwise_or_bool(TRUE, FALSE)\n; Expected: TRUE\n\n@OUTPUT \"Bitwise operators test complete\"\n"
+---
+TRUE
+FALSE
+FALSE
+TRUE
+TRUE
+FALSE
+FALSE
+FALSE
+8
+14
+16
+12
+4
+3
+-4
+273
+8
+14
+16
+4
+15
+18
+18
+8
+FALSE
+2
+14
+TRUE
+"Bitwise operators test complete"
