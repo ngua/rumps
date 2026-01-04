@@ -1568,6 +1568,9 @@ impl Parser {
             just(Token::Question).to(UnOp::Wrap),
         ));
 
+        // Postfix operators for intrinsic expressions (e.g., `@GET d(1)!`).
+        let postfix_ops = Self::postfix_ops(intrinsic_op.clone());
+
         recursive(move |unary| {
             let with_op = op.clone().then(unary.clone()).map_with_span(
                 |(op, inner), span| {
@@ -1578,32 +1581,68 @@ impl Parser {
                 },
             );
 
-            // GET target
+            // GET target (with optional postfix ops like `!`)
             let get_expr = just(Token::Get)
                 .ignore_then(Self::db_ref(intrinsic_op.clone()))
                 .map_with_span(|dbref, span| {
                     cst::Expr::new(cst::ExprKind::Get(dbref), span)
+                })
+                .then(postfix_ops.clone())
+                .map_with_span(|(base, ops), span| {
+                    Self::fold_postfix(base, ops).unwrap_or_else(|| {
+                        cst::Expr::new(
+                            cst::ExprKind::Error("postfix fold failed".into()),
+                            span,
+                        )
+                    })
                 });
 
-            // DATA target
+            // DATA target (with optional postfix ops)
             let data_expr = just(Token::Data)
                 .ignore_then(Self::db_ref(intrinsic_op.clone()))
                 .map_with_span(|dbref, span| {
                     cst::Expr::new(cst::ExprKind::Data(dbref), span)
+                })
+                .then(postfix_ops.clone())
+                .map_with_span(|(base, ops), span| {
+                    Self::fold_postfix(base, ops).unwrap_or_else(|| {
+                        cst::Expr::new(
+                            cst::ExprKind::Error("postfix fold failed".into()),
+                            span,
+                        )
+                    })
                 });
 
-            // ORDER target
+            // ORDER target (with optional postfix ops)
             let order_expr = just(Token::Order)
                 .ignore_then(Self::db_ref(intrinsic_op.clone()))
                 .map_with_span(|dbref, span| {
                     cst::Expr::new(cst::ExprKind::Order(dbref), span)
+                })
+                .then(postfix_ops.clone())
+                .map_with_span(|(base, ops), span| {
+                    Self::fold_postfix(base, ops).unwrap_or_else(|| {
+                        cst::Expr::new(
+                            cst::ExprKind::Error("postfix fold failed".into()),
+                            span,
+                        )
+                    })
                 });
 
-            // QUERY target
+            // QUERY target (with optional postfix ops)
             let query_expr = just(Token::Query)
                 .ignore_then(Self::db_ref(intrinsic_op.clone()))
                 .map_with_span(|dbref, span| {
                     cst::Expr::new(cst::ExprKind::Query(dbref), span)
+                })
+                .then(postfix_ops.clone())
+                .map_with_span(|(base, ops), span| {
+                    Self::fold_postfix(base, ops).unwrap_or_else(|| {
+                        cst::Expr::new(
+                            cst::ExprKind::Error("postfix fold failed".into()),
+                            span,
+                        )
+                    })
                 });
 
             // OUTPUT expr [JSON] [TO target]
@@ -1651,15 +1690,16 @@ impl Parser {
         choice((global, local))
     }
 
-    /// Postfix: field access `.field`, index `[expr]`, call `(args...)`
-    fn postfix_expr(
+    /// Postfix operators parser; returns zero or more `PostfixOp`s.
+    ///
+    /// Separated from `postfix_expr` so that other parsers (e.g. `unary_expr`
+    /// for intrinsics) can also apply postfix operators.
+    fn postfix_ops(
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
-        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
-            + Clone
-            + 'static,
-    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, Vec<PostfixOp>, Error = ParseErr> + Clone
+    {
         // Field access: `.field` or tuple index `.0`, `.1`, etc.
         let field_or_tuple_idx = just(Token::Dot).ignore_then(
             // Try tuple index first (integer literal)
@@ -1733,7 +1773,7 @@ impl Parser {
                 PostfixOp::JsonArrowArrow(Box::new(e), span)
             });
 
-        let postfix_op = choice((
+        choice((
             field_or_tuple_idx,
             opt_field,
             index,
@@ -1745,10 +1785,21 @@ impl Parser {
             // Dynamic key access with parens
             json_arrow_arrow_expr,
             json_arrow_expr,
-        ));
+        ))
+        .repeated()
+    }
 
+    /// Postfix: field access `.field`, index `[expr]`, call `(args...)`
+    fn postfix_expr(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         operand
-            .then(postfix_op.repeated())
+            .then(Self::postfix_ops(expr))
             .map_with_span(|x, span| (x, span))
             .try_map(|((base, ops), span), _| {
                 Self::fold_postfix(base, ops).ok_or_else(|| {
