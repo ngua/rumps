@@ -7,7 +7,7 @@
 
 ; Generate unique directory name using Random.uuid
 LET test-uuid = Random.uuid()
-LET test-dir-path = "/tmp/rumps-test-" ++ test-uuid
+LET test-dir-path = "/tmp/rumps-test-{test-uuid}"
 LET test-dir = test-dir-path AS FilePath
 
 ; Create the test directory
@@ -55,7 +55,7 @@ LET no-such-var = Io.Directory.get-env("RUMPS_NONEXISTENT_VAR_12345")
 ; ============ write-file / read-file ============
 
 ; Write a file to our temp directory
-LET test-file-path = test-dir-path ++ "/test-file.txt"
+LET test-file-path = "{test-dir-path}/test-file.txt"
 LET test-file = test-file-path AS FilePath
 LET test-contents = "Hello, RUMPS!"
 
@@ -85,7 +85,7 @@ LET appended-contents = Io.Directory.read-file(test-file)
 ; ============ create-dir / create-dir-all ============
 
 ; Create a single directory
-LET subdir-path = test-dir-path ++ "/subdir"
+LET subdir-path = "{test-dir-path}/subdir"
 LET subdir = subdir-path AS FilePath
 LET _ = Io.Directory.create-dir(subdir)
 
@@ -93,7 +93,7 @@ LET subdir-exists = Io.Directory.exists(subdir)
 @OUTPUT subdir-exists  ; true
 
 ; Create nested directories
-LET nested-path = test-dir-path ++ "/a/b/c"
+LET nested-path = "{test-dir-path}/a/b/c"
 LET nested = nested-path AS FilePath
 LET _ = Io.Directory.create-dir-all(nested)
 
@@ -117,7 +117,7 @@ LET entry-count = Array.length(entries)
 ; ============ copy-path ============
 
 ; Copy the test file
-LET copy-dest-path = test-dir-path ++ "/test-file-copy.txt"
+LET copy-dest-path = "{test-dir-path}/test-file-copy.txt"
 LET copy-dest = copy-dest-path AS FilePath
 LET _ = Io.Directory.copy-path({ src: test-file, dest: copy-dest })
 
@@ -131,7 +131,7 @@ LET copy-contents = Io.Directory.read-file(copy-dest)
 ; ============ move-path ============
 
 ; Move (rename) the copy
-LET move-dest-path = test-dir-path ++ "/test-file-moved.txt"
+LET move-dest-path = "{test-dir-path}/test-file-moved.txt"
 LET move-dest = move-dest-path AS FilePath
 LET _ = Io.Directory.move-path({ src: copy-dest, dest: move-dest })
 
@@ -221,7 +221,7 @@ LET ext = Io.Directory.extension(test-file)
 @OUTPUT ext  ; Option.Some("txt")
 
 ; Get extension of file without extension
-LET no-ext-path = test-dir-path ++ "/noext"
+LET no-ext-path = "{test-dir-path}/noext"
 LET no-ext-file = no-ext-path AS FilePath
 LET _ = Io.Directory.write-file({ path: no-ext-file, contents: "no extension" })
 LET no-ext = Io.Directory.extension(no-ext-file)

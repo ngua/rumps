@@ -43,8 +43,8 @@ LET txn-result = TRANSACTION {
   "success"
 }
 LET matched = MATCH txn-result {
-  Result.Ok(s) => { "got: " ++ s }
-  Result.Err(e) => { "error: " ++ e }
+  Result.Ok(s) => { "got: {s}" }
+  Result.Err(e) => { "error: {e}" }
 }
 @OUTPUT matched
 

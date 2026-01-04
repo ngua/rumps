@@ -52,11 +52,11 @@ LET logic = TRUE
 @OUTPUT logic
 ; Expected: false
 
-; === String concat continuation ===
+; === String interpolation (replaces concat) ===
 
-LET msg = "Hello"
-  ++ " "
-  ++ "World"
+LET greet = "Hello"
+LET target = "World"
+LET msg = "{greet} {target}"
 @OUTPUT msg
 ; Expected: Hello World
 

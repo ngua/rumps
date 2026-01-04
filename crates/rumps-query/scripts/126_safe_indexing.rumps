@@ -78,13 +78,13 @@ LET m = { "a" => 1, "b" => 2 }
 
 ; Use with pattern matching
 MATCH arr?[0] {
-  Option.Some(x) => @OUTPUT "Got: " ++ (x AS String)
+  Option.Some(x) => @OUTPUT "Got: {x}"
   Option.None => @OUTPUT "Nothing"
 }
 ; Expected: Got: 10
 
 MATCH arr?[999] {
-  Option.Some(x) => @OUTPUT "Got: " ++ (x AS String)
+  Option.Some(x) => @OUTPUT "Got: {x}"
   Option.None => @OUTPUT "Nothing"
 }
 ; Expected: Nothing

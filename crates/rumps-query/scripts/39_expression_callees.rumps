@@ -77,7 +77,7 @@ FUN add-typed (a: Int, b: Int) -> Int {
 ; Expected: 42
 
 FUN greet (name: String) -> String {
-  "Hello, " ++ name ++ "!"
+  "Hello, {name}!"
 }
 
 @OUTPUT greet("World")

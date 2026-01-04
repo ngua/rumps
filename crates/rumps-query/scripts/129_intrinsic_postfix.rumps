@@ -16,11 +16,11 @@
 @OUTPUT @QUERY d(0)!
 
 ; Combined with other operations
-LET val = (@GET d(1)! AS String) ++ " appended"
+LET val = "{@GET d(1)! AS String} appended"
 @OUTPUT val
 
 ; Nested in expression context
-@OUTPUT ((@GET d(3)! AS String) ++ " suffix")
+@OUTPUT "{@GET d(3)! AS String} suffix"
 
 ; Works with subscript expressions too
 LET key = 2

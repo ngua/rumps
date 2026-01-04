@@ -16,33 +16,33 @@ LET spaced = "Hello World"
 @OUTPUT spaced
 ; Expected: Hello World
 
-; String concatenation
+; String concatenation (using interpolation)
 LET a = "Hello"
 LET b = "World"
-LET c = a ++ " " ++ b
+LET c = "{a} {b}"
 @OUTPUT c
 ; Expected: Hello World
 
 ; Concatenate literals
-@OUTPUT "foo" ++ "bar"
+@OUTPUT "{"foo"}{"bar"}"
 ; Expected: foobar
 
-; Concatenate with numbers (explicit conversion)
-@OUTPUT "Value: " ++ (42 AS String)
+; Concatenate with numbers (interpolation auto-coerces)
+@OUTPUT "Value: {42}"
 ; Expected: Value: 42
 
-@OUTPUT "Pi is " ++ (3.14 AS String)
+@OUTPUT "Pi is {3.14}"
 ; Expected: Pi is 3.14
 
 ; Concatenate with booleans
-@OUTPUT "Flag is " ++ (TRUE AS String)
+@OUTPUT "Flag is {TRUE}"
 ; Expected: Flag is true
 
 ; Multiple concatenations
 LET first = "one"
 LET second = "two"
 LET third = "three"
-@OUTPUT first ++ ", " ++ second ++ ", " ++ third
+@OUTPUT "{first}, {second}, {third}"
 ; Expected: one, two, three
 
 ; Escape sequences (if supported)

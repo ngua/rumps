@@ -33,7 +33,7 @@ LET typed: Option[Array[Subscript]] = @QUERY items
 
 ; Use with MATCH
 LET msg = MATCH @QUERY items {
-  Option.Some(path) => { "found path of length: " ++ ((Array.length(path)) AS String) }
+  Option.Some(path) => { "found path of length: {Array.length(path)}" }
   Option.None => { "no nodes" }
 }
 @OUTPUT msg

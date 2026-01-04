@@ -42,7 +42,7 @@ LET val = (Option.None ?? 5) + 1
 
 ; Coalesce with string concatenation
 LET greeting = Option.None ?? "Hello"
-@OUTPUT greeting ++ " World"
+@OUTPUT "{greeting} World"
 ; Expected: Hello World
 
 ; Coalesce with Option.Some in expression

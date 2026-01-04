@@ -7,7 +7,7 @@ FUN apply (f: (Int) -> Int, x: Int) -> Int {
 
 ; Pass a function that takes String instead of Int
 FUN greet (name: String) -> String {
-  "Hello, " ++ name
+  "Hello, {name}"
 }
 
 @OUTPUT apply(greet, 5)

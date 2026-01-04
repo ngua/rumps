@@ -144,13 +144,13 @@ MODULE PolyHof {
 @OUTPUT PolyHof.apply(n => n + 1, 5)  ; 6
 
 ; Int -> String
-@OUTPUT PolyHof.apply(n => "num: " ++ (n as String), 42)  ; num: 42
+@OUTPUT PolyHof.apply(n => "num: {n}", 42)  ; num: 42
 
 ; String -> Int
 @OUTPUT PolyHof.apply(s => String.length(s), "hello")  ; 5
 
 ; Compose: Int -> Int -> String
-@OUTPUT PolyHof.compose(n => "result: " ++ (n as String), x => x * 2, 10)  ; result: 20
+@OUTPUT PolyHof.compose(n => "result: {n}", x => x * 2, 10)  ; result: 20
 
 ; ============ Module with TYPE definitions ============
 
@@ -186,7 +186,7 @@ MODULE Users {
   NEWTYPE User = { name: String, age: Int }
 
   FUN greet(u: Users.User) -> String {
-    "Hello, " ++ u.name
+    "Hello, {u.name}"
   }
 
   FUN is-adult(u: Users.User) -> Bool {

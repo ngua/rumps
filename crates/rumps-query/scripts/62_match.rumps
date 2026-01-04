@@ -74,7 +74,7 @@ TYPE Status = Pending | Active(String) | Completed
 LET s1 = Status.Pending
 LET s1-label = MATCH s1 {
   Status.Pending => { "waiting" }
-  Status.Active(msg) => { "active: " ++ msg }
+  Status.Active(msg) => { "active: {msg}" }
   Status.Completed => { "done" }
 }
 @OUTPUT s1-label
@@ -82,7 +82,7 @@ LET s1-label = MATCH s1 {
 LET s2 = Status.Active("step 1")
 LET s2-label = MATCH s2 {
   Status.Pending => { "waiting" }
-  Status.Active(msg) => { "active: " ++ msg }
+  Status.Active(msg) => { "active: {msg}" }
   Status.Completed => { "done" }
 }
 @OUTPUT s2-label
@@ -90,7 +90,7 @@ LET s2-label = MATCH s2 {
 LET s3 = Status.Completed
 LET s3-label = MATCH s3 {
   Status.Pending => { "waiting" }
-  Status.Active(msg) => { "active: " ++ msg }
+  Status.Active(msg) => { "active: {msg}" }
   Status.Completed => { "done" }
 }
 @OUTPUT s3-label
@@ -106,9 +106,9 @@ LET pair-sum = MATCH pair {
 ; With literal in tuple
 LET point = (0, 5)
 LET axis = MATCH point {
-  (0, y) => { "on y-axis at " ++ (y as String) }
-  (x, 0) => { "on x-axis at " ++ (x as String) }
-  (x, y) => { "at (" ++ (x as String) ++ ", " ++ (y as String) ++ ")" }
+  (0, y) => { "on y-axis at {y}" }
+  (x, 0) => { "on x-axis at {x}" }
+  (x, y) => { "at ({x}, {y})" }
 }
 @OUTPUT axis
 
@@ -132,15 +132,15 @@ LET axis3 = MATCH point3 {
 
 LET user = { name: "Alice", age: 30, role: "admin" }
 LET greeting = MATCH user {
-  { name, role: "admin" } => { name ++ " is an admin" }
-  { name } => { name ++ " is a user" }
+  { name, role: "admin" } => { "{name} is an admin" }
+  { name } => { "{name} is a user" }
 }
 @OUTPUT greeting
 
 LET user2 = { name: "Bob", age: 25, role: "user" }
 LET greeting2 = MATCH user2 {
-  { name, role: "admin" } => { name ++ " is an admin" }
-  { name } => { name ++ " is a user" }
+  { name, role: "admin" } => { "{name} is an admin" }
+  { name } => { "{name} is a user" }
 }
 @OUTPUT greeting2
 
@@ -189,7 +189,7 @@ LET computed = base + MATCH Option.Some(5) {
 ; Return from function
 FUN describe(opt: Option[Int]) -> String {
   MATCH opt {
-    Option.Some(n) => { "got " ++ (n as String) }
+    Option.Some(n) => { "got {n}" }
     Option.None => { "nothing" }
   }
 }
@@ -227,7 +227,7 @@ LET nums = [1, 2, 3, 4, 5]
 LET head-tail = MATCH nums {
   [h, ...t] => {
     LET strs = Array.map((x: Int) => x as String, t)
-    (h as String) ++ ":" ++ String.join(strs, ",")
+    "{h}:{String.join(strs, ",")}"
   }
   [..] => { "empty" }
 }
@@ -252,7 +252,7 @@ LET first-pair-sum = MATCH pairs {
 ; Array of Options
 LET opts = [Option.Some(1), Option.None, Option.Some(2)]
 LET first-opt = MATCH opts {
-  [Option.Some(x), ..] => { "first is Some(" ++ (x as String) ++ ")" }
+  [Option.Some(x), ..] => { "first is Some({x})" }
   [Option.None, ..] => { "first is None" }
   [..] => { "empty" }
 }

@@ -83,7 +83,7 @@ LET chain = ("42" READ Int) AS String
 
 ; === Read with expressions ===
 
-LET concat = "1" ++ "23"
+LET concat = "{"1"}{"23"}"
 LET parsed = concat READ Int
 @OUTPUT parsed
 ; Expected: Result.Ok(123)

@@ -10,8 +10,8 @@
 ; Pattern match on error type (Raise)
 @OUTPUT @RAISE "error msg" @CATCH e => {
   MATCH e {
-    Error.Raise(msg) => { "raised: " ++ msg }
-    Error.Runtime(msg) => { "runtime: " ++ msg }
+    Error.Raise(msg) => { "raised: {msg}" }
+    Error.Runtime(msg) => { "runtime: {msg}" }
     _ => { "other" }
   }
 }
@@ -25,9 +25,9 @@
 }
 
 ; String expression with Runtime error match
-@OUTPUT ("test" ++ @RAISE "oops") @CATCH e => {
+@OUTPUT "{"test"}{@RAISE "oops"}" @CATCH e => {
   MATCH e {
-    Error.Raise(msg) => { "caught raise: " ++ msg }
+    Error.Raise(msg) => { "caught raise: {msg}" }
     _ => { "other error" }
   }
 }

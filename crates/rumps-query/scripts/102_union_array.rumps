@@ -64,8 +64,8 @@ LET arr: Array[Int | String] = [1, "two", 3, "four"]
 ; Array.foreach works on union arrays
 Array.foreach(x => {
   MATCH x {
-    n IS Int => { @OUTPUT "int: " ++ (n AS String) }
-    s IS String => { @OUTPUT "str: " ++ s }
+    n IS Int => { @OUTPUT "int: {n}" }
+    s IS String => { @OUTPUT "str: {s}" }
     _ => { @OUTPUT "other" }
   }
 }, arr)

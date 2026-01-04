@@ -89,11 +89,11 @@ LET timeout = 1000
 LET with = "with"
 LET retries = "retries"
 LET isolation = "isolation"
-@OUTPUT on ++ " " ++ conflict
+@OUTPUT "{on} {conflict}"
 
 ; Can use these as variable names and still use modifiers
 LET r11 = TRANSACTION {
-  @SET ^data(11) = on ++ conflict
+  @SET ^data(11) = "{on}{conflict}"
 } WITH TIMEOUT timeout
 @OUTPUT r11 IS Result.Ok(_)
 @OUTPUT @GET ^data(11)

@@ -63,8 +63,8 @@ LET not-id: Float = 1.5
 
 FUN format-id(id: NumericId) -> String {
   MATCH id {
-    n IS Int => { "ID#" ++ (n AS String) }
-    s IS String => { "ID:" ++ s }
+    n IS Int => { "ID#{n}" }
+    s IS String => { "ID:{s}" }
     _ => { "unknown" }
   }
 }
@@ -76,8 +76,8 @@ FUN format-id(id: NumericId) -> String {
 
 LET val1 = 42
 LET result1 = MATCH val1 {
-  n IS Int => { "int: " ++ (n AS String) }
-  s IS String => { "str: " ++ s }
+  n IS Int => { "int: {n}" }
+  s IS String => { "str: {s}" }
   b IS Bool => { "bool" }
   _ => { "other" }
 }
@@ -85,8 +85,8 @@ LET result1 = MATCH val1 {
 
 LET val2 = "hello"
 LET result2 = MATCH val2 {
-  n IS Int => { "int: " ++ (n AS String) }
-  s IS String => { "str: " ++ s }
+  n IS Int => { "int: {n}" }
+  s IS String => { "str: {s}" }
   b IS Bool => { "bool" }
   _ => { "other" }
 }
@@ -96,7 +96,7 @@ LET val3 = true
 LET result3 = MATCH val3 {
   n IS Int => { "int" }
   s IS String => { "str" }
-  b IS Bool => { "bool: " ++ (b AS String) }
+  b IS Bool => { "bool: {b}" }
   _ => { "other" }
 }
 @OUTPUT result3
@@ -172,10 +172,10 @@ FUN describe-scalar(opt: Option[Scalar]) -> String {
     Option.None => { "missing" }
     Option.Some(s) => {
       MATCH s {
-        v IS String => { "string: " ++ v }
-        v IS Int => { "int: " ++ (v AS String) }
-        v IS Bool => { "bool: " ++ (v AS String) }
-        v IS Float => { "float: " ++ (v AS String) }
+        v IS String => { "string: {v}" }
+        v IS Int => { "int: {v}" }
+        v IS Bool => { "bool: {v}" }
+        v IS Float => { "float: {v}" }
         _ => { "unknown scalar" }
       }
     }

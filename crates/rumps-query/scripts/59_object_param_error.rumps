@@ -3,7 +3,7 @@
 NEWTYPE Person = { name: String, age: Int }
 
 FUN greet (p: Person) -> String {
-  "Hello, " ++ p.name ++ "!"
+  "Hello, {p.name}!"
 }
 
 ; Missing `age` field

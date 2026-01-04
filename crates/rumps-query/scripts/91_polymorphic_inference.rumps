@@ -45,7 +45,7 @@ FUN apply-twice(f, x) {
 }
 
 FUN inc(n: Int) -> Int { n + 1 }
-FUN double-str(s: String) -> String { s ++ s }
+FUN double-str(s: String) -> String { "{s}{s}" }
 
 @OUTPUT apply-twice(inc, 0)           ; 2
 @OUTPUT apply-twice(double-str, "a")  ; aaaa

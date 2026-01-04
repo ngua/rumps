@@ -47,7 +47,7 @@ LET empty-sum = Array.reduce((acc, x) => acc + x, 100, empty)
 
 ; Array.reduce with string concatenation
 LET words = ["hello", " ", "world"]
-LET combined = Array.reduce((acc, s) => acc ++ s, "", words)
+LET combined = Array.reduce((acc, s) => "{acc}{s}", "", words)
 @OUTPUT combined  ; "hello world"
 
 ; Array.reduce with named function

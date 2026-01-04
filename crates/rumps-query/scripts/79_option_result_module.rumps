@@ -52,7 +52,7 @@ LET err-val = Result.Err("something went wrong")
 
 ; ============ Result.map-err ============
 
-LET add-prefix = e => "Error: " ++ e
+LET add-prefix = e => "Error: {e}"
 
 @OUTPUT Result.map-err(Result.Err("failed"), add-prefix)  ; Err("Error: failed")
 @OUTPUT Result.map-err(Result.Ok(42), add-prefix)  ; Ok(42)

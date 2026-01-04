@@ -27,8 +27,8 @@ LET x = 123
 @OUTPUT 10 + 20 * 3
 ; Expected: 70
 
-; Output string concatenation
-@OUTPUT "Hello" ++ " " ++ "RUMPS"
+; Output string interpolation
+@OUTPUT "{"Hello"} {"RUMPS"}"
 ; Expected: Hello RUMPS
 
 ; Output comparison result

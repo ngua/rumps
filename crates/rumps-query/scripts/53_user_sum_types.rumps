@@ -36,11 +36,11 @@ LET resize = Event.Resize(1920, 1080)
 
 ; Test is with bindings
 IF click is Event.Click(x, y) {
-  @OUTPUT "Click at: " ++ (x AS String) ++ ", " ++ (y AS String)
+  @OUTPUT "Click at: {x}, {y}"
 }
 
 IF key is Event.KeyPress(k) {
-  @OUTPUT "Key: " ++ k
+  @OUTPUT "Key: {k}"
 }
 
 ; Parameterized type (generic)
@@ -54,11 +54,11 @@ LET right = Either.Right(42)
 
 ; Test is with generic variants
 IF left is Either.Left(msg) {
-  @OUTPUT "Got left: " ++ msg
+  @OUTPUT "Got left: {msg}"
 }
 
 IF right is Either.Right(val) {
-  @OUTPUT "Got right: " ++ (val AS String)
+  @OUTPUT "Got right: {val}"
 }
 
 ; Multi-line syntax (use Outcome to avoid conflict with builtin Result)

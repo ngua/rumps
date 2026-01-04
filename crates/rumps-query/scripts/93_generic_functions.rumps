@@ -52,7 +52,7 @@ FUN apply[A, B](f: (A) -> B, x: A) -> B {
 }
 
 FUN double(n: Int) -> Int { n * 2 }
-FUN greet(s: String) -> String { "Hello, " ++ s }
+FUN greet(s: String) -> String { "Hello, {s}" }
 
 @OUTPUT apply(double, 21)        ; 42
 @OUTPUT apply(greet, "World")    ; Hello, World

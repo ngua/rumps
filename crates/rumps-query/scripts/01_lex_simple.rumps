@@ -41,7 +41,7 @@ LET and2 = TRUE && FALSE
 LET or2 = TRUE || FALSE
 LET not2 = !FALSE
 
-; Concat operator
-LET concat = "hello" ++ " " ++ "world"
+; String interpolation (replaces concat)
+LET concat = "{"hello"} {"world"}"
 
 @OUTPUT "Lexer test complete"
