@@ -45,6 +45,15 @@ pub(crate) enum Token {
     Float(OrderedFloat<f64>),
     Char(char),
     String(String),
+    /// Interpolated string literal: `"{expr} text {expr2}"`.
+    ///
+    /// The vector contains alternating literal parts and expression strings.
+    /// - Even indices (0, 2, 4, ...): literal text segments
+    /// - Odd indices (1, 3, 5, ...): expression source code
+    ///
+    /// For example, `"Hello {name}!"` becomes `["Hello ", "name", "!"]`.
+    /// Escaped braces (`{{` and `}}`) are converted to literal `{` and `}`.
+    Interpolation(Vec<String>),
     /// Regex literal: `/pattern/`.
     Regex(String),
     /// JSON null; only valid in JSON contexts (quoted-key objects, arrays).
@@ -222,6 +231,17 @@ impl fmt::Display for Token {
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),
             Self::String(s) => write!(f, "\"{s}\""),
+            Self::Interpolation(parts) => {
+                write!(f, "\"")?;
+                parts.iter().enumerate().try_for_each(|(i, part)| {
+                    if i % 2 == 0 {
+                        write!(f, "{part}")
+                    } else {
+                        write!(f, "{{{part}}}")
+                    }
+                })?;
+                write!(f, "\"")
+            }
             Self::Regex(p) => write!(f, "/{p}/"),
             Self::Null => write!(f, "null"),
             Self::Ident(s) => write!(f, "{s}"),

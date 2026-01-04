@@ -639,6 +639,15 @@ pub(crate) enum Expr {
     /// A literal value.
     Literal(Literal),
 
+    /// String interpolation: `"text {expr} more text"`.
+    ///
+    /// Contains alternating literal parts and expression IDs:
+    /// - Even indices: literal text segments (as `ExprId` pointing to `Literal(String)`)
+    /// - Odd indices: expression IDs
+    ///
+    /// For example, `"Hello {name}!"` becomes `[Lit("Hello "), VarId, Lit("!")]`.
+    Interpolation(SmallVec<[ExprId; 4]>),
+
     /// A lexical variable reference (LET bindings).
     ///
     /// `x` becomes `Var("x")`. Only looks up in lexical scope; does not

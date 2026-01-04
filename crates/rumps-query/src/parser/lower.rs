@@ -185,6 +185,9 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
     let span = expr.span;
     let e = match expr.kind {
         cst::ExprKind::Literal(lit) => Expr::Literal(lit),
+        cst::ExprKind::Interpolation(parts) => {
+            lower_interpolation(ast, parts, span)?
+        }
         cst::ExprKind::Var(name) => Expr::Var(name),
         cst::ExprKind::Get(dbref) => {
             let dbref = lower_db_ref(ast, dbref)?;
@@ -732,4 +735,735 @@ fn lower_txn_modifiers(
         retries: m.retries,
         isolation,
     })
+}
+
+/// Lower interpolated string parts to an AST expression.
+///
+/// Takes the alternating literal/expression parts and parses expression strings
+/// into AST nodes. Returns an `Expr::Interpolation` containing the parsed parts.
+fn lower_interpolation(
+    ast: &mut Ast,
+    parts: Vec<String>,
+    span: crate::Span,
+) -> Result<Expr> {
+    use crate::{Lexer, Parser};
+
+    let ids: Result<SmallVec<[crate::ast::ExprId; 4]>> = parts
+        .into_iter()
+        .enumerate()
+        .map(|(i, part)| {
+            if i % 2 == 0 {
+                // Even indices: literal text; create a String literal
+                let lit = ast::Literal::String(part);
+                ast.add_expr(Expr::Literal(lit), span)
+            } else {
+                // Odd indices: expression source code; parse and merge
+                let tokens = Lexer::new(&part).lex().map_err(|e| {
+                    crate::Error::parse(span, e.to_string(), vec![])
+                })?;
+
+                let parsed = Parser::parse_tokens(&tokens).map_err(|e| {
+                    crate::Error::parse(span, e.to_string(), vec![])
+                })?;
+
+                // Should produce exactly one expression statement
+                let expr = parsed
+                    .stmts
+                    .first()
+                    .and_then(|stmt_id| parsed.ast.get_stmt(*stmt_id))
+                    .and_then(|stmt| match stmt {
+                        ast::Stmt::Expr(expr_id) => Some(*expr_id),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        crate::Error::parse(
+                            span,
+                            format!(
+                                "expected expression in interpolation: `{}`",
+                                part
+                            ),
+                            vec![],
+                        )
+                    })?;
+
+                // Copy the expression from the parsed AST into our AST
+                merge_expr(ast, &parsed.ast, expr, span)
+            }
+        })
+        .collect();
+
+    ids.map(Expr::Interpolation)
+}
+
+/// Merge a `DbRef` from source AST into target AST.
+///
+/// Recursively copies subscript expressions.
+fn merge_dbref(
+    target: &mut Ast,
+    source: &Ast,
+    dbref: &DbRef,
+    span: crate::Span,
+) -> Result<DbRef> {
+    let mut merge_subs =
+        |subs: &SmallVec<[SubscriptElem; 4]>| -> Result<SmallVec<_>> {
+            subs.iter()
+                .map(|elem| match elem {
+                    SubscriptElem::Elem(e) => {
+                        merge_expr(target, source, *e, span)
+                            .map(SubscriptElem::Elem)
+                    }
+                    SubscriptElem::Spread(e) => {
+                        merge_expr(target, source, *e, span)
+                            .map(SubscriptElem::Spread)
+                    }
+                })
+                .collect()
+        };
+    match dbref {
+        DbRef::Local(name, subs) => {
+            Ok(DbRef::Local(name.clone(), merge_subs(subs)?))
+        }
+        DbRef::Global(name, subs) => {
+            Ok(DbRef::Global(name.clone(), merge_subs(subs)?))
+        }
+    }
+}
+
+/// Merge an `AstTypeExprId` from source AST into target AST.
+fn merge_type_expr(
+    target: &mut Ast,
+    source: &Ast,
+    id: AstTypeExprId,
+    span: crate::Span,
+) -> Result<AstTypeExprId> {
+    let te = source
+        .get_type_expr(id)
+        .ok_or_else(|| {
+            crate::Error::parse(span, "invalid type expr id", vec![])
+        })?
+        .clone();
+    let new_te = match te {
+        AstTypeExpr::Named(n) => AstTypeExpr::Named(n),
+        AstTypeExpr::App(name, args) => {
+            let new_args: Result<SmallVec<_>> = args
+                .iter()
+                .map(|&a| merge_type_expr(target, source, a, span))
+                .collect();
+            AstTypeExpr::App(name, new_args?)
+        }
+        AstTypeExpr::Fn(params, ret) => {
+            let new_params: Result<SmallVec<_>> = params
+                .iter()
+                .map(|&p| merge_type_expr(target, source, p, span))
+                .collect();
+            let new_ret = merge_type_expr(target, source, ret, span)?;
+            AstTypeExpr::Fn(new_params?, new_ret)
+        }
+        AstTypeExpr::Tuple(elems) => {
+            let new_elems: Result<SmallVec<_>> = elems
+                .iter()
+                .map(|&e| merge_type_expr(target, source, e, span))
+                .collect();
+            AstTypeExpr::Tuple(new_elems?)
+        }
+        AstTypeExpr::Union(members) => {
+            let new_members: Result<SmallVec<_>> = members
+                .iter()
+                .map(|&m| merge_type_expr(target, source, m, span))
+                .collect();
+            AstTypeExpr::Union(new_members?)
+        }
+        AstTypeExpr::Object(fields) => {
+            let new_fields: Result<SmallVec<_>> = fields
+                .into_iter()
+                .map(|(name, ty_id)| {
+                    merge_type_expr(target, source, ty_id, span)
+                        .map(|new_id| (name, new_id))
+                })
+                .collect();
+            AstTypeExpr::Object(new_fields?)
+        }
+    };
+    target.add_type_expr(new_te, span)
+}
+
+/// Merge a `MatchPatternId` from source AST into target AST.
+fn merge_pattern(
+    target: &mut Ast,
+    source: &Ast,
+    id: MatchPatternId,
+    span: crate::Span,
+) -> Result<MatchPatternId> {
+    let pat = source
+        .get_pattern(id)
+        .ok_or_else(|| crate::Error::parse(span, "invalid pattern id", vec![]))?
+        .clone();
+    let new_pat = match pat {
+        MatchPattern::Wildcard => MatchPattern::Wildcard,
+        MatchPattern::Var(name) => MatchPattern::Var(name),
+        MatchPattern::Literal(lit) => MatchPattern::Literal(lit),
+        MatchPattern::Variant(ty, var, pats) => {
+            let new_pats: Result<SmallVec<_>> = pats
+                .iter()
+                .map(|&p| merge_pattern(target, source, p, span))
+                .collect();
+            MatchPattern::Variant(ty, var, new_pats?)
+        }
+        MatchPattern::Object(fields) => {
+            let new_fields: Result<SmallVec<_>> = fields
+                .into_iter()
+                .map(|(name, pat_id)| {
+                    merge_pattern(target, source, pat_id, span)
+                        .map(|new_id| (name, new_id))
+                })
+                .collect();
+            MatchPattern::Object(new_fields?)
+        }
+        MatchPattern::Tuple(pats) => {
+            let new_pats: Result<SmallVec<_>> = pats
+                .iter()
+                .map(|&p| merge_pattern(target, source, p, span))
+                .collect();
+            MatchPattern::Tuple(new_pats?)
+        }
+        MatchPattern::Array(pats, rest) => {
+            let new_pats: Result<SmallVec<_>> = pats
+                .iter()
+                .map(|&p| merge_pattern(target, source, p, span))
+                .collect();
+            MatchPattern::Array(new_pats?, rest)
+        }
+        MatchPattern::Is(name, ty_id) => {
+            let new_ty = merge_type_expr(target, source, ty_id, span)?;
+            MatchPattern::Is(name, new_ty)
+        }
+    };
+    target.add_pattern(new_pat)
+}
+
+/// Merge an `OutputStmt` from source AST into target AST.
+fn merge_output_stmt(
+    target: &mut Ast,
+    source: &Ast,
+    stmt: &OutputStmt,
+    span: crate::Span,
+) -> Result<OutputStmt> {
+    let new_expr = merge_expr(target, source, stmt.expr, span)?;
+    let new_target = match stmt.target {
+        OutputTarget::Stdout => OutputTarget::Stdout,
+        OutputTarget::Stderr => OutputTarget::Stderr,
+        OutputTarget::File(e) => {
+            OutputTarget::File(merge_expr(target, source, e, span)?)
+        }
+    };
+    Ok(OutputStmt {
+        expr: new_expr,
+        format: stmt.format,
+        target: new_target,
+    })
+}
+
+/// Merge a `TypePattern` from source AST into target AST.
+fn merge_type_pattern(
+    target: &mut Ast,
+    source: &Ast,
+    pat: &TypePattern,
+    span: crate::Span,
+) -> Result<TypePattern> {
+    match pat {
+        TypePattern::Type(ty_id) => {
+            let new_ty = merge_type_expr(target, source, *ty_id, span)?;
+            Ok(TypePattern::Type(new_ty))
+        }
+        TypePattern::Variant(ty, var) => {
+            Ok(TypePattern::Variant(ty.clone(), var.clone()))
+        }
+        TypePattern::VariantWildcard(ty, var) => {
+            Ok(TypePattern::VariantWildcard(ty.clone(), var.clone()))
+        }
+        TypePattern::VariantBind(ty, var, binds) => Ok(
+            TypePattern::VariantBind(ty.clone(), var.clone(), binds.clone()),
+        ),
+        TypePattern::Object(fields) => {
+            let new_fields: Result<SmallVec<_>> = fields
+                .iter()
+                .map(|(name, ty_id)| {
+                    merge_type_expr(target, source, *ty_id, span)
+                        .map(|new_id| (name.clone(), new_id))
+                })
+                .collect();
+            Ok(TypePattern::Object(new_fields?))
+        }
+    }
+}
+
+/// Merge a statement from source AST into target AST.
+fn merge_stmt(
+    target: &mut Ast,
+    source: &Ast,
+    stmt_id: StmtId,
+    span: crate::Span,
+) -> Result<StmtId> {
+    let stmt = source
+        .get_stmt(stmt_id)
+        .ok_or_else(|| crate::Error::parse(span, "invalid stmt id", vec![]))?
+        .clone();
+    let new_stmt = match stmt {
+        Stmt::Let(pat, ty_ann, expr) => {
+            let new_ty = ty_ann
+                .map(|t| merge_type_expr(target, source, t, span))
+                .transpose()?;
+            let new_expr = merge_expr(target, source, expr, span)?;
+            Stmt::Let(pat, new_ty, new_expr)
+        }
+        Stmt::Set(dbref, expr, txn) => {
+            let new_dbref = merge_dbref(target, source, &dbref, span)?;
+            let new_expr = merge_expr(target, source, expr, span)?;
+            Stmt::Set(new_dbref, new_expr, txn)
+        }
+        Stmt::Kill(dbref, txn) => {
+            let new_dbref = merge_dbref(target, source, &dbref, span)?;
+            Stmt::Kill(new_dbref, txn)
+        }
+        Stmt::Output(out) => {
+            let new_out = merge_output_stmt(target, source, &out, span)?;
+            Stmt::Output(new_out)
+        }
+        Stmt::Expr(e) => {
+            let new_e = merge_expr(target, source, e, span)?;
+            Stmt::Expr(new_e)
+        }
+        Stmt::Fun {
+            name,
+            type_params,
+            params,
+            ret,
+            body,
+        } => {
+            let new_params: Result<SmallVec<_>> = params
+                .into_iter()
+                .map(|(n, ty_opt)| {
+                    let new_ty = ty_opt
+                        .map(|t| merge_type_expr(target, source, t, span))
+                        .transpose()?;
+                    Ok((n, new_ty))
+                })
+                .collect();
+            let new_ret = ret
+                .map(|t| merge_type_expr(target, source, t, span))
+                .transpose()?;
+            let new_body = merge_expr(target, source, body, span)?;
+            Stmt::Fun {
+                name,
+                type_params,
+                params: new_params?,
+                ret: new_ret,
+                body: new_body,
+            }
+        }
+        Stmt::Type {
+            name,
+            type_params,
+            def,
+        } => {
+            // TypeDefAst variants only contain AstTypeExprId
+            let new_def = match def {
+                TypeDefAst::Sum(variants) => {
+                    let new_variants: Result<SmallVec<_>> = variants
+                        .into_iter()
+                        .map(|v| {
+                            let new_payloads: Result<SmallVec<_>> = v
+                                .payloads
+                                .iter()
+                                .map(|&p| {
+                                    merge_type_expr(target, source, p, span)
+                                })
+                                .collect();
+                            Ok(VariantAst {
+                                name: v.name,
+                                payloads: new_payloads?,
+                            })
+                        })
+                        .collect();
+                    TypeDefAst::Sum(new_variants?)
+                }
+            };
+            Stmt::Type {
+                name,
+                type_params,
+                def: new_def,
+            }
+        }
+        Stmt::NewType {
+            name,
+            type_params,
+            target: ty,
+        } => {
+            let new_ty = merge_type_expr(target, source, ty, span)?;
+            Stmt::NewType {
+                name,
+                type_params,
+                target: new_ty,
+            }
+        }
+        Stmt::Union {
+            name,
+            type_params,
+            members,
+        } => {
+            let new_members: Result<SmallVec<_>> = members
+                .iter()
+                .map(|&m| merge_type_expr(target, source, m, span))
+                .collect();
+            Stmt::Union {
+                name,
+                type_params,
+                members: new_members?,
+            }
+        }
+        Stmt::Module { name, body } => {
+            let new_body: Result<Vec<_>> = body
+                .iter()
+                .map(|&s| merge_stmt(target, source, s, span))
+                .collect();
+            Stmt::Module {
+                name,
+                body: new_body?,
+            }
+        }
+    };
+    target.add_stmt(new_stmt, span)
+}
+
+/// Merge an expression from a parsed AST into the target AST.
+///
+/// Recursively copies the expression and all its sub-expressions, statements,
+/// type expressions, and patterns.
+fn merge_expr(
+    target: &mut Ast,
+    source: &Ast,
+    expr_id: ExprId,
+    span: crate::Span,
+) -> Result<ExprId> {
+    let expr = source
+        .get_expr(expr_id)
+        .ok_or_else(|| {
+            crate::Error::parse(span, "invalid expression id", vec![])
+        })?
+        .clone();
+
+    let new_expr = match expr {
+        Expr::Literal(lit) => Expr::Literal(lit),
+        Expr::Interpolation(parts) => {
+            let new_parts: Result<SmallVec<_>> = parts
+                .iter()
+                .map(|&id| merge_expr(target, source, id, span))
+                .collect();
+            Expr::Interpolation(new_parts?)
+        }
+        Expr::Var(name) => Expr::Var(name),
+        Expr::Get(dbref, txn) => {
+            let new_dbref = merge_dbref(target, source, &dbref, span)?;
+            Expr::Get(new_dbref, txn)
+        }
+        Expr::Binary(lhs, op, rhs) => {
+            let new_lhs = merge_expr(target, source, lhs, span)?;
+            let new_rhs = merge_expr(target, source, rhs, span)?;
+            Expr::Binary(new_lhs, op, new_rhs)
+        }
+        Expr::Unary(op, operand) => {
+            let new_op = merge_expr(target, source, operand, span)?;
+            Expr::Unary(op, new_op)
+        }
+        Expr::Call(callee, args) => {
+            let new_callee = merge_expr(target, source, callee, span)?;
+            let new_args: Result<SmallVec<_>> = args
+                .iter()
+                .map(|&id| merge_expr(target, source, id, span))
+                .collect();
+            Expr::Call(new_callee, new_args?)
+        }
+        Expr::Object(entries) => {
+            let new_entries: Result<Vec<_>> = entries
+                .into_iter()
+                .map(|entry| match entry {
+                    ObjectEntry::Field(k, v) => {
+                        merge_expr(target, source, v, span)
+                            .map(|new_v| ObjectEntry::Field(k, new_v))
+                    }
+                    ObjectEntry::Spread(e) => {
+                        merge_expr(target, source, e, span)
+                            .map(ObjectEntry::Spread)
+                    }
+                })
+                .collect();
+            Expr::Object(new_entries?)
+        }
+        Expr::Array(elems) => {
+            let new_elems: Result<Vec<_>> = elems
+                .into_iter()
+                .map(|elem| match elem {
+                    ArrayElem::Elem(e) => {
+                        merge_expr(target, source, e, span).map(ArrayElem::Elem)
+                    }
+                    ArrayElem::Spread(e) => merge_expr(target, source, e, span)
+                        .map(ArrayElem::Spread),
+                })
+                .collect();
+            Expr::Array(new_elems?)
+        }
+        Expr::Tuple(elems) => {
+            let new_elems: Result<SmallVec<_>> = elems
+                .iter()
+                .map(|&id| merge_expr(target, source, id, span))
+                .collect();
+            Expr::Tuple(new_elems?)
+        }
+        Expr::MapLit(entries) => {
+            let new_entries: Result<SmallVec<_>> = entries
+                .into_iter()
+                .map(|(k, v)| {
+                    let new_k = merge_expr(target, source, k, span)?;
+                    let new_v = merge_expr(target, source, v, span)?;
+                    Ok((new_k, new_v))
+                })
+                .collect();
+            Expr::MapLit(new_entries?)
+        }
+        Expr::TupleIndex(base, idx) => {
+            let new_base = merge_expr(target, source, base, span)?;
+            Expr::TupleIndex(new_base, idx)
+        }
+        Expr::Index(base, idx) => {
+            let new_base = merge_expr(target, source, base, span)?;
+            let new_idx = merge_expr(target, source, idx, span)?;
+            Expr::Index(new_base, new_idx)
+        }
+        Expr::OptionalIndex(base, idx) => {
+            let new_base = merge_expr(target, source, base, span)?;
+            let new_idx = merge_expr(target, source, idx, span)?;
+            Expr::OptionalIndex(new_base, new_idx)
+        }
+        Expr::Field(base, field) => {
+            let new_base = merge_expr(target, source, base, span)?;
+            Expr::Field(new_base, field)
+        }
+        Expr::OptionalField(base, field) => {
+            let new_base = merge_expr(target, source, base, span)?;
+            Expr::OptionalField(new_base, field)
+        }
+        Expr::Variant(ty, var, args) => {
+            let new_args: Result<SmallVec<_>> = args
+                .iter()
+                .map(|&id| merge_expr(target, source, id, span))
+                .collect();
+            Expr::Variant(ty, var, new_args?)
+        }
+        Expr::Path(segments) => Expr::Path(segments),
+        Expr::Is(expr, pat) => {
+            let new_expr = merge_expr(target, source, expr, span)?;
+            let new_pat = merge_type_pattern(target, source, &pat, span)?;
+            Expr::Is(new_expr, new_pat)
+        }
+        Expr::As(expr, ty) => {
+            let new_expr = merge_expr(target, source, expr, span)?;
+            let new_ty = merge_type_expr(target, source, ty, span)?;
+            Expr::As(new_expr, new_ty)
+        }
+        Expr::Read(expr, ty) => {
+            let new_expr = merge_expr(target, source, expr, span)?;
+            let new_ty = merge_type_expr(target, source, ty, span)?;
+            Expr::Read(new_expr, new_ty)
+        }
+        Expr::Block(stmts, tail) => {
+            let new_stmts: Result<Vec<_>> = stmts
+                .iter()
+                .map(|&s| merge_stmt(target, source, s, span))
+                .collect();
+            let new_tail = tail
+                .map(|e| merge_expr(target, source, e, span))
+                .transpose()?;
+            Expr::Block(new_stmts?, new_tail)
+        }
+        Expr::If(cond, then, els) => {
+            let new_cond = merge_expr(target, source, cond, span)?;
+            let new_then = merge_expr(target, source, then, span)?;
+            let new_els = els
+                .map(|e| merge_expr(target, source, e, span))
+                .transpose()?;
+            Expr::If(new_cond, new_then, new_els)
+        }
+        Expr::Match(scrut, arms) => {
+            let new_scrut = merge_expr(target, source, scrut, span)?;
+            let new_arms: Result<Vec<_>> = arms
+                .into_iter()
+                .map(|arm| {
+                    let new_pat =
+                        merge_pattern(target, source, arm.pattern, span)?;
+                    let new_guard = arm
+                        .guard
+                        .map(|g| merge_expr(target, source, g, span))
+                        .transpose()?;
+                    let new_body = merge_expr(target, source, arm.body, span)?;
+                    Ok(MatchArm {
+                        pattern: new_pat,
+                        guard: new_guard,
+                        body: new_body,
+                    })
+                })
+                .collect();
+            Expr::Match(new_scrut, new_arms?)
+        }
+        Expr::Closure {
+            type_params,
+            params,
+            ret,
+            body,
+        } => {
+            let new_params: Result<SmallVec<_>> = params
+                .into_iter()
+                .map(|(n, ty_opt)| {
+                    let new_ty = ty_opt
+                        .map(|t| merge_type_expr(target, source, t, span))
+                        .transpose()?;
+                    Ok((n, new_ty))
+                })
+                .collect();
+            let new_ret = ret
+                .map(|t| merge_type_expr(target, source, t, span))
+                .transpose()?;
+            let new_body = merge_expr(target, source, body, span)?;
+            Expr::Closure {
+                type_params,
+                params: new_params?,
+                ret: new_ret,
+                body: new_body,
+            }
+        }
+        Expr::Unwrap(expr) => {
+            let new_expr = merge_expr(target, source, expr, span)?;
+            Expr::Unwrap(new_expr)
+        }
+        Expr::Range(start, end, incl) => {
+            let new_start = merge_expr(target, source, start, span)?;
+            let new_end = merge_expr(target, source, end, span)?;
+            Expr::Range(new_start, new_end, incl)
+        }
+        Expr::Annotate(expr, ty) => {
+            let new_expr = merge_expr(target, source, expr, span)?;
+            let new_ty = merge_type_expr(target, source, ty, span)?;
+            Expr::Annotate(new_expr, new_ty)
+        }
+        Expr::Json(entries) => {
+            let new_entries: Result<Vec<_>> = entries
+                .into_iter()
+                .map(|(k, v)| {
+                    merge_expr(target, source, v, span).map(|new_v| (k, new_v))
+                })
+                .collect();
+            Expr::Json(new_entries?)
+        }
+        Expr::JsonAccess(expr, kind, key) => {
+            let new_expr = merge_expr(target, source, expr, span)?;
+            let new_key = match key {
+                JsonAccessKey::Field(f) => JsonAccessKey::Field(f),
+                JsonAccessKey::Expr(e) => {
+                    JsonAccessKey::Expr(merge_expr(target, source, e, span)?)
+                }
+            };
+            Expr::JsonAccess(new_expr, kind, new_key)
+        }
+        Expr::Regex(pat, cache_idx) => Expr::Regex(pat, cache_idx),
+        Expr::Matches(lhs, rhs) => {
+            let new_lhs = merge_expr(target, source, lhs, span)?;
+            let new_rhs = merge_expr(target, source, rhs, span)?;
+            Expr::Matches(new_lhs, new_rhs)
+        }
+        Expr::Catch(expr, handler) => {
+            let new_expr = merge_expr(target, source, expr, span)?;
+            let new_handler = merge_expr(target, source, handler, span)?;
+            Expr::Catch(new_expr, new_handler)
+        }
+        Expr::Data(dbref, txn) => {
+            let new_dbref = merge_dbref(target, source, &dbref, span)?;
+            Expr::Data(new_dbref, txn)
+        }
+        Expr::Order(dbref, txn) => {
+            let new_dbref = merge_dbref(target, source, &dbref, span)?;
+            Expr::Order(new_dbref, txn)
+        }
+        Expr::Query(dbref, txn) => {
+            let new_dbref = merge_dbref(target, source, &dbref, span)?;
+            Expr::Query(new_dbref, txn)
+        }
+        Expr::Output(out) => {
+            let new_out = merge_output_stmt(target, source, &out, span)?;
+            Expr::Output(new_out)
+        }
+        Expr::Set(dbref, expr, txn) => {
+            let new_dbref = merge_dbref(target, source, &dbref, span)?;
+            let new_expr = merge_expr(target, source, expr, span)?;
+            Expr::Set(new_dbref, new_expr, txn)
+        }
+        Expr::Kill(dbref, txn) => {
+            let new_dbref = merge_dbref(target, source, &dbref, span)?;
+            Expr::Kill(new_dbref, txn)
+        }
+        Expr::Raise(expr) => {
+            let new_expr = merge_expr(target, source, expr, span)?;
+            Expr::Raise(new_expr)
+        }
+        Expr::Forever {
+            seed,
+            state_param,
+            cont_param,
+            body,
+        } => {
+            let new_seed = merge_expr(target, source, seed, span)?;
+            let new_state_ty = state_param
+                .1
+                .map(|t| merge_type_expr(target, source, t, span))
+                .transpose()?;
+            let new_cont_ty = cont_param
+                .1
+                .map(|t| merge_type_expr(target, source, t, span))
+                .transpose()?;
+            let new_body = merge_expr(target, source, body, span)?;
+            Expr::Forever {
+                seed: new_seed,
+                state_param: (state_param.0, new_state_ty),
+                cont_param: (cont_param.0, new_cont_ty),
+                body: new_body,
+            }
+        }
+        Expr::Transaction(txn_expr) => {
+            let new_stmts: Result<Vec<_>> = txn_expr
+                .stmts
+                .iter()
+                .map(|&s| merge_stmt(target, source, s, span))
+                .collect();
+            let new_tail = txn_expr
+                .expr
+                .map(|e| merge_expr(target, source, e, span))
+                .transpose()?;
+            let new_timeout = txn_expr
+                .modifiers
+                .timeout
+                .map(|e| merge_expr(target, source, e, span))
+                .transpose()?;
+            Expr::Transaction(ast::TransactionExpr {
+                id: txn_expr.id,
+                stmts: new_stmts?,
+                expr: new_tail,
+                modifiers: TransactionModifiers {
+                    conflict: txn_expr.modifiers.conflict,
+                    timeout: new_timeout,
+                    retries: txn_expr.modifiers.retries,
+                    isolation: txn_expr.modifiers.isolation,
+                },
+            })
+        }
+    };
+
+    target.add_expr(new_expr, span)
 }

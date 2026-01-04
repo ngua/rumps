@@ -283,6 +283,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
         match expr {
             Expr::Literal(lit) => Ok(self.literal(&lit)),
+            Expr::Interpolation(parts) => self.interpolation(&parts).await,
             Expr::Var(name) => Ok(self.var(&name, span)),
             Expr::Get(ref dbref, txn_id) => self.get(dbref, txn_id, span).await,
             Expr::Data(ref dbref, txn_id) => self.data(dbref, txn_id).await,
@@ -841,6 +842,46 @@ impl<I: IoContext> Interpreter<'_, I> {
             Literal::String(s) => Value::String(self.arena.intern(s)),
             Literal::Null => Value::Json(serde_json::Value::Null),
             Literal::Unit => Value::Unit,
+        }
+    }
+
+    /// Evaluate string interpolation.
+    ///
+    /// Evaluates each part: literal strings pass through unchanged, expressions
+    /// are stringified. Strings are passed through without quotes.
+    ///
+    /// Collects parts into a `Vec` then joins, avoiding `O(n^2)` allocations.
+    async fn interpolation(&mut self, parts: &[ExprId]) -> Result<Value> {
+        self.interpolation_collect(parts, Vec::with_capacity(parts.len()))
+            .await
+    }
+
+    /// Accumulator helper for interpolation; collects strings then joins.
+    #[async_recursion]
+    async fn interpolation_collect(
+        &mut self,
+        parts: &[ExprId],
+        mut acc: Vec<String>,
+    ) -> Result<Value> {
+        match parts.split_first() {
+            None => {
+                let joined = acc.join("");
+                Ok(Value::String(self.arena.intern(&joined)))
+            }
+            Some((&id, rest)) => {
+                let val = self.eval(id).await?;
+                // Strings pass through unchanged; other values use stringify
+                let s = match &val {
+                    Value::String(sid) => self
+                        .arena
+                        .get_str(*sid)
+                        .unwrap_or_else(|| invariant!("StringId in arena"))
+                        .to_owned(),
+                    other => self.stringify(other),
+                };
+                acc.push(s);
+                self.interpolation_collect(rest, acc).await
+            }
         }
     }
 

@@ -46,6 +46,9 @@ impl InferCtx<'_> {
             // Literals
             Expr::Literal(lit) => self.literal(lit),
 
+            // String interpolation: all parts must be Stringable
+            Expr::Interpolation(parts) => self.interpolation(parts, span),
+
             // Unit: empty tuple
             Expr::Tuple(elems) if elems.is_empty() => Ty::Unit,
 
@@ -287,6 +290,22 @@ impl InferCtx<'_> {
             Literal::Null => Ty::Json,
             Literal::Unit => Ty::Unit,
         }
+    }
+
+    /// Infer type of string interpolation.
+    ///
+    /// All expression parts (odd indices) must satisfy `Stringable` constraint.
+    /// Literal parts (even indices) are already strings. Returns `String`.
+    fn interpolation(&mut self, parts: &[ExprId], span: Span) -> Ty {
+        parts.iter().enumerate().for_each(|(i, &part_id)| {
+            let part_ty = self.expr(part_id);
+            // Odd indices are expressions; they must be Stringable
+            // Even indices are string literals; no constraint needed
+            if i % 2 == 1 {
+                self.constrain(Constraint::Stringable(part_ty, span));
+            }
+        });
+        Ty::String
     }
 
     /// Infer type of a variable reference.

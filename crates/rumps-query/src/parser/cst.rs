@@ -184,6 +184,15 @@ pub(crate) enum ExprKind {
     /// A literal value.
     Literal(Literal),
 
+    /// String interpolation: `"text {expr} more text"`.
+    ///
+    /// Contains alternating literal parts and expression source strings:
+    /// - Even indices: literal text segments
+    /// - Odd indices: expression source code (to be parsed during lowering)
+    ///
+    /// For example, `"Hello {name}!"` becomes `["Hello ", "name", "!"]`.
+    Interpolation(Vec<String>),
+
     /// A lexical variable reference.
     Var(String),
 

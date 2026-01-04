@@ -12,6 +12,7 @@
 use std::ops::Range;
 
 use chumsky::prelude::*;
+use chumsky::primitive::any;
 use nonempty::NonEmpty;
 use ordered_float::OrderedFloat;
 
@@ -302,25 +303,171 @@ impl Lexer<'_> {
     }
 
     fn string_lit() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+        just('"')
+            .ignore_then(Self::string_content())
+            .then_ignore(just('"'))
+            .map_with_span(|parts, span| {
+                // If no interpolation (single literal part), return plain string
+                if parts.len() == 1 {
+                    Spanned::from_range(
+                        Token::String(
+                            parts.into_iter().next().unwrap_or_default(),
+                        ),
+                        span,
+                    )
+                } else {
+                    Spanned::from_range(Token::Interpolation(parts), span)
+                }
+            })
+    }
+
+    /// Parse string content, returning alternating literal/expression parts.
+    ///
+    /// - Even indices: literal text (may be empty)
+    /// - Odd indices: expression source code
+    ///
+    /// Handles `{{` and `}}` as escaped braces in literals.
+    fn string_content() -> impl Parser<char, Vec<String>, Error = LexErr> + Clone
+    {
         let escape = just('\\').ignore_then(choice((
             just('n').to('\n'),
             just('r').to('\r'),
             just('t').to('\t'),
             just('\\').to('\\'),
             just('"').to('"'),
+            just('{').to('{'),
+            just('}').to('}'),
             just('0').to('\0'),
         )));
 
-        let char_in_string =
-            escape.or(filter(|c: &char| *c != '"' && *c != '\\' && *c != '\n'));
+        // `{{` produces literal `{`
+        let escaped_open = just("{{").to('{');
+        // `}}` produces literal `}`
+        let escaped_close = just("}}").to('}');
 
-        just('"')
-            .ignore_then(char_in_string.repeated())
-            .then_ignore(just('"'))
-            .collect::<String>()
-            .map_with_span(|s, span| {
-                Spanned::from_range(Token::String(s), span)
+        // Regular char: not `"`, `\`, `{`, `}`, or newline
+        let regular = filter(|c: &char| {
+            *c != '"' && *c != '\\' && *c != '{' && *c != '}' && *c != '\n'
+        });
+
+        // Literal segment char: escape, escaped brace, or regular
+        let lit_char = choice((escape, escaped_open, escaped_close, regular));
+
+        // Literal segment: zero or more literal chars
+        let literal_seg = lit_char.repeated().collect::<String>();
+
+        // Expression content: balanced braces, handles nested `{}` and strings
+        let expr_content = Self::interpolation_expr();
+
+        // Interpolation: `{` expr `}`
+        let interpolation =
+            just('{').ignore_then(expr_content).then_ignore(just('}'));
+
+        // Alternating: literal, then optionally (expr, literal)*
+        literal_seg
+            .clone()
+            .then(interpolation.then(literal_seg).repeated())
+            .map(|(first, rest)| {
+                let mut parts = vec![first];
+                rest.into_iter().for_each(|(expr, lit)| {
+                    parts.push(expr);
+                    parts.push(lit);
+                });
+                parts
             })
+    }
+
+    /// Parse interpolation expression content (balanced braces).
+    ///
+    /// Handles nested `{}`, strings, and chars within the expression.
+    fn interpolation_expr() -> impl Parser<char, String, Error = LexErr> + Clone
+    {
+        recursive(
+            |expr: chumsky::recursive::Recursive<char, String, LexErr>| {
+                // Nested string: "..."
+                let nested_string = just('"')
+                    .then(
+                        choice((
+                            just('\\').then(any()).map(
+                                |(a, b): (char, char)| {
+                                    let mut s = String::new();
+                                    s.push(a);
+                                    s.push(b);
+                                    s
+                                },
+                            ),
+                            filter(|c: &char| {
+                                *c != '"' && *c != '\\' && *c != '\n'
+                            })
+                            .map(|c: char| c.to_string()),
+                        ))
+                        .repeated(),
+                    )
+                    .then(just('"'))
+                    .map(
+                        |((open, chars), close): (
+                            (char, Vec<String>),
+                            char,
+                        )| {
+                            let mut s = String::new();
+                            s.push(open);
+                            chars.into_iter().for_each(|c| s.push_str(&c));
+                            s.push(close);
+                            s
+                        },
+                    );
+
+                // Nested char: '.'
+                let nested_char = just('\'')
+                    .then(
+                        just('\\')
+                            .then(any())
+                            .map(|(a, b): (char, char)| {
+                                let mut s = String::new();
+                                s.push(a);
+                                s.push(b);
+                                s
+                            })
+                            .or(filter(|c: &char| *c != '\'' && *c != '\n')
+                                .map(|c: char| c.to_string())),
+                    )
+                    .then(just('\''))
+                    .map(|((open, ch), close): ((char, String), char)| {
+                        let mut s = String::new();
+                        s.push(open);
+                        s.push_str(&ch);
+                        s.push(close);
+                        s
+                    });
+
+                // Nested braces: { ... }
+                let nested_braces = just('{').then(expr).then(just('}')).map(
+                    |((open, inner), close): ((char, String), char)| {
+                        let mut s = String::new();
+                        s.push(open);
+                        s.push_str(&inner);
+                        s.push(close);
+                        s
+                    },
+                );
+
+                // Regular char: not `{`, `}`, `"`, `'`, or newline
+                let regular = filter(|c: &char| {
+                    *c != '{'
+                        && *c != '}'
+                        && *c != '"'
+                        && *c != '\''
+                        && *c != '\n'
+                })
+                .map(|c: char| c.to_string());
+
+                // Combine all and repeat
+                choice((nested_string, nested_char, nested_braces, regular))
+                    .repeated()
+                    .collect::<Vec<String>>()
+                    .map(|parts| parts.join(""))
+            },
+        )
     }
 
     fn char_lit() -> impl Parser<char, Spanned, Error = LexErr> + Clone {

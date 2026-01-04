@@ -1905,6 +1905,12 @@ impl Parser {
                 cst::Expr::new(cst::ExprKind::Regex(pattern), span)
             });
 
+        // Interpolated string: `"Hello {name}!"`
+        let interpolation = select! { Token::Interpolation(parts) => parts }
+            .map_with_span(|parts, span| {
+                cst::Expr::new(cst::ExprKind::Interpolation(parts), span)
+            });
+
         // Lexical variable
         let var = Self::ident().map_with_span(|name, span| {
             cst::Expr::new(cst::ExprKind::Var(name), span)
@@ -2256,6 +2262,7 @@ impl Parser {
         // Order matters (see original parser for rationale)
         choice((
             literal,
+            interpolation,
             regex_lit,
             closure_single,
             closure_multi,
