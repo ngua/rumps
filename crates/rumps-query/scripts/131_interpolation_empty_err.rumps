@@ -1,0 +1,5 @@
+; Test: Empty interpolation is an error
+; Empty `{}` in a string should produce a parse error
+
+LET x = "{}"
+@OUTPUT x

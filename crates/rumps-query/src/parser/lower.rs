@@ -776,14 +776,12 @@ fn lower_interpolation(
                         _ => None,
                     })
                     .ok_or_else(|| {
-                        crate::Error::parse(
-                            span,
-                            format!(
-                                "expected expression in interpolation: `{}`",
-                                part
-                            ),
-                            vec![],
-                        )
+                        let msg = if part.trim().is_empty() {
+                            "interpolation requires an expression".into()
+                        } else {
+                            format!("interpolation requires an expression, got `{}`", part)
+                        };
+                        crate::Error::parse(span, msg, vec![])
                     })?;
 
                 // Copy the expression from the parsed AST into our AST

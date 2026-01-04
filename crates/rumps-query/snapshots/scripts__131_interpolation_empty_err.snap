@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Empty interpolation is an error\n; Empty `{}` in a string should produce a parse error\n\nLET x = \"{}\"\n@OUTPUT x\n"
+---
+ERROR: parse error at 103..107: interpolation requires an expression

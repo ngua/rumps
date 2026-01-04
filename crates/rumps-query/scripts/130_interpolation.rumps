@@ -91,3 +91,27 @@ LET my-maybe: Option[Int] = ?10
 
 ; Pipe operator
 @OUTPUT "Piped: {5 |> double}"
+
+; Nested string interpolation
+LET inner = 100
+@OUTPUT "Outer: {"Inner: {inner}"}"
+
+; IF expression directly in interpolation
+LET val = 7
+@OUTPUT "Direct IF: {IF val > 5 { "big" } ELSE { "small" }}"
+
+; DbRef in interpolation (requires the merge_dbref fix)
+@SET d(1, 2) = "nested-key"
+@OUTPUT "DbRef: {@GET d(1, 2)!}"
+
+; Complex subscript expression
+LET idx = 2
+@SET d(1, idx) = "dynamic"
+@OUTPUT "Dynamic key: {@GET d(1, idx)!}"
+
+; Block expression in interpolation (note: `{{` is escape, so `{{{ ... }}}` needed)
+@OUTPUT "Block: {{{ 2 * 21 }}}"
+
+; Unwrap in interpolation
+LET opt: Option[Int] = ?999
+@OUTPUT "Unwrapped: {opt!}"
