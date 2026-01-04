@@ -375,6 +375,15 @@ pub(crate) enum TypeError {
     /// Invalid regex pattern.
     #[error("invalid regex pattern `{0}`: {1}")]
     InvalidRegex(String, String, Span),
+
+    /// Module member not found (i.e. module resolves correctly but user calls or
+    /// references something that is not defined in that module).
+    #[error("`{name}` not found in module `{module}`")]
+    NotFoundInModule {
+        module: String,
+        name: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -406,7 +415,8 @@ impl TypeError {
             | Self::NotAUnionMember { span, .. }
             | Self::InvalidCast { span, .. }
             | Self::Custom { span, .. }
-            | Self::InvalidRegex(_, _, span) => *span,
+            | Self::InvalidRegex(_, _, span)
+            | Self::NotFoundInModule { span, .. } => *span,
         }
     }
 
@@ -559,6 +569,10 @@ impl TypeError {
             Self::Custom { msg, .. } => (msg.clone(), None),
             Self::InvalidRegex(pattern, err, _) => (
                 format!("invalid regex pattern `/{pattern}/`: {err}"),
+                None,
+            ),
+            Self::NotFoundInModule { module, name, .. } => (
+                format!("`{name}` not found in module `{module}`"),
                 None,
             ),
         };

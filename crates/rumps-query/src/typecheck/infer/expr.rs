@@ -188,7 +188,20 @@ impl InferCtx<'_> {
                     self.emit_user_constraints(constraints, span);
                     ty
                 } else {
-                    Ty::Unknown
+                    // Path resolved as module but member not found
+                    let module = path
+                        .iter()
+                        .take(path.len().saturating_sub(1))
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    let name = path.last().copied().unwrap_or("").to_string();
+                    self.error(TypeError::NotFoundInModule {
+                        module,
+                        name,
+                        span,
+                    });
+                    Ty::Error
                 }
             }
 

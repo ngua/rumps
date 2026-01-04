@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Module member not found error\n; Should report clear error for non-existent module function\n\n@OUTPUT Array.len([1, 2, 3])\n"
+---
+ERROR: `len` not found in module `Array`
