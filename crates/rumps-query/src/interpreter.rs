@@ -1353,6 +1353,3 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

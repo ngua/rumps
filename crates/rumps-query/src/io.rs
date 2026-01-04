@@ -149,36 +149,3 @@ impl IoContext for TestIo {
         Ok(())
     }
 }
-
-/// No-op I/O context for primitive unit tests that don't need I/O.
-#[cfg(test)]
-pub(crate) struct NoopIo;
-
-#[cfg(test)]
-#[async_trait]
-impl IoContext for NoopIo {
-    async fn stdout(&mut self, _s: &str, _span: Span) -> Result<()> {
-        Ok(())
-    }
-
-    async fn stdoutline(&mut self, _s: &str, _span: Span) -> Result<()> {
-        Ok(())
-    }
-
-    async fn stderr(&mut self, _s: &str, _span: Span) -> Result<()> {
-        Ok(())
-    }
-
-    async fn stderrline(&mut self, _s: &str, _span: Span) -> Result<()> {
-        Ok(())
-    }
-
-    async fn write(
-        &mut self,
-        _path: &str,
-        _content: &str,
-        _span: Span,
-    ) -> Result<()> {
-        Ok(())
-    }
-}

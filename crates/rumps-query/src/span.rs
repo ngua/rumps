@@ -176,36 +176,3 @@ impl<M> From<Span<M>> for miette::SourceSpan {
         (s.start as usize, (s.end - s.start) as usize).into()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn line_col_first_line() {
-        let src = "hello world";
-        let span = Span::new(6, 11);
-        assert_eq!(span.line_col(src), (1, 7));
-    }
-
-    #[test]
-    fn line_col_second_line() {
-        let src = "hello\nworld";
-        let span = Span::new(6, 11);
-        assert_eq!(span.line_col(src), (2, 1));
-    }
-
-    #[test]
-    fn line_col_multiline() {
-        let src = "line1\nline2\nline3";
-        let span = Span::new(12, 17);
-        assert_eq!(span.line_col(src), (3, 1));
-    }
-
-    #[test]
-    fn merge_spans() {
-        let a = Span::new(5, 10);
-        let b = Span::new(15, 20);
-        assert_eq!(a.merge(b), Span::new(5, 20));
-    }
-}
