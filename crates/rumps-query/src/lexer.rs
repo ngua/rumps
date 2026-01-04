@@ -489,6 +489,7 @@ impl Lexer<'_> {
             just("=>").to(Token::FatArrow),
             just("??").to(Token::QuestionQuestion),
             just("?.").to(Token::QuestionDot),
+            just("?[").to(Token::QuestionLBracket),
         ));
 
         let one_char_ops = choice((

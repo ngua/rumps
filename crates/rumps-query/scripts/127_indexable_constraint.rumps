@@ -1,0 +1,6 @@
+; Test: Indexable constraint errors
+; Tests that non-indexable types produce proper error messages
+
+; Try to index an Int (should fail)
+LET x = 42
+@OUTPUT x[0]

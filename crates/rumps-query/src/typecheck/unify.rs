@@ -711,6 +711,17 @@ impl<'a> InferCtx<'a> {
                 let elem = elem.apply(&subst);
                 self.check_iterable(&coll, &elem, *span, &mut subst);
             }
+            Constraint::Indexable {
+                base,
+                idx,
+                elem,
+                span,
+            } => {
+                let base = base.apply(&subst);
+                let idx = idx.apply(&subst);
+                let elem = elem.apply(&subst);
+                self.check_indexable(&base, &idx, &elem, *span, &mut subst);
+            }
             _ => {}
         });
 
@@ -719,7 +730,8 @@ impl<'a> InferCtx<'a> {
             match c {
                 Constraint::Eq(..)
                 | Constraint::HasField { .. }
-                | Constraint::Iterable { .. } => {
+                | Constraint::Iterable { .. }
+                | Constraint::Indexable { .. } => {
                     // Already processed in first pass
                 }
 
@@ -1214,6 +1226,77 @@ impl<'a> InferCtx<'a> {
                     got: coll.clone(),
                     span,
                 });
+            }
+        }
+    }
+
+    /// Check that a type is indexable and unify index/element types.
+    ///
+    /// Indexable types:
+    /// - `Array[T]`: indexed by `Int`, returns `T`
+    /// - `Map[K, V]`: indexed by `K`, returns `Option[V]`
+    /// - `String`: indexed by `Int`, returns `Char`
+    fn check_indexable(
+        &mut self,
+        base: &Ty,
+        idx: &Ty,
+        elem: &Ty,
+        span: Span,
+        subst: &mut Subst,
+    ) {
+        match base {
+            Ty::Array(inner) => {
+                // Index must be Int
+                match self.unify_types(idx, &Ty::Int, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                }
+                // Element type is the array's inner type
+                match self.unify_types(elem, inner, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                }
+            }
+
+            Ty::Map(key, val) => {
+                // Index must match key type
+                match self.unify_types(idx, key, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                }
+                // Element type is Option[V]
+                let opt_val = Ty::Option(val.clone());
+                match self.unify_types(elem, &opt_val, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                }
+            }
+
+            Ty::String => {
+                // Index must be Int
+                match self.unify_types(idx, &Ty::Int, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                }
+                // Element type is Char
+                match self.unify_types(elem, &Ty::Char, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                }
+            }
+
+            Ty::Var(_) => {
+                // Not yet resolved; defer
+            }
+
+            Ty::Error | Ty::Unknown => {}
+
+            _ => {
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Indexable,
+                    base.clone(),
+                    span,
+                ));
             }
         }
     }

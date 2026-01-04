@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Indexable constraint errors\n; Tests that non-indexable types produce proper error messages\n\n; Try to index an Int (should fail)\nLET x = 42\n@OUTPUT x[0]\n"
+---
+ERROR: type `Int` does not satisfy `Indexable` constraint

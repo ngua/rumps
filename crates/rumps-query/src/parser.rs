@@ -1633,6 +1633,16 @@ impl Parser {
             .then_ignore(just(Token::RBracket))
             .map_with_span(|idx, span| PostfixOp::Index(Box::new(idx), span));
 
+        // Optional index: `?[expr]` (safe indexing, returns Option)
+        let opt_index = just(Token::QuestionLBracket)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(expr.clone())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBracket))
+            .map_with_span(|idx, span| {
+                PostfixOp::OptionalIndex(Box::new(idx), span)
+            });
+
         // Call: `(args...)`
         let call_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let call = just(Token::LParen)
@@ -1673,6 +1683,7 @@ impl Parser {
             field_or_tuple_idx,
             opt_field,
             index,
+            opt_index,
             call,
             unwrap,
             // JSON scalar static field access `..field`
@@ -1711,6 +1722,10 @@ impl Parser {
                 )),
                 PostfixOp::Index(idx, _) => Some(cst::Expr::new(
                     cst::ExprKind::Index(Box::new(acc), idx),
+                    span,
+                )),
+                PostfixOp::OptionalIndex(idx, _) => Some(cst::Expr::new(
+                    cst::ExprKind::OptionalIndex(Box::new(acc), idx),
                     span,
                 )),
                 PostfixOp::Call(args, _) => Some(cst::Expr::new(
@@ -2693,6 +2708,8 @@ enum PostfixOp {
     OptionalField(String, Span),
     TupleIndex(u32, Span),
     Index(Box<cst::Expr>, Span),
+    /// Safe index access: `?[expr]` (returns `Option[T]`).
+    OptionalIndex(Box<cst::Expr>, Span),
     Call(Vec<cst::Expr>, Span),
     Unwrap(Span),
     /// JSON scalar static field: `..field` (returns `Option[T]`).
@@ -2732,6 +2749,7 @@ impl PostfixOp {
             | Self::OptionalField(_, s)
             | Self::TupleIndex(_, s)
             | Self::Index(_, s)
+            | Self::OptionalIndex(_, s)
             | Self::Call(_, s)
             | Self::Unwrap(s)
             | Self::JsonScalarField(_, s)

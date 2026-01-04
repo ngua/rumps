@@ -512,6 +512,63 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    /// Evaluate optional index access (safe indexing).
+    ///
+    /// Returns `Option.Some(value)` on success, `Option.None` on out-of-bounds.
+    /// Unlike `index`, this never raises a runtime error for bounds issues.
+    #[async_recursion]
+    pub(super) async fn optional_index(
+        &mut self,
+        base: ExprId,
+        idx: ExprId,
+        span: Span,
+    ) -> Result<Value> {
+        let base_val = self.eval(base).await?;
+        let idx_val = self.eval(idx).await?;
+
+        match (&base_val, &idx_val) {
+            (Value::Array(elem_ty, elems), Value::Int(i)) => {
+                let index = if *i < 0 {
+                    elems.len().checked_sub((-*i) as usize)
+                } else {
+                    Some(*i as usize)
+                };
+                let opt_ty =
+                    self.type_exprs.app(TypeId::OPTION, smallvec![*elem_ty]);
+                Ok(index
+                    .and_then(|idx| elems.get(idx))
+                    .map(|id| Value::some(opt_ty, *id))
+                    .unwrap_or_else(|| Value::none(opt_ty)))
+            }
+            (Value::Map(_, v_ty, entries), key) => {
+                // Map indexing already returns Option, so ?[] is the same
+                let map_key = self.value_to_map_key(key);
+                let opt_ty =
+                    self.type_exprs.app(TypeId::OPTION, smallvec![*v_ty]);
+                Ok(entries
+                    .get(&map_key)
+                    .map(|id| Value::some(opt_ty, *id))
+                    .unwrap_or_else(|| Value::none(opt_ty)))
+            }
+            (Value::String(sid), Value::Int(i)) => {
+                let s = self.arena.get_str(*sid).unwrap_or("");
+                let len = s.chars().count() as i64;
+                let index = if *i < 0 { len + *i } else { *i };
+                let char_ty = self.type_exprs.named(TypeId::CHAR);
+                let opt_ty =
+                    self.type_exprs.app(TypeId::OPTION, smallvec![char_ty]);
+                Ok(s.chars()
+                    .nth(index as usize)
+                    .map(|c| {
+                        let char_id = self.arena.add(Value::Char(c), span);
+                        Value::some(opt_ty, char_id)
+                    })
+                    .unwrap_or_else(|| Value::none(opt_ty)))
+            }
+            _ => typechecked!("?[]", "Indexable"),
+        }
+    }
+
     /// Evaluate field access on an object value.
     ///
     /// After name resolution, this method is primarily for runtime field access

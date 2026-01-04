@@ -696,6 +696,14 @@ pub(crate) enum Expr {
     /// Index access: `expr[index]`.
     Index(ExprId, ExprId),
 
+    /// Optional index access: `expr?[index]`.
+    ///
+    /// Safe indexing that returns `Option[T]` instead of panicking:
+    /// - `Array[T]?[Int]` returns `Option[T]`
+    /// - `Map[K, V]?[K]` returns `Option[V]` (always safe; maps already return Option)
+    /// - `String?[Int]` returns `Option[Char]`
+    OptionalIndex(ExprId, ExprId),
+
     /// Field access: `expr.field`.
     Field(ExprId, String),
 

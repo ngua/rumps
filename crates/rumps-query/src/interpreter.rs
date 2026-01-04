@@ -301,6 +301,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::MapLit(entries) => self.map_lit(&entries, span).await,
             Expr::TupleIndex(base, idx) => self.tuple_index(base, idx).await,
             Expr::Index(base, idx) => self.index(base, idx, span).await,
+            Expr::OptionalIndex(base, idx) => {
+                self.optional_index(base, idx, span).await
+            }
             Expr::Field(base, field) => self.field(base, &field, span).await,
             Expr::OptionalField(base, field) => {
                 self.optional_field(base, &field, span).await

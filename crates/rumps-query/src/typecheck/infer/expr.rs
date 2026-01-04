@@ -16,7 +16,7 @@ use crate::ast::{
     UserConstraint,
 };
 use crate::intern::StringId;
-use crate::typecheck::error::TypeError;
+use crate::typecheck::error::{ConstraintKind, TypeError};
 use crate::typecheck::ty::{Scheme, Ty};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
@@ -92,6 +92,11 @@ impl InferCtx<'_> {
 
             // Index access: arr[i] or map[k]
             Expr::Index(base, idx) => self.index(*base, *idx, span),
+
+            // Optional index access: arr?[i] or str?[i] (safe, returns Option)
+            Expr::OptionalIndex(base, idx) => {
+                self.optional_index(*base, *idx, span)
+            }
 
             // JSON access: data.field, data..field, data->"key", data->>"key"
             Expr::JsonAccess(base, kind, key) => {
@@ -734,8 +739,9 @@ impl InferCtx<'_> {
 
     /// Infer type of index access: `base[idx]`.
     ///
-    /// Works for `Array[T]` (index must be `Int`, returns `T`) and
-    /// `Map[K, V]` (index unifies with `K`, returns `V`).
+    /// Works for `Array[T]` (index must be `Int`, returns `T`),
+    /// `Map[K, V]` (index unifies with `K`, returns `Option[V]`),
+    /// and `String` (index must be `Int`, returns `Char`).
     fn index(&mut self, base_id: ExprId, idx_id: ExprId, span: Span) -> Ty {
         let base_ty = self.expr(base_id);
         let idx_ty = self.expr(idx_id);
@@ -752,9 +758,15 @@ impl InferCtx<'_> {
             }
 
             Ty::Var(_) => {
-                // Base is type variable; could be Array or Map.
-                // We can't know which, so return fresh and let unification handle it.
-                self.fresh()
+                // Base is type variable; generate Indexable constraint
+                let elem = self.fresh();
+                self.constrain(Constraint::Indexable {
+                    base: base_ty,
+                    idx: idx_ty,
+                    elem: elem.clone(),
+                    span,
+                });
+                elem
             }
 
             Ty::Error => Ty::Error,
@@ -766,7 +778,68 @@ impl InferCtx<'_> {
             }
 
             _ => {
-                self.error(TypeError::NotIndexable(base_ty, span));
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Indexable,
+                    base_ty,
+                    span,
+                ));
+                Ty::Error
+            }
+        }
+    }
+
+    /// Infer type of optional index access: `base?[idx]`.
+    ///
+    /// Safe indexing that returns `Option[T]` instead of panicking:
+    /// - `Array[T]?[Int]` returns `Option[T]`
+    /// - `Map[K, V]?[K]` returns `Option[V]` (map lookup already returns Option)
+    /// - `String?[Int]` returns `Option[Char]`
+    fn optional_index(
+        &mut self,
+        base_id: ExprId,
+        idx_id: ExprId,
+        span: Span,
+    ) -> Ty {
+        let base_ty = self.expr(base_id);
+        let idx_ty = self.expr(idx_id);
+
+        match &base_ty {
+            Ty::Array(elem) => {
+                self.unify(idx_ty, Ty::Int, span);
+                Ty::Option(elem.clone())
+            }
+
+            Ty::Map(key, val) => {
+                self.unify(idx_ty, key.as_ref().clone(), span);
+                // Map?[k] is the same as Map[k] since both return Option[V]
+                Ty::Option(val.clone())
+            }
+
+            Ty::Var(_) => {
+                // Generate Indexable constraint with elem wrapped in Option
+                let inner = self.fresh();
+                self.constrain(Constraint::Indexable {
+                    base: base_ty,
+                    idx: idx_ty,
+                    elem: inner.clone(),
+                    span,
+                });
+                Ty::Option(Box::new(inner))
+            }
+
+            Ty::Error => Ty::Error,
+
+            Ty::String => {
+                self.unify(idx_ty, Ty::Int, span);
+                Ty::Option(Box::new(Ty::Char))
+            }
+
+            _ => {
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Indexable,
+                    base_ty,
+                    span,
+                ));
                 Ty::Error
             }
         }

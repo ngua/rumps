@@ -213,6 +213,9 @@ pub(crate) enum ExprKind {
     /// Index access.
     Index(Box<Expr>, Box<Expr>),
 
+    /// Optional index access: `expr?[index]`.
+    OptionalIndex(Box<Expr>, Box<Expr>),
+
     /// Field access.
     Field(Box<Expr>, String),
 

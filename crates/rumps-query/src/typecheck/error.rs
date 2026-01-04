@@ -21,6 +21,8 @@ pub(crate) enum ConstraintKind {
     Storable,
     /// Type must support concatenation/append (`++`).
     Monoid,
+    /// Type must be indexable (`[]` access).
+    Indexable,
 }
 
 impl fmt::Display for ConstraintKind {
@@ -31,6 +33,7 @@ impl fmt::Display for ConstraintKind {
             Self::Subscriptable => write!(f, "Subscriptable"),
             Self::Storable => write!(f, "Storable"),
             Self::Monoid => write!(f, "Monoid"),
+            Self::Indexable => write!(f, "Indexable"),
         }
     }
 }
@@ -54,6 +57,9 @@ impl ConstraintKind {
                  `String`, or `Json`",
             ),
             Self::Monoid => Some("`++` works on `String`, `Array`, and `Map`"),
+            Self::Indexable => {
+                Some("indexable types are `Array`, `Map`, and `String`")
+            }
         }
     }
 }
@@ -319,10 +325,6 @@ pub(crate) enum TypeError {
     #[error("tuple index {idx} is out of bounds for tuple of length {len}")]
     TupleIndexOutOfBounds { idx: u32, len: usize, span: Span },
 
-    /// Index access on non-indexable type.
-    #[error("type `{0}` is not indexable")]
-    NotIndexable(Ty, Span),
-
     /// Spread on non-array type.
     #[error("cannot spread type `{0}` in array literal; expected `Array`")]
     NotAnArray(Ty, Span),
@@ -390,7 +392,6 @@ impl TypeError {
             | Self::NotATuple(_, span)
             | Self::ArrayPatternInLet(span)
             | Self::TupleIndexOutOfBounds { span, .. }
-            | Self::NotIndexable(_, span)
             | Self::NotAnArray(_, span)
             | Self::NotAnObjectSpread(_, span)
             | Self::NotJson(_, span)
@@ -503,10 +504,6 @@ impl TypeError {
                     "tuple index {idx} is out of bounds for tuple of length {len}"
                 ),
                 None,
-            ),
-            Self::NotIndexable(ty, _) => (
-                format!("type `{}` is not indexable", p.format(ty)),
-                Some("indexable types are `Array`, `Map`, `String`, and `Json`".to_owned()),
             ),
             Self::NotAnArray(ty, _) => (
                 format!(

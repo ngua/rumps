@@ -244,6 +244,11 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let idx_id = lower_expr(ast, *idx)?;
             Expr::Index(base_id, idx_id)
         }
+        cst::ExprKind::OptionalIndex(base, idx) => {
+            let base_id = lower_expr(ast, *base)?;
+            let idx_id = lower_expr(ast, *idx)?;
+            Expr::OptionalIndex(base_id, idx_id)
+        }
         cst::ExprKind::Field(base, field) => {
             let base_id = lower_expr(ast, *base)?;
             Expr::Field(base_id, field)
