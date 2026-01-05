@@ -4,6 +4,9 @@
 //! This is a straightforward recursive traversal with direct `&mut Ast` access;
 //! no `Rc` or `RefCell` required.
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 use smallvec::SmallVec;
 
 use super::cst;
@@ -14,7 +17,25 @@ use crate::ast::{
     StmtId, SubscriptElem, TransactionModifiers, TypeDefAst, TypePattern,
     VariantAst, Visibility,
 };
-use crate::Result;
+use crate::{Error, Result};
+
+/// Context for lowering; tracks base directory and files being parsed.
+struct Ctx {
+    /// Base directory for resolving relative module paths.
+    /// `None` means relative paths resolve against cwd.
+    base_dir: Option<PathBuf>,
+    /// Files currently being parsed (for cycle detection).
+    in_progress: HashSet<PathBuf>,
+}
+
+impl Ctx {
+    fn new(base_dir: Option<PathBuf>) -> Self {
+        Self {
+            base_dir,
+            in_progress: HashSet::new(),
+        }
+    }
+}
 
 /// Convert CST visibility to AST visibility.
 fn lower_visibility(vis: cst::Visibility) -> Visibility {
@@ -59,35 +80,134 @@ fn lower_type_params(
 
 /// Lower a CST program (list of statements) to AST.
 pub(crate) fn program(stmts: Vec<cst::Stmt>) -> Result<(Ast, Vec<StmtId>)> {
+    program_with_path(stmts, None)
+}
+
+/// Lower a CST program with source file context.
+///
+/// The `src_path` is used to resolve relative module imports.
+pub(crate) fn program_with_path(
+    stmts: Vec<cst::Stmt>,
+    src_path: Option<&Path>,
+) -> Result<(Ast, Vec<StmtId>)> {
+    let base_dir = src_path.and_then(|p| p.parent().map(Path::to_path_buf));
+    let mut ctx = Ctx::new(base_dir);
     let mut ast = Ast::new();
     let ids = stmts
         .into_iter()
-        .map(|s| lower_stmt(&mut ast, s))
+        .map(|s| lower_stmt(&mut ast, &mut ctx, s))
         .collect::<Result<Vec<_>>>()?;
     Ok((ast, ids))
 }
 
+/// Lower a module from a file path.
+///
+/// Reads the file, parses it, and merges the resulting statements into the
+/// target AST. The file should contain module body statements (`FUN`, `LET`,
+/// `MODULE`); this is enforced during typechecking.
+fn lower_module_from_file(
+    ast: &mut Ast,
+    ctx: &mut Ctx,
+    path: &str,
+    span: crate::Span,
+) -> Result<Vec<StmtId>> {
+    use crate::Lexer;
+
+    // Resolve path: if relative, resolve against base_dir; otherwise use as-is
+    let p = Path::new(path);
+    let resolved = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        ctx.base_dir
+            .as_ref()
+            .map(|base| base.join(p))
+            .unwrap_or_else(|| p.to_path_buf())
+    };
+
+    // Canonicalize to absolute path
+    let canonical = resolved.canonicalize().map_err(|e| {
+        Error::parse(
+            span,
+            format!("cannot resolve module path `{path}`: {e}"),
+            vec![],
+        )
+    })?;
+
+    // Cycle detection
+    if ctx.in_progress.contains(&canonical) {
+        Err(Error::parse(
+            span,
+            format!("circular module import: `{}`", canonical.display()),
+            vec![],
+        ))?
+    }
+
+    // Mark as in-progress
+    ctx.in_progress.insert(canonical.clone());
+
+    // Read file content
+    let content = std::fs::read_to_string(&canonical).map_err(|e| {
+        Error::parse(
+            span,
+            format!("cannot read module file `{}`: {e}", canonical.display()),
+            vec![],
+        )
+    })?;
+
+    // Lex and parse to CST (not full AST, we need to lower with our context)
+    let tokens = Lexer::new(&content).lex().map_err(|e| {
+        Error::parse(
+            span,
+            format!("error in module file `{}`: {e}", canonical.display()),
+            vec![],
+        )
+    })?;
+
+    let cst_stmts = super::Parser::parse_to_cst(&tokens).map_err(|e| {
+        Error::parse(
+            span,
+            format!("error in module file `{}`: {e}", canonical.display()),
+            vec![],
+        )
+    })?;
+
+    // Lower with updated context (use this file's directory as new base)
+    let old_base = ctx.base_dir.take();
+    ctx.base_dir = canonical.parent().map(Path::to_path_buf);
+
+    let ids = cst_stmts
+        .into_iter()
+        .map(|s| lower_stmt(ast, ctx, s))
+        .collect::<Result<Vec<_>>>();
+
+    // Restore context
+    ctx.base_dir = old_base;
+    ctx.in_progress.remove(&canonical);
+
+    ids
+}
+
 /// Lower a CST statement to AST.
-fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
+fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
     let span = stmt.span;
     let s = match stmt.kind {
         cst::StmtKind::Let(pat, ty, expr, vis) => {
             let pat = lower_binding_pattern(pat);
             let ty_id = ty.map(|t| lower_type_expr(ast, t)).transpose()?;
-            let expr_id = lower_expr(ast, expr)?;
+            let expr_id = lower_expr(ast, ctx, expr)?;
             Stmt::Let(pat, ty_id, expr_id, lower_visibility(vis))
         }
         cst::StmtKind::Set(dbref, value) => {
-            let dbref = lower_db_ref(ast, dbref)?;
-            let value_id = lower_expr(ast, value)?;
+            let dbref = lower_db_ref(ast, ctx, dbref)?;
+            let value_id = lower_expr(ast, ctx, value)?;
             Stmt::Set(dbref, value_id, None)
         }
         cst::StmtKind::Kill(dbref) => {
-            let dbref = lower_db_ref(ast, dbref)?;
+            let dbref = lower_db_ref(ast, ctx, dbref)?;
             Stmt::Kill(dbref, None)
         }
         cst::StmtKind::Output(output) => {
-            let expr_id = lower_expr(ast, output.expr)?;
+            let expr_id = lower_expr(ast, ctx, output.expr)?;
             let format = match output.format {
                 cst::OutputFormat::Default => OutputFormat::Default,
                 cst::OutputFormat::Json => OutputFormat::Json,
@@ -96,7 +216,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 cst::OutputTarget::Stdout => OutputTarget::Stdout,
                 cst::OutputTarget::Stderr => OutputTarget::Stderr,
                 cst::OutputTarget::File(path_expr) => {
-                    let path_id = lower_expr(ast, *path_expr)?;
+                    let path_id = lower_expr(ast, ctx, *path_expr)?;
                     OutputTarget::File(path_id)
                 }
             };
@@ -107,7 +227,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
             })
         }
         cst::StmtKind::Expr(expr) => {
-            let expr_id = lower_expr(ast, expr)?;
+            let expr_id = lower_expr(ast, ctx, expr)?;
             Stmt::Expr(expr_id)
         }
         cst::StmtKind::Fun {
@@ -127,7 +247,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 })
                 .collect::<Result<SmallVec<_>>>()?;
             let ret_id = ret.map(|t| lower_type_expr(ast, t)).transpose()?;
-            let body_id = lower_expr(ast, body)?;
+            let body_id = lower_expr(ast, ctx, body)?;
             Stmt::Fun {
                 name,
                 type_params: lower_type_params(type_params),
@@ -182,11 +302,16 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 vis: lower_visibility(vis),
             }
         }
-        cst::StmtKind::Module { name, body } => {
-            let body_ids = body
-                .into_iter()
-                .map(|s| lower_stmt(ast, s))
-                .collect::<Result<Vec<_>>>()?;
+        cst::StmtKind::Module { name, source } => {
+            let body_ids = match source {
+                cst::ModuleSource::Inline(body) => body
+                    .into_iter()
+                    .map(|s| lower_stmt(ast, ctx, s))
+                    .collect::<Result<Vec<_>>>()?,
+                cst::ModuleSource::File(path) => {
+                    lower_module_from_file(ast, ctx, &path, span)?
+                }
+            };
             Stmt::Module {
                 name,
                 body: body_ids,
@@ -197,50 +322,50 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
 }
 
 /// Lower a CST expression to AST.
-fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
+fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
     let span = expr.span;
     let e = match expr.kind {
         cst::ExprKind::Literal(lit) => Expr::Literal(lit),
         cst::ExprKind::Interpolation(parts) => {
-            lower_interpolation(ast, parts, span)?
+            lower_interpolation(ast, ctx, parts, span)?
         }
         cst::ExprKind::Var(name) => Expr::Var(name),
         cst::ExprKind::Get(dbref) => {
-            let dbref = lower_db_ref(ast, dbref)?;
+            let dbref = lower_db_ref(ast, ctx, dbref)?;
             Expr::Get(dbref, None)
         }
         cst::ExprKind::Binary(lhs, op, rhs) => {
-            let lhs_id = lower_expr(ast, *lhs)?;
-            let rhs_id = lower_expr(ast, *rhs)?;
+            let lhs_id = lower_expr(ast, ctx, *lhs)?;
+            let rhs_id = lower_expr(ast, ctx, *rhs)?;
             Expr::Binary(lhs_id, op, rhs_id)
         }
         cst::ExprKind::Unary(op, operand) => {
-            let operand_id = lower_expr(ast, *operand)?;
+            let operand_id = lower_expr(ast, ctx, *operand)?;
             Expr::Unary(op, operand_id)
         }
         cst::ExprKind::Call(callee, args) => {
-            let callee_id = lower_expr(ast, *callee)?;
-            let arg_ids = lower_exprs(ast, args)?;
+            let callee_id = lower_expr(ast, ctx, *callee)?;
+            let arg_ids = lower_exprs(ast, ctx, args)?;
             Expr::Call(callee_id, arg_ids)
         }
         cst::ExprKind::Object(entries) => {
             let lowered = entries
                 .into_iter()
-                .map(|e| lower_object_entry(ast, e))
+                .map(|e| lower_object_entry(ast, ctx, e))
                 .collect::<Result<Vec<_>>>()?;
             Expr::Object(lowered)
         }
         cst::ExprKind::Array(elems) => {
             let lowered = elems
                 .into_iter()
-                .map(|e| lower_array_elem(ast, e))
+                .map(|e| lower_array_elem(ast, ctx, e))
                 .collect::<Result<Vec<_>>>()?;
             Expr::Array(lowered)
         }
         cst::ExprKind::Tuple(elems) => {
             let elem_ids = elems
                 .into_iter()
-                .map(|e| lower_expr(ast, e))
+                .map(|e| lower_expr(ast, ctx, e))
                 .collect::<Result<SmallVec<_>>>()?;
             Expr::Tuple(elem_ids)
         }
@@ -248,67 +373,68 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let entry_ids = entries
                 .into_iter()
                 .map(|(k, v)| {
-                    let k_id = lower_expr(ast, k)?;
-                    let v_id = lower_expr(ast, v)?;
+                    let k_id = lower_expr(ast, ctx, k)?;
+                    let v_id = lower_expr(ast, ctx, v)?;
                     Ok((k_id, v_id))
                 })
                 .collect::<Result<SmallVec<_>>>()?;
             Expr::MapLit(entry_ids)
         }
         cst::ExprKind::TupleIndex(base, idx) => {
-            let base_id = lower_expr(ast, *base)?;
+            let base_id = lower_expr(ast, ctx, *base)?;
             Expr::TupleIndex(base_id, idx)
         }
         cst::ExprKind::Index(base, idx) => {
-            let base_id = lower_expr(ast, *base)?;
-            let idx_id = lower_expr(ast, *idx)?;
+            let base_id = lower_expr(ast, ctx, *base)?;
+            let idx_id = lower_expr(ast, ctx, *idx)?;
             Expr::Index(base_id, idx_id)
         }
         cst::ExprKind::OptionalIndex(base, idx) => {
-            let base_id = lower_expr(ast, *base)?;
-            let idx_id = lower_expr(ast, *idx)?;
+            let base_id = lower_expr(ast, ctx, *base)?;
+            let idx_id = lower_expr(ast, ctx, *idx)?;
             Expr::OptionalIndex(base_id, idx_id)
         }
         cst::ExprKind::Field(base, field) => {
-            let base_id = lower_expr(ast, *base)?;
+            let base_id = lower_expr(ast, ctx, *base)?;
             Expr::Field(base_id, field)
         }
         cst::ExprKind::OptionalField(base, field) => {
-            let base_id = lower_expr(ast, *base)?;
+            let base_id = lower_expr(ast, ctx, *base)?;
             Expr::OptionalField(base_id, field)
         }
         cst::ExprKind::Variant(ty, var, args) => {
-            let arg_ids = lower_exprs(ast, args)?;
+            let arg_ids = lower_exprs(ast, ctx, args)?;
             Expr::Variant(ty, var, arg_ids)
         }
         // NOTE: No `Path` case; `Expr::Path` will be used for modules (not yet implemented).
         cst::ExprKind::Is(inner, pattern) => {
-            let inner_id = lower_expr(ast, *inner)?;
+            let inner_id = lower_expr(ast, ctx, *inner)?;
             let lowered_pat = lower_type_pattern(ast, pattern)?;
             Expr::Is(inner_id, lowered_pat)
         }
         cst::ExprKind::As(inner, ty) => {
-            let inner_id = lower_expr(ast, *inner)?;
+            let inner_id = lower_expr(ast, ctx, *inner)?;
             let ty_id = lower_type_expr(ast, ty)?;
             Expr::As(inner_id, ty_id)
         }
         cst::ExprKind::Read(inner, ty) => {
-            let inner_id = lower_expr(ast, *inner)?;
+            let inner_id = lower_expr(ast, ctx, *inner)?;
             let ty_id = lower_type_expr(ast, ty)?;
             Expr::Read(inner_id, ty_id)
         }
         cst::ExprKind::Block(stmts, tail) => {
             let stmt_ids = stmts
                 .into_iter()
-                .map(|s| lower_stmt(ast, s))
+                .map(|s| lower_stmt(ast, ctx, s))
                 .collect::<Result<Vec<_>>>()?;
-            let tail_id = tail.map(|e| lower_expr(ast, *e)).transpose()?;
+            let tail_id = tail.map(|e| lower_expr(ast, ctx, *e)).transpose()?;
             Expr::Block(stmt_ids, tail_id)
         }
         cst::ExprKind::If(cond, then_br, else_br) => {
-            let cond_id = lower_expr(ast, *cond)?;
-            let then_id = lower_expr(ast, *then_br)?;
-            let else_id = else_br.map(|e| lower_expr(ast, *e)).transpose()?;
+            let cond_id = lower_expr(ast, ctx, *cond)?;
+            let then_id = lower_expr(ast, ctx, *then_br)?;
+            let else_id =
+                else_br.map(|e| lower_expr(ast, ctx, *e)).transpose()?;
             Expr::If(cond_id, then_id, else_id)
         }
         cst::ExprKind::Closure {
@@ -326,7 +452,7 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
                 })
                 .collect::<Result<SmallVec<_>>>()?;
             let ret_id = ret.map(|t| lower_type_expr(ast, t)).transpose()?;
-            let body_id = lower_expr(ast, *body)?;
+            let body_id = lower_expr(ast, ctx, *body)?;
             Expr::Closure {
                 type_params: lower_type_params(type_params),
                 params: params_lowered,
@@ -335,40 +461,40 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             }
         }
         cst::ExprKind::Match(scrutinee, arms) => {
-            let scrutinee_id = lower_expr(ast, *scrutinee)?;
+            let scrutinee_id = lower_expr(ast, ctx, *scrutinee)?;
             let arms_lowered = arms
                 .into_iter()
-                .map(|arm| lower_match_arm(ast, arm))
+                .map(|arm| lower_match_arm(ast, ctx, arm))
                 .collect::<Result<Vec<_>>>()?;
             Expr::Match(scrutinee_id, arms_lowered)
         }
         cst::ExprKind::Unwrap(inner) => {
-            let inner_id = lower_expr(ast, *inner)?;
+            let inner_id = lower_expr(ast, ctx, *inner)?;
             Expr::Unwrap(inner_id)
         }
         cst::ExprKind::Range(start, end, inclusive) => {
-            let start_id = lower_expr(ast, *start)?;
-            let end_id = lower_expr(ast, *end)?;
+            let start_id = lower_expr(ast, ctx, *start)?;
+            let end_id = lower_expr(ast, ctx, *end)?;
             Expr::Range(start_id, end_id, inclusive)
         }
         cst::ExprKind::Annotate(inner, ty) => {
-            let inner_id = lower_expr(ast, *inner)?;
+            let inner_id = lower_expr(ast, ctx, *inner)?;
             let ty_id = lower_type_expr(ast, ty)?;
             Expr::Annotate(inner_id, ty_id)
         }
         cst::ExprKind::Json(fields) => {
             let field_ids = fields
                 .into_iter()
-                .map(|(k, v)| lower_expr(ast, v).map(|id| (k, id)))
+                .map(|(k, v)| lower_expr(ast, ctx, v).map(|id| (k, id)))
                 .collect::<Result<Vec<_>>>()?;
             Expr::Json(field_ids)
         }
         cst::ExprKind::JsonAccess(base, kind, key) => {
-            let base_id = lower_expr(ast, *base)?;
+            let base_id = lower_expr(ast, ctx, *base)?;
             let key_lowered = match key {
                 cst::JsonAccessKey::Field(name) => JsonAccessKey::Field(name),
                 cst::JsonAccessKey::Expr(e) => {
-                    let e_id = lower_expr(ast, *e)?;
+                    let e_id = lower_expr(ast, ctx, *e)?;
                     JsonAccessKey::Expr(e_id)
                 }
             };
@@ -376,29 +502,29 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
         }
         cst::ExprKind::Regex(pattern) => Expr::Regex(pattern, None),
         cst::ExprKind::Matches(lhs, rhs) => {
-            let lhs_id = lower_expr(ast, *lhs)?;
-            let rhs_id = lower_expr(ast, *rhs)?;
+            let lhs_id = lower_expr(ast, ctx, *lhs)?;
+            let rhs_id = lower_expr(ast, ctx, *rhs)?;
             Expr::Matches(lhs_id, rhs_id)
         }
         cst::ExprKind::Catch(expr, handler) => {
-            let expr_id = lower_expr(ast, *expr)?;
-            let handler_id = lower_expr(ast, *handler)?;
+            let expr_id = lower_expr(ast, ctx, *expr)?;
+            let handler_id = lower_expr(ast, ctx, *handler)?;
             Expr::Catch(expr_id, handler_id)
         }
         cst::ExprKind::Data(dbref) => {
-            let dbref = lower_db_ref(ast, dbref)?;
+            let dbref = lower_db_ref(ast, ctx, dbref)?;
             Expr::Data(dbref, None)
         }
         cst::ExprKind::Order(dbref) => {
-            let dbref = lower_db_ref(ast, dbref)?;
+            let dbref = lower_db_ref(ast, ctx, dbref)?;
             Expr::Order(dbref, None)
         }
         cst::ExprKind::Query(dbref) => {
-            let dbref = lower_db_ref(ast, dbref)?;
+            let dbref = lower_db_ref(ast, ctx, dbref)?;
             Expr::Query(dbref, None)
         }
         cst::ExprKind::Output(output) => {
-            let expr_id = lower_expr(ast, output.expr)?;
+            let expr_id = lower_expr(ast, ctx, output.expr)?;
             let format = match output.format {
                 cst::OutputFormat::Default => OutputFormat::Default,
                 cst::OutputFormat::Json => OutputFormat::Json,
@@ -407,7 +533,7 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
                 cst::OutputTarget::Stdout => OutputTarget::Stdout,
                 cst::OutputTarget::Stderr => OutputTarget::Stderr,
                 cst::OutputTarget::File(path_expr) => {
-                    let path_id = lower_expr(ast, *path_expr)?;
+                    let path_id = lower_expr(ast, ctx, *path_expr)?;
                     OutputTarget::File(path_id)
                 }
             };
@@ -418,16 +544,16 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             })
         }
         cst::ExprKind::Set(dbref, value) => {
-            let dbref = lower_db_ref(ast, dbref)?;
-            let value_id = lower_expr(ast, *value)?;
+            let dbref = lower_db_ref(ast, ctx, dbref)?;
+            let value_id = lower_expr(ast, ctx, *value)?;
             Expr::Set(dbref, value_id, None)
         }
         cst::ExprKind::Kill(dbref) => {
-            let dbref = lower_db_ref(ast, dbref)?;
+            let dbref = lower_db_ref(ast, ctx, dbref)?;
             Expr::Kill(dbref, None)
         }
         cst::ExprKind::Raise(inner) => {
-            let id = lower_expr(ast, *inner)?;
+            let id = lower_expr(ast, ctx, *inner)?;
             Expr::Raise(id)
         }
         cst::ExprKind::Forever {
@@ -436,12 +562,12 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             cont_param,
             body,
         } => {
-            let seed_id = lower_expr(ast, *seed)?;
+            let seed_id = lower_expr(ast, ctx, *seed)?;
             let state_ty =
                 state_param.1.map(|t| lower_type_expr(ast, t)).transpose()?;
             let cont_ty =
                 cont_param.1.map(|t| lower_type_expr(ast, t)).transpose()?;
-            let body_id = lower_expr(ast, *body)?;
+            let body_id = lower_expr(ast, ctx, *body)?;
             Expr::Forever {
                 seed: seed_id,
                 state_param: (state_param.0, state_ty),
@@ -453,10 +579,11 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
             let stmts = txn
                 .stmts
                 .into_iter()
-                .map(|s| lower_stmt(ast, s))
+                .map(|s| lower_stmt(ast, ctx, s))
                 .collect::<Result<Vec<_>>>()?;
-            let expr = txn.expr.map(|e| lower_expr(ast, *e)).transpose()?;
-            let modifiers = lower_txn_modifiers(ast, txn.modifiers)?;
+            let expr =
+                txn.expr.map(|e| lower_expr(ast, ctx, *e)).transpose()?;
+            let modifiers = lower_txn_modifiers(ast, ctx, txn.modifiers)?;
             Expr::Transaction(ast::TransactionExpr {
                 id: None,
                 stmts,
@@ -475,11 +602,12 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
 /// Lower a list of CST expressions to AST, returning a `SmallVec`.
 fn lower_exprs(
     ast: &mut Ast,
+    ctx: &mut Ctx,
     exprs: Vec<cst::Expr>,
 ) -> Result<SmallVec<[ExprId; 4]>> {
     exprs
         .into_iter()
-        .map(|e| lower_expr(ast, e))
+        .map(|e| lower_expr(ast, ctx, e))
         .collect::<Result<SmallVec<_>>>()
 }
 
@@ -610,10 +738,14 @@ fn lower_variant(ast: &mut Ast, v: cst::VariantCst) -> Result<VariantAst> {
 }
 
 /// Lower a CST match arm to AST.
-fn lower_match_arm(ast: &mut Ast, arm: cst::MatchArm) -> Result<MatchArm> {
+fn lower_match_arm(
+    ast: &mut Ast,
+    ctx: &mut Ctx,
+    arm: cst::MatchArm,
+) -> Result<MatchArm> {
     let pattern = lower_match_pattern(ast, arm.pattern)?;
-    let guard = arm.guard.map(|e| lower_expr(ast, e)).transpose()?;
-    let body = lower_expr(ast, arm.body)?;
+    let guard = arm.guard.map(|e| lower_expr(ast, ctx, e)).transpose()?;
+    let body = lower_expr(ast, ctx, arm.body)?;
     Ok(MatchArm {
         pattern,
         guard,
@@ -622,24 +754,31 @@ fn lower_match_arm(ast: &mut Ast, arm: cst::MatchArm) -> Result<MatchArm> {
 }
 
 /// Lower a CST array element to AST.
-fn lower_array_elem(ast: &mut Ast, elem: cst::ArrayElem) -> Result<ArrayElem> {
+fn lower_array_elem(
+    ast: &mut Ast,
+    ctx: &mut Ctx,
+    elem: cst::ArrayElem,
+) -> Result<ArrayElem> {
     match elem {
-        cst::ArrayElem::Elem(e) => lower_expr(ast, e).map(ArrayElem::Elem),
-        cst::ArrayElem::Spread(e) => lower_expr(ast, e).map(ArrayElem::Spread),
+        cst::ArrayElem::Elem(e) => lower_expr(ast, ctx, e).map(ArrayElem::Elem),
+        cst::ArrayElem::Spread(e) => {
+            lower_expr(ast, ctx, e).map(ArrayElem::Spread)
+        }
     }
 }
 
 /// Lower a CST object entry to AST.
 fn lower_object_entry(
     ast: &mut Ast,
+    ctx: &mut Ctx,
     entry: cst::ObjectEntry,
 ) -> Result<ObjectEntry> {
     match entry {
         cst::ObjectEntry::Field(k, v) => {
-            lower_expr(ast, v).map(|id| ObjectEntry::Field(k, id))
+            lower_expr(ast, ctx, v).map(|id| ObjectEntry::Field(k, id))
         }
         cst::ObjectEntry::Spread(e) => {
-            lower_expr(ast, e).map(ObjectEntry::Spread)
+            lower_expr(ast, ctx, e).map(ObjectEntry::Spread)
         }
     }
 }
@@ -647,14 +786,15 @@ fn lower_object_entry(
 /// Lower a CST subscript element to AST.
 fn lower_subscript_elem(
     ast: &mut Ast,
+    ctx: &mut Ctx,
     elem: cst::SubscriptElem,
 ) -> Result<SubscriptElem> {
     match elem {
         cst::SubscriptElem::Elem(e) => {
-            lower_expr(ast, e).map(SubscriptElem::Elem)
+            lower_expr(ast, ctx, e).map(SubscriptElem::Elem)
         }
         cst::SubscriptElem::Spread(e) => {
-            lower_expr(ast, e).map(SubscriptElem::Spread)
+            lower_expr(ast, ctx, e).map(SubscriptElem::Spread)
         }
     }
 }
@@ -662,23 +802,28 @@ fn lower_subscript_elem(
 /// Lower a list of CST subscript elements to AST.
 fn lower_subscript_elems(
     ast: &mut Ast,
+    ctx: &mut Ctx,
     elems: Vec<cst::SubscriptElem>,
 ) -> Result<SmallVec<[SubscriptElem; 4]>> {
     elems
         .into_iter()
-        .map(|e| lower_subscript_elem(ast, e))
+        .map(|e| lower_subscript_elem(ast, ctx, e))
         .collect()
 }
 
 /// Lower a CST database reference to AST.
-fn lower_db_ref(ast: &mut Ast, dbref: cst::DbRef) -> Result<DbRef> {
+fn lower_db_ref(
+    ast: &mut Ast,
+    ctx: &mut Ctx,
+    dbref: cst::DbRef,
+) -> Result<DbRef> {
     match dbref {
         cst::DbRef::Local(name, subs) => {
-            let sub_ids = lower_subscript_elems(ast, subs)?;
+            let sub_ids = lower_subscript_elems(ast, ctx, subs)?;
             Ok(DbRef::Local(name, sub_ids))
         }
         cst::DbRef::Global(name, subs) => {
-            let sub_ids = lower_subscript_elems(ast, subs)?;
+            let sub_ids = lower_subscript_elems(ast, ctx, subs)?;
             Ok(DbRef::Global(name, sub_ids))
         }
     }
@@ -732,6 +877,7 @@ fn lower_match_pattern(
 /// Lower CST transaction modifiers to AST.
 fn lower_txn_modifiers(
     ast: &mut Ast,
+    ctx: &mut Ctx,
     m: cst::TransactionModifiers,
 ) -> Result<TransactionModifiers> {
     let conflict = m.conflict.map(|c| match c {
@@ -740,7 +886,7 @@ fn lower_txn_modifiers(
             rumps_storage::ConflictStrategy::Overwrite
         }
     });
-    let timeout = m.timeout.map(|e| lower_expr(ast, *e)).transpose()?;
+    let timeout = m.timeout.map(|e| lower_expr(ast, ctx, *e)).transpose()?;
     let isolation = m.isolation.map(|i| match i {
         cst::IsolationModifier::Snapshot => {
             rumps_storage::IsolationLevel::SnapshotIsolation
@@ -758,8 +904,12 @@ fn lower_txn_modifiers(
 ///
 /// Takes the alternating literal/expression parts and parses expression strings
 /// into AST nodes. Returns an `Expr::Interpolation` containing the parsed parts.
+///
+/// Note: `_ctx` is unused because interpolated expressions are parsed fresh
+/// and unlikely to contain module file imports.
 fn lower_interpolation(
     ast: &mut Ast,
+    _ctx: &mut Ctx,
     parts: Vec<String>,
     span: crate::Span,
 ) -> Result<Expr> {

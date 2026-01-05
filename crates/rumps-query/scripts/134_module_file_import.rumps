@@ -1,0 +1,28 @@
+; Module file imports
+; Tests importing modules from files using `MODULE Name FROM "path"` syntax
+
+; Import module from file (path relative to script directory)
+MODULE MyMath FROM "../modules/lib/mymath.rumps"
+
+; ============ Test constants from imported module ============
+
+@OUTPUT MyMath.pi > 3  ; true
+@OUTPUT MyMath.e > 2  ; true
+
+; ============ Test functions from imported module ============
+
+@OUTPUT MyMath.square(5)  ; 25
+@OUTPUT MyMath.double(7)  ; 14
+@OUTPUT MyMath.is-positive(10)  ; true
+@OUTPUT MyMath.is-positive(-5)  ; false
+
+; ============ Use imported functions in expressions ============
+
+LET sq = MyMath.square(4)
+LET dbl = MyMath.double(sq)
+@OUTPUT dbl  ; 32
+
+; ============ Pass imported function as value ============
+
+LET f = MyMath.double
+@OUTPUT f(100)  ; 200

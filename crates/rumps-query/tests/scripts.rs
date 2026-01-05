@@ -4,11 +4,12 @@
 
 use std::path::Path;
 
-use rumps_query::run_capturing;
+use rumps_query::run_capturing_from_path;
 use rumps_storage::Database;
 
 fn run_script(path: &Path) -> datatest_stable::Result<()> {
-    let src = std::fs::read_to_string(path)?;
+    let abs_path = path.canonicalize()?;
+    let src = std::fs::read_to_string(&abs_path)?;
     let name = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -23,7 +24,7 @@ fn run_script(path: &Path) -> datatest_stable::Result<()> {
             Ok(db) => db,
             Err(e) => return format!("ERROR: {e}"),
         };
-        match run_capturing(&src, db).await {
+        match run_capturing_from_path(&src, &abs_path, db).await {
             Ok(out) => out,
             Err(e) => format!("ERROR: {e}"),
         }

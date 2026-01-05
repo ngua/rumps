@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Multiple module file imports\n\nMODULE Math @\"modules/lib/math.rumps\"\nMODULE Utils @\"modules/lib/utils.rumps\"\n\n; Use functions from both modules\n@OUTPUT Math.square(4)  ; 16\n@OUTPUT Utils.is-even(4)  ; true\n\n; Combine results\nLET sq = Math.square(5)\nLET str = Utils.stringify(sq)\n@OUTPUT str  ; 25\n\n@OUTPUT Utils.version  ; 1.0\n@OUTPUT Math.pi > 3  ; true\n"
+---
+16
+TRUE
+"25"
+"1.0"
+TRUE

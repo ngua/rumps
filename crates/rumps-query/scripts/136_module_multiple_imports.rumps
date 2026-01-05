@@ -1,0 +1,16 @@
+; Multiple module file imports
+
+MODULE MyMath FROM "../modules/lib/mymath.rumps"
+MODULE Utils FROM "../modules/lib/utils.rumps"
+
+; Use functions from both modules
+@OUTPUT MyMath.square(4)  ; 16
+@OUTPUT Utils.is-even(4)  ; true
+
+; Combine results
+LET sq = MyMath.square(5)
+LET str = Utils.stringify(sq)
+@OUTPUT str  ; 25
+
+@OUTPUT Utils.version  ; 1.0
+@OUTPUT MyMath.pi > 3  ; true

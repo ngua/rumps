@@ -73,12 +73,29 @@ impl Parser {
         Self::parse_tokens(&tokens)
     }
 
+    /// Parse source code with a source file path for resolving relative imports.
+    pub(crate) fn parse_with_path(
+        src: &str,
+        src_path: &std::path::Path,
+    ) -> Result<ParseResult> {
+        let tokens = Lexer::new(src).lex()?;
+        Self::parse_tokens_with_path(&tokens, Some(src_path))
+    }
+
     /// Parse a token stream into an AST.
     ///
     /// This is the two-pass entry point:
     /// 1. Parse tokens into CST (this module)
     /// 2. Lower CST to AST (`lower.rs`)
     pub(crate) fn parse_tokens(tokens: &[Spanned]) -> Result<ParseResult> {
+        Self::parse_tokens_with_path(tokens, None)
+    }
+
+    /// Parse a token stream into an AST with optional source file context.
+    fn parse_tokens_with_path(
+        tokens: &[Spanned],
+        src_path: Option<&std::path::Path>,
+    ) -> Result<ParseResult> {
         let parser = Self::program();
 
         // Find EOF span for chumsky's end-of-input handling
@@ -106,9 +123,39 @@ impl Parser {
                     })
             })
             .and_then(|cst_stmts| {
-                let (ast, stmts) = lower::program(cst_stmts)?;
+                let (ast, stmts) =
+                    lower::program_with_path(cst_stmts, src_path)?;
                 Ok(ParseResult { ast, stmts })
             })
+    }
+
+    /// Parse a token stream into CST (without lowering to AST).
+    ///
+    /// Used by `lower_module_from_file` to parse imported module files
+    /// with the calling module's context for relative path resolution.
+    pub(super) fn parse_to_cst(tokens: &[Spanned]) -> Result<Vec<cst::Stmt>> {
+        let parser = Self::program();
+
+        let eof_span = tokens
+            .iter()
+            .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
+            .unwrap_or(Span::new(0, 0));
+
+        let stream = chumsky::Stream::from_iter(
+            eof_span,
+            tokens
+                .iter()
+                .filter(|s| !matches!(s.tok, Token::Eof))
+                .map(|s| (s.tok.clone(), s.span)),
+        );
+
+        parser.parse(stream).map_err(|errs| {
+            NonEmpty::collect(errs.into_iter().map(Into::into))
+                .map(Error::multiple)
+                .unwrap_or_else(|| {
+                    Error::runtime_no_span("unknown parse error")
+                })
+        })
     }
 
     /// Program: zero or more statements separated by newlines, ending with EOF.
@@ -920,31 +967,39 @@ impl Parser {
             })
     }
 
-    /// `MODULE Name { ... }`
+    /// User-defined module declaration.
     ///
-    /// User-defined module containing functions, constants, and nested modules.
-    /// Accepts any statement inside; invalid statements (anything other than
-    /// `FUN`, `LET`, or `MODULE`) are rejected during typechecking.
+    /// Two forms are supported:
+    /// - Inline: `MODULE Name { ... }`
+    /// - File import: `MODULE Name FROM "path/to/module.rumps"`
+    ///
+    /// Accepts any statement inside inline modules; invalid statements
+    /// (anything other than `FUN`, `LET`, or `MODULE`) are rejected during
+    /// typechecking.
     fn module_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        // Inline body: `{ ... }`
+        let inline_body = just(Token::LBrace)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(stmt.separated_by(Self::newlines()).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBrace))
+            .map(cst::ModuleSource::Inline);
+        // File import: `FROM "path"`
+        let file_import = just(Token::From)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(select! { Token::String(s) => s })
+            .map(cst::ModuleSource::File);
         just(Token::Module)
             .ignore_then(Self::opt_newlines())
             .ignore_then(Self::ident())
             .then_ignore(Self::opt_newlines())
-            .then(
-                just(Token::LBrace)
-                    .ignore_then(Self::opt_newlines())
-                    .ignore_then(
-                        stmt.separated_by(Self::newlines()).allow_trailing(),
-                    )
-                    .then_ignore(Self::opt_newlines())
-                    .then_ignore(just(Token::RBrace)),
-            )
-            .map_with_span(|(name, body), span| {
-                cst::Stmt::new(cst::StmtKind::Module { name, body }, span)
+            .then(inline_body.or(file_import))
+            .map_with_span(|(name, source), span| {
+                cst::Stmt::new(cst::StmtKind::Module { name, source }, span)
             })
     }
 

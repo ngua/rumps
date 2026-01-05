@@ -39,6 +39,7 @@ pub(crate) enum Token {
     Forever,
     Transaction,
     Catch,
+    From,
 
     // Literals
     Int(i64),
@@ -166,6 +167,7 @@ impl Token {
                 "MODULE" => Some(Self::Module),
                 "FOREVER" => Some(Self::Forever),
                 "TRANSACTION" => Some(Self::Transaction),
+                "FROM" => Some(Self::From),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -217,6 +219,7 @@ impl fmt::Display for Token {
             Self::Module => write!(f, "MODULE"),
             Self::Forever => write!(f, "FOREVER"),
             Self::Transaction => write!(f, "TRANSACTION"),
+            Self::From => write!(f, "FROM"),
             // DB intrinsics (prefixed with `@`)
             Self::Set => write!(f, "@SET"),
             Self::Get => write!(f, "@GET"),

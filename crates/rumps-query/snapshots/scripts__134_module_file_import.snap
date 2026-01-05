@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Module file imports\n; Tests importing modules from files using `MODULE Name FROM \"path\"` syntax\n\n; Import module from file (path relative to script directory)\nMODULE MyMath FROM \"../modules/lib/mymath.rumps\"\n\n; ============ Test constants from imported module ============\n\n@OUTPUT MyMath.pi > 3  ; true\n@OUTPUT MyMath.e > 2  ; true\n\n; ============ Test functions from imported module ============\n\n@OUTPUT MyMath.square(5)  ; 25\n@OUTPUT MyMath.double(7)  ; 14\n@OUTPUT MyMath.is-positive(10)  ; true\n@OUTPUT MyMath.is-positive(-5)  ; false\n\n; ============ Use imported functions in expressions ============\n\nLET sq = MyMath.square(4)\nLET dbl = MyMath.double(sq)\n@OUTPUT dbl  ; 32\n\n; ============ Pass imported function as value ============\n\nLET f = MyMath.double\n@OUTPUT f(100)  ; 200\n"
+---
+TRUE
+TRUE
+25
+14
+TRUE
+FALSE
+32
+200

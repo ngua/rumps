@@ -508,7 +508,7 @@ pub(crate) enum StmtKind {
         vis: Visibility,
     },
 
-    /// User-defined module declaration: `MODULE Name { ... }`.
+    /// User-defined module declaration.
     ///
     /// Modules group related functions, constants, and nested modules.
     /// Contents can include:
@@ -517,8 +517,23 @@ pub(crate) enum StmtKind {
     /// - Nested `MODULE` definitions (registered as submodules)
     ///
     /// The body contains `Stmt`s; only `Fun`, `Let`, and `Module` are valid.
-    /// This is enforced during parsing.
-    Module { name: String, body: Vec<Stmt> },
+    /// This is enforced during typechecking.
+    ///
+    /// Two forms are supported:
+    /// - Inline: `MODULE Name { ... }`
+    /// - File import: `MODULE Name FROM "path/to/module.rumps"`
+    Module { name: String, source: ModuleSource },
+}
+
+/// Source of a module's contents.
+#[derive(Clone, Debug)]
+pub(crate) enum ModuleSource {
+    /// Inline module body: `MODULE Name { ... }`.
+    Inline(Vec<Stmt>),
+    /// File import: `MODULE Name FROM "path/to/module.rumps"`.
+    ///
+    /// The path is relative to the importing script's directory, or absolute.
+    File(String),
 }
 
 /// A CST type expression with inline span.
