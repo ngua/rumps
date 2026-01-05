@@ -26,3 +26,7 @@ LET dbl = MyMath.double(sq)
 
 LET f = MyMath.double
 @OUTPUT f(100)  ; 200
+
+; ============ Test function referencing sibling constant ============
+
+@OUTPUT MyMath.area(2.0)  ; pi * 4 = 12.56636

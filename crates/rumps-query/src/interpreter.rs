@@ -469,6 +469,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Processes the module body, registering functions and constants in a
     /// `UserModule` structure. Nested modules are supported via recursion.
+    ///
+    /// A new scope is pushed before processing and popped after, so that
+    /// closures defined in the module body can capture sibling bindings.
     async fn user_module(
         &mut self,
         name: &str,
@@ -476,7 +479,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<()> {
         let mut module = crate::env::UserModule::default();
-        self.populate_module(body, &mut module, name, span).await?;
+        self.env.scopes.push();
+        let res = self.populate_module(body, &mut module, name, span).await;
+        self.env.scopes.pop();
+        res?;
         self.env.register_user_module(name, module);
         Ok(())
     }
@@ -509,7 +515,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                             let closure =
                                 self.closure(&params, ret, fn_body)?;
                             let val_id = self.arena.add(closure, item_span);
-                            module.functions.insert(fn_name, val_id);
+                            module.functions.insert(fn_name.clone(), val_id);
+                            // Also bind in scope so sibling closures can
+                            // reference this function (mutual recursion)
+                            let name_id = self.arena.intern(&fn_name);
+                            self.env.scopes.bind(name_id, val_id);
                         }
 
                         Stmt::Let(ref pat, _, expr_id, _) => {
@@ -519,6 +529,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 module
                                     .constants
                                     .insert(const_name.clone(), val_id);
+                                // Also bind in scope so sibling closures can
+                                // reference this constant
+                                let name_id = self.arena.intern(const_name);
+                                self.env.scopes.bind(name_id, val_id);
                             }
                         }
 
@@ -528,10 +542,16 @@ impl<I: IoContext> Interpreter<'_, I> {
                         } => {
                             let mut sub = crate::env::UserModule::default();
                             let sub_path = format!("{}.{}", mod_path, sub_name);
-                            self.populate_module(
-                                &sub_body, &mut sub, &sub_path, item_span,
-                            )
-                            .await?;
+                            // Push scope for nested module so its bindings
+                            // don't leak into parent
+                            self.env.scopes.push();
+                            let res = self
+                                .populate_module(
+                                    &sub_body, &mut sub, &sub_path, item_span,
+                                )
+                                .await;
+                            self.env.scopes.pop();
+                            res?;
                             module.submodules.insert(sub_name, sub);
                         }
 

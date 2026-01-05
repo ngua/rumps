@@ -9,3 +9,5 @@
 +FUN double(x: Int) -> Int { x * 2 }
 
 +FUN is-positive(n: Int) -> Bool { n > 0 }
+
++FUN area(r: Float) -> Float { pi * r * r }
