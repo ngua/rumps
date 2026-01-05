@@ -37,4 +37,31 @@ FUN concat3[T: Monoid](a: T, b: T, c: T) -> T { a ++ b ++ c }
 @OUTPUT concat3([1], [2], [3])
 @OUTPUT concat3({ 1 => "x" }, { 2 => "y" }, { 3 => "z" })
 
+; === Option alternative (`<|>` semantics) ===
+; First `Some` wins; `None` acts as identity
+
+LET some10 = Option.Some(10)
+LET some9 = Option.Some(9)
+LET none: Option[Int] = Option.None
+
+; Some ++ None = Some (left wins)
+@OUTPUT some10 ++ none
+
+; None ++ Some = Some (right wins)
+@OUTPUT none ++ some9
+
+; None ++ None = None
+@OUTPUT none ++ none
+
+; Some ++ Some = first Some (left-biased, like Haskell `<|>`)
+@OUTPUT some10 ++ some9
+
+; Chaining: first Some in chain wins
+@OUTPUT none ++ none ++ some10 ++ some9
+
+; With generic Monoid function
+@OUTPUT concat3(none, some10, some9)  ; first non-None wins
+@OUTPUT concat3(none, none, some9)    ; last Some wins
+@OUTPUT concat3(none, none, none)     ; all None
+
 @OUTPUT "Monoid concatenation complete"

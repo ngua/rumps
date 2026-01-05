@@ -10,7 +10,7 @@ use super::Interpreter;
 use crate::ast::{BinOp, UnOp};
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::value::{Value, ValueId};
+use crate::value::{TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -91,8 +91,8 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Monoid concatenation (`++`).
     ///
-    /// Type checker guarantees both operands are `Monoid` (String, Array, Map)
-    /// and have the same type.
+    /// Type checker guarantees both operands are `Monoid` (String, Array, Map,
+    /// Option) and have the same type.
     pub(super) fn binop_concat(
         &mut self,
         left: &Value,
@@ -119,6 +119,27 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mut merged = l.clone();
                 merged.extend(r.iter().map(|(k, v)| (k.clone(), *v)));
                 Value::Map(*k_ty, *v_ty, merged)
+            }
+
+            // Option alternative (`<|>`): first `Some` wins
+            (Value::Tagged(ty1, idx1, _), Value::Tagged(ty2, idx2, _))
+                if self
+                    .type_exprs
+                    .base_type(*ty1)
+                    .is_some_and(|t| t == TypeId::OPTION)
+                    && self
+                        .type_exprs
+                        .base_type(*ty2)
+                        .is_some_and(|t| t == TypeId::OPTION) =>
+            {
+                // idx `0` = None, idx `1` = Some
+                if *idx1 == 1 {
+                    left.clone()
+                } else if *idx2 == 1 {
+                    right.clone()
+                } else {
+                    left.clone()
+                }
             }
 
             _ => typechecked!("++", "Monoid"),

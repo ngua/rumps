@@ -59,7 +59,9 @@ impl ConstraintKind {
                 "storable types are `Bool`, `Int`, `Float`, `Char`, \
                  `String`, or `Json`",
             ),
-            Self::Monoid => Some("`++` works on `String`, `Array`, and `Map`"),
+            Self::Monoid => {
+                Some("`++` works on `String`, `Array`, `Map`, and `Option`")
+            }
             Self::Indexable => {
                 Some("indexable types are `Array`, `Map`, and `String`")
             }

@@ -947,7 +947,8 @@ impl<'a> InferCtx<'a> {
             // Deferred types
             Ty::Var(_) | Ty::Unknown | Ty::Error => {}
 
-            // Range, Time, Ordering, DataStatus, FilePath, Path, RuntimeError: technically not JSON-native but we allow conversion
+            // Range, Time, Ordering, DataStatus, FilePath, Path,
+            // RuntimeError : technically not JSON-native but we allow conversion
             Ty::Range
             | Ty::Time
             | Ty::Ordering
@@ -1007,11 +1008,11 @@ impl<'a> InferCtx<'a> {
 
     /// Check that a type is monoidal (supports `++` concatenation).
     ///
-    /// Valid monoidal types are `String`, `Array[T]`, and `Map[K, V]`.
+    /// Valid monoidal types are `String`, `Array[T]`, `Map[K, V]`, and `Option[T]`.
     /// Unresolved type variables are left polymorphic (no defaulting).
     fn check_monoid(&mut self, ty: &Ty, span: Span) {
         match ty {
-            Ty::String | Ty::Array(_) | Ty::Map(_, _) => {}
+            Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_) => {}
             // Type variables remain polymorphic; caller provides concrete type
             Ty::Var(_) | Ty::Error | Ty::Unknown => {}
             _ => {
