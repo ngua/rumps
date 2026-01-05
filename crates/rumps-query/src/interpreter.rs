@@ -174,6 +174,11 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// Mapping from regex expression IDs to cache indices.
     regex_indices: HashMap<ExprId, u32>,
+
+    /// Mapping from mempty expression IDs to their resolved types.
+    ///
+    /// Populated during typechecking; used to produce the correct empty value.
+    mempty_types: HashMap<ExprId, crate::typecheck::Ty>,
 }
 
 // Public API
@@ -205,15 +210,16 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let env = Environment::new();
 
         // Run type checking after resolution
-        let (regex_cache, regex_indices) = crate::typecheck::check(
-            ast,
-            stmts,
-            &registry,
-            &type_exprs,
-            &env,
-            &arena,
-            arena.interner(),
-        )?;
+        let (regex_cache, regex_indices, mempty_types) =
+            crate::typecheck::check(
+                ast,
+                stmts,
+                &registry,
+                &type_exprs,
+                &env,
+                &arena,
+                arena.interner(),
+            )?;
 
         Ok(Self {
             ast,
@@ -224,6 +230,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             registry,
             regex_cache,
             regex_indices,
+            mempty_types,
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -265,6 +272,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             registry,
             regex_cache: Vec::new(),
             regex_indices: HashMap::new(),
+            mempty_types: HashMap::new(),
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -380,6 +388,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     .await
             }
             Expr::Transaction(ref txn) => self.transaction(txn, span).await,
+            Expr::Mempty => self.mempty(id, span),
         }
     }
 }

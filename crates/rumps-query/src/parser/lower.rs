@@ -448,6 +448,7 @@ fn lower_expr(ast: &mut Ast, expr: cst::Expr) -> Result<ExprId> {
                 modifiers,
             })
         }
+        cst::ExprKind::Mempty => Expr::Mempty,
         cst::ExprKind::Error(msg) => {
             Err(crate::Error::parse(span, msg, vec![]))?
         }
@@ -1461,6 +1462,7 @@ fn merge_expr(
                 },
             })
         }
+        Expr::Mempty => Expr::Mempty,
     };
 
     target.add_expr(new_expr, span)

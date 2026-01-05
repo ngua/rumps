@@ -1,11 +1,13 @@
 //! Variant construction and Option/Result helpers.
 
 use async_recursion::async_recursion;
+use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
 use super::Interpreter;
 use crate::ast::ExprId;
 use crate::io::IoContext;
+use crate::typecheck::Ty;
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
 use crate::{Result, Span};
 
@@ -183,6 +185,44 @@ impl<I: IoContext> Interpreter<'_, I> {
             // For other types, use Unknown for all type params
             // (Future: read type_params from TypeDef and infer properly)
             self.type_exprs.named(type_id)
+        }
+    }
+
+    /// Evaluate a `Mempty` expression (monoid identity: `_`).
+    ///
+    /// Looks up the inferred type from the type checker and produces the
+    /// appropriate empty value:
+    /// - `String` -> `""`
+    /// - `Array[T]` -> `[]`
+    /// - `Map[K, V]` -> `{}`
+    /// - `Option[T]` -> `Option.None`
+    pub(super) fn mempty(
+        &mut self,
+        id: crate::ast::ExprId,
+        span: Span,
+    ) -> crate::Result<Value> {
+        let ty = self
+            .mempty_types
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| typechecked!("mempty", "resolved type"));
+
+        match ty {
+            Ty::String => Ok(Value::String(self.arena.intern(""))),
+            Ty::Array(_) => {
+                let elem_ty = self.type_exprs.named(TypeId::UNKNOWN);
+                Ok(Value::Array(elem_ty, SmallVec::new()))
+            }
+            Ty::Map(_, _) => {
+                let k_ty = self.type_exprs.named(TypeId::UNKNOWN);
+                let v_ty = self.type_exprs.named(TypeId::UNKNOWN);
+                Ok(Value::Map(k_ty, v_ty, IndexMap::new()))
+            }
+            Ty::Option(_) => Ok(self.make_none()),
+            _ => Err(crate::Error::runtime(
+                span,
+                format!("mempty: unsupported type `{ty:?}`"),
+            )),
         }
     }
 }

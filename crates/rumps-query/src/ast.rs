@@ -935,6 +935,15 @@ pub(crate) enum Expr {
 
     /// Transaction block expression: `TRANSACTION { ... }`.
     Transaction(TransactionExpr),
+
+    /// Monoid identity (`mempty`): `_` in expression context.
+    ///
+    /// Type-inferred from context to produce the empty value for a `Monoid` type:
+    /// - `String`: `""`
+    /// - `Array[T]`: `[]`
+    /// - `Map[K, V]`: `{}`
+    /// - `Option[T]`: `Option.None`
+    Mempty,
 }
 
 /// The kind of JSON access operation.

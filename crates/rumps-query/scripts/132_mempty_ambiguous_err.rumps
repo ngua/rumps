@@ -1,0 +1,5 @@
+; Test: Ambiguous mempty type error
+; Using `_` without context to infer the monoid type should fail
+
+LET x = _
+@OUTPUT x

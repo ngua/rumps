@@ -371,6 +371,11 @@ pub(crate) enum ExprKind {
 
     /// Transaction block expression: `TRANSACTION { ... }`.
     Transaction(Box<TransactionExpr>),
+
+    /// Monoid identity (`mempty`): `_` in expression context.
+    ///
+    /// Produces the empty/identity value for the inferred `Monoid` type.
+    Mempty,
 }
 
 /// The key specification for JSON access (CST form).

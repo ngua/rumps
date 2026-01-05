@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Ambiguous mempty type error\n; Using `_` without context to infer the monoid type should fail\n\nLET x = _\n@OUTPUT x\n"
+---
+ERROR: cannot infer type; add a type annotation

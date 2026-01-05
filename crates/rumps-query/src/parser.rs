@@ -1911,9 +1911,13 @@ impl Parser {
                 cst::Expr::new(cst::ExprKind::Interpolation(parts), span)
             });
 
-        // Lexical variable
+        // Lexical variable or mempty (`_`)
         let var = Self::ident().map_with_span(|name, span| {
-            cst::Expr::new(cst::ExprKind::Var(name), span)
+            if name == "_" {
+                cst::Expr::new(cst::ExprKind::Mempty, span)
+            } else {
+                cst::Expr::new(cst::ExprKind::Var(name), span)
+            }
         });
 
         // Parenthesized expression, tuple literal, or type annotation

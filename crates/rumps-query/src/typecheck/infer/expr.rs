@@ -289,6 +289,18 @@ impl InferCtx<'_> {
 
             // Transaction block: `TRANSACTION { ... }`
             Expr::Transaction(ref txn) => self.transaction(id, txn, span),
+
+            // Mempty: `_` (monoid identity)
+            //
+            // Creates a fresh type variable with `Monoid` constraint.
+            // The concrete type is inferred from context (e.g., `_ ++ [1]` infers `Array[Int]`).
+            // Store the type variable for later resolution.
+            Expr::Mempty => {
+                let tv = Ty::Var(self.fresh_var());
+                self.constrain(Constraint::Monoid(tv.clone(), span));
+                self.mempty_types.insert(id, tv.clone());
+                tv
+            }
         }
     }
 

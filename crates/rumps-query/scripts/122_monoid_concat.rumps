@@ -64,4 +64,55 @@ LET none: Option[Int] = Option.None
 @OUTPUT concat3(none, none, some9)    ; last Some wins
 @OUTPUT concat3(none, none, none)     ; all None
 
+; === Mempty: `_` (monoid identity) ===
+; `_` produces the empty value for any Monoid type, inferred from context
+
+; String mempty
+@OUTPUT _ ++ "hello"      ; "" ++ "hello" = "hello"
+@OUTPUT "world" ++ _      ; "world" ++ "" = "world"
+
+; Array mempty
+@OUTPUT _ ++ [1, 2, 3]    ; [] ++ [1, 2, 3] = [1, 2, 3]
+@OUTPUT [4, 5] ++ _       ; [4, 5] ++ [] = [4, 5]
+
+; Map mempty
+LET m = { "x" => 10 }
+@OUTPUT _ ++ m            ; {} ++ m = m
+@OUTPUT m ++ _            ; m ++ {} = m
+
+; Option mempty (None)
+@OUTPUT _ ++ Option.Some(99)   ; None ++ Some(99) = Some(99)
+@OUTPUT Option.Some(77) ++ _   ; Some(77) ++ None = Some(77)
+@OUTPUT Option.None ++ _       ; None ++ None = None
+@OUTPUT _ ++ Option.None       ; None ++ None = None
+
+; Mempty with generic Monoid function
+@OUTPUT concat3(_, "a", "b")   ; "" ++ "a" ++ "b" = "ab"
+@OUTPUT concat3([0], _, [2])   ; [0] ++ [] ++ [2] = [0, 2]
+
+; Mempty as FOREVER seed (common pattern for accumulating)
+; Collect squares of 1..5 into an array starting from `_` (empty array)
+LET squares = FOREVER { i: 1, acc: _ } (state, cont) => {
+  IF state.i > 5 {
+    state.acc
+  } ELSE {
+    cont({ i: state.i + 1, acc: state.acc ++ [state.i * state.i] })
+  }
+}
+@OUTPUT squares
+
+; Build a string using `_` as initial accumulator
+LET words = FOREVER { i: 0, s: _ } (state, cont) => {
+  LET items = ["hello", "world", "!"]
+  IF state.i >= 3 {
+    state.s
+  } ELSE {
+    ; Note that `?? _` works fine since `_ == ""` for `String`
+    LET word = items?[state.i] ?? _
+    LET sep = IF state.i == 0 { _ } ELSE { " " }
+    cont({ i: state.i + 1, s: state.s ++ sep ++ word })
+  }
+}
+@OUTPUT words
+
 @OUTPUT "Monoid concatenation complete"

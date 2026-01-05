@@ -235,6 +235,12 @@ pub(crate) struct InferCtx<'a> {
     ///
     /// When interpreting an `Expr::Regex`, look up the cache index here.
     regex_indices: HashMap<ExprId, u32>,
+    /// Mapping from mempty expression IDs to their inferred types.
+    ///
+    /// Populated during inference with type variables; resolved after
+    /// substitution to concrete `Monoid` types. The interpreter uses
+    /// this to produce the correct empty value.
+    mempty_types: HashMap<ExprId, Ty>,
     /// Current transaction ID, if inside a `TRANSACTION` block.
     ///
     /// Used to enforce that global writes (`@SET ^...`, `@KILL ^...`) only
@@ -272,6 +278,7 @@ impl<'a> InferCtx<'a> {
             errors: Vec::new(),
             regex_cache: Vec::new(),
             regex_indices: HashMap::new(),
+            mempty_types: HashMap::new(),
             in_transaction: None,
             next_txn_id: 0,
         }
@@ -442,6 +449,9 @@ impl<'a> InferCtx<'a> {
         self.expr_types
             .values_mut()
             .for_each(|ty| *ty = ty.apply(subst));
+        self.mempty_types
+            .values_mut()
+            .for_each(|ty| *ty = ty.apply(subst));
     }
 
     /// Check for remaining unresolved type variables and emit errors.
@@ -450,34 +460,46 @@ impl<'a> InferCtx<'a> {
     /// `Ty::Var` or `Ty::Unknown` indicates incomplete inference. This emits
     /// `MissingAnnotation` errors for such cases.
     pub(crate) fn check_remaining_unknowns(&mut self) {
-        let unresolved: Vec<_> = self
-            .expr_types
+        self.expr_types
             .iter()
             .filter(|(_, ty)| Self::has_unresolved_vars(ty))
             .map(|(id, _)| {
                 self.ast.expr_span(*id).unwrap_or_else(|| Span::new(0, 0))
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into_iter()
+            .for_each(|span| {
+                self.errors.push(TypeError::MissingAnnotation(span));
+            });
 
-        unresolved.into_iter().for_each(|span| {
-            self.errors.push(TypeError::MissingAnnotation(span));
-        });
+        // Mempty expressions require concrete monoid types; any remaining
+        // `Ty::Var` or `Ty::Unknown` means we cannot produce the empty value.
+        self.mempty_types
+            .iter()
+            .filter(|(_, ty)| matches!(ty, Ty::Var(_) | Ty::Unknown))
+            .map(|(id, _)| {
+                self.ast.expr_span(*id).unwrap_or_else(|| Span::new(0, 0))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .for_each(|span| {
+                self.errors.push(TypeError::MissingAnnotation(span));
+            });
     }
 
-    /// Consume the context and return formatted errors or the regex cache.
-    ///
-    /// On success, returns the cache of compiled regex patterns. On failure,
-    /// returns formatted type errors with proper type names using the provided
-    /// registry and arena.
-    /// Consume the context, returning the regex cache and index map on success,
-    /// or formatted type errors on failure.
+    /// Consume the context, returning the regex cache, index map, and mempty
+    /// types on success, or formatted type errors on failure.
     pub(crate) fn into_result_formatted(
         self,
         registry: &TypeRegistry,
         arena: &crate::value::ValueArena,
-    ) -> crate::Result<(Vec<regex::Regex>, HashMap<ExprId, u32>)> {
+    ) -> crate::Result<(
+        Vec<regex::Regex>,
+        HashMap<ExprId, u32>,
+        HashMap<ExprId, Ty>,
+    )> {
         NonEmpty::from_vec(self.errors).map_or(
-            Ok((self.regex_cache, self.regex_indices)),
+            Ok((self.regex_cache, self.regex_indices, self.mempty_types)),
             |errs| {
                 let printer =
                     TyPrinter::new(registry, arena, &self.env.strings);
