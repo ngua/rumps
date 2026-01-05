@@ -67,7 +67,7 @@ pub(crate) struct TypeParam {
 
 // User-facing constraint enum (subset of internal Constraint)
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum UserConstraint {
+pub(crate) enum ParamConstraint {
     Numeric,
     Stringable,
     Jsonable,
@@ -89,7 +89,7 @@ pub(crate) enum UserConstraint {
 ### Phase 2: CST Updates
 
 1. Add `TypeParam` struct to `crates/rumps-query/src/parser/cst.rs`
-2. Add `UserConstraint` enum to CST
+2. Add `ParamConstraint` enum to CST
 3. Update `StmtKind::Fun`, `StmtKind::Type`, `StmtKind::Union` to use `Vec<TypeParam>` instead of `Vec<String>`
 4. Update `ExprKind::Closure` similarly
 
@@ -113,12 +113,12 @@ New pattern:
 ```rust
 let constraint = Self::ident().try_map(|name, span| {
     match name.as_str() {
-        "Numeric" => Ok(UserConstraint::Numeric),
-        "Stringable" => Ok(UserConstraint::Stringable),
-        "Jsonable" => Ok(UserConstraint::Jsonable),
-        "Subscriptable" => Ok(UserConstraint::Subscriptable),
-        "Storable" => Ok(UserConstraint::Storable),
-        "Iterable" => Ok(UserConstraint::Iterable),
+        "Numeric" => Ok(ParamConstraint::Numeric),
+        "Stringable" => Ok(ParamConstraint::Stringable),
+        "Jsonable" => Ok(ParamConstraint::Jsonable),
+        "Subscriptable" => Ok(ParamConstraint::Subscriptable),
+        "Storable" => Ok(ParamConstraint::Storable),
+        "Iterable" => Ok(ParamConstraint::Iterable),
         _ => Err(Simple::custom(span, format!("unknown constraint: {}", name))),
     }
 });
@@ -139,7 +139,7 @@ let type_param = Self::ident()
 
 ### Phase 4: AST Updates
 
-1. Add `TypeParam` and `UserConstraint` to `crates/rumps-query/src/ast.rs`
+1. Add `TypeParam` and `ParamConstraint` to `crates/rumps-query/src/ast.rs`
 2. Update `Stmt::Fun`, `Stmt::Type`, `Stmt::Union` to use `SmallVec<[TypeParam; 2]>`
 3. Update `Expr::Closure` similarly
 
@@ -179,12 +179,12 @@ let type_param_subst: HashMap<_, _> = type_params
         // Emit constraints for this type variable
         tp.constraints.iter().for_each(|c| {
             let constraint = match c {
-                UserConstraint::Numeric => Constraint::Numeric(tv.clone(), span),
-                UserConstraint::Stringable => Constraint::Stringable(tv.clone(), span),
-                UserConstraint::Jsonable => Constraint::Jsonable(tv.clone(), span),
-                UserConstraint::Subscriptable => Constraint::Subscriptable(tv.clone(), span),
-                UserConstraint::Storable => Constraint::Storable(tv.clone(), span),
-                UserConstraint::Iterable => {
+                ParamConstraint::Numeric => Constraint::Numeric(tv.clone(), span),
+                ParamConstraint::Stringable => Constraint::Stringable(tv.clone(), span),
+                ParamConstraint::Jsonable => Constraint::Jsonable(tv.clone(), span),
+                ParamConstraint::Subscriptable => Constraint::Subscriptable(tv.clone(), span),
+                ParamConstraint::Storable => Constraint::Storable(tv.clone(), span),
+                ParamConstraint::Iterable => {
                     let elem = self.fresh();
                     Constraint::Iterable { coll: tv.clone(), elem, span }
                 }

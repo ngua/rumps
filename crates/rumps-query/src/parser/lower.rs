@@ -17,20 +17,20 @@ use crate::ast::{
 use crate::Result;
 
 /// Convert a CST constraint to an AST constraint.
-fn lower_constraint(c: cst::UserConstraint) -> ast::UserConstraint {
+fn lower_constraint(c: cst::ParamConstraint) -> ast::ParamConstraint {
     match c {
-        cst::UserConstraint::Numeric => ast::UserConstraint::Numeric,
-        cst::UserConstraint::Stringable => ast::UserConstraint::Stringable,
-        cst::UserConstraint::Jsonable => ast::UserConstraint::Jsonable,
-        cst::UserConstraint::Subscriptable => {
-            ast::UserConstraint::Subscriptable
+        cst::ParamConstraint::Numeric => ast::ParamConstraint::Numeric,
+        cst::ParamConstraint::Stringable => ast::ParamConstraint::Stringable,
+        cst::ParamConstraint::Jsonable => ast::ParamConstraint::Jsonable,
+        cst::ParamConstraint::Subscriptable => {
+            ast::ParamConstraint::Subscriptable
         }
-        cst::UserConstraint::Storable => ast::UserConstraint::Storable,
-        cst::UserConstraint::Iterable(elem) => {
-            ast::UserConstraint::Iterable(elem)
+        cst::ParamConstraint::Storable => ast::ParamConstraint::Storable,
+        cst::ParamConstraint::Iterable(elem) => {
+            ast::ParamConstraint::Iterable(elem)
         }
-        cst::UserConstraint::Monoid => ast::UserConstraint::Monoid,
-        cst::UserConstraint::BitLike => ast::UserConstraint::BitLike,
+        cst::ParamConstraint::Monoid => ast::ParamConstraint::Monoid,
+        cst::ParamConstraint::BitLike => ast::ParamConstraint::BitLike,
     }
 }
 

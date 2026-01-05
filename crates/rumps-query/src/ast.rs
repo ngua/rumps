@@ -129,13 +129,13 @@ impl MatchPatternId {
     }
 }
 
-/// User-facing constraint for type parameters.
+/// Constraint for type parameters.
 ///
 /// This is a subset of the internal `Constraint` enum from the typechecker.
 /// Not all internal constraints are exposed to users; see the design doc
 /// at `TODOS/dsl/type-constraints.md` for rationale.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum UserConstraint {
+pub(crate) enum ParamConstraint {
     /// Type is `Int` or `Float`.
     Numeric,
     /// Type can be converted to string.
@@ -168,7 +168,7 @@ pub(crate) enum UserConstraint {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TypeParam {
     pub name: String,
-    pub constraints: SmallVec<[UserConstraint; 2]>,
+    pub constraints: SmallVec<[ParamConstraint; 2]>,
 }
 
 /// The AST arena; owns all expressions and statements.

@@ -11,9 +11,9 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
-    JsonAccessKey, JsonAccessKind, Literal, MatchArm, ObjectEntry, StmtId,
-    SubscriptElem, TransactionExpr, TxnId, TypeParam, TypePattern, UnOp,
-    UserConstraint,
+    JsonAccessKey, JsonAccessKind, Literal, MatchArm, ObjectEntry,
+    ParamConstraint, StmtId, SubscriptElem, TransactionExpr, TxnId, TypeParam,
+    TypePattern, UnOp,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::{ConstraintKind, TypeError};
@@ -1042,22 +1042,22 @@ impl InferCtx<'_> {
             if let Some(tv) = type_param_subst.get(&id) {
                 tp.constraints.iter().for_each(|c| {
                     let constraint = match c {
-                        UserConstraint::Numeric => {
+                        ParamConstraint::Numeric => {
                             Constraint::Numeric(tv.clone(), span)
                         }
-                        UserConstraint::Stringable => {
+                        ParamConstraint::Stringable => {
                             Constraint::Stringable(tv.clone(), span)
                         }
-                        UserConstraint::Jsonable => {
+                        ParamConstraint::Jsonable => {
                             Constraint::Jsonable(tv.clone(), span)
                         }
-                        UserConstraint::Subscriptable => {
+                        ParamConstraint::Subscriptable => {
                             Constraint::Subscriptable(tv.clone(), span)
                         }
-                        UserConstraint::Storable => {
+                        ParamConstraint::Storable => {
                             Constraint::Storable(tv.clone(), span)
                         }
-                        UserConstraint::Iterable(elem_name) => {
+                        ParamConstraint::Iterable(elem_name) => {
                             let elem = elem_name
                                 .as_ref()
                                 .map(|el| {
@@ -1081,10 +1081,10 @@ impl InferCtx<'_> {
                                 span,
                             }
                         }
-                        UserConstraint::Monoid => {
+                        ParamConstraint::Monoid => {
                             Constraint::Monoid(tv.clone(), span)
                         }
-                        UserConstraint::BitLike => {
+                        ParamConstraint::BitLike => {
                             Constraint::BitLike(tv.clone(), span)
                         }
                     };

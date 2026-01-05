@@ -10,8 +10,8 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
-    OutputFormat, OutputStmt, OutputTarget, Stmt, StmtId, SubscriptElem, TxnId,
-    TypeParam, UnOp, UserConstraint,
+    OutputFormat, OutputStmt, OutputTarget, ParamConstraint, Stmt, StmtId,
+    SubscriptElem, TxnId, TypeParam, UnOp,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
@@ -240,7 +240,7 @@ impl InferCtx<'_> {
 
         // Second pass: process constraints now that all type params are known
         let mut scheme_constraints: SmallVec<
-            [(TyVar, UserConstraint, Option<TyVar>); 2],
+            [(TyVar, ParamConstraint, Option<TyVar>); 2],
         > = SmallVec::new();
 
         type_params.iter().for_each(|tp| {
@@ -250,7 +250,7 @@ impl InferCtx<'_> {
             tp.constraints.iter().for_each(|c| {
                 // Resolve element type name for Iterable[T]
                 let elem_tv = match c {
-                    UserConstraint::Iterable(Some(el)) => {
+                    ParamConstraint::Iterable(Some(el)) => {
                         let tv = name_to_tv.get(el.as_str()).copied();
                         if tv.is_none() {
                             self.error(TypeError::Custom {
@@ -269,22 +269,22 @@ impl InferCtx<'_> {
 
                 // Emit constraint for checking the function body
                 let constraint = match c {
-                    UserConstraint::Numeric => {
+                    ParamConstraint::Numeric => {
                         Constraint::Numeric(ty.clone(), span)
                     }
-                    UserConstraint::Stringable => {
+                    ParamConstraint::Stringable => {
                         Constraint::Stringable(ty.clone(), span)
                     }
-                    UserConstraint::Jsonable => {
+                    ParamConstraint::Jsonable => {
                         Constraint::Jsonable(ty.clone(), span)
                     }
-                    UserConstraint::Subscriptable => {
+                    ParamConstraint::Subscriptable => {
                         Constraint::Subscriptable(ty.clone(), span)
                     }
-                    UserConstraint::Storable => {
+                    ParamConstraint::Storable => {
                         Constraint::Storable(ty.clone(), span)
                     }
-                    UserConstraint::Iterable(_) => {
+                    ParamConstraint::Iterable(_) => {
                         // Use resolved elem type or fresh var
                         let elem = elem_tv
                             .map(Ty::Var)
@@ -295,10 +295,10 @@ impl InferCtx<'_> {
                             span,
                         }
                     }
-                    UserConstraint::Monoid => {
+                    ParamConstraint::Monoid => {
                         Constraint::Monoid(ty.clone(), span)
                     }
-                    UserConstraint::BitLike => {
+                    ParamConstraint::BitLike => {
                         Constraint::BitLike(ty.clone(), span)
                     }
                 };

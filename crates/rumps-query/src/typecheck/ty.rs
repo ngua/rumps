@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use indexmap::IndexMap;
 use smallvec::SmallVec;
 
-use crate::ast::UserConstraint;
+use crate::ast::ParamConstraint;
 use crate::intern::StringId;
 use crate::TypeId;
 
@@ -285,7 +285,7 @@ pub(crate) struct Scheme {
     /// - The constraint itself
     /// - For `Iterable[T]`, the element type's TyVar (resolved from name)
     pub(crate) constraints:
-        SmallVec<[(TyVar, UserConstraint, Option<TyVar>); 2]>,
+        SmallVec<[(TyVar, ParamConstraint, Option<TyVar>); 2]>,
 }
 
 impl Scheme {
@@ -341,7 +341,7 @@ impl Scheme {
     pub(crate) fn instantiate(
         &self,
         next: &mut u32,
-    ) -> (Ty, SmallVec<[(Ty, UserConstraint, Option<Ty>); 2]>) {
+    ) -> (Ty, SmallVec<[(Ty, ParamConstraint, Option<Ty>); 2]>) {
         if self.vars.is_empty() {
             (self.ty.clone(), SmallVec::new())
         } else {

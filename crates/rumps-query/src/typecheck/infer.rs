@@ -341,21 +341,21 @@ impl<'a> InferCtx<'a> {
     pub(crate) fn emit_user_constraints(
         &mut self,
         constraints: smallvec::SmallVec<
-            [(Ty, crate::ast::UserConstraint, Option<Ty>); 2],
+            [(Ty, crate::ast::ParamConstraint, Option<Ty>); 2],
         >,
         span: Span,
     ) {
-        use crate::ast::UserConstraint;
+        use crate::ast::ParamConstraint;
         constraints.into_iter().for_each(|(ty, c, elem_ty)| {
             let constraint = match c {
-                UserConstraint::Numeric => Constraint::Numeric(ty, span),
-                UserConstraint::Stringable => Constraint::Stringable(ty, span),
-                UserConstraint::Jsonable => Constraint::Jsonable(ty, span),
-                UserConstraint::Subscriptable => {
+                ParamConstraint::Numeric => Constraint::Numeric(ty, span),
+                ParamConstraint::Stringable => Constraint::Stringable(ty, span),
+                ParamConstraint::Jsonable => Constraint::Jsonable(ty, span),
+                ParamConstraint::Subscriptable => {
                     Constraint::Subscriptable(ty, span)
                 }
-                UserConstraint::Storable => Constraint::Storable(ty, span),
-                UserConstraint::Iterable(_) => {
+                ParamConstraint::Storable => Constraint::Storable(ty, span),
+                ParamConstraint::Iterable(_) => {
                     // Use pre-resolved element type if available, else fresh
                     let elem = elem_ty.unwrap_or_else(|| self.fresh());
                     Constraint::Iterable {
@@ -364,8 +364,8 @@ impl<'a> InferCtx<'a> {
                         span,
                     }
                 }
-                UserConstraint::Monoid => Constraint::Monoid(ty, span),
-                UserConstraint::BitLike => Constraint::BitLike(ty, span),
+                ParamConstraint::Monoid => Constraint::Monoid(ty, span),
+                ParamConstraint::BitLike => Constraint::BitLike(ty, span),
             };
             self.constrain(constraint);
         });

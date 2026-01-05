@@ -2507,7 +2507,7 @@ impl Parser {
     /// Recognizes: `Numeric`, `Stringable`, `Jsonable`, `Subscriptable`,
     /// `Storable`, `Iterable`, `Iterable[T]`.
     fn constraint(
-    ) -> impl chumsky::Parser<Token, cst::UserConstraint, Error = ParseErr> + Clone
+    ) -> impl chumsky::Parser<Token, cst::ParamConstraint, Error = ParseErr> + Clone
     {
         // Optional element type for Iterable: `[T]`
         let elem_param = just(Token::LBracket)
@@ -2517,14 +2517,14 @@ impl Parser {
         select! { Token::Ident(s) => s }
             .then(elem_param.or_not())
             .try_map(|(name, elem), span| match name.as_str() {
-                "Numeric" => Ok(cst::UserConstraint::Numeric),
-                "Stringable" => Ok(cst::UserConstraint::Stringable),
-                "Jsonable" => Ok(cst::UserConstraint::Jsonable),
-                "Subscriptable" => Ok(cst::UserConstraint::Subscriptable),
-                "Storable" => Ok(cst::UserConstraint::Storable),
-                "Iterable" => Ok(cst::UserConstraint::Iterable(elem)),
-                "Monoid" => Ok(cst::UserConstraint::Monoid),
-                "BitLike" => Ok(cst::UserConstraint::BitLike),
+                "Numeric" => Ok(cst::ParamConstraint::Numeric),
+                "Stringable" => Ok(cst::ParamConstraint::Stringable),
+                "Jsonable" => Ok(cst::ParamConstraint::Jsonable),
+                "Subscriptable" => Ok(cst::ParamConstraint::Subscriptable),
+                "Storable" => Ok(cst::ParamConstraint::Storable),
+                "Iterable" => Ok(cst::ParamConstraint::Iterable(elem)),
+                "Monoid" => Ok(cst::ParamConstraint::Monoid),
+                "BitLike" => Ok(cst::ParamConstraint::BitLike),
                 _ => Err(Simple::custom(
                     span,
                     format!(
