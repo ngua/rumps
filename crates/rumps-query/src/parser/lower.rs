@@ -12,9 +12,17 @@ use crate::ast::{
     Expr, ExprId, JsonAccessKey, MatchArm, MatchPattern, MatchPatternId,
     ObjectEntry, OutputFormat, OutputStmt, OutputTarget, RestPattern, Stmt,
     StmtId, SubscriptElem, TransactionModifiers, TypeDefAst, TypePattern,
-    VariantAst,
+    VariantAst, Visibility,
 };
 use crate::Result;
+
+/// Convert CST visibility to AST visibility.
+fn lower_visibility(vis: cst::Visibility) -> Visibility {
+    match vis {
+        cst::Visibility::Private => Visibility::Private,
+        cst::Visibility::Public => Visibility::Public,
+    }
+}
 
 /// Convert a CST constraint to an AST constraint.
 fn lower_constraint(c: cst::ParamConstraint) -> ast::ParamConstraint {
@@ -63,11 +71,11 @@ pub(crate) fn program(stmts: Vec<cst::Stmt>) -> Result<(Ast, Vec<StmtId>)> {
 fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
     let span = stmt.span;
     let s = match stmt.kind {
-        cst::StmtKind::Let(pat, ty, expr) => {
+        cst::StmtKind::Let(pat, ty, expr, vis) => {
             let pat = lower_binding_pattern(pat);
             let ty_id = ty.map(|t| lower_type_expr(ast, t)).transpose()?;
             let expr_id = lower_expr(ast, expr)?;
-            Stmt::Let(pat, ty_id, expr_id)
+            Stmt::Let(pat, ty_id, expr_id, lower_visibility(vis))
         }
         cst::StmtKind::Set(dbref, value) => {
             let dbref = lower_db_ref(ast, dbref)?;
@@ -108,6 +116,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
             params,
             ret,
             body,
+            vis,
         } => {
             let params_lowered = params
                 .into_iter()
@@ -125,36 +134,42 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 params: params_lowered,
                 ret: ret_id,
                 body: body_id,
+                vis: lower_visibility(vis),
             }
         }
         cst::StmtKind::Type {
             name,
             type_params,
             def,
+            vis,
         } => {
             let def_lowered = lower_type_def(ast, def)?;
             Stmt::Type {
                 name,
                 type_params: lower_type_params(type_params),
                 def: def_lowered,
+                vis: lower_visibility(vis),
             }
         }
         cst::StmtKind::NewType {
             name,
             type_params,
             target,
+            vis,
         } => {
             let target_id = lower_type_expr(ast, target)?;
             Stmt::NewType {
                 name,
                 type_params: lower_type_params(type_params),
                 target: target_id,
+                vis: lower_visibility(vis),
             }
         }
         cst::StmtKind::Union {
             name,
             type_params,
             members,
+            vis,
         } => {
             let member_ids = members
                 .into_iter()
@@ -164,6 +179,7 @@ fn lower_stmt(ast: &mut Ast, stmt: cst::Stmt) -> Result<StmtId> {
                 name,
                 type_params: lower_type_params(type_params),
                 members: member_ids,
+                vis: lower_visibility(vis),
             }
         }
         cst::StmtKind::Module { name, body } => {
@@ -1008,12 +1024,12 @@ fn merge_stmt(
         .ok_or_else(|| crate::Error::parse(span, "invalid stmt id", vec![]))?
         .clone();
     let new_stmt = match stmt {
-        Stmt::Let(pat, ty_ann, expr) => {
+        Stmt::Let(pat, ty_ann, expr, vis) => {
             let new_ty = ty_ann
                 .map(|t| merge_type_expr(target, source, t, span))
                 .transpose()?;
             let new_expr = merge_expr(target, source, expr, span)?;
-            Stmt::Let(pat, new_ty, new_expr)
+            Stmt::Let(pat, new_ty, new_expr, vis)
         }
         Stmt::Set(dbref, expr, txn) => {
             let new_dbref = merge_dbref(target, source, &dbref, span)?;
@@ -1038,6 +1054,7 @@ fn merge_stmt(
             params,
             ret,
             body,
+            vis,
         } => {
             let new_params: Result<SmallVec<_>> = params
                 .into_iter()
@@ -1058,12 +1075,14 @@ fn merge_stmt(
                 params: new_params?,
                 ret: new_ret,
                 body: new_body,
+                vis,
             }
         }
         Stmt::Type {
             name,
             type_params,
             def,
+            vis,
         } => {
             // TypeDefAst variants only contain AstTypeExprId
             let new_def = match def {
@@ -1091,24 +1110,28 @@ fn merge_stmt(
                 name,
                 type_params,
                 def: new_def,
+                vis,
             }
         }
         Stmt::NewType {
             name,
             type_params,
             target: ty,
+            vis,
         } => {
             let new_ty = merge_type_expr(target, source, ty, span)?;
             Stmt::NewType {
                 name,
                 type_params,
                 target: new_ty,
+                vis,
             }
         }
         Stmt::Union {
             name,
             type_params,
             members,
+            vis,
         } => {
             let new_members: Result<SmallVec<_>> = members
                 .iter()
@@ -1118,6 +1141,7 @@ fn merge_stmt(
                 name,
                 type_params,
                 members: new_members?,
+                vis,
             }
         }
         Stmt::Module { name, body } => {

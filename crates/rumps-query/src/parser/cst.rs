@@ -410,6 +410,19 @@ pub(crate) enum RestPattern {
     Bind(String),
 }
 
+/// Visibility modifier for module members.
+///
+/// Inside a module, items are private by default. Use `+` prefix to make
+/// them public (e.g., `+LET`, `+FUN`, `+TYPE`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Visibility {
+    /// Private; only accessible within the module (default).
+    #[default]
+    Private,
+    /// Public; accessible from outside the module (`+` prefix).
+    Public,
+}
+
 /// A binding pattern for destructuring in `LET` statements (CST form).
 #[derive(Clone, Debug)]
 pub(crate) enum BindingPattern {
@@ -434,7 +447,9 @@ pub(crate) enum BindingPattern {
 #[derive(Clone, Debug)]
 pub(crate) enum StmtKind {
     /// Lexical binding with destructuring.
-    Let(BindingPattern, Option<TypeExpr>, Expr),
+    ///
+    /// The visibility is only meaningful inside modules (`+LET` for public).
+    Let(BindingPattern, Option<TypeExpr>, Expr, Visibility),
 
     /// B-tree assignment.
     Set(DbRef, Expr),
@@ -449,36 +464,48 @@ pub(crate) enum StmtKind {
     Expr(Expr),
 
     /// Named function definition.
+    ///
+    /// The visibility is only meaningful inside modules (`+FUN` for public).
     Fun {
         name: String,
         type_params: Vec<TypeParam>,
         params: SmallVec<[(String, Option<TypeExpr>); 4]>,
         ret: Option<TypeExpr>,
         body: Expr,
+        vis: Visibility,
     },
 
     /// User-defined sum type declaration: `TYPE Name = Variant1 | Variant2(T)`.
+    ///
+    /// The visibility is only meaningful inside modules (`+TYPE` for public).
     Type {
         name: String,
         type_params: Vec<TypeParam>,
         def: TypeDefCst,
+        vis: Visibility,
     },
 
     /// Transparent type alias: `NEWTYPE Name = Type` or `NEWTYPE Name[T] = Type`.
+    ///
+    /// The visibility is only meaningful inside modules (`+NEWTYPE` for public).
     NewType {
         name: String,
         type_params: Vec<TypeParam>,
         target: TypeExpr,
+        vis: Visibility,
     },
 
     /// Union type declaration: `UNION Name = Type1 | Type2 | ...`.
     ///
     /// Anonymous unions for function parameters etc. use inline syntax
     /// (`x: Int | String`). Named unions are registered in the type registry.
+    ///
+    /// The visibility is only meaningful inside modules (`+UNION` for public).
     Union {
         name: String,
         type_params: Vec<TypeParam>,
         members: Vec<TypeExpr>,
+        vis: Visibility,
     },
 
     /// User-defined module declaration: `MODULE Name { ... }`.

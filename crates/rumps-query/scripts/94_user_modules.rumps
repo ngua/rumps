@@ -1,12 +1,13 @@
 ; User-defined modules
 ; Tests MODULE definition, functions, constants, and nested modules
+; Uses `+` prefix for public members; members without `+` are private
 
 ; ============ Basic module with functions ============
 
 MODULE Counter {
-  FUN new() -> Int { 0 }
-  FUN inc(x: Int) -> Int { x + 1 }
-  FUN add(x: Int, y: Int) -> Int { x + y }
+  +FUN new() -> Int { 0 }
+  +FUN inc(x: Int) -> Int { x + 1 }
+  +FUN add(x: Int, y: Int) -> Int { x + y }
 }
 
 LET c = Counter.new()
@@ -21,9 +22,9 @@ LET c2 = Counter.add(c1, 10)
 ; ============ Module with constants ============
 
 MODULE Config {
-  LET max-size = 1000
-  LET default-name = "unnamed"
-  LET ratio = 3.14
+  +LET max-size = 1000
+  +LET default-name = "unnamed"
+  +LET ratio = 3.14
 }
 
 @OUTPUT Config.max-size  ; 1000
@@ -37,13 +38,13 @@ LET scaled = Config.max-size * 2
 ; ============ Module with both functions and constants ============
 
 MODULE Geometry {
-  LET pi = 3.14159
+  +LET pi = 3.14159
 
-  FUN area(r: Float) -> Float {
+  +FUN area(r: Float) -> Float {
     Geometry.pi * r * r
   }
 
-  FUN circumference(r: Float) -> Float {
+  +FUN circumference(r: Float) -> Float {
     2.0 * Geometry.pi * r
   }
 }
@@ -59,15 +60,15 @@ LET circ = Geometry.circumference(1.0)
 ; ============ Nested modules ============
 
 MODULE Outer {
-  LET val = 100
+  +LET val = 100
 
-  FUN value() -> Int { Outer.val }
+  +FUN value() -> Int { Outer.val }
 
   MODULE Inner {
-    LET secret = 42
+    +LET secret = 42
 
-    FUN get-secret() -> Int { Outer.Inner.secret }
-    FUN combined() -> Int { Outer.val + Outer.Inner.secret }
+    +FUN get-secret() -> Int { Outer.Inner.secret }
+    +FUN combined() -> Int { Outer.val + Outer.Inner.secret }
   }
 }
 
@@ -80,8 +81,8 @@ MODULE Outer {
 ; ============ Generic functions in modules ============
 
 MODULE Utils {
-  FUN identity[T](x: T) -> T { x }
-  FUN pair[A, B](a: A, b: B) -> (A, B) { (a, b) }
+  +FUN identity[T](x: T) -> T { x }
+  +FUN pair[A, B](a: A, b: B) -> (A, B) { (a, b) }
 }
 
 LET id-int = Utils.identity(42)
@@ -102,7 +103,7 @@ LET result = inc-fn(5)
 ; ============ Module with closures ============
 
 MODULE Adder {
-  FUN make(n: Int) -> (Int) -> Int {
+  +FUN make(n: Int) -> (Int) -> Int {
     x => x + n
   }
 }
@@ -116,11 +117,11 @@ LET add10 = Adder.make(10)
 ; ============ Monomorphic higher-order functions ============
 
 MODULE MonoHof {
-  FUN apply(f: (Int) -> Int, x: Int) -> Int {
+  +FUN apply(f: (Int) -> Int, x: Int) -> Int {
     f(x)
   }
 
-  FUN map-twice(f: (Int) -> Int, x: Int) -> Int {
+  +FUN map-twice(f: (Int) -> Int, x: Int) -> Int {
     f(f(x))
   }
 }
@@ -131,11 +132,11 @@ MODULE MonoHof {
 ; ============ Polymorphic higher-order functions ============
 
 MODULE PolyHof {
-  FUN apply[T, U](f: (T) -> U, x: T) -> U {
+  +FUN apply[T, U](f: (T) -> U, x: T) -> U {
     f(x)
   }
 
-  FUN compose[A, B, C](f: (B) -> C, g: (A) -> B, x: A) -> C {
+  +FUN compose[A, B, C](f: (B) -> C, g: (A) -> B, x: A) -> C {
     f(g(x))
   }
 }
@@ -155,16 +156,16 @@ MODULE PolyHof {
 ; ============ Module with TYPE definitions ============
 
 MODULE Shapes {
-  TYPE Shape = Circle(Float) | Rectangle(Float, Float)
+  +TYPE Shape = Circle(Float) | Rectangle(Float, Float)
 
-  FUN area(s: Shapes.Shape) -> Float {
+  +FUN area(s: Shapes.Shape) -> Float {
     MATCH s {
       Shapes.Shape.Circle(r) => 3.14159 * r * r
       Shapes.Shape.Rectangle(w, h) => w * h
     }
   }
 
-  FUN describe(s: Shapes.Shape) -> String {
+  +FUN describe(s: Shapes.Shape) -> String {
     MATCH s {
       Shapes.Shape.Circle(_) => "circle"
       Shapes.Shape.Rectangle(_, _) => "rectangle"
@@ -183,13 +184,13 @@ LET r = Shapes.Shape.Rectangle(3.0, 4.0)
 ; ============ Module with NEWTYPE ============
 
 MODULE Users {
-  NEWTYPE User = { name: String, age: Int }
+  +NEWTYPE User = { name: String, age: Int }
 
-  FUN greet(u: Users.User) -> String {
+  +FUN greet(u: Users.User) -> String {
     "Hello, {u.name}"
   }
 
-  FUN is-adult(u: Users.User) -> Bool {
+  +FUN is-adult(u: Users.User) -> Bool {
     u.age >= 18
   }
 }
@@ -204,9 +205,9 @@ LET child: Users.User = { name: "Bob", age: 10 }
 ; ============ Module with UNION definition ============
 
 MODULE Data {
-  UNION Primitive = Bool | Int | Float | String
+  +UNION Primitive = Bool | Int | Float | String
 
-  FUN stringify(p: Data.Primitive) -> String {
+  +FUN stringify(p: Data.Primitive) -> String {
     p as String
   }
 }
@@ -220,9 +221,9 @@ LET s: Data.Primitive = "hello"
 
 MODULE Outer2 {
   MODULE Inner2 {
-    TYPE Status = Active | Inactive
+    +TYPE Status = Active | Inactive
 
-    FUN is-active(s: Outer2.Inner2.Status) -> Bool {
+    +FUN is-active(s: Outer2.Inner2.Status) -> Bool {
       MATCH s {
         Outer2.Inner2.Status.Active => true
         Outer2.Inner2.Status.Inactive => false
@@ -239,9 +240,9 @@ LET inactive = Outer2.Inner2.Status.Inactive
 ; ============ Generic type in module ============
 
 MODULE Container {
-  TYPE Box[T] = Wrapped(T) | Empty
+  +TYPE Box[T] = Wrapped(T) | Empty
 
-  FUN unwrap-or[T](b: Container.Box[T], default: T) -> T {
+  +FUN unwrap-or[T](b: Container.Box[T], default: T) -> T {
     MATCH b {
       Container.Box.Wrapped(v) => v
       Container.Box.Empty => default

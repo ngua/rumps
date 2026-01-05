@@ -190,14 +190,20 @@ impl Parser {
         let type_ann =
             just(Token::Colon).ignore_then(Self::type_expr()).or_not();
 
-        just(Token::Let)
-            .ignore_then(Self::binding_pattern())
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::Let))
+            .then(Self::binding_pattern())
             .then(type_ann)
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
             .then(Self::expr(stmt))
-            .map_with_span(|((pat, ty_ann), val), span| {
-                cst::Stmt::new(cst::StmtKind::Let(pat, ty_ann, val), span)
+            .map_with_span(|(((vis, pat), ty_ann), val), span| {
+                cst::Stmt::new(cst::StmtKind::Let(pat, ty_ann, val, vis), span)
             })
     }
 
@@ -740,9 +746,15 @@ impl Parser {
         // Body block
         let body = Self::block(stmt);
 
-        just(Token::Fun)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::ident())
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::Fun))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::ident())
             .then_ignore(Self::opt_newlines())
             .then(Self::type_params())
             .then_ignore(Self::opt_newlines())
@@ -751,7 +763,7 @@ impl Parser {
             .then(body)
             .map_with_span(
                 |(
-                    (((name, type_params), params_vec), ret),
+                    ((((vis, name), type_params), params_vec), ret),
                     (stmts, blk_span),
                 ),
                  span| {
@@ -764,6 +776,7 @@ impl Parser {
                             params,
                             ret,
                             body,
+                            vis,
                         },
                         span,
                     )
@@ -803,20 +816,27 @@ impl Parser {
             .allow_leading() // Allow leading `|` for multi-line formatting
             .map(cst::TypeDefCst::Sum);
 
-        just(Token::Type)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::ident())
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::Type))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::ident())
             .then(Self::type_params())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
             .then(sum_def)
-            .map_with_span(|((name, type_params), def), span| {
+            .map_with_span(|(((vis, name), type_params), def), span| {
                 cst::Stmt::new(
                     cst::StmtKind::Type {
                         name,
                         type_params,
                         def,
+                        vis,
                     },
                     span,
                 )
@@ -830,20 +850,27 @@ impl Parser {
     /// with `Int`.
     fn newtype_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
     {
-        just(Token::NewType)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::ident())
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::NewType))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::ident())
             .then(Self::type_params())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
             .then(Self::type_expr())
-            .map_with_span(|((name, type_params), target), span| {
+            .map_with_span(|(((vis, name), type_params), target), span| {
                 cst::Stmt::new(
                     cst::StmtKind::NewType {
                         name,
                         type_params,
                         target,
+                        vis,
                     },
                     span,
                 )
@@ -866,20 +893,27 @@ impl Parser {
             .at_least(2)
             .allow_leading();
 
-        just(Token::Union)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::ident())
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::Union))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::ident())
             .then(Self::type_params())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
             .then(members)
-            .map_with_span(|((name, type_params), members), span| {
+            .map_with_span(|(((vis, name), type_params), members), span| {
                 cst::Stmt::new(
                     cst::StmtKind::Union {
                         name,
                         type_params,
                         members,
+                        vis,
                     },
                     span,
                 )

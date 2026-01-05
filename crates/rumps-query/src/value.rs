@@ -1750,6 +1750,7 @@ impl TypeRegistry {
                     name,
                     type_params,
                     def,
+                    ..
                 } => {
                     let qname = prefix.map_or_else(
                         || name.clone(),
@@ -1761,6 +1762,7 @@ impl TypeRegistry {
                     name,
                     type_params,
                     members,
+                    ..
                 } => {
                     let qname = prefix.map_or_else(
                         || name.clone(),
@@ -1772,6 +1774,7 @@ impl TypeRegistry {
                     name,
                     type_params,
                     target,
+                    ..
                 } => {
                     let qname = prefix.map_or_else(
                         || name.clone(),

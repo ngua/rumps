@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use super::{Constraint, InferCtx};
-use crate::ast::{AstTypeExpr, AstTypeExprId};
+use crate::ast::{AstTypeExpr, AstTypeExprId, Visibility};
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty};
@@ -276,34 +276,48 @@ impl InferCtx<'_> {
                 AstTypeExpr::Named(name) => {
                     let name_id = self.env.intern(name);
                     // Check substitution first (for type params)
-                    let ty = subst
-                        .get(&name_id)
-                        .cloned()
-                        .unwrap_or_else(|| self.named_type_to_ty(name));
-                    // Emit error for unknown types
-                    if ty == Ty::Unknown {
+                    subst.get(&name_id).cloned().unwrap_or_else(|| {
+                        // Check visibility for module-qualified types
                         let span =
                             self.ast.type_expr_span(id).unwrap_or_default();
-                        self.error(TypeError::UnknownType(name.clone(), span));
-                        Ty::Error
-                    } else {
-                        ty
-                    }
+                        if self.check_type_visibility(name, span) {
+                            let ty = self.named_type_to_ty(name);
+                            // Emit error for unknown types
+                            if ty == Ty::Unknown {
+                                self.error(TypeError::UnknownType(
+                                    name.clone(),
+                                    span,
+                                ));
+                                Ty::Error
+                            } else {
+                                ty
+                            }
+                        } else {
+                            Ty::Error
+                        }
+                    })
                 }
                 AstTypeExpr::App(name, args) => {
-                    let arg_tys: Vec<_> = args
-                        .iter()
-                        .map(|a| self.ast_type_to_ty(*a, subst))
-                        .collect();
-                    let ty = self.parameterized_type_to_ty(name, arg_tys);
-                    // Emit error for unknown parameterized types
-                    if ty == Ty::Unknown {
-                        let span =
-                            self.ast.type_expr_span(id).unwrap_or_default();
-                        self.error(TypeError::UnknownType(name.clone(), span));
-                        Ty::Error
+                    // Check visibility for module-qualified types
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    if self.check_type_visibility(name, span) {
+                        let arg_tys: Vec<_> = args
+                            .iter()
+                            .map(|a| self.ast_type_to_ty(*a, subst))
+                            .collect();
+                        let ty = self.parameterized_type_to_ty(name, arg_tys);
+                        // Emit error for unknown parameterized types
+                        if ty == Ty::Unknown {
+                            self.error(TypeError::UnknownType(
+                                name.clone(),
+                                span,
+                            ));
+                            Ty::Error
+                        } else {
+                            ty
+                        }
                     } else {
-                        ty
+                        Ty::Error
                     }
                 }
                 AstTypeExpr::Fn(params, ret) => {
@@ -432,6 +446,42 @@ impl InferCtx<'_> {
                     })
             }
         }
+    }
+
+    /// Check visibility for a module-qualified type name.
+    ///
+    /// Returns `true` if the type is accessible, `false` if private.
+    /// Emits a `PrivateAccess` error for private types.
+    ///
+    /// Non-module types (no `.` in name) always return `true`.
+    fn check_type_visibility(&mut self, name: &str, span: Span) -> bool {
+        // Only check visibility for module-qualified types
+        name.contains('.')
+            .then(|| {
+                self.env
+                    .lookup_user_module_type_vis(name)
+                    .is_none_or(|vis| {
+                        if vis == Visibility::Private {
+                            // Extract module path and type name for error
+                            let parts: Vec<_> = name.split('.').collect();
+                            let (type_name, module_parts) = parts
+                                .split_last()
+                                .map_or(("", vec![]), |(t, m)| {
+                                    (*t, m.to_vec())
+                                });
+                            let module = module_parts.join(".");
+                            self.error(TypeError::PrivateAccess {
+                                module,
+                                name: type_name.to_string(),
+                                span,
+                            });
+                            false
+                        } else {
+                            true
+                        }
+                    })
+            })
+            .unwrap_or(true)
     }
 
     /// Extract the type of a field from a type.

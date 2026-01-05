@@ -34,11 +34,12 @@ impl InferCtx<'_> {
                 params,
                 ret,
                 body,
+                ..
             }) => {
                 self.fun(&name, &type_params, &params, ret.as_ref(), body, span)
             }
 
-            Some(Stmt::Let(pattern, ann, rhs)) => {
+            Some(Stmt::Let(pattern, ann, rhs, _)) => {
                 self.r#let(&pattern, ann.as_ref(), rhs, span)
             }
 
@@ -110,28 +111,28 @@ impl InferCtx<'_> {
             let item = self.ast.get_stmt(id).cloned();
 
             match item {
-                Some(Stmt::Fun { ref name, .. }) => {
+                Some(Stmt::Fun { ref name, vis, .. }) => {
                     // Typecheck the function (binds it in current scope)
                     self.stmt(id);
-                    // Register as module member
+                    // Register as module member with visibility
                     if let Some(scheme) = self.env.lookup(name).cloned() {
                         self.env.register_user_module_member(
-                            mod_path, name, scheme,
+                            mod_path, name, scheme, vis,
                         );
                     }
                 }
 
-                Some(Stmt::Let(ref pat, ..)) => {
+                Some(Stmt::Let(ref pat, _, _, vis)) => {
                     // Module constants must be simple bindings (not destructuring)
                     match pat {
                         BindingPattern::Var(ref const_name) => {
                             self.stmt(id);
-                            // Register as module member
+                            // Register as module member with visibility
                             if let Some(scheme) =
                                 self.env.lookup(const_name).cloned()
                             {
                                 self.env.register_user_module_member(
-                                    mod_path, const_name, scheme,
+                                    mod_path, const_name, scheme, vis,
                                 );
                             }
                         }
@@ -182,20 +183,23 @@ impl InferCtx<'_> {
                         span: item_span,
                     });
                 }
-                Some(Stmt::Type { .. }) => {
+                Some(Stmt::Type { ref name, vis, .. }) => {
                     // Type declarations are processed by the registry with
-                    // qualified names (e.g., `ModuleName.TypeName`); nothing
-                    // to infer here.
+                    // qualified names; register visibility for access checks.
+                    let qname = format!("{}.{}", mod_path, name);
+                    self.env.register_user_module_type_vis(&qname, vis);
                 }
-                Some(Stmt::Union { .. }) => {
+                Some(Stmt::Union { ref name, vis, .. }) => {
                     // Union declarations are processed by the registry with
-                    // qualified names (e.g., `ModuleName.UnionName`); nothing
-                    // to infer here.
+                    // qualified names; register visibility for access checks.
+                    let qname = format!("{}.{}", mod_path, name);
+                    self.env.register_user_module_type_vis(&qname, vis);
                 }
-                Some(Stmt::NewType { .. }) => {
+                Some(Stmt::NewType { ref name, vis, .. }) => {
                     // NewType declarations are processed by the registry with
-                    // qualified names (e.g., `ModuleName.AliasName`); nothing
-                    // to infer here.
+                    // qualified names; register visibility for access checks.
+                    let qname = format!("{}.{}", mod_path, name);
+                    self.env.register_user_module_type_vis(&qname, vis);
                 }
                 None => {}
             }

@@ -420,7 +420,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             .clone();
 
         match stmt {
-            Stmt::Let(pat, ty_ann, expr_id) => {
+            Stmt::Let(pat, ty_ann, expr_id, _) => {
                 self.r#let(&pat, ty_ann, expr_id, span).await
             }
             Stmt::Set(ref dbref, expr_id, txn_id) => {
@@ -445,16 +445,19 @@ impl<I: IoContext> Interpreter<'_, I> {
                 name,
                 type_params,
                 def,
+                ..
             } => self.type_decl(&name, &type_params, &def, span),
             Stmt::NewType {
                 name,
                 type_params,
                 target,
+                ..
             } => self.newtype_decl(&name, &type_params, target, span),
             Stmt::Union {
                 name,
                 type_params,
                 members,
+                ..
             } => self.union_decl(&name, &type_params, &members, span),
             Stmt::Module { name, body } => {
                 self.user_module(&name, &body, span).await
@@ -509,7 +512,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             module.functions.insert(fn_name, val_id);
                         }
 
-                        Stmt::Let(ref pat, _, expr_id) => {
+                        Stmt::Let(ref pat, _, expr_id, _) => {
                             let val = self.eval(expr_id).await?;
                             let val_id = self.arena.add(val, item_span);
                             if let BindingPattern::Var(ref const_name) = pat {
@@ -536,6 +539,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             name: type_name,
                             type_params,
                             def,
+                            ..
                         } => {
                             // Types are already registered with qualified names
                             // by register_from_ast. The idempotent type_decl
@@ -553,6 +557,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             name: alias_name,
                             type_params,
                             target,
+                            ..
                         } => {
                             // Aliases are already registered with qualified names
                             // by register_from_ast. The idempotent newtype_decl
@@ -570,6 +575,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             name: union_name,
                             type_params,
                             members,
+                            ..
                         } => {
                             // Unions are already registered with qualified names
                             // by register_from_ast. The idempotent union_decl

@@ -386,6 +386,14 @@ pub(crate) enum TypeError {
         name: String,
         span: Span,
     },
+
+    /// Private module member access from outside the module.
+    #[error("`{name}` is private in module `{module}`")]
+    PrivateAccess {
+        module: String,
+        name: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -418,7 +426,8 @@ impl TypeError {
             | Self::InvalidCast { span, .. }
             | Self::Custom { span, .. }
             | Self::InvalidRegex(_, _, span)
-            | Self::NotFoundInModule { span, .. } => *span,
+            | Self::NotFoundInModule { span, .. }
+            | Self::PrivateAccess { span, .. } => *span,
         }
     }
 
@@ -576,6 +585,10 @@ impl TypeError {
             Self::NotFoundInModule { module, name, .. } => (
                 format!("`{name}` not found in module `{module}`"),
                 None,
+            ),
+            Self::PrivateAccess { module, name, .. } => (
+                format!("`{name}` is private in module `{module}`"),
+                Some("use `+` prefix to make it public (e.g., `+LET`, `+FUN`)".to_owned()),
             ),
         };
 

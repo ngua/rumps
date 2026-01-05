@@ -90,7 +90,7 @@ pub(crate) trait Prim {
     ///
     /// Since the `StringId` is already validated (via `get_string_id` +
     /// `typechecked!`), the lookup should always succeed.
-    fn valid_str<'a>(arena: &'a ValueArena, sid: crate::StringId) -> &'a str {
+    fn valid_str(arena: &ValueArena, sid: crate::StringId) -> &str {
         arena
             .get_str(sid)
             .unwrap_or_else(|| invariant!("StringId lookup"))

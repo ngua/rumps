@@ -365,7 +365,6 @@ impl Lexer<'_> {
 
         // Alternating: literal, then optionally (expr, literal)*
         literal_seg
-            .clone()
             .then(interpolation.then(literal_seg).repeated())
             .map(|(first, rest)| {
                 let mut parts = vec![first];

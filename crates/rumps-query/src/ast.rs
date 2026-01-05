@@ -1018,6 +1018,19 @@ pub(crate) struct TransactionModifiers {
     pub(crate) isolation: Option<rumps_storage::IsolationLevel>,
 }
 
+/// Visibility modifier for module members.
+///
+/// Inside a module, items are private by default. Use `+` prefix to make
+/// them public (e.g., `+LET`, `+FUN`, `+TYPE`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Visibility {
+    /// Private; only accessible within the module (default).
+    #[default]
+    Private,
+    /// Public; accessible from outside the module (`+` prefix).
+    Public,
+}
+
 /// A statement node.
 ///
 /// All recursive references use `ExprId`/`StmtId` indices into the `Ast` arena.
@@ -1031,7 +1044,9 @@ pub(crate) enum Stmt {
     /// The optional `AstTypeExprId` is the type annotation; if present, the
     /// interpreter validates that the value's type matches (applies to the
     /// entire RHS value, not individual bindings).
-    Let(BindingPattern, Option<AstTypeExprId>, ExprId),
+    ///
+    /// The visibility is only meaningful inside modules (`+LET` for public).
+    Let(BindingPattern, Option<AstTypeExprId>, ExprId, Visibility),
 
     /// B-tree assignment: `SET x(subs...) = expr` or `SET ^NAME(subs...) = expr`.
     ///
@@ -1062,12 +1077,15 @@ pub(crate) enum Stmt {
     /// - `body`: the function body expression (typically a block)
     ///
     /// Named functions support recursion (the name is visible in the body).
+    ///
+    /// The visibility is only meaningful inside modules (`+FUN` for public).
     Fun {
         name: String,
         type_params: SmallVec<[TypeParam; 2]>,
         params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<AstTypeExprId>,
         body: ExprId,
+        vis: Visibility,
     },
 
     /// User-defined sum type declaration: `TYPE Name = Variant1 | Variant2(T)`.
@@ -1076,10 +1094,13 @@ pub(crate) enum Stmt {
     /// - `TYPE Status = Pending | Active | Completed`
     /// - `TYPE Event = Click(Int, Int) | KeyPress(Char)`
     /// - `TYPE Either[L, R] = Left(L) | Right(R)`
+    ///
+    /// The visibility is only meaningful inside modules (`+TYPE` for public).
     Type {
         name: String,
         type_params: SmallVec<[TypeParam; 2]>,
         def: TypeDefAst,
+        vis: Visibility,
     },
 
     /// Transparent type alias: `NEWTYPE Name = Type` or `NEWTYPE Name[T] = Type`.
@@ -1091,10 +1112,13 @@ pub(crate) enum Stmt {
     /// - `NEWTYPE Person = { name: String, age: Int }`
     /// - `NEWTYPE I = Int`
     /// - `NEWTYPE IntMap[V] = Map[Int, V]`
+    ///
+    /// The visibility is only meaningful inside modules (`+NEWTYPE` for public).
     NewType {
         name: String,
         type_params: SmallVec<[TypeParam; 2]>,
         target: AstTypeExprId,
+        vis: Visibility,
     },
 
     /// Union type declaration: `UNION Name = Type1 | Type2 | ...`.
@@ -1106,10 +1130,13 @@ pub(crate) enum Stmt {
     /// - `UNION Storable = Bool | Int | Float | Char | String | Json`
     /// - `UNION Numeric = Int | Float`
     /// - `UNION F[T] = Int | Option[T]`
+    ///
+    /// The visibility is only meaningful inside modules (`+UNION` for public).
     Union {
         name: String,
         type_params: SmallVec<[TypeParam; 2]>,
         members: SmallVec<[AstTypeExprId; 4]>,
+        vis: Visibility,
     },
 
     /// User-defined module: `MODULE Name { ... }`.

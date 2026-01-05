@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Private module member access errors\n; Tests that private members (without `+`) cannot be accessed outside the module\n\nMODULE Secrets {\n  ; Private constant (no `+` prefix)\n  LET hidden = 42\n\n  ; Private function\n  FUN internal() -> Int { 100 }\n\n  ; Private TYPE\n  TYPE Status = Pending | Done\n\n  ; Private NEWTYPE\n  NEWTYPE UserId = Int\n\n  ; Private UNION\n  UNION Payload = Int | String\n}\n\n; Accessing private constant should produce a type error\nLET x = Secrets.hidden\n\n; Accessing private function should produce a type error\nLET y = Secrets.internal()\n\n; Accessing private TYPE should produce a type error\nLET z: Secrets.Status = Secrets.Status.Pending\n\n; Accessing private NEWTYPE should produce a type error\nLET w: Secrets.UserId = 123\n\n; Accessing private UNION should produce a type error\nLET v: Secrets.Payload = 456\n"
+---
+ERROR: `hidden` is private in module `Secrets`
+`internal` is private in module `Secrets`
+`Status` is private in module `Secrets`
+`UserId` is private in module `Secrets`
+`Payload` is private in module `Secrets`

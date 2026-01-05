@@ -5,7 +5,15 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ty::{Scheme, Subst, Ty, TyVar};
+use crate::ast::Visibility;
 use crate::intern::{StringId, StringInterner};
+
+/// A module member entry with type scheme and visibility.
+#[derive(Clone, Debug)]
+pub(crate) struct ModuleMember {
+    pub(crate) scheme: Scheme,
+    pub(crate) vis: Visibility,
+}
 
 /// Scoped type environment mapping names to type schemes.
 ///
@@ -16,8 +24,12 @@ pub(crate) struct TypeEnv {
     pub(super) strings: StringInterner,
     /// User-defined module names registered during typechecking.
     user_modules: HashSet<String>,
-    /// User module member types: `module_name -> member_name -> Scheme`.
-    user_module_members: HashMap<String, HashMap<String, Scheme>>,
+    /// User module member types and visibility: `module_path -> member_name -> ModuleMember`.
+    user_module_members: HashMap<String, HashMap<String, ModuleMember>>,
+    /// User module type visibility: qualified type name (e.g., `Mod.Type`) -> visibility.
+    ///
+    /// Used to enforce visibility for `TYPE`, `NEWTYPE`, `UNION` inside modules.
+    user_module_type_vis: HashMap<String, Visibility>,
 }
 
 impl TypeEnv {
@@ -31,6 +43,7 @@ impl TypeEnv {
             strings,
             user_modules: HashSet::new(),
             user_module_members: HashMap::new(),
+            user_module_type_vis: HashMap::new(),
         }
     }
 
@@ -55,21 +68,24 @@ impl TypeEnv {
         module: &str,
         member: &str,
         scheme: Scheme,
+        vis: Visibility,
     ) {
         self.user_module_members
             .entry(module.to_string())
             .or_default()
-            .insert(member.to_string(), scheme);
+            .insert(member.to_string(), ModuleMember { scheme, vis });
     }
 
-    /// Look up a user module member type by path.
+    /// Look up a user module member by path.
     ///
     /// Path should be like `["Counter", "new"]` for `Counter.new`, or
     /// `["Outer", "Inner", "fn"]` for `Outer.Inner.fn`.
+    ///
+    /// Returns the member (scheme + visibility) if found.
     pub(crate) fn lookup_user_module_member(
         &self,
         path: &[&str],
-    ) -> Option<&Scheme> {
+    ) -> Option<&ModuleMember> {
         // Split into module path (all but last) and member (last)
         path.split_last().and_then(|(member, mod_path)| {
             // Join module path with dots (e.g., `["Outer", "Inner"]` -> `"Outer.Inner"`)
@@ -78,6 +94,28 @@ impl TypeEnv {
                 .get(&mod_key)
                 .and_then(|m| m.get(*member))
         })
+    }
+
+    /// Register visibility for a type inside a user module.
+    ///
+    /// Called for `TYPE`, `NEWTYPE`, `UNION` inside `MODULE` blocks.
+    /// The `qname` is the qualified name (e.g., `Mod.MyType`).
+    pub(crate) fn register_user_module_type_vis(
+        &mut self,
+        qname: &str,
+        vis: Visibility,
+    ) {
+        self.user_module_type_vis.insert(qname.to_string(), vis);
+    }
+
+    /// Look up visibility for a module-qualified type name.
+    ///
+    /// Returns `Some(vis)` if this is a user module type, `None` otherwise.
+    pub(crate) fn lookup_user_module_type_vis(
+        &self,
+        qname: &str,
+    ) -> Option<Visibility> {
+        self.user_module_type_vis.get(qname).copied()
     }
 
     /// Push a new scope (e.g., entering a function body or block).

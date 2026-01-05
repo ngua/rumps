@@ -13,7 +13,7 @@ use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
     JsonAccessKey, JsonAccessKind, Literal, MatchArm, ObjectEntry,
     ParamConstraint, StmtId, SubscriptElem, TransactionExpr, TxnId, TypeParam,
-    TypePattern, UnOp,
+    TypePattern, UnOp, Visibility,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::{ConstraintKind, TypeError};
@@ -179,14 +179,33 @@ impl InferCtx<'_> {
                         scheme.instantiate(&mut self.next_var);
                     self.emit_user_constraints(constraints, span);
                     ty
-                } else if let Some(scheme) =
+                } else if let Some(member) =
                     self.env.lookup_user_module_member(&path)
                 {
-                    // User-defined module members may have constraints
-                    let (ty, constraints) =
-                        scheme.instantiate(&mut self.next_var);
-                    self.emit_user_constraints(constraints, span);
-                    ty
+                    // Check visibility; private members cannot be accessed
+                    // from outside the module
+                    if member.vis == Visibility::Private {
+                        let module = path
+                            .iter()
+                            .take(path.len().saturating_sub(1))
+                            .copied()
+                            .collect::<Vec<_>>()
+                            .join(".");
+                        let name =
+                            path.last().copied().unwrap_or("").to_string();
+                        self.error(TypeError::PrivateAccess {
+                            module,
+                            name,
+                            span,
+                        });
+                        Ty::Error
+                    } else {
+                        // Public member; instantiate and use
+                        let (ty, constraints) =
+                            member.scheme.instantiate(&mut self.next_var);
+                        self.emit_user_constraints(constraints, span);
+                        ty
+                    }
                 } else {
                     // Path resolved as module but member not found
                     let module = path
