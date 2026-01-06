@@ -5,17 +5,17 @@
 ; ============ Inline module with sibling references ============
 
 MODULE Geometry {
-    +LET pi = 3.14159
-    +LET tau = 6.28318
+  +LET pi = 3.14159
+  +LET tau = 6.28318
 
-    ; Function referencing sibling constant
-    +FUN circle-area(r: Float) -> Float { pi * r * r }
+  ; Function referencing sibling constant
+  +FUN circle-area(r: Float) -> Float { pi * r * r }
 
-    ; Function referencing sibling constant
-    +FUN circle-circumference(r: Float) -> Float { tau * r }
+  ; Function referencing sibling constant
+  +FUN circle-circumference(r: Float) -> Float { tau * r }
 
-    ; Function referencing sibling function (mutual recursion base case)
-    +FUN double-area(r: Float) -> Float { 2.0 * circle-area(r) }
+  ; Function referencing sibling function (mutual recursion base case)
+  +FUN double-area(r: Float) -> Float { 2.0 * circle-area(r) }
 }
 
 @OUTPUT Geometry.pi > 3  ; true

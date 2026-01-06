@@ -17,9 +17,9 @@
 
 ; Block-local function hoisting
 LET result = {
-    LET x = local-fn(5)
-    FUN local-fn(n: Int) -> Int { n * 3 }
-    x
+  LET x = local-fn(5)
+  FUN local-fn(n: Int) -> Int { n * 3 }
+  x
 }
 @OUTPUT result
 
@@ -28,11 +28,11 @@ LET result = {
 FUN add-one(x: Int) -> Int { x + 1 }
 
 FUN is-even(n: Int) -> Bool {
-    IF n == 0 { true } ELSE { is-odd(n - 1) }
+  IF n == 0 { true } ELSE { is-odd(n - 1) }
 }
 
 FUN is-odd(n: Int) -> Bool {
-    IF n == 0 { false } ELSE { is-even(n - 1) }
+  IF n == 0 { false } ELSE { is-even(n - 1) }
 }
 
 FUN identity[T](x: T) -> T { x }
