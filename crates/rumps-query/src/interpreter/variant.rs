@@ -199,7 +199,6 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) fn mempty(
         &mut self,
         id: crate::ast::ExprId,
-        span: Span,
     ) -> crate::Result<Value> {
         let ty = self
             .mempty_types
@@ -219,10 +218,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(Value::Map(k_ty, v_ty, IndexMap::new()))
             }
             Ty::Option(_) => Ok(self.make_none()),
-            _ => Err(crate::Error::runtime(
-                span,
-                format!("mempty: unsupported type `{ty:?}`"),
-            )),
+            _ => typechecked!("mempty", "monoid type"),
         }
     }
 }

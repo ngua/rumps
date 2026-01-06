@@ -392,7 +392,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     .await
             }
             Expr::Transaction(ref txn) => self.transaction(txn, span).await,
-            Expr::Mempty => self.mempty(id, span),
+            Expr::Mempty => self.mempty(id),
         }
     }
 }
