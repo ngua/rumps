@@ -8,22 +8,22 @@ LET a2 = [1, 2, 3]
 LET a3 = [1, 2, 4]
 LET a4 = [1, 2]
 
-@OUTPUT a1 == a2
+WRITE a1 == a2
 ; Expected: true (same elements)
 
-@OUTPUT a1 == a3
+WRITE a1 == a3
 ; Expected: false (different last element)
 
-@OUTPUT a1 == a4
+WRITE a1 == a4
 ; Expected: false (different length)
 
-@OUTPUT a1 != a3
+WRITE a1 != a3
 ; Expected: true
 
 ; Empty arrays
 LET empty1 = []
 LET empty2 = []
-@OUTPUT empty1 == empty2
+WRITE empty1 == empty2
 ; Expected: true
 
 ; Nested arrays
@@ -31,10 +31,10 @@ LET nested1 = [[1, 2], [3, 4]]
 LET nested2 = [[1, 2], [3, 4]]
 LET nested3 = [[1, 2], [3, 5]]
 
-@OUTPUT nested1 == nested2
+WRITE nested1 == nested2
 ; Expected: true
 
-@OUTPUT nested1 == nested3
+WRITE nested1 == nested3
 ; Expected: false
 
 ; === Object Equality ===
@@ -44,22 +44,22 @@ LET o2 = { a: 1, b: 2 }
 LET o3 = { a: 1, b: 3 }
 LET o4 = { a: 1 }
 
-@OUTPUT o1 == o2
+WRITE o1 == o2
 ; Expected: true (same keys and values)
 
-@OUTPUT o1 == o3
+WRITE o1 == o3
 ; Expected: false (different value)
 
-@OUTPUT o1 == o4
+WRITE o1 == o4
 ; Expected: false (different keys)
 
-@OUTPUT o1 != o3
+WRITE o1 != o3
 ; Expected: true
 
 ; Empty objects
 LET empty-obj-a = {}
 LET empty-obj-b = {}
-@OUTPUT empty-obj-a == empty-obj-b
+WRITE empty-obj-a == empty-obj-b
 ; Expected: true
 
 ; Nested objects
@@ -67,10 +67,10 @@ LET no1 = { outer: { inner: 42 } }
 LET no2 = { outer: { inner: 42 } }
 LET no3 = { outer: { inner: 99 } }
 
-@OUTPUT no1 == no2
+WRITE no1 == no2
 ; Expected: true
 
-@OUTPUT no1 == no3
+WRITE no1 == no3
 ; Expected: false
 
 ; Objects with arrays
@@ -78,21 +78,21 @@ LET oa1 = { items: [1, 2, 3] }
 LET oa2 = { items: [1, 2, 3] }
 LET oa3 = { items: [1, 2, 4] }
 
-@OUTPUT oa1 == oa2
+WRITE oa1 == oa2
 ; Expected: true
 
-@OUTPUT oa1 == oa3
+WRITE oa1 == oa3
 ; Expected: false
 
 ; === Mixed Numeric Equality ===
 
-@OUTPUT 5 == 5.0
+WRITE 5 == 5.0
 ; Expected: true (int equals float)
 
-@OUTPUT [1, 2, 3] == [1.0, 2.0, 3.0]
+WRITE [1, 2, 3] == [1.0, 2.0, 3.0]
 ; Expected: true (if cross-type comparison allowed in arrays)
 
-@OUTPUT { x: 5 } == { x: 5.0 }
+WRITE { x: 5 } == { x: 5.0 }
 ; Expected: true (if cross-type comparison allowed in objects)
 
-@OUTPUT "Equality test complete"
+WRITE "Equality test complete"

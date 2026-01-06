@@ -2,46 +2,46 @@
 
 ; Basic tuple construction
 LET pair = (1, "hello")
-@OUTPUT pair.0
-@OUTPUT pair.1
+WRITE pair.0
+WRITE pair.1
 
 ; Triple
 LET triple = (true, 42, "world")
-@OUTPUT triple.0
-@OUTPUT triple.1
-@OUTPUT triple.2
+WRITE triple.0
+WRITE triple.1
+WRITE triple.2
 
 ; Nested tuples
 LET nested = ((1, 2), (3, 4))
 LET inner1 = nested.0
 LET inner2 = nested.1
-@OUTPUT inner1.0
-@OUTPUT inner1.1
-@OUTPUT inner2.0
-@OUTPUT inner2.1
+WRITE inner1.0
+WRITE inner1.1
+WRITE inner2.0
+WRITE inner2.1
 
 ; Empty tuple (unit)
 LET unit = ()
-@OUTPUT unit
+WRITE unit
 
 ; Single-element tuple (trailing comma required)
 LET single = (42,)
-@OUTPUT single.0
+WRITE single.0
 
 ; Tuple in expression
 LET first = (1, 2).0
 LET second = (1, 2).1
 LET sum = first + second
-@OUTPUT sum
+WRITE sum
 
 ; Tuple with function results
 LET expr-tuple = (1 + 2, 3 * 4, "test")
-@OUTPUT expr-tuple.0
-@OUTPUT expr-tuple.1
-@OUTPUT expr-tuple.2
+WRITE expr-tuple.0
+WRITE expr-tuple.1
+WRITE expr-tuple.2
 
 ; Tuple passed to closure
 LET get-first = t => t.0
 LET get-second = t => t.1
-@OUTPUT get-first((10, 20))
-@OUTPUT get-second((10, 20))
+WRITE get-first((10, 20))
+WRITE get-second((10, 20))

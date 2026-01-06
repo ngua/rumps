@@ -1,21 +1,21 @@
 ; Module hoisting: forward references to modules
 
 ; Forward reference to module defined later
-@OUTPUT M.get-value()
-@OUTPUT M.add(10, 20)
+WRITE M.get-value()
+WRITE M.add(10, 20)
 
 ; Forward reference to nested module
-@OUTPUT Outer.Inner.greet("world")
+WRITE Outer.Inner.greet("world")
 
 ; Simple module function
-@OUTPUT Utils.double(21)
+WRITE Utils.double(21)
 
 ; Forward reference to module LET constants
-@OUTPUT Config.name
-@OUTPUT Config.version
+WRITE Config.name
+WRITE Config.version
 
 ; Forward reference to nested module constant
-@OUTPUT Outer.Inner.prefix
+WRITE Outer.Inner.prefix
 
 ; Definitions
 

@@ -9,7 +9,7 @@ LET count = FOREVER 1 (n, cont) => {
     cont(n + 1)
   }
 }
-@OUTPUT count
+WRITE count
 
 ; Sum from 1 to 10
 LET sum = FOREVER { acc: 0, i: 1 } (state, cont) => {
@@ -19,7 +19,7 @@ LET sum = FOREVER { acc: 0, i: 1 } (state, cont) => {
     cont({ acc: state.acc + state.i, i: state.i + 1 })
   }
 }
-@OUTPUT sum
+WRITE sum
 
 ; Factorial of 5
 LET factorial = FOREVER { result: 1, n: 5 } (state, cont) => {
@@ -29,7 +29,7 @@ LET factorial = FOREVER { result: 1, n: 5 } (state, cont) => {
     cont({ result: state.result * state.n, n: state.n - 1 })
   }
 }
-@OUTPUT factorial
+WRITE factorial
 
 ; Early exit based on condition
 LET early = FOREVER 0 (n, cont) => {
@@ -39,7 +39,7 @@ LET early = FOREVER 0 (n, cont) => {
     cont(n + 1)
   }
 }
-@OUTPUT early
+WRITE early
 
 ; Collect even numbers from 0 to 10
 LET evens = FOREVER { i: 0, acc: [] } (state, cont) => {
@@ -53,7 +53,7 @@ LET evens = FOREVER { i: 0, acc: [] } (state, cont) => {
     }
   }
 }
-@OUTPUT evens
+WRITE evens
 
 ; Using @ORDER to iterate through subscripts
 @SET data(1) = "one"
@@ -74,7 +74,7 @@ LET keys = FOREVER { key: @ORDER data, acc: [] } (state, cont) => {
     }
   }
 }
-@OUTPUT keys
+WRITE keys
 
 ; Collect all values using @ORDER
 LET vals = FOREVER { key: @ORDER data, acc: "" } (state, cont) => {
@@ -90,7 +90,7 @@ LET vals = FOREVER { key: @ORDER data, acc: "" } (state, cont) => {
     }
   }
 }
-@OUTPUT vals
+WRITE vals
 
 ; Large iteration count (previously caused stack overflow at ~100k)
 LET big = FOREVER 0 (n, cont) => {
@@ -100,6 +100,6 @@ LET big = FOREVER 0 (n, cont) => {
     cont(n + 1)
   }
 }
-@OUTPUT big
+WRITE big
 
-@OUTPUT "FOREVER test complete"
+WRITE "FOREVER test complete"

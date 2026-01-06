@@ -9,4 +9,4 @@ FUN add (a: Int, b: Int) -> Int {
 }
 
 ; Passing string to Int parameter
-@OUTPUT add("hello", 5)
+WRITE add("hello", 5)

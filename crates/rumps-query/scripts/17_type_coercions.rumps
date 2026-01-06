@@ -5,98 +5,98 @@
 
 ; Addition with mixed types
 LET a = 10 + 3.5
-@OUTPUT a
+WRITE a
 ; Expected: 13.5 (Float)
 
 LET b = 3.5 + 10
-@OUTPUT b
+WRITE b
 ; Expected: 13.5 (Float)
 
 ; Subtraction with mixed types
 LET c = 10 - 2.5
-@OUTPUT c
+WRITE c
 ; Expected: 7.5 (Float)
 
 LET d = 10.5 - 3
-@OUTPUT d
+WRITE d
 ; Expected: 7.5 (Float)
 
 ; Multiplication with mixed types
 LET e = 5 * 2.5
-@OUTPUT e
+WRITE e
 ; Expected: 12.5 (Float)
 
 LET f = 2.5 * 4
-@OUTPUT f
+WRITE f
 ; Expected: 10.0 (Float)
 
 ; Division with mixed types
 LET g = 10 / 4.0
-@OUTPUT g
+WRITE g
 ; Expected: 2.5 (Float)
 
 LET h = 10.0 / 4
-@OUTPUT h
+WRITE h
 ; Expected: 2.5 (Float)
 
 ; Int division always yields float
 LET i = 10 / 5
-@OUTPUT i
+WRITE i
 ; Expected: 2.0 (Float)
 
 ; Floor division with mixed types
 LET j = 10 // 3.0
-@OUTPUT j
+WRITE j
 ; Expected: 3 (Int)
 
 LET k = 10.0 // 3
-@OUTPUT k
+WRITE k
 ; Expected: 3 (Int)
 
 ; Modulo with mixed types
 LET l = 10 % 3.5
-@OUTPUT l
+WRITE l
 ; Expected: 3.0 (Float; 10 % 3.5 = 3.0)
 
 LET m = 10.5 % 3
-@OUTPUT m
+WRITE m
 ; Expected: 1.5 (Float; 10.5 % 3 = 1.5)
 
 ; === String Conversion (via interpolation) ===
 
 ; Int to string
-@OUTPUT "Number: {42}"
+WRITE "Number: {42}"
 ; Expected: Number: 42
 
 ; Float to string
-@OUTPUT "Pi: {3.14159}"
+WRITE "Pi: {3.14159}"
 ; Expected: Pi: 3.14159
 
 ; Bool to string
-@OUTPUT "Flag: {TRUE}"
+WRITE "Flag: {TRUE}"
 ; Expected: Flag: true
 
-@OUTPUT "Flag: {FALSE}"
+WRITE "Flag: {FALSE}"
 ; Expected: Flag: false
 
 ; === Cross-type Numeric Comparison ===
 
-@OUTPUT 5 == 5.0
+WRITE 5 == 5.0
 ; Expected: true (int and float compare equal)
 
-@OUTPUT 5.0 == 5
+WRITE 5.0 == 5
 ; Expected: true
 
-@OUTPUT 10 < 10.5
+WRITE 10 < 10.5
 ; Expected: true
 
-@OUTPUT 10.5 > 10
+WRITE 10.5 > 10
 ; Expected: true
 
-@OUTPUT 3 >= 3.0
+WRITE 3 >= 3.0
 ; Expected: true
 
-@OUTPUT 3.0 <= 3
+WRITE 3.0 <= 3
 ; Expected: true
 
-@OUTPUT "Type coercion test complete"
+WRITE "Type coercion test complete"

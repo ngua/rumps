@@ -8,4 +8,4 @@ LET r = TRANSACTION {
   }
 }
 
-@OUTPUT r
+WRITE r

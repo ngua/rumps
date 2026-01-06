@@ -10,25 +10,25 @@
 ; === @DATA on non-existent key ===
 
 LET status0 = @DATA vars(999)
-@OUTPUT status0
+WRITE status0
 
 ; === @DATA on key with value only ===
 
 ; Key (1, "A") has value but no descendants
 LET status1 = @DATA vars(1, "A")
-@OUTPUT status1
+WRITE status1
 
 ; === @DATA on key with descendants only ===
 
 ; Key (2) has no value but has descendants at (2, "B", ...)
 LET status2 = @DATA vars(2)
-@OUTPUT status2
+WRITE status2
 
 ; === @DATA on key with both value and descendants ===
 
 ; Key (1) has value AND descendants at (1, "A")
 LET status3 = @DATA vars(1)
-@OUTPUT status3
+WRITE status3
 
 ; === Pattern matching on DataStatus ===
 
@@ -41,17 +41,17 @@ FUN describe(s: DataStatus) -> String {
   }
 }
 
-@OUTPUT describe(@DATA vars(999))
-@OUTPUT describe(@DATA vars(1, "A"))
-@OUTPUT describe(@DATA vars(2))
-@OUTPUT describe(@DATA vars(1))
+WRITE describe(@DATA vars(999))
+WRITE describe(@DATA vars(1, "A"))
+WRITE describe(@DATA vars(2))
+WRITE describe(@DATA vars(1))
 
 ; === AS Int coercion (MUMPS $@DATA values) ===
 
-@OUTPUT (@DATA vars(999)) AS Int
-@OUTPUT (@DATA vars(1, "A")) AS Int
-@OUTPUT (@DATA vars(2)) AS Int
-@OUTPUT (@DATA vars(1)) AS Int
+WRITE (@DATA vars(999)) AS Int
+WRITE (@DATA vars(1, "A")) AS Int
+WRITE (@DATA vars(2)) AS Int
+WRITE (@DATA vars(1)) AS Int
 
 ; === DataStatus in expressions ===
 
@@ -59,13 +59,13 @@ FUN has-data(s: DataStatus) -> Bool {
   (s AS Int) > 0
 }
 
-@OUTPUT has-data(@DATA vars(999))
-@OUTPUT has-data(@DATA vars(1))
+WRITE has-data(@DATA vars(999))
+WRITE has-data(@DATA vars(1))
 
 ; === Type annotation ===
 
 LET typed: DataStatus = @DATA vars(1)
-@OUTPUT typed
+WRITE typed
 
 ; === DataStatus in arrays ===
 
@@ -75,8 +75,8 @@ LET statuses: Array[DataStatus] = [
   @DATA vars(2),
   @DATA vars(1)
 ]
-@OUTPUT Array.length(statuses)
-@OUTPUT Array.map(describe, statuses)
+WRITE Array.length(statuses)
+WRITE Array.map(describe, statuses)
 
 ; === READ DataStatus from Int ===
 
@@ -86,8 +86,8 @@ LET from10 = 10 READ DataStatus
 LET from11 = 11 READ DataStatus
 LET invalid = 5 READ DataStatus
 
-@OUTPUT from0
-@OUTPUT from1
-@OUTPUT from10
-@OUTPUT from11
-@OUTPUT invalid
+WRITE from0
+WRITE from1
+WRITE from10
+WRITE from11
+WRITE invalid

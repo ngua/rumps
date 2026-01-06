@@ -2,4 +2,4 @@
 ; This should produce a type error at compile time
 
 LET x: Word = -42
-@OUTPUT x
+WRITE x

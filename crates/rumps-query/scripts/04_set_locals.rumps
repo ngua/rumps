@@ -3,11 +3,11 @@
 
 ; Simple @SET without subscripts
 @SET x = 100
-@OUTPUT @GET x
+WRITE @GET x
 ; Expected: 100
 
 @SET x = 200
-@OUTPUT @GET x
+WRITE @GET x
 ; Expected: 200
 
 ; @SET with single subscript
@@ -42,4 +42,4 @@
 @SET dict("beta") = 2
 @SET dict("gamma") = 3
 
-@OUTPUT "@SET locals test complete"
+WRITE "@SET locals test complete"

@@ -8,4 +8,4 @@ TYPE Status = Open | Closed
 
 ; Use the shadowed type (should have Open and Closed variants)
 LET s: Status = Status.Open
-@OUTPUT s
+WRITE s

@@ -7,53 +7,53 @@
 LET arr1 = [1, 2, 3]
 LET arr2 = [4, 5, 6]
 LET combined = [...arr1, ...arr2]
-@OUTPUT combined
+WRITE combined
 
 ; Prepend/append with spread
 LET with-zero = [0, ...arr1]
-@OUTPUT with-zero
+WRITE with-zero
 
 LET with-four = [...arr1, 4]
-@OUTPUT with-four
+WRITE with-four
 
 ; Mixed elements and spreads
 LET mixed = [0, ...arr1, 4, 5]
-@OUTPUT mixed
+WRITE mixed
 
 ; Empty array spread
 LET empty: Array[Int] = []
 LET spread-empty = [...empty, 1, 2]
-@OUTPUT spread-empty
+WRITE spread-empty
 
 ; Spread with single element array
 LET single = [42]
 LET spread-single = [...single, ...single]
-@OUTPUT spread-single
+WRITE spread-single
 
 ; ====== Object Spread ======
 
 ; Basic object spread
 LET base = { name: "Alice", age: 30 }
 LET updated = { ...base, age: 31 }
-@OUTPUT updated.name
-@OUTPUT updated.age
+WRITE updated.name
+WRITE updated.age
 
 ; Merge multiple objects
 LET defaults = { color: "red", size: "medium" }
 LET user-prefs = { size: "large" }
 LET config = { ...defaults, ...user-prefs }
-@OUTPUT config.color
-@OUTPUT config.size
+WRITE config.color
+WRITE config.size
 
 ; Add new fields
 LET extended = { ...base, city: "NYC" }
-@OUTPUT extended.name
-@OUTPUT extended.city
+WRITE extended.name
+WRITE extended.city
 
 ; Empty object spread
 LET empty-obj = { }
 LET spread-empty-obj = { ...empty-obj, x: 1 }
-@OUTPUT spread-empty-obj.x
+WRITE spread-empty-obj.x
 
 ; ====== Struct Spread with Preservation ======
 
@@ -63,12 +63,12 @@ NEWTYPE Person = { name: String, age: Int }
 ; Spread a struct value (should preserve type)
 LET alice: Person = { name: "Alice", age: 30 }
 LET alice-older: Person = { ...alice, age: 31 }
-@OUTPUT alice-older.name
-@OUTPUT alice-older.age
+WRITE alice-older.name
+WRITE alice-older.age
 
 ; Adding fields to a struct (extensible record semantics)
 LET alice-with-city = { ...alice, city: "NYC" }
-@OUTPUT alice-with-city.city
+WRITE alice-with-city.city
 
 ; ====== Nested Spreads ======
 
@@ -77,15 +77,15 @@ LET a = [1, 2]
 LET b = [3, 4]
 LET c = [5, 6]
 LET all = [...a, ...b, ...c]
-@OUTPUT all
+WRITE all
 
 ; Nested object spreads
 LET o1 = { x: 1 }
 LET o2 = { y: 2 }
 LET o3 = { z: 3 }
 LET merged = { ...o1, ...o2, ...o3 }
-@OUTPUT merged.x
-@OUTPUT merged.y
-@OUTPUT merged.z
+WRITE merged.x
+WRITE merged.y
+WRITE merged.z
 
-@OUTPUT "--- TESTS PASSED ---"
+WRITE "--- TESTS PASSED ---"

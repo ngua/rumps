@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test @RAISE with a string message\n@RAISE \"something went wrong\"\n"
+description: "; Test RAISE with a string message\nRAISE \"something went wrong\"\n"
 ---
-ERROR: @RAISE at 36..65: something went wrong
+ERROR: RAISE at 35..63: something went wrong

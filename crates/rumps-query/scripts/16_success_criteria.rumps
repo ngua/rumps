@@ -5,7 +5,7 @@
 LET x = 10
 LET y = 20
 LET sum = x + y
-@OUTPUT sum
+WRITE sum
 
 ; @SET for B-tree locals (async, subscriptable)
 @SET z = 100
@@ -13,9 +13,9 @@ LET sum = x + y
 
 ; Comparison and branching
 IF sum > 25 {
-  @OUTPUT "Large sum"
+  WRITE "Large sum"
 } ELSE {
-  @OUTPUT "Small sum"
+  WRITE "Small sum"
 }
 
 ; Expected output:

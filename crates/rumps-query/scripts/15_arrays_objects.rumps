@@ -3,44 +3,44 @@
 
 ; Array literal
 LET arr = [1, 2, 3, 4, 5]
-@OUTPUT arr
+WRITE arr
 ; Expected: [1, 2, 3, 4, 5]
 
 ; Empty array
 LET empty = []
-@OUTPUT empty
+WRITE empty
 ; Expected: []
 
 ; Array indexing
 LET nums = [10, 20, 30]
-@OUTPUT nums[0]
+WRITE nums[0]
 ; Expected: 10
 
-@OUTPUT nums[1]
+WRITE nums[1]
 ; Expected: 20
 
-@OUTPUT nums[2]
+WRITE nums[2]
 ; Expected: 30
 
 ; Object literal
 LET obj = { name: "Alice", age: 30 }
-@OUTPUT obj
+WRITE obj
 ; Expected: { name: "Alice", age: 30 }
 
 ; Empty object
 LET empty-obj = {}
-@OUTPUT empty-obj
+WRITE empty-obj
 ; Expected: {}
 
 ; Field access with dot notation
 LET person = { name: "Bob", age: 25, active: TRUE }
-@OUTPUT person.name
+WRITE person.name
 ; Expected: Bob
 
-@OUTPUT person.age
+WRITE person.age
 ; Expected: 25
 
-@OUTPUT person.active
+WRITE person.active
 ; Expected: true
 
 ; Nested objects
@@ -53,10 +53,10 @@ LET nested = {
     }
   }
 }
-@OUTPUT nested.user.name
+WRITE nested.user.name
 ; Expected: Charlie
 
-@OUTPUT nested.user.address.city
+WRITE nested.user.address.city
 ; Expected: NYC
 
 ; Object with array value
@@ -64,10 +64,10 @@ LET rec = {
   items: [1, 2, 3],
   count: 3
 }
-@OUTPUT rec.items
+WRITE rec.items
 ; Expected: [1, 2, 3]
 
-@OUTPUT rec.items[0]
+WRITE rec.items[0]
 ; Expected: 1
 
 ; Array of objects
@@ -75,10 +75,10 @@ LET users = [
   { name: "Alice", score: 100 },
   { name: "Bob", score: 85 }
 ]
-@OUTPUT users[0].name
+WRITE users[0].name
 ; Expected: Alice
 
-@OUTPUT users[1].score
+WRITE users[1].score
 ; Expected: 85
 
-@OUTPUT "Arrays/Objects test complete"
+WRITE "Arrays/Objects test complete"

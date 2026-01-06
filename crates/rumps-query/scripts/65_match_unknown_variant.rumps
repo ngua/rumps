@@ -8,4 +8,4 @@ LET result = MATCH opt {
   Option.None => { 0 }
 }
 
-@OUTPUT result
+WRITE result

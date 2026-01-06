@@ -6,91 +6,91 @@
 LET some-val = Option.Some(42)
 LET none-val = Option.None
 
-@OUTPUT Option.unwrap-or(some-val, 0)  ; 42
-@OUTPUT Option.unwrap-or(none-val, 0)  ; 0
-@OUTPUT Option.unwrap-or(Option.Some("hello"), "default")  ; "hello"
-@OUTPUT Option.unwrap-or(Option.None, "default")  ; "default"
+WRITE Option.unwrap-or(some-val, 0)  ; 42
+WRITE Option.unwrap-or(none-val, 0)  ; 0
+WRITE Option.unwrap-or(Option.Some("hello"), "default")  ; "hello"
+WRITE Option.unwrap-or(Option.None, "default")  ; "default"
 
 ; ============ Option.map ============
 
 LET double = x => x * 2
 LET to-upper = s => String.upper(s)
 
-@OUTPUT Option.map(Option.Some(21), double)  ; Some(42)
-@OUTPUT Option.map(Option.None, double)  ; None
-@OUTPUT Option.map(Option.Some("hello"), to-upper)  ; Some("HELLO")
-@OUTPUT Option.map(Option.None, to-upper)  ; None
+WRITE Option.map(Option.Some(21), double)  ; Some(42)
+WRITE Option.map(Option.None, double)  ; None
+WRITE Option.map(Option.Some("hello"), to-upper)  ; Some("HELLO")
+WRITE Option.map(Option.None, to-upper)  ; None
 
 ; Inline closure
-@OUTPUT Option.map(Option.Some(5), x => x + 1)  ; Some(6)
+WRITE Option.map(Option.Some(5), x => x + 1)  ; Some(6)
 
 ; Chaining map
 LET opt = Option.Some(10)
 LET mapped = Option.map(opt, x => x * 2)
-@OUTPUT mapped  ; Some(20)
-@OUTPUT Option.map(mapped, x => x + 5)  ; Some(25)
+WRITE mapped  ; Some(20)
+WRITE Option.map(mapped, x => x + 5)  ; Some(25)
 
 ; ============ Result.unwrap-or ============
 
 LET ok-val = Result.Ok(100)
 LET err-val = Result.Err("something went wrong")
 
-@OUTPUT Result.unwrap-or(ok-val, 0)  ; 100
-@OUTPUT Result.unwrap-or(err-val, 0)  ; 0
-@OUTPUT Result.unwrap-or(Result.Ok("success"), "fallback")  ; "success"
-@OUTPUT Result.unwrap-or(Result.Err("fail"), "fallback")  ; "fallback"
+WRITE Result.unwrap-or(ok-val, 0)  ; 100
+WRITE Result.unwrap-or(err-val, 0)  ; 0
+WRITE Result.unwrap-or(Result.Ok("success"), "fallback")  ; "success"
+WRITE Result.unwrap-or(Result.Err("fail"), "fallback")  ; "fallback"
 
 ; ============ Result.map ============
 
-@OUTPUT Result.map(Result.Ok(21), double)  ; Ok(42)
-@OUTPUT Result.map(Result.Err("err"), double)  ; Err("err")
-@OUTPUT Result.map(Result.Ok("hello"), to-upper)  ; Ok("HELLO")
-@OUTPUT Result.map(Result.Err("err"), to-upper)  ; Err("err")
+WRITE Result.map(Result.Ok(21), double)  ; Ok(42)
+WRITE Result.map(Result.Err("err"), double)  ; Err("err")
+WRITE Result.map(Result.Ok("hello"), to-upper)  ; Ok("HELLO")
+WRITE Result.map(Result.Err("err"), to-upper)  ; Err("err")
 
 ; Inline closure
-@OUTPUT Result.map(Result.Ok(5), x => x + 1)  ; Ok(6)
+WRITE Result.map(Result.Ok(5), x => x + 1)  ; Ok(6)
 
 ; ============ Result.map-err ============
 
 LET add-prefix = e => "Error: {e}"
 
-@OUTPUT Result.map-err(Result.Err("failed"), add-prefix)  ; Err("Error: failed")
-@OUTPUT Result.map-err(Result.Ok(42), add-prefix)  ; Ok(42)
-@OUTPUT Result.map-err(Result.Err("oops"), e => String.upper(e))  ; Err("OOPS")
-@OUTPUT Result.map-err(Result.Ok("ok"), e => String.upper(e))  ; Ok("ok")
+WRITE Result.map-err(Result.Err("failed"), add-prefix)  ; Err("Error: failed")
+WRITE Result.map-err(Result.Ok(42), add-prefix)  ; Ok(42)
+WRITE Result.map-err(Result.Err("oops"), e => String.upper(e))  ; Err("OOPS")
+WRITE Result.map-err(Result.Ok("ok"), e => String.upper(e))  ; Ok("ok")
 
 ; ============ Combining operations ============
 
 ; Option.map then unwrap-or
 LET maybe-num = Option.Some(10)
 LET doubled-or-zero = Option.unwrap-or(Option.map(maybe-num, x => x * 2), 0)
-@OUTPUT doubled-or-zero  ; 20
+WRITE doubled-or-zero  ; 20
 
 LET no-num = Option.None
 LET doubled-or-zero-none = Option.unwrap-or(Option.map(no-num, x => x * 2), 0)
-@OUTPUT doubled-or-zero-none  ; 0
+WRITE doubled-or-zero-none  ; 0
 
 ; Result.map then unwrap-or
 LET res-ok = Result.Ok(5)
 LET res-mapped = Result.unwrap-or(Result.map(res-ok, x => x * 3), 0)
-@OUTPUT res-mapped  ; 15
+WRITE res-mapped  ; 15
 
 LET res-err = Result.Err("bad")
 LET res-err-mapped = Result.unwrap-or(Result.map(res-err, x => x * 3), 0)
-@OUTPUT res-err-mapped  ; 0
+WRITE res-err-mapped  ; 0
 
 ; ============ Type variants still work ============
 
 ; Ensure Option.None and Result.Ok etc. still work as type constructors
 LET opt-none = Option.None
 LET opt-some = Option.Some(1)
-@OUTPUT opt-none IS Option.None  ; true
-@OUTPUT opt-some IS Option.Some(_)  ; true
+WRITE opt-none IS Option.None  ; true
+WRITE opt-some IS Option.Some(_)  ; true
 
 LET res-ok-check = Result.Ok(1)
 LET res-err-check = Result.Err("x")
-@OUTPUT res-ok-check IS Result.Ok(_)  ; true
-@OUTPUT res-err-check IS Result.Err(_)  ; true
+WRITE res-ok-check IS Result.Ok(_)  ; true
+WRITE res-err-check IS Result.Err(_)  ; true
 
 ; ============ Option.flat-map ============
 
@@ -99,9 +99,9 @@ FUN safe-div(n, d) {
   IF d == 0 { Option.None } ELSE { Option.Some(n // d) }
 }
 
-@OUTPUT Option.flat-map(Option.Some(10), x => safe-div(x, 2))  ; Some(5)
-@OUTPUT Option.flat-map(Option.Some(10), x => safe-div(x, 0))  ; None
-@OUTPUT Option.flat-map(Option.None, x => safe-div(x, 2))  ; None
+WRITE Option.flat-map(Option.Some(10), x => safe-div(x, 2))  ; Some(5)
+WRITE Option.flat-map(Option.Some(10), x => safe-div(x, 0))  ; None
+WRITE Option.flat-map(Option.None, x => safe-div(x, 2))  ; None
 
 ; Chaining flat-map
 FUN parse-positive(x) {
@@ -111,9 +111,9 @@ FUN halve(x) {
   IF x % 2 == 0 { Option.Some(x // 2) } ELSE { Option.None }
 }
 
-@OUTPUT Option.flat-map(Option.flat-map(Option.Some(8), parse-positive), halve)  ; Some(4)
-@OUTPUT Option.flat-map(Option.flat-map(Option.Some(-1), parse-positive), halve)  ; None
-@OUTPUT Option.flat-map(Option.flat-map(Option.Some(7), parse-positive), halve)  ; None (7 is odd)
+WRITE Option.flat-map(Option.flat-map(Option.Some(8), parse-positive), halve)  ; Some(4)
+WRITE Option.flat-map(Option.flat-map(Option.Some(-1), parse-positive), halve)  ; None
+WRITE Option.flat-map(Option.flat-map(Option.Some(7), parse-positive), halve)  ; None (7 is odd)
 
 ; ============ Result.flat-map ============
 
@@ -122,9 +122,9 @@ FUN safe-div-res(n, d) {
   IF d == 0 { Result.Err("div by zero") } ELSE { Result.Ok(n // d) }
 }
 
-@OUTPUT Result.flat-map(Result.Ok(10), x => safe-div-res(x, 2))  ; Ok(5)
-@OUTPUT Result.flat-map(Result.Ok(10), x => safe-div-res(x, 0))  ; Err("div by zero")
-@OUTPUT Result.flat-map(Result.Err("bad input"), x => safe-div-res(x, 2))  ; Err("bad input")
+WRITE Result.flat-map(Result.Ok(10), x => safe-div-res(x, 2))  ; Ok(5)
+WRITE Result.flat-map(Result.Ok(10), x => safe-div-res(x, 0))  ; Err("div by zero")
+WRITE Result.flat-map(Result.Err("bad input"), x => safe-div-res(x, 2))  ; Err("bad input")
 
 ; Chaining flat-map
 FUN validate(x) {
@@ -134,52 +134,52 @@ FUN halve-res(x) {
   IF x % 2 == 0 { Result.Ok(x // 2) } ELSE { Result.Err("odd") }
 }
 
-@OUTPUT Result.flat-map(Result.flat-map(Result.Ok(8), validate), halve-res)  ; Ok(4)
-@OUTPUT Result.flat-map(Result.flat-map(Result.Ok(-1), validate), halve-res)  ; Err("negative")
-@OUTPUT Result.flat-map(Result.flat-map(Result.Ok(7), validate), halve-res)  ; Err("odd")
+WRITE Result.flat-map(Result.flat-map(Result.Ok(8), validate), halve-res)  ; Ok(4)
+WRITE Result.flat-map(Result.flat-map(Result.Ok(-1), validate), halve-res)  ; Err("negative")
+WRITE Result.flat-map(Result.flat-map(Result.Ok(7), validate), halve-res)  ; Err("odd")
 
 ; ============ Option.flatten ============
 
 ; Some(Some(v)) -> Some(v)
-@OUTPUT Option.flatten(Option.Some(Option.Some(42)))  ; Some(42)
-@OUTPUT Option.flatten(Option.Some(Option.Some("hello")))  ; Some("hello")
+WRITE Option.flatten(Option.Some(Option.Some(42)))  ; Some(42)
+WRITE Option.flatten(Option.Some(Option.Some("hello")))  ; Some("hello")
 
 ; Some(None) -> None
-@OUTPUT Option.flatten(Option.Some(Option.None))  ; None
+WRITE Option.flatten(Option.Some(Option.None))  ; None
 
 ; None -> None
-@OUTPUT Option.flatten(Option.None)  ; None
+WRITE Option.flatten(Option.None)  ; None
 
 ; Practical: flatten after map that returns Option
 LET maybe-find = arr => Array.head(arr)
 LET nested = Option.map(Option.Some([1, 2, 3]), maybe-find)
-@OUTPUT nested  ; Some(Some(1))
-@OUTPUT Option.flatten(nested)  ; Some(1)
+WRITE nested  ; Some(Some(1))
+WRITE Option.flatten(nested)  ; Some(1)
 
 LET empty-nested = Option.map(Option.Some([]), maybe-find)
-@OUTPUT empty-nested  ; Some(None)
-@OUTPUT Option.flatten(empty-nested)  ; None
+WRITE empty-nested  ; Some(None)
+WRITE Option.flatten(empty-nested)  ; None
 
 ; ============ Result.flatten ============
 
 ; Ok(Ok(v)) -> Ok(v)
-@OUTPUT Result.flatten(Result.Ok(Result.Ok(42)))  ; Ok(42)
-@OUTPUT Result.flatten(Result.Ok(Result.Ok("success")))  ; Ok("success")
+WRITE Result.flatten(Result.Ok(Result.Ok(42)))  ; Ok(42)
+WRITE Result.flatten(Result.Ok(Result.Ok("success")))  ; Ok("success")
 
 ; Ok(Err(e)) -> Err(e)
-@OUTPUT Result.flatten(Result.Ok(Result.Err("inner error")))  ; Err("inner error")
+WRITE Result.flatten(Result.Ok(Result.Err("inner error")))  ; Err("inner error")
 
 ; Err(e) -> Err(e)
-@OUTPUT Result.flatten(Result.Err("outer error"))  ; Err("outer error")
+WRITE Result.flatten(Result.Err("outer error"))  ; Err("outer error")
 
 ; Practical: flatten after map that returns Result
 FUN try-parse(s) {
   IF s == "42" { Result.Ok(42) } ELSE { Result.Err("parse failed") }
 }
 LET nested-res = Result.map(Result.Ok("42"), try-parse)
-@OUTPUT nested-res  ; Ok(Ok(42))
-@OUTPUT Result.flatten(nested-res)  ; Ok(42)
+WRITE nested-res  ; Ok(Ok(42))
+WRITE Result.flatten(nested-res)  ; Ok(42)
 
 LET nested-err = Result.map(Result.Ok("bad"), try-parse)
-@OUTPUT nested-err  ; Ok(Err("parse failed"))
-@OUTPUT Result.flatten(nested-err)  ; Err("parse failed")
+WRITE nested-err  ; Ok(Err("parse failed"))
+WRITE Result.flatten(nested-err)  ; Err("parse failed")

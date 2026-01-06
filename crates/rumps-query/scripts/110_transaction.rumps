@@ -7,17 +7,17 @@ LET write-result = TRANSACTION {
   @SET ^TEST(1, "age") = 30
   @GET ^TEST(1, "name")
 }
-@OUTPUT write-result
+WRITE write-result
 
 ; Verify write persisted
-@OUTPUT @GET ^TEST(1, "age")
+WRITE @GET ^TEST(1, "age")
 
 ; Transaction returning unit (write-only)
 LET unit-result = TRANSACTION {
   @SET ^TEST(2, "status") = "active"
 }
-@OUTPUT unit-result
-@OUTPUT @GET ^TEST(2, "status")
+WRITE unit-result
+WRITE @GET ^TEST(2, "status")
 
 ; Transaction with multiple statements and computation
 LET multi = TRANSACTION {
@@ -26,8 +26,8 @@ LET multi = TRANSACTION {
   @SET ^TEST(4, "sum") = a + b
   a + b
 }
-@OUTPUT multi
-@OUTPUT @GET ^TEST(4, "sum")
+WRITE multi
+WRITE @GET ^TEST(4, "sum")
 
 ; Accessing outer scope from transaction
 LET x = 100
@@ -35,7 +35,7 @@ LET access-outer = TRANSACTION {
   @SET ^TEST(5, "val") = x + 1
   x + 1
 }
-@OUTPUT access-outer
+WRITE access-outer
 
 ; Transaction result matching
 LET txn-result = TRANSACTION {
@@ -46,7 +46,7 @@ LET matched = MATCH txn-result {
   Result.Ok(s) => { "got: {s}" }
   Result.Err(e) => { "error: {e}" }
 }
-@OUTPUT matched
+WRITE matched
 
 ; Rollback on error: write then fail, verify write is not persisted
 LET rollback-test = TRANSACTION {
@@ -54,8 +54,8 @@ LET rollback-test = TRANSACTION {
   LET x = Option.None!
   "unreachable"
 }
-@OUTPUT rollback-test
-@OUTPUT @GET ^ROLLBACK("key")
+WRITE rollback-test
+WRITE @GET ^ROLLBACK("key")
 
 ; Bulk write/read test using FOREVER inside transaction
 LET bulk-result = TRANSACTION {
@@ -84,6 +84,6 @@ LET bulk-result = TRANSACTION {
   }
   count
 }
-@OUTPUT bulk-result
+WRITE bulk-result
 
-@OUTPUT "TRANSACTION test complete"
+WRITE "TRANSACTION test complete"

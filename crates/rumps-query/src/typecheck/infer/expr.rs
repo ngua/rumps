@@ -269,7 +269,7 @@ impl InferCtx<'_> {
             // Query: `@QUERY local(...)` or `@QUERY ^global(...)`
             Expr::Query(ref dbref, _) => self.query(id, dbref, span),
 
-            // Output expression: `@OUTPUT expr [JSON] [TO target]`
+            // Output expression: `WRITE expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
             Expr::Output(output) => {
                 self.output(output, span);
@@ -290,7 +290,7 @@ impl InferCtx<'_> {
                 Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
-            // Raise expression: `@RAISE expr`
+            // Raise expression: `RAISE expr`
             // Never returns; can unify with any expected type.
             Expr::Raise(inner) => {
                 let ty = self.expr(*inner);

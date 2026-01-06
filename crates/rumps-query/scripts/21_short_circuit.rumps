@@ -12,7 +12,7 @@ LET r1 = FALSE AND {
   @SET counter = 100
   TRUE
 }
-@OUTPUT @GET counter
+WRITE @GET counter
 ; Expected: 0 (block not evaluated)
 
 ; === Non-short-circuit AND (TRUE AND ...) ===
@@ -23,7 +23,7 @@ LET r2 = TRUE AND {
   @SET counter = 200
   TRUE
 }
-@OUTPUT @GET counter
+WRITE @GET counter
 ; Expected: 200 (block was evaluated)
 
 ; === Short-circuit OR (TRUE OR ...) ===
@@ -34,7 +34,7 @@ LET r3 = TRUE OR {
   @SET counter = 300
   FALSE
 }
-@OUTPUT @GET counter
+WRITE @GET counter
 ; Expected: 0 (block not evaluated)
 
 ; === Non-short-circuit OR (FALSE OR ...) ===
@@ -45,7 +45,7 @@ LET r4 = FALSE OR {
   @SET counter = 400
   TRUE
 }
-@OUTPUT @GET counter
+WRITE @GET counter
 ; Expected: 400 (block was evaluated)
 
 ; === Chained short-circuit ===
@@ -58,7 +58,7 @@ LET r5 = FALSE AND {
   @SET counter = 2
   TRUE
 }
-@OUTPUT @GET counter
+WRITE @GET counter
 ; Expected: 0 (first FALSE short-circuits entire chain)
 
 @SET counter = 0
@@ -69,7 +69,7 @@ LET r6 = TRUE OR {
   @SET counter = 2
   FALSE
 }
-@OUTPUT @GET counter
+WRITE @GET counter
 ; Expected: 0 (first TRUE short-circuits entire chain)
 
 ; === Mixed AND/OR ===
@@ -82,7 +82,7 @@ LET r7 = (FALSE AND {
   @SET counter = 20
   TRUE
 }
-@OUTPUT @GET counter
+WRITE @GET counter
 ; Expected: 20 (AND short-circuits, OR evaluates RHS)
 
 @SET counter = 0
@@ -93,7 +93,7 @@ LET r8 = (TRUE OR {
   @SET counter = 30
   TRUE
 }
-@OUTPUT @GET counter
+WRITE @GET counter
 ; Expected: 30 (OR short-circuits, AND evaluates RHS)
 
-@OUTPUT "done"
+WRITE "done"

@@ -4,4 +4,4 @@
 ; Direct global SET outside transaction
 @SET ^data(1) = "value"
 
-@OUTPUT "should not reach here"
+WRITE "should not reach here"

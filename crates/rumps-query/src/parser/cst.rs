@@ -339,10 +339,10 @@ pub(crate) enum ExprKind {
     /// Returns `Option[Array[Subscript]]`.
     Query(DbRef),
 
-    /// Output expression: `@OUTPUT expr [JSON] [TO target]`.
+    /// Output expression: `WRITE expr [JSON] [TO target]`.
     ///
     /// Executes the output side effect and evaluates to `Unit`.
-    /// This allows `@OUTPUT` in expression contexts.
+    /// This allows `WRITE` in expression contexts.
     Output(Box<OutputStmt>),
 
     /// Set expression: `@SET target = value`.
@@ -355,7 +355,7 @@ pub(crate) enum ExprKind {
     /// Deletes a variable or subtree and evaluates to `Unit`.
     Kill(DbRef),
 
-    /// Raise a runtime error: `@RAISE expr`.
+    /// Raise a runtime error: `RAISE expr`.
     ///
     /// Evaluates `expr` (must be `Stringable`) and raises a runtime error.
     /// Never returns; can unify with any expected type.

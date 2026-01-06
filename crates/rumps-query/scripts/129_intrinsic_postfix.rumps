@@ -6,26 +6,26 @@
 @SET d(3) = "three"
 
 ; @GET with postfix ! (no parens needed)
-@OUTPUT @GET d(1)! AS String
-@OUTPUT @GET d(2)! AS String
+WRITE @GET d(1)! AS String
+WRITE @GET d(2)! AS String
 
 ; @ORDER with postfix ! (returns Option[Subscript])
-@OUTPUT @ORDER d(0)!
+WRITE @ORDER d(0)!
 
 ; @QUERY with postfix ! (returns Option[Array[Subscript]])
-@OUTPUT @QUERY d(0)!
+WRITE @QUERY d(0)!
 
 ; Combined with other operations
 LET val = "{@GET d(1)! AS String} appended"
-@OUTPUT val
+WRITE val
 
 ; Nested in expression context
-@OUTPUT "{@GET d(3)! AS String} suffix"
+WRITE "{@GET d(3)! AS String} suffix"
 
 ; Works with subscript expressions too
 LET key = 2
-@OUTPUT @GET d(key)! AS String
+WRITE @GET d(key)! AS String
 
 ; Multiple postfix ops chained on @GET
 @SET arr(1) = 42
-@OUTPUT (@GET arr(1)! AS Int) + 8
+WRITE (@GET arr(1)! AS Int) + 8

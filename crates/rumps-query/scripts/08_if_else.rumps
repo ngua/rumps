@@ -3,65 +3,65 @@
 
 ; Simple IF with true condition
 IF TRUE {
-  @OUTPUT "TRUE branch taken"
+  WRITE "TRUE branch taken"
 }
 
 ; Simple IF with false condition (no output)
 IF FALSE {
-  @OUTPUT "This should not print"
+  WRITE "This should not print"
 }
 
 ; IF/ELSE with true condition
 IF TRUE {
-  @OUTPUT "IF branch"
+  WRITE "IF branch"
 } ELSE {
-  @OUTPUT "ELSE branch"
+  WRITE "ELSE branch"
 }
 ; Expected: IF branch
 
 ; IF/ELSE with false condition
 IF FALSE {
-  @OUTPUT "IF branch"
+  WRITE "IF branch"
 } ELSE {
-  @OUTPUT "ELSE branch"
+  WRITE "ELSE branch"
 }
 ; Expected: ELSE branch
 
 ; IF with comparison
 LET x = 10
 IF x > 5 {
-  @OUTPUT "x is greater than 5"
+  WRITE "x is greater than 5"
 } ELSE {
-  @OUTPUT "x is not greater than 5"
+  WRITE "x is not greater than 5"
 }
 ; Expected: x is greater than 5
 
 ; IF with equality
 LET name = "Alice"
 IF name == "Alice" {
-  @OUTPUT "Hello, Alice!"
+  WRITE "Hello, Alice!"
 } ELSE {
-  @OUTPUT "You are not Alice"
+  WRITE "You are not Alice"
 }
 ; Expected: Hello, Alice!
 
 ; IF as expression
 LET result = IF 10 > 5 { "big" } ELSE { "small" }
-@OUTPUT result
+WRITE result
 ; Expected: big
 
 ; Nested IF
 LET score = 85
 IF score >= 90 {
-  @OUTPUT "A"
+  WRITE "A"
 } ELSE {
   IF score >= 80 {
-    @OUTPUT "B"
+    WRITE "B"
   } ELSE {
     IF score >= 70 {
-      @OUTPUT "C"
+      WRITE "C"
     } ELSE {
-      @OUTPUT "F"
+      WRITE "F"
     }
   }
 }
@@ -71,7 +71,7 @@ IF score >= 90 {
 LET a = TRUE
 LET b = FALSE
 IF a AND NOT b {
-  @OUTPUT "a is true and b is false"
+  WRITE "a is true and b is false"
 }
 ; Expected: a is true and b is false
 
@@ -79,10 +79,10 @@ IF a AND NOT b {
 LET age = 25
 LET has-license = TRUE
 IF age >= 18 AND has-license {
-  @OUTPUT "Can drive"
+  WRITE "Can drive"
 } ELSE {
-  @OUTPUT "Cannot drive"
+  WRITE "Cannot drive"
 }
 ; Expected: Can drive
 
-@OUTPUT "IF/ELSE test complete"
+WRITE "IF/ELSE test complete"

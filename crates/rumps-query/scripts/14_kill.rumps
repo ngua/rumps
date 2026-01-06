@@ -10,7 +10,7 @@
 
 ; Verify items exists
 LET v1 = @GET items(1)
-@OUTPUT v1
+WRITE v1
 ; Expected: one
 
 ; @KILL single node
@@ -18,7 +18,7 @@ LET v1 = @GET items(1)
 
 ; Verify deleted
 LET v2 = @GET items(2)
-@OUTPUT v2
+WRITE v2
 ; Expected: Option.None
 
 ; @KILL subtree
@@ -26,27 +26,27 @@ LET v2 = @GET items(2)
 
 ; Verify subtree deleted
 LET v3 = @GET items(1)
-@OUTPUT v3
+WRITE v3
 ; Expected: Option.None
 
 LET v4 = @GET items(1, "a")
-@OUTPUT v4
+WRITE v4
 ; Expected: Option.None
 
 ; items(3) should still exist
 LET v5 = @GET items(3)
-@OUTPUT v5
+WRITE v5
 ; Expected: three
 
 ; @KILL entire variable
 @SET temp = 999
 LET before = @GET temp
-@OUTPUT before
+WRITE before
 ; Expected: 999
 
 @KILL temp
 LET after = @GET temp
-@OUTPUT after
+WRITE after
 ; Expected: Option.None
 
-@OUTPUT "@KILL test complete"
+WRITE "@KILL test complete"

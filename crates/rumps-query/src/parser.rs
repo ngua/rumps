@@ -38,7 +38,9 @@
 // `Box`ing would add allocation overhead
 #![allow(clippy::result_large_err)]
 
-use chumsky::prelude::{choice, end, just, recursive, select, Simple};
+use chumsky::prelude::{
+    choice, end, filter_map, just, recursive, select, Simple,
+};
 use chumsky::Parser as _;
 use nonempty::NonEmpty;
 use ordered_float::OrderedFloat;
@@ -501,7 +503,7 @@ impl Parser {
         let target =
             to_error.or(to_file).or_not().map(|t| t.unwrap_or_default());
 
-        just(Token::Output)
+        just(Token::Write)
             .ignore_then(Self::expr(stmt))
             .then(format)
             .then(target)
@@ -515,7 +517,7 @@ impl Parser {
             })
     }
 
-    /// `OUTPUT expr [JSON] [TO ERROR | TO FILE expr]` as expression.
+    /// `WRITE expr [JSON] [TO ERROR | TO FILE expr]` as expression.
     ///
     /// Same syntax as `output_stmt`, but returns `cst::Expr` instead of
     /// `cst::Stmt`. Evaluates to `Unit` after performing the output.
@@ -541,7 +543,7 @@ impl Parser {
         let target =
             to_error.or(to_file).or_not().map(|t| t.unwrap_or_default());
 
-        just(Token::Output)
+        just(Token::Write)
             .ignore_then(expr)
             .then(format)
             .then(target)
@@ -588,7 +590,7 @@ impl Parser {
             })
     }
 
-    /// `@RAISE expr` as expression.
+    /// `RAISE expr` as expression.
     ///
     /// Raises a runtime error with the stringified value.
     fn raise_expr(
@@ -848,7 +850,9 @@ impl Parser {
             .or_not()
             .map(|ps| ps.unwrap_or_default());
 
-        let variant = Self::ident()
+        // Uses `ident_or_contextual_keyword` because variant names like `Raise` may
+        // also be keywords
+        let variant = Self::ident_or_contextual_keyword()
             .then(payloads)
             .map(|(name, payloads)| cst::VariantCst { name, payloads });
 
@@ -1324,9 +1328,11 @@ impl Parser {
             .then_ignore(just(Token::RParen));
 
         // Type.Variant pattern (with optional args)
-        let variant_pattern = Self::ident()
+        // Uses `ident_or_contextual_keyword` because variant names like `Raise` may
+        // also be keywords
+        let variant_pattern = Self::ident_or_contextual_keyword()
             .then_ignore(just(Token::Dot))
-            .then(Self::ident())
+            .then(Self::ident_or_contextual_keyword())
             .then(pattern_args.or_not())
             .map(|((ty, var), args)| match args {
                 None => TypePattern::Variant(ty, var),
@@ -1635,10 +1641,10 @@ impl Parser {
         })
     }
 
-    /// Unary: `NOT`, `!`, `-`, and intrinsics (`GET`, `SET`, `RAISE`, etc.).
+    /// Unary: `NOT`, `!`, `-`, and intrinsics/keywords (`@GET`, `@SET`, `RAISE`, etc.).
     ///
     /// `intrinsic_op` is the operand parser for intrinsics; it excludes `CATCH`
-    /// so that `@RAISE x CATCH ...` parses as `(@RAISE x) CATCH ...`.
+    /// so that `RAISE x CATCH ...` parses as `(RAISE x) CATCH ...`.
     fn unary_expr(
         intrinsic_op: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
@@ -1790,6 +1796,8 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, Vec<PostfixOp>, Error = ParseErr> + Clone
     {
         // Field access: `.field` or tuple index `.0`, `.1`, etc.
+        // Uses `ident_or_contextual_keyword` so keywords work as variant names
+        // (e.g., `Action.Raise`)
         let field_or_tuple_idx = just(Token::Dot).ignore_then(
             // Try tuple index first (integer literal)
             select! { Token::Int(n) => n }
@@ -1800,12 +1808,13 @@ impl Parser {
                 })
                 .map_with_span(PostfixOp::TupleIndex)
                 // Otherwise, it's a field access
-                .or(Self::ident().map_with_span(PostfixOp::Field)),
+                .or(Self::ident_or_contextual_keyword()
+                    .map_with_span(PostfixOp::Field)),
         );
 
         // Optional field access: `?.field`
         let opt_field = just(Token::QuestionDot)
-            .ignore_then(Self::ident())
+            .ignore_then(Self::ident_or_contextual_keyword())
             .map_with_span(PostfixOp::OptionalField);
 
         // Index: `[expr]`
@@ -2419,7 +2428,9 @@ impl Parser {
             // Variant pattern: `Type.Variant` or `Module.Type.Variant`
             // Parse a path of at least two segments; the last is the variant,
             // everything else (joined by `.`) is the type path.
-            let variant_pat = Self::ident()
+            // Uses `ident_or_contextual_keyword` because variant names like `Raise`
+            // may also be keywords.
+            let variant_pat = Self::ident_or_contextual_keyword()
                 .separated_by(just(Token::Dot))
                 .at_least(2)
                 .then(variant_args.or_not())
@@ -2589,6 +2600,23 @@ impl Parser {
     fn ident() -> impl chumsky::Parser<Token, String, Error = ParseErr> + Clone
     {
         select! { Token::Ident(s) => s }
+    }
+
+    /// Parse an identifier or contextual keyword that can appear as a variant
+    /// name. Keywords like `Raise`, `Catch`, `Write` can be used as enum
+    /// variant names (e.g., `Error.Raise`).
+    ///
+    /// Uses `Token::as_contextual_ident` to stay synchronized with the token
+    /// definitions.
+    fn ident_or_contextual_keyword(
+    ) -> impl chumsky::Parser<Token, String, Error = ParseErr> + Clone {
+        filter_map(|span, tok: Token| match tok {
+            Token::Ident(s) => Ok(s),
+            _ => tok
+                .as_contextual_ident()
+                .map(|s| s.to_owned())
+                .ok_or_else(|| Simple::custom(span, "expected identifier")),
+        })
     }
 
     /// Parse a user-facing constraint name.

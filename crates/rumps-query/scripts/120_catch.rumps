@@ -1,14 +1,14 @@
 ; Test catch without parens
-@OUTPUT @RAISE "x" @CATCH e => "caught"
+WRITE RAISE "x" CATCH e => "caught"
 
 ; Catch with success (no error)
-@OUTPUT 42 @CATCH e => 0
+WRITE 42 CATCH e => 0
 
 ; Catch division by zero
-@OUTPUT (1 // 0) @CATCH e => -1
+WRITE (1 // 0) CATCH e => -1
 
 ; Pattern match on error type (Raise)
-@OUTPUT @RAISE "error msg" @CATCH e => {
+WRITE RAISE "error msg" CATCH e => {
   MATCH e {
     Error.Raise(msg) => { "raised: {msg}" }
     Error.Runtime(msg) => { "runtime: {msg}" }
@@ -17,7 +17,7 @@
 }
 
 ; Division by zero is Runtime; must return Int to match
-@OUTPUT (1 // 0) @CATCH e => {
+WRITE (1 // 0) CATCH e => {
   MATCH e {
     Error.Runtime(msg) => { -1 }
     _ => { -2 }
@@ -25,7 +25,7 @@
 }
 
 ; String expression with Runtime error match
-@OUTPUT "{"test"}{@RAISE "oops"}" @CATCH e => {
+WRITE "{"test"}{RAISE "oops"}" CATCH e => {
   MATCH e {
     Error.Raise(msg) => { "caught raise: {msg}" }
     _ => { "other error" }

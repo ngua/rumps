@@ -889,10 +889,10 @@ pub(crate) enum Expr {
     /// The `Option<TxnId>` is assigned during typecheck.
     Query(DbRef, Option<TxnId>),
 
-    /// Output expression: `@OUTPUT expr [JSON] [TO target]`.
+    /// Output expression: `WRITE expr [JSON] [TO target]`.
     ///
     /// Executes the output side effect and evaluates to `Unit`.
-    /// This allows `@OUTPUT` in expression contexts like `f(@OUTPUT x)`.
+    /// This allows `WRITE` in expression contexts like `f(WRITE x)`.
     Output(OutputStmt),
 
     /// Set expression: `@SET target = value`.
@@ -909,7 +909,7 @@ pub(crate) enum Expr {
     /// The `Option<TxnId>` is assigned during typecheck; globals require it.
     Kill(DbRef, Option<TxnId>),
 
-    /// Raise a runtime error: `@RAISE expr`.
+    /// Raise a runtime error: `RAISE expr`.
     ///
     /// Evaluates `expr` (must be `Stringable`) and raises a runtime error.
     /// Never returns; can unify with any expected type.

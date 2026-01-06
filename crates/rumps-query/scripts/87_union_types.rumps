@@ -12,38 +12,38 @@ LET f: Float = 3.14
 LET c: Char = 'x'
 LET s: String = "hello"
 
-@OUTPUT b IS Storable
-@OUTPUT i IS Storable
-@OUTPUT f IS Storable
-@OUTPUT c IS Storable
-@OUTPUT s IS Storable
+WRITE b IS Storable
+WRITE i IS Storable
+WRITE f IS Storable
+WRITE c IS Storable
+WRITE s IS Storable
 
 ; Non-storables
 LET arr = [1, 2, 3]
 LET obj = { x: 1 }
 LET tup = (1, 2)
-@OUTPUT arr IS Storable
-@OUTPUT obj IS Storable
-@OUTPUT tup IS Storable
+WRITE arr IS Storable
+WRITE obj IS Storable
+WRITE tup IS Storable
 
 ; IS checks against Scalar
-@OUTPUT b IS Scalar
-@OUTPUT i IS Scalar
-@OUTPUT f IS Scalar
-@OUTPUT s IS Scalar
-@OUTPUT c IS Scalar  ; Char is NOT Scalar
+WRITE b IS Scalar
+WRITE i IS Scalar
+WRITE f IS Scalar
+WRITE s IS Scalar
+WRITE c IS Scalar  ; Char is NOT Scalar
 
 ; === AS cast for Storable (infallible) ===
 
 LET int-val: Int = 100
 LET storable-int = int-val AS Storable
-@OUTPUT storable-int IS Storable
-@OUTPUT storable-int IS Int
+WRITE storable-int IS Storable
+WRITE storable-int IS Int
 
 LET str-val: String = "test"
 LET storable-str = str-val AS Storable
-@OUTPUT storable-str IS Storable
-@OUTPUT storable-str IS String
+WRITE storable-str IS Storable
+WRITE storable-str IS String
 
 ; === User-defined unions ===
 
@@ -52,12 +52,12 @@ UNION NumericId = Int | String
 LET id1: Int = 123
 LET id2: String = "abc-456"
 
-@OUTPUT id1 IS NumericId
-@OUTPUT id2 IS NumericId
+WRITE id1 IS NumericId
+WRITE id2 IS NumericId
 
 ; Non-member
 LET not-id: Float = 1.5
-@OUTPUT not-id IS NumericId
+WRITE not-id IS NumericId
 
 ; === Union type in function signatures ===
 
@@ -69,8 +69,8 @@ FUN format-id(id: NumericId) -> String {
   }
 }
 
-@OUTPUT format-id(123)
-@OUTPUT format-id("xyz")
+WRITE format-id(123)
+WRITE format-id("xyz")
 
 ; === MATCH with IS patterns ===
 
@@ -81,7 +81,7 @@ LET result1 = MATCH val1 {
   b IS Bool => { "bool" }
   _ => { "other" }
 }
-@OUTPUT result1
+WRITE result1
 
 LET val2 = "hello"
 LET result2 = MATCH val2 {
@@ -90,7 +90,7 @@ LET result2 = MATCH val2 {
   b IS Bool => { "bool" }
   _ => { "other" }
 }
-@OUTPUT result2
+WRITE result2
 
 LET val3 = true
 LET result3 = MATCH val3 {
@@ -99,17 +99,17 @@ LET result3 = MATCH val3 {
   b IS Bool => { "bool: {b}" }
   _ => { "other" }
 }
-@OUTPUT result3
+WRITE result3
 
 ; === Inline union types ===
 
 LET mixed: Int | String = 99
-@OUTPUT mixed IS Int
-@OUTPUT mixed IS String
+WRITE mixed IS Int
+WRITE mixed IS String
 
 LET mixed2: Int | String = "foo"
-@OUTPUT mixed2 IS Int
-@OUTPUT mixed2 IS String
+WRITE mixed2 IS Int
+WRITE mixed2 IS String
 
 ; === Complex match with guards ===
 
@@ -125,13 +125,13 @@ FUN classify(v: Storable) -> String {
   }
 }
 
-@OUTPUT classify(500)
-@OUTPUT classify(50)
-@OUTPUT classify(0)
-@OUTPUT classify("hello world!!!")
-@OUTPUT classify("hi")
-@OUTPUT classify(true)
-@OUTPUT classify(3.14)
+WRITE classify(500)
+WRITE classify(50)
+WRITE classify(0)
+WRITE classify("hello world!!!")
+WRITE classify("hi")
+WRITE classify(true)
+WRITE classify(3.14)
 
 ; === JSON scalar extraction returns Option[Scalar] ===
 
@@ -144,9 +144,9 @@ LET active-opt = data->>("active")
 LET score-opt = data->>("score")
 LET missing-opt = data->>("missing")
 
-@OUTPUT name-opt IS Option
-@OUTPUT age-opt IS Option
-@OUTPUT missing-opt IS Option.None
+WRITE name-opt IS Option
+WRITE age-opt IS Option
+WRITE missing-opt IS Option.None
 
 ; Unwrapped values are Scalar (the union type)
 LET name-val = name-opt!
@@ -154,16 +154,16 @@ LET age-val = age-opt!
 LET active-val = active-opt!
 LET score-val = score-opt!
 
-@OUTPUT name-val IS Scalar
-@OUTPUT age-val IS Scalar
-@OUTPUT active-val IS Scalar
-@OUTPUT score-val IS Scalar
+WRITE name-val IS Scalar
+WRITE age-val IS Scalar
+WRITE active-val IS Scalar
+WRITE score-val IS Scalar
 
 ; Can narrow Scalar with IS
-@OUTPUT name-val IS String
-@OUTPUT age-val IS Int
-@OUTPUT active-val IS Bool
-@OUTPUT score-val IS Float
+WRITE name-val IS String
+WRITE age-val IS Int
+WRITE active-val IS Bool
+WRITE score-val IS Float
 
 ; === Type narrowing with MATCH on JSON scalars ===
 
@@ -182,24 +182,24 @@ FUN describe-scalar(opt: Option[Scalar]) -> String {
   }
 }
 
-@OUTPUT describe-scalar(data->>("name"))
-@OUTPUT describe-scalar(data->>("age"))
-@OUTPUT describe-scalar(data->>("active"))
-@OUTPUT describe-scalar(data->>("score"))
-@OUTPUT describe-scalar(data->>("missing"))
+WRITE describe-scalar(data->>("name"))
+WRITE describe-scalar(data->>("age"))
+WRITE describe-scalar(data->>("active"))
+WRITE describe-scalar(data->>("score"))
+WRITE describe-scalar(data->>("missing"))
 
 ; === Static field extraction with .. also returns Option[Scalar] ===
 
 LET static-name = data..name
 LET static-age = data..age
 
-@OUTPUT static-name IS Option
-@OUTPUT static-name! IS Scalar
-@OUTPUT static-name! IS String
+WRITE static-name IS Option
+WRITE static-name! IS Scalar
+WRITE static-name! IS String
 
-@OUTPUT static-age IS Option
-@OUTPUT static-age! IS Scalar
-@OUTPUT static-age! IS Int
+WRITE static-age IS Option
+WRITE static-age! IS Scalar
+WRITE static-age! IS Int
 
 ; === Returning union types from functions ===
 
@@ -210,10 +210,10 @@ FUN get-id(use-int: Bool) -> Int | String {
 LET id-int = get-id(true)
 LET id-str = get-id(false)
 
-@OUTPUT id-int IS Int
-@OUTPUT id-int IS String
-@OUTPUT id-str IS Int
-@OUTPUT id-str IS String
+WRITE id-int IS Int
+WRITE id-int IS String
+WRITE id-str IS Int
+WRITE id-str IS String
 
 ; Return Storable
 FUN get-storable(kind: Int) -> Storable {
@@ -227,12 +227,12 @@ FUN get-storable(kind: Int) -> Storable {
   }
 }
 
-@OUTPUT get-storable(0) IS Bool
-@OUTPUT get-storable(1) IS Int
-@OUTPUT get-storable(2) IS Float
-@OUTPUT get-storable(3) IS Char
-@OUTPUT get-storable(4) IS String
-@OUTPUT get-storable(5) IS Json
+WRITE get-storable(0) IS Bool
+WRITE get-storable(1) IS Int
+WRITE get-storable(2) IS Float
+WRITE get-storable(3) IS Char
+WRITE get-storable(4) IS String
+WRITE get-storable(5) IS Json
 
 ; Return Scalar
 FUN get-scalar(kind: Int) -> Scalar {
@@ -244,10 +244,10 @@ FUN get-scalar(kind: Int) -> Scalar {
   }
 }
 
-@OUTPUT get-scalar(0) IS Bool
-@OUTPUT get-scalar(1) IS Int
-@OUTPUT get-scalar(2) IS Float
-@OUTPUT get-scalar(3) IS String
+WRITE get-scalar(0) IS Bool
+WRITE get-scalar(1) IS Int
+WRITE get-scalar(2) IS Float
+WRITE get-scalar(3) IS String
 
 ; Return user-defined union
 FUN parse-id(s: String) -> NumericId {
@@ -258,5 +258,5 @@ FUN parse-id(s: String) -> NumericId {
   }
 }
 
-@OUTPUT parse-id("123") IS Int
-@OUTPUT parse-id("abc") IS String
+WRITE parse-id("123") IS Int
+WRITE parse-id("abc") IS String

@@ -1,2 +1,2 @@
-; Test @RAISE with an object (stringified)
-@RAISE { error: "not found", code: 404 }
+; Test RAISE with an object (stringified)
+RAISE { error: "not found", code: 404 }

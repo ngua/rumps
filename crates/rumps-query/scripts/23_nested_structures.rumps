@@ -4,20 +4,20 @@
 ; === Deeply nested arrays ===
 
 LET deep = [[[[1]]]]
-@OUTPUT deep[0][0][0][0]
+WRITE deep[0][0][0][0]
 ; Expected: 1
 
 LET matrix3d = [
   [[1, 2], [3, 4]],
   [[5, 6], [7, 8]]
 ]
-@OUTPUT matrix3d[0][0][0]
+WRITE matrix3d[0][0][0]
 ; Expected: 1
 
-@OUTPUT matrix3d[1][1][1]
+WRITE matrix3d[1][1][1]
 ; Expected: 8
 
-@OUTPUT matrix3d[-1][-1][-1]
+WRITE matrix3d[-1][-1][-1]
 ; Expected: 8
 
 ; === Deeply nested objects ===
@@ -31,7 +31,7 @@ LET nested = {
     }
   }
 }
-@OUTPUT nested.level1.level2.level3.value
+WRITE nested.level1.level2.level3.value
 ; Expected: deep
 
 ; === Mixed nesting ===
@@ -47,19 +47,19 @@ LET complex = {
   }
 }
 
-@OUTPUT complex.users[0].name
+WRITE complex.users[0].name
 ; Expected: Alice
 
-@OUTPUT complex.users[0].scores[0]
+WRITE complex.users[0].scores[0]
 ; Expected: 100
 
-@OUTPUT complex.users[1].scores[-1]
+WRITE complex.users[1].scores[-1]
 ; Expected: 92
 
-@OUTPUT complex.meta.tags[0]
+WRITE complex.meta.tags[0]
 ; Expected: active
 
-@OUTPUT complex.users[1].name
+WRITE complex.users[1].name
 ; Expected: Bob
 
 ; === Nested blocks ===
@@ -74,7 +74,7 @@ LET result = {
   }
   a * 3
 }
-@OUTPUT result
+WRITE result
 ; Expected: 75 ((10 * 2 + 5) * 3 = 25 * 3)
 
 ; === Nested conditionals ===
@@ -93,7 +93,7 @@ LET grade = IF score >= 90 {
     }
   }
 }
-@OUTPUT grade
+WRITE grade
 ; Expected: B
 
 ; === Array of blocks ===
@@ -109,7 +109,7 @@ LET computed = [
     x + 1
   }
 ]
-@OUTPUT computed
+WRITE computed
 ; Expected: [ 2, 3, 4 ]
 
 ; === Object with computed values ===
@@ -120,13 +120,13 @@ LET obj = {
   triple: base * 3,
   square: base * base
 }
-@OUTPUT obj.double
+WRITE obj.double
 ; Expected: 20
 
-@OUTPUT obj.triple
+WRITE obj.triple
 ; Expected: 30
 
-@OUTPUT obj.square
+WRITE obj.square
 ; Expected: 100
 
-@OUTPUT "Nested structures test complete"
+WRITE "Nested structures test complete"

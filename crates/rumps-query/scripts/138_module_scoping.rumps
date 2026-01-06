@@ -18,18 +18,18 @@ MODULE Geometry {
   +FUN double-area(r: Float) -> Float { 2.0 * circle-area(r) }
 }
 
-@OUTPUT Geometry.pi > 3  ; true
-@OUTPUT Geometry.circle-area(1.0) > 3  ; true (pi * 1 * 1 = pi)
-@OUTPUT Geometry.circle-circumference(1.0) > 6  ; true (tau * 1 = tau)
-@OUTPUT Geometry.double-area(1.0) > 6  ; true (2 * pi)
+WRITE Geometry.pi > 3  ; true
+WRITE Geometry.circle-area(1.0) > 3  ; true (pi * 1 * 1 = pi)
+WRITE Geometry.circle-circumference(1.0) > 6  ; true (tau * 1 = tau)
+WRITE Geometry.double-area(1.0) > 6  ; true (2 * pi)
 
 ; ============ File-imported module with sibling references ============
 
 MODULE MyMath FROM "../modules/lib/mymath.rumps"
 
-@OUTPUT MyMath.pi > 3  ; true
-@OUTPUT MyMath.area(1.0) > 3  ; true (pi * 1 * 1 = pi)
-@OUTPUT MyMath.area(2.0) > 12  ; true (pi * 4 = ~12.56)
+WRITE MyMath.pi > 3  ; true
+WRITE MyMath.area(1.0) > 3  ; true (pi * 1 * 1 = pi)
+WRITE MyMath.area(2.0) > 12  ; true (pi * 4 = ~12.56)
 
 ; ============ Both inline and imported in same script ============
 
@@ -37,10 +37,10 @@ LET inline-area = Geometry.circle-area(2.0)
 LET file-area = MyMath.area(2.0)
 
 ; Both should compute pi * 4 = ~12.56636
-@OUTPUT inline-area > 12
-@OUTPUT file-area > 12
+WRITE inline-area > 12
+WRITE file-area > 12
 
 ; They should be equal (both use pi * r * r)
 LET diff = inline-area - file-area
-@OUTPUT diff < 0.0001
-@OUTPUT diff > -0.0001
+WRITE diff < 0.0001
+WRITE diff > -0.0001

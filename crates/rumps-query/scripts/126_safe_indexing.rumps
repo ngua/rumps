@@ -5,88 +5,88 @@
 LET arr = [10, 20, 30]
 
 ; Valid indices return Some
-@OUTPUT arr?[0]
+WRITE arr?[0]
 ; Expected: Option.Some(10)
 
-@OUTPUT arr?[1]
+WRITE arr?[1]
 ; Expected: Option.Some(20)
 
-@OUTPUT arr?[2]
+WRITE arr?[2]
 ; Expected: Option.Some(30)
 
 ; Negative indices
-@OUTPUT arr?[-1]
+WRITE arr?[-1]
 ; Expected: Option.Some(30)
 
-@OUTPUT arr?[-2]
+WRITE arr?[-2]
 ; Expected: Option.Some(20)
 
 ; Out of bounds returns None
-@OUTPUT arr?[3]
+WRITE arr?[3]
 ; Expected: Option.None
 
-@OUTPUT arr?[100]
+WRITE arr?[100]
 ; Expected: Option.None
 
-@OUTPUT arr?[-4]
+WRITE arr?[-4]
 ; Expected: Option.None
 
-@OUTPUT arr?[-100]
+WRITE arr?[-100]
 ; Expected: Option.None
 
 ; String safe indexing
 LET s = "hello"
 
-@OUTPUT s?[0]
+WRITE s?[0]
 ; Expected: Option.Some('h')
 
-@OUTPUT s?[4]
+WRITE s?[4]
 ; Expected: Option.Some('o')
 
-@OUTPUT s?[-1]
+WRITE s?[-1]
 ; Expected: Option.Some('o')
 
-@OUTPUT s?[5]
+WRITE s?[5]
 ; Expected: Option.None
 
-@OUTPUT s?[-6]
+WRITE s?[-6]
 ; Expected: Option.None
 
 ; Empty collections
 LET empty: Array[Int] = []
-@OUTPUT empty?[0]
+WRITE empty?[0]
 ; Expected: Option.None
 
 LET empty-str = ""
-@OUTPUT empty-str?[0]
+WRITE empty-str?[0]
 ; Expected: Option.None
 
 ; Map safe indexing (same as regular indexing since maps already return Option)
 LET m = { "a" => 1, "b" => 2 }
-@OUTPUT m?["a"]
+WRITE m?["a"]
 ; Expected: Option.Some(1)
 
-@OUTPUT m?["z"]
+WRITE m?["z"]
 ; Expected: Option.None
 
 ; Chain with unwrap or coalesce
-@OUTPUT arr?[0] ?? -1
+WRITE arr?[0] ?? -1
 ; Expected: 10
 
-@OUTPUT arr?[100] ?? -1
+WRITE arr?[100] ?? -1
 ; Expected: -1
 
 ; Use with pattern matching
 MATCH arr?[0] {
-  Option.Some(x) => @OUTPUT "Got: {x}"
-  Option.None => @OUTPUT "Nothing"
+  Option.Some(x) => WRITE "Got: {x}"
+  Option.None => WRITE "Nothing"
 }
 ; Expected: Got: 10
 
 MATCH arr?[999] {
-  Option.Some(x) => @OUTPUT "Got: {x}"
-  Option.None => @OUTPUT "Nothing"
+  Option.Some(x) => WRITE "Got: {x}"
+  Option.None => WRITE "Nothing"
 }
 ; Expected: Nothing
 
-@OUTPUT "Safe indexing test complete"
+WRITE "Safe indexing test complete"

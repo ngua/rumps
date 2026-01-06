@@ -6,27 +6,27 @@ MODULE MyMath FROM "../modules/lib/mymath.rumps"
 
 ; ============ Test constants from imported module ============
 
-@OUTPUT MyMath.pi > 3  ; true
-@OUTPUT MyMath.e > 2  ; true
+WRITE MyMath.pi > 3  ; true
+WRITE MyMath.e > 2  ; true
 
 ; ============ Test functions from imported module ============
 
-@OUTPUT MyMath.square(5)  ; 25
-@OUTPUT MyMath.double(7)  ; 14
-@OUTPUT MyMath.is-positive(10)  ; true
-@OUTPUT MyMath.is-positive(-5)  ; false
+WRITE MyMath.square(5)  ; 25
+WRITE MyMath.double(7)  ; 14
+WRITE MyMath.is-positive(10)  ; true
+WRITE MyMath.is-positive(-5)  ; false
 
 ; ============ Use imported functions in expressions ============
 
 LET sq = MyMath.square(4)
 LET dbl = MyMath.double(sq)
-@OUTPUT dbl  ; 32
+WRITE dbl  ; 32
 
 ; ============ Pass imported function as value ============
 
 LET f = MyMath.double
-@OUTPUT f(100)  ; 200
+WRITE f(100)  ; 200
 
 ; ============ Test function referencing sibling constant ============
 
-@OUTPUT MyMath.area(2.0)  ; pi * 4 = 12.56636
+WRITE MyMath.area(2.0)  ; pi * 4 = 12.56636

@@ -5,196 +5,196 @@
 ; ============ Array.length ============
 
 LET nums = [1, 2, 3, 4, 5]
-@OUTPUT Array.length(nums)  ; 5
+WRITE Array.length(nums)  ; 5
 
 LET empty = []
-@OUTPUT Array.length(empty)  ; 0
+WRITE Array.length(empty)  ; 0
 
 LET single = [42]
-@OUTPUT Array.length(single)  ; 1
+WRITE Array.length(single)  ; 1
 
 ; ============ Array.push ============
 
 LET base-arr = [1, 2, 3]
 LET pushed = Array.push(base-arr, 4)
-@OUTPUT pushed  ; [1, 2, 3, 4]
+WRITE pushed  ; [1, 2, 3, 4]
 
 ; Original unchanged (immutable)
-@OUTPUT base-arr  ; [1, 2, 3]
+WRITE base-arr  ; [1, 2, 3]
 
 ; Push to empty array
 LET pushed-empty = Array.push([], 1)
-@OUTPUT pushed-empty  ; [1]
+WRITE pushed-empty  ; [1]
 
 ; ============ Array.pop ============
 
 LET to-pop = [1, 2, 3]
 LET popped = Array.pop(to-pop)
-@OUTPUT popped  ; [1, 2]
+WRITE popped  ; [1, 2]
 
 ; Pop from single element
 LET pop-single = Array.pop([42])
-@OUTPUT pop-single  ; []
+WRITE pop-single  ; []
 
 ; Pop from empty (returns empty)
 LET pop-empty = Array.pop([])
-@OUTPUT pop-empty  ; []
+WRITE pop-empty  ; []
 
 ; ============ Array.head ============
 
 LET head-arr = [10, 20, 30]
 LET first = Array.head(head-arr)
-@OUTPUT first  ; Option.Some(10)
+WRITE first  ; Option.Some(10)
 
 ; Head of empty array
 LET head-empty = Array.head([])
-@OUTPUT head-empty  ; Option.None
+WRITE head-empty  ; Option.None
 
 ; Head with unwrap
 LET head-val = Array.head([100, 200])!
-@OUTPUT head-val  ; 100
+WRITE head-val  ; 100
 
 ; ============ Array.tail ============
 
 LET tail-arr = [1, 2, 3, 4]
 LET rest = Array.tail(tail-arr)
-@OUTPUT rest  ; [2, 3, 4]
+WRITE rest  ; [2, 3, 4]
 
 ; Tail of single element
 LET tail-single = Array.tail([42])
-@OUTPUT tail-single  ; []
+WRITE tail-single  ; []
 
 ; Tail of empty array
 LET tail-empty = Array.tail([])
-@OUTPUT tail-empty  ; []
+WRITE tail-empty  ; []
 
 ; ============ Array.reverse ============
 
 LET to-reverse = [1, 2, 3, 4, 5]
 LET reversed = Array.reverse(to-reverse)
-@OUTPUT reversed  ; [5, 4, 3, 2, 1]
+WRITE reversed  ; [5, 4, 3, 2, 1]
 
 ; Reverse single element
 LET rev-single = Array.reverse([42])
-@OUTPUT rev-single  ; [42]
+WRITE rev-single  ; [42]
 
 ; Reverse empty
 LET rev-empty = Array.reverse([])
-@OUTPUT rev-empty  ; []
+WRITE rev-empty  ; []
 
 ; ============ Array.sort ============
 
 LET unsorted = [3, 1, 4, 1, 5, 9, 2, 6]
 LET sorted = Array.sort(unsorted)
-@OUTPUT sorted  ; [1, 1, 2, 3, 4, 5, 6, 9]
+WRITE sorted  ; [1, 1, 2, 3, 4, 5, 6, 9]
 
 ; Sort already sorted
 LET already-sorted = Array.sort([1, 2, 3])
-@OUTPUT already-sorted  ; [1, 2, 3]
+WRITE already-sorted  ; [1, 2, 3]
 
 ; Sort reverse order
 LET sort-reverse = Array.sort([3, 2, 1])
-@OUTPUT sort-reverse  ; [1, 2, 3]
+WRITE sort-reverse  ; [1, 2, 3]
 
 ; Sort strings
 LET unsorted-strs = ["banana", "apple", "cherry"]
 LET sorted-strs = Array.sort(unsorted-strs)
-@OUTPUT sorted-strs  ; ["apple", "banana", "cherry"]
+WRITE sorted-strs  ; ["apple", "banana", "cherry"]
 
 ; Sort booleans
 LET unsorted-bools = [TRUE, FALSE, TRUE, FALSE]
 LET sorted-bools = Array.sort(unsorted-bools)
-@OUTPUT sorted-bools  ; [false, false, true, true]
+WRITE sorted-bools  ; [false, false, true, true]
 
 ; Sort empty
 LET sort-empty = Array.sort([])
-@OUTPUT sort-empty  ; []
+WRITE sort-empty  ; []
 
 ; ============ Array.slice ============
 
 LET slice-arr = [0, 1, 2, 3, 4, 5]
 LET sliced = Array.slice(slice-arr, 1, 4)
-@OUTPUT sliced  ; [1, 2, 3]
+WRITE sliced  ; [1, 2, 3]
 
 ; Slice from start
 LET slice-start = Array.slice(slice-arr, 0, 3)
-@OUTPUT slice-start  ; [0, 1, 2]
+WRITE slice-start  ; [0, 1, 2]
 
 ; Slice to end
 LET slice-end = Array.slice(slice-arr, 3, 6)
-@OUTPUT slice-end  ; [3, 4, 5]
+WRITE slice-end  ; [3, 4, 5]
 
 ; Slice full array
 LET slice-full = Array.slice(slice-arr, 0, 6)
-@OUTPUT slice-full  ; [0, 1, 2, 3, 4, 5]
+WRITE slice-full  ; [0, 1, 2, 3, 4, 5]
 
 ; Slice empty range
 LET slice-none = Array.slice(slice-arr, 2, 2)
-@OUTPUT slice-none  ; []
+WRITE slice-none  ; []
 
 ; Slice with clamped bounds
 LET slice-clamp = Array.slice([1, 2, 3], 0, 100)
-@OUTPUT slice-clamp  ; [1, 2, 3]
+WRITE slice-clamp  ; [1, 2, 3]
 
 ; Slice with negative start (clamped to 0)
 LET slice-neg = Array.slice([1, 2, 3], -5, 2)
-@OUTPUT slice-neg  ; [1, 2]
+WRITE slice-neg  ; [1, 2]
 
 ; ============ Array.contains ============
 
 LET contains-arr = [1, 2, 3, 4, 5]
-@OUTPUT Array.contains(contains-arr, 3)  ; true
-@OUTPUT Array.contains(contains-arr, 10)  ; false
+WRITE Array.contains(contains-arr, 3)  ; true
+WRITE Array.contains(contains-arr, 10)  ; false
 
 ; Contains in empty array
-@OUTPUT Array.contains([], 1)  ; false
+WRITE Array.contains([], 1)  ; false
 
 ; Contains with strings
 LET str-arr = ["hello", "world"]
-@OUTPUT Array.contains(str-arr, "hello")  ; true
-@OUTPUT Array.contains(str-arr, "foo")  ; false
+WRITE Array.contains(str-arr, "hello")  ; true
+WRITE Array.contains(str-arr, "foo")  ; false
 
 ; Contains with booleans
 LET bool-arr = [TRUE, FALSE]
-@OUTPUT Array.contains(bool-arr, TRUE)  ; true
+WRITE Array.contains(bool-arr, TRUE)  ; true
 
 ; ============ Array.concat ============
 
 LET arr-a = [1, 2, 3]
 LET arr-b = [4, 5, 6]
 LET combined = Array.concat(arr-a, arr-b)
-@OUTPUT combined  ; [1, 2, 3, 4, 5, 6]
+WRITE combined  ; [1, 2, 3, 4, 5, 6]
 
 ; Concat with empty first
 LET concat-empty-a = Array.concat([], [1, 2, 3])
-@OUTPUT concat-empty-a  ; [1, 2, 3]
+WRITE concat-empty-a  ; [1, 2, 3]
 
 ; Concat with empty second
 LET concat-empty-b = Array.concat([1, 2, 3], [])
-@OUTPUT concat-empty-b  ; [1, 2, 3]
+WRITE concat-empty-b  ; [1, 2, 3]
 
 ; Concat two empty
 LET concat-both-empty = Array.concat([], [])
-@OUTPUT concat-both-empty  ; []
+WRITE concat-both-empty  ; []
 
 ; Concat strings
 LET concat-strs = Array.concat(["a", "b"], ["c", "d"])
-@OUTPUT concat-strs  ; ["a", "b", "c", "d"]
+WRITE concat-strs  ; ["a", "b", "c", "d"]
 
 ; ============ Chaining operations ============
 
 ; Get first element of sorted reversed array
 LET chain-arr = [3, 1, 4, 1, 5]
 LET chain-result = Array.head(Array.reverse(Array.sort(chain-arr)))!
-@OUTPUT chain-result  ; 5
+WRITE chain-result  ; 5
 
 ; Slice then reverse
 LET slice-rev = Array.reverse(Array.slice([0, 1, 2, 3, 4], 1, 4))
-@OUTPUT slice-rev  ; [3, 2, 1]
+WRITE slice-rev  ; [3, 2, 1]
 
 ; Push then length
 LET push-len = Array.length(Array.push([1, 2], 3))
-@OUTPUT push-len  ; 3
+WRITE push-len  ; 3
 
 ; ============ Pipeline usage ============
 
@@ -203,4 +203,4 @@ LET pipeline-result = pipeline-arr
   |> Array.sort
   |> Array.reverse
   |> (arr => Array.slice(arr, 0, 3))
-@OUTPUT pipeline-result  ; [9, 8, 5]
+WRITE pipeline-result  ; [9, 8, 5]

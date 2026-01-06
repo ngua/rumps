@@ -4,56 +4,56 @@
 ; Array.map with closure
 LET nums = [1, 2, 3, 4, 5]
 LET doubled = Array.map(x => x * 2, nums)
-@OUTPUT doubled  ; [2, 4, 6, 8, 10]
+WRITE doubled  ; [2, 4, 6, 8, 10]
 
 ; Array.map on empty array
 LET empty = []
 LET mapped-empty = Array.map(x => x + 1, empty)
-@OUTPUT mapped-empty  ; []
+WRITE mapped-empty  ; []
 
 ; Array.map with named function
 FUN square (n: Int) -> Int { n * n }
 LET squares = Array.map(square, [1, 2, 3])
-@OUTPUT squares  ; [1, 4, 9]
+WRITE squares  ; [1, 4, 9]
 
 ; Array.filter with closure
 LET evens = Array.filter(x => x % 2 == 0, nums)
-@OUTPUT evens  ; [2, 4]
+WRITE evens  ; [2, 4]
 
 ; Array.filter on empty array
 LET filtered-empty = Array.filter(x => x > 0, empty)
-@OUTPUT filtered-empty  ; []
+WRITE filtered-empty  ; []
 
 ; Array.filter with named function
 FUN is-positive (n: Int) -> Bool { n > 0 }
 LET positives = Array.filter(is-positive, [-1, 0, 1, 2])
-@OUTPUT positives  ; [1, 2]
+WRITE positives  ; [1, 2]
 
 ; Array.filter keeping all
 LET all-kept = Array.filter(x => TRUE, [1, 2, 3])
-@OUTPUT all-kept  ; [1, 2, 3]
+WRITE all-kept  ; [1, 2, 3]
 
 ; Array.filter keeping none
 LET none-kept = Array.filter(x => FALSE, [1, 2, 3])
-@OUTPUT none-kept  ; []
+WRITE none-kept  ; []
 
 ; Array.reduce with sum
 LET sum = Array.reduce((acc, x) => acc + x, 0, nums)
-@OUTPUT sum  ; 15
+WRITE sum  ; 15
 
 ; Array.reduce on empty array returns initial value
 LET empty-sum = Array.reduce((acc, x) => acc + x, 100, empty)
-@OUTPUT empty-sum  ; 100
+WRITE empty-sum  ; 100
 
 ; Array.reduce with string concatenation
 LET words = ["hello", " ", "world"]
 LET combined = Array.reduce((acc, s) => "{acc}{s}", "", words)
-@OUTPUT combined  ; "hello world"
+WRITE combined  ; "hello world"
 
 ; Array.reduce with named function
 FUN add (a: Int, b: Int) -> Int { a + b }
 LET total = Array.reduce(add, 0, [1, 2, 3, 4])
-@OUTPUT total  ; 10
+WRITE total  ; 10
 
 ; Combining Array functions
 LET result = Array.reduce(
@@ -61,99 +61,99 @@ LET result = Array.reduce(
   0,
   Array.map(x => x * x, Array.filter(x => x % 2 == 1, [1, 2, 3, 4, 5]))
 )
-@OUTPUT result  ; 1 + 9 + 25 = 35
+WRITE result  ; 1 + 9 + 25 = 35
 
 ; Pipeline usage with Array functions (using wrapper closures)
 LET piped = [1, 2, 3, 4, 5]
   |> (arr => Array.filter(x => x > 2, arr))
   |> (arr => Array.map(x => x * 10, arr))
-@OUTPUT piped  ; [30, 40, 50]
+WRITE piped  ; [30, 40, 50]
 
 ; Module functions can be passed as first-class values
 LET filter-fn = Array.filter
 LET data = [1, 2, 3, 4, 5]
 LET filtered = filter-fn(x => x > 2, data)
-@OUTPUT filtered  ; [3, 4, 5]
+WRITE filtered  ; [3, 4, 5]
 
 ; Array.map with Option results (homogeneous tagged values)
 LET with-opts = Array.map(x => Option.Some(x), [1, 2, 3])
-@OUTPUT with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
+WRITE with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
 
 ; Nested Array.map (callback uses Array function)
 LET nested = [[1, 2], [3, 4]]
 LET doubled-nested = Array.map(arr => Array.map(x => x * 2, arr), nested)
-@OUTPUT doubled-nested  ; [[2, 4], [6, 8]]
+WRITE doubled-nested  ; [[2, 4], [6, 8]]
 
 ; === Array.foreach ===
 
 ; Array.foreach for side effects (outputs each element)
-@OUTPUT "foreach:"
-LET fe-result = Array.foreach(x => { @OUTPUT x }, [10, 20, 30])
-@OUTPUT fe-result  ; Unit
+WRITE "foreach:"
+LET fe-result = Array.foreach(x => { WRITE x }, [10, 20, 30])
+WRITE fe-result  ; Unit
 
 ; Array.foreach on empty array (no side effects)
-LET fe-empty = Array.foreach(x => { @OUTPUT x }, [])
-@OUTPUT fe-empty  ; Unit
+LET fe-empty = Array.foreach(x => { WRITE x }, [])
+WRITE fe-empty  ; Unit
 
 ; Array.foreach with range
-@OUTPUT "range foreach:"
-LET fe-range = Array.foreach(n => { @OUTPUT n }, 1 .. 4)
-@OUTPUT fe-range  ; Unit
+WRITE "range foreach:"
+LET fe-range = Array.foreach(n => { WRITE n }, 1 .. 4)
+WRITE fe-range  ; Unit
 
 ; === Array.zip ===
 
 LET a = [1, 2, 3]
 LET b = ["a", "b", "c"]
 LET zipped = Array.zip(a, b)
-@OUTPUT zipped
+WRITE zipped
 
 ; Shorter array determines length
 LET short = [1, 2]
 LET long = ["a", "b", "c", "d"]
-@OUTPUT Array.zip(short, long)
+WRITE Array.zip(short, long)
 
 ; === Array.unzip ===
 
 LET pairs: Array[(Int, String)] = [(1, "one"), (2, "two"), (3, "three")]
 LET (unzip-nums, unzip-strs) = Array.unzip(pairs)
-@OUTPUT unzip-nums
-@OUTPUT unzip-strs
+WRITE unzip-nums
+WRITE unzip-strs
 
 ; Round-trip
 LET x = [10, 20, 30]
 LET y = [true, false, true]
 LET (x2, y2) = Array.unzip(Array.zip(x, y))
-@OUTPUT x2
-@OUTPUT y2
+WRITE x2
+WRITE y2
 
 ; === Array.intersperse ===
 
 LET inter-words = ["hello", "world", "!"]
-@OUTPUT Array.intersperse(",", inter-words)
+WRITE Array.intersperse(",", inter-words)
 
 LET inter-nums = [1, 2, 3, 4]
-@OUTPUT Array.intersperse(0, inter-nums)
+WRITE Array.intersperse(0, inter-nums)
 
 ; Empty array
 LET inter-empty: Array[Int] = []
-@OUTPUT Array.intersperse(0, inter-empty)
+WRITE Array.intersperse(0, inter-empty)
 
 ; Single element
-@OUTPUT Array.intersperse(0, [42])
+WRITE Array.intersperse(0, [42])
 
 ; === Array.zip-with ===
 
 FUN zip-add(za: Int, zb: Int) -> Int { za + zb }
 LET xs = [1, 2, 3]
 LET ys = [10, 20, 30]
-@OUTPUT Array.zip-with(zip-add, xs, ys)
+WRITE Array.zip-with(zip-add, xs, ys)
 
 ; With closure
 LET multiplied = Array.zip-with((ma, mb) => ma * mb, [2, 3, 4], [5, 6, 7])
-@OUTPUT multiplied
+WRITE multiplied
 
 ; With shorter array
-@OUTPUT Array.zip-with(zip-add, [1, 2, 3, 4, 5], [10, 20])
+WRITE Array.zip-with(zip-add, [1, 2, 3, 4, 5], [10, 20])
 
 ; === Array.sort-by ===
 
@@ -164,7 +164,7 @@ FUN cmp-int(ca: Int, cb: Int) -> Ordering {
 }
 
 LET unsorted = [3, 1, 4, 1, 5, 9, 2, 6]
-@OUTPUT Array.sort-by(cmp-int, unsorted)
+WRITE Array.sort-by(cmp-int, unsorted)
 
 ; Sort descending (reverse comparator)
 FUN cmp-desc(da: Int, db: Int) -> Ordering {
@@ -172,7 +172,7 @@ FUN cmp-desc(da: Int, db: Int) -> Ordering {
     IF da == db { Ordering.Eq } ELSE { Ordering.Gt }
   }
 }
-@OUTPUT Array.sort-by(cmp-desc, unsorted)
+WRITE Array.sort-by(cmp-desc, unsorted)
 
 ; Sort by absolute value
 FUN cmp-abs(aa: Int, ab: Int) -> Ordering {
@@ -181,7 +181,7 @@ FUN cmp-abs(aa: Int, ab: Int) -> Ordering {
   cmp-int(abs-a, abs-b)
 }
 LET signed = [-5, 3, -1, 4, -2]
-@OUTPUT Array.sort-by(cmp-abs, signed)
+WRITE Array.sort-by(cmp-abs, signed)
 
 ; Sort objects by field
 NEWTYPE SortPerson = { name: String, age: Int }
@@ -196,7 +196,7 @@ LET people = [
   { name: "Carol", age: 35 }
 ]
 LET by-age = Array.sort-by(cmp-by-age, people)
-@OUTPUT Array.map(p => p.name, by-age)
+WRITE Array.map(p => p.name, by-age)
 
 ; === Chained operations ===
 
@@ -205,10 +205,10 @@ LET indices = [0, 1, 2, 3, 4]
 LET values = [10, 25, 30, 15, 40]
 LET indexed = Array.zip(indices, values)
 LET chain-filtered = Array.filter(pair => pair.1 > 20, indexed)
-@OUTPUT chain-filtered
+WRITE chain-filtered
 
 ; zip-with to compute differences
 LET before = [10, 20, 30]
 LET after = [15, 18, 35]
 LET diffs = Array.zip-with((db, da) => da - db, before, after)
-@OUTPUT diffs
+WRITE diffs

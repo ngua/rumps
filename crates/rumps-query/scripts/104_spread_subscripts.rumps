@@ -10,45 +10,45 @@
 
 ; Regular subscripts (existing behavior)
 LET v1 = @GET data(1, "a")
-@OUTPUT v1
+WRITE v1
 
 ; Spread an empty array: equivalent to data()
 LET empty: Array[Subscript] = []
 LET root = @GET data(...empty)
-@OUTPUT root
+WRITE root
 
 ; Spread a single-element array
 LET k1: Array[Subscript] = [1]
 LET partial = @GET data(...k1, "a")
-@OUTPUT partial
+WRITE partial
 
 ; Spread a full key path
 LET key: Array[Subscript] = [1, "b"]
 LET v2 = @GET data(...key)
-@OUTPUT v2
+WRITE v2
 
 ; Mix regular and spread subscripts
 LET suffix: Array[Subscript] = ["x"]
 LET v3 = @GET data(2, ...suffix)
-@OUTPUT v3
+WRITE v3
 
 ; Spread with @SET
 LET set-key: Array[Subscript] = [3, "z"]
 @SET data(...set-key) = "spread-set"
 LET v4 = @GET data(3, "z")
-@OUTPUT v4
+WRITE v4
 
 ; Spread with @KILL
 @SET data(99, "del") = "to-delete"
 LET kill-key: Array[Subscript] = [99, "del"]
 @KILL data(...kill-key)
 LET deleted = @GET data(99, "del")
-@OUTPUT deleted
+WRITE deleted
 
 ; Spread with @DATA
 LET data-key: Array[Subscript] = [1, "a"]
 LET status = @DATA data(...data-key)
-@OUTPUT status
+WRITE status
 
 ; Spread with @ORDER
 @SET items(1) = "one"
@@ -56,19 +56,19 @@ LET status = @DATA data(...data-key)
 @SET items(10) = "ten"
 LET prefix: Array[Subscript] = [1]
 LET next = @ORDER items(...prefix)
-@OUTPUT next
+WRITE next
 
 ; Multiple spreads (concatenation)
 LET part1: Array[Subscript] = [1]
 LET part2: Array[Subscript] = ["a"]
 LET combined = @GET data(...part1, ...part2)
-@OUTPUT combined
+WRITE combined
 
 ; Spread with dynamic subscript values
 LET n = 2
 LET s = "y"
 LET dyn-key: Array[Subscript] = [n, s]
 LET v5 = @GET data(...dyn-key)
-@OUTPUT v5
+WRITE v5
 
-@OUTPUT "spread subscript test complete"
+WRITE "spread subscript test complete"

@@ -7,4 +7,4 @@ FUN greet (p: Person) -> String {
 }
 
 ; Missing `age` field
-@OUTPUT greet({ name: "Alice" })
+WRITE greet({ name: "Alice" })

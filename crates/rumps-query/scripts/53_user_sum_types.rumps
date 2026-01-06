@@ -9,18 +9,18 @@ LET s2 = Status.Active
 LET s3 = Status.Completed
 LET s4 = Status.Failed
 
-@OUTPUT s1
-@OUTPUT s2
-@OUTPUT s3
-@OUTPUT s4
+WRITE s1
+WRITE s2
+WRITE s3
+WRITE s4
 
 ; Test with is operator
 IF s1 is Status.Pending {
-  @OUTPUT "s1 is Pending"
+  WRITE "s1 is Pending"
 }
 
 IF s2 is Status.Active {
-  @OUTPUT "s2 is Active"
+  WRITE "s2 is Active"
 }
 
 ; Sum type with payloads
@@ -30,17 +30,17 @@ LET click = Event.Click(100, 200)
 LET key = Event.KeyPress("Enter")
 LET resize = Event.Resize(1920, 1080)
 
-@OUTPUT click
-@OUTPUT key
-@OUTPUT resize
+WRITE click
+WRITE key
+WRITE resize
 
 ; Test is with bindings
 IF click is Event.Click(x, y) {
-  @OUTPUT "Click at: {x}, {y}"
+  WRITE "Click at: {x}, {y}"
 }
 
 IF key is Event.KeyPress(k) {
-  @OUTPUT "Key: {k}"
+  WRITE "Key: {k}"
 }
 
 ; Parameterized type (generic)
@@ -49,16 +49,16 @@ TYPE Either[L, R] = Left(L) | Right(R)
 LET left = Either.Left("error message")
 LET right = Either.Right(42)
 
-@OUTPUT left
-@OUTPUT right
+WRITE left
+WRITE right
 
 ; Test is with generic variants
 IF left is Either.Left(msg) {
-  @OUTPUT "Got left: {msg}"
+  WRITE "Got left: {msg}"
 }
 
 IF right is Either.Right(val) {
-  @OUTPUT "Got right: {val}"
+  WRITE "Got right: {val}"
 }
 
 ; Multi-line syntax (use Outcome to avoid conflict with builtin Result)
@@ -69,12 +69,12 @@ TYPE Outcome[T, E] =
 LET ok = Outcome.Success(100)
 LET err = Outcome.Failure("failed")
 
-@OUTPUT ok
-@OUTPUT err
+WRITE ok
+WRITE err
 
 ; Test wildcard patterns
 IF ok is Outcome.Success(_) {
-  @OUTPUT "ok is Success (wildcard)"
+  WRITE "ok is Success (wildcard)"
 }
 
 ; Single type parameter
@@ -83,7 +83,37 @@ TYPE Maybe[T] = Just(T) | Nothing
 LET just = Maybe.Just("hello")
 LET nothing = Maybe.Nothing
 
-@OUTPUT just
-@OUTPUT nothing
+WRITE just
+WRITE nothing
 
-@OUTPUT "User-defined sum types complete"
+; Test that keywords can be used as variant names (exercises `ident_or_contextual_kw`)
+; `Raise`, `Catch`, `Write`, `Read` are keywords but should work as variant names
+TYPE Action = Raise(String) | Catch(String) | Write(String) | Read(String)
+
+LET a1 = Action.Raise("raising")
+LET a2 = Action.Catch("catching")
+LET a3 = Action.Write("writing")
+LET a4 = Action.Read("reading")
+
+WRITE a1
+WRITE a2
+WRITE a3
+WRITE a4
+
+IF a1 IS Action.Raise(msg) {
+  WRITE "Action.Raise: {msg}"
+}
+
+IF a2 IS Action.Catch(msg) {
+  WRITE "Action.Catch: {msg}"
+}
+
+IF a3 IS Action.Write(msg) {
+  WRITE "Action.Write: {msg}"
+}
+
+IF a4 IS Action.Read(msg) {
+  WRITE "Action.Read: {msg}"
+}
+
+WRITE "User-defined sum types complete"

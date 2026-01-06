@@ -6,89 +6,89 @@
 ; ============ Time.epoch ============
 
 LET epoch = Time.epoch()
-@OUTPUT epoch
+WRITE epoch
 
 ; Epoch components
-@OUTPUT Time.year(epoch)    ; 1970
-@OUTPUT Time.month(epoch)   ; 1
-@OUTPUT Time.day(epoch)     ; 1
-@OUTPUT Time.hour(epoch)    ; 0
-@OUTPUT Time.minute(epoch)  ; 0
-@OUTPUT Time.second(epoch)  ; 0
+WRITE Time.year(epoch)    ; 1970
+WRITE Time.month(epoch)   ; 1
+WRITE Time.day(epoch)     ; 1
+WRITE Time.hour(epoch)    ; 0
+WRITE Time.minute(epoch)  ; 0
+WRITE Time.second(epoch)  ; 0
 
 ; ============ Time.add-seconds ============
 
 LET one-hour = Time.add-seconds(epoch, 3600)
-@OUTPUT Time.hour(one-hour)  ; 1
+WRITE Time.hour(one-hour)  ; 1
 
 LET one-day = Time.add-seconds(epoch, 86400)
-@OUTPUT Time.day(one-day)  ; 2
+WRITE Time.day(one-day)  ; 2
 
 ; Negative seconds (subtract)
 LET back = Time.add-seconds(one-hour, -3600)
-@OUTPUT Time.hour(back)  ; 0
+WRITE Time.hour(back)  ; 0
 
 ; ============ Time.diff-seconds ============
 
 LET diff1 = Time.diff-seconds(one-hour, epoch)
-@OUTPUT diff1  ; 3600.0
+WRITE diff1  ; 3600.0
 
 LET diff2 = Time.diff-seconds(epoch, one-hour)
-@OUTPUT diff2  ; -3600.0
+WRITE diff2  ; -3600.0
 
 LET diff3 = Time.diff-seconds(one-day, epoch)
-@OUTPUT diff3  ; 86400.0
+WRITE diff3  ; 86400.0
 
 ; ============ Time.format and Time.parse ============
 
 ; Format epoch to ISO-like string
 LET fmt = Time.format("%Y-%m-%d %H:%M:%S %z", epoch)
-@OUTPUT fmt  ; 1970-01-01 00:00:00 +0000
+WRITE fmt  ; 1970-01-01 00:00:00 +0000
 
 ; Format with different patterns
 LET date-only = Time.format("%Y-%m-%d", epoch)
-@OUTPUT date-only  ; 1970-01-01
+WRITE date-only  ; 1970-01-01
 
 LET time-only = Time.format("%H:%M:%S", epoch)
-@OUTPUT time-only  ; 00:00:00
+WRITE time-only  ; 00:00:00
 
 ; Parse a date string back
 LET parsed = Time.parse("%Y-%m-%d %H:%M:%S %z", "2024-06-15 14:30:45 +0000")
-@OUTPUT parsed  ; Result[Time, String]
+WRITE parsed  ; Result[Time, String]
 
 ; Check that parsed is Ok
-@OUTPUT parsed IS Result.Ok(_)  ; true
+WRITE parsed IS Result.Ok(_)  ; true
 
 ; Unwrap and check components
 LET t = parsed!
-@OUTPUT Time.year(t)    ; 2024
-@OUTPUT Time.month(t)   ; 6
-@OUTPUT Time.day(t)     ; 15
-@OUTPUT Time.hour(t)    ; 14
-@OUTPUT Time.minute(t)  ; 30
-@OUTPUT Time.second(t)  ; 45
+WRITE Time.year(t)    ; 2024
+WRITE Time.month(t)   ; 6
+WRITE Time.day(t)     ; 15
+WRITE Time.hour(t)    ; 14
+WRITE Time.minute(t)  ; 30
+WRITE Time.second(t)  ; 45
 
 ; ============ Parse error handling ============
 
 LET bad-parse = Time.parse("%Y-%m-%d", "not-a-date")
-@OUTPUT bad-parse IS Result.Err(_)  ; true
+WRITE bad-parse IS Result.Err(_)  ; true
 
 ; ============ Time.now ============
 
 ; Just verify it runs and returns a Time
 LET now = Time.now()
-@OUTPUT now IS Time  ; true
+WRITE now IS Time  ; true
 
 ; ============ Chaining with pipeline ============
 
 LET chain = Time.add-seconds(Time.epoch(), 3661)  ; 1 hour, 1 minute, 1 second
-@OUTPUT Time.hour(chain)    ; 1
-@OUTPUT Time.minute(chain)  ; 1
-@OUTPUT Time.second(chain)  ; 1
+WRITE Time.hour(chain)    ; 1
+WRITE Time.minute(chain)  ; 1
+WRITE Time.second(chain)  ; 1
 
 ; ============ Formatting variations ============
 
 LET t2 = Time.add-seconds(epoch, 90061)  ; 1 day + 1 hour + 1 minute + 1 second
 
-@OUTPUT Time.format("%d/%m/%Y", t2)  ; 02/01/1970
-@OUTPUT Time.format("%I:%M %p", t2)  ; 01:01 AM
+WRITE Time.format("%d/%m/%Y", t2)  ; 02/01/1970
+WRITE Time.format("%I:%M %p", t2)  ; 01:01 AM

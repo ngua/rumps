@@ -11,10 +11,6 @@ use ordered_float::OrderedFloat;
 pub(crate) enum Token {
     // Keywords
     Let,
-    Set,
-    Get,
-    Kill,
-    Output,
     If,
     Else,
     Is,
@@ -32,14 +28,20 @@ pub(crate) enum Token {
     Matches,
     Union,
     Module,
+    Forever,
+    Transaction,
+    From,
+    Write,
+    Raise,
+    Catch,
+
+    // DB intrinsics (prefixed with `@`)
+    Set,
+    Get,
+    Kill,
     Data,
     Order,
     Query,
-    Raise,
-    Forever,
-    Transaction,
-    Catch,
-    From,
 
     // Literals
     Int(i64),
@@ -168,6 +170,9 @@ impl Token {
                 "FOREVER" => Some(Self::Forever),
                 "TRANSACTION" => Some(Self::Transaction),
                 "FROM" => Some(Self::From),
+                "WRITE" => Some(Self::Write),
+                "RAISE" => Some(Self::Raise),
+                "CATCH" => Some(Self::Catch),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -184,12 +189,45 @@ impl Token {
             "SET" => Some(Self::Set),
             "GET" => Some(Self::Get),
             "KILL" => Some(Self::Kill),
-            "OUTPUT" => Some(Self::Output),
             "DATA" => Some(Self::Data),
             "ORDER" => Some(Self::Order),
             "QUERY" => Some(Self::Query),
-            "RAISE" => Some(Self::Raise),
-            "CATCH" => Some(Self::Catch),
+            _ => None,
+        }
+    }
+
+    /// Returns the string form of a keyword token when used as a contextual
+    /// identifier (e.g., as an enum variant name like `Action.Raise`).
+    ///
+    /// Keywords can appear as variant names in TYPE declarations and pattern
+    /// matching. This method is used by the parser to accept keywords in
+    /// identifier positions.
+    pub(crate) fn as_contextual_ident(&self) -> Option<&'static str> {
+        match self {
+            Self::Let => Some("Let"),
+            Self::If => Some("If"),
+            Self::Else => Some("Else"),
+            Self::Is => Some("Is"),
+            Self::As => Some("As"),
+            Self::Read => Some("Read"),
+            Self::And => Some("And"),
+            Self::Or => Some("Or"),
+            Self::Not => Some("Not"),
+            Self::True => Some("True"),
+            Self::False => Some("False"),
+            Self::Fun => Some("Fun"),
+            Self::Type => Some("Type"),
+            Self::NewType => Some("NewType"),
+            Self::Match => Some("Match"),
+            Self::Matches => Some("Matches"),
+            Self::Union => Some("Union"),
+            Self::Module => Some("Module"),
+            Self::Forever => Some("Forever"),
+            Self::Transaction => Some("Transaction"),
+            Self::From => Some("From"),
+            Self::Write => Some("Write"),
+            Self::Raise => Some("Raise"),
+            Self::Catch => Some("Catch"),
             _ => None,
         }
     }
@@ -220,16 +258,16 @@ impl fmt::Display for Token {
             Self::Forever => write!(f, "FOREVER"),
             Self::Transaction => write!(f, "TRANSACTION"),
             Self::From => write!(f, "FROM"),
+            Self::Write => write!(f, "WRITE"),
+            Self::Raise => write!(f, "RAISE"),
+            Self::Catch => write!(f, "CATCH"),
             // DB intrinsics (prefixed with `@`)
             Self::Set => write!(f, "@SET"),
             Self::Get => write!(f, "@GET"),
             Self::Kill => write!(f, "@KILL"),
-            Self::Output => write!(f, "@OUTPUT"),
             Self::Data => write!(f, "@DATA"),
             Self::Order => write!(f, "@ORDER"),
             Self::Query => write!(f, "@QUERY"),
-            Self::Raise => write!(f, "@RAISE"),
-            Self::Catch => write!(f, "@CATCH"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),

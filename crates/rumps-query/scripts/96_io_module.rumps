@@ -8,12 +8,12 @@
 
 ; This will print to stdout during test execution
 LET result = Io.println("Hello from Io.println")
-@OUTPUT result IS Unit  ; true
+WRITE result IS Unit  ; true
 
 ; ============ Test Io.print ============
 
 LET result2 = Io.print("Hello from Io.print (no newline)")
-@OUTPUT result2 IS Unit  ; true
+WRITE result2 IS Unit  ; true
 
 ; Print a newline after the previous print
 LET _ = Io.println("")
@@ -22,12 +22,12 @@ LET _ = Io.println("")
 
 ; This will print to stderr during test execution
 LET result3 = Io.eprintln("Hello from Io.eprintln")
-@OUTPUT result3 IS Unit  ; true
+WRITE result3 IS Unit  ; true
 
 ; ============ Test Io.eprint ============
 
 LET result4 = Io.eprint("Hello from Io.eprint (no newline)")
-@OUTPUT result4 IS Unit  ; true
+WRITE result4 IS Unit  ; true
 
 ; Print a newline to stderr after the previous eprint
 LET _ = Io.eprintln("")
@@ -44,4 +44,4 @@ LET _ = msg |> Io.println
   Io.println("value")
 }
 
-@OUTPUT "All Io tests passed"
+WRITE "All Io tests passed"

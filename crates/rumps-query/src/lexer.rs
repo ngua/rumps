@@ -243,7 +243,7 @@ impl Lexer<'_> {
         ))
     }
 
-    /// DB intrinsic: `@SET`, `@GET`, `@KILL`, `@OUTPUT`, `@DATA`, `@ORDER`, `@QUERY`.
+    /// DB intrinsic: `@SET`, `@GET`, `@KILL`, `@DATA`, `@ORDER`, `@QUERY`.
     ///
     /// Case-insensitive (e.g., `@set`, `@SET`, `@Set` all work).
     fn intrinsic() -> impl Parser<char, Spanned, Error = LexErr> + Clone {

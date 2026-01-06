@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Unwrap Option.None should error\nLET none-val = Option.None\n@OUTPUT none-val!\n"
+description: "; Unwrap Option.None should error\nLET none-val = Option.None\nWRITE none-val!\n"
 ---
-ERROR: runtime error at 69..78: cannot unwrap Option.None
+ERROR: runtime error at 67..76: cannot unwrap Option.None

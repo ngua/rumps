@@ -1,4 +1,4 @@
 ; Test: Module member not found error
 ; Should report clear error for non-existent module function
 
-@OUTPUT Array.len([1, 2, 3])
+WRITE Array.len([1, 2, 3])

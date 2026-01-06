@@ -67,10 +67,9 @@
       }).await?;
 
       // Transactions can be configured with custom parameters, e.g. timeout,
-      // priority, etc...
+      // conflict overwrite, etc...
       db.build_transaction()
           .timeout(5000)  // 5 second timeout
-          .priority(TransactionPriority::High)
           .begin(|txn| {
               let audits = audits.clone();
               async move {

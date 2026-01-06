@@ -5,20 +5,20 @@
 LET x = 10
 
 IF x > 5 {
-  @OUTPUT "x is big"
+  WRITE "x is big"
 }
 ; Expected: x is big
 
 IF x < 5 {
-  @OUTPUT "x is small"
+  WRITE "x is small"
 }
 ; Expected: (no output; condition false)
 
 ; Block as statement
 {
-  @OUTPUT "Inside block"
+  WRITE "Inside block"
   LET temp = 42
-  @OUTPUT temp
+  WRITE temp
 }
 ; Expected: Inside block, 42
 
@@ -28,7 +28,7 @@ LET b = FALSE
 
 IF a {
   IF NOT b {
-    @OUTPUT "a is true and b is false"
+    WRITE "a is true and b is false"
   }
 }
 ; Expected: a is true and b is false
@@ -41,15 +41,15 @@ IF a {
 TRUE AND FALSE
 ; Evaluated but result discarded
 
-@OUTPUT "Made it past expression statements"
+WRITE "Made it past expression statements"
 
 ; IF/ELSE as statement
 LET mode = "debug"
 
 IF mode == "debug" {
-  @OUTPUT "Debug mode enabled"
+  WRITE "Debug mode enabled"
 } ELSE {
-  @OUTPUT "Production mode"
+  WRITE "Production mode"
 }
 ; Expected: Debug mode enabled
 
@@ -59,10 +59,10 @@ IF mode == "debug" {
   @SET items(2) = "second"
 }
 
-@OUTPUT @GET items(1)
+WRITE @GET items(1)
 ; Expected: first
 
-@OUTPUT @GET items(2)
+WRITE @GET items(2)
 ; Expected: second
 
-@OUTPUT "Expression statements test complete"
+WRITE "Expression statements test complete"

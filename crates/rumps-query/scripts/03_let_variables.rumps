@@ -3,12 +3,12 @@
 
 ; Simple binding
 LET x = 42
-@OUTPUT x
+WRITE x
 ; Expected: 42
 
 ; Binding using another variable
 LET y = x + 8
-@OUTPUT y
+WRITE y
 ; Expected: 50
 
 ; Multiple bindings
@@ -16,37 +16,37 @@ LET a = 1
 LET b = 2
 LET c = 3
 LET sum = a + b + c
-@OUTPUT sum
+WRITE sum
 ; Expected: 6
 
 ; Shadowing in same scope
 LET val = 10
 LET val = 20
-@OUTPUT val
+WRITE val
 ; Expected: 20
 
 ; String variables
 LET name = "Alice"
-@OUTPUT name
+WRITE name
 ; Expected: Alice
 
 ; Boolean variables
 LET flag = TRUE
-@OUTPUT flag
+WRITE flag
 ; Expected: true (or TRUE)
 
 ; Using variables in expressions
 LET base = 100
 LET offset = 25
 LET result = base - offset * 2
-@OUTPUT result
+WRITE result
 ; Expected: 50
 
 ; Chained variable references
 LET v1 = 5
 LET v2 = v1 * 2
 LET v3 = v2 + v1
-@OUTPUT v3
+WRITE v3
 ; Expected: 15
 
-@OUTPUT "LET variable test complete"
+WRITE "LET variable test complete"

@@ -5,29 +5,29 @@
 
 ; Int annotation
 LET x: Int = 42
-@OUTPUT x
+WRITE x
 ; Expected: 42
 
 ; String annotation
 LET s: String = "hello"
-@OUTPUT s
+WRITE s
 ; Expected: hello
 
 ; Bool annotation
 LET b: Bool = TRUE
-@OUTPUT b
+WRITE b
 ; Expected: true
 
 ; Float annotation
 LET f: Float = 3.14
-@OUTPUT f
+WRITE f
 ; Expected: 3.14
 
 ; === Parameterized type annotations ===
 
 ; Option[Int] with Some
 LET opt: Option[Int] = Option.Some(10)
-@OUTPUT opt
+WRITE opt
 ; Expected: Option.Some(10)
 
 ; Option[Int] with None (this tests type compatibility)
@@ -37,23 +37,23 @@ LET opt: Option[Int] = Option.Some(10)
 
 ; Array[Int]
 LET arr: Array[Int] = [1, 2, 3]
-@OUTPUT arr
+WRITE arr
 ; Expected: [1, 2, 3]
 
 ; Array[Option[Int]] - nested parameterized type
 LET arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]
-@OUTPUT arr-opt
+WRITE arr-opt
 ; Expected: [Option.Some(1), Option.Some(2)]
 
 ; Result[Int, String] - two type parameters
 LET res: Result[Int, String] = Result.Ok(42)
-@OUTPUT res
+WRITE res
 ; Expected: Result.Ok(42)
 
 ; === Without annotations (still works) ===
 
 LET no-ann = 123
-@OUTPUT no-ann
+WRITE no-ann
 ; Expected: 123
 
-@OUTPUT "Type annotation test complete"
+WRITE "Type annotation test complete"

@@ -5,9 +5,9 @@
 
 FUN id[T](x: T) -> T { x }
 
-@OUTPUT id(42)        ; 42
-@OUTPUT id("hello")   ; hello
-@OUTPUT id(TRUE)      ; true
+WRITE id(42)        ; 42
+WRITE id("hello")   ; hello
+WRITE id(TRUE)      ; true
 
 ; === Multiple type parameters ===
 
@@ -15,8 +15,8 @@ FUN pair[A, B](a: A, b: B) -> (A, B) {
   (a, b)
 }
 
-@OUTPUT pair(1, "hello")  ; (1, "hello")
-@OUTPUT pair(TRUE, 3.14)  ; (true, 3.14)
+WRITE pair(1, "hello")  ; (1, "hello")
+WRITE pair(TRUE, 3.14)  ; (true, 3.14)
 
 ; === Generic function returning parameterized type ===
 
@@ -24,8 +24,8 @@ FUN wrap[T](x: T) -> Option[T] {
   Option.Some(x)
 }
 
-@OUTPUT wrap(42)      ; Option.Some(42)
-@OUTPUT wrap("test")  ; Option.Some("test")
+WRITE wrap(42)      ; Option.Some(42)
+WRITE wrap("test")  ; Option.Some("test")
 
 ; === Generic swap function ===
 
@@ -33,8 +33,8 @@ FUN swap[A, B](p: (A, B)) -> (B, A) {
   (p.1, p.0)
 }
 
-@OUTPUT swap((1, "x"))    ; ("x", 1)
-@OUTPUT swap(("a", TRUE)) ; (true, "a")
+WRITE swap((1, "x"))    ; ("x", 1)
+WRITE swap(("a", TRUE)) ; (true, "a")
 
 ; === Generic first/second accessors ===
 
@@ -42,8 +42,8 @@ FUN fst[A, B](p: (A, B)) -> A { p.0 }
 FUN snd[A, B](p: (A, B)) -> B { p.1 }
 
 LET p = (42, "answer")
-@OUTPUT fst(p)  ; 42
-@OUTPUT snd(p)  ; answer
+WRITE fst(p)  ; 42
+WRITE snd(p)  ; answer
 
 ; === Generic higher-order function ===
 
@@ -54,8 +54,8 @@ FUN apply[A, B](f: (A) -> B, x: A) -> B {
 FUN double(n: Int) -> Int { n * 2 }
 FUN greet(s: String) -> String { "Hello, {s}" }
 
-@OUTPUT apply(double, 21)        ; 42
-@OUTPUT apply(greet, "World")    ; Hello, World
+WRITE apply(double, 21)        ; 42
+WRITE apply(greet, "World")    ; Hello, World
 
 ; === Mix of implicit and explicit generics ===
 
@@ -66,9 +66,9 @@ FUN implicit-id(x) { x }
 FUN explicit-id[T](x: T) -> T { x }
 
 ; Both should work the same way
-@OUTPUT implicit-id(100)   ; 100
-@OUTPUT explicit-id(100)   ; 100
-@OUTPUT implicit-id("hi")  ; hi
-@OUTPUT explicit-id("hi")  ; hi
+WRITE implicit-id(100)   ; 100
+WRITE explicit-id(100)   ; 100
+WRITE implicit-id("hi")  ; hi
+WRITE explicit-id("hi")  ; hi
 
-@OUTPUT "Generic functions test complete"
+WRITE "Generic functions test complete"

@@ -4,13 +4,13 @@
 LET obj = { name: "Alice", age: 30, active: TRUE }
 
 ; Dot notation
-@OUTPUT obj.name
+WRITE obj.name
 ; Expected: Alice
 
-@OUTPUT obj.age
+WRITE obj.age
 ; Expected: 30
 
-@OUTPUT obj.active
+WRITE obj.active
 ; Expected: TRUE
 
 ; Nested object access (dot notation)
@@ -24,24 +24,24 @@ LET rec = {
   }
 }
 
-@OUTPUT rec.user.profile.first-name
+WRITE rec.user.profile.first-name
 ; Expected: Bob
 
-@OUTPUT rec.user.profile.last-name
+WRITE rec.user.profile.last-name
 ; Expected: Smith
 
-@OUTPUT rec.user.scores[0]
+WRITE rec.user.scores[0]
 ; Expected: 90
 
-@OUTPUT rec.user.scores[-1]
+WRITE rec.user.scores[-1]
 ; Expected: 95
 
 ; Object with dashed keys (valid RUMPS identifiers)
 LET special = { my-key: "value1", another-key: "value2" }
-@OUTPUT special.my-key
+WRITE special.my-key
 ; Expected: value1
 
-@OUTPUT special.another-key
+WRITE special.another-key
 ; Expected: value2
 
 ; Optional field access (`?.`) on objects
@@ -49,27 +49,27 @@ LET special = { my-key: "value1", another-key: "value2" }
 
 LET person = { name: "Carol", age: 25 }
 
-@OUTPUT person?.name
+WRITE person?.name
 ; Expected: Option.Some("Carol")
 
-@OUTPUT person?.age
+WRITE person?.age
 ; Expected: Option.Some(25)
 
-@OUTPUT person?.email
+WRITE person?.email
 ; Expected: Option.None
 
-@OUTPUT person?.address
+WRITE person?.address
 ; Expected: Option.None
 
 ; Chained optional access
 LET nested = { user: { name: "Dan" } }
-@OUTPUT nested?.user?.name
+WRITE nested?.user?.name
 ; Expected: Option.Some("Dan")
 
-@OUTPUT nested?.user?.missing
+WRITE nested?.user?.missing
 ; Expected: Option.None
 
-@OUTPUT nested?.missing?.anything
+WRITE nested?.missing?.anything
 ; Expected: Option.None
 
 ; Optional field access in function with typed parameter
@@ -78,10 +78,10 @@ fun get_b(x: { a: Int }) {
   x?.b
 }
 
-@OUTPUT get_b({ a: 1 })
+WRITE get_b({ a: 1 })
 ; Expected: Option.None
 
-@OUTPUT get_b({ a: 1, b: 2 })
+WRITE get_b({ a: 1, b: 2 })
 ; Expected: Option.Some(2)
 
-@OUTPUT "Object access test complete"
+WRITE "Object access test complete"

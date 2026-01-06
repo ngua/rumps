@@ -3,4 +3,4 @@
 
 ; Try to index an Int (should fail)
 LET x = 42
-@OUTPUT x[0]
+WRITE x[0]

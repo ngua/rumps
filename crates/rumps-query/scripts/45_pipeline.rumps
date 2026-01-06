@@ -3,10 +3,10 @@
 
 ; === Basic pipeline with closure ===
 
-@OUTPUT 5 |> (x => x * 2)
+WRITE 5 |> (x => x * 2)
 ; Expected: 10
 
-@OUTPUT 10 |> (x => x + 5)
+WRITE 10 |> (x => x + 5)
 ; Expected: 15
 
 ; === Pipeline with named function ===
@@ -15,40 +15,40 @@ FUN double (x) { x * 2 }
 FUN square (x) { x * x }
 FUN inc (x) { x + 1 }
 
-@OUTPUT 5 |> double
+WRITE 5 |> double
 ; Expected: 10
 
-@OUTPUT 5 |> square
+WRITE 5 |> square
 ; Expected: 25
 
 ; === Pipeline chain (left-associative) ===
 
-@OUTPUT 5 |> double |> square
+WRITE 5 |> double |> square
 ; Expected: 100 (double(5)=10, square(10)=100)
 
-@OUTPUT 5 |> square |> double
+WRITE 5 |> square |> double
 ; Expected: 50 (square(5)=25, double(25)=50)
 
-@OUTPUT 5 |> inc |> double |> square
+WRITE 5 |> inc |> double |> square
 ; Expected: 144 (inc(5)=6, double(6)=12, square(12)=144)
 
 ; === Pipeline with inline closures ===
 
-@OUTPUT 10 |> (x => x + 1) |> (x => x * 2)
+WRITE 10 |> (x => x + 1) |> (x => x * 2)
 ; Expected: 22 (10+1=11, 11*2=22)
 
-@OUTPUT 3 |> (x => x * x) |> (x => x + 1)
+WRITE 3 |> (x => x * x) |> (x => x + 1)
 ; Expected: 10 (3*3=9, 9+1=10)
 
 ; === Pipeline precedence (lower than all other ops) ===
 
-@OUTPUT 1 + 2 |> double
+WRITE 1 + 2 |> double
 ; Expected: 6 (1+2=3, double(3)=6)
 
-@OUTPUT 10 - 4 |> square
+WRITE 10 - 4 |> square
 ; Expected: 36 ((10-4)=6, square(6)=36)
 
-@OUTPUT 2 * 3 |> inc
+WRITE 2 * 3 |> inc
 ; Expected: 7 (2*3=6, inc(6)=7)
 
 ; === Pipeline with typed functions ===
@@ -56,10 +56,10 @@ FUN inc (x) { x + 1 }
 FUN typed-double (x: Int) -> Int { x * 2 }
 FUN typed-inc (x: Int) -> Int { x + 1 }
 
-@OUTPUT 5 |> typed-double
+WRITE 5 |> typed-double
 ; Expected: 10
 
-@OUTPUT 5 |> typed-double |> typed-inc
+WRITE 5 |> typed-double |> typed-inc
 ; Expected: 11
 
 ; === Pipeline with closures capturing variables ===
@@ -67,13 +67,13 @@ FUN typed-inc (x: Int) -> Int { x + 1 }
 LET factor = 3
 LET scale = x => x * factor
 
-@OUTPUT 10 |> scale
+WRITE 10 |> scale
 ; Expected: 30
 
 LET offset = 100
 LET shift = x => x + offset
 
-@OUTPUT 5 |> double |> shift
+WRITE 5 |> double |> shift
 ; Expected: 110 (double(5)=10, shift(10)=110)
 
 ; === Pipeline with higher-order functions ===
@@ -84,17 +84,17 @@ FUN apply-twice (f, x) {
 
 LET quad = x => apply-twice(double, x)
 
-@OUTPUT 3 |> quad
+WRITE 3 |> quad
 ; Expected: 12 (3*2=6, 6*2=12)
 
 ; === Chained pipelines with various transforms ===
 
 FUN negate (x) { 0 - x }
 
-@OUTPUT 5 |> double |> negate
+WRITE 5 |> double |> negate
 ; Expected: -10
 
-@OUTPUT 5 |> negate |> double
+WRITE 5 |> negate |> double
 ; Expected: -10
 
 ; === Complex pipeline expression ===
@@ -102,7 +102,7 @@ FUN negate (x) { 0 - x }
 FUN add-10 (x) { x + 10 }
 FUN half (x) { x // 2 }
 
-@OUTPUT 4 |> square |> add-10 |> half
+WRITE 4 |> square |> add-10 |> half
 ; Expected: 13 (square(4)=16, add-10(16)=26, half(26)=13)
 
-@OUTPUT "Pipeline test complete"
+WRITE "Pipeline test complete"

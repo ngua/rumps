@@ -2,4 +2,4 @@
 ; Empty `{}` in a string should produce a parse error
 
 LET x = "{}"
-@OUTPUT x
+WRITE x

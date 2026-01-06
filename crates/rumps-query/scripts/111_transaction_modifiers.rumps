@@ -24,63 +24,63 @@
 LET r1 = TRANSACTION {
   @SET ^data(1) = "one"
 } ON CONFLICT ABORT
-@OUTPUT r1 IS Result.Ok(_)
+WRITE r1 IS Result.Ok(_)
 
 ; === ON CONFLICT OVERWRITE ===
 LET r2 = TRANSACTION {
   @SET ^data(2) = "two"
 } ON CONFLICT OVERWRITE
-@OUTPUT r2 IS Result.Ok(_)
+WRITE r2 IS Result.Ok(_)
 
 ; === WITH TIMEOUT (milliseconds) ===
 LET r3 = TRANSACTION {
   @SET ^data(3) = "three"
 } WITH TIMEOUT 5000
-@OUTPUT r3 IS Result.Ok(_)
+WRITE r3 IS Result.Ok(_)
 
 ; === WITH RETRIES n ===
 LET r4 = TRANSACTION {
   @SET ^data(4) = "four"
 } WITH RETRIES 3
-@OUTPUT r4 IS Result.Ok(_)
+WRITE r4 IS Result.Ok(_)
 
 ; === WITH ISOLATION SNAPSHOT ===
 LET r5 = TRANSACTION {
   @SET ^data(5) = "five"
 } WITH ISOLATION SNAPSHOT
-@OUTPUT r5 IS Result.Ok(_)
+WRITE r5 IS Result.Ok(_)
 
 ; === Combined modifiers ===
 LET r6 = TRANSACTION {
   @SET ^data(6) = "six"
 } ON CONFLICT OVERWRITE WITH TIMEOUT 5000 WITH RETRIES 3
-@OUTPUT r6 IS Result.Ok(_)
+WRITE r6 IS Result.Ok(_)
 
 ; === All modifiers ===
 LET r7 = TRANSACTION {
   @SET ^data(7) = "seven"
 } ON CONFLICT OVERWRITE WITH TIMEOUT 1000 WITH RETRIES 5 WITH ISOLATION SNAPSHOT
-@OUTPUT r7 IS Result.Ok(_)
+WRITE r7 IS Result.Ok(_)
 
 ; === Timeout from expression ===
 LET timeout-ms = 2000
 LET r8 = TRANSACTION {
   @SET ^data(8) = "eight"
 } WITH TIMEOUT timeout-ms
-@OUTPUT r8 IS Result.Ok(_)
+WRITE r8 IS Result.Ok(_)
 
 ; === Case-insensitivity ===
 ; Contextual keywords are matched case-insensitively (like RUMPS keywords)
 LET r9 = TRANSACTION {
   @SET ^data(9) = "nine"
 } on conflict abort with timeout 1000
-@OUTPUT r9 IS Result.Ok(_)
+WRITE r9 IS Result.Ok(_)
 
 ; Mixed case also works
 LET r10 = TRANSACTION {
   @SET ^data(10) = "ten"
 } On Conflict Overwrite With Retries 2
-@OUTPUT r10 IS Result.Ok(_)
+WRITE r10 IS Result.Ok(_)
 
 ; === Contextual identifiers as variables ===
 LET on = "on"
@@ -89,14 +89,14 @@ LET timeout = 1000
 LET with = "with"
 LET retries = "retries"
 LET isolation = "isolation"
-@OUTPUT "{on} {conflict}"
+WRITE "{on} {conflict}"
 
 ; Can use these as variable names and still use modifiers
 LET r11 = TRANSACTION {
   @SET ^data(11) = "{on}{conflict}"
 } WITH TIMEOUT timeout
-@OUTPUT r11 IS Result.Ok(_)
-@OUTPUT @GET ^data(11)
+WRITE r11 IS Result.Ok(_)
+WRITE @GET ^data(11)
 
 ; === Timeout actually triggers ===
 ; This tests that WITH TIMEOUT actually cancels long-running transactions
@@ -114,6 +114,6 @@ LET timed-out = TRANSACTION {
   }
 } WITH TIMEOUT 1
 
-@OUTPUT timed-out
+WRITE timed-out
 
-@OUTPUT "Transaction modifiers test complete"
+WRITE "Transaction modifiers test complete"

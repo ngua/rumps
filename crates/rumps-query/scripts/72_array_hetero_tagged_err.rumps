@@ -5,4 +5,4 @@ LET result = Array.map(
   x => IF x > 1 { Option.Some(x) } ELSE { Result.Ok(x) },
   [1, 2]
 )
-@OUTPUT result
+WRITE result

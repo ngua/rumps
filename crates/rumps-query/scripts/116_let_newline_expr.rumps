@@ -5,7 +5,7 @@ LET x =
     Unit => Unit
   }
 
-@OUTPUT x
+WRITE x
 
 ; Also test with other expressions
 LET y =
@@ -13,7 +13,7 @@ LET y =
   + 2
   + 3
 
-@OUTPUT y
+WRITE y
 
 ; Nested
 LET z =
@@ -23,4 +23,4 @@ LET z =
     "no"
   }
 
-@OUTPUT z
+WRITE z

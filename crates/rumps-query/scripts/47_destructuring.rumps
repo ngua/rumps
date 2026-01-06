@@ -4,29 +4,29 @@
 
 LET pair = (1, 2)
 LET (a, b) = pair
-@OUTPUT a
-@OUTPUT b
+WRITE a
+WRITE b
 
 ; Nested tuple
 LET nested = ((1, 2), (3, 4))
 LET ((x1, y1), (x2, y2)) = nested
-@OUTPUT x1
-@OUTPUT y1
-@OUTPUT x2
-@OUTPUT y2
+WRITE x1
+WRITE y1
+WRITE x2
+WRITE y2
 
 ; === Object destructuring ===
 
 LET person = { name: "Alice", age: 30 }
 LET { name, age } = person
-@OUTPUT name
-@OUTPUT age
+WRITE name
+WRITE age
 
 ; Object with rename
 LET point = { x: 10, y: 20 }
 LET { x: px, y: py } = point
-@OUTPUT px
-@OUTPUT py
+WRITE px
+WRITE py
 
 ; NOTE: Array destructuring is only supported in MATCH expressions, not in LET bindings.
 ; See 62_match.rumps for array pattern matching examples.
@@ -35,20 +35,20 @@ LET { x: px, y: py } = point
 
 LET triple = (100, 200, 300)
 LET (keep, _, last) = triple
-@OUTPUT keep
-@OUTPUT last
+WRITE keep
+WRITE last
 
 ; Wildcard discards entire value
 LET _ = "discarded"
-@OUTPUT "wildcard works"
+WRITE "wildcard works"
 
 ; === Mixed nesting ===
 
 LET data = { coords: (10, 20), name: "origin" }
 LET { coords: (cx, cy), name: label } = data
-@OUTPUT cx
-@OUTPUT cy
-@OUTPUT label
+WRITE cx
+WRITE cy
+WRITE label
 
 ; === In expressions ===
 
@@ -56,6 +56,6 @@ LET result = {
   LET (x, y) = (5, 10)
   x + y
 }
-@OUTPUT result
+WRITE result
 
-@OUTPUT "Destructuring test complete"
+WRITE "Destructuring test complete"
