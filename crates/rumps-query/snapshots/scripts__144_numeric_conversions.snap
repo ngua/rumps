@@ -1,0 +1,11 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Int -> Float coercion\nLET f: Float = 10\nWRITE f\n\n; With parentheses (regression test)\nLET f2: Float = (10)\nWRITE f2\n\n; Negative float\nLET f3: Float = -5\nWRITE f3\n\n; Int -> Word coercion\nLET w: Word = 42\nWRITE w\n\n; Float literal with Float annotation\nLET f4: Float = 3.14\nWRITE f4\n\n; Int literal with Int annotation (trivial)\nLET i: Int = 100\nWRITE i\n\n; Nested in expression\nLET f5: Float = (10 + 5)\nWRITE f5\n"
+---
+10
+10
+-5
+42
+3.14
+100
+15

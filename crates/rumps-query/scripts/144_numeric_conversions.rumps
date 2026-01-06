@@ -1,0 +1,27 @@
+; Int -> Float coercion
+LET f: Float = 10
+WRITE f
+
+; With parentheses (regression test)
+LET f2: Float = (10)
+WRITE f2
+
+; Negative float
+LET f3: Float = -5
+WRITE f3
+
+; Int -> Word coercion
+LET w: Word = 42
+WRITE w
+
+; Float literal with Float annotation
+LET f4: Float = 3.14
+WRITE f4
+
+; Int literal with Int annotation (trivial)
+LET i: Int = 100
+WRITE i
+
+; Nested in expression
+LET f5: Float = (10 + 5)
+WRITE f5

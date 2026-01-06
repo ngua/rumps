@@ -1338,6 +1338,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             (val, self.type_exprs.base_type(expected_ty))
         {
             Ok(())
+        // Allow Int -> Float coercion (widening)
+        } else if let (Value::Int(_), Some(TypeId::FLOAT)) =
+            (val, self.type_exprs.base_type(expected_ty))
+        {
+            Ok(())
         } else {
             typechecked!("value type", "matches declaration")
         }
