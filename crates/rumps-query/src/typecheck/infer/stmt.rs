@@ -10,9 +10,8 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
-    Import, ImportItem, OutputFormat, OutputStmt, OutputTarget,
-    ParamConstraint, Stmt, StmtId, SubscriptElem, TxnId, TypeParam, UnOp,
-    Visibility,
+    Import, ImportItem, OutputFormat, OutputTarget, ParamConstraint, Stmt,
+    StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility, WriteStmt,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
@@ -75,9 +74,9 @@ impl InferCtx<'_> {
                 self.kill_stmt(id, dbref, span);
             }
 
-            Some(Stmt::Output(output)) => {
+            Some(Stmt::Write(output)) => {
                 self.env.mark_non_import();
-                self.output(&output, span);
+                self.write(&output, span);
             }
 
             Some(Stmt::Expr(expr)) => {
@@ -202,9 +201,9 @@ impl InferCtx<'_> {
                         span: item_span,
                     });
                 }
-                Some(Stmt::Output(..)) => {
+                Some(Stmt::Write(..)) => {
                     self.error(TypeError::Custom {
-                        msg: "`OUTPUT` is not allowed inside a module"
+                        msg: "`WRITE` is not allowed inside a module"
                             .to_string(),
                         span: item_span,
                     });
@@ -762,13 +761,13 @@ impl InferCtx<'_> {
             .set_expr(id, Expr::Kill(dbref.clone(), self.in_transaction));
     }
 
-    /// Infer types for an `OUTPUT` statement or expression.
+    /// Infer types for a `WRITE` statement or expression.
     ///
     /// Type-checks the expression and adds constraints based on format and target:
     /// - `Stringable` for default format
     /// - `Jsonable` for JSON format
     /// - `FilePath | String` for file target path
-    pub(super) fn output(&mut self, output: &OutputStmt, span: Span) {
+    pub(super) fn write(&mut self, output: &WriteStmt, span: Span) {
         let expr_ty = self.expr(output.expr);
 
         // Format constraint

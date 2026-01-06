@@ -889,11 +889,11 @@ pub(crate) enum Expr {
     /// The `Option<TxnId>` is assigned during typecheck.
     Query(DbRef, Option<TxnId>),
 
-    /// Output expression: `WRITE expr [JSON] [TO target]`.
+    /// Write expression: `WRITE expr [JSON] [TO target]`.
     ///
-    /// Executes the output side effect and evaluates to `Unit`.
+    /// Executes the write side effect and evaluates to `Unit`.
     /// This allows `WRITE` in expression contexts like `f(WRITE x)`.
-    Output(OutputStmt),
+    Write(WriteStmt),
 
     /// Set expression: `@SET target = value`.
     ///
@@ -986,9 +986,9 @@ pub(crate) enum OutputTarget {
     File(ExprId),
 }
 
-/// Extended output statement.
+/// Extended write statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OutputStmt {
+pub(crate) struct WriteStmt {
     pub(crate) expr: ExprId,
     pub(crate) format: OutputFormat,
     pub(crate) target: OutputTarget,
@@ -1078,10 +1078,10 @@ pub(crate) enum Stmt {
     /// The `Option<TxnId>` is assigned during typecheck; globals require it.
     Kill(DbRef, Option<TxnId>),
 
-    /// Output a value with optional format and target.
+    /// Write a value with optional format and target.
     ///
-    /// Extended syntax: `OUTPUT expr [JSON] [TO ERROR | TO FILE path]`.
-    Output(OutputStmt),
+    /// Extended syntax: `WRITE expr [JSON] [TO ERROR | TO FILE path]`.
+    Write(WriteStmt),
 
     /// An expression used as a statement (for side effects).
     ///

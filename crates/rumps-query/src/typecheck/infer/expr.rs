@@ -269,10 +269,10 @@ impl InferCtx<'_> {
             // Query: `@QUERY local(...)` or `@QUERY ^global(...)`
             Expr::Query(ref dbref, _) => self.query(id, dbref, span),
 
-            // Output expression: `WRITE expr [JSON] [TO target]`
+            // Write expression: `WRITE expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
-            Expr::Output(output) => {
-                self.output(output, span);
+            Expr::Write(output) => {
+                self.write(output, span);
                 Ty::Unit
             }
 

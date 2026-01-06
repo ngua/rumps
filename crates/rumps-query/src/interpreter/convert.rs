@@ -79,7 +79,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a value to a human-readable display string.
     ///
-    /// Used for OUTPUT statements. Quotes strings and file paths so output
+    /// Used for WRITE statements. Quotes strings and file paths so output
     /// is valid RUMPS syntax.
     pub(crate) fn display(&self, v: &Value) -> String {
         self.stringify(v)
@@ -199,16 +199,19 @@ impl<I: IoContext> Interpreter<'_, I> {
                     format!("{ty_name}.{var_name}({args})")
                 }
             }
-            Value::Closure { params, .. } => {
-                // Display as <closure(n)> where n is the number of parameters
-                format!("<closure({})>", params.len())
+            // Functions cannot be stringified (rejected by type checker)
+            Value::Closure { .. } => {
+                typechecked!("stringify", "Stringable (not Closure)")
             }
-            Value::Function { name, params, .. } => {
-                // Display as <function name(n)> where n is the number of parameters
-                let fn_name = self.arena.get_str(*name).unwrap_or("?");
-                format!("<function {}({})>", fn_name, params.len())
+            Value::Function { .. } => {
+                typechecked!("stringify", "Stringable (not Function)")
             }
-            Value::ModuleFn { path } | Value::ModuleConst { path } => {
+            Value::ModuleFn { .. } => {
+                typechecked!("stringify", "Stringable (not ModuleFn)")
+            }
+            // Module constants should be resolved before stringify; if not,
+            // display the path as a fallback
+            Value::ModuleConst { path } => {
                 let path_str: String = path
                     .iter()
                     .filter_map(|id| self.arena.get_str(*id))

@@ -510,12 +510,12 @@ impl Parser {
             .then(format)
             .then(target)
             .map_with_span(|((expr, format), target), span| {
-                let output = cst::OutputStmt {
+                let output = cst::WriteStmt {
                     expr,
                     format,
                     target,
                 };
-                cst::Stmt::new(cst::StmtKind::Output(output), span)
+                cst::Stmt::new(cst::StmtKind::Write(output), span)
             })
     }
 
@@ -550,12 +550,12 @@ impl Parser {
             .then(format)
             .then(target)
             .map_with_span(|((inner, format), target), span| {
-                let output = cst::OutputStmt {
+                let output = cst::WriteStmt {
                     expr: inner,
                     format,
                     target,
                 };
-                cst::Expr::new(cst::ExprKind::Output(Box::new(output)), span)
+                cst::Expr::new(cst::ExprKind::Write(Box::new(output)), span)
             })
     }
 

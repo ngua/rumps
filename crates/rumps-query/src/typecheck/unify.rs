@@ -761,8 +761,8 @@ impl<'a> InferCtx<'a> {
                     );
                 }
 
-                Constraint::Stringable(_, _) => {
-                    // All types can be stringified; no check needed
+                Constraint::Stringable(ty, span) => {
+                    self.check_stringable(&ty.apply(&subst), *span);
                 }
 
                 Constraint::Jsonable(ty, span) => {
@@ -1022,6 +1022,27 @@ impl<'a> InferCtx<'a> {
                     span,
                 ));
             }
+        }
+    }
+
+    /// Check that a type is stringable (can be converted to a display string).
+    ///
+    /// Rejects function types (closures, named functions, module functions).
+    /// All other types can be stringified for display.
+    fn check_stringable(&mut self, ty: &Ty, span: Span) {
+        match ty {
+            // Functions cannot be stringified
+            Ty::Fn(_, _) => {
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Stringable,
+                    ty.clone(),
+                    span,
+                ));
+            }
+            // Deferred types
+            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+            // All other types are stringable
+            _ => {}
         }
     }
 

@@ -92,8 +92,8 @@ FUN triple (x) {
 }
 
 LET f = triple
-WRITE f
-; Expected: <function triple(1)>
+WRITE f(14)
+; Expected: 42
 
 ; === Multiple functions ===
 

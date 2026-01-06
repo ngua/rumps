@@ -1,15 +1,15 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Closures\n; Tests closure definition, binding, and display\n\n; === Single parameter closure ===\n\nLET double = x => x * 2\nOUTPUT double\n; Expected: <closure(1)>\n\nLET identity = x => x\nOUTPUT identity\n; Expected: <closure(1)>\n\n; === Multi-parameter closure ===\n\nLET add = (a, b) => a + b\nOUTPUT add\n; Expected: <closure(2)>\n\nLET triple = (a, b, c) => a + b + c\nOUTPUT triple\n; Expected: <closure(3)>\n\n; === Nullary closure ===\n\nLET const = () => 42\nOUTPUT const\n; Expected: <closure(0)>\n\n; === Typed parameter closure ===\n\nLET typed = (x: Int) => x + 1\nOUTPUT typed\n; Expected: <closure(1)>\n\nLET multi-typed = (x: Int, y: String) => y\nOUTPUT multi-typed\n; Expected: <closure(2)>\n\n; === Closure with return type ===\n\nLET with-ret = (x: Int) -> Int => x * x\nOUTPUT with-ret\n; Expected: <closure(1)>\n\n; === Nested closure in expression ===\n\nLET nested = (x => x + 1)\nOUTPUT nested\n; Expected: <closure(1)>\n\n; === Closure with complex body ===\n\nLET complex = (a, b) => { a * b + 1 }\nOUTPUT complex\n; Expected: <closure(2)>\n\nOUTPUT \"Closure test complete\"\n"
+description: "; Test: Closures\n; Tests closure definition, binding, and calling\n\n; === Single parameter closure ===\n\nLET double = x => x * 2\nWRITE double(21)\n; Expected: 42\n\nLET identity = x => x\nWRITE identity(42)\n; Expected: 42\n\n; === Multi-parameter closure ===\n\nLET add = (a, b) => a + b\nWRITE add(10, 32)\n; Expected: 42\n\nLET triple = (a, b, c) => a + b + c\nWRITE triple(1, 2, 3)\n; Expected: 6\n\n; === Nullary closure ===\n\nLET const = () => 42\nWRITE const()\n; Expected: 42\n\n; === Typed parameter closure ===\n\nLET typed = (x: Int) => x + 1\nWRITE typed(41)\n; Expected: 42\n\nLET multi-typed = (x: Int, y: String) => y\nWRITE multi-typed(1, \"hello\")\n; Expected: \"hello\"\n\n; === Closure with return type ===\n\nLET with-ret = (x: Int) -> Int => x * x\nWRITE with-ret(6)\n; Expected: 36\n\n; === Nested closure in expression ===\n\nLET nested = (x => x + 1)\nWRITE nested(41)\n; Expected: 42\n\n; === Closure with complex body ===\n\nLET complex = (a, b) => { a * b + 1 }\nWRITE complex(5, 8)\n; Expected: 41\n\nWRITE \"Closure test complete\"\n"
 ---
-<closure(1)>
-<closure(1)>
-<closure(2)>
-<closure(3)>
-<closure(0)>
-<closure(1)>
-<closure(2)>
-<closure(1)>
-<closure(1)>
-<closure(2)>
+42
+42
+42
+6
+42
+42
+"hello"
+36
+42
+41
 "Closure test complete"

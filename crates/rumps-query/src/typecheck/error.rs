@@ -25,6 +25,8 @@ pub(crate) enum ConstraintKind {
     Indexable,
     /// Type must support bitwise operations (`&`, `|`, `<<`, `>>`).
     BitLike,
+    /// Type must be convertible to a string for display.
+    Stringable,
 }
 
 impl fmt::Display for ConstraintKind {
@@ -37,6 +39,7 @@ impl fmt::Display for ConstraintKind {
             Self::Monoid => write!(f, "Monoid"),
             Self::Indexable => write!(f, "Indexable"),
             Self::BitLike => write!(f, "BitLike"),
+            Self::Stringable => write!(f, "Stringable"),
         }
     }
 }
@@ -67,6 +70,9 @@ impl ConstraintKind {
             }
             Self::BitLike => {
                 Some("bitwise types are `Bool`, `Int`, and `Word`")
+            }
+            Self::Stringable => {
+                Some("functions and closures cannot be converted to strings")
             }
         }
     }

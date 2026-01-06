@@ -12,7 +12,7 @@
 //! ## String Coercion
 //!
 //! String coercion (via [`Interpreter::display`]) converts any value to a
-//! human-readable string. Used for `OUTPUT` statements and string concatenation
+//! human-readable string. Used for `WRITE` statements and string concatenation
 //! or interpolation.
 //!
 //! | *Type*   | *Result*                                              |
@@ -115,8 +115,8 @@ use smallvec::SmallVec;
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
     Import, ImportItem, JsonAccessKey, JsonAccessKind, Literal, OutputFormat,
-    OutputStmt, OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam,
-    TypePattern, UnOp,
+    OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam, TypePattern,
+    UnOp, WriteStmt,
 };
 use crate::env::Environment;
 use crate::intern::StringId;
@@ -363,8 +363,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Catch(expr_id, handler_id) => {
                 self.catch(expr_id, handler_id, span).await
             }
-            Expr::Output(output) => {
-                self.output(&output).await?;
+            Expr::Write(output) => {
+                self.write(&output).await?;
                 Ok(Value::Unit)
             }
             Expr::Set(ref dbref, value, txn_id) => {
@@ -433,7 +433,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Stmt::Kill(ref dbref, txn_id) => {
                 self.kill(dbref, txn_id, span).await.map(|_| ())
             }
-            Stmt::Output(output) => self.output(&output).await,
+            Stmt::Write(output) => self.write(&output).await,
             Stmt::Expr(expr_id) => {
                 // Evaluate for side effects, discard result
                 self.eval(expr_id).await.map(|_| ())
@@ -1530,7 +1530,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Writes to stdout, stderr, or a file via the I/O context, with optional
     /// JSON formatting.
     #[async_recursion]
-    async fn output(&mut self, output: &OutputStmt) -> Result<()> {
+    async fn write(&mut self, output: &WriteStmt) -> Result<()> {
         let span = self.ast.expr_span(output.expr).unwrap_or_default();
         let val = self.eval(output.expr).await?;
 

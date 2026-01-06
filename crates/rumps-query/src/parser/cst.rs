@@ -339,11 +339,11 @@ pub(crate) enum ExprKind {
     /// Returns `Option[Array[Subscript]]`.
     Query(DbRef),
 
-    /// Output expression: `WRITE expr [JSON] [TO target]`.
+    /// Write expression: `WRITE expr [JSON] [TO target]`.
     ///
-    /// Executes the output side effect and evaluates to `Unit`.
+    /// Executes the write side effect and evaluates to `Unit`.
     /// This allows `WRITE` in expression contexts.
-    Output(Box<OutputStmt>),
+    Write(Box<WriteStmt>),
 
     /// Set expression: `@SET target = value`.
     ///
@@ -457,8 +457,8 @@ pub(crate) enum StmtKind {
     /// Delete a variable or subtree.
     Kill(DbRef),
 
-    /// Output a value with optional format and target.
-    Output(OutputStmt),
+    /// Write a value with optional format and target.
+    Write(WriteStmt),
 
     /// An expression used as a statement.
     Expr(Expr),
@@ -682,9 +682,9 @@ pub(crate) enum OutputTarget {
     File(Box<Expr>),
 }
 
-/// Extended output statement.
+/// Extended write statement.
 #[derive(Clone, Debug)]
-pub(crate) struct OutputStmt {
+pub(crate) struct WriteStmt {
     pub(crate) expr: Expr,
     pub(crate) format: OutputFormat,
     pub(crate) target: OutputTarget,
