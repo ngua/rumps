@@ -12,10 +12,10 @@ use smallvec::SmallVec;
 use super::cst;
 use crate::ast::{
     self, ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
-    Expr, ExprId, JsonAccessKey, MatchArm, MatchPattern, MatchPatternId,
-    ObjectEntry, OutputFormat, OutputStmt, OutputTarget, RestPattern, Stmt,
-    StmtId, SubscriptElem, TransactionModifiers, TypeDefAst, TypePattern,
-    VariantAst, Visibility,
+    Expr, ExprId, Import, ImportItem, JsonAccessKey, MatchArm, MatchPattern,
+    MatchPatternId, ObjectEntry, OutputFormat, OutputStmt, OutputTarget,
+    RestPattern, Stmt, StmtId, SubscriptElem, TransactionModifiers, TypeDefAst,
+    TypePattern, VariantAst, Visibility,
 };
 use crate::{Error, Result};
 
@@ -316,6 +316,23 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
                 name,
                 body: body_ids,
             }
+        }
+        cst::StmtKind::Import(imp) => {
+            let items = imp
+                .items
+                .into_iter()
+                .map(|item| match item {
+                    cst::ImportItem::Named { name, alias } => {
+                        ImportItem::Named { name, alias }
+                    }
+                    cst::ImportItem::Wildcard => ImportItem::Wildcard,
+                    cst::ImportItem::Exclude(n) => ImportItem::Exclude(n),
+                })
+                .collect();
+            Stmt::Import(Import {
+                path: imp.path,
+                items,
+            })
         }
     };
     ast.add_stmt(s, span)
@@ -1304,6 +1321,7 @@ fn merge_stmt(
                 body: new_body?,
             }
         }
+        Stmt::Import(import) => Stmt::Import(import),
     };
     target.add_stmt(new_stmt, span)
 }

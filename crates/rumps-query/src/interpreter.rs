@@ -105,7 +105,7 @@ mod transaction;
 mod types;
 mod variant;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_recursion::async_recursion;
 use ordered_float::OrderedFloat;
@@ -114,9 +114,9 @@ use smallvec::SmallVec;
 
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
-    JsonAccessKey, JsonAccessKind, Literal, OutputFormat, OutputStmt,
-    OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam, TypePattern,
-    UnOp,
+    Import, ImportItem, JsonAccessKey, JsonAccessKind, Literal, OutputFormat,
+    OutputStmt, OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam,
+    TypePattern, UnOp,
 };
 use crate::env::Environment;
 use crate::intern::StringId;
@@ -466,6 +466,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Stmt::Module { name, body } => {
                 self.user_module(&name, &body, span).await
             }
+            Stmt::Import(ref import) => self.import(import, span),
         }
     }
 
@@ -653,6 +654,162 @@ impl<I: IoContext> Interpreter<'_, I> {
                     }
                 }
                 self.populate_module(rest, module, mod_path, span).await
+            }
+        }
+    }
+
+    /// Execute an import statement.
+    ///
+    /// Binds imported names into the current scope. The typechecker has already
+    /// validated that the module exists, members exist, and there are no
+    /// conflicts, so no runtime errors are possible.
+    fn import(&mut self, import: &Import, span: Span) -> Result<()> {
+        let path_refs: Vec<&str> =
+            import.path.iter().map(|s| s.as_str()).collect();
+
+        // Collect exclusions for wildcard imports
+        let excludes: HashSet<&str> = import
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ImportItem::Exclude(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        // Check for wildcard
+        let has_wildcard = import
+            .items
+            .iter()
+            .any(|item| matches!(item, ImportItem::Wildcard));
+
+        // Check if this is a builtin module (or submodule like Math.Trig)
+        if let Some(builtin) = self.env.get_builtin_module_by_path(&path_refs) {
+            // Builtin module
+            if has_wildcard {
+                // Get all members and bind them (except exclusions)
+                let members: Vec<String> = builtin
+                    .public_members()
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .filter(|name| !excludes.contains(name.as_str()))
+                    .collect();
+
+                members.iter().for_each(|name| {
+                    self.bind_module_member(&import.path, name, name, span);
+                });
+            }
+
+            // Process named imports
+            import.items.iter().for_each(|item| {
+                if let ImportItem::Named { name, alias } = item {
+                    let bind_as = alias.as_ref().unwrap_or(name);
+                    self.bind_module_member(&import.path, name, bind_as, span);
+                }
+            });
+        } else {
+            // User module
+            if has_wildcard {
+                // Get all public members and bind them (except exclusions)
+                let members: Vec<(String, bool)> = self
+                    .env
+                    .get_user_module(&path_refs)
+                    .map(|m| {
+                        let fns = m
+                            .functions
+                            .keys()
+                            .map(|n| (n.clone(), true))
+                            .filter(|(n, _)| !excludes.contains(n.as_str()));
+                        let consts = m
+                            .constants
+                            .keys()
+                            .map(|n| (n.clone(), false))
+                            .filter(|(n, _)| !excludes.contains(n.as_str()));
+                        fns.chain(consts).collect()
+                    })
+                    .unwrap_or_default();
+
+                members.iter().for_each(|(name, is_fn)| {
+                    self.bind_user_module_member(
+                        &import.path,
+                        name,
+                        name,
+                        *is_fn,
+                        span,
+                    );
+                });
+            }
+
+            // Process named imports
+            import.items.iter().for_each(|item| {
+                if let ImportItem::Named { name, alias } = item {
+                    let bind_as = alias.as_ref().unwrap_or(name);
+                    // Check if it's a function or constant
+                    let is_fn = self
+                        .env
+                        .get_user_module(&path_refs)
+                        .map(|m| m.functions.contains_key(name))
+                        .unwrap_or(false);
+                    self.bind_user_module_member(
+                        &import.path,
+                        name,
+                        bind_as,
+                        is_fn,
+                        span,
+                    );
+                }
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Bind a builtin module member to the current scope.
+    fn bind_module_member(
+        &mut self,
+        path: &[String],
+        name: &str,
+        bind_as: &str,
+        span: Span,
+    ) {
+        let mut full_path: SmallVec<[StringId; 4]> =
+            path.iter().map(|s| self.arena.intern(s)).collect();
+        full_path.push(self.arena.intern(name));
+        let val = Value::ModuleFn { path: full_path };
+        let val_id = self.arena.add(val, span);
+        let bind_id = self.arena.intern(bind_as);
+        self.env.scopes.bind(bind_id, val_id);
+    }
+
+    /// Bind a user module member to the current scope.
+    fn bind_user_module_member(
+        &mut self,
+        path: &[String],
+        name: &str,
+        bind_as: &str,
+        is_fn: bool,
+        span: Span,
+    ) {
+        let bind_id = self.arena.intern(bind_as);
+        if is_fn {
+            // For functions, create a ModuleFn reference
+            let mut full_path: SmallVec<[StringId; 4]> =
+                path.iter().map(|s| self.arena.intern(s)).collect();
+            full_path.push(self.arena.intern(name));
+            let val = Value::ModuleFn { path: full_path };
+            let val_id = self.arena.add(val, span);
+            self.env.scopes.bind(bind_id, val_id);
+        } else {
+            // For constants, look up the ValueId and bind it directly
+            let path_refs: Vec<&str> =
+                path.iter().map(|s| s.as_str()).collect();
+            let full_path: Vec<&str> = path_refs
+                .iter()
+                .copied()
+                .chain(std::iter::once(name))
+                .collect();
+            if let Some(const_id) = self.env.get_user_module_const(&full_path) {
+                self.env.scopes.bind(bind_id, const_id);
             }
         }
     }

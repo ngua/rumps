@@ -118,6 +118,25 @@ impl TypeEnv {
         self.user_module_type_vis.get(qname).copied()
     }
 
+    /// Get all public members of a user module.
+    ///
+    /// Returns `(name, scheme)` pairs for all public members.
+    pub(crate) fn get_public_user_module_members(
+        &self,
+        mod_path: &str,
+    ) -> Vec<(String, Scheme)> {
+        self.user_module_members
+            .get(mod_path)
+            .map(|members| {
+                members
+                    .iter()
+                    .filter(|(_, m)| m.vis == Visibility::Public)
+                    .map(|(name, m)| (name.clone(), m.scheme.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Push a new scope (e.g., entering a function body or block).
     pub(crate) fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());

@@ -3,15 +3,16 @@
 //! Contains methods for inferring types from statements: let bindings,
 //! function definitions, assignments, etc.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
-    OutputFormat, OutputStmt, OutputTarget, ParamConstraint, Stmt, StmtId,
-    SubscriptElem, TxnId, TypeParam, UnOp,
+    Import, ImportItem, OutputFormat, OutputStmt, OutputTarget,
+    ParamConstraint, Stmt, StmtId, SubscriptElem, TxnId, TypeParam, UnOp,
+    Visibility,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
@@ -74,6 +75,8 @@ impl InferCtx<'_> {
             Some(Stmt::Module { name, body }) => {
                 self.user_module_with_path(&name, &body, span)
             }
+
+            Some(Stmt::Import(ref import)) => self.import_stmt(import, span),
 
             None => {}
         }
@@ -201,7 +204,131 @@ impl InferCtx<'_> {
                     let qname = format!("{}.{}", mod_path, name);
                     self.env.register_user_module_type_vis(&qname, vis);
                 }
+                Some(Stmt::Import(ref import)) => {
+                    // Process import inside module
+                    self.import_stmt(import, item_span);
+                }
                 None => {}
+            }
+        });
+    }
+
+    /// Process an import statement.
+    ///
+    /// Validates module and member existence, checks visibility, and binds
+    /// imported names in the current scope with their types.
+    fn import_stmt(&mut self, import: &Import, span: Span) {
+        let mod_path = import.path.join(".");
+        let path_segs: Vec<&str> =
+            import.path.iter().map(String::as_str).collect();
+
+        // Check if module exists (builtin or user-defined)
+        let is_builtin = path_segs
+            .first()
+            .is_some_and(|&name| self.runtime_env.is_builtin_module(name));
+        let is_user = self.env.is_user_module(&mod_path);
+
+        if !is_builtin && !is_user {
+            self.error(TypeError::Custom {
+                msg: format!("unknown module `{}`", mod_path),
+                span,
+            });
+            // Continue to gather more errors
+        }
+
+        // Collect exclusions and check for wildcard
+        let mut has_wildcard = false;
+        let mut exclusions = HashSet::new();
+
+        import.items.iter().for_each(|item| match item {
+            ImportItem::Wildcard => has_wildcard = true,
+            ImportItem::Exclude(ref name) => {
+                if !has_wildcard {
+                    self.error(TypeError::Custom {
+                        msg: "exclusions (`-name`) only valid after `...`"
+                            .to_string(),
+                        span,
+                    });
+                }
+                exclusions.insert(name.as_str());
+            }
+            ImportItem::Named { .. } => {}
+        });
+
+        // Process wildcard: import all public members
+        if has_wildcard {
+            // Get public members from builtin module
+            if is_builtin {
+                if let Some(m) = path_segs
+                    .first()
+                    .and_then(|&name| self.runtime_env.get_builtin_module(name))
+                {
+                    m.public_members()
+                        .into_iter()
+                        .filter(|(name, _)| !exclusions.contains(name.as_str()))
+                        .for_each(|(name, scheme)| {
+                            self.env.bind(&name, scheme);
+                        });
+                }
+            }
+            // Get public members from user module
+            if is_user {
+                self.env
+                    .get_public_user_module_members(&mod_path)
+                    .into_iter()
+                    .filter(|(name, _)| !exclusions.contains(name.as_str()))
+                    .for_each(|(name, scheme)| {
+                        self.env.bind(&name, scheme);
+                    });
+            }
+        }
+
+        // Process named imports
+        import.items.iter().for_each(|item| {
+            if let ImportItem::Named { name, alias } = item {
+                let bind_name = alias.as_deref().unwrap_or(name);
+                let mut full_path = path_segs.clone();
+                full_path.push(name);
+
+                // Try builtin module first (always public)
+                let builtin = self
+                    .runtime_env
+                    .get_module_fn_type(&full_path)
+                    .cloned()
+                    .or_else(|| {
+                        self.runtime_env
+                            .get_module_const_type(&full_path)
+                            .cloned()
+                            .map(Scheme::mono)
+                    });
+
+                // Then try user module (check visibility)
+                let user = self.env.lookup_user_module_member(&full_path);
+
+                match (builtin, user) {
+                    (Some(s), _) => self.env.bind(bind_name, s),
+                    (None, Some(m)) if m.vis == Visibility::Public => {
+                        self.env.bind(bind_name, m.scheme.clone());
+                    }
+                    (None, Some(_)) => {
+                        self.error(TypeError::Custom {
+                            msg: format!(
+                                "member `{}` is private in module `{}`",
+                                name, mod_path
+                            ),
+                            span,
+                        });
+                    }
+                    (None, None) => {
+                        self.error(TypeError::Custom {
+                            msg: format!(
+                                "member `{}` not found in module `{}`",
+                                name, mod_path
+                            ),
+                            span,
+                        });
+                    }
+                }
             }
         });
     }

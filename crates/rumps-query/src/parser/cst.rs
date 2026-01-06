@@ -523,6 +523,11 @@ pub(crate) enum StmtKind {
     /// - Inline: `MODULE Name { ... }`
     /// - File import: `MODULE Name FROM "path/to/module.rumps"`
     Module { name: String, source: ModuleSource },
+
+    /// Import members from a module.
+    ///
+    /// Syntax: `IMPORT Module.{ member, ... }` or `IMPORT Module.{ ... }`.
+    Import(ImportStmt),
 }
 
 /// Source of a module's contents.
@@ -534,6 +539,26 @@ pub(crate) enum ModuleSource {
     ///
     /// The path is relative to the importing script's directory, or absolute.
     File(String),
+}
+
+/// A single import item.
+#[derive(Clone, Debug)]
+pub(crate) enum ImportItem {
+    /// Named import: `member` or `member AS alias`.
+    Named { name: String, alias: Option<String> },
+    /// Wildcard import: `...`.
+    Wildcard,
+    /// Exclusion (only valid after wildcard): `-member`.
+    Exclude(String),
+}
+
+/// Import statement.
+#[derive(Clone, Debug)]
+pub(crate) struct ImportStmt {
+    /// Module path segments (e.g., `["Module", "Nested"]`).
+    pub(crate) path: Vec<String>,
+    /// Import items.
+    pub(crate) items: Vec<ImportItem>,
 }
 
 /// A CST type expression with inline span.

@@ -195,6 +195,7 @@ impl Parser {
     /// A single statement.
     fn stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         recursive(|stmt| {
+            let import_stmt = Self::import_stmt();
             let let_stmt = Self::let_stmt(stmt.clone());
             let set_stmt = Self::set_stmt(stmt.clone());
             let kill_stmt = Self::kill_stmt(stmt.clone());
@@ -207,6 +208,7 @@ impl Parser {
             let expr_stmt = Self::expr_stmt(stmt);
 
             choice((
+                import_stmt,
                 let_stmt,
                 set_stmt,
                 kill_stmt,
@@ -1004,6 +1006,47 @@ impl Parser {
             .then(inline_body.or(file_import))
             .map_with_span(|(name, source), span| {
                 cst::Stmt::new(cst::StmtKind::Module { name, source }, span)
+            })
+    }
+
+    /// `IMPORT Module.{ member, ... }` or `IMPORT Module.{ ... }`.
+    ///
+    /// Imports members from a module into the current scope.
+    fn import_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+    {
+        // Module path: idents separated by `.`
+        let path = Self::ident().separated_by(just(Token::Dot)).at_least(1);
+
+        // Named with optional alias: `name` or `name AS alias`
+        let named = Self::ident()
+            .then(just(Token::As).ignore_then(Self::ident()).or_not())
+            .map(|(name, alias)| cst::ImportItem::Named { name, alias });
+
+        // Wildcard: `...`
+        let wildcard = just(Token::DotDotDot).to(cst::ImportItem::Wildcard);
+
+        // Exclusion: `-name`
+        let exclude = just(Token::Minus)
+            .ignore_then(Self::ident())
+            .map(cst::ImportItem::Exclude);
+
+        let item = choice((wildcard, exclude, named));
+
+        let items = item
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace));
+
+        just(Token::Import)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(path)
+            .then_ignore(just(Token::Dot))
+            .then(items)
+            .map_with_span(|(path, items), span| {
+                cst::Stmt::new(
+                    cst::StmtKind::Import(cst::ImportStmt { path, items }),
+                    span,
+                )
             })
     }
 

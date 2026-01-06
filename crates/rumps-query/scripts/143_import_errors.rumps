@@ -1,0 +1,19 @@
+; Test: IMPORT statement errors
+; Tests various error conditions for imports
+
+; Error: Import from non-existent module
+IMPORT NonExistent.{ foo }
+
+; Error: Import non-existent member
+IMPORT Math.{ nonexistent }
+
+; Error: Import private member from user module
+MODULE Priv {
+  LET secret = 42
+  FUN internal() -> Int { secret }
+  +FUN public() -> Int { 1 }
+}
+IMPORT Priv.{ internal }
+
+; Error: Exclusion without wildcard
+IMPORT Math.{ floor, -ceil }

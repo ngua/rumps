@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: IMPORT statement errors\n; Tests various error conditions for imports\n\n; Error: Import from non-existent module\nIMPORT NonExistent.{ foo }\n\n; Error: Import non-existent member\nIMPORT Math.{ nonexistent }\n\n; Error: Import private member from user module\nMODULE Priv {\n  LET secret = 42\n  FUN internal() -> Int { secret }\n  +FUN public() -> Int { 1 }\n}\nIMPORT Priv.{ internal }\n\n; Error: Exclusion without wildcard\nIMPORT Math.{ floor, -ceil }\n"
+---
+ERROR: unknown module `NonExistent`
+member `foo` not found in module `NonExistent`
+member `nonexistent` not found in module `Math`
+member `internal` is private in module `Priv`
+exclusions (`-name`) only valid after `...`

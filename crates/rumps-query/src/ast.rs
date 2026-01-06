@@ -1031,6 +1031,26 @@ pub(crate) enum Visibility {
     Public,
 }
 
+/// A single import item.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ImportItem {
+    /// Named import: `member` or `member AS alias`.
+    Named { name: String, alias: Option<String> },
+    /// Wildcard import: `...`.
+    Wildcard,
+    /// Exclusion (only valid after wildcard): `-member`.
+    Exclude(String),
+}
+
+/// Import statement.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Import {
+    /// Module path segments (e.g., `["Module", "Nested"]`).
+    pub(crate) path: Vec<String>,
+    /// Import items.
+    pub(crate) items: Vec<ImportItem>,
+}
+
 /// A statement node.
 ///
 /// All recursive references use `ExprId`/`StmtId` indices into the `Ast` arena.
@@ -1150,4 +1170,14 @@ pub(crate) enum Stmt {
     /// The body contains `StmtId`s; only `Fun`, `Let`, and `Module` are valid.
     /// This is enforced during parsing.
     Module { name: String, body: Vec<StmtId> },
+
+    /// Import members from a module: `IMPORT Module.{ member, ... }`.
+    ///
+    /// Syntax variants:
+    /// - `IMPORT M.{ member }` ; single named import
+    /// - `IMPORT M.{ m1, m2 }` ; multiple named imports
+    /// - `IMPORT M.{ member AS alias }` ; import with alias
+    /// - `IMPORT M.{ ... }` ; import all public members
+    /// - `IMPORT M.{ ..., -excluded }` ; wildcard with exclusions
+    Import(Import),
 }

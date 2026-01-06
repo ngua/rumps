@@ -323,6 +323,35 @@ impl Module {
     pub(crate) fn contains_const(&self, path: &[&str]) -> bool {
         self.get_const(path).is_some()
     }
+
+    /// Get all public members (functions and constants) with their type schemes.
+    ///
+    /// Returns `(name, scheme)` pairs for all top-level members.
+    /// All builtin module members are public.
+    pub(crate) fn public_members(&self) -> Vec<(String, Scheme)> {
+        let fns = self
+            .functions
+            .iter()
+            .map(|(name, (_, scheme))| (name.clone(), scheme.clone()));
+        let consts = self
+            .constants
+            .iter()
+            .map(|(name, (_, ty))| (name.clone(), Scheme::mono(ty.clone())));
+        fns.chain(consts).collect()
+    }
+
+    /// Navigate to a submodule by path.
+    ///
+    /// An empty path returns `self`. Otherwise, navigates through submodules.
+    pub(crate) fn get_submodule(&self, path: &[&str]) -> Option<&Self> {
+        match path {
+            [] => Some(self),
+            [first, rest @ ..] => self
+                .submodules
+                .get(*first)
+                .and_then(|m| m.get_submodule(rest)),
+        }
+    }
 }
 
 /// A user-defined module containing functions and constants.
@@ -506,6 +535,28 @@ impl Environment {
             self.modules
                 .get(*module)
                 .is_some_and(|m| m.contains_const(rest))
+        })
+    }
+
+    /// Check if a name is a builtin module.
+    pub(crate) fn is_builtin_module(&self, name: &str) -> bool {
+        self.modules.contains_key(name)
+    }
+
+    /// Get a builtin module by name.
+    pub(crate) fn get_builtin_module(&self, name: &str) -> Option<&Module> {
+        self.modules.get(name)
+    }
+
+    /// Get a builtin module or submodule by path.
+    ///
+    /// The path should be like `["Math"]` or `["Math", "Trig"]`.
+    pub(crate) fn get_builtin_module_by_path(
+        &self,
+        path: &[&str],
+    ) -> Option<&Module> {
+        path.split_first().and_then(|(first, rest)| {
+            self.modules.get(*first).and_then(|m| m.get_submodule(rest))
         })
     }
 

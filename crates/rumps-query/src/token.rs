@@ -34,6 +34,7 @@ pub(crate) enum Token {
     Write,
     Raise,
     Catch,
+    Import,
 
     // DB intrinsics (prefixed with `@`)
     Set,
@@ -173,6 +174,7 @@ impl Token {
                 "WRITE" => Some(Self::Write),
                 "RAISE" => Some(Self::Raise),
                 "CATCH" => Some(Self::Catch),
+                "IMPORT" => Some(Self::Import),
                 // `null` is case-sensitive; other casings are identifiers
                 "NULL" => None,
                 _ => None,
@@ -228,6 +230,7 @@ impl Token {
             Self::Write => Some("Write"),
             Self::Raise => Some("Raise"),
             Self::Catch => Some("Catch"),
+            Self::Import => Some("Import"),
             _ => None,
         }
     }
@@ -261,6 +264,7 @@ impl fmt::Display for Token {
             Self::Write => write!(f, "WRITE"),
             Self::Raise => write!(f, "RAISE"),
             Self::Catch => write!(f, "CATCH"),
+            Self::Import => write!(f, "IMPORT"),
             // DB intrinsics (prefixed with `@`)
             Self::Set => write!(f, "@SET"),
             Self::Get => write!(f, "@GET"),

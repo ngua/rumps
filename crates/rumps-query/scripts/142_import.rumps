@@ -1,0 +1,91 @@
+; Test: IMPORT statement
+; Tests importing module members into local scope
+
+; Basic named import
+IMPORT Math.{ floor }
+WRITE floor(3.7)
+; Expected: 3
+
+; Multiple named imports
+IMPORT Array.{ length, reverse }
+WRITE length([1, 2, 3])
+; Expected: 3
+WRITE reverse([1, 2, 3])
+; Expected: [ 3, 2, 1 ]
+
+; Wildcard import brings all public members
+{
+  IMPORT String.{ ... }
+  WRITE length("hello")
+  ; Expected: 5
+}
+
+; User module import
+MODULE Counter {
+  LET start = 0
+  +FUN new() -> Int { start }
+  +FUN inc(n: Int) -> Int { n + 1 }
+}
+
+IMPORT Counter.{ new, inc }
+LET c = new()
+WRITE c
+; Expected: 0
+WRITE inc(c)
+; Expected: 1
+
+; Wildcard with exclusion
+{
+  IMPORT Math.{ ..., -floor }
+  WRITE ceil(1.1)
+  ; Expected: 2
+}
+
+; Import in nested scope does not leak
+LET x = 100
+{
+  IMPORT Math.{ floor }
+  WRITE floor(2.9)
+  ; Expected: 2
+}
+WRITE x
+; Expected: 100
+
+; Multiple imports from same module merge
+IMPORT Math.{ ceil }
+WRITE ceil(4.1)
+; Expected: 5
+WRITE floor(4.9)
+; Expected: 4
+
+; Import inside function body
+FUN test() -> Int {
+  IMPORT Math.{ abs }
+  abs(-42)
+}
+WRITE test()
+; Expected: 42
+
+; Import with AS alias
+IMPORT Math.{ sqrt AS root }
+WRITE root(16.0)
+; Expected: 4.0
+
+; Multiple aliases in same import
+IMPORT Math.Trig.{ sin AS s, cos AS c }
+WRITE s(0.0)
+; Expected: 0.0
+WRITE c(0.0)
+; Expected: 1.0
+
+; Import from hoisted (forward-declared) module
+IMPORT Forward.{ id, val }
+WRITE id("hoisted")
+; Expected: "hoisted"
+WRITE val
+; Expected: 42
+
+MODULE Forward {
+  +LET val: Int = 42
+  +FUN id[T](x: T) -> T { x }
+}

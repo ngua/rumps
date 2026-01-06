@@ -1,0 +1,21 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: IMPORT statement\n; Tests importing module members into local scope\n\n; Basic named import\nIMPORT Math.{ floor }\nWRITE floor(3.7)\n; Expected: 3\n\n; Multiple named imports\nIMPORT Array.{ length, reverse }\nWRITE length([1, 2, 3])\n; Expected: 3\nWRITE reverse([1, 2, 3])\n; Expected: [ 3, 2, 1 ]\n\n; Wildcard import brings all public members\n{\n  IMPORT String.{ ... }\n  WRITE length(\"hello\")\n  ; Expected: 5\n}\n\n; User module import\nMODULE Counter {\n  LET start = 0\n  +FUN new() -> Int { start }\n  +FUN inc(n: Int) -> Int { n + 1 }\n}\n\nIMPORT Counter.{ new, inc }\nLET c = new()\nWRITE c\n; Expected: 0\nWRITE inc(c)\n; Expected: 1\n\n; Wildcard with exclusion\n{\n  IMPORT Math.{ ..., -floor }\n  WRITE ceil(1.1)\n  ; Expected: 2\n}\n\n; Import in nested scope does not leak\nLET x = 100\n{\n  IMPORT Math.{ floor }\n  WRITE floor(2.9)\n  ; Expected: 2\n}\nWRITE x\n; Expected: 100\n\n; Multiple imports from same module merge\nIMPORT Math.{ ceil }\nWRITE ceil(4.1)\n; Expected: 5\nWRITE floor(4.9)\n; Expected: 4\n\n; Import inside function body\nFUN test() -> Int {\n  IMPORT Math.{ abs }\n  abs(-42)\n}\nWRITE test()\n; Expected: 42\n\n; Import with AS alias\nIMPORT Math.{ sqrt AS root }\nWRITE root(16.0)\n; Expected: 4.0\n\n; Multiple aliases in same import\nIMPORT Math.Trig.{ sin AS s, cos AS c }\nWRITE s(0.0)\n; Expected: 0.0\nWRITE c(0.0)\n; Expected: 1.0\n\n; Import from hoisted (forward-declared) module\nIMPORT Forward.{ id, val }\nWRITE id(\"hoisted\")\n; Expected: \"hoisted\"\nWRITE val\n; Expected: 42\n\nMODULE Forward {\n  +LET val: Int = 42\n  +FUN id[T](x: T) -> T { x }\n}\n"
+---
+3
+3
+[ 3, 2, 1 ]
+5
+0
+1
+2
+2
+100
+5
+4
+42
+4
+0
+1
+"hoisted"
+42

@@ -148,24 +148,24 @@ impl InferCtx<'_> {
                     }
                 }
 
-                Some(Stmt::Let(ref pat, ref ann, _, vis)) => {
-                    // Module LET bindings: hoist with provisional type
-                    // Only simple bindings (not destructuring) are valid
-                    if let BindingPattern::Var(ref const_name) = pat {
-                        // Use annotation if present, else fresh type variable
-                        let ty = match ann {
-                            Some(id) => {
-                                self.ast_type_to_ty(*id, &HashMap::new())
-                            }
-                            None => self.fresh(),
-                        };
-                        let scheme = Scheme::mono(ty);
-                        self.env.bind(const_name, scheme.clone());
-                        self.env.register_user_module_member(
-                            mod_path, const_name, scheme, vis,
-                        );
-                    }
-                    // Destructuring patterns are rejected in Pass 2
+                // Module LET bindings: hoist with provisional type.
+                // Only simple bindings are valid; destructuring rejected in Pass 2.
+                Some(Stmt::Let(
+                    BindingPattern::Var(ref const_name),
+                    ref ann,
+                    _,
+                    vis,
+                )) => {
+                    // Use annotation if present, else fresh type variable
+                    let ty = match ann {
+                        Some(id) => self.ast_type_to_ty(*id, &HashMap::new()),
+                        None => self.fresh(),
+                    };
+                    let scheme = Scheme::mono(ty);
+                    self.env.bind(const_name, scheme.clone());
+                    self.env.register_user_module_member(
+                        mod_path, const_name, scheme, vis,
+                    );
                 }
 
                 Some(Stmt::Module { ref name, ref body }) => {
