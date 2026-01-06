@@ -11,7 +11,7 @@ use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
     Import, ImportItem, OutputFormat, OutputTarget, ParamConstraint, Stmt,
-    StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility, WriteStmt,
+    StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility, WriteExpr,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
@@ -62,21 +62,6 @@ impl InferCtx<'_> {
             Some(Stmt::Let(pattern, ann, rhs, _)) => {
                 self.env.mark_non_import();
                 self.r#let(&pattern, ann.as_ref(), rhs, span);
-            }
-
-            Some(Stmt::Set(ref dbref, value, _)) => {
-                self.env.mark_non_import();
-                self.set_stmt(id, dbref, value, span);
-            }
-
-            Some(Stmt::Kill(ref dbref, _)) => {
-                self.env.mark_non_import();
-                self.kill_stmt(id, dbref, span);
-            }
-
-            Some(Stmt::Write(output)) => {
-                self.env.mark_non_import();
-                self.write(&output, span);
             }
 
             Some(Stmt::Expr(expr)) => {
@@ -187,27 +172,8 @@ impl InferCtx<'_> {
                     self.user_module(&nested_path, body, item_span);
                 }
 
-                // Invalid statements inside a module
-                Some(Stmt::Set(..)) => {
-                    self.error(TypeError::Custom {
-                        msg: "`SET` is not allowed inside a module".to_string(),
-                        span: item_span,
-                    });
-                }
-                Some(Stmt::Kill(..)) => {
-                    self.error(TypeError::Custom {
-                        msg: "`KILL` is not allowed inside a module"
-                            .to_string(),
-                        span: item_span,
-                    });
-                }
-                Some(Stmt::Write(..)) => {
-                    self.error(TypeError::Custom {
-                        msg: "`WRITE` is not allowed inside a module"
-                            .to_string(),
-                        span: item_span,
-                    });
-                }
+                // Invalid statements inside a module (SET/KILL/WRITE are now
+                // `Stmt::Expr` wrapping their expression forms)
                 Some(Stmt::Expr(..)) => {
                     self.error(TypeError::Custom {
                         msg: "expression statements are not allowed inside a \
@@ -694,21 +660,6 @@ impl InferCtx<'_> {
         self.constrain(Constraint::Storable(val_ty, span));
     }
 
-    /// Infer types for a `SET` statement.
-    ///
-    /// Calls validation, then populates the `TxnId` field in the AST.
-    pub(super) fn set_stmt(
-        &mut self,
-        id: StmtId,
-        dbref: &DbRef,
-        value: ExprId,
-        span: Span,
-    ) {
-        self.set(dbref, value, span);
-        self.ast
-            .set_stmt(id, Stmt::Set(dbref.clone(), value, self.in_transaction));
-    }
-
     /// Infer types for a `@SET` expression.
     ///
     /// Calls validation, then populates the `TxnId` field in the AST.
@@ -743,15 +694,6 @@ impl InferCtx<'_> {
         self.check_subscript_elems(subs, span);
     }
 
-    /// Infer types for a `KILL` statement.
-    ///
-    /// Calls validation, then populates the `TxnId` field in the AST.
-    pub(super) fn kill_stmt(&mut self, id: StmtId, dbref: &DbRef, span: Span) {
-        self.kill(dbref, span);
-        self.ast
-            .set_stmt(id, Stmt::Kill(dbref.clone(), self.in_transaction));
-    }
-
     /// Infer types for a `@KILL` expression.
     ///
     /// Calls validation, then populates the `TxnId` field in the AST.
@@ -767,7 +709,7 @@ impl InferCtx<'_> {
     /// - `Stringable` for default format
     /// - `Jsonable` for JSON format
     /// - `FilePath | String` for file target path
-    pub(super) fn write(&mut self, output: &WriteStmt, span: Span) {
+    pub(super) fn write(&mut self, output: &WriteExpr, span: Span) {
         let expr_ty = self.expr(output.expr);
 
         // Format constraint

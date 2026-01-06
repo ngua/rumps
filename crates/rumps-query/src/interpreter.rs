@@ -116,7 +116,7 @@ use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
     Import, ImportItem, JsonAccessKey, JsonAccessKind, Literal, OutputFormat,
     OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam, TypePattern,
-    UnOp, WriteStmt,
+    UnOp, WriteExpr,
 };
 use crate::env::Environment;
 use crate::intern::StringId;
@@ -427,13 +427,6 @@ impl<I: IoContext> Interpreter<'_, I> {
             Stmt::Let(pat, ty_ann, expr_id, _) => {
                 self.r#let(&pat, ty_ann, expr_id, span).await
             }
-            Stmt::Set(ref dbref, expr_id, txn_id) => {
-                self.set(dbref, expr_id, txn_id, span).await.map(|_| ())
-            }
-            Stmt::Kill(ref dbref, txn_id) => {
-                self.kill(dbref, txn_id, span).await.map(|_| ())
-            }
-            Stmt::Write(output) => self.write(&output).await,
             Stmt::Expr(expr_id) => {
                 // Evaluate for side effects, discard result
                 self.eval(expr_id).await.map(|_| ())
@@ -1530,7 +1523,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Writes to stdout, stderr, or a file via the I/O context, with optional
     /// JSON formatting.
     #[async_recursion]
-    async fn write(&mut self, output: &WriteStmt) -> Result<()> {
+    async fn write(&mut self, output: &WriteExpr) -> Result<()> {
         let span = self.ast.expr_span(output.expr).unwrap_or_default();
         let val = self.eval(output.expr).await?;
 

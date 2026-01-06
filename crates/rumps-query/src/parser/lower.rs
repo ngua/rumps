@@ -15,7 +15,7 @@ use crate::ast::{
     Expr, ExprId, Import, ImportItem, JsonAccessKey, MatchArm, MatchPattern,
     MatchPatternId, ObjectEntry, OutputFormat, OutputTarget, RestPattern, Stmt,
     StmtId, SubscriptElem, TransactionModifiers, TypeDefAst, TypePattern,
-    VariantAst, Visibility, WriteStmt,
+    VariantAst, Visibility, WriteExpr,
 };
 use crate::{Error, Result};
 
@@ -200,14 +200,18 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
         cst::StmtKind::Set(dbref, value) => {
             let dbref = lower_db_ref(ast, ctx, dbref)?;
             let value_id = lower_expr(ast, ctx, value)?;
-            Stmt::Set(dbref, value_id, None)
+            let expr = Expr::Set(dbref, value_id, None);
+            let expr_id = ast.add_expr(expr, span)?;
+            Stmt::Expr(expr_id)
         }
         cst::StmtKind::Kill(dbref) => {
             let dbref = lower_db_ref(ast, ctx, dbref)?;
-            Stmt::Kill(dbref, None)
+            let expr = Expr::Kill(dbref, None);
+            let expr_id = ast.add_expr(expr, span)?;
+            Stmt::Expr(expr_id)
         }
         cst::StmtKind::Write(output) => {
-            let expr_id = lower_expr(ast, ctx, output.expr)?;
+            let inner_id = lower_expr(ast, ctx, output.expr)?;
             let format = match output.format {
                 cst::OutputFormat::Default => OutputFormat::Default,
                 cst::OutputFormat::Json => OutputFormat::Json,
@@ -220,11 +224,13 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
                     OutputTarget::File(path_id)
                 }
             };
-            Stmt::Write(WriteStmt {
-                expr: expr_id,
+            let expr = Expr::Write(WriteExpr {
+                expr: inner_id,
                 format,
                 target,
-            })
+            });
+            let expr_id = ast.add_expr(expr, span)?;
+            Stmt::Expr(expr_id)
         }
         cst::StmtKind::Expr(expr) => {
             let expr_id = lower_expr(ast, ctx, expr)?;
@@ -554,7 +560,7 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
                     OutputTarget::File(path_id)
                 }
             };
-            Expr::Write(WriteStmt {
+            Expr::Write(WriteExpr {
                 expr: expr_id,
                 format,
                 target,
@@ -1123,24 +1129,24 @@ fn merge_pattern(
     target.add_pattern(new_pat)
 }
 
-/// Merge a `WriteStmt` from source AST into target AST.
-fn merge_write_stmt(
+/// Merge a `WriteExpr` from source AST into target AST.
+fn merge_write_expr(
     target: &mut Ast,
     source: &Ast,
-    stmt: &WriteStmt,
+    w: &WriteExpr,
     span: crate::Span,
-) -> Result<WriteStmt> {
-    let new_expr = merge_expr(target, source, stmt.expr, span)?;
-    let new_target = match stmt.target {
+) -> Result<WriteExpr> {
+    let new_expr = merge_expr(target, source, w.expr, span)?;
+    let new_target = match w.target {
         OutputTarget::Stdout => OutputTarget::Stdout,
         OutputTarget::Stderr => OutputTarget::Stderr,
         OutputTarget::File(e) => {
             OutputTarget::File(merge_expr(target, source, e, span)?)
         }
     };
-    Ok(WriteStmt {
+    Ok(WriteExpr {
         expr: new_expr,
-        format: stmt.format,
+        format: w.format,
         target: new_target,
     })
 }
@@ -1197,19 +1203,6 @@ fn merge_stmt(
                 .transpose()?;
             let new_expr = merge_expr(target, source, expr, span)?;
             Stmt::Let(pat, new_ty, new_expr, vis)
-        }
-        Stmt::Set(dbref, expr, txn) => {
-            let new_dbref = merge_dbref(target, source, &dbref, span)?;
-            let new_expr = merge_expr(target, source, expr, span)?;
-            Stmt::Set(new_dbref, new_expr, txn)
-        }
-        Stmt::Kill(dbref, txn) => {
-            let new_dbref = merge_dbref(target, source, &dbref, span)?;
-            Stmt::Kill(new_dbref, txn)
-        }
-        Stmt::Write(out) => {
-            let new_out = merge_write_stmt(target, source, &out, span)?;
-            Stmt::Write(new_out)
         }
         Stmt::Expr(e) => {
             let new_e = merge_expr(target, source, e, span)?;
@@ -1588,7 +1581,7 @@ fn merge_expr(
             Expr::Query(new_dbref, txn)
         }
         Expr::Write(out) => {
-            let new_out = merge_write_stmt(target, source, &out, span)?;
+            let new_out = merge_write_expr(target, source, &out, span)?;
             Expr::Write(new_out)
         }
         Expr::Set(dbref, expr, txn) => {

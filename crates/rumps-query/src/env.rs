@@ -191,7 +191,7 @@ impl PrimCtx<'_> {
 /// to a `ValueId`.
 ///
 /// Note: `GET`/`SET`/`KILL` are keywords with special syntax, so they are
-/// AST constructs (`Expr::Get`, `Stmt::Set`, `Stmt::Kill`), not primitives.
+/// AST constructs (`Expr::Get`, `Expr::Set`, `Expr::Kill`), not primitives.
 pub(crate) type PrimFn =
     for<'a> fn(&'a mut PrimCtx<'a>, SmallVec<[ValueId; 4]>) -> PrimResult<'a>;
 

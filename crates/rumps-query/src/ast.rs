@@ -893,7 +893,7 @@ pub(crate) enum Expr {
     ///
     /// Executes the write side effect and evaluates to `Unit`.
     /// This allows `WRITE` in expression contexts like `f(WRITE x)`.
-    Write(WriteStmt),
+    Write(WriteExpr),
 
     /// Set expression: `@SET target = value`.
     ///
@@ -986,9 +986,9 @@ pub(crate) enum OutputTarget {
     File(ExprId),
 }
 
-/// Extended write statement.
+/// Extended write expression.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct WriteStmt {
+pub(crate) struct WriteExpr {
     pub(crate) expr: ExprId,
     pub(crate) format: OutputFormat,
     pub(crate) target: OutputTarget,
@@ -1068,24 +1068,10 @@ pub(crate) enum Stmt {
     /// The visibility is only meaningful inside modules (`+LET` for public).
     Let(BindingPattern, Option<AstTypeExprId>, ExprId, Visibility),
 
-    /// B-tree assignment: `SET x(subs...) = expr` or `SET ^NAME(subs...) = expr`.
-    ///
-    /// The `DbRef` is the target; the `ExprId` is the value expression.
-    /// The `Option<TxnId>` is assigned during typecheck; globals require it.
-    Set(DbRef, ExprId, Option<TxnId>),
-
-    /// Delete a variable or subtree: `KILL x(subs...)` or `KILL ^NAME(subs...)`.
-    /// The `Option<TxnId>` is assigned during typecheck; globals require it.
-    Kill(DbRef, Option<TxnId>),
-
-    /// Write a value with optional format and target.
-    ///
-    /// Extended syntax: `WRITE expr [JSON] [TO ERROR | TO FILE path]`.
-    Write(WriteStmt),
-
     /// An expression used as a statement (for side effects).
     ///
-    /// This is the canonical way to use `Expr::If` and `Expr::Block` as statements.
+    /// Used for effectful expressions: `Expr::If`, `Expr::Block`, `Expr::Set`,
+    /// `Expr::Kill`, `Expr::Write`, etc.
     Expr(ExprId),
 
     /// Named function definition: `FUN name (params) { body }`.
