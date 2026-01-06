@@ -8,7 +8,9 @@ use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::value::{CapturedEnv, TypeExprId, TypeId, Value, ValueId};
+use crate::value::{
+    CapturedEnv, FunctionDef, TypeExprId, TypeId, Value, ValueId,
+};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -281,20 +283,95 @@ impl<I: IoContext> Interpreter<'_, I> {
             ["Result", "map-err"] => self.result_map_err(args, span).await,
             ["Result", "flat-map"] => self.result_flat_map(args, span).await,
             _ => {
-                // Regular module function; resolver guarantees it exists
-                let prim =
-                    self.env.get_module_fn(&path_refs).copied().unwrap_or_else(
-                        || {
+                // Check for user module function first
+                if let Some(fn_def) =
+                    self.env.get_user_module_fn(&path_refs).cloned()
+                {
+                    self.invoke_user_module_fn(&path_refs, &fn_def, args, span)
+                        .await
+                } else {
+                    // Builtin module function; resolver guarantees it exists
+                    let prim = self
+                        .env
+                        .get_module_fn(&path_refs)
+                        .copied()
+                        .unwrap_or_else(|| {
                             typechecked!(
                                 "invoke_module_fn",
                                 "known module function"
                             )
-                        },
-                    );
+                        });
 
-                self.invoke_primitive(prim, args, span).await
+                    self.invoke_primitive(prim, args, span).await
+                }
             }
         }
+    }
+
+    /// Invoke a user-defined module function.
+    ///
+    /// Binds all sibling functions and constants at call time, enabling
+    /// mutual recursion between module functions. This is different from
+    /// closures which capture their environment at creation time.
+    #[async_recursion]
+    async fn invoke_user_module_fn(
+        &mut self,
+        path: &[&str],
+        fn_def: &FunctionDef,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        // Type checker guarantees arity matches
+        if fn_def.params.len() != args.len() {
+            typechecked!("user module call", "correct arity")
+        }
+
+        // Get the module path (all but last segment)
+        let mod_path =
+            path.split_last().map(|(_, rest)| rest).unwrap_or_else(|| {
+                typechecked!("module path", "at least 2 segments")
+            });
+
+        // Look up the module to bind siblings
+        let module = self
+            .env
+            .get_user_module(mod_path)
+            .cloned()
+            .unwrap_or_else(|| typechecked!("user module", "exists"));
+
+        // Push a new scope for this function call
+        self.env.scopes.push();
+
+        // Bind all sibling functions as Value::Function so they can be called
+        module.functions.iter().for_each(|(name, sibling)| {
+            let name_id = self.arena.intern(name);
+            let val = Value::Function {
+                name: sibling.name,
+                params: sibling.params.clone(),
+                ret: sibling.ret,
+                body: sibling.body,
+            };
+            let val_id = self.arena.add(val, span);
+            self.env.scopes.bind(name_id, val_id);
+        });
+
+        // Bind all sibling constants
+        module.constants.iter().for_each(|(name, &const_id)| {
+            let name_id = self.arena.intern(name);
+            self.env.scopes.bind(name_id, const_id);
+        });
+
+        // Bind parameters
+        self.bind_params(&fn_def.params, args, span)?;
+
+        // Evaluate body
+        let result = self.eval(fn_def.body).await;
+
+        // Pop the scope
+        self.env.scopes.pop();
+
+        // Validate return type if annotated
+        result.and_then(|val| self.check_return_type(val, fn_def.ret))
     }
 
     /// `Array.map(fn, arr) -> Array`

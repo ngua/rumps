@@ -1,2 +1,6 @@
 [alias]
 r = "run -p rumps --features cli --"
+
+[env]
+# Increase stack size for parallel tests (recursive interpreters need more stack)
+RUST_MIN_STACK = "8388608"

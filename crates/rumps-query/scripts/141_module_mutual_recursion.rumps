@@ -1,0 +1,37 @@
+; Module-level mutual recursion: functions within a module calling each other
+
+MODULE Parity {
+    +FUN is-even(n: Int) -> Bool {
+        IF n == 0 { true } ELSE { is-odd(n - 1) }
+    }
+
+    +FUN is-odd(n: Int) -> Bool {
+        IF n == 0 { false } ELSE { is-even(n - 1) }
+    }
+}
+
+; Test mutual recursion via module path
+@OUTPUT Parity.is-even(0)
+@OUTPUT Parity.is-even(4)
+@OUTPUT Parity.is-even(7)
+@OUTPUT Parity.is-odd(0)
+@OUTPUT Parity.is-odd(3)
+@OUTPUT Parity.is-odd(6)
+
+; Nested module with mutual recursion
+MODULE Math {
+    MODULE Fibonacci {
+        ; Mutually recursive helper functions
+        +FUN fib(n: Int) -> Int {
+            IF n <= 1 { n } ELSE { fib-sum(n) }
+        }
+
+        FUN fib-sum(n: Int) -> Int {
+            fib(n - 1) + fib(n - 2)
+        }
+    }
+}
+
+@OUTPUT Math.Fibonacci.fib(0)
+@OUTPUT Math.Fibonacci.fib(1)
+@OUTPUT Math.Fibonacci.fib(10)

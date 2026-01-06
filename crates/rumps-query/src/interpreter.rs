@@ -516,14 +516,49 @@ impl<I: IoContext> Interpreter<'_, I> {
                             body: fn_body,
                             ..
                         } => {
-                            let closure =
-                                self.closure(&params, ret, fn_body)?;
-                            let val_id = self.arena.add(closure, item_span);
-                            module.functions.insert(fn_name.clone(), val_id);
-                            // Also bind in scope so sibling closures can
-                            // reference this function (mutual recursion)
+                            // Create FunctionDef (not closure) so siblings are
+                            // bound at call time, enabling mutual recursion.
                             let name_id = self.arena.intern(&fn_name);
-                            self.env.scopes.bind(name_id, val_id);
+                            let resolved_params: Result<
+                                SmallVec<[(StringId, Option<TypeExprId>); 4]>,
+                            > = params
+                                .iter()
+                                .map(|(pname, ty)| {
+                                    let pid = self.arena.intern(pname);
+                                    let tid = ty
+                                        .map(|ast_id| {
+                                            let s = self
+                                                .ast
+                                                .type_expr_span(ast_id)
+                                                .unwrap_or(item_span);
+                                            self.try_resolve_type_expr(
+                                                ast_id, s,
+                                            )
+                                        })
+                                        .transpose()?
+                                        .flatten();
+                                    Ok((pid, tid))
+                                })
+                                .collect();
+                            let resolved_ret = ret
+                                .map(|ast_id| {
+                                    let s = self
+                                        .ast
+                                        .type_expr_span(ast_id)
+                                        .unwrap_or(item_span);
+                                    self.try_resolve_type_expr(ast_id, s)
+                                })
+                                .transpose()?
+                                .flatten();
+                            module.functions.insert(
+                                fn_name.clone(),
+                                FunctionDef {
+                                    name: name_id,
+                                    params: resolved_params?,
+                                    ret: resolved_ret,
+                                    body: fn_body,
+                                },
+                            );
                         }
 
                         Stmt::Let(ref pat, _, expr_id, _) => {
@@ -533,8 +568,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 module
                                     .constants
                                     .insert(const_name.clone(), val_id);
-                                // Also bind in scope so sibling closures can
-                                // reference this constant
+                                // Bind in scope so later LET initializers can
+                                // reference earlier constants.
                                 let name_id = self.arena.intern(const_name);
                                 self.env.scopes.bind(name_id, val_id);
                             }

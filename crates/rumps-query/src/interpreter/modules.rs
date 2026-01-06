@@ -91,13 +91,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .unwrap_or_else(|| invariant!("ConstId in consts map")))
         }
         // Check for user module function
-        else if let Some(fn_id) = self.env.get_user_module_fn(&path_strs) {
-            // Get the closure value and clone it
-            Ok(self
-                .arena
-                .get(fn_id)
-                .cloned()
-                .unwrap_or_else(|| invariant!("ValueId in arena")))
+        else if self.env.user_module_fn_exists(&path_strs) {
+            // Return ModuleFn; actual FunctionDef is looked up at call time
+            // so siblings can be bound then (enabling mutual recursion).
+            let path: SmallVec<[StringId; 4]> =
+                segments.iter().map(|s| self.arena.intern(s)).collect();
+            Ok(Value::ModuleFn { path })
         }
         // Check for user module constant
         else if let Some(const_id) =

@@ -25,7 +25,7 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::value::{TypeId, Value, ValueArena, ValueId};
+use crate::value::{FunctionDef, TypeId, Value, ValueArena, ValueId};
 use crate::{Error, Result, Span};
 
 /// Stack of lexical scopes for `LET` bindings.
@@ -328,13 +328,14 @@ impl Module {
 /// A user-defined module containing functions and constants.
 ///
 /// Unlike builtin `Module`s which use `PrimFn`, user modules store:
-/// - Functions as `ValueId`s pointing to closure values
+/// - Functions as `FunctionDef`s (not closures; siblings are bound at call time)
 /// - Constants as `ValueId`s pointing to evaluated values
 #[derive(Default, Clone)]
 pub(crate) struct UserModule {
     /// Functions in this module, keyed by function name.
-    /// `ValueId`s point to closure values in a `ValueArena`.
-    pub(crate) functions: HashMap<String, ValueId>,
+    /// Stored as `FunctionDef`s so sibling lookup happens at call time,
+    /// enabling mutual recursion between module functions.
+    pub(crate) functions: HashMap<String, FunctionDef>,
 
     /// Constants in this module, keyed by constant name.
     pub(crate) constants: HashMap<String, ValueId>,
@@ -345,10 +346,10 @@ pub(crate) struct UserModule {
 
 impl UserModule {
     /// Look up a function by path within this module.
-    pub(crate) fn get_fn(&self, path: &[&str]) -> Option<ValueId> {
+    pub(crate) fn get_fn(&self, path: &[&str]) -> Option<&FunctionDef> {
         match path {
             [] => None,
-            [name] => self.functions.get(*name).copied(),
+            [name] => self.functions.get(*name),
             [first, rest @ ..] => {
                 self.submodules.get(*first).and_then(|m| m.get_fn(rest))
             }
@@ -443,8 +444,23 @@ impl Environment {
         self.user_modules.entry(name.to_string()).or_default()
     }
 
+    /// Look up a user module by path.
+    ///
+    /// The path is the module path segments (e.g., `["Counter"]` or
+    /// `["Counter", "Inner"]` for nested modules).
+    pub(crate) fn get_user_module(&self, path: &[&str]) -> Option<&UserModule> {
+        path.split_first().and_then(|(first, rest)| {
+            self.user_modules.get(*first).and_then(|m| {
+                rest.iter().try_fold(m, |acc, seg| acc.submodules.get(*seg))
+            })
+        })
+    }
+
     /// Look up a user module function by path.
-    pub(crate) fn get_user_module_fn(&self, path: &[&str]) -> Option<ValueId> {
+    pub(crate) fn get_user_module_fn(
+        &self,
+        path: &[&str],
+    ) -> Option<&FunctionDef> {
         path.split_first().and_then(|(module, rest)| {
             self.user_modules.get(*module).and_then(|m| m.get_fn(rest))
         })
