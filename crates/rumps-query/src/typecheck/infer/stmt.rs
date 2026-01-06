@@ -29,6 +29,18 @@ impl InferCtx<'_> {
         let stmt = self.ast.get_stmt(id).cloned();
 
         match stmt {
+            Some(Stmt::Import(ref import)) => {
+                // Check import ordering before processing
+                if !self.env.imports_allowed() {
+                    self.error(TypeError::Custom {
+                        msg: "imports must appear at the top of a scope"
+                            .to_string(),
+                        span,
+                    });
+                }
+                self.import_stmt(import, span);
+            }
+
             Some(Stmt::Fun {
                 name,
                 type_params,
@@ -37,46 +49,65 @@ impl InferCtx<'_> {
                 body,
                 ..
             }) => {
-                self.fun(&name, &type_params, &params, ret.as_ref(), body, span)
+                self.env.mark_non_import();
+                self.fun(
+                    &name,
+                    &type_params,
+                    &params,
+                    ret.as_ref(),
+                    body,
+                    span,
+                );
             }
 
             Some(Stmt::Let(pattern, ann, rhs, _)) => {
-                self.r#let(&pattern, ann.as_ref(), rhs, span)
+                self.env.mark_non_import();
+                self.r#let(&pattern, ann.as_ref(), rhs, span);
             }
 
             Some(Stmt::Set(ref dbref, value, _)) => {
-                self.set_stmt(id, dbref, value, span)
+                self.env.mark_non_import();
+                self.set_stmt(id, dbref, value, span);
             }
 
-            Some(Stmt::Kill(ref dbref, _)) => self.kill_stmt(id, dbref, span),
+            Some(Stmt::Kill(ref dbref, _)) => {
+                self.env.mark_non_import();
+                self.kill_stmt(id, dbref, span);
+            }
 
-            Some(Stmt::Output(output)) => self.output(&output, span),
+            Some(Stmt::Output(output)) => {
+                self.env.mark_non_import();
+                self.output(&output, span);
+            }
 
             Some(Stmt::Expr(expr)) => {
+                self.env.mark_non_import();
                 self.expr(expr);
             }
 
             Some(Stmt::Type { .. }) => {
+                self.env.mark_non_import();
                 // Type declarations are processed by the registry; nothing to
                 // infer here. The types are registered before type checking.
             }
 
             Some(Stmt::Union { .. }) => {
+                self.env.mark_non_import();
                 // Union declarations are processed by the registry; nothing to
                 // infer here. The unions are registered before type checking.
             }
 
             Some(Stmt::NewType { .. }) => {
+                self.env.mark_non_import();
                 // NewType declarations are processed by the registry; nothing
                 // to infer here. The type aliases are registered before type
                 // checking.
             }
 
             Some(Stmt::Module { name, body }) => {
-                self.user_module_with_path(&name, &body, span)
+                self.env.mark_non_import();
+                self.user_module_with_path(&name, &body, span);
             }
-
-            Some(Stmt::Import(ref import)) => self.import_stmt(import, span),
 
             None => {}
         }

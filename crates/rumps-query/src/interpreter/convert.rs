@@ -51,6 +51,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Closure { .. }
             | Value::Function { .. }
             | Value::ModuleFn { .. }
+            | Value::ModuleConst { .. }
             | Value::Range { .. }
             | Value::ForeverContinuation
             | Value::LoopContinue(_) => {
@@ -207,7 +208,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let fn_name = self.arena.get_str(*name).unwrap_or("?");
                 format!("<function {}({})>", fn_name, params.len())
             }
-            Value::ModuleFn { path } => {
+            Value::ModuleFn { path } | Value::ModuleConst { path } => {
                 let path_str: String = path
                     .iter()
                     .filter_map(|id| self.arena.get_str(*id))
@@ -377,6 +378,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ModuleFn { .. } => {
                 typechecked!("jsonify", "Jsonable (not ModuleFn)")
             }
+            Value::ModuleConst { .. } => {
+                typechecked!("jsonify", "Jsonable (not ModuleConst)")
+            }
             Value::Regex(_) => typechecked!("jsonify", "Jsonable (not Regex)"),
             Value::ForeverContinuation | Value::LoopContinue(_) => {
                 typechecked!("jsonify", "Jsonable (not continuation)")
@@ -468,6 +472,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Closure { .. }
             | Value::Function { .. }
             | Value::ModuleFn { .. }
+            | Value::ModuleConst { .. }
             | Value::Range { .. }
             | Value::ForeverContinuation
             | Value::LoopContinue(_) => {

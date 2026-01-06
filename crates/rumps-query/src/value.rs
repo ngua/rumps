@@ -506,6 +506,15 @@ pub(crate) enum Value {
     /// - `Math.Trig.sin` → `["Math", "Trig", "sin"]`
     ModuleFn { path: SmallVec<[StringId; 4]> },
 
+    /// A module constant reference.
+    ///
+    /// Created when a module constant like `Math.pi` is imported. The actual
+    /// value is looked up from `Environment::consts` at evaluation time.
+    ///
+    /// The path includes the full module path plus constant name:
+    /// - `Math.pi` → `["Math", "pi"]`
+    ModuleConst { path: SmallVec<[StringId; 4]> },
+
     /// A lazy integer range.
     ///
     /// Created by `start..end` (exclusive) or `start..=end` (inclusive).
@@ -588,6 +597,7 @@ impl Value {
             Self::Closure { .. } => Cow::Borrowed("Closure"),
             Self::Function { .. } => Cow::Borrowed("Function"),
             Self::ModuleFn { .. } => Cow::Borrowed("ModuleFn"),
+            Self::ModuleConst { .. } => Cow::Borrowed("ModuleConst"),
             Self::Range { .. } => Cow::Borrowed("Range"),
             Self::ForeverContinuation => Cow::Borrowed("Continuation"),
             Self::LoopContinue(_) => Cow::Borrowed("LoopContinue"),
@@ -696,7 +706,8 @@ impl Value {
             }
             Self::Closure { .. }
             | Self::Function { .. }
-            | Self::ModuleFn { .. } => TypeId::UNKNOWN,
+            | Self::ModuleFn { .. }
+            | Self::ModuleConst { .. } => TypeId::UNKNOWN,
             Self::Range { .. } => TypeId::RANGE,
             // Internal types; not exposed to user code
             Self::ForeverContinuation | Self::LoopContinue(_) => TypeId::UNIT,

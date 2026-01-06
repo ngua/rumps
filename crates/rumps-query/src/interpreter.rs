@@ -772,12 +772,26 @@ impl<I: IoContext> Interpreter<'_, I> {
         bind_as: &str,
         span: Span,
     ) {
+        let bind_id = self.arena.intern(bind_as);
+        let path_refs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
+        let full_path_refs: Vec<&str> = path_refs
+            .iter()
+            .copied()
+            .chain(std::iter::once(name))
+            .collect();
+
+        // Build the interned path
         let mut full_path: SmallVec<[StringId; 4]> =
             path.iter().map(|s| self.arena.intern(s)).collect();
         full_path.push(self.arena.intern(name));
-        let val = Value::ModuleFn { path: full_path };
+
+        // Check if it's a constant or function and create appropriate value
+        let val = if self.env.module_const_exists(&full_path_refs) {
+            Value::ModuleConst { path: full_path }
+        } else {
+            Value::ModuleFn { path: full_path }
+        };
         let val_id = self.arena.add(val, span);
-        let bind_id = self.arena.intern(bind_as);
         self.env.scopes.bind(bind_id, val_id);
     }
 
@@ -1173,7 +1187,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         let name_id = self.arena.intern(name);
 
         // First try lexical scope
-        self.env
+        let val = self
+            .env
             .scopes
             .lookup(name_id)
             .and_then(|val_id| self.arena.get(val_id).cloned())
@@ -1186,7 +1201,30 @@ impl<I: IoContext> Interpreter<'_, I> {
                     body: def.body,
                 })
             })
-            .unwrap_or_else(|| typechecked!("var", "Defined"))
+            .unwrap_or_else(|| typechecked!("var", "Defined"));
+
+        // Resolve ModuleConst to actual value from env.consts
+        self.resolve_module_const(val)
+    }
+
+    /// Resolve a `ModuleConst` to its actual value.
+    ///
+    /// If the value is a `ModuleConst`, looks up the path in `env.consts`.
+    /// Otherwise returns the value unchanged.
+    fn resolve_module_const(&self, val: Value) -> Value {
+        match val {
+            Value::ModuleConst { ref path } => {
+                let path_strs: Vec<&str> = path
+                    .iter()
+                    .filter_map(|id| self.arena.strings.get(*id))
+                    .collect();
+                self.env
+                    .get_module_const(&path_strs)
+                    .and_then(|id| self.env.consts.get(id).cloned())
+                    .unwrap_or(val)
+            }
+            other => other,
+        }
     }
 
     /// Evaluate a binary operation.

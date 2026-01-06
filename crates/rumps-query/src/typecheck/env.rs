@@ -15,12 +15,22 @@ pub(crate) struct ModuleMember {
     pub(crate) vis: Visibility,
 }
 
+/// A single scope in the type environment.
+#[derive(Clone, Debug, Default)]
+struct Scope {
+    bindings: HashMap<StringId, Scheme>,
+    /// Whether a non-import statement has been seen in this scope.
+    ///
+    /// Used to enforce that imports appear at the top of each scope.
+    seen_non_import: bool,
+}
+
 /// Scoped type environment mapping names to type schemes.
 ///
 /// Uses a stack of scopes for lexical scoping (blocks, functions, etc.).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TypeEnv {
-    scopes: Vec<HashMap<StringId, Scheme>>,
+    scopes: Vec<Scope>,
     pub(super) strings: StringInterner,
     /// User-defined module names registered during typechecking.
     user_modules: HashSet<String>,
@@ -39,7 +49,7 @@ impl TypeEnv {
     /// lookups are consistent.
     pub(crate) fn new(strings: StringInterner) -> Self {
         Self {
-            scopes: vec![HashMap::new()],
+            scopes: vec![Scope::default()],
             strings,
             user_modules: HashSet::new(),
             user_module_members: HashMap::new(),
@@ -139,7 +149,7 @@ impl TypeEnv {
 
     /// Push a new scope (e.g., entering a function body or block).
     pub(crate) fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(Scope::default());
     }
 
     /// Pop the current scope (e.g., leaving a function body or block).
@@ -152,18 +162,40 @@ impl TypeEnv {
         self.scopes.pop();
     }
 
+    /// Mark that a non-import statement has been seen in the current scope.
+    ///
+    /// After this, any import statements will be errors.
+    pub(crate) fn mark_non_import(&mut self) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.seen_non_import = true;
+        }
+    }
+
+    /// Check if imports are allowed in the current scope.
+    ///
+    /// Returns `false` if a non-import statement has already been seen.
+    pub(crate) fn imports_allowed(&self) -> bool {
+        self.scopes
+            .last()
+            .map(|s| !s.seen_non_import)
+            .unwrap_or(false)
+    }
+
     /// Bind a name to a type scheme in the current scope.
     pub(crate) fn bind(&mut self, name: &str, scheme: Scheme) {
         let id = self.strings.intern(name);
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(id, scheme);
+            scope.bindings.insert(id, scheme);
         }
     }
 
     /// Look up a name, searching from innermost to outermost scope.
     pub(crate) fn lookup(&self, name: &str) -> Option<&Scheme> {
         self.strings.lookup(name).and_then(|id| {
-            self.scopes.iter().rev().find_map(|scope| scope.get(&id))
+            self.scopes
+                .iter()
+                .rev()
+                .find_map(|scope| scope.bindings.get(&id))
         })
     }
 
@@ -188,7 +220,7 @@ impl TypeEnv {
     pub(crate) fn free_vars(&self) -> HashSet<TyVar> {
         self.scopes
             .iter()
-            .flat_map(|scope| scope.values())
+            .flat_map(|scope| scope.bindings.values())
             .flat_map(|scheme| scheme.free_vars())
             .collect()
     }
@@ -216,7 +248,7 @@ impl TypeEnv {
     /// Apply a substitution to all schemes in the environment.
     pub(crate) fn apply(&mut self, subst: &Subst) {
         self.scopes.iter_mut().for_each(|scope| {
-            scope.values_mut().for_each(|scheme| {
+            scope.bindings.values_mut().for_each(|scheme| {
                 *scheme = scheme.apply(subst);
             });
         });

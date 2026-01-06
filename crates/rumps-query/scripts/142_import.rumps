@@ -1,19 +1,37 @@
 ; Test: IMPORT statement
 ; Tests importing module members into local scope
 
+; All top-level imports must appear first
+IMPORT Math.{ floor, ceil, sqrt AS root, pi, e }
+IMPORT Math.Trig.{ sin AS sine, cos AS cosine }
+IMPORT Array.{ length, reverse }
+IMPORT Counter.{ new, inc }
+IMPORT Forward.{ id, val }
+
+; User module (defined after import due to hoisting)
+MODULE Counter {
+  LET start = 0
+  +FUN new() -> Int { start }
+  +FUN inc(n: Int) -> Int { n + 1 }
+}
+
+; Hoisted module (defined after import)
+MODULE Forward {
+  +LET val: Int = 42
+  +FUN id[T](x: T) -> T { x }
+}
+
 ; Basic named import
-IMPORT Math.{ floor }
 WRITE floor(3.7)
 ; Expected: 3
 
 ; Multiple named imports
-IMPORT Array.{ length, reverse }
 WRITE length([1, 2, 3])
 ; Expected: 3
 WRITE reverse([1, 2, 3])
 ; Expected: [ 3, 2, 1 ]
 
-; Wildcard import brings all public members
+; Wildcard import in nested scope (at top of scope)
 {
   IMPORT String.{ ... }
   WRITE length("hello")
@@ -21,20 +39,13 @@ WRITE reverse([1, 2, 3])
 }
 
 ; User module import
-MODULE Counter {
-  LET start = 0
-  +FUN new() -> Int { start }
-  +FUN inc(n: Int) -> Int { n + 1 }
-}
-
-IMPORT Counter.{ new, inc }
 LET c = new()
 WRITE c
 ; Expected: 0
 WRITE inc(c)
 ; Expected: 1
 
-; Wildcard with exclusion
+; Wildcard with exclusion in nested scope
 {
   IMPORT Math.{ ..., -floor }
   WRITE ceil(1.1)
@@ -51,14 +62,13 @@ LET x = 100
 WRITE x
 ; Expected: 100
 
-; Multiple imports from same module merge
-IMPORT Math.{ ceil }
+; ceil and floor from top-level imports
 WRITE ceil(4.1)
 ; Expected: 5
 WRITE floor(4.9)
 ; Expected: 4
 
-; Import inside function body
+; Import inside function body (at top of function scope)
 FUN test() -> Int {
   IMPORT Math.{ abs }
   abs(-42)
@@ -66,26 +76,24 @@ FUN test() -> Int {
 WRITE test()
 ; Expected: 42
 
-; Import with AS alias
-IMPORT Math.{ sqrt AS root }
+; AS alias from top-level import
 WRITE root(16.0)
 ; Expected: 4.0
 
-; Multiple aliases in same import
-IMPORT Math.Trig.{ sin AS s, cos AS c }
-WRITE s(0.0)
+; Multiple aliases from top-level import
+WRITE sine(0.0)
 ; Expected: 0.0
-WRITE c(0.0)
+WRITE cosine(0.0)
 ; Expected: 1.0
 
-; Import from hoisted (forward-declared) module
-IMPORT Forward.{ id, val }
+; Import from hoisted module
 WRITE id("hoisted")
 ; Expected: "hoisted"
 WRITE val
 ; Expected: 42
 
-MODULE Forward {
-  +LET val: Int = 42
-  +FUN id[T](x: T) -> T { x }
-}
+; Import builtin module constants
+WRITE pi
+; Expected: 3.141592653589793
+WRITE e
+; Expected: 2.718281828459045

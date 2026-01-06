@@ -71,8 +71,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
                 self.type_exprs.fn_type(param_tys, ret_ty)
             }
-            // Module functions don't have a simple type expression
-            Value::ModuleFn { .. } => self.type_exprs.named(TypeId::UNKNOWN),
+            // Module functions/consts don't have a simple type expression
+            Value::ModuleFn { .. } | Value::ModuleConst { .. } => {
+                self.type_exprs.named(TypeId::UNKNOWN)
+            }
             Value::Range { .. } => self.type_exprs.named(TypeId::RANGE),
             // Internal loop control types; not exposed to users
             Value::ForeverContinuation | Value::LoopContinue(_) => {
@@ -892,10 +894,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .type_exprs
                 .base_type(*ty_expr)
                 .is_some_and(|t| t == type_id),
-            // Closures, functions, and module functions don't have a simple TypeId
+            // Closures, functions, and module functions/consts don't have a simple TypeId
             Value::Closure { .. }
             | Value::Function { .. }
-            | Value::ModuleFn { .. } => false,
+            | Value::ModuleFn { .. }
+            | Value::ModuleConst { .. } => false,
             Value::Range { .. } => type_id == TypeId::RANGE,
             // Internal loop control types; don't match user types
             Value::ForeverContinuation | Value::LoopContinue(_) => false,
