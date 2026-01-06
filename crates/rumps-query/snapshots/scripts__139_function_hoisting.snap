@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Function hoisting: forward references and mutual recursion\n\n; Forward reference to function defined later\n@OUTPUT add-one(5)\n\n; Mutual recursion\n@OUTPUT is-even(4)\n@OUTPUT is-even(7)\n@OUTPUT is-odd(3)\n\n; Generic forward reference\n@OUTPUT identity(\"hello\")\n@OUTPUT identity(42)\n\n; Inference without return annotation\n@OUTPUT double-it(10)\n\n; Block-local function hoisting\nLET result = {\n    LET x = local-fn(5)\n    FUN local-fn(n: Int) -> Int { n * 3 }\n    x\n}\n@OUTPUT result\n\n; Definitions\n\nFUN add-one(x: Int) -> Int { x + 1 }\n\nFUN is-even(n: Int) -> Bool {\n    IF n == 0 { true } ELSE { is-odd(n - 1) }\n}\n\nFUN is-odd(n: Int) -> Bool {\n    IF n == 0 { false } ELSE { is-even(n - 1) }\n}\n\nFUN identity[T](x: T) -> T { x }\n\nFUN double-it(n: Int) { n * 2 }\n"
+---
+6
+TRUE
+FALSE
+TRUE
+"hello"
+42
+20
+15

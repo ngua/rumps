@@ -59,7 +59,10 @@ pub(crate) fn check(
     let mut ctx =
         InferCtx::new(ast, registry, type_exprs, runtime_env, strings);
 
-    // Infer types for all statements
+    // Pass 1: Hoist function and module declarations for forward references
+    ctx.hoist_declarations(stmts);
+
+    // Pass 2: Infer types for all statement bodies
     stmts.iter().for_each(|id| ctx.stmt(*id));
 
     // Solve collected constraints

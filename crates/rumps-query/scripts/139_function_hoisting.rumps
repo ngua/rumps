@@ -1,0 +1,40 @@
+; Function hoisting: forward references and mutual recursion
+
+; Forward reference to function defined later
+@OUTPUT add-one(5)
+
+; Mutual recursion
+@OUTPUT is-even(4)
+@OUTPUT is-even(7)
+@OUTPUT is-odd(3)
+
+; Generic forward reference
+@OUTPUT identity("hello")
+@OUTPUT identity(42)
+
+; Inference without return annotation
+@OUTPUT double-it(10)
+
+; Block-local function hoisting
+LET result = {
+    LET x = local-fn(5)
+    FUN local-fn(n: Int) -> Int { n * 3 }
+    x
+}
+@OUTPUT result
+
+; Definitions
+
+FUN add-one(x: Int) -> Int { x + 1 }
+
+FUN is-even(n: Int) -> Bool {
+    IF n == 0 { true } ELSE { is-odd(n - 1) }
+}
+
+FUN is-odd(n: Int) -> Bool {
+    IF n == 0 { false } ELSE { is-even(n - 1) }
+}
+
+FUN identity[T](x: T) -> T { x }
+
+FUN double-it(n: Int) { n * 2 }

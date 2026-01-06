@@ -1244,6 +1244,7 @@ impl InferCtx<'_> {
         _span: Span,
     ) -> Ty {
         self.env.push_scope();
+        self.hoist_declarations(stmts);
         stmts.iter().for_each(|id| self.stmt(*id));
         let result_ty = tail.map_or(Ty::Unit, |id| self.expr(id));
         self.env.pop_scope();

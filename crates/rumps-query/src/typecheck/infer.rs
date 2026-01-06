@@ -23,6 +23,7 @@
 
 mod convert;
 mod expr;
+mod hoist;
 mod pattern;
 mod stmt;
 

@@ -97,6 +97,7 @@ mod collections;
 mod control;
 mod convert;
 mod db;
+mod hoist;
 mod modules;
 mod ops;
 mod pattern;
@@ -241,6 +242,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     ///
     /// Consumes and returns the interpreter, allowing continued use after execution.
     pub(crate) async fn run(mut self, stmts: &[StmtId]) -> Result<Self> {
+        // Pass 1: Hoist function and module declarations for forward references
+        self.hoist_declarations(stmts).await?;
+        // Pass 2: Execute all statements
         self.stmts(stmts).await?;
         Ok(self)
     }

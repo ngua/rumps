@@ -137,6 +137,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         tail: Option<ExprId>,
     ) -> Result<Value> {
         self.env.scopes.push();
+        // Hoist local function declarations for forward references
+        self.hoist_declarations(stmts).await?;
         let result = self.block_inner(stmts, tail).await;
         self.env.scopes.pop();
         result
