@@ -60,12 +60,10 @@ async fn run(args: Args) -> miette::Result<()> {
     }
     .map_err(|e| miette::miette!("failed to open database: {e}"))?;
 
-    rumps_query::run_from_path(&src, &script_path, db)
-        .await
-        .map_err(|e| {
-            let name = script_path.display().to_string();
-            Report::new(e).with_source_code(NamedSource::new(name, src.clone()))
-        })
+    rumps_query::run(&src, &script_path, db).await.map_err(|e| {
+        let name = script_path.display().to_string();
+        Report::new(e).with_source_code(NamedSource::new(name, src.clone()))
+    })
 }
 
 fn install_miette() {

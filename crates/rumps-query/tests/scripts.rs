@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use rumps_query::run_capturing_from_path;
+use rumps_query::run_capturing;
 use rumps_storage::Database;
 
 fn run_script(path: &Path) -> datatest_stable::Result<()> {
@@ -24,7 +24,7 @@ fn run_script(path: &Path) -> datatest_stable::Result<()> {
             Ok(db) => db,
             Err(e) => return format!("ERROR: {e}"),
         };
-        match run_capturing_from_path(&src, &abs_path, db).await {
+        match run_capturing(&src, &abs_path, db).await {
             Ok(out) => out,
             Err(e) => format!("ERROR: {e}"),
         }

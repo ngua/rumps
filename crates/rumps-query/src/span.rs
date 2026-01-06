@@ -19,11 +19,11 @@ use std::ops::Range;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Span<M = ()> {
     /// Byte offset of the start (inclusive).
-    pub start: u32,
+    pub(crate) start: u32,
     /// Byte offset of the end (exclusive).
-    pub end: u32,
+    pub(crate) end: u32,
     /// Optional metadata attached to this span.
-    pub meta: M,
+    pub(crate) meta: M,
 }
 
 /// Constructors for `Span<()>` (no metadata).

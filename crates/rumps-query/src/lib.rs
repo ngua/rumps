@@ -5,11 +5,12 @@
 //! # Example
 //!
 //! ```ignore
+//! use std::path::Path;
 //! use rumps_query::run;
 //! use rumps_storage::Database;
 //!
 //! let db = Database::in_memory()?;
-//! run("OUTPUT 1 + 2", db).await?;
+//! run("OUTPUT 1 + 2", Path::new("/dev/stdin"), db).await?;
 //! // Prints: 3
 //! ```
 
@@ -101,56 +102,37 @@ pub(crate) use value::{
 };
 
 /// Run a RUMPS script, outputting to stdout.
-pub async fn run(src: &str, db: Database) -> Result<()> {
-    run_with_io(src, None, db, Io).await.map(|_| ())
-}
-
-/// Run a RUMPS script from a file, outputting to stdout.
 ///
 /// The `src_path` is used to resolve relative module imports.
-pub async fn run_from_path(
+pub async fn run(
     src: &str,
     src_path: &std::path::Path,
     db: Database,
 ) -> Result<()> {
-    run_with_io(src, Some(src_path), db, Io).await.map(|_| ())
-}
-
-/// Run a RUMPS script with a custom I/O context.
-///
-/// Parses the source, interprets it against the given database, and uses the
-/// provided I/O context for output operations.
-async fn run_with_io<I: IoContext>(
-    src: &str,
-    src_path: Option<&std::path::Path>,
-    db: Database,
-    io: I,
-) -> Result<I> {
-    let mut result = match src_path {
-        Some(path) => Parser::parse_with_path(src, path)?,
-        None => Parser::parse(src)?,
-    };
-    let interp = Interpreter::new(&mut result.ast, &result.stmts, db, io)?;
-    let interp = interp.run(&result.stmts).await?;
-    Ok(interp.into_io())
+    run_with_io(src, src_path, db, Io).await.map(|_| ())
 }
 
 /// Run a RUMPS script and capture output to a string.
 ///
-/// Useful for testing; returns the captured stdout as a `String`.
-pub async fn run_capturing(src: &str, db: Database) -> Result<String> {
-    let io = run_with_io(src, None, db, TestIo::new()).await?;
-    Ok(io.stdout_str().to_owned())
-}
-
-/// Run a RUMPS script from a file and capture output to a string.
-///
 /// The `src_path` is used to resolve relative module imports.
-pub async fn run_capturing_from_path(
+pub async fn run_capturing(
     src: &str,
     src_path: &std::path::Path,
     db: Database,
 ) -> Result<String> {
-    let io = run_with_io(src, Some(src_path), db, TestIo::new()).await?;
+    let io = run_with_io(src, src_path, db, TestIo::new()).await?;
     Ok(io.stdout_str().to_owned())
+}
+
+/// Run a RUMPS script with a custom I/O context.
+async fn run_with_io<I: IoContext>(
+    src: &str,
+    src_path: &std::path::Path,
+    db: Database,
+    io: I,
+) -> Result<I> {
+    let mut result = Parser::parse_with_path(src, src_path)?;
+    let interp = Interpreter::new(&mut result.ast, &result.stmts, db, io)?;
+    let interp = interp.run(&result.stmts).await?;
+    Ok(interp.into_io())
 }
