@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use smallvec::SmallVec;
 
 use super::InferCtx;
-use crate::ast::{AstTypeExprId, Stmt, StmtId, TypeParam, Visibility};
+use crate::ast::{
+    AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam, Visibility,
+};
 use crate::typecheck::ty::{Scheme, Ty};
 use crate::Span;
 
@@ -146,13 +148,32 @@ impl InferCtx<'_> {
                     }
                 }
 
+                Some(Stmt::Let(ref pat, ref ann, _, vis)) => {
+                    // Module LET bindings: hoist with provisional type
+                    // Only simple bindings (not destructuring) are valid
+                    if let BindingPattern::Var(ref const_name) = pat {
+                        // Use annotation if present, else fresh type variable
+                        let ty = match ann {
+                            Some(id) => {
+                                self.ast_type_to_ty(*id, &HashMap::new())
+                            }
+                            None => self.fresh(),
+                        };
+                        let scheme = Scheme::mono(ty);
+                        self.env.bind(const_name, scheme.clone());
+                        self.env.register_user_module_member(
+                            mod_path, const_name, scheme, vis,
+                        );
+                    }
+                    // Destructuring patterns are rejected in Pass 2
+                }
+
                 Some(Stmt::Module { ref name, ref body }) => {
                     // Nested module; recurse with qualified path
                     let nested_path = format!("{}.{}", mod_path, name);
                     self.hoist_module(&nested_path, body, item_span);
                 }
 
-                // LET bindings are NOT hoisted (per requirements)
                 // TYPE/UNION/NEWTYPE are processed by registry; skip
                 // Other statements are invalid in modules (caught in Pass 2)
                 _ => {}

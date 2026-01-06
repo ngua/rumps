@@ -10,19 +10,32 @@
 ; Simple module function
 @OUTPUT Utils.double(21)
 
+; Forward reference to module LET constants
+@OUTPUT Config.name
+@OUTPUT Config.version
+
+; Forward reference to nested module constant
+@OUTPUT Outer.Inner.prefix
+
 ; Definitions
 
 MODULE M {
-    +FUN get-value() -> Int { 42 }
-    +FUN add(a: Int, b: Int) -> Int { a + b }
+  +FUN get-value() -> Int { 42 }
+  +FUN add(a: Int, b: Int) -> Int { a + b }
 }
 
 MODULE Outer {
-    MODULE Inner {
-        +FUN greet(name: String) -> String { "Hello, " ++ name ++ "!" }
-    }
+  MODULE Inner {
+    +FUN greet(name: String) -> String { "Hello, " ++ name ++ "!" }
+    +LET prefix: String = "[Inner]"
+  }
 }
 
 MODULE Utils {
-    +FUN double(n: Int) -> Int { n * 2 }
+  +FUN double(n: Int) -> Int { n * 2 }
+}
+
+MODULE Config {
+  +LET name: String = "TestApp"
+  +LET version: Int = 42
 }
