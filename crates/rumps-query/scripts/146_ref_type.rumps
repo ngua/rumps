@@ -49,20 +49,18 @@ LET returned = make-ref(42)
 WRITE returned
 WRITE @GET returned
 
-; @SET and @KILL with Ref variable require transactions
-; (typechecker can't statically determine local vs global)
+; @SET and @KILL with local Ref variable (no transaction needed)
+LET set-ref = data{100}
+@SET set-ref = "via ref"
+WRITE @GET set-ref
+
+; KILL local ref via variable (no transaction needed)
+LET kill-ref = data{100}
+@KILL kill-ref
+WRITE @GET kill-ref ?? "killed"
+
+; Global ref via variable (requires transaction)
 TRANSACTION {
-  ; Local ref via variable
-  LET set-ref = data{100}
-  @SET set-ref = "via ref"
-  WRITE @GET set-ref
-
-  ; KILL local ref via variable
-  LET kill-ref = data{100}
-  @KILL kill-ref
-  WRITE @GET kill-ref ?? "killed"
-
-  ; Global ref via variable
   LET g-ref = ^info{"txn-key"}
   @SET g-ref = "set via ref"
   WRITE @GET g-ref

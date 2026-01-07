@@ -45,7 +45,8 @@ impl InferCtx<'_> {
             | Ty::Path
             | Ty::Regex
             | Ty::RuntimeError
-            | Ty::Ref
+            | Ty::Local
+            | Ty::Global
             | Ty::Error => false,
             // Option, Result, Array, Map, and Fn with unresolved type params are
             // OK. These are intentionally polymorphic (e.g., `Option.None`,
@@ -93,7 +94,10 @@ impl InferCtx<'_> {
             TypeId::TIME => Ty::Time,
             TypeId::RANGE => Ty::Range,
             TypeId::JSON => Ty::Json,
-            TypeId::REF => Ty::Ref,
+            TypeId::LOCAL => Ty::Local,
+            TypeId::GLOBAL => Ty::Global,
+            // Ref is a union type (Local | Global); return Named
+            TypeId::REF => Ty::Named(TypeId::REF, vec![]),
             _ => Ty::Named(id, vec![]),
         }
     }
@@ -386,7 +390,10 @@ impl InferCtx<'_> {
             "FilePath" => Ty::FilePath,
             "Path" => Ty::Path,
             "Regex" => Ty::Regex,
-            "Ref" => Ty::Ref,
+            // Ref union type; Local and Global are the concrete types
+            "Local" => Ty::Local,
+            "Global" => Ty::Global,
+            "Ref" => Ty::Named(TypeId::REF, vec![]),
             _ => {
                 // Look up in registry
                 self.env

@@ -205,7 +205,8 @@ impl<'a> TyPrinter<'a> {
                     format!("{}[{}]", name, ps.join(", "))
                 }
             }
-            Ty::Ref => "Ref".to_owned(),
+            Ty::Local => "Local".to_owned(),
+            Ty::Global => "Global".to_owned(),
         }
     }
 
@@ -741,7 +742,8 @@ impl fmt::Display for Ty {
                 }
                 Ok(())
             }
-            Self::Ref => write!(f, "Ref"),
+            Self::Local => write!(f, "Local"),
+            Self::Global => write!(f, "Global"),
         }
     }
 }

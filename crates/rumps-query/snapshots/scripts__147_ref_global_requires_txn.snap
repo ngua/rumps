@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error test: global Ref variable write outside transaction\n\n; Create a global ref\nLET g = ^info{\"test-key\"}\n\n; This should fail: global write requires transaction\n@SET g = \"should fail\"\n"
+---
+ERROR: global writes require a transaction

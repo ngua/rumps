@@ -323,14 +323,17 @@ impl InferCtx<'_> {
             }
 
             // Ref literal: `data{1, 2}` or `^global{key}`
-            // Creates a first-class `Ref` value.
-            Expr::Ref(ref dbref) => {
-                let subs = match dbref {
-                    DbRef::Local(_, s) | DbRef::Global(_, s) => s,
-                };
-                self.check_subscript_elems(subs, span);
-                Ty::Ref
-            }
+            // Creates a first-class `Local` or `Global` type.
+            Expr::Ref(ref dbref) => match dbref {
+                DbRef::Local(_, subs) => {
+                    self.check_subscript_elems(subs, span);
+                    Ty::Local
+                }
+                DbRef::Global(_, subs) => {
+                    self.check_subscript_elems(subs, span);
+                    Ty::Global
+                }
+            },
         }
     }
 
@@ -448,13 +451,18 @@ impl InferCtx<'_> {
                 }
             }
 
-            // Comparison: operands must unify, result is Bool
-            BinOp::Eq
-            | BinOp::Ne
-            | BinOp::Lt
-            | BinOp::Gt
-            | BinOp::Le
-            | BinOp::Ge => {
+            // Equality: operands must unify (or both be ref types), result is Bool
+            BinOp::Eq | BinOp::Ne => {
+                // Allow comparing Local and Global (always unequal at runtime)
+                let both_refs = lhs_ty.is_ref() && rhs_ty.is_ref();
+                if !both_refs {
+                    self.unify(lhs_ty, rhs_ty, span);
+                }
+                Ty::Bool
+            }
+
+            // Ordering: operands must unify, result is Bool
+            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
                 self.unify(lhs_ty, rhs_ty, span);
                 Ty::Bool
             }
@@ -1814,33 +1822,34 @@ impl InferCtx<'_> {
                 match dbref {
                     DbRef::Local(name, subs) if subs.is_empty() => {
                         // Check if name is a variable of type Ref
-                        let is_ref = self.env.lookup(name).is_some_and(|s| {
+                        let ref_ty = self.env.lookup(name).and_then(|s| {
                             let (ty, _) = s.instantiate(&mut self.next_var);
-                            ty == Ty::Ref
+                            ty.is_ref().then_some(ty)
                         });
-                        if is_ref {
-                            // Create a Var expression and rewrite to Expr
-                            match self
-                                .ast
-                                .add_expr(Expr::Var(name.clone()), span)
-                            {
-                                Ok(var_id) => {
-                                    self.record_type(var_id, Ty::Ref);
-                                    Cow::Owned(RefTarget::Expr(var_id))
-                                }
-                                Err(e) => {
-                                    // Arena overflow; report error and fall back
-                                    self.error(TypeError::Custom {
-                                        msg: e.to_string(),
-                                        span,
-                                    });
-                                    Cow::Borrowed(rt)
-                                }
-                            }
-                        } else {
+                        ref_ty.map_or_else(
                             // Not a Ref variable; treat as DB local
-                            Cow::Borrowed(rt)
-                        }
+                            || Cow::Borrowed(rt),
+                            |ty| {
+                                // Create a Var expression and rewrite to Expr
+                                match self
+                                    .ast
+                                    .add_expr(Expr::Var(name.clone()), span)
+                                {
+                                    Ok(var_id) => {
+                                        self.record_type(var_id, ty);
+                                        Cow::Owned(RefTarget::Expr(var_id))
+                                    }
+                                    Err(e) => {
+                                        // Arena overflow; report error and fall back
+                                        self.error(TypeError::Custom {
+                                            msg: e.to_string(),
+                                            span,
+                                        });
+                                        Cow::Borrowed(rt)
+                                    }
+                                }
+                            },
+                        )
                     }
                     DbRef::Local(_, subs) | DbRef::Global(_, subs) => {
                         // Has subscripts or is global; check subscripts
@@ -1851,7 +1860,15 @@ impl InferCtx<'_> {
             }
             RefTarget::Expr(e) => {
                 let ty = self.expr(*e);
-                self.unify(ty, Ty::Ref, span);
+                // Ensure expression is a Ref type (Local, Global, or Ref union)
+                if !ty.is_ref() && !matches!(ty, Ty::Var(_) | Ty::Error) {
+                    self.error(TypeError::Mismatch {
+                        // Display hint: use Ref union (Local | Global)
+                        expected: Ty::Named(TypeId::REF, vec![]),
+                        got: ty,
+                        span,
+                    });
+                }
                 Cow::Borrowed(rt)
             }
         }

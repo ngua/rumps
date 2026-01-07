@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error test: @SET on global ref outside transaction\n\n; Even with Ref annotation, concrete type is preserved\nLET x: Ref = ^global{}\n\n; This should fail: global writes require transaction\n@SET x = \"should fail\"\n"
+---
+ERROR: global writes require a transaction

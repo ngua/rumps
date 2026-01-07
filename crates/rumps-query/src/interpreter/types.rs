@@ -903,7 +903,14 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Range { .. } => type_id == TypeId::RANGE,
             // Internal loop control types; don't match user types
             Value::ForeverContinuation | Value::LoopContinue(_) => false,
-            Value::Ref(..) => type_id == TypeId::REF,
+            // Ref values match Local or Global based on the is_global flag
+            Value::Ref(is_global, ..) => {
+                if *is_global {
+                    type_id == TypeId::GLOBAL
+                } else {
+                    type_id == TypeId::LOCAL
+                }
+            }
         }
     }
 

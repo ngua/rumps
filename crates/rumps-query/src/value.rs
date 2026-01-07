@@ -163,11 +163,18 @@ impl TypeId {
     ///
     /// An unsigned integral type mapping to `usize`. Satisfies `Numeric` constraint.
     pub(crate) const WORD: Self = Self(24);
-    /// Builtin type: `Ref`.
+    /// Builtin type: `Local`.
     ///
-    /// A database reference combining a variable name (local or global) with
-    /// subscripts. Created via `data{1, 2}` or `^global{key}` syntax.
-    pub(crate) const REF: Self = Self(25);
+    /// A local database variable reference (e.g., `data{1, 2}`).
+    pub(crate) const LOCAL: Self = Self(25);
+    /// Builtin type: `Global`.
+    ///
+    /// A global database variable reference (e.g., `^info{key}`).
+    pub(crate) const GLOBAL: Self = Self(26);
+    /// Builtin union: `Ref = Local | Global`.
+    ///
+    /// A database reference that can be either local or global.
+    pub(crate) const REF: Self = Self(27);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -751,7 +758,8 @@ pub(crate) enum BuiltinType {
     Json,
     FilePath,
     Regex,
-    Ref,
+    Local,
+    Global,
 }
 
 impl BuiltinType {
@@ -773,7 +781,8 @@ impl BuiltinType {
             Self::Json => "Json",
             Self::FilePath => "FilePath",
             Self::Regex => "Regex",
-            Self::Ref => "Ref",
+            Self::Local => "Local",
+            Self::Global => "Global",
         }
     }
 }
@@ -1192,7 +1201,8 @@ impl TypeExprArena {
             Ty::Path => self.named(TypeId::PATH),
             Ty::Regex => self.named(TypeId::REGEX),
             Ty::RuntimeError => self.named(TypeId::ERROR),
-            Ty::Ref => self.named(TypeId::REF),
+            Ty::Local => self.named(TypeId::LOCAL),
+            Ty::Global => self.named(TypeId::GLOBAL),
             Ty::Array(elem) => {
                 let elem_id = self.intern_ty(elem);
                 self.app(TypeId::ARRAY, smallvec![elem_id])
@@ -1746,10 +1756,36 @@ impl TypeRegistry {
             invariant!("Word registered at expected index");
         }
 
-        // Ref at index 25
+        // Local at index 25
+        let local_name = arena.intern("Local");
+        let local_ty =
+            self.register(TypeDef::Builtin(BuiltinType::Local), local_name);
+        if local_ty != TypeId::LOCAL {
+            invariant!("Local registered at expected index");
+        }
+
+        // Global at index 26
+        let global_name = arena.intern("Global");
+        let global_ty =
+            self.register(TypeDef::Builtin(BuiltinType::Global), global_name);
+        if global_ty != TypeId::GLOBAL {
+            invariant!("Global registered at expected index");
+        }
+
+        // Ref union at index 27: Local | Global
         let ref_name = arena.intern("Ref");
-        let ref_ty =
-            self.register(TypeDef::Builtin(BuiltinType::Ref), ref_name);
+        let ref_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
+            type_exprs.named(TypeId::LOCAL),
+            type_exprs.named(TypeId::GLOBAL),
+        ];
+        let ref_ty = self.register(
+            TypeDef::Union {
+                name: ref_name,
+                type_params: SmallVec::new(),
+                members: ref_members,
+            },
+            ref_name,
+        );
         if ref_ty != TypeId::REF {
             invariant!("Ref registered at expected index");
         }

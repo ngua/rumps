@@ -54,7 +54,14 @@ pub(crate) enum Ty {
     Path,
     Regex,
     RuntimeError,
-    Ref,
+    /// Local database variable reference (e.g., `data{1}`).
+    ///
+    /// Part of the builtin `Ref = Local | Global` union. See [`Self::is_ref`].
+    Local,
+    /// Global database variable reference (e.g., `^info{1}`).
+    ///
+    /// Part of the builtin `Ref = Local | Global` union. See [`Self::is_ref`].
+    Global,
 
     // Parameterized builtins
     Array(Box<Self>),
@@ -119,6 +126,35 @@ impl Ty {
     pub(crate) const SCALAR_MEMBERS: &'static [Self] =
         &[Self::Bool, Self::Int, Self::Float, Self::String];
 
+    /// Member types of the builtin `Ref` union: database variable references.
+    ///
+    /// `Ref = Local | Global` is a builtin union that abstracts over the
+    /// local/global distinction. Unlike anonymous unions, `Ref` is nominal;
+    /// the named type `Ref` unifies with both `Local` and `Global`.
+    ///
+    /// # Why `Ref` Preserves Concrete Types
+    ///
+    /// Type annotations with `Local` or `Global` preserve the concrete type
+    /// through inference rather than widening to `Ref`. This is critical for
+    /// operations like `@SET` which require transaction context for globals;
+    /// writing globals outside transactions must be a static type error.
+    ///
+    /// When the user annotates `LET x: Ref = ...`, the RHS type (`Local` or
+    /// `Global`) is preserved in the expression type map, enabling correct
+    /// transaction checking even when the binding has type `Ref`.
+    pub(crate) const REF_MEMBERS: &'static [Self] =
+        &[Self::Local, Self::Global];
+
+    /// Check if this type is a database reference type.
+    ///
+    /// Returns `true` for `Local`, `Global`, or the named union `Ref`.
+    pub(crate) fn is_ref(&self) -> bool {
+        matches!(
+            self,
+            Self::Local | Self::Global | Self::Named(TypeId::REF, _)
+        )
+    }
+
     /// Construct a function type: `Fn([A, B, ...], R)`.
     pub(crate) fn func(params: impl Into<Vec<Self>>, ret: Self) -> Self {
         Self::Fn(params.into(), Box::new(ret))
@@ -152,7 +188,8 @@ impl Ty {
             | Self::Path
             | Self::Regex
             | Self::RuntimeError
-            | Self::Ref
+            | Self::Local
+            | Self::Global
             | Self::Unknown
             | Self::Error => {}
             Self::Array(t) | Self::Option(t) => t.collect_free_vars(acc),
@@ -201,7 +238,8 @@ impl Ty {
             | Self::Path
             | Self::Regex
             | Self::RuntimeError
-            | Self::Ref
+            | Self::Local
+            | Self::Global
             | Self::Unknown
             | Self::Error => false,
             Self::Array(t) | Self::Option(t) => t.occurs(v),
@@ -240,7 +278,8 @@ impl Ty {
             Self::Path => Self::Path,
             Self::Regex => Self::Regex,
             Self::RuntimeError => Self::RuntimeError,
-            Self::Ref => Self::Ref,
+            Self::Local => Self::Local,
+            Self::Global => Self::Global,
             Self::Unknown => Self::Unknown,
             Self::Error => Self::Error,
             Self::Array(t) => Self::Array(Box::new(t.apply(subst))),

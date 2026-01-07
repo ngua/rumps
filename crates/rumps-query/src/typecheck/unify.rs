@@ -168,8 +168,12 @@ impl<'a> InferCtx<'a> {
             | (Ty::FilePath, Ty::FilePath)
             | (Ty::Path, Ty::Path)
             | (Ty::Regex, Ty::Regex)
-            | (Ty::Ref, Ty::Ref)
             | (Ty::RuntimeError, Ty::RuntimeError) => {
+                UnifyResult::Ok(Subst::empty())
+            }
+
+            // Local and Global are distinct types; use Ref union for either
+            (Ty::Local, Ty::Local) | (Ty::Global, Ty::Global) => {
                 UnifyResult::Ok(Subst::empty())
             }
 
@@ -937,7 +941,7 @@ impl<'a> InferCtx<'a> {
             }
 
             // Functions, regex, and refs cannot be serialized to JSON
-            Ty::Fn(_, _) | Ty::Regex | Ty::Ref => {
+            Ty::Fn(_, _) | Ty::Regex | Ty::Local | Ty::Global => {
                 self.error(TypeError::UnsatisfiedConstraint(
                     ConstraintKind::Jsonable,
                     ty.clone(),

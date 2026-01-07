@@ -15,7 +15,7 @@ use crate::ast::{
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
-use crate::value::TypeDef;
+use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
 impl InferCtx<'_> {
@@ -563,13 +563,14 @@ impl InferCtx<'_> {
             _ => false,
         }));
 
-        Some(
-            if matches!(&rhs_ty, Ty::Object(_)) && is_obj_alias {
-                rhs_ty
-            } else {
-                ann_ty.clone()
-            },
-        )
+        // Preserve concrete type for:
+        // 1. Extensible records (object rhs with object alias annotation)
+        // 2. Ref types (Local/Global rhs with Ref union annotation)
+        let use_rhs_ty = (matches!(&rhs_ty, Ty::Object(_)) && is_obj_alias)
+            || (matches!(&rhs_ty, Ty::Local | Ty::Global)
+                && matches!(ann_ty, Ty::Named(id, _) if *id == TypeId::REF));
+
+        Some(if use_rhs_ty { rhs_ty } else { ann_ty.clone() })
     }
 
     /// Bind variables from a binding pattern to types in the environment.
@@ -640,30 +641,25 @@ impl InferCtx<'_> {
     /// Validate a `SET` operation with a resolved `RefTarget`.
     ///
     /// Type-checks the value, adding appropriate constraints.
-    /// Global writes and Ref expressions require transaction context.
+    /// Global writes require transaction context.
     fn set_validate(&mut self, rt: &RefTarget, value: ExprId, span: Span) {
-        match rt {
-            RefTarget::Inline(dbref) => {
-                // Global writes require transaction context
-                if matches!(dbref, DbRef::Global(..))
-                    && self.in_transaction.is_none()
-                {
-                    self.error(TypeError::Custom {
-                        msg: "global writes require a transaction".to_string(),
-                        span,
-                    });
-                }
+        let needs_txn = match rt {
+            RefTarget::Inline(dbref) => matches!(dbref, DbRef::Global(..)),
+            RefTarget::Expr(e) => {
+                // Look up the type to determine scope. The expression should
+                // already be typechecked by `resolve_ref_target`; if not found,
+                // default to requiring transaction (safer; produces an error
+                // rather than silently allowing an unsafe global write).
+                self.expr_types
+                    .get(e)
+                    .is_none_or(|ty| matches!(ty, Ty::Global))
             }
-            RefTarget::Expr(_) => {
-                // Can't statically determine local/global; require transaction
-                if self.in_transaction.is_none() {
-                    self.error(TypeError::Custom {
-                        msg: "SET with Ref expression requires a transaction"
-                            .to_string(),
-                        span,
-                    });
-                }
-            }
+        };
+        if needs_txn && self.in_transaction.is_none() {
+            self.error(TypeError::Custom {
+                msg: "global writes require a transaction".to_string(),
+                span,
+            });
         }
 
         // Type-check value and add Storable constraint
@@ -692,30 +688,25 @@ impl InferCtx<'_> {
 
     /// Validate a `KILL` operation with a resolved `RefTarget`.
     ///
-    /// Global writes and Ref expressions require transaction context.
+    /// Global writes require transaction context.
     fn kill_validate(&mut self, rt: &RefTarget, span: Span) {
-        match rt {
-            RefTarget::Inline(dbref) => {
-                // Global writes require transaction context
-                if matches!(dbref, DbRef::Global(..))
-                    && self.in_transaction.is_none()
-                {
-                    self.error(TypeError::Custom {
-                        msg: "global writes require a transaction".to_string(),
-                        span,
-                    });
-                }
+        let needs_txn = match rt {
+            RefTarget::Inline(dbref) => matches!(dbref, DbRef::Global(..)),
+            RefTarget::Expr(e) => {
+                // Look up the type to determine scope. The expression should
+                // already be typechecked by `resolve_ref_target`; if not found,
+                // default to requiring transaction (safer; produces an error
+                // rather than silently allowing an unsafe global write).
+                self.expr_types
+                    .get(e)
+                    .is_none_or(|ty| matches!(ty, Ty::Global))
             }
-            RefTarget::Expr(_) => {
-                // Can't statically determine local/global; require transaction
-                if self.in_transaction.is_none() {
-                    self.error(TypeError::Custom {
-                        msg: "KILL with Ref expression requires a transaction"
-                            .to_string(),
-                        span,
-                    });
-                }
-            }
+        };
+        if needs_txn && self.in_transaction.is_none() {
+            self.error(TypeError::Custom {
+                msg: "global writes require a transaction".to_string(),
+                span,
+            });
         }
     }
 
