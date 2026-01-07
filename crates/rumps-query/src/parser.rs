@@ -160,12 +160,12 @@ impl Parser {
         })
     }
 
-    /// Program: zero or more statements separated by newlines, ending with EOF.
+    /// Program: zero or more statements separated by newlines or commas.
     fn program() -> impl chumsky::Parser<Token, Vec<cst::Stmt>, Error = ParseErr>
     {
         Self::opt_newlines()
             .ignore_then(
-                Self::stmt().separated_by(Self::newlines()).allow_trailing(),
+                Self::stmt().separated_by(Self::item_sep()).allow_trailing(),
             )
             .then_ignore(Self::opt_newlines())
             .then_ignore(end())
@@ -189,6 +189,28 @@ impl Parser {
             just(Token::Newline),
             just(Token::Indent),
             just(Token::Dedent),
+        ))
+    }
+
+    /// Separator for items (statements, match arms): comma or newlines.
+    ///
+    /// Allows either:
+    /// - A comma (optionally followed by newlines): `a, b` or `a,\n  b`
+    /// - One or more newlines: `a\nb`
+    ///
+    /// This enables both inline and multi-line styles:
+    /// ```text
+    /// LET x = 1, LET y = 2
+    /// LET z = x + y
+    ///
+    /// MATCH v { Foo => 1, Bar => 2 }
+    /// ```
+    fn item_sep() -> impl chumsky::Parser<Token, (), Error = ParseErr> + Clone {
+        choice((
+            Self::newlines(),
+            just(Token::Comma)
+                .then_ignore(Self::opt_newlines())
+                .ignored(),
         ))
     }
 
@@ -992,7 +1014,7 @@ impl Parser {
         // Inline body: `{ ... }`
         let inline_body = just(Token::LBrace)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(stmt.separated_by(Self::newlines()).allow_trailing())
+            .ignore_then(stmt.separated_by(Self::item_sep()).allow_trailing())
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
             .map(cst::ModuleSource::Inline);
@@ -1086,7 +1108,7 @@ impl Parser {
             .ignore_then(just(Token::LBrace))
             .ignore_then(Self::opt_newlines())
             .ignore_then(
-                stmt.separated_by(Self::newlines())
+                stmt.separated_by(Self::item_sep())
                     .allow_leading()
                     .allow_trailing(),
             )
@@ -2651,12 +2673,11 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
-        let arm_sep = Self::newlines();
         let arms = just(Token::LBrace)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
                 Self::match_arm(expr.clone())
-                    .separated_by(arm_sep)
+                    .separated_by(Self::item_sep())
                     .allow_leading()
                     .allow_trailing(),
             )
