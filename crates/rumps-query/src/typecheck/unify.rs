@@ -670,7 +670,7 @@ impl<'a> InferCtx<'a> {
     /// 5. `Jsonable` constraints (rejects `Fn` types)
     /// 6. `Subscript` constraints (must be `Bool | Int | Float | Char | String | Json`)
     /// 7. `Storable` constraints (must be `Bool | Int | Float | Char | String | Json`)
-    /// 8. `Unwrappable` constraints (must be `Option[T]` or `Result[T, E]`)
+    /// 8. `Fallible` constraints (must be `Option[T]` or `Result[T, E]`)
     ///
     /// Errors are recorded via `self.error()`; unification continues to collect
     /// as many errors as possible.
@@ -678,8 +678,8 @@ impl<'a> InferCtx<'a> {
         let constraints = self.take_constraints();
         let mut subst = Subst::empty();
 
-        // First pass: process Eq, Unwrappable, and HasField constraints to
-        // build substitution. Unwrappable and HasField must be processed early
+        // First pass: process Eq, Fallible, and HasField constraints to
+        // build substitution. Fallible and HasField must be processed early
         // so type variables get resolved before they're used in other constraints.
         constraints.iter().for_each(|c| match c {
             Constraint::Eq(t1, t2, span) => {
@@ -694,10 +694,10 @@ impl<'a> InferCtx<'a> {
                     }
                 }
             }
-            Constraint::Unwrappable { ty, inner, span } => {
+            Constraint::Fallible { ty, inner, span } => {
                 let ty = ty.apply(&subst);
                 let inner = inner.apply(&subst);
-                self.check_unwrappable(&ty, &inner, *span, &mut subst);
+                self.check_fallible(&ty, &inner, *span, &mut subst);
             }
             Constraint::HasField {
                 base,
@@ -740,11 +740,11 @@ impl<'a> InferCtx<'a> {
                     // Already processed in first pass
                 }
 
-                // Re-check Unwrappable now that Callable has resolved types
-                Constraint::Unwrappable { ty, inner, span } => {
+                // Re-check Fallible now that Callable has resolved types
+                Constraint::Fallible { ty, inner, span } => {
                     let ty = ty.apply(&subst);
                     let inner = inner.apply(&subst);
-                    self.check_unwrappable(&ty, &inner, *span, &mut subst);
+                    self.check_fallible(&ty, &inner, *span, &mut subst);
                 }
 
                 Constraint::Numeric(ty, span) => {
@@ -1051,10 +1051,10 @@ impl<'a> InferCtx<'a> {
         }
     }
 
-    /// Check that a type is unwrappable (`Option[T]` or `Result[T, E]`).
+    /// Check that a type is fallible (`Option[T]` or `Result[T, E]`).
     ///
     /// Unifies the `inner` type variable with the extracted inner type.
-    fn check_unwrappable(
+    fn check_fallible(
         &mut self,
         ty: &Ty,
         inner: &Ty,
@@ -1093,7 +1093,7 @@ impl<'a> InferCtx<'a> {
             Ty::Error | Ty::Unknown => {}
 
             _ => {
-                self.error(TypeError::NotUnwrappable(ty.clone(), span));
+                self.error(TypeError::NotFallible(ty.clone(), span));
             }
         }
     }

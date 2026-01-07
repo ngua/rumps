@@ -493,7 +493,7 @@ impl InferCtx<'_> {
             // Coalesce: lhs is Option[T] or Result[T, E], rhs unifies with T
             BinOp::Coalesce => {
                 let inner = self.fresh();
-                self.constrain(Constraint::Unwrappable {
+                self.constrain(Constraint::Fallible {
                     ty: lhs_ty,
                     inner: inner.clone(),
                     span,
@@ -1485,11 +1485,11 @@ impl InferCtx<'_> {
     /// Infer type of postfix unwrap `!`.
     ///
     /// The operand must be `Option[T]` or `Result[T, E]`. Returns `T`.
-    /// Adds an `Unwrappable` constraint that the solver will check.
+    /// Adds a `Fallible` constraint that the solver will check.
     fn unwrap(&mut self, inner_id: ExprId, span: Span) -> Ty {
         let inner_ty = self.expr(inner_id);
         let result = self.fresh();
-        self.constrain(Constraint::Unwrappable {
+        self.constrain(Constraint::Fallible {
             ty: inner_ty,
             inner: result.clone(),
             span,

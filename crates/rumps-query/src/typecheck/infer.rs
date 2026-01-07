@@ -122,9 +122,9 @@ pub(crate) enum Constraint {
     /// `Result[T, E]`. The `inner` field captures the extracted inner
     /// type (`T`), which becomes the result type of the unwrap.
     ///
-    /// Example: `opt!` generates `Unwrappable { ty: typeof(opt), inner: ?t }`,
+    /// Example: `opt!` generates `Fallible { ty: typeof(opt), inner: ?t }`,
     /// and the expression types as `?t`.
-    Unwrappable { ty: Ty, inner: Ty, span: Span },
+    Fallible { ty: Ty, inner: Ty, span: Span },
 
     /// Type must have a specific field.
     ///
@@ -193,7 +193,7 @@ impl Constraint {
             | Self::Jsonable(_, span)
             | Self::Subscriptable(_, span)
             | Self::Storable(_, span)
-            | Self::Unwrappable { span, .. }
+            | Self::Fallible { span, .. }
             | Self::HasField { span, .. }
             | Self::Iterable { span, .. }
             | Self::Monoid(_, span)

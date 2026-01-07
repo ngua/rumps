@@ -65,7 +65,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ))
             }
             // Type checker guarantees Option or Result
-            _ => typechecked!("!", "Unwrappable"),
+            _ => typechecked!("!", "Fallible"),
         }
     }
 
@@ -122,7 +122,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.eval(rhs).await
             }
             // Type checker guarantees Option or Result
-            _ => typechecked!("??", "Unwrappable"),
+            _ => typechecked!("??", "Fallible"),
         }
     }
 
