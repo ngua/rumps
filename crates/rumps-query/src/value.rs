@@ -1030,7 +1030,9 @@ impl TypeExprArena {
                     .filter_map(|p| self.format(*p, name_fn, str_fn))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({parts})")
+                // Single-element tuples need trailing comma: `(Int,)`
+                let trail = if elems.len() == 1 { "," } else { "" };
+                format!("({parts}{trail})")
             }
             TypeExpr::Union(members) => {
                 let parts = members

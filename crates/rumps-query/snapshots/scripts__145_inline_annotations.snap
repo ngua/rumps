@@ -1,0 +1,38 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Inline type annotations\n; Tests `expr: Type` syntax for inline type annotations without requiring parens\n\n; === Basic scalar annotations (no parens required) ===\n\nWRITE 42: Int\nWRITE \"hello\": String\nWRITE TRUE: Bool\nWRITE 3.14: Float\n\n; With LET bindings\nLET x = 10: Int\nWRITE x\n\nLET s = \"world\": String\nWRITE s\n\n; === Annotation with various whitespace ===\n\n; No space\nLET a = 1:Int\nWRITE a\n\n; Spaces around colon\nLET b = 2 : Int\nWRITE b\n\n; Space only before\nLET c = 3 :Int\nWRITE c\n\n; === Annotation inside parentheses ===\n\n; Single expression with annotation inside parens\nLET y = (100: Int)\nWRITE y\n\n; Nested parens\nLET z = ((200: Int))\nWRITE z\n\n; === Old syntax still works: `(expr): Type` ===\n\nLET old = (300): Int\nWRITE old\n\n; === Postfix operators then annotation ===\n\n; Field access then annotation\nLET obj = { a: { b: 10 } }\nWRITE obj.a.b: Int\n\n; Index then annotation\nLET arr = [1, 2, 3]\nWRITE arr[0]: Int\n\n; Unwrap then annotation\nLET opt = Option.Some(42)\nWRITE opt!: Int\n\n; === DB intrinsics with annotation ===\n\n; Setup a local db\nLET d = {}\n@SET d(\"key\") = 123\n\n; @GET with annotation\nLET val = @GET d(\"key\"): Option[Storable]\nWRITE val\n\n; @GET with unwrap then annotation\nLET unwrapped = @GET d(\"key\")!: Storable\nWRITE unwrapped\n\n; @DATA with annotation\nLET status = @DATA d(\"key\"): DataStatus\nWRITE status\n\n; @ORDER with annotation\nLET ord = @ORDER d(\"\"): Option[Subscript]\nWRITE ord\n\n; === WRITE with annotated operand ===\n\nWRITE 999: Int\nWRITE \"test\": String\nWRITE obj.a.b: Int\n\n; === Tuple annotation ===\n\n; Tuple with annotation (parens around tuple + annotation)\nLET tup = (1, 2): (Int, Int)\nWRITE tup\n\n; Tuple annotation inside parens\nLET tup2 = ((3, 4): (Int, Int))\nWRITE tup2\n\n; Access tuple element with annotation\nWRITE tup.0: Int\n\n; === Parameterized type annotations ===\n\nLET some = Option.Some(10): Option[Int]\nWRITE some\n\nLET none = Option.None: Option[String]\nWRITE none\n\nLET ok = Result.Ok(42): Result[Int, String]\nWRITE ok\n\nLET err = Result.Err(\"oops\"): Result[Int, String]\nWRITE err\n\n; === Array annotations ===\n\nLET nums = [1, 2, 3]: Array[Int]\nWRITE nums\n\n; === Complex expressions ===\n\n; Arithmetic then annotation (annotation binds to `2` not to `1 + 2`)\n; So we need parens for the whole thing\nLET sum = (1 + 2: Int)\nWRITE sum\n\n; Chained postfix then annotation\nLET nested = { x: Option.Some({ y: 5 }) }\nWRITE nested.x!.y: Int\n\n; === Function return type inference with annotation ===\n\nFUN double(n: Int) -> Int { n * 2 }\nWRITE double(5): Int\n\nWRITE \"Inline annotation test complete\"\n"
+---
+42
+"hello"
+TRUE
+3.14
+10
+"world"
+1
+2
+3
+100
+200
+300
+10
+1
+42
+Option.Some(123)
+123
+DataStatus.HasValue
+Option.Some("key")
+999
+"test"
+10
+(1, 2)
+(3, 4)
+1
+Option.Some(10)
+Option.None
+Result.Ok(42)
+Result.Err("oops")
+[ 1, 2, 3 ]
+3
+5
+10
+"Inline annotation test complete"

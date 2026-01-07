@@ -1,0 +1,5 @@
+; Test: Tuple type annotation now works with postfix syntax
+; `(a, b): T` is valid (annotation applied to tuple expression)
+
+LET x = (1, 2): (Int, Int)
+WRITE x

@@ -1,0 +1,5 @@
+; Test: Single-element tuple with incorrect type annotation
+; `(x,)` is a tuple (due to trailing comma), so `(x,): Int` is a type mismatch
+
+LET x = (42,): Int
+WRITE x

@@ -1914,6 +1914,12 @@ impl Parser {
                 PostfixOp::JsonArrowArrow(Box::new(e), span)
             });
 
+        // Type annotation: `: Type`
+        let annotate = just(Token::Colon)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::type_expr())
+            .map_with_span(PostfixOp::Annotate);
+
         choice((
             field_or_tuple_idx,
             opt_field,
@@ -1926,6 +1932,8 @@ impl Parser {
             // Dynamic key access with parens
             json_arrow_arrow_expr,
             json_arrow_expr,
+            // Type annotation
+            annotate,
         ))
         .repeated()
     }
@@ -2006,6 +2014,10 @@ impl Parser {
                     ),
                     span,
                 )),
+                PostfixOp::Annotate(ty, _) => Some(cst::Expr::new(
+                    cst::ExprKind::Annotate(Box::new(acc), ty),
+                    span,
+                )),
             }
         })
     }
@@ -2061,18 +2073,17 @@ impl Parser {
             }
         });
 
-        // Parenthesized expression, tuple literal, or type annotation
-        // - `(expr)` -> parenthesized expression
-        // - `(expr) : Type` -> type annotation
+        // Parenthesized expression or tuple literal
+        // - `(expr)` -> parenthesized expression (unwrapped)
         // - `(expr,)` -> single-element tuple
         // - `(expr, expr, ...)` -> multi-element tuple
         // - `()` -> empty tuple
         //
+        // Type annotations are handled as postfix operators: `expr: Type`.
+        // This works uniformly for `(expr): T`, `(expr: T)`, `10: Int`, etc.
+        //
         // We manually detect trailing comma instead of using `allow_trailing()`
         // so we can distinguish `(x)` from `(x,)`.
-        //
-        // Type annotations `(expr) : Type` are only valid for single-element
-        // parenthesized expressions (not tuples).
         let paren_or_tuple = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
@@ -2111,46 +2122,18 @@ impl Parser {
                         }),
                 ),
             )
-            // Optional type annotation after `(expr)`
-            .then(
-                just(Token::Colon)
-                    .ignore_then(Self::opt_newlines())
-                    .ignore_then(Self::type_expr())
-                    .or_not(),
-            )
-            .map_with_span(|(contents, ty_ann), span| match contents {
+            .map_with_span(|contents, span| match contents {
                 ParenContents::Empty => {
                     cst::Expr::new(cst::ExprKind::Tuple(vec![]), span)
                 }
                 ParenContents::Elements(mut elems, has_comma) => {
                     if elems.len() == 1 && !has_comma {
-                        // Single element without comma: parenthesized
+                        // Single element without comma: unwrap parens
                         // SAFETY: len checked above; `unwrap` is OK
                         #[allow(clippy::unwrap_used)]
-                        let inner = elems.pop().unwrap();
-                        // Check for type annotation
-                        match ty_ann {
-                            Some(ty) => cst::Expr::new(
-                                cst::ExprKind::Annotate(Box::new(inner), ty),
-                                span,
-                            ),
-                            None => inner,
-                        }
+                        elems.pop().unwrap()
                     } else {
-                        // Multiple elements or has comma: tuple
-                        // Type annotations on tuples require extra parens
-                        if ty_ann.is_some() {
-                            cst::Expr::new(
-                                cst::ExprKind::Error(
-                                    "type annotations on tuples require double \
-                                     parentheses: `((a, b) : T)`"
-                                        .into(),
-                                ),
-                                span,
-                            )
-                        } else {
-                            cst::Expr::new(cst::ExprKind::Tuple(elems), span)
-                        }
+                        cst::Expr::new(cst::ExprKind::Tuple(elems), span)
                     }
                 }
             });
@@ -2995,6 +2978,8 @@ enum PostfixOp {
     JsonArrow(Box<cst::Expr>, Span),
     /// JSON scalar access with dynamic key: `->>(expr)` (returns `Option[T]`).
     JsonArrowArrow(Box<cst::Expr>, Span),
+    /// Type annotation: `expr: Type`.
+    Annotate(cst::TypeExpr, Span),
 }
 
 /// Helper enum for array pattern elements during parsing.
@@ -3031,7 +3016,8 @@ impl PostfixOp {
             | Self::Unwrap(s)
             | Self::JsonScalarField(_, s)
             | Self::JsonArrow(_, s)
-            | Self::JsonArrowArrow(_, s) => *s,
+            | Self::JsonArrowArrow(_, s)
+            | Self::Annotate(_, s) => *s,
         }
     }
 }

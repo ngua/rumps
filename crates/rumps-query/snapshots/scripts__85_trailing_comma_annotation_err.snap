@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Single-element tuple with type annotation should fail\n; `(x,)` is a tuple (due to trailing comma), so `(x,) : T` is invalid\n\nLET x = (42,) : Int\nOUTPUT x\n"
----
-ERROR: parse error at 141..152: type annotations on tuples require double parentheses: `((a, b) : T)`

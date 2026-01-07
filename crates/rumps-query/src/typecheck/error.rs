@@ -158,7 +158,9 @@ impl<'a> TyPrinter<'a> {
             Ty::Tuple(ts) => {
                 let parts: Vec<_> =
                     ts.iter().map(|t| self.format_inner(t, namer)).collect();
-                format!("({})", parts.join(", "))
+                // Single-element tuples need trailing comma: `(Int,)`
+                let trail = if ts.len() == 1 { "," } else { "" };
+                format!("({}{})", parts.join(", "), trail)
             }
             Ty::Fn(params, ret) => {
                 let ps: Vec<_> = params
@@ -688,6 +690,10 @@ impl fmt::Display for Ty {
                     }
                     write!(f, "{t}")
                 })?;
+                // Single-element tuples need trailing comma: `(Int,)`
+                if ts.len() == 1 {
+                    write!(f, ",")?;
+                }
                 write!(f, ")")
             }
             Self::Fn(params, ret) => {
