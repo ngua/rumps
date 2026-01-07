@@ -1,6 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
-description: "; Error: wrong field type in nested struct\n\nTYPE Address = { street: String, city: String, zip: String }\nTYPE Patient = { id: Int, name: String, address: Address }\n\n; address.zip should be String, not Int\nLET p: Patient = {\n  id: 1,\n  name: \"Alice\",\n  address: { street: \"123 Main\", city: \"NYC\", zip: 10001 }\n}\n"
+description: "; Error: wrong field type in nested object alias\n\nNEWTYPE Address = { street: String, city: String, zip: String }\nNEWTYPE Patient = { id: Int, name: String, address: Address }\n\n; address.zip should be String, not Int\nLET p: Patient = {\n  id: 1,\n  name: \"Alice\",\n  address: { street: \"123 Main\", city: \"NYC\", zip: 10001 }\n}\n"
 ---
-ERROR: type mismatch: expected `String`, got `Int`
+ERROR: type mismatch: expected `Int`, got `String`

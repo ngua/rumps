@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Array.map with heterogeneous tagged results should error\n; This should fail because mixing Option and Result types is heterogeneous\n\nLET result = Array.map(\n  x => IF x > 1 { Option.Some(x) } ELSE { Result.Ok(x) },\n  [1, 2]\n)\nOUTPUT result\n"
+description: "; Test: Array.map with heterogeneous tagged results should error\n; This should fail because mixing Option and Result types is heterogeneous\n\nLET result = Array.map(\n  x => IF x > 1 { Option.Some(x) } ELSE { Result.Ok(x) },\n  [1, 2]\n)\nWRITE result\n"
 ---
-ERROR: type mismatch: expected `Option[Int]`, got `Result[Int, T]`
+ERROR: type mismatch: expected `Result[Int, T]`, got `Option[Int]`

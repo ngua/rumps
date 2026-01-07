@@ -1,6 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
-description: "; Test: Closure Parameter Type Error\n; Calling a typed closure with wrong argument type.\n\nLET double = (x: Int) -> Int => x * 2\n\n; Pass string to Int parameter\nOUTPUT double(\"hello\")\n"
+description: "; Test: Closure Parameter Type Error\n; Calling a typed closure with wrong argument type.\n\nLET double = (x: Int) -> Int => x * 2\n\n; Pass string to Int parameter\nWRITE double(\"hello\")\n"
 ---
-ERROR: type mismatch: expected `Int`, got `String`
+ERROR: type mismatch: expected `String`, got `Int`

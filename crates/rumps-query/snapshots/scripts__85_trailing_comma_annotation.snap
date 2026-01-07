@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Test: Single-element tuple with incorrect type annotation\n; `(x,)` is a tuple (due to trailing comma), so `(x,): Int` is a type mismatch\n\nLET x = (42,): Int\nWRITE x\n"
 ---
-ERROR: type mismatch: expected `(Int,)`, got `Int`
+ERROR: type mismatch: expected `Int`, got `(Int,)`

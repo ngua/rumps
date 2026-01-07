@@ -237,8 +237,8 @@ impl<'a> InferCtx<'a> {
             (Ty::Tuple(ts1), Ty::Tuple(ts2)) => {
                 if ts1.len() != ts2.len() {
                     UnifyResult::Err(TypeError::Mismatch {
-                        expected: t1.clone(),
-                        got: t2.clone(),
+                        expected: t2.clone(),
+                        got: t1.clone(),
                         span,
                     })
                 } else {
@@ -290,8 +290,8 @@ impl<'a> InferCtx<'a> {
             (Ty::Named(id1, args1), Ty::Named(id2, args2)) => {
                 if id1 != id2 || args1.len() != args2.len() {
                     UnifyResult::Err(TypeError::Mismatch {
-                        expected: t1.clone(),
-                        got: t2.clone(),
+                        expected: t2.clone(),
+                        got: t1.clone(),
                         span,
                     })
                 } else {
@@ -303,8 +303,8 @@ impl<'a> InferCtx<'a> {
             (Ty::Union(members1), Ty::Union(members2)) => {
                 if members1.len() != members2.len() {
                     UnifyResult::Err(TypeError::Mismatch {
-                        expected: t1.clone(),
-                        got: t2.clone(),
+                        expected: t2.clone(),
+                        got: t1.clone(),
                         span,
                     })
                 } else {
@@ -336,8 +336,8 @@ impl<'a> InferCtx<'a> {
                 })
                 .unwrap_or_else(|| {
                     UnifyResult::Err(TypeError::Mismatch {
-                        expected: t1.clone(),
-                        got: t2.clone(),
+                        expected: t2.clone(),
+                        got: t1.clone(),
                         span,
                     })
                 }),
@@ -372,8 +372,8 @@ impl<'a> InferCtx<'a> {
 
             // All other combinations are type mismatches
             _ => UnifyResult::Err(TypeError::Mismatch {
-                expected: t1.clone(),
-                got: t2.clone(),
+                expected: t2.clone(),
+                got: t1.clone(),
                 span,
             }),
         }
