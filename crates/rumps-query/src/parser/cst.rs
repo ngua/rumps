@@ -149,9 +149,9 @@ pub(crate) enum SubscriptElem {
 /// `GET`, `SET`, `KILL`, `DATA`, and `ORDER`.
 #[derive(Clone, Debug)]
 pub(crate) enum DbRef {
-    /// Local B-tree variable: `data`, `data(1)`, `data(...keys)`.
+    /// Local B-tree variable: `data{1}`, `data{...keys}`, `data{}`.
     Local(String, Vec<SubscriptElem>),
-    /// Global B-tree variable: `^PATIENT`, `^DATA(1, ...rest)`.
+    /// Global B-tree variable: `^PATIENT`, `^DATA{1, ...rest}`.
     Global(String, Vec<SubscriptElem>),
 }
 
@@ -196,8 +196,8 @@ pub(crate) enum ExprKind {
     /// A lexical variable reference.
     Var(String),
 
-    /// `GET` primitive.
-    Get(DbRef),
+    /// `@GET` primitive; argument must be `Ref` type.
+    Get(Box<Expr>),
 
     /// A binary operation.
     Binary(Box<Expr>, BinOp, Box<Expr>),
@@ -323,21 +323,21 @@ pub(crate) enum ExprKind {
     /// Handler must be a closure `(Error) -> T` where `T` matches expr's type.
     Catch(Box<Expr>, Box<Expr>),
 
-    /// Data query: `DATA var`.
+    /// `@DATA` primitive; argument must be `Ref` type.
     ///
     /// Queries the existence status of a node. Returns `DataStatus` enum.
-    Data(DbRef),
+    Data(Box<Expr>),
 
-    /// Order query: `ORDER var`.
+    /// `@ORDER` primitive; argument must be `Ref` type.
     ///
     /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
-    Order(DbRef),
+    Order(Box<Expr>),
 
-    /// Query: `@QUERY var`.
+    /// `@QUERY` primitive; argument must be `Ref` type.
     ///
     /// Returns the full key path to the next node with a value.
     /// Returns `Option[Array[Subscript]]`.
-    Query(DbRef),
+    Query(Box<Expr>),
 
     /// Write expression: `WRITE expr [JSON] [TO target]`.
     ///
@@ -345,15 +345,15 @@ pub(crate) enum ExprKind {
     /// This allows `WRITE` in expression contexts.
     Write(Box<WriteStmt>),
 
-    /// Set expression: `@SET target = value`.
+    /// `@SET` primitive; first argument must be `Ref` type.
     ///
     /// Executes the B-tree assignment and evaluates to `Unit`.
-    Set(DbRef, Box<Expr>),
+    Set(Box<Expr>, Box<Expr>),
 
-    /// Kill expression: `@KILL target`.
+    /// `@KILL` primitive; argument must be `Ref` type.
     ///
     /// Deletes a variable or subtree and evaluates to `Unit`.
-    Kill(DbRef),
+    Kill(Box<Expr>),
 
     /// Raise a runtime error: `RAISE expr`.
     ///
@@ -376,6 +376,12 @@ pub(crate) enum ExprKind {
     ///
     /// Produces the empty/identity value for the inferred `Monoid` type.
     Mempty,
+
+    /// A database reference literal: `data{1, 2}` or `^global{key}`.
+    ///
+    /// Creates a first-class `Ref` value that can be stored or passed to
+    /// functions. Use with intrinsics: `@GET r`, `@SET r = value`.
+    RefLit(DbRef),
 }
 
 /// The key specification for JSON access (CST form).
@@ -451,11 +457,11 @@ pub(crate) enum StmtKind {
     /// The visibility is only meaningful inside modules (`+LET` for public).
     Let(BindingPattern, Option<TypeExpr>, Expr, Visibility),
 
-    /// B-tree assignment.
-    Set(DbRef, Expr),
+    /// B-tree assignment; first argument must be `Ref` type.
+    Set(Expr, Expr),
 
-    /// Delete a variable or subtree.
-    Kill(DbRef),
+    /// Delete a variable or subtree; argument must be `Ref` type.
+    Kill(Expr),
 
     /// Write a value with optional format and target.
     Write(WriteStmt),

@@ -10,8 +10,8 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
-    Import, ImportItem, OutputFormat, OutputTarget, ParamConstraint, Stmt,
-    StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility, WriteExpr,
+    Import, ImportItem, OutputFormat, OutputTarget, ParamConstraint, RefTarget,
+    Stmt, StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility, WriteExpr,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
@@ -637,23 +637,34 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Validate a `SET` operation (shared by statement and expression forms).
+    /// Validate a `SET` operation with a resolved `RefTarget`.
     ///
-    /// Type-checks subscript expressions and the value, adding appropriate
-    /// constraints. Global writes must be inside a transaction block.
-    fn set(&mut self, dbref: &DbRef, value: ExprId, span: Span) {
-        // Global writes require transaction context
-        if matches!(dbref, DbRef::Global(..)) && self.in_transaction.is_none() {
-            self.error(TypeError::Custom {
-                msg: "global writes require a transaction".to_string(),
-                span,
-            });
+    /// Type-checks the value, adding appropriate constraints.
+    /// Global writes and Ref expressions require transaction context.
+    fn set_validate(&mut self, rt: &RefTarget, value: ExprId, span: Span) {
+        match rt {
+            RefTarget::Inline(dbref) => {
+                // Global writes require transaction context
+                if matches!(dbref, DbRef::Global(..))
+                    && self.in_transaction.is_none()
+                {
+                    self.error(TypeError::Custom {
+                        msg: "global writes require a transaction".to_string(),
+                        span,
+                    });
+                }
+            }
+            RefTarget::Expr(_) => {
+                // Can't statically determine local/global; require transaction
+                if self.in_transaction.is_none() {
+                    self.error(TypeError::Custom {
+                        msg: "SET with Ref expression requires a transaction"
+                            .to_string(),
+                        span,
+                    });
+                }
+            }
         }
-
-        let subs = match dbref {
-            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
-        };
-        self.check_subscript_elems(subs, span);
 
         // Type-check value and add Storable constraint
         let val_ty = self.expr(value);
@@ -662,45 +673,63 @@ impl InferCtx<'_> {
 
     /// Infer types for a `@SET` expression.
     ///
-    /// Calls validation, then populates the `TxnId` field in the AST.
+    /// Resolves variable references to `RefTarget::Expr`, validates the
+    /// operation, and populates the AST with the resolved target.
     pub(super) fn set_expr(
         &mut self,
         id: ExprId,
-        dbref: &DbRef,
+        rt: &RefTarget,
         value: ExprId,
         span: Span,
     ) {
-        self.set(dbref, value, span);
-        self.ast
-            .set_expr(id, Expr::Set(dbref.clone(), value, self.in_transaction));
+        let resolved_rt = self.resolve_ref_target(rt, span);
+        self.set_validate(resolved_rt.as_ref(), value, span);
+        self.ast.set_expr(
+            id,
+            Expr::Set(resolved_rt.into_owned(), value, self.in_transaction),
+        );
     }
 
-    /// Validate a `KILL` operation (shared by statement and expression forms).
+    /// Validate a `KILL` operation with a resolved `RefTarget`.
     ///
-    /// Type-checks subscript expressions with `Subscriptable` constraints.
-    /// Global kills must be inside a transaction block.
-    fn kill(&mut self, dbref: &DbRef, span: Span) {
-        // Global writes require transaction context
-        if matches!(dbref, DbRef::Global(..)) && self.in_transaction.is_none() {
-            self.error(TypeError::Custom {
-                msg: "global writes require a transaction".to_string(),
-                span,
-            });
+    /// Global writes and Ref expressions require transaction context.
+    fn kill_validate(&mut self, rt: &RefTarget, span: Span) {
+        match rt {
+            RefTarget::Inline(dbref) => {
+                // Global writes require transaction context
+                if matches!(dbref, DbRef::Global(..))
+                    && self.in_transaction.is_none()
+                {
+                    self.error(TypeError::Custom {
+                        msg: "global writes require a transaction".to_string(),
+                        span,
+                    });
+                }
+            }
+            RefTarget::Expr(_) => {
+                // Can't statically determine local/global; require transaction
+                if self.in_transaction.is_none() {
+                    self.error(TypeError::Custom {
+                        msg: "KILL with Ref expression requires a transaction"
+                            .to_string(),
+                        span,
+                    });
+                }
+            }
         }
-
-        let subs = match dbref {
-            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
-        };
-        self.check_subscript_elems(subs, span);
     }
 
     /// Infer types for a `@KILL` expression.
     ///
-    /// Calls validation, then populates the `TxnId` field in the AST.
-    pub(super) fn kill_expr(&mut self, id: ExprId, dbref: &DbRef, span: Span) {
-        self.kill(dbref, span);
-        self.ast
-            .set_expr(id, Expr::Kill(dbref.clone(), self.in_transaction));
+    /// Resolves variable references to `RefTarget::Expr`, validates the
+    /// operation, and populates the AST with the resolved target.
+    pub(super) fn kill_expr(&mut self, id: ExprId, rt: &RefTarget, span: Span) {
+        let resolved_rt = self.resolve_ref_target(rt, span);
+        self.kill_validate(resolved_rt.as_ref(), span);
+        self.ast.set_expr(
+            id,
+            Expr::Kill(resolved_rt.into_owned(), self.in_transaction),
+        );
     }
 
     /// Infer types for a `WRITE` statement or expression.

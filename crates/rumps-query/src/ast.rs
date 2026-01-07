@@ -613,6 +613,20 @@ impl DbRef {
     }
 }
 
+/// Target of a database intrinsic: either inline `DbRef` syntax or an
+/// expression evaluating to `Ref`.
+///
+/// Intrinsics like `@GET`, `@SET`, `@KILL`, etc., can accept:
+/// - Inline syntax: `@GET data{1, 2}` or `@GET ^global{key}`
+/// - Expression: `@GET r` where `r: Ref`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RefTarget {
+    /// Inline `DbRef` syntax (subscripts evaluated at intrinsic call).
+    Inline(DbRef),
+    /// Expression evaluating to `Ref` (subscripts pre-evaluated).
+    Expr(ExprId),
+}
+
 /// A literal value in the AST.
 ///
 /// This is the compile-time representation; runtime values (with arena
@@ -656,10 +670,11 @@ pub(crate) enum Expr {
 
     /// `GET` primitive.
     ///
-    /// Reads a value from a B-tree variable. The `DbRef` specifies the
-    /// variable name and subscripts. The `Option<TxnId>` is assigned during
-    /// typecheck; `Some(id)` means use transaction `id`, `None` means direct DB.
-    Get(DbRef, Option<TxnId>),
+    /// Reads a value from a B-tree variable. The `RefTarget` specifies the
+    /// variable reference (inline `DbRef` or expression). The `Option<TxnId>`
+    /// is assigned during typecheck; `Some(id)` means use transaction `id`,
+    /// `None` means direct DB.
+    Get(RefTarget, Option<TxnId>),
 
     /// A binary operation.
     Binary(ExprId, BinOp, ExprId),
@@ -870,24 +885,24 @@ pub(crate) enum Expr {
     /// value. Handler must return the same type as `expr`.
     Catch(ExprId, ExprId),
 
-    /// Data query: `DATA var`.
+    /// Data query: `DATA ref`.
     ///
     /// Queries the existence status of a node. Returns `DataStatus` enum.
     /// The `Option<TxnId>` is assigned during typecheck.
-    Data(DbRef, Option<TxnId>),
+    Data(RefTarget, Option<TxnId>),
 
-    /// Order query: `ORDER var`.
+    /// Order query: `ORDER ref`.
     ///
     /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
     /// The `Option<TxnId>` is assigned during typecheck.
-    Order(DbRef, Option<TxnId>),
+    Order(RefTarget, Option<TxnId>),
 
-    /// Query: `@QUERY var`.
+    /// Query: `@QUERY ref`.
     ///
     /// Returns the full key path to the next node with a value.
     /// Returns `Option[Array[Subscript]]`.
     /// The `Option<TxnId>` is assigned during typecheck.
-    Query(DbRef, Option<TxnId>),
+    Query(RefTarget, Option<TxnId>),
 
     /// Write expression: `WRITE expr [JSON] [TO target]`.
     ///
@@ -898,16 +913,16 @@ pub(crate) enum Expr {
     /// Set expression: `@SET target = value`.
     ///
     /// Executes the B-tree assignment and evaluates to `Unit`.
-    /// This allows `@SET` in expression contexts like `f(@SET x = 1)`.
+    /// This allows `@SET` in expression contexts like `f(@SET x{} = 1)`.
     /// The `Option<TxnId>` is assigned during typecheck; globals require it.
-    Set(DbRef, ExprId, Option<TxnId>),
+    Set(RefTarget, ExprId, Option<TxnId>),
 
     /// Kill expression: `@KILL target`.
     ///
     /// Deletes a variable or subtree and evaluates to `Unit`.
-    /// This allows `@KILL` in expression contexts like `f(@KILL x)`.
+    /// This allows `@KILL` in expression contexts like `f(@KILL x{})`.
     /// The `Option<TxnId>` is assigned during typecheck; globals require it.
-    Kill(DbRef, Option<TxnId>),
+    Kill(RefTarget, Option<TxnId>),
 
     /// Raise a runtime error: `RAISE expr`.
     ///
@@ -944,6 +959,12 @@ pub(crate) enum Expr {
     /// - `Map[K, V]`: `{}`
     /// - `Option[T]`: `Option.None`
     Mempty,
+
+    /// A database reference literal: `data{1, 2}` or `^global{key}`.
+    ///
+    /// Creates a `Ref` value that can be passed to intrinsics or stored.
+    /// Type: `Ref`.
+    Ref(DbRef),
 }
 
 /// The kind of JSON access operation.

@@ -163,6 +163,11 @@ impl TypeId {
     ///
     /// An unsigned integral type mapping to `usize`. Satisfies `Numeric` constraint.
     pub(crate) const WORD: Self = Self(24);
+    /// Builtin type: `Ref`.
+    ///
+    /// A database reference combining a variable name (local or global) with
+    /// subscripts. Created via `data{1, 2}` or `^global{key}` syntax.
+    pub(crate) const REF: Self = Self(25);
     /// Placeholder type for uninferred type parameters; compatible with any type.
     /// Used for empty arrays (unknown element type) and partial variant types
     /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
@@ -541,6 +546,16 @@ pub(crate) enum Value {
     /// the continuation call and the FOREVER loop interpreter. The `ValueId`
     /// points to the new state value.
     LoopContinue(ValueId),
+
+    /// A database reference (local or global variable with subscripts).
+    ///
+    /// Created via `data{1, 2}` or `^global{key}` syntax.
+    /// Used with intrinsics: `@GET r`, `@SET r = value`, etc.
+    ///
+    /// - `bool`: `true` for global (`^var`), `false` for local
+    /// - `StringId`: the variable name
+    /// - `SmallVec`: subscript values (already evaluated)
+    Ref(bool, StringId, SmallVec<[ValueId; 4]>),
 }
 
 impl Value {
@@ -601,6 +616,7 @@ impl Value {
             Self::Range { .. } => Cow::Borrowed("Range"),
             Self::ForeverContinuation => Cow::Borrowed("Continuation"),
             Self::LoopContinue(_) => Cow::Borrowed("LoopContinue"),
+            Self::Ref(..) => Cow::Borrowed("Ref"),
         }
     }
 
@@ -709,6 +725,7 @@ impl Value {
             | Self::ModuleFn { .. }
             | Self::ModuleConst { .. } => TypeId::UNKNOWN,
             Self::Range { .. } => TypeId::RANGE,
+            Self::Ref(..) => TypeId::REF,
             // Internal types; not exposed to user code
             Self::ForeverContinuation | Self::LoopContinue(_) => TypeId::UNIT,
         }
@@ -734,6 +751,7 @@ pub(crate) enum BuiltinType {
     Json,
     FilePath,
     Regex,
+    Ref,
 }
 
 impl BuiltinType {
@@ -755,6 +773,7 @@ impl BuiltinType {
             Self::Json => "Json",
             Self::FilePath => "FilePath",
             Self::Regex => "Regex",
+            Self::Ref => "Ref",
         }
     }
 }
@@ -1173,6 +1192,7 @@ impl TypeExprArena {
             Ty::Path => self.named(TypeId::PATH),
             Ty::Regex => self.named(TypeId::REGEX),
             Ty::RuntimeError => self.named(TypeId::ERROR),
+            Ty::Ref => self.named(TypeId::REF),
             Ty::Array(elem) => {
                 let elem_id = self.intern_ty(elem);
                 self.app(TypeId::ARRAY, smallvec![elem_id])
@@ -1724,6 +1744,14 @@ impl TypeRegistry {
             self.register(TypeDef::Builtin(BuiltinType::Word), word_name);
         if word != TypeId::WORD {
             invariant!("Word registered at expected index");
+        }
+
+        // Ref at index 25
+        let ref_name = arena.intern("Ref");
+        let ref_ty =
+            self.register(TypeDef::Builtin(BuiltinType::Ref), ref_name);
+        if ref_ty != TypeId::REF {
+            invariant!("Ref registered at expected index");
         }
     }
 

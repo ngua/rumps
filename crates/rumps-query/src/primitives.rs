@@ -362,7 +362,7 @@ impl Array {
                     }
 
                     // Unit, closures, functions, module fns/consts, ranges, paths, regex,
-                    // and loop continuations are not comparable
+                    // refs, and loop continuations are not comparable
                     Value::Unit
                     | Value::FilePath(_)
                     | Value::Regex(_)
@@ -372,7 +372,8 @@ impl Array {
                     | Value::ModuleConst { .. }
                     | Value::Range { .. }
                     | Value::ForeverContinuation
-                    | Value::LoopContinue(_) => None,
+                    | Value::LoopContinue(_)
+                    | Value::Ref(..) => None,
                 }
             }
 

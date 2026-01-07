@@ -13,9 +13,9 @@ use super::cst;
 use crate::ast::{
     self, ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
     Expr, ExprId, Import, ImportItem, JsonAccessKey, MatchArm, MatchPattern,
-    MatchPatternId, ObjectEntry, OutputFormat, OutputTarget, RestPattern, Stmt,
-    StmtId, SubscriptElem, TransactionModifiers, TypeDefAst, TypePattern,
-    VariantAst, Visibility, WriteExpr,
+    MatchPatternId, ObjectEntry, OutputFormat, OutputTarget, RefTarget,
+    RestPattern, Stmt, StmtId, SubscriptElem, TransactionModifiers, TypeDefAst,
+    TypePattern, VariantAst, Visibility, WriteExpr,
 };
 use crate::{Error, Result};
 
@@ -197,16 +197,16 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             let expr_id = lower_expr(ast, ctx, expr)?;
             Stmt::Let(pat, ty_id, expr_id, lower_visibility(vis))
         }
-        cst::StmtKind::Set(dbref, value) => {
-            let dbref = lower_db_ref(ast, ctx, dbref)?;
+        cst::StmtKind::Set(r, value) => {
+            let rt = lower_ref_arg(ast, ctx, r)?;
             let value_id = lower_expr(ast, ctx, value)?;
-            let expr = Expr::Set(dbref, value_id, None);
+            let expr = Expr::Set(rt, value_id, None);
             let expr_id = ast.add_expr(expr, span)?;
             Stmt::Expr(expr_id)
         }
-        cst::StmtKind::Kill(dbref) => {
-            let dbref = lower_db_ref(ast, ctx, dbref)?;
-            let expr = Expr::Kill(dbref, None);
+        cst::StmtKind::Kill(r) => {
+            let rt = lower_ref_arg(ast, ctx, r)?;
+            let expr = Expr::Kill(rt, None);
             let expr_id = ast.add_expr(expr, span)?;
             Stmt::Expr(expr_id)
         }
@@ -353,9 +353,9 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
             lower_interpolation(ast, ctx, parts, span)?
         }
         cst::ExprKind::Var(name) => Expr::Var(name),
-        cst::ExprKind::Get(dbref) => {
-            let dbref = lower_db_ref(ast, ctx, dbref)?;
-            Expr::Get(dbref, None)
+        cst::ExprKind::Get(r) => {
+            let rt = lower_ref_arg(ast, ctx, *r)?;
+            Expr::Get(rt, None)
         }
         cst::ExprKind::Binary(lhs, op, rhs) => {
             let lhs_id = lower_expr(ast, ctx, *lhs)?;
@@ -534,17 +534,17 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
             let handler_id = lower_expr(ast, ctx, *handler)?;
             Expr::Catch(expr_id, handler_id)
         }
-        cst::ExprKind::Data(dbref) => {
-            let dbref = lower_db_ref(ast, ctx, dbref)?;
-            Expr::Data(dbref, None)
+        cst::ExprKind::Data(r) => {
+            let rt = lower_ref_arg(ast, ctx, *r)?;
+            Expr::Data(rt, None)
         }
-        cst::ExprKind::Order(dbref) => {
-            let dbref = lower_db_ref(ast, ctx, dbref)?;
-            Expr::Order(dbref, None)
+        cst::ExprKind::Order(r) => {
+            let rt = lower_ref_arg(ast, ctx, *r)?;
+            Expr::Order(rt, None)
         }
-        cst::ExprKind::Query(dbref) => {
-            let dbref = lower_db_ref(ast, ctx, dbref)?;
-            Expr::Query(dbref, None)
+        cst::ExprKind::Query(r) => {
+            let rt = lower_ref_arg(ast, ctx, *r)?;
+            Expr::Query(rt, None)
         }
         cst::ExprKind::Write(output) => {
             let expr_id = lower_expr(ast, ctx, output.expr)?;
@@ -566,14 +566,14 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
                 target,
             })
         }
-        cst::ExprKind::Set(dbref, value) => {
-            let dbref = lower_db_ref(ast, ctx, dbref)?;
+        cst::ExprKind::Set(r, value) => {
+            let rt = lower_ref_arg(ast, ctx, *r)?;
             let value_id = lower_expr(ast, ctx, *value)?;
-            Expr::Set(dbref, value_id, None)
+            Expr::Set(rt, value_id, None)
         }
-        cst::ExprKind::Kill(dbref) => {
-            let dbref = lower_db_ref(ast, ctx, dbref)?;
-            Expr::Kill(dbref, None)
+        cst::ExprKind::Kill(r) => {
+            let rt = lower_ref_arg(ast, ctx, *r)?;
+            Expr::Kill(rt, None)
         }
         cst::ExprKind::Raise(inner) => {
             let id = lower_expr(ast, ctx, *inner)?;
@@ -615,6 +615,10 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
             })
         }
         cst::ExprKind::Mempty => Expr::Mempty,
+        cst::ExprKind::RefLit(dbref) => {
+            let dbref = lower_db_ref(ast, ctx, dbref)?;
+            Expr::Ref(dbref)
+        }
         cst::ExprKind::Error(msg) => {
             Err(crate::Error::parse(span, msg, vec![]))?
         }
@@ -848,6 +852,40 @@ fn lower_db_ref(
         cst::DbRef::Global(name, subs) => {
             let sub_ids = lower_subscript_elems(ast, ctx, subs)?;
             Ok(DbRef::Global(name, sub_ids))
+        }
+    }
+}
+
+/// Lower a ref argument expression to `RefTarget`.
+///
+/// If the expression is a `RefLit`, uses `RefTarget::Inline`; otherwise
+/// lowers the expression and uses `RefTarget::Expr`.
+fn lower_ref_arg(
+    ast: &mut Ast,
+    ctx: &mut Ctx,
+    expr: cst::Expr,
+) -> Result<RefTarget> {
+    match expr.kind {
+        cst::ExprKind::RefLit(dbref) => {
+            lower_db_ref(ast, ctx, dbref).map(RefTarget::Inline)
+        }
+        _ => lower_expr(ast, ctx, expr).map(RefTarget::Expr),
+    }
+}
+
+/// Merge a `RefTarget` from source AST into target AST.
+fn merge_ref_target(
+    target: &mut Ast,
+    source: &Ast,
+    rt: &RefTarget,
+    span: crate::Span,
+) -> Result<RefTarget> {
+    match rt {
+        RefTarget::Inline(dbref) => {
+            merge_dbref(target, source, dbref, span).map(RefTarget::Inline)
+        }
+        RefTarget::Expr(e) => {
+            merge_expr(target, source, *e, span).map(RefTarget::Expr)
         }
     }
 }
@@ -1346,9 +1384,9 @@ fn merge_expr(
             Expr::Interpolation(new_parts?)
         }
         Expr::Var(name) => Expr::Var(name),
-        Expr::Get(dbref, txn) => {
-            let new_dbref = merge_dbref(target, source, &dbref, span)?;
-            Expr::Get(new_dbref, txn)
+        Expr::Get(ref rt, txn) => {
+            let new_rt = merge_ref_target(target, source, rt, span)?;
+            Expr::Get(new_rt, txn)
         }
         Expr::Binary(lhs, op, rhs) => {
             let new_lhs = merge_expr(target, source, lhs, span)?;
@@ -1568,30 +1606,30 @@ fn merge_expr(
             let new_handler = merge_expr(target, source, handler, span)?;
             Expr::Catch(new_expr, new_handler)
         }
-        Expr::Data(dbref, txn) => {
-            let new_dbref = merge_dbref(target, source, &dbref, span)?;
-            Expr::Data(new_dbref, txn)
+        Expr::Data(ref rt, txn) => {
+            let new_rt = merge_ref_target(target, source, rt, span)?;
+            Expr::Data(new_rt, txn)
         }
-        Expr::Order(dbref, txn) => {
-            let new_dbref = merge_dbref(target, source, &dbref, span)?;
-            Expr::Order(new_dbref, txn)
+        Expr::Order(ref rt, txn) => {
+            let new_rt = merge_ref_target(target, source, rt, span)?;
+            Expr::Order(new_rt, txn)
         }
-        Expr::Query(dbref, txn) => {
-            let new_dbref = merge_dbref(target, source, &dbref, span)?;
-            Expr::Query(new_dbref, txn)
+        Expr::Query(ref rt, txn) => {
+            let new_rt = merge_ref_target(target, source, rt, span)?;
+            Expr::Query(new_rt, txn)
         }
         Expr::Write(out) => {
             let new_out = merge_write_expr(target, source, &out, span)?;
             Expr::Write(new_out)
         }
-        Expr::Set(dbref, expr, txn) => {
-            let new_dbref = merge_dbref(target, source, &dbref, span)?;
+        Expr::Set(ref rt, expr, txn) => {
+            let new_rt = merge_ref_target(target, source, rt, span)?;
             let new_expr = merge_expr(target, source, expr, span)?;
-            Expr::Set(new_dbref, new_expr, txn)
+            Expr::Set(new_rt, new_expr, txn)
         }
-        Expr::Kill(dbref, txn) => {
-            let new_dbref = merge_dbref(target, source, &dbref, span)?;
-            Expr::Kill(new_dbref, txn)
+        Expr::Kill(ref rt, txn) => {
+            let new_rt = merge_ref_target(target, source, rt, span)?;
+            Expr::Kill(new_rt, txn)
         }
         Expr::Raise(expr) => {
             let new_expr = merge_expr(target, source, expr, span)?;
@@ -1648,6 +1686,10 @@ fn merge_expr(
             })
         }
         Expr::Mempty => Expr::Mempty,
+        Expr::Ref(ref dbref) => {
+            let new_dbref = merge_dbref(target, source, dbref, span)?;
+            Expr::Ref(new_dbref)
+        }
     };
 
     target.add_expr(new_expr, span)

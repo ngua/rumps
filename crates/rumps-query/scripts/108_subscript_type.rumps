@@ -3,26 +3,26 @@
 ; enabling seamless piping of `@ORDER` results into `@GET` without coercions.
 
 ; Set up test data with mixed subscript types
-@SET data(1) = "one"
-@SET data(2) = "two"
-@SET data(3) = "three"
-@SET data("a") = "alpha"
-@SET data("b") = "beta"
+@SET data{1} = "one"
+@SET data{2} = "two"
+@SET data{3} = "three"
+@SET data{"a"} = "alpha"
+@SET data{"b"} = "beta"
 
 ; Use @ORDER result directly as subscript (no READ coercion needed)
-LET first : Subscript = @ORDER data!
+LET first : Subscript = @ORDER data{}!
 WRITE first
-WRITE @GET data(first)!
+WRITE @GET data{first}!
 
 ; Chain through all keys using FOREVER
-LET vals = FOREVER { key: @ORDER data, acc: [] } (st, cont) => {
+LET vals = FOREVER { key: @ORDER data{}, acc: [] } (st, cont) => {
   MATCH st.key {
     Option.None => st.acc
     Option.Some(k) => {
       ; k is Subscript; use directly in @GET and @ORDER
-      LET v = @GET data(k)!
+      LET v = @GET data{k}!
       cont({
-        key: @ORDER data(k),
+        key: @ORDER data{k},
         acc: Array.concat(st.acc, [v])
       })
     }
@@ -32,12 +32,12 @@ WRITE vals
 
 ; Explicit Subscript annotation works
 LET sub : Subscript = 42
-@SET x(sub) = "works"
-WRITE @GET x(sub)!
+@SET x{sub} = "works"
+WRITE @GET x{sub}!
 
 ; Function that takes Subscript parameter
 FUN lookup (key: Subscript) -> Option[Storable] {
-  @GET data(key)
+  @GET data{key}
 }
 
 WRITE lookup(1)

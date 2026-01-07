@@ -55,14 +55,14 @@ IF mode == "debug" {
 
 ; Block with @SET side effects
 {
-  @SET items(1) = "first"
-  @SET items(2) = "second"
+  @SET items{1} = "first"
+  @SET items{2} = "second"
 }
 
-WRITE @GET items(1)
+WRITE @GET items{1}
 ; Expected: first
 
-WRITE @GET items(2)
+WRITE @GET items{2}
 ; Expected: second
 
 WRITE "Expression statements test complete"

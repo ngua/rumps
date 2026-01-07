@@ -3,6 +3,7 @@
 //! Contains methods for inferring types of expressions: literals, variables,
 //! operators, collections, function calls, control flow, etc.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
@@ -12,8 +13,8 @@ use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
     JsonAccessKey, JsonAccessKind, Literal, MatchArm, ObjectEntry,
-    ParamConstraint, StmtId, SubscriptElem, TransactionExpr, TxnId, TypeParam,
-    TypePattern, UnOp, Visibility,
+    ParamConstraint, RefTarget, StmtId, SubscriptElem, TransactionExpr, TxnId,
+    TypeParam, TypePattern, UnOp, Visibility,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::{ConstraintKind, TypeError};
@@ -154,8 +155,8 @@ impl InferCtx<'_> {
             // Fallible conversion: `expr READ Type`
             Expr::Read(inner, ty_id) => self.read_conv(*inner, *ty_id, span),
 
-            // Database read: `GET local(...)` or `GET ^global(...)`
-            Expr::Get(ref dbref, _) => self.get(id, dbref, span),
+            // Database read: `GET local{...}` or `GET ^global{...}` or `GET ref`
+            Expr::Get(ref rt, _) => self.get(id, rt, span),
 
             // Type annotation: `(expr) : Type`
             Expr::Annotate(inner, ty_id) => self.annotate(*inner, *ty_id, span),
@@ -260,14 +261,14 @@ impl InferCtx<'_> {
                 expr_ty
             }
 
-            // Data query: `DATA local(...)` or `DATA ^global(...)`
-            Expr::Data(ref dbref, _) => self.data(id, dbref, span),
+            // Data query: `DATA local{...}` or `DATA ^global{...}` or `DATA ref`
+            Expr::Data(ref rt, _) => self.data(id, rt, span),
 
-            // Order query: `ORDER local(...)` or `ORDER ^global(...)`
-            Expr::Order(ref dbref, _) => self.order(id, dbref, span),
+            // Order query: `ORDER local{...}` or `ORDER ^global{...}` or `ORDER ref`
+            Expr::Order(ref rt, _) => self.order(id, rt, span),
 
-            // Query: `@QUERY local(...)` or `@QUERY ^global(...)`
-            Expr::Query(ref dbref, _) => self.query(id, dbref, span),
+            // Query: `@QUERY local{...}` or `@QUERY ^global{...}` or `@QUERY ref`
+            Expr::Query(ref rt, _) => self.query(id, rt, span),
 
             // Write expression: `WRITE expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
@@ -278,15 +279,15 @@ impl InferCtx<'_> {
 
             // Set expression: `@SET target = value`
             // Returns `Result[Unit, String]`
-            Expr::Set(ref dbref, value, _) => {
-                self.set_expr(id, dbref, *value, span);
+            Expr::Set(ref rt, value, _) => {
+                self.set_expr(id, rt, *value, span);
                 Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
             // Kill expression: `@KILL target`
             // Returns `Result[Unit, String]`
-            Expr::Kill(ref dbref, _) => {
-                self.kill_expr(id, dbref, span);
+            Expr::Kill(ref rt, _) => {
+                self.kill_expr(id, rt, span);
                 Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
@@ -319,6 +320,16 @@ impl InferCtx<'_> {
                 self.constrain(Constraint::Monoid(tv.clone(), span));
                 self.mempty_types.insert(id, tv.clone());
                 tv
+            }
+
+            // Ref literal: `data{1, 2}` or `^global{key}`
+            // Creates a first-class `Ref` value.
+            Expr::Ref(ref dbref) => {
+                let subs = match dbref {
+                    DbRef::Local(_, s) | DbRef::Global(_, s) => s,
+                };
+                self.check_subscript_elems(subs, span);
+                Ty::Ref
             }
         }
     }
@@ -1776,14 +1787,74 @@ impl InferCtx<'_> {
     /// Database reads return `Option[Storable]`; the value may not exist at the
     /// given path. Usage may narrow via `IS`/`AS` checks or arithmetic operations.
     /// Populates the `TxnId` field in the AST based on current transaction context.
-    fn get(&mut self, id: ExprId, dbref: &DbRef, span: Span) -> Ty {
-        let subs = match dbref {
-            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
-        };
-        self.check_subscript_elems(subs, span);
+    ///
+    /// When the target is `RefTarget::Inline(DbRef::Local(name, []))` and `name`
+    /// is a variable of type `Ref`, rewrites to `RefTarget::Expr`.
+    fn get(&mut self, id: ExprId, rt: &RefTarget, span: Span) -> Ty {
+        let resolved_rt = self.resolve_ref_target(rt, span).into_owned();
         self.ast
-            .set_expr(id, Expr::Get(dbref.clone(), self.in_transaction));
+            .set_expr(id, Expr::Get(resolved_rt, self.in_transaction));
         Ty::Option(Box::new(Ty::Named(TypeId::STORABLE, vec![])))
+    }
+
+    /// Resolve a `RefTarget`, checking for variable references.
+    ///
+    /// When the target is `RefTarget::Inline(DbRef::Local(name, []))` and `name`
+    /// is a variable of type `Ref`, rewrites to `RefTarget::Expr` referencing
+    /// that variable. Otherwise, type-checks subscripts and returns as-is.
+    ///
+    /// Returns `Cow::Borrowed` when unchanged, `Cow::Owned` when rewritten.
+    pub(super) fn resolve_ref_target<'a>(
+        &mut self,
+        rt: &'a RefTarget,
+        span: Span,
+    ) -> Cow<'a, RefTarget> {
+        match rt {
+            RefTarget::Inline(dbref) => {
+                match dbref {
+                    DbRef::Local(name, subs) if subs.is_empty() => {
+                        // Check if name is a variable of type Ref
+                        let is_ref = self.env.lookup(name).is_some_and(|s| {
+                            let (ty, _) = s.instantiate(&mut self.next_var);
+                            ty == Ty::Ref
+                        });
+                        if is_ref {
+                            // Create a Var expression and rewrite to Expr
+                            match self
+                                .ast
+                                .add_expr(Expr::Var(name.clone()), span)
+                            {
+                                Ok(var_id) => {
+                                    self.record_type(var_id, Ty::Ref);
+                                    Cow::Owned(RefTarget::Expr(var_id))
+                                }
+                                Err(e) => {
+                                    // Arena overflow; report error and fall back
+                                    self.error(TypeError::Custom {
+                                        msg: e.to_string(),
+                                        span,
+                                    });
+                                    Cow::Borrowed(rt)
+                                }
+                            }
+                        } else {
+                            // Not a Ref variable; treat as DB local
+                            Cow::Borrowed(rt)
+                        }
+                    }
+                    DbRef::Local(_, subs) | DbRef::Global(_, subs) => {
+                        // Has subscripts or is global; check subscripts
+                        self.check_subscript_elems(subs, span);
+                        Cow::Borrowed(rt)
+                    }
+                }
+            }
+            RefTarget::Expr(e) => {
+                let ty = self.expr(*e);
+                self.unify(ty, Ty::Ref, span);
+                Cow::Borrowed(rt)
+            }
+        }
     }
 
     /// Type-check subscript elements.
@@ -1814,13 +1885,10 @@ impl InferCtx<'_> {
     ///
     /// Queries the existence status of a node. Returns `DataStatus` enum.
     /// Populates the `TxnId` field in the AST based on current transaction context.
-    fn data(&mut self, id: ExprId, dbref: &DbRef, span: Span) -> Ty {
-        let subs = match dbref {
-            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
-        };
-        self.check_subscript_elems(subs, span);
+    fn data(&mut self, id: ExprId, rt: &RefTarget, span: Span) -> Ty {
+        let resolved_rt = self.resolve_ref_target(rt, span).into_owned();
         self.ast
-            .set_expr(id, Expr::Data(dbref.clone(), self.in_transaction));
+            .set_expr(id, Expr::Data(resolved_rt, self.in_transaction));
         Ty::DataStatus
     }
 
@@ -1828,13 +1896,10 @@ impl InferCtx<'_> {
     ///
     /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
     /// Populates the `TxnId` field in the AST based on current transaction context.
-    fn order(&mut self, id: ExprId, dbref: &DbRef, span: Span) -> Ty {
-        let subs = match dbref {
-            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
-        };
-        self.check_subscript_elems(subs, span);
+    fn order(&mut self, id: ExprId, rt: &RefTarget, span: Span) -> Ty {
+        let resolved_rt = self.resolve_ref_target(rt, span).into_owned();
         self.ast
-            .set_expr(id, Expr::Order(dbref.clone(), self.in_transaction));
+            .set_expr(id, Expr::Order(resolved_rt, self.in_transaction));
         Ty::Option(Box::new(Ty::Named(TypeId::SUBSCRIPT, vec![])))
     }
 
@@ -1843,13 +1908,10 @@ impl InferCtx<'_> {
     /// Returns the full key path to the next node with a value.
     /// Returns `Option[Array[Subscript]]`.
     /// Populates the `TxnId` field in the AST based on current transaction context.
-    fn query(&mut self, id: ExprId, dbref: &DbRef, span: Span) -> Ty {
-        let subs = match dbref {
-            DbRef::Local(_, s) | DbRef::Global(_, s) => s,
-        };
-        self.check_subscript_elems(subs, span);
+    fn query(&mut self, id: ExprId, rt: &RefTarget, span: Span) -> Ty {
+        let resolved_rt = self.resolve_ref_target(rt, span).into_owned();
         self.ast
-            .set_expr(id, Expr::Query(dbref.clone(), self.in_transaction));
+            .set_expr(id, Expr::Query(resolved_rt, self.in_transaction));
         let subscript = Ty::Named(TypeId::SUBSCRIPT, vec![]);
         Ty::Option(Box::new(Ty::Array(Box::new(subscript))))
     }

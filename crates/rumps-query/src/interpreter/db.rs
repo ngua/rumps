@@ -1,16 +1,131 @@
 //! Database primitives: GET, SET, KILL, DATA, and key construction.
 
 use async_recursion::async_recursion;
-use rumps_types::{DataStatus, Key, Subscript};
+use rumps_types::{DataStatus, Key, Name, Subscript};
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{DbRef, ExprId, SubscriptElem, TxnId};
+use crate::ast::{DbRef, ExprId, RefTarget, SubscriptElem, TxnId};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
+    /// Evaluate a `DbRef` literal to a `Value::Ref`.
+    ///
+    /// Evaluates all subscript expressions and creates a first-class `Ref` value.
+    #[async_recursion]
+    pub(super) async fn ref_lit(
+        &mut self,
+        dbref: &DbRef,
+        span: Span,
+    ) -> Result<Value> {
+        let (is_global, name) = match dbref {
+            DbRef::Local(n, _) => (false, n.as_str()),
+            DbRef::Global(n, _) => (true, n.as_str()),
+        };
+        let name_id = self.arena.intern(name);
+        let (_, subs) = dbref.split();
+
+        // Evaluate subscripts and store them
+        let sub_ids = self.eval_subscripts(subs, span).await?;
+
+        Ok(Value::Ref(is_global, name_id, sub_ids))
+    }
+
+    /// Evaluate subscript elements and return a `SmallVec` of `ValueId`s.
+    #[async_recursion]
+    async fn eval_subscripts(
+        &mut self,
+        subs: &[SubscriptElem],
+        span: Span,
+    ) -> Result<SmallVec<[crate::value::ValueId; 4]>> {
+        let mut acc = SmallVec::with_capacity(subs.len());
+        self.eval_subscripts_acc(subs, &mut acc, span).await?;
+        Ok(acc)
+    }
+
+    /// Recursive helper for evaluating subscripts.
+    #[async_recursion]
+    async fn eval_subscripts_acc(
+        &mut self,
+        subs: &[SubscriptElem],
+        acc: &mut SmallVec<[crate::value::ValueId; 4]>,
+        span: Span,
+    ) -> Result<()> {
+        match subs.split_first() {
+            None => Ok(()),
+            Some((head, tail)) => {
+                match head {
+                    SubscriptElem::Elem(id) => {
+                        let val = self.eval(*id).await?;
+                        let val_id = self.arena.add(val, span);
+                        acc.push(val_id);
+                    }
+                    SubscriptElem::Spread(id) => {
+                        let val = self.eval(*id).await?;
+                        match &val {
+                            Value::Array(_, elems) => {
+                                elems.iter().for_each(|elem_id| {
+                                    acc.push(*elem_id);
+                                });
+                            }
+                            _ => typechecked!("...spread", "Array[Subscript]"),
+                        }
+                    }
+                }
+                self.eval_subscripts_acc(tail, acc, span).await
+            }
+        }
+    }
+
+    /// Resolve a `RefTarget` to `(Name, Key)`.
+    ///
+    /// - `Inline(DbRef)`: extracts name and evaluates subscript expressions
+    /// - `Expr(ExprId)`: evaluates to `Value::Ref` with pre-evaluated subscripts
+    #[async_recursion]
+    async fn resolve_ref_target(
+        &mut self,
+        rt: &RefTarget,
+    ) -> Result<(Name, Key)> {
+        match rt {
+            RefTarget::Inline(dbref) => {
+                let (name, subs) = dbref.split();
+                let key = self.build_key(subs).await?;
+                Ok((name, key))
+            }
+            RefTarget::Expr(e) => {
+                let val = self.eval(*e).await?;
+                match &val {
+                    Value::Ref(is_global, name_id, sub_ids) => {
+                        let name_str = self
+                            .arena
+                            .get_str(*name_id)
+                            .unwrap_or_else(|| invariant!("Ref name in arena"));
+                        let name = if *is_global {
+                            Name::global(name_str)
+                        } else {
+                            Name::local(name_str)
+                        };
+                        // Build key from pre-evaluated subscripts
+                        let key = sub_ids
+                            .iter()
+                            .map(|vid| {
+                                let v =
+                                    self.arena.get(*vid).unwrap_or_else(|| {
+                                        invariant!("Ref subscript in arena")
+                                    });
+                                self.subscript(v)
+                            })
+                            .collect::<Vec<_>>();
+                        Ok((name, Key::from(key)))
+                    }
+                    _ => typechecked!("RefTarget::Expr", "Value::Ref"),
+                }
+            }
+        }
+    }
+
     /// `@GET` primitive; reads a value from a B-tree variable.
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
@@ -18,12 +133,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn get(
         &mut self,
-        dbref: &DbRef,
+        rt: &RefTarget,
         txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
-        let (name, subs) = dbref.split();
-        let key = self.build_key(subs).await?;
+        let (name, key) = self.resolve_ref_target(rt).await?;
 
         let opt_val = match txn_id.and_then(|id| self.txns.get(&id)) {
             Some(txn) => txn.get(&name, &key).await.ok().flatten(),
@@ -47,13 +161,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn set(
         &mut self,
-        dbref: &DbRef,
+        rt: &RefTarget,
         expr_id: ExprId,
         txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
-        let (name, subs) = dbref.split();
-        let key = self.build_key(subs).await?;
+        let (name, key) = self.resolve_ref_target(rt).await?;
         let val = self.eval(expr_id).await?;
         let storage_val = self.store(&val);
 
@@ -87,12 +200,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn kill(
         &mut self,
-        dbref: &DbRef,
+        rt: &RefTarget,
         txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
-        let (name, subs) = dbref.split();
-        let key = self.build_key(subs).await?;
+        let (name, key) = self.resolve_ref_target(rt).await?;
 
         // Global writes require transaction (typechecked); locals go direct
         let res = if name.is_global() {
@@ -121,11 +233,10 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn data(
         &mut self,
-        dbref: &DbRef,
+        rt: &RefTarget,
         txn_id: Option<TxnId>,
     ) -> Result<Value> {
-        let (name, subs) = dbref.split();
-        let key = self.build_key(subs).await?;
+        let (name, key) = self.resolve_ref_target(rt).await?;
 
         let status = match txn_id.and_then(|id| self.txns.get(&id)) {
             Some(txn) => txn.data(&name, &key).await,
@@ -151,12 +262,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn order(
         &mut self,
-        dbref: &DbRef,
+        rt: &RefTarget,
         txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
-        let (name, subs) = dbref.split();
-        let key = self.build_key(subs).await?;
+        let (name, key) = self.resolve_ref_target(rt).await?;
 
         // `ORDER items(1)` means "find next subscript after `1` at root level",
         // so we split the key: prefix = [] (root), after = `Some(1)`.
@@ -200,12 +310,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn query(
         &mut self,
-        dbref: &DbRef,
+        rt: &RefTarget,
         txn_id: Option<TxnId>,
         span: Span,
     ) -> Result<Value> {
-        let (name, subs) = dbref.split();
-        let key = self.build_key(subs).await?;
+        let (name, key) = self.resolve_ref_target(rt).await?;
 
         // The `query` API takes `Option<&Key>` for the "after" position.
         let after = if key.is_empty() { None } else { Some(&key) };

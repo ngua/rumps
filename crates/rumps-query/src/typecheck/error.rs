@@ -205,6 +205,7 @@ impl<'a> TyPrinter<'a> {
                     format!("{}[{}]", name, ps.join(", "))
                 }
             }
+            Ty::Ref => "Ref".to_owned(),
         }
     }
 
@@ -740,6 +741,7 @@ impl fmt::Display for Ty {
                 }
                 Ok(())
             }
+            Self::Ref => write!(f, "Ref"),
         }
     }
 }

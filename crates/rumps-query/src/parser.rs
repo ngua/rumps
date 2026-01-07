@@ -447,17 +447,16 @@ impl Parser {
         let expr = Self::expr(stmt);
 
         just(Token::Set)
-            .ignore_then(Self::db_ref(expr.clone()))
+            .ignore_then(Self::ref_expr(expr.clone()))
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
             .then(expr)
-            .map_with_span(|(dbref, val), span| {
-                cst::Stmt::new(cst::StmtKind::Set(dbref, val), span)
+            .map_with_span(|(r, val), span| {
+                cst::Stmt::new(cst::StmtKind::Set(r, val), span)
             })
     }
 
-    /// `KILL name` or `KILL name(subs...)`
-    /// `KILL ^global` or `KILL ^global(subs...)`
+    /// `@KILL target`
     fn kill_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
@@ -466,9 +465,9 @@ impl Parser {
         let expr = Self::expr(stmt);
 
         just(Token::Kill)
-            .ignore_then(Self::db_ref(expr))
-            .map_with_span(|dbref, span| {
-                cst::Stmt::new(cst::StmtKind::Kill(dbref), span)
+            .ignore_then(Self::ref_expr(expr))
+            .map_with_span(|r, span| {
+                cst::Stmt::new(cst::StmtKind::Kill(r), span)
             })
     }
 
@@ -568,12 +567,15 @@ impl Parser {
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         just(Token::Set)
-            .ignore_then(Self::db_ref(expr.clone()))
+            .ignore_then(Self::ref_expr(expr.clone()))
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
             .then(expr)
-            .map_with_span(|(dbref, val), span| {
-                cst::Expr::new(cst::ExprKind::Set(dbref, Box::new(val)), span)
+            .map_with_span(|(r, val), span| {
+                cst::Expr::new(
+                    cst::ExprKind::Set(Box::new(r), Box::new(val)),
+                    span,
+                )
             })
     }
 
@@ -586,9 +588,9 @@ impl Parser {
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         just(Token::Kill)
-            .ignore_then(Self::db_ref(expr))
-            .map_with_span(|dbref, span| {
-                cst::Expr::new(cst::ExprKind::Kill(dbref), span)
+            .ignore_then(Self::ref_expr(expr))
+            .map_with_span(|r, span| {
+                cst::Expr::new(cst::ExprKind::Kill(Box::new(r)), span)
             })
     }
 
@@ -1721,9 +1723,9 @@ impl Parser {
 
             // GET target (with optional postfix ops like `!`)
             let get_expr = just(Token::Get)
-                .ignore_then(Self::db_ref(intrinsic_op.clone()))
-                .map_with_span(|dbref, span| {
-                    cst::Expr::new(cst::ExprKind::Get(dbref), span)
+                .ignore_then(Self::ref_expr(intrinsic_op.clone()))
+                .map_with_span(|r, span| {
+                    cst::Expr::new(cst::ExprKind::Get(Box::new(r)), span)
                 })
                 .then(postfix_ops.clone())
                 .map_with_span(|(base, ops), span| {
@@ -1737,9 +1739,9 @@ impl Parser {
 
             // DATA target (with optional postfix ops)
             let data_expr = just(Token::Data)
-                .ignore_then(Self::db_ref(intrinsic_op.clone()))
-                .map_with_span(|dbref, span| {
-                    cst::Expr::new(cst::ExprKind::Data(dbref), span)
+                .ignore_then(Self::ref_expr(intrinsic_op.clone()))
+                .map_with_span(|r, span| {
+                    cst::Expr::new(cst::ExprKind::Data(Box::new(r)), span)
                 })
                 .then(postfix_ops.clone())
                 .map_with_span(|(base, ops), span| {
@@ -1753,9 +1755,9 @@ impl Parser {
 
             // ORDER target (with optional postfix ops)
             let order_expr = just(Token::Order)
-                .ignore_then(Self::db_ref(intrinsic_op.clone()))
-                .map_with_span(|dbref, span| {
-                    cst::Expr::new(cst::ExprKind::Order(dbref), span)
+                .ignore_then(Self::ref_expr(intrinsic_op.clone()))
+                .map_with_span(|r, span| {
+                    cst::Expr::new(cst::ExprKind::Order(Box::new(r)), span)
                 })
                 .then(postfix_ops.clone())
                 .map_with_span(|(base, ops), span| {
@@ -1769,9 +1771,9 @@ impl Parser {
 
             // QUERY target (with optional postfix ops)
             let query_expr = just(Token::Query)
-                .ignore_then(Self::db_ref(intrinsic_op.clone()))
-                .map_with_span(|dbref, span| {
-                    cst::Expr::new(cst::ExprKind::Query(dbref), span)
+                .ignore_then(Self::ref_expr(intrinsic_op.clone()))
+                .map_with_span(|r, span| {
+                    cst::Expr::new(cst::ExprKind::Query(Box::new(r)), span)
                 })
                 .then(postfix_ops.clone())
                 .map_with_span(|(base, ops), span| {
@@ -1810,22 +1812,48 @@ impl Parser {
     /// Parse a B-tree variable reference (local or global with subscripts).
     ///
     /// Returns `cst::DbRef` for use in `GET`, `SET`, `KILL`, `DATA`, `ORDER`, `QUERY`.
+    ///
+    /// NOTE: Bare locals (`name`) are NOT valid; use `name{}` for root refs.
+    /// Bare identifiers are parsed as variable references by `ref_arg`.
     fn db_ref(
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::DbRef, Error = ParseErr> + Clone {
-        let global = Self::global_name()
-            .then(Self::subscripts(expr.clone()).or_not())
-            .map(|(name, subs)| {
-                cst::DbRef::Global(name, subs.unwrap_or_default())
-            });
+        // Global with subscripts: `^name{...}` (GlobalBrace token)
+        // For root refs, use `^name{}` (empty subscripts)
+        let global_with_subs = select! { Token::GlobalBrace(name) => name }
+            .then(Self::subscript_contents(expr.clone()))
+            .map(|(name, subs)| cst::DbRef::Global(name, subs));
 
-        let local = Self::ident().then(Self::subscripts(expr).or_not()).map(
-            |(name, subs)| cst::DbRef::Local(name, subs.unwrap_or_default()),
-        );
+        // Local with subscripts: `name{...}` (IdentBrace token)
+        // For root refs, use `name{}` (empty subscripts)
+        let local_with_subs = select! { Token::IdentBrace(name) => name }
+            .then(Self::subscript_contents(expr))
+            .map(|(name, subs)| cst::DbRef::Local(name, subs));
 
-        choice((global, local))
+        // No bare cases; both `name` and `^name` require `{}`
+        choice((global_with_subs, local_with_subs))
+    }
+
+    /// Parse a ref expression for intrinsics.
+    ///
+    /// Accepts either:
+    /// - Inline `DbRef` as `RefLit`: `data{1}`, `^global{}`, `data{}`
+    /// - Variable: bare identifier (must have type `Ref`)
+    fn ref_expr(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let ref_lit = Self::db_ref(expr).map_with_span(|dbref, span| {
+            cst::Expr::new(cst::ExprKind::RefLit(dbref), span)
+        });
+        let var = Self::ident().map_with_span(|name, span| {
+            cst::Expr::new(cst::ExprKind::Var(name), span)
+        });
+        // Try ref_lit first (more specific due to IdentBrace/GlobalBrace)
+        ref_lit.or(var)
     }
 
     /// Postfix operators parser; returns zero or more `PostfixOp`s.
@@ -2062,6 +2090,28 @@ impl Parser {
         let interpolation = select! { Token::Interpolation(parts) => parts }
             .map_with_span(|parts, span| {
                 cst::Expr::new(cst::ExprKind::Interpolation(parts), span)
+            });
+
+        // Database reference literals: `name{...}` or `^global{...}`.
+        //
+        // Creates a first-class `Ref` value. Uses `IdentBrace`/`GlobalBrace`
+        // tokens which only form when there's NO space between name and `{`.
+        // This allows `IF cond { ... }` to work (space means block, not ref).
+        let ref_local = select! { Token::IdentBrace(name) => name }
+            .then(Self::subscript_contents(expr.clone()))
+            .map_with_span(|(name, subs), span| {
+                cst::Expr::new(
+                    cst::ExprKind::RefLit(cst::DbRef::Local(name, subs)),
+                    span,
+                )
+            });
+        let ref_global = select! { Token::GlobalBrace(name) => name }
+            .then(Self::subscript_contents(expr.clone()))
+            .map_with_span(|(name, subs), span| {
+                cst::Expr::new(
+                    cst::ExprKind::RefLit(cst::DbRef::Global(name, subs)),
+                    span,
+                )
             });
 
         // Lexical variable or mempty (`_`)
@@ -2387,13 +2437,17 @@ impl Parser {
         // Match expression
         let match_expr = Self::match_expr(expr);
 
-        // Order matters (see original parser for rationale)
+        // Order matters: ref literals before var (IdentBrace is distinct from
+        // Ident so they won't conflict). Closures before var since both can
+        // start with ident but closure needs `=>`.
         choice((
             literal,
             interpolation,
             regex_lit,
             closure_single,
             closure_multi,
+            ref_local,
+            ref_global,
             var,
             paren,
             array,
@@ -2727,13 +2781,18 @@ impl Parser {
         select! { Token::Global(s) => s }
     }
 
-    /// Parse subscripts: `(expr, expr, ...)` with optional spread.
+    /// Parse subscripts: `{expr, expr, ...}` with optional spread.
     ///
     /// Supports both regular subscript elements and spread syntax:
-    /// - `d(1, "key")` uses `Elem` for each subscript
-    /// - `d(...keys)` uses `Spread` to expand an `Array[Subscript]`
-    /// - `d(1, ...rest)` mixes both
-    fn subscripts(
+    /// - `d{1, "key"}` uses `Elem` for each subscript
+    /// - `d{...keys}` uses `Spread` to expand an `Array[Subscript]`
+    /// - `d{1, ...rest}` mixes both
+    ///
+    /// Note: Uses `{}` to distinguish from function calls `f(args)`.
+    /// Parse subscript contents (after the opening `{`) and closing `}`.
+    ///
+    /// Used with `IdentBrace`/`GlobalBrace` tokens where `{` is already consumed.
+    fn subscript_contents(
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
@@ -2745,13 +2804,21 @@ impl Parser {
         let single = expr.map(cst::SubscriptElem::Elem);
         let elem = spread.or(single);
 
-        just(Token::LParen)
-            .ignore_then(
-                elem.separated_by(just(Token::Comma))
-                    .at_least(1)
-                    .allow_trailing(),
-            )
-            .then_ignore(just(Token::RParen))
+        elem.separated_by(just(Token::Comma))
+            .allow_trailing()
+            .then_ignore(just(Token::RBrace))
+    }
+
+    /// Parse full subscripts including opening `{` and closing `}`.
+    ///
+    /// Used for contexts where `{` is a separate token (not merged).
+    fn subscripts(
+        expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, Vec<cst::SubscriptElem>, Error = ParseErr> + Clone
+    {
+        just(Token::LBrace).ignore_then(Self::subscript_contents(expr))
     }
 
     /// Parse a type expression.

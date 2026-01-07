@@ -58,6 +58,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 rumps_types::Value::Json(self.jsonify(v))
             }
             Value::Time(t) => rumps_types::Value::String(t.to_rfc3339()),
+            Value::Ref(..) => typechecked!("store", "Storable (not Ref)"),
         }
     }
 
@@ -233,6 +234,18 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Internal loop control values; should not be stringified by user code
             Value::ForeverContinuation => "<continuation>".into(),
             Value::LoopContinue(_) => "<loop-continue>".into(),
+            // Ref values: format as `name{sub1, sub2}` or `^name{sub1, sub2}`
+            Value::Ref(is_global, name_id, sub_ids) => {
+                let prefix = if *is_global { "^" } else { "" };
+                let name = self.arena.get_str(*name_id).unwrap_or("?");
+                let subs = sub_ids
+                    .iter()
+                    .filter_map(|id| self.arena.get(*id))
+                    .map(|v| self.stringify(v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{prefix}{name}{{{subs}}}")
+            }
         }
     }
 
@@ -388,6 +401,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ForeverContinuation | Value::LoopContinue(_) => {
                 typechecked!("jsonify", "Jsonable (not continuation)")
             }
+            Value::Ref(..) => typechecked!("jsonify", "Jsonable (not Ref)"),
         }
     }
 
@@ -478,7 +492,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::ModuleConst { .. }
             | Value::Range { .. }
             | Value::ForeverContinuation
-            | Value::LoopContinue(_) => {
+            | Value::LoopContinue(_)
+            | Value::Ref(..) => {
                 typechecked!("subscript", "Subscriptable")
             }
         }

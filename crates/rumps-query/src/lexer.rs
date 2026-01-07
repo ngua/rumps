@@ -56,6 +56,68 @@ impl Spanned {
             .collect()
     }
 
+    /// Post-processes tokens to merge `Ident`/`Global` + `LBrace` into
+    /// `IdentBrace`/`GlobalBrace` when adjacent (no whitespace).
+    ///
+    /// This allows the parser to distinguish:
+    /// - `data{1, 2}` -> DB ref literal (IdentBrace)
+    /// - `data { ... }` -> variable followed by block (Ident + LBrace)
+    fn process_ref_braces(tokens: Vec<Self>) -> Vec<Self> {
+        // State: (accumulated tokens, pending ident/global that might merge)
+        let (mut acc, pending) = tokens.into_iter().fold(
+            (Vec::new(), None::<Self>),
+            |(mut acc, pending), t| match pending {
+                Some(p) => {
+                    // Check if current token is `LBrace` adjacent to pending
+                    let merged = (t.tok == Token::LBrace
+                        && p.span.end == t.span.start)
+                        .then(|| match &p.tok {
+                            Token::Ident(name) => Self::new(
+                                Token::IdentBrace(name.clone()),
+                                Span::new(p.span.start, t.span.end),
+                            ),
+                            Token::Global(name) => Self::new(
+                                Token::GlobalBrace(name.clone()),
+                                Span::new(p.span.start, t.span.end),
+                            ),
+                            _ => unreachable!(),
+                        });
+                    match merged {
+                        Some(m) => {
+                            acc.push(m);
+                            (acc, None)
+                        }
+                        None => {
+                            acc.push(p);
+                            // Current token might be ident/global for next merge
+                            match &t.tok {
+                                Token::Ident(_) | Token::Global(_) => {
+                                    (acc, Some(t))
+                                }
+                                _ => {
+                                    acc.push(t);
+                                    (acc, None)
+                                }
+                            }
+                        }
+                    }
+                }
+                None => match &t.tok {
+                    Token::Ident(_) | Token::Global(_) => (acc, Some(t)),
+                    _ => {
+                        acc.push(t);
+                        (acc, None)
+                    }
+                },
+            },
+        );
+        // Flush any pending token
+        if let Some(p) = pending {
+            acc.push(p);
+        }
+        acc
+    }
+
     /// Post-processes tokens to add `Indent` and `Dedent` tokens.
     ///
     /// Uses iterative `fold` instead of recursion to avoid stack overflow
@@ -156,6 +218,7 @@ impl<'a> Lexer<'a> {
         Self::lexer()
             .parse(self.src)
             .map(Spanned::process_dot_dot)
+            .map(Spanned::process_ref_braces)
             .map(Spanned::process_indentation)
             .map_err(|errs| {
                 NonEmpty::collect(errs.into_iter().map(Self::to_error))

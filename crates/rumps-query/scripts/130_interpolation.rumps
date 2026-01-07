@@ -101,13 +101,13 @@ LET val = 7
 WRITE "Direct IF: {IF val > 5 { "big" } ELSE { "small" }}"
 
 ; DbRef in interpolation (requires the merge_dbref fix)
-@SET d(1, 2) = "nested-key"
-WRITE "DbRef: {@GET d(1, 2)!}"
+@SET d{1, 2} = "nested-key"
+WRITE "DbRef: {@GET d{1, 2}!}"
 
 ; Complex subscript expression
 LET idx = 2
-@SET d(1, idx) = "dynamic"
-WRITE "Dynamic key: {@GET d(1, idx)!}"
+@SET d{1, idx} = "dynamic"
+WRITE "Dynamic key: {@GET d{1, idx}!}"
 
 ; Block expression in interpolation (note: `{{` is escape, so `{{{ ... }}}` needed)
 WRITE "Block: {{{ 2 * 21 }}}"

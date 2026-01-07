@@ -62,22 +62,22 @@ WRITE opt!: Int
 
 ; Setup a local db
 LET d = {}
-@SET d("key") = 123
+@SET d{"key"} = 123
 
 ; @GET with annotation
-LET val = @GET d("key"): Option[Storable]
+LET val = @GET d{"key"}: Option[Storable]
 WRITE val
 
 ; @GET with unwrap then annotation
-LET unwrapped = @GET d("key")!: Storable
+LET unwrapped = @GET d{"key"}!: Storable
 WRITE unwrapped
 
 ; @DATA with annotation
-LET status = @DATA d("key"): DataStatus
+LET status = @DATA d{"key"}: DataStatus
 WRITE status
 
 ; @ORDER with annotation
-LET ord = @ORDER d(""): Option[Subscript]
+LET ord = @ORDER d{""}: Option[Subscript]
 WRITE ord
 
 ; === WRITE with annotated operand ===

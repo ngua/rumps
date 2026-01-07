@@ -582,6 +582,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                     && p1.len() == p2.len()
                     && self.payloads_equal(p1, p2)
             }
+            (Value::Ref(g1, name1, subs1), Value::Ref(g2, name2, subs2)) => {
+                g1 == g2
+                    && name1 == name2
+                    && subs1.len() == subs2.len()
+                    && self.payloads_equal(subs1, subs2)
+            }
             _ => typechecked!("==/!=", "Eq"),
         }
     }

@@ -297,14 +297,10 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Literal(lit) => Ok(self.literal(&lit)),
             Expr::Interpolation(parts) => self.interpolation(&parts).await,
             Expr::Var(name) => Ok(self.var(&name, span)),
-            Expr::Get(ref dbref, txn_id) => self.get(dbref, txn_id, span).await,
-            Expr::Data(ref dbref, txn_id) => self.data(dbref, txn_id).await,
-            Expr::Order(ref dbref, txn_id) => {
-                self.order(dbref, txn_id, span).await
-            }
-            Expr::Query(ref dbref, txn_id) => {
-                self.query(dbref, txn_id, span).await
-            }
+            Expr::Get(ref rt, txn_id) => self.get(rt, txn_id, span).await,
+            Expr::Data(ref rt, txn_id) => self.data(rt, txn_id).await,
+            Expr::Order(ref rt, txn_id) => self.order(rt, txn_id, span).await,
+            Expr::Query(ref rt, txn_id) => self.query(rt, txn_id, span).await,
             Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
             Expr::Unary(op, operand) => self.unary(op, operand, span).await,
             Expr::Call(callee, args) => self.call(callee, &args, span).await,
@@ -367,12 +363,10 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.write(&output).await?;
                 Ok(Value::Unit)
             }
-            Expr::Set(ref dbref, value, txn_id) => {
-                self.set(dbref, value, txn_id, span).await
+            Expr::Set(ref rt, value, txn_id) => {
+                self.set(rt, value, txn_id, span).await
             }
-            Expr::Kill(ref dbref, txn_id) => {
-                self.kill(dbref, txn_id, span).await
-            }
+            Expr::Kill(ref rt, txn_id) => self.kill(rt, txn_id, span).await,
             Expr::Raise(inner) => {
                 let val = self.eval(inner).await?;
                 let msg = if let Value::String(id) = &val {
@@ -393,6 +387,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             }
             Expr::Transaction(ref txn) => self.transaction(txn, span).await,
             Expr::Mempty => self.mempty(id),
+            Expr::Ref(ref dbref) => self.ref_lit(dbref, span).await,
         }
     }
 }

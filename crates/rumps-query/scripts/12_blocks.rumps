@@ -29,11 +29,11 @@ WRITE z
 
 ; Block with @SET (side effect, no return)
 {
-  @SET counter = 0
-  @SET counter = 1
-  @SET counter = 2
+  @SET counter{} = 0
+  @SET counter{} = 1
+  @SET counter{} = 2
 }
-LET c = @GET counter
+LET c = @GET counter{}
 WRITE c
 ; Expected: 2
 

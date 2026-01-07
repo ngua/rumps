@@ -45,6 +45,7 @@ impl InferCtx<'_> {
             | Ty::Path
             | Ty::Regex
             | Ty::RuntimeError
+            | Ty::Ref
             | Ty::Error => false,
             // Option, Result, Array, Map, and Fn with unresolved type params are
             // OK. These are intentionally polymorphic (e.g., `Option.None`,
@@ -92,6 +93,7 @@ impl InferCtx<'_> {
             TypeId::TIME => Ty::Time,
             TypeId::RANGE => Ty::Range,
             TypeId::JSON => Ty::Json,
+            TypeId::REF => Ty::Ref,
             _ => Ty::Named(id, vec![]),
         }
     }
@@ -384,6 +386,7 @@ impl InferCtx<'_> {
             "FilePath" => Ty::FilePath,
             "Path" => Ty::Path,
             "Regex" => Ty::Regex,
+            "Ref" => Ty::Ref,
             _ => {
                 // Look up in registry
                 self.env

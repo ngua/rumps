@@ -56,19 +56,19 @@ LET evens = FOREVER { i: 0, acc: [] } (state, cont) => {
 WRITE evens
 
 ; Using @ORDER to iterate through subscripts
-@SET data(1) = "one"
-@SET data(2) = "two"
-@SET data(3) = "three"
-@SET data(4) = "four"
+@SET data{1} = "one"
+@SET data{2} = "two"
+@SET data{3} = "three"
+@SET data{4} = "four"
 
 ; Collect keys using @ORDER and FOREVER
-LET keys = FOREVER { key: @ORDER data, acc: [] } (state, cont) => {
+LET keys = FOREVER { key: @ORDER data{}, acc: [] } (state, cont) => {
   MATCH state.key {
     Option.None => state.acc
     Option.Some(s) => {
       LET s = (s READ Int)!
       cont({
-        key: @ORDER data(s),
+        key: @ORDER data{s},
         acc: Array.concat(state.acc, [s])
       })
     }
@@ -77,14 +77,14 @@ LET keys = FOREVER { key: @ORDER data, acc: [] } (state, cont) => {
 WRITE keys
 
 ; Collect all values using @ORDER
-LET vals = FOREVER { key: @ORDER data, acc: "" } (state, cont) => {
+LET vals = FOREVER { key: @ORDER data{}, acc: "" } (state, cont) => {
   MATCH state.key {
     Option.None => state.acc
     Option.Some(k) => {
       LET ki = (k READ Int)!
-      LET v = @GET data(ki)!
+      LET v = @GET data{ki}!
       cont({
-        key: @ORDER data(ki),
+        key: @ORDER data{ki},
         acc: "{state.acc}{v} "
       })
     }

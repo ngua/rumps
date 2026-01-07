@@ -2,5 +2,5 @@
 
 ; Duplicate ON CONFLICT should fail
 LET r = TRANSACTION {
-  @SET ^data(1) = "one"
+  @SET ^data{1} = "one"
 } ON CONFLICT ABORT ON CONFLICT SKIP

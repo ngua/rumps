@@ -80,6 +80,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ForeverContinuation | Value::LoopContinue(_) => {
                 self.type_exprs.named(TypeId::UNIT)
             }
+            Value::Ref(..) => self.type_exprs.named(TypeId::REF),
         }
     }
 
@@ -902,6 +903,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Range { .. } => type_id == TypeId::RANGE,
             // Internal loop control types; don't match user types
             Value::ForeverContinuation | Value::LoopContinue(_) => false,
+            Value::Ref(..) => type_id == TypeId::REF,
         }
     }
 

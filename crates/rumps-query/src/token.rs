@@ -65,8 +65,17 @@ pub(crate) enum Token {
 
     // Identifiers
     Ident(String),
+    /// Identifier immediately followed by `{` (no space); for DB ref literals.
+    ///
+    /// Example: `data{1, 2}` lexes as `IdentBrace("data")`, `1`, `,`, `2`, `}`.
+    /// Contrast: `data { ... }` lexes as `Ident("data")`, `LBrace`, etc.
+    IdentBrace(String),
     /// Global variable (prefixed with `^` in source).
     Global(String),
+    /// Global immediately followed by `{` (no space); for DB ref literals.
+    ///
+    /// Example: `^data{1}` lexes as `GlobalBrace("data")`, `1`, `}`.
+    GlobalBrace(String),
 
     // Arithmetic operators
     Plus,     // +
@@ -290,7 +299,9 @@ impl fmt::Display for Token {
             Self::Regex(p) => write!(f, "/{p}/"),
             Self::Null => write!(f, "null"),
             Self::Ident(s) => write!(f, "{s}"),
+            Self::IdentBrace(s) => write!(f, "{s}{{"),
             Self::Global(s) => write!(f, "^{s}"),
+            Self::GlobalBrace(s) => write!(f, "^{s}{{"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
             Self::Mul => write!(f, "*"),

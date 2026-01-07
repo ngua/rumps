@@ -54,6 +54,7 @@ pub(crate) enum Ty {
     Path,
     Regex,
     RuntimeError,
+    Ref,
 
     // Parameterized builtins
     Array(Box<Self>),
@@ -151,6 +152,7 @@ impl Ty {
             | Self::Path
             | Self::Regex
             | Self::RuntimeError
+            | Self::Ref
             | Self::Unknown
             | Self::Error => {}
             Self::Array(t) | Self::Option(t) => t.collect_free_vars(acc),
@@ -199,6 +201,7 @@ impl Ty {
             | Self::Path
             | Self::Regex
             | Self::RuntimeError
+            | Self::Ref
             | Self::Unknown
             | Self::Error => false,
             Self::Array(t) | Self::Option(t) => t.occurs(v),
@@ -237,6 +240,7 @@ impl Ty {
             Self::Path => Self::Path,
             Self::Regex => Self::Regex,
             Self::RuntimeError => Self::RuntimeError,
+            Self::Ref => Self::Ref,
             Self::Unknown => Self::Unknown,
             Self::Error => Self::Error,
             Self::Array(t) => Self::Array(Box::new(t.apply(subst))),

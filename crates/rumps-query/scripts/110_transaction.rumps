@@ -3,43 +3,43 @@
 
 ; Basic transaction with global write
 LET write-result = TRANSACTION {
-  @SET ^TEST(1, "name") = "Alice"
-  @SET ^TEST(1, "age") = 30
-  @GET ^TEST(1, "name")
+  @SET ^TEST{1, "name"} = "Alice"
+  @SET ^TEST{1, "age"} = 30
+  @GET ^TEST{1, "name"}
 }
 WRITE write-result
 
 ; Verify write persisted
-WRITE @GET ^TEST(1, "age")
+WRITE @GET ^TEST{1, "age"}
 
 ; Transaction returning unit (write-only)
 LET unit-result = TRANSACTION {
-  @SET ^TEST(2, "status") = "active"
+  @SET ^TEST{2, "status"} = "active"
 }
 WRITE unit-result
-WRITE @GET ^TEST(2, "status")
+WRITE @GET ^TEST{2, "status"}
 
 ; Transaction with multiple statements and computation
 LET multi = TRANSACTION {
   LET a = 10
   LET b = 20
-  @SET ^TEST(4, "sum") = a + b
+  @SET ^TEST{4, "sum"} = a + b
   a + b
 }
 WRITE multi
-WRITE @GET ^TEST(4, "sum")
+WRITE @GET ^TEST{4, "sum"}
 
 ; Accessing outer scope from transaction
 LET x = 100
 LET access-outer = TRANSACTION {
-  @SET ^TEST(5, "val") = x + 1
+  @SET ^TEST{5, "val"} = x + 1
   x + 1
 }
 WRITE access-outer
 
 ; Transaction result matching
 LET txn-result = TRANSACTION {
-  @SET ^TEST(6, "m") = "success"
+  @SET ^TEST{6, "m"} = "success"
   "success"
 }
 LET matched = MATCH txn-result {
@@ -50,21 +50,21 @@ WRITE matched
 
 ; Rollback on error: write then fail, verify write is not persisted
 LET rollback-test = TRANSACTION {
-  @SET ^ROLLBACK("key") = "should not persist"
+  @SET ^ROLLBACK{"key"} = "should not persist"
   LET x = Option.None!
   "unreachable"
 }
 WRITE rollback-test
-WRITE @GET ^ROLLBACK("key")
+WRITE @GET ^ROLLBACK{"key"}
 
 ; Bulk write/read test using FOREVER inside transaction
 LET bulk-result = TRANSACTION {
-  ; Write 100 values to ^BULK(0) through ^BULK(99)
+  ; Write 100 values to ^BULK{0} through ^BULK{99}
   FOREVER 0 (n, cont) => {
     IF n >= 100 {
       n
     } ELSE {
-      @SET ^BULK(n) = n * 2
+      @SET ^BULK{n} = n * 2
       cont(n + 1)
     }
   }
@@ -74,7 +74,7 @@ LET bulk-result = TRANSACTION {
     IF state.i >= 100 {
       state.found
     } ELSE {
-      LET val = @GET ^BULK(state.i)
+      LET val = @GET ^BULK{state.i}
       LET inc = MATCH val {
         Option.Some(_) => { 1 }
         Option.None => { 0 }

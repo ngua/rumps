@@ -168,6 +168,7 @@ impl<'a> InferCtx<'a> {
             | (Ty::FilePath, Ty::FilePath)
             | (Ty::Path, Ty::Path)
             | (Ty::Regex, Ty::Regex)
+            | (Ty::Ref, Ty::Ref)
             | (Ty::RuntimeError, Ty::RuntimeError) => {
                 UnifyResult::Ok(Subst::empty())
             }
@@ -935,8 +936,8 @@ impl<'a> InferCtx<'a> {
                 args.iter().for_each(|a| self.check_jsonable(a, span));
             }
 
-            // Functions and regex cannot be serialized to JSON
-            Ty::Fn(_, _) | Ty::Regex => {
+            // Functions, regex, and refs cannot be serialized to JSON
+            Ty::Fn(_, _) | Ty::Regex | Ty::Ref => {
                 self.error(TypeError::UnsatisfiedConstraint(
                     ConstraintKind::Jsonable,
                     ty.clone(),
