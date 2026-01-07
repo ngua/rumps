@@ -82,7 +82,7 @@ LET vals = FOREVER { key: @ORDER data, acc: "" } (state, cont) => {
     Option.None => state.acc
     Option.Some(k) => {
       LET ki = (k READ Int)!
-      LET v = (@GET data(ki))!
+      LET v = @GET data(ki)!
       cont({
         key: @ORDER data(ki),
         acc: "{state.acc}{v} "
