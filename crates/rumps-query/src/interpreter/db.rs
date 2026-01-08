@@ -5,7 +5,7 @@ use rumps_types::{DataStatus, Key, Name, Subscript};
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{DbRef, ExprId, RefTarget, SubscriptElem, TxnId};
+use crate::ast::{DbRef, ExprId, Intrinsic, RefTarget, SubscriptElem, TxnId};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
 use crate::{Result, Span};
@@ -31,6 +31,29 @@ impl<I: IoContext> Interpreter<'_, I> {
         let sub_ids = self.eval_subscripts(subs, span).await?;
 
         Ok(Value::Ref(is_global, name_id, sub_ids))
+    }
+
+    /// Dispatcher for all DB intrinsics (`@GET`, `@SET`, `@KILL`, `@DATA`, `@ORDER`, `@QUERY`).
+    #[async_recursion]
+    pub(super) async fn intrinsic(
+        &mut self,
+        op: Intrinsic,
+        rt: &RefTarget,
+        val: Option<ExprId>,
+        txn_id: Option<TxnId>,
+        span: Span,
+    ) -> Result<Value> {
+        match op {
+            Intrinsic::Get => self.get(rt, txn_id, span).await,
+            Intrinsic::Set => {
+                let v = val.unwrap_or_else(|| invariant!("SET has value"));
+                self.set(rt, v, txn_id, span).await
+            }
+            Intrinsic::Kill => self.kill(rt, txn_id, span).await,
+            Intrinsic::Data => self.data(rt, txn_id).await,
+            Intrinsic::Order => self.order(rt, txn_id, span).await,
+            Intrinsic::Query => self.query(rt, txn_id, span).await,
+        }
     }
 
     /// Evaluate subscript elements and return a `SmallVec` of `ValueId`s.

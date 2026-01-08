@@ -214,16 +214,10 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             let expr_id = lower_expr(ast, ctx, expr)?;
             Stmt::Let(pat, ty_id, expr_id, lower_visibility(vis))
         }
-        cst::StmtKind::Set(r, value) => {
+        cst::StmtKind::Intrinsic(op, r, value) => {
             let rt = lower_ref_arg(ast, ctx, r)?;
-            let value_id = lower_expr(ast, ctx, value)?;
-            let expr = Expr::Set(rt, value_id, None);
-            let expr_id = ast.add_expr(expr, span)?;
-            Stmt::Expr(expr_id)
-        }
-        cst::StmtKind::Kill(r) => {
-            let rt = lower_ref_arg(ast, ctx, r)?;
-            let expr = Expr::Kill(rt, None);
+            let val = value.map(|v| lower_expr(ast, ctx, v)).transpose()?;
+            let expr = Expr::Intrinsic(op, rt, val, None);
             let expr_id = ast.add_expr(expr, span)?;
             Stmt::Expr(expr_id)
         }
@@ -370,9 +364,10 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
             lower_interpolation(ast, ctx, parts, span)?
         }
         cst::ExprKind::Var(name) => Expr::Var(name),
-        cst::ExprKind::Get(r) => {
+        cst::ExprKind::Intrinsic(op, r, value) => {
             let rt = lower_ref_arg(ast, ctx, *r)?;
-            Expr::Get(rt, None)
+            let val = value.map(|v| lower_expr(ast, ctx, *v)).transpose()?;
+            Expr::Intrinsic(op, rt, val, None)
         }
         cst::ExprKind::Binary(lhs, op, rhs) => {
             let lhs_id = lower_expr(ast, ctx, *lhs)?;
@@ -551,18 +546,6 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
             let handler_id = lower_expr(ast, ctx, *handler)?;
             Expr::Catch(expr_id, handler_id)
         }
-        cst::ExprKind::Data(r) => {
-            let rt = lower_ref_arg(ast, ctx, *r)?;
-            Expr::Data(rt, None)
-        }
-        cst::ExprKind::Order(r) => {
-            let rt = lower_ref_arg(ast, ctx, *r)?;
-            Expr::Order(rt, None)
-        }
-        cst::ExprKind::Query(r) => {
-            let rt = lower_ref_arg(ast, ctx, *r)?;
-            Expr::Query(rt, None)
-        }
         cst::ExprKind::Write(output) => {
             let expr_id = lower_expr(ast, ctx, output.expr)?;
             let format = match output.format {
@@ -582,15 +565,6 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
                 format,
                 target,
             })
-        }
-        cst::ExprKind::Set(r, value) => {
-            let rt = lower_ref_arg(ast, ctx, *r)?;
-            let value_id = lower_expr(ast, ctx, *value)?;
-            Expr::Set(rt, value_id, None)
-        }
-        cst::ExprKind::Kill(r) => {
-            let rt = lower_ref_arg(ast, ctx, *r)?;
-            Expr::Kill(rt, None)
         }
         cst::ExprKind::Raise(inner) => {
             let id = lower_expr(ast, ctx, *inner)?;
@@ -1401,9 +1375,12 @@ fn merge_expr(
             Expr::Interpolation(new_parts?)
         }
         Expr::Var(name) => Expr::Var(name),
-        Expr::Get(ref rt, txn) => {
+        Expr::Intrinsic(op, ref rt, value, txn) => {
             let new_rt = merge_ref_target(target, source, rt, span)?;
-            Expr::Get(new_rt, txn)
+            let new_val = value
+                .map(|v| merge_expr(target, source, v, span))
+                .transpose()?;
+            Expr::Intrinsic(op, new_rt, new_val, txn)
         }
         Expr::Binary(lhs, op, rhs) => {
             let new_lhs = merge_expr(target, source, lhs, span)?;
@@ -1623,30 +1600,9 @@ fn merge_expr(
             let new_handler = merge_expr(target, source, handler, span)?;
             Expr::Catch(new_expr, new_handler)
         }
-        Expr::Data(ref rt, txn) => {
-            let new_rt = merge_ref_target(target, source, rt, span)?;
-            Expr::Data(new_rt, txn)
-        }
-        Expr::Order(ref rt, txn) => {
-            let new_rt = merge_ref_target(target, source, rt, span)?;
-            Expr::Order(new_rt, txn)
-        }
-        Expr::Query(ref rt, txn) => {
-            let new_rt = merge_ref_target(target, source, rt, span)?;
-            Expr::Query(new_rt, txn)
-        }
         Expr::Write(out) => {
             let new_out = merge_write_expr(target, source, &out, span)?;
             Expr::Write(new_out)
-        }
-        Expr::Set(ref rt, expr, txn) => {
-            let new_rt = merge_ref_target(target, source, rt, span)?;
-            let new_expr = merge_expr(target, source, expr, span)?;
-            Expr::Set(new_rt, new_expr, txn)
-        }
-        Expr::Kill(ref rt, txn) => {
-            let new_rt = merge_ref_target(target, source, rt, span)?;
-            Expr::Kill(new_rt, txn)
         }
         Expr::Raise(expr) => {
             let new_expr = merge_expr(target, source, expr, span)?;

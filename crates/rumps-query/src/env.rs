@@ -23,6 +23,7 @@ pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
 use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
 
+use crate::ast::Intrinsic;
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::value::{FunctionDef, TypeId, Value, ValueArena, ValueId};
@@ -190,8 +191,8 @@ impl PrimCtx<'_> {
 /// etc. They take a context and arguments, returning a future that resolves
 /// to a `ValueId`.
 ///
-/// Note: `GET`/`SET`/`KILL` are keywords with special syntax, so they are
-/// AST constructs (`Expr::Get`, `Expr::Set`, `Expr::Kill`), not primitives.
+/// Note: database intrinsics (`@GET`, `@SET`, `@KILL`, etc.) have special
+/// syntax and are represented as `Expr::Intrinsic`, not primitives.
 pub(crate) type PrimFn =
     for<'a> fn(&'a mut PrimCtx<'a>, SmallVec<[ValueId; 4]>) -> PrimResult<'a>;
 
@@ -203,6 +204,64 @@ pub(crate) struct PrimDef {
     pub(crate) name: &'static str,
     pub(crate) f: PrimFn,
     pub(crate) ty: Scheme,
+}
+
+/// When a transaction is required for an intrinsic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TxnReq {
+    /// No transaction required (read-only intrinsics).
+    None,
+    /// Transaction required when targeting globals.
+    Globals,
+}
+
+/// Definition of a database intrinsic with its type signature.
+///
+/// Similar to `PrimDef` but for DB intrinsics which have special syntax
+/// (`@` prefix) and take `RefTarget` arguments rather than expressions.
+pub(crate) struct IntrinsicDef {
+    pub(crate) name: &'static str,
+    /// Type scheme; only the return type is used (arguments are `RefTarget`).
+    pub(crate) ty: Scheme,
+    pub(crate) txn: TxnReq,
+}
+
+impl Intrinsic {
+    /// Get the definition for this intrinsic.
+    pub(crate) fn def(self) -> IntrinsicDef {
+        match self {
+            Self::Get => IntrinsicDef {
+                name: "@GET",
+                ty: scheme!((Ref) -> Option[Storable]),
+                txn: TxnReq::None,
+            },
+            Self::Set => IntrinsicDef {
+                name: "@SET",
+                ty: scheme!((Ref, Storable) -> Result[Unit, String]),
+                txn: TxnReq::Globals,
+            },
+            Self::Kill => IntrinsicDef {
+                name: "@KILL",
+                ty: scheme!((Ref) -> Result[Unit, String]),
+                txn: TxnReq::Globals,
+            },
+            Self::Data => IntrinsicDef {
+                name: "@DATA",
+                ty: scheme!((Ref) -> DataStatus),
+                txn: TxnReq::None,
+            },
+            Self::Order => IntrinsicDef {
+                name: "@ORDER",
+                ty: scheme!((Ref) -> Option[Subscript]),
+                txn: TxnReq::None,
+            },
+            Self::Query => IntrinsicDef {
+                name: "@QUERY",
+                ty: scheme!((Ref) -> Option[Array[Subscript]]),
+                txn: TxnReq::None,
+            },
+        }
+    }
 }
 
 /// A built-in module containing primitive functions, constants, and submodules.

@@ -639,6 +639,26 @@ pub(crate) enum RefTarget {
     Expr(ExprId),
 }
 
+/// Database intrinsic operation.
+///
+/// These are special operations with `@` prefix syntax that operate on
+/// B-tree references (`RefTarget`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Intrinsic {
+    /// `@GET`: Read a value from a B-tree variable.
+    Get,
+    /// `@SET`: Write a value to a B-tree variable.
+    Set,
+    /// `@KILL`: Delete a variable and its descendants.
+    Kill,
+    /// `@DATA`: Query existence status of a node.
+    Data,
+    /// `@ORDER`: Return the next subscript at a given level.
+    Order,
+    /// `@QUERY`: Return the full key path to the next node.
+    Query,
+}
+
 /// A literal value in the AST.
 ///
 /// This is the compile-time representation; runtime values (with arena
@@ -683,13 +703,14 @@ pub(crate) enum Expr {
     /// fall back to B-tree locals.
     Var(String),
 
-    /// `GET` primitive.
+    /// Database intrinsic: `@GET`, `@SET`, `@KILL`, `@DATA`, `@ORDER`, `@QUERY`.
     ///
-    /// Reads a value from a B-tree variable. The `RefTarget` specifies the
-    /// variable reference (inline `DbRef` or expression). The `Option<TxnId>`
-    /// is assigned during typecheck; `Some(id)` means use transaction `id`,
-    /// `None` means direct DB.
-    Get(RefTarget, Option<TxnId>),
+    /// Unified variant for all DB intrinsics:
+    /// - `Intrinsic`: which operation (`Get`, `Set`, `Kill`, `Data`, `Order`, `Query`)
+    /// - `RefTarget`: the database reference target (inline `DbRef` or expression)
+    /// - `Option<ExprId>`: value argument (only for `@SET`)
+    /// - `Option<TxnId>`: transaction context (assigned during typecheck)
+    Intrinsic(Intrinsic, RefTarget, Option<ExprId>, Option<TxnId>),
 
     /// A binary operation.
     Binary(ExprId, BinOp, ExprId),
@@ -900,44 +921,11 @@ pub(crate) enum Expr {
     /// value. Handler must return the same type as `expr`.
     Catch(ExprId, ExprId),
 
-    /// Data query: `DATA ref`.
-    ///
-    /// Queries the existence status of a node. Returns `DataStatus` enum.
-    /// The `Option<TxnId>` is assigned during typecheck.
-    Data(RefTarget, Option<TxnId>),
-
-    /// Order query: `ORDER ref`.
-    ///
-    /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
-    /// The `Option<TxnId>` is assigned during typecheck.
-    Order(RefTarget, Option<TxnId>),
-
-    /// Query: `@QUERY ref`.
-    ///
-    /// Returns the full key path to the next node with a value.
-    /// Returns `Option[Array[Subscript]]`.
-    /// The `Option<TxnId>` is assigned during typecheck.
-    Query(RefTarget, Option<TxnId>),
-
     /// Write expression: `WRITE expr [JSON] [TO target]`.
     ///
     /// Executes the write side effect and evaluates to `Unit`.
     /// This allows `WRITE` in expression contexts like `f(WRITE x)`.
     Write(WriteExpr),
-
-    /// Set expression: `@SET target = value`.
-    ///
-    /// Executes the B-tree assignment and evaluates to `Unit`.
-    /// This allows `@SET` in expression contexts like `f(@SET x{} = 1)`.
-    /// The `Option<TxnId>` is assigned during typecheck; globals require it.
-    Set(RefTarget, ExprId, Option<TxnId>),
-
-    /// Kill expression: `@KILL target`.
-    ///
-    /// Deletes a variable or subtree and evaluates to `Unit`.
-    /// This allows `@KILL` in expression contexts like `f(@KILL x{})`.
-    /// The `Option<TxnId>` is assigned during typecheck; globals require it.
-    Kill(RefTarget, Option<TxnId>),
 
     /// Raise a runtime error: `RAISE expr`.
     ///
@@ -1106,8 +1094,8 @@ pub(crate) enum Stmt {
 
     /// An expression used as a statement (for side effects).
     ///
-    /// Used for effectful expressions: `Expr::If`, `Expr::Block`, `Expr::Set`,
-    /// `Expr::Kill`, `Expr::Write`, etc.
+    /// Used for effectful expressions: `Expr::If`, `Expr::Block`,
+    /// `Expr::Intrinsic`, `Expr::Write`, etc.
     Expr(ExprId),
 
     /// Named function definition: `FUN name (params) { body }`.

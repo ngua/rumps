@@ -646,9 +646,8 @@ impl InferCtx<'_> {
 
     /// Validate a `SET` operation with a resolved `RefTarget`.
     ///
-    /// Type-checks the value, adding appropriate constraints.
     /// Global writes require transaction context.
-    fn set_validate(&mut self, rt: &RefTarget, value: ExprId, span: Span) {
+    pub(super) fn set_validate(&mut self, rt: &RefTarget, span: Span) {
         let needs_txn = match rt {
             RefTarget::Inline(dbref) => matches!(dbref, DbRef::Global(..)),
             RefTarget::Expr(e) => {
@@ -667,35 +666,12 @@ impl InferCtx<'_> {
                 span,
             });
         }
-
-        // Type-check value and add Storable constraint
-        let val_ty = self.expr(value);
-        self.constrain(Constraint::Storable(val_ty, span));
-    }
-
-    /// Infer types for a `@SET` expression.
-    ///
-    /// Resolves variable references to `RefTarget::Expr`, validates the
-    /// operation, and populates the AST with the resolved target.
-    pub(super) fn set_expr(
-        &mut self,
-        id: ExprId,
-        rt: &RefTarget,
-        value: ExprId,
-        span: Span,
-    ) {
-        let resolved_rt = self.resolve_ref_target(rt, span);
-        self.set_validate(resolved_rt.as_ref(), value, span);
-        self.ast.set_expr(
-            id,
-            Expr::Set(resolved_rt.into_owned(), value, self.in_transaction),
-        );
     }
 
     /// Validate a `KILL` operation with a resolved `RefTarget`.
     ///
     /// Global writes require transaction context.
-    fn kill_validate(&mut self, rt: &RefTarget, span: Span) {
+    pub(super) fn kill_validate(&mut self, rt: &RefTarget, span: Span) {
         let needs_txn = match rt {
             RefTarget::Inline(dbref) => matches!(dbref, DbRef::Global(..)),
             RefTarget::Expr(e) => {
@@ -714,19 +690,6 @@ impl InferCtx<'_> {
                 span,
             });
         }
-    }
-
-    /// Infer types for a `@KILL` expression.
-    ///
-    /// Resolves variable references to `RefTarget::Expr`, validates the
-    /// operation, and populates the AST with the resolved target.
-    pub(super) fn kill_expr(&mut self, id: ExprId, rt: &RefTarget, span: Span) {
-        let resolved_rt = self.resolve_ref_target(rt, span);
-        self.kill_validate(resolved_rt.as_ref(), span);
-        self.ast.set_expr(
-            id,
-            Expr::Kill(resolved_rt.into_owned(), self.in_transaction),
-        );
     }
 
     /// Infer types for a `WRITE` statement or expression.

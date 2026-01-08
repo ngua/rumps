@@ -30,7 +30,10 @@ use syn::{Ident, Result, Token};
 ///
 /// ## Type syntax
 ///
-/// - Primitives: `Int`, `Float`, `Bool`, `String`, `Char`, `Unit`, `Time`, `Range`, `Json`
+/// - Primitives: `Int`, `Float`, `Bool`, `String`, `Char`, `Unit`, `Time`, `Range`, `Json`,
+///   `Word`, `DataStatus`, `Regex`, `RuntimeError`, `Local`, `Global`, `Ordering`,
+///   `FilePath`, `Path`, `Error`, `Unknown`
+/// - Named builtins: `Storable`, `Subscript`, `Scalar`, `Ref` (maps to `Ty::Named`)
 /// - Type variables: any identifier bound by `forall`
 /// - Parameterized: `Array[T]`, `Option[T]`, `Result[T, E]`, `Map[K, V]`
 /// - Functions: `(A, B) -> C` or `A -> B`
@@ -226,6 +229,8 @@ enum TyExpr {
     Union(Vec<Self>),
     /// Object type: `{ field: Type, ... }`.
     Object(Vec<(String, Box<Self>)>),
+    /// Named builtin type: `Storable`, `Subscript`, etc.
+    Named(String),
 }
 
 impl TyExpr {
@@ -312,18 +317,52 @@ impl TyExpr {
                     })
                 }
             }
+            Self::Named(type_id) => {
+                let id = Ident::new(type_id, proc_macro2::Span::call_site());
+                quote! {
+                    crate::typecheck::Ty::Named(crate::value::TypeId::#id, vec![])
+                }
+            }
         }
     }
 }
 
-/// Primitive type names.
+/// Primitive type names (directly variants of `Ty`).
 const PRIMITIVES: &[&str] = &[
-    "Bool", "Int", "Float", "Char", "String", "Unit", "Time", "Range", "Json",
-    "Unknown", "Error", "Ordering", "FilePath", "Path",
+    "Bool",
+    "Int",
+    "Float",
+    "Char",
+    "String",
+    "Unit",
+    "Time",
+    "Range",
+    "Json",
+    "Unknown",
+    "Error",
+    "Ordering",
+    "FilePath",
+    "Path",
+    "Word",
+    "DataStatus",
+    "Regex",
+    "RuntimeError",
+    "Local",
+    "Global",
 ];
 
 /// Parameterized type names (require `[...]` args).
 const PARAMETERIZED: &[&str] = &["Array", "Option", "Result", "Map"];
+
+/// Named builtin types (represented as `Ty::Named(TypeId::XXX, vec![])`).
+///
+/// These are builtin unions like `Storable`, `Subscript`, etc.
+const NAMED: &[(&str, &str)] = &[
+    ("Storable", "STORABLE"),
+    ("Subscript", "SUBSCRIPT"),
+    ("Scalar", "SCALAR"),
+    ("Ref", "REF"),
+];
 
 fn is_primitive(s: &str) -> bool {
     PRIMITIVES.contains(&s)
@@ -331,6 +370,10 @@ fn is_primitive(s: &str) -> bool {
 
 fn is_parameterized(s: &str) -> bool {
     PARAMETERIZED.contains(&s)
+}
+
+fn named_type_id(s: &str) -> Option<&'static str> {
+    NAMED.iter().find(|(name, _)| *name == s).map(|(_, id)| *id)
 }
 
 /// Parse a type expression.
@@ -454,7 +497,7 @@ fn parse_bracketed_args(input: ParseStream) -> Result<Vec<TyExpr>> {
     .map(|p| p.into_iter().collect())
 }
 
-/// Parse an identifier-based type: primitive, type var, or parameterized.
+/// Parse an identifier-based type: primitive, named, type var, or parameterized.
 fn parse_ty_ident(input: ParseStream) -> Result<TyExpr> {
     let name = input.parse::<Ident>()?.to_string();
 
@@ -462,6 +505,8 @@ fn parse_ty_ident(input: ParseStream) -> Result<TyExpr> {
         parse_bracketed_args(input).map(|args| TyExpr::App(name, args))
     } else if is_primitive(&name) {
         Ok(TyExpr::Prim(name))
+    } else if let Some(type_id) = named_type_id(&name) {
+        Ok(TyExpr::Named(type_id.to_string()))
     } else {
         Ok(TyExpr::Var(name))
     }
@@ -475,6 +520,8 @@ fn parse_ty_starting_with(input: ParseStream, ident: Ident) -> Result<TyExpr> {
         TyExpr::App(name, parse_bracketed_args(input)?)
     } else if is_primitive(&name) {
         TyExpr::Prim(name)
+    } else if let Some(type_id) = named_type_id(&name) {
+        TyExpr::Named(type_id.to_string())
     } else {
         TyExpr::Var(name)
     };

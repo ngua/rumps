@@ -45,7 +45,7 @@
 
 use smallvec::SmallVec;
 
-use crate::ast::{BinOp, JsonAccessKind, Literal, UnOp};
+use crate::ast::{BinOp, Intrinsic, JsonAccessKind, Literal, UnOp};
 use crate::Span;
 
 /// Constraint for type parameters.
@@ -200,8 +200,12 @@ pub(crate) enum ExprKind {
     /// A lexical variable reference.
     Var(String),
 
-    /// `@GET` primitive; argument must be `Ref` type.
-    Get(Box<Expr>),
+    /// Database intrinsic: `@GET`, `@SET`, `@KILL`, `@DATA`, `@ORDER`, `@QUERY`.
+    ///
+    /// - `Intrinsic`: which operation
+    /// - `Box<Expr>`: the reference target
+    /// - `Option<Box<Expr>>`: value argument (only for `@SET`)
+    Intrinsic(Intrinsic, Box<Expr>, Option<Box<Expr>>),
 
     /// A binary operation.
     Binary(Box<Expr>, BinOp, Box<Expr>),
@@ -327,37 +331,11 @@ pub(crate) enum ExprKind {
     /// Handler must be a closure `(Error) -> T` where `T` matches expr's type.
     Catch(Box<Expr>, Box<Expr>),
 
-    /// `@DATA` primitive; argument must be `Ref` type.
-    ///
-    /// Queries the existence status of a node. Returns `DataStatus` enum.
-    Data(Box<Expr>),
-
-    /// `@ORDER` primitive; argument must be `Ref` type.
-    ///
-    /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
-    Order(Box<Expr>),
-
-    /// `@QUERY` primitive; argument must be `Ref` type.
-    ///
-    /// Returns the full key path to the next node with a value.
-    /// Returns `Option[Array[Subscript]]`.
-    Query(Box<Expr>),
-
     /// Write expression: `WRITE expr [JSON] [TO target]`.
     ///
     /// Executes the write side effect and evaluates to `Unit`.
     /// This allows `WRITE` in expression contexts.
     Write(Box<WriteStmt>),
-
-    /// `@SET` primitive; first argument must be `Ref` type.
-    ///
-    /// Executes the B-tree assignment and evaluates to `Unit`.
-    Set(Box<Expr>, Box<Expr>),
-
-    /// `@KILL` primitive; argument must be `Ref` type.
-    ///
-    /// Deletes a variable or subtree and evaluates to `Unit`.
-    Kill(Box<Expr>),
 
     /// Raise a runtime error: `RAISE expr`.
     ///
@@ -461,11 +439,12 @@ pub(crate) enum StmtKind {
     /// The visibility is only meaningful inside modules (`+LET` for public).
     Let(BindingPattern, Option<TypeExpr>, Expr, Visibility),
 
-    /// B-tree assignment; first argument must be `Ref` type.
-    Set(Expr, Expr),
-
-    /// Delete a variable or subtree; argument must be `Ref` type.
-    Kill(Expr),
+    /// Database intrinsic as statement: `@SET` or `@KILL`.
+    ///
+    /// - `Intrinsic`: which operation (`Set` or `Kill`)
+    /// - `Expr`: the reference target
+    /// - `Option<Expr>`: value argument (only for `@SET`)
+    Intrinsic(Intrinsic, Expr, Option<Expr>),
 
     /// Write a value with optional format and target.
     Write(WriteStmt),

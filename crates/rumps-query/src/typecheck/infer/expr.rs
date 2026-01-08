@@ -12,10 +12,11 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
-    JsonAccessKey, JsonAccessKind, Literal, MatchArm, ObjectEntry,
+    Intrinsic, JsonAccessKey, JsonAccessKind, Literal, MatchArm, ObjectEntry,
     ParamConstraint, RefTarget, StmtId, SubscriptElem, TransactionExpr, TxnId,
     TypeParam, TypePattern, UnOp, Visibility,
 };
+use crate::env::TxnReq;
 use crate::intern::StringId;
 use crate::typecheck::error::{ConstraintKind, TypeError};
 use crate::typecheck::ty::{Scheme, Ty};
@@ -155,8 +156,10 @@ impl InferCtx<'_> {
             // Fallible conversion: `expr READ Type`
             Expr::Read(inner, ty_id) => self.read_conv(*inner, *ty_id, span),
 
-            // Database read: `GET local{...}` or `GET ^global{...}` or `GET ref`
-            Expr::Get(ref rt, _) => self.get(id, rt, span),
+            // Database intrinsics: `@GET`, `@SET`, `@KILL`, `@DATA`, `@ORDER`, `@QUERY`
+            Expr::Intrinsic(op, ref rt, val, _) => {
+                self.intrinsic(id, *op, rt, val.as_ref().copied(), span)
+            }
 
             // Type annotation: `(expr) : Type`
             Expr::Annotate(inner, ty_id) => self.annotate(*inner, *ty_id, span),
@@ -261,34 +264,11 @@ impl InferCtx<'_> {
                 expr_ty
             }
 
-            // Data query: `DATA local{...}` or `DATA ^global{...}` or `DATA ref`
-            Expr::Data(ref rt, _) => self.data(id, rt, span),
-
-            // Order query: `ORDER local{...}` or `ORDER ^global{...}` or `ORDER ref`
-            Expr::Order(ref rt, _) => self.order(id, rt, span),
-
-            // Query: `@QUERY local{...}` or `@QUERY ^global{...}` or `@QUERY ref`
-            Expr::Query(ref rt, _) => self.query(id, rt, span),
-
             // Write expression: `WRITE expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
             Expr::Write(output) => {
                 self.write(output, span);
                 Ty::Unit
-            }
-
-            // Set expression: `@SET target = value`
-            // Returns `Result[Unit, String]`
-            Expr::Set(ref rt, value, _) => {
-                self.set_expr(id, rt, *value, span);
-                Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
-            }
-
-            // Kill expression: `@KILL target`
-            // Returns `Result[Unit, String]`
-            Expr::Kill(ref rt, _) => {
-                self.kill_expr(id, rt, span);
-                Ty::Result(Box::new(Ty::Unit), Box::new(Ty::String))
             }
 
             // Raise expression: `RAISE expr`
@@ -1767,19 +1747,50 @@ impl InferCtx<'_> {
         Ty::Result(Box::new(target_ty), Box::new(Ty::String))
     }
 
-    /// Infer type of `GET` expression.
+    /// Infer type of a database intrinsic (`@GET`, `@SET`, `@KILL`, etc.).
     ///
-    /// Database reads return `Option[Storable]`; the value may not exist at the
-    /// given path. Usage may narrow via `IS`/`AS` checks or arithmetic operations.
-    /// Populates the `TxnId` field in the AST based on current transaction context.
+    /// Validates transaction requirements for mutating intrinsics, typechecks
+    /// the value expression for `@SET`, and populates the `TxnId` field in the
+    /// AST based on current transaction context.
     ///
     /// When the target is `RefTarget::Inline(DbRef::Local(name, []))` and `name`
     /// is a variable of type `Ref`, rewrites to `RefTarget::Expr`.
-    fn get(&mut self, id: ExprId, rt: &RefTarget, span: Span) -> Ty {
+    fn intrinsic(
+        &mut self,
+        id: ExprId,
+        op: Intrinsic,
+        rt: &RefTarget,
+        val: Option<ExprId>,
+        span: Span,
+    ) -> Ty {
+        let def = op.def();
         let resolved_rt = self.resolve_ref_target(rt, span).into_owned();
-        self.ast
-            .set_expr(id, Expr::Get(resolved_rt, self.in_transaction));
-        Ty::Option(Box::new(Ty::Named(TypeId::STORABLE, vec![])))
+
+        // Validate transaction requirement for mutating intrinsics
+        if def.txn == TxnReq::Globals {
+            match op {
+                Intrinsic::Set => self.set_validate(&resolved_rt, span),
+                Intrinsic::Kill => self.kill_validate(&resolved_rt, span),
+                _ => {}
+            }
+        }
+
+        // For Set, also typecheck the value expression
+        if let Some(v) = val {
+            let v_ty = self.expr(v);
+            self.constrain(Constraint::Storable(v_ty, span));
+        }
+
+        self.ast.set_expr(
+            id,
+            Expr::Intrinsic(op, resolved_rt, val, self.in_transaction),
+        );
+
+        // Extract return type from the function signature
+        match &def.ty.ty {
+            Ty::Fn(_, ret) => (**ret).clone(),
+            _ => Ty::Error, // Shouldn't happen; intrinsics are always functions
+        }
     }
 
     /// Resolve a `RefTarget`, checking for variable references.
@@ -1873,41 +1884,6 @@ impl InferCtx<'_> {
                 self.unify(ty, expected, span);
             }
         });
-    }
-
-    /// Infer type of `DATA` expression.
-    ///
-    /// Queries the existence status of a node. Returns `DataStatus` enum.
-    /// Populates the `TxnId` field in the AST based on current transaction context.
-    fn data(&mut self, id: ExprId, rt: &RefTarget, span: Span) -> Ty {
-        let resolved_rt = self.resolve_ref_target(rt, span).into_owned();
-        self.ast
-            .set_expr(id, Expr::Data(resolved_rt, self.in_transaction));
-        Ty::DataStatus
-    }
-
-    /// Infer type of `ORDER` expression.
-    ///
-    /// Returns the next subscript at a given level. Returns `Option[Subscript]`.
-    /// Populates the `TxnId` field in the AST based on current transaction context.
-    fn order(&mut self, id: ExprId, rt: &RefTarget, span: Span) -> Ty {
-        let resolved_rt = self.resolve_ref_target(rt, span).into_owned();
-        self.ast
-            .set_expr(id, Expr::Order(resolved_rt, self.in_transaction));
-        Ty::Option(Box::new(Ty::Named(TypeId::SUBSCRIPT, vec![])))
-    }
-
-    /// Infer type of `@QUERY` expression.
-    ///
-    /// Returns the full key path to the next node with a value.
-    /// Returns `Option[Array[Subscript]]`.
-    /// Populates the `TxnId` field in the AST based on current transaction context.
-    fn query(&mut self, id: ExprId, rt: &RefTarget, span: Span) -> Ty {
-        let resolved_rt = self.resolve_ref_target(rt, span).into_owned();
-        self.ast
-            .set_expr(id, Expr::Query(resolved_rt, self.in_transaction));
-        let subscript = Ty::Named(TypeId::SUBSCRIPT, vec![]);
-        Ty::Option(Box::new(Ty::Array(Box::new(subscript))))
     }
 
     /// Infer type of type annotation expression `(expr) : Type`.

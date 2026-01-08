@@ -49,7 +49,7 @@ use smallvec::SmallVec;
 mod cst;
 mod lower;
 
-use crate::ast::{BinOp, JsonAccessKind, Literal, UnOp};
+use crate::ast::{BinOp, Intrinsic, JsonAccessKind, Literal, UnOp};
 use crate::parser::cst::TypePattern;
 use crate::{Ast, Error, Lexer, Result, Span, Spanned, StmtId, Token};
 
@@ -474,7 +474,10 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then(expr)
             .map_with_span(|(r, val), span| {
-                cst::Stmt::new(cst::StmtKind::Set(r, val), span)
+                cst::Stmt::new(
+                    cst::StmtKind::Intrinsic(Intrinsic::Set, r, Some(val)),
+                    span,
+                )
             })
     }
 
@@ -489,7 +492,10 @@ impl Parser {
         just(Token::Kill)
             .ignore_then(Self::ref_expr(expr))
             .map_with_span(|r, span| {
-                cst::Stmt::new(cst::StmtKind::Kill(r), span)
+                cst::Stmt::new(
+                    cst::StmtKind::Intrinsic(Intrinsic::Kill, r, None),
+                    span,
+                )
             })
     }
 
@@ -595,7 +601,11 @@ impl Parser {
             .then(expr)
             .map_with_span(|(r, val), span| {
                 cst::Expr::new(
-                    cst::ExprKind::Set(Box::new(r), Box::new(val)),
+                    cst::ExprKind::Intrinsic(
+                        Intrinsic::Set,
+                        Box::new(r),
+                        Some(Box::new(val)),
+                    ),
                     span,
                 )
             })
@@ -612,7 +622,14 @@ impl Parser {
         just(Token::Kill)
             .ignore_then(Self::ref_expr(expr))
             .map_with_span(|r, span| {
-                cst::Expr::new(cst::ExprKind::Kill(Box::new(r)), span)
+                cst::Expr::new(
+                    cst::ExprKind::Intrinsic(
+                        Intrinsic::Kill,
+                        Box::new(r),
+                        None,
+                    ),
+                    span,
+                )
             })
     }
 
@@ -1743,69 +1760,29 @@ impl Parser {
                 },
             );
 
-            // GET target (with optional postfix ops like `!`)
-            let get_expr = just(Token::Get)
-                .ignore_then(Self::ref_expr(intrinsic_op.clone()))
-                .map_with_span(|r, span| {
-                    cst::Expr::new(cst::ExprKind::Get(Box::new(r)), span)
+            // Read intrinsics: @GET, @DATA, @ORDER, @QUERY (with optional postfix ops)
+            let read_intrinsic = choice((
+                just(Token::Get).to(Intrinsic::Get),
+                just(Token::Data).to(Intrinsic::Data),
+                just(Token::Order).to(Intrinsic::Order),
+                just(Token::Query).to(Intrinsic::Query),
+            ))
+            .then(Self::ref_expr(intrinsic_op.clone()))
+            .map_with_span(|(op, r), span| {
+                cst::Expr::new(
+                    cst::ExprKind::Intrinsic(op, Box::new(r), None),
+                    span,
+                )
+            })
+            .then(postfix_ops.clone())
+            .map_with_span(|(base, ops), span| {
+                Self::fold_postfix(base, ops).unwrap_or_else(|| {
+                    cst::Expr::new(
+                        cst::ExprKind::Error("postfix fold failed".into()),
+                        span,
+                    )
                 })
-                .then(postfix_ops.clone())
-                .map_with_span(|(base, ops), span| {
-                    Self::fold_postfix(base, ops).unwrap_or_else(|| {
-                        cst::Expr::new(
-                            cst::ExprKind::Error("postfix fold failed".into()),
-                            span,
-                        )
-                    })
-                });
-
-            // DATA target (with optional postfix ops)
-            let data_expr = just(Token::Data)
-                .ignore_then(Self::ref_expr(intrinsic_op.clone()))
-                .map_with_span(|r, span| {
-                    cst::Expr::new(cst::ExprKind::Data(Box::new(r)), span)
-                })
-                .then(postfix_ops.clone())
-                .map_with_span(|(base, ops), span| {
-                    Self::fold_postfix(base, ops).unwrap_or_else(|| {
-                        cst::Expr::new(
-                            cst::ExprKind::Error("postfix fold failed".into()),
-                            span,
-                        )
-                    })
-                });
-
-            // ORDER target (with optional postfix ops)
-            let order_expr = just(Token::Order)
-                .ignore_then(Self::ref_expr(intrinsic_op.clone()))
-                .map_with_span(|r, span| {
-                    cst::Expr::new(cst::ExprKind::Order(Box::new(r)), span)
-                })
-                .then(postfix_ops.clone())
-                .map_with_span(|(base, ops), span| {
-                    Self::fold_postfix(base, ops).unwrap_or_else(|| {
-                        cst::Expr::new(
-                            cst::ExprKind::Error("postfix fold failed".into()),
-                            span,
-                        )
-                    })
-                });
-
-            // QUERY target (with optional postfix ops)
-            let query_expr = just(Token::Query)
-                .ignore_then(Self::ref_expr(intrinsic_op.clone()))
-                .map_with_span(|r, span| {
-                    cst::Expr::new(cst::ExprKind::Query(Box::new(r)), span)
-                })
-                .then(postfix_ops.clone())
-                .map_with_span(|(base, ops), span| {
-                    Self::fold_postfix(base, ops).unwrap_or_else(|| {
-                        cst::Expr::new(
-                            cst::ExprKind::Error("postfix fold failed".into()),
-                            span,
-                        )
-                    })
-                });
+            });
 
             // OUTPUT expr [JSON] [TO target]
             let output = Self::output_expr(intrinsic_op.clone());
@@ -1823,11 +1800,8 @@ impl Parser {
             // Use primary for seed (no postfix ops) to avoid parsing (state, cont) as a call
             let forever = Self::forever_expr(primary, intrinsic_op);
 
-            choice((
-                with_op, get_expr, data_expr, order_expr, query_expr, output,
-                set, kill, raise, forever,
-            ))
-            .or(operand.clone())
+            choice((with_op, read_intrinsic, output, set, kill, raise, forever))
+                .or(operand.clone())
         })
     }
 
