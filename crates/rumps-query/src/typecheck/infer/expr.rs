@@ -1054,26 +1054,6 @@ impl InferCtx<'_> {
             })
             .collect();
 
-        // Build name -> Ty map for element type lookup
-        let name_to_ty: HashMap<&str, Ty> = type_params
-            .iter()
-            .map(|tp| {
-                let id = self.env.intern(&tp.name);
-                let ty =
-                    type_param_subst.get(&id).cloned().unwrap_or_else(|| {
-                        self.error(TypeError::Custom {
-                            msg: format!(
-                                "internal: type param `{}` not in subst",
-                                tp.name
-                            ),
-                            span,
-                        });
-                        self.fresh()
-                    });
-                (tp.name.as_str(), ty)
-            })
-            .collect();
-
         // Emit constraints for each user-specified bound
         type_params.iter().for_each(|tp| {
             let id = self.env.intern(&tp.name);
@@ -1095,24 +1075,9 @@ impl InferCtx<'_> {
                         ParamConstraint::Storable => {
                             Constraint::Storable(tv.clone(), span)
                         }
-                        ParamConstraint::Iterable(elem_name) => {
-                            let elem = elem_name
-                                .as_ref()
-                                .map(|el| {
-                                    name_to_ty.get(el.as_str()).cloned().unwrap_or_else(
-                                        || {
-                                            self.error(TypeError::Custom {
-                                                msg: format!(
-                                                    "unknown type parameter `{el}` in \
-                                                     constraint `Iterable[{el}]`"
-                                                ),
-                                                span,
-                                            });
-                                            self.fresh()
-                                        },
-                                    )
-                                })
-                                .unwrap_or_else(|| self.fresh());
+                        ParamConstraint::Iterable(ty_id) => {
+                            let elem =
+                                self.ast_type_to_ty(*ty_id, &type_param_subst);
                             Constraint::Iterable {
                                 coll: tv.clone(),
                                 elem,
@@ -1125,24 +1090,9 @@ impl InferCtx<'_> {
                         ParamConstraint::BitLike => {
                             Constraint::BitLike(tv.clone(), span)
                         }
-                        ParamConstraint::Fallible(inner_name) => {
-                            let inner = inner_name
-                                .as_ref()
-                                .map(|el| {
-                                    name_to_ty.get(el.as_str()).cloned().unwrap_or_else(
-                                        || {
-                                            self.error(TypeError::Custom {
-                                                msg: format!(
-                                                    "unknown type parameter `{el}` in \
-                                                     constraint `Fallible[{el}]`"
-                                                ),
-                                                span,
-                                            });
-                                            self.fresh()
-                                        },
-                                    )
-                                })
-                                .unwrap_or_else(|| self.fresh());
+                        ParamConstraint::Fallible(ty_id) => {
+                            let inner =
+                                self.ast_type_to_ty(*ty_id, &type_param_subst);
                             Constraint::Fallible {
                                 ty: tv.clone(),
                                 inner,
@@ -1154,7 +1104,10 @@ impl InferCtx<'_> {
                 });
             } else {
                 self.error(TypeError::Custom {
-                    msg: format!("internal: type param `{}` not in subst", tp.name),
+                    msg: format!(
+                        "internal: type param `{}` not in subst",
+                        tp.name
+                    ),
                     span,
                 });
             }

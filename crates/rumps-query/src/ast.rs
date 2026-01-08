@@ -148,10 +148,9 @@ pub(crate) enum ParamConstraint {
     Storable,
     /// Type is iterable (`Array[T]` or `Range`).
     ///
-    /// The optional string is the name of another type parameter that
-    /// represents the element type (e.g., `Iterable[T]` stores `Some("T")`).
-    /// If `None`, element type is unconstrained (fresh variable).
-    Iterable(Option<String>),
+    /// The inner type can be a type parameter name (`Iterable[T]`) or a
+    /// concrete type (`Iterable[Int]`).
+    Iterable(AstTypeExprId),
     /// Type supports monoidal concatenation (`++`).
     ///
     /// Satisfied by `String`, `Array[T]`, and `Map[K, V]`.
@@ -162,10 +161,9 @@ pub(crate) enum ParamConstraint {
     BitLike,
     /// Type is fallible (`Option[T]` or `Result[T, E]`).
     ///
-    /// The optional string is the name of another type parameter that
-    /// represents the inner/success type (e.g., `Fallible[T]` stores `Some("T")`).
-    /// If `None`, inner type is unconstrained (fresh variable).
-    Fallible(Option<String>),
+    /// The inner type can be a type parameter name (`Fallible[T]`) or a
+    /// concrete type (`Fallible[Int]`).
+    Fallible(AstTypeExprId),
 }
 
 /// A type parameter with optional constraints.

@@ -367,7 +367,7 @@ impl InferCtx<'_> {
 
         // Second pass: process constraints now that all type params are known
         let mut scheme_constraints: SmallVec<
-            [(TyVar, ParamConstraint, Option<TyVar>); 2],
+            [(TyVar, ParamConstraint, Option<Ty>); 2],
         > = SmallVec::new();
 
         type_params.iter().for_each(|tp| {
@@ -375,37 +375,16 @@ impl InferCtx<'_> {
             let ty = Ty::Var(tv);
 
             tp.constraints.iter().for_each(|c| {
-                // Resolve element/inner type name for Iterable[T] or Fallible[T]
-                let elem_tv = match c {
-                    ParamConstraint::Iterable(Some(el)) => {
-                        let tv = name_to_tv.get(el.as_str()).copied();
-                        if tv.is_none() {
-                            self.error(TypeError::Custom {
-                                msg: format!(
-                                    "unknown type parameter `{el}` in \
-                                     constraint `Iterable[{el}]`"
-                                ),
-                                span,
-                            });
-                        }
-                        tv
-                    }
-                    ParamConstraint::Fallible(Some(el)) => {
-                        let tv = name_to_tv.get(el.as_str()).copied();
-                        if tv.is_none() {
-                            self.error(TypeError::Custom {
-                                msg: format!(
-                                    "unknown type parameter `{el}` in \
-                                     constraint `Fallible[{el}]`"
-                                ),
-                                span,
-                            });
-                        }
-                        tv
+                // Resolve element/inner type for Iterable[T] or Fallible[T]
+                // The inner type can be a type parameter or a concrete type
+                let elem_ty = match c {
+                    ParamConstraint::Iterable(ty_id)
+                    | ParamConstraint::Fallible(ty_id) => {
+                        Some(self.ast_type_to_ty(*ty_id, &type_param_subst))
                     }
                     _ => None,
                 };
-                scheme_constraints.push((tv, c.clone(), elem_tv));
+                scheme_constraints.push((tv, c.clone(), elem_ty.clone()));
 
                 // Emit constraint for checking the function body
                 let constraint = match c {
@@ -425,10 +404,8 @@ impl InferCtx<'_> {
                         Constraint::Storable(ty.clone(), span)
                     }
                     ParamConstraint::Iterable(_) => {
-                        // Use resolved elem type or fresh var
-                        let elem = elem_tv
-                            .map(Ty::Var)
-                            .unwrap_or_else(|| self.fresh());
+                        let elem =
+                            elem_ty.clone().unwrap_or_else(|| self.fresh());
                         Constraint::Iterable {
                             coll: ty.clone(),
                             elem,
@@ -442,10 +419,8 @@ impl InferCtx<'_> {
                         Constraint::BitLike(ty.clone(), span)
                     }
                     ParamConstraint::Fallible(_) => {
-                        // Use resolved inner type or fresh var
-                        let inner = elem_tv
-                            .map(Ty::Var)
-                            .unwrap_or_else(|| self.fresh());
+                        let inner =
+                            elem_ty.clone().unwrap_or_else(|| self.fresh());
                         Constraint::Fallible {
                             ty: ty.clone(),
                             inner,
@@ -494,7 +469,14 @@ impl InferCtx<'_> {
         // Build final function type and generalize
         let fn_ty = Ty::Fn(param_tys, Box::new(actual_ret));
         let ty_vars = fn_ty.free_vars();
-        let vars: Vec<_> = ty_vars.difference(&outer_free).copied().collect();
+        // Include all declared type params (they may only appear in constraints,
+        // not in the function type itself; e.g. `T` in `[T, F: Fallible[T]]`)
+        let declared_tvs: HashSet<_> = name_to_tv.values().copied().collect();
+        let vars: Vec<_> = ty_vars
+            .union(&declared_tvs)
+            .copied()
+            .filter(|v| !outer_free.contains(v))
+            .collect();
         let scheme = Scheme {
             vars,
             ty: fn_ty,

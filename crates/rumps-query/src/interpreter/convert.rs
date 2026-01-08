@@ -226,9 +226,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 inclusive,
             } => {
                 if *inclusive {
-                    format!("{start}..={end}")
+                    format!("{start} ..= {end}")
                 } else {
-                    format!("{start}..{end}")
+                    format!("{start} .. {end}")
                 }
             }
             // Internal loop control values; should not be stringified by user code

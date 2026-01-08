@@ -46,8 +46,11 @@ fn lower_visibility(vis: cst::Visibility) -> Visibility {
 }
 
 /// Convert a CST constraint to an AST constraint.
-fn lower_constraint(c: cst::ParamConstraint) -> ast::ParamConstraint {
-    match c {
+fn lower_constraint(
+    ast: &mut Ast,
+    c: cst::ParamConstraint,
+) -> Result<ast::ParamConstraint> {
+    Ok(match c {
         cst::ParamConstraint::Numeric => ast::ParamConstraint::Numeric,
         cst::ParamConstraint::Stringable => ast::ParamConstraint::Stringable,
         cst::ParamConstraint::Jsonable => ast::ParamConstraint::Jsonable,
@@ -56,29 +59,40 @@ fn lower_constraint(c: cst::ParamConstraint) -> ast::ParamConstraint {
         }
         cst::ParamConstraint::Storable => ast::ParamConstraint::Storable,
         cst::ParamConstraint::Iterable(elem) => {
-            ast::ParamConstraint::Iterable(elem)
+            ast::ParamConstraint::Iterable(lower_type_expr(ast, elem)?)
         }
         cst::ParamConstraint::Monoid => ast::ParamConstraint::Monoid,
         cst::ParamConstraint::BitLike => ast::ParamConstraint::BitLike,
         cst::ParamConstraint::Fallible(inner) => {
-            ast::ParamConstraint::Fallible(inner)
+            ast::ParamConstraint::Fallible(lower_type_expr(ast, inner)?)
         }
-    }
+    })
 }
 
 /// Convert a CST type parameter to an AST type parameter.
-fn lower_type_param(tp: cst::TypeParam) -> ast::TypeParam {
-    ast::TypeParam {
+fn lower_type_param(
+    ast: &mut Ast,
+    tp: cst::TypeParam,
+) -> Result<ast::TypeParam> {
+    let constraints = tp
+        .constraints
+        .into_iter()
+        .map(|c| lower_constraint(ast, c))
+        .collect::<Result<_>>()?;
+    Ok(ast::TypeParam {
         name: tp.name,
-        constraints: tp.constraints.into_iter().map(lower_constraint).collect(),
-    }
+        constraints,
+    })
 }
 
 /// Convert a list of CST type parameters to AST type parameters.
 fn lower_type_params(
+    ast: &mut Ast,
     tps: Vec<cst::TypeParam>,
-) -> SmallVec<[ast::TypeParam; 2]> {
-    tps.into_iter().map(lower_type_param).collect()
+) -> Result<SmallVec<[ast::TypeParam; 2]>> {
+    tps.into_iter()
+        .map(|tp| lower_type_param(ast, tp))
+        .collect()
 }
 
 /// Lower a CST program (list of statements) to AST.
@@ -259,7 +273,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             let body_id = lower_expr(ast, ctx, body)?;
             Stmt::Fun {
                 name,
-                type_params: lower_type_params(type_params),
+                type_params: lower_type_params(ast, type_params)?,
                 params: params_lowered,
                 ret: ret_id,
                 body: body_id,
@@ -275,7 +289,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             let def_lowered = lower_type_def(ast, def)?;
             Stmt::Type {
                 name,
-                type_params: lower_type_params(type_params),
+                type_params: lower_type_params(ast, type_params)?,
                 def: def_lowered,
                 vis: lower_visibility(vis),
             }
@@ -289,7 +303,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             let target_id = lower_type_expr(ast, target)?;
             Stmt::NewType {
                 name,
-                type_params: lower_type_params(type_params),
+                type_params: lower_type_params(ast, type_params)?,
                 target: target_id,
                 vis: lower_visibility(vis),
             }
@@ -306,7 +320,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
                 .collect::<Result<SmallVec<_>>>()?;
             Stmt::Union {
                 name,
-                type_params: lower_type_params(type_params),
+                type_params: lower_type_params(ast, type_params)?,
                 members: member_ids,
                 vis: lower_visibility(vis),
             }
@@ -480,7 +494,7 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
             let ret_id = ret.map(|t| lower_type_expr(ast, t)).transpose()?;
             let body_id = lower_expr(ast, ctx, *body)?;
             Expr::Closure {
-                type_params: lower_type_params(type_params),
+                type_params: lower_type_params(ast, type_params)?,
                 params: params_lowered,
                 ret: ret_id,
                 body: body_id,

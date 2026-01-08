@@ -326,9 +326,9 @@ pub(crate) struct Scheme {
     /// The tuple contains:
     /// - The type variable being constrained
     /// - The constraint itself
-    /// - For `Iterable[T]` or `Fallible[T]`, the element/inner type's TyVar
-    pub(crate) constraints:
-        SmallVec<[(TyVar, ParamConstraint, Option<TyVar>); 2]>,
+    /// - For `Iterable[T]` or `Fallible[T]`, the element/inner type (may be
+    ///   a type variable or concrete type like `Int`)
+    pub(crate) constraints: SmallVec<[(TyVar, ParamConstraint, Option<Ty>); 2]>,
 }
 
 impl Scheme {
@@ -412,9 +412,8 @@ impl Scheme {
                 .iter()
                 .map(|(v, c, elem)| {
                     let ty = subst.0.get(v).cloned().unwrap_or(Ty::Var(*v));
-                    let elem_ty = elem.map(|e| {
-                        subst.0.get(&e).cloned().unwrap_or(Ty::Var(e))
-                    });
+                    // Apply substitution to inner type (handles both TyVar and concrete)
+                    let elem_ty = elem.as_ref().map(|e| e.apply(&subst));
                     (ty, c.clone(), elem_ty)
                 })
                 .collect();

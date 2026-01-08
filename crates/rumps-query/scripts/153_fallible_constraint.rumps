@@ -75,11 +75,11 @@ WRITE unwrap-numeric(Option.None: Option[Int])
 WRITE unwrap-numeric(Result.Ok(4.5))
 
 ; ============================================================================
-; Fallible without explicit inner type (unconstrained)
+; Fallible with unconstrained inner type
 ; ============================================================================
 
-; When inner type is unconstrained, it's inferred
-FUN is-present[F: Fallible](x: F) -> Bool {
+; When inner type is unconstrained, it's inferred from usage
+FUN is-present[T, F: Fallible[T]](x: F) -> Bool {
   IF x IS Option.Some(_) {
     true
   } ELSE {
