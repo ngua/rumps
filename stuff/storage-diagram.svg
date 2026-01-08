@@ -57,9 +57,9 @@
 
   <!-- Intro text -->
   <text x="40" y="96">
-    Each "global" (
+    Each "global" {
     <tspan class="code">^NAME</tspan>
-    ) is a sparse, sorted tree:
+    } is a sparse, sorted tree:
   </text>
 
   <!-- Root node -->
@@ -146,7 +146,7 @@
   <text x="40" y="610">Keys are paths through the tree:</text>
 
   <text x="80" y="640">
-    <tspan class="code">^PATIENT(1,"NAME")</tspan>
+    <tspan class="code">^PATIENT{ 1,"NAME" }</tspan>
     <tspan xml:space="preserve">  →  </tspan>
     <tspan class="code">"Alice"</tspan>
     <tspan xml:space="preserve">    Key: </tspan>
@@ -154,7 +154,7 @@
   </text>
 
   <text x="80" y="668">
-    <tspan class="code">^PATIENT(10,"ADDR","CITY")</tspan>
+    <tspan class="code">^PATIENT{ 10,"ADDR","CITY" }</tspan>
     <tspan xml:space="preserve"> →  </tspan>
     <tspan class="code">"NYC"</tspan>
     <tspan xml:space="preserve">      Key: </tspan>
@@ -162,7 +162,7 @@
   </text>
 
   <text x="80" y="696">
-    <tspan class="code">^PATIENT(2)</tspan>
+    <tspan class="code">^PATIENT{ 2 }</tspan>
     <tspan xml:space="preserve">
       →  (no value, but has descendants)
     </tspan>
