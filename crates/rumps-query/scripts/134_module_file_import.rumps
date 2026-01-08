@@ -6,8 +6,8 @@ MODULE MyMath FROM "../modules/lib/mymath.rumps"
 
 ; ============ Test constants from imported module ============
 
-WRITE MyMath.pi > 3  ; true
-WRITE MyMath.e > 2  ; true
+WRITE MyMath.pi > 3.0  ; true
+WRITE MyMath.e > 2.0  ; true
 
 ; ============ Test functions from imported module ============
 

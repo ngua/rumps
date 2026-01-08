@@ -374,6 +374,14 @@ impl Scheme {
         }
     }
 
+    /// Extract the return type if the scheme body is a function type.
+    pub(crate) fn return_ty(&self) -> Option<&Ty> {
+        match &self.ty {
+            Ty::Fn(_, ret) => Some(ret),
+            _ => None,
+        }
+    }
+
     /// Instantiate the scheme with fresh type variables.
     ///
     /// Takes a mutable counter for generating fresh `TyVar`s. Returns:

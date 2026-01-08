@@ -13,9 +13,9 @@ use super::cst;
 use crate::ast::{
     self, ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
     Expr, ExprId, Import, ImportItem, JsonAccessKey, MatchArm, MatchPattern,
-    MatchPatternId, ObjectEntry, OutputFormat, OutputTarget, RefTarget,
-    RestPattern, Stmt, StmtId, SubscriptElem, TransactionModifiers, TypeDefAst,
-    TypePattern, VariantAst, Visibility, WriteExpr,
+    MatchPatternId, ObjectEntry, OutputFormat, OutputTarget, PostfixOp,
+    RefTarget, RestPattern, Stmt, StmtId, SubscriptElem, TransactionModifiers,
+    TypeDefAst, TypePattern, VariantAst, Visibility, WriteExpr,
 };
 use crate::{Error, Result};
 
@@ -505,7 +505,7 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
         }
         cst::ExprKind::Unwrap(inner) => {
             let inner_id = lower_expr(ast, ctx, *inner)?;
-            Expr::Unwrap(inner_id)
+            Expr::Postfix(PostfixOp::Unwrap, inner_id)
         }
         cst::ExprKind::Range(start, end, inclusive) => {
             let start_id = lower_expr(ast, ctx, *start)?;
@@ -1556,9 +1556,9 @@ fn merge_expr(
                 body: new_body,
             }
         }
-        Expr::Unwrap(expr) => {
+        Expr::Postfix(op, expr) => {
             let new_expr = merge_expr(target, source, expr, span)?;
-            Expr::Unwrap(new_expr)
+            Expr::Postfix(op, new_expr)
         }
         Expr::Range(start, end, incl) => {
             let new_start = merge_expr(target, source, start, span)?;

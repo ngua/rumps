@@ -242,6 +242,13 @@ pub(crate) struct InferCtx<'a> {
     /// substitution to concrete `Monoid` types. The interpreter uses
     /// this to produce the correct empty value.
     mempty_types: HashMap<ExprId, Ty>,
+    /// Type schemes for polymorphic closures.
+    ///
+    /// When a closure with type parameters is inferred, its full scheme
+    /// (quantified vars + constraints) is stored here. On `LET` binding,
+    /// we retrieve this scheme for proper generalization instead of
+    /// treating the closure as monomorphic.
+    pub(super) closure_schemes: HashMap<ExprId, Scheme>,
     /// Current transaction ID, if inside a `TRANSACTION` block.
     ///
     /// Used to enforce that global writes (`@SET ^...`, `@KILL ^...`) only
@@ -280,6 +287,7 @@ impl<'a> InferCtx<'a> {
             regex_cache: Vec::new(),
             regex_indices: HashMap::new(),
             mempty_types: HashMap::new(),
+            closure_schemes: HashMap::new(),
             in_transaction: None,
             next_txn_id: 0,
         }

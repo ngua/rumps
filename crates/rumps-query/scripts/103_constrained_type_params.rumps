@@ -57,7 +57,7 @@ WRITE s    ; "hello"
 ; Closures with constraints
 ; ============================================================================
 
-; Closure with constrained type parameter
+; Closure with constrained type parameter; works with ANY Numeric type
 LET double = [T: Numeric](x: T) -> T => x + x
 
 WRITE double(10)    ; 20

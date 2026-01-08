@@ -385,7 +385,7 @@ pub(crate) enum BinOp {
     Pipe, // `|>`
 }
 
-/// Unary operators.
+/// Unary (prefix) operators.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UnOp {
     Neg, // `-`
@@ -396,6 +396,13 @@ pub(crate) enum UnOp {
     /// `?(?x)` produces `Option.Some(Option.Some(x))`. Note that `??x`
     /// is parsed as the coalesce operator, not nested wrap.
     Wrap,
+}
+
+/// Postfix operators.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PostfixOp {
+    /// `!` ; unwrap `Option`/`Result`, producing a runtime error on `None`/`Err`
+    Unwrap,
 }
 
 /// Rest pattern for array destructuring.
@@ -860,12 +867,12 @@ pub(crate) enum Expr {
         body: ExprId,
     },
 
-    /// Unwrap: `expr!`
+    /// Postfix operator: `expr!` (unwrap), etc.
     ///
-    /// Extracts the payload from `Option.Some` or `Result.Ok`; produces a
-    /// runtime error for `Option.None` or `Result.Err(e)` (where `e` is
-    /// stringified in the error message).
-    Unwrap(ExprId),
+    /// Currently only `Unwrap` (`!`), which extracts the payload from
+    /// `Option.Some` or `Result.Ok`; produces a runtime error for
+    /// `Option.None` or `Result.Err(e)`.
+    Postfix(PostfixOp, ExprId),
 
     /// Range: `start..end` (exclusive) or `start..=end` (inclusive).
     ///

@@ -1003,9 +1003,9 @@ pub(crate) struct Math;
 impl Prim for Math {}
 
 impl Math {
-    /// `(Float) -> Float`
+    /// `forall T: Numeric. (T) -> T`
     ///
-    /// Returns the absolute value. Works on Int or Float.
+    /// Returns the absolute value.
     pub(crate) fn abs<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1018,17 +1018,18 @@ impl Math {
 
             let result = match v {
                 Value::Int(n) => Value::Int(n.abs()),
+                Value::Word(n) => Value::Word(*n), // Word is unsigned; abs is identity
                 Value::Float(f) => Value::Float(OrderedFloat(f.0.abs())),
-                _ => typechecked!("Math.abs", "Int or Float"),
+                _ => typechecked!("Math.abs", "Numeric"),
             };
 
             Ok(ctx.arena.add(result, ctx.span))
         })
     }
 
-    /// `(Float, Float) -> Float`
+    /// `forall T: Numeric. (T, T) -> T`
     ///
-    /// Returns the minimum of two numbers. Coerces to Float if mixed types.
+    /// Returns the minimum of two numbers.
     pub(crate) fn min<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1039,20 +1040,22 @@ impl Math {
                 (Some(Value::Int(x)), Some(Value::Int(y))) => {
                     Value::Int((*x).min(*y))
                 }
-                _ => {
-                    let x = Self::to_float(ctx, args[0]);
-                    let y = Self::to_float(ctx, args[1]);
-                    Value::Float(OrderedFloat(x.min(y)))
+                (Some(Value::Word(x)), Some(Value::Word(y))) => {
+                    Value::Word((*x).min(*y))
                 }
+                (Some(Value::Float(x)), Some(Value::Float(y))) => {
+                    Value::Float(OrderedFloat(x.0.min(y.0)))
+                }
+                _ => typechecked!("Math.min", "same Numeric type"),
             };
 
             Ok(ctx.arena.add(result, ctx.span))
         })
     }
 
-    /// `(Float, Float) -> Float`
+    /// `forall T: Numeric. (T, T) -> T`
     ///
-    /// Returns the maximum of two numbers. Coerces to Float if mixed types.
+    /// Returns the maximum of two numbers.
     pub(crate) fn max<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1063,11 +1066,13 @@ impl Math {
                 (Some(Value::Int(x)), Some(Value::Int(y))) => {
                     Value::Int((*x).max(*y))
                 }
-                _ => {
-                    let x = Self::to_float(ctx, args[0]);
-                    let y = Self::to_float(ctx, args[1]);
-                    Value::Float(OrderedFloat(x.max(y)))
+                (Some(Value::Word(x)), Some(Value::Word(y))) => {
+                    Value::Word((*x).max(*y))
                 }
+                (Some(Value::Float(x)), Some(Value::Float(y))) => {
+                    Value::Float(OrderedFloat(x.0.max(y.0)))
+                }
+                _ => typechecked!("Math.max", "same Numeric type"),
             };
 
             Ok(ctx.arena.add(result, ctx.span))

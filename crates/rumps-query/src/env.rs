@@ -23,7 +23,7 @@ pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
 use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
 
-use crate::ast::Intrinsic;
+use crate::ast::{BinOp, Intrinsic, PostfixOp, UnOp};
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::value::{FunctionDef, TypeId, Value, ValueArena, ValueId};
@@ -259,6 +259,165 @@ impl Intrinsic {
                 name: "@QUERY",
                 ty: scheme!((Ref) -> Option[Array[Subscript]]),
                 txn: TxnReq::None,
+            },
+        }
+    }
+}
+
+/// Definition of a binary operator with its type signature.
+pub(crate) struct BinOpDef {
+    pub(crate) name: &'static str,
+    pub(crate) ty: Scheme,
+}
+
+impl BinOp {
+    /// Get the definition for this binary operator.
+    pub(crate) fn def(self) -> BinOpDef {
+        match self {
+            // Arithmetic: forall T: Numeric. (T, T) -> T
+            Self::Add => BinOpDef {
+                name: "+",
+                ty: scheme!(forall T: Numeric. (T, T) -> T),
+            },
+            Self::Sub => BinOpDef {
+                name: "-",
+                ty: scheme!(forall T: Numeric. (T, T) -> T),
+            },
+            Self::Mul => BinOpDef {
+                name: "*",
+                ty: scheme!(forall T: Numeric. (T, T) -> T),
+            },
+            Self::Div => BinOpDef {
+                name: "/",
+                ty: scheme!((Float, Float) -> Float),
+            },
+            Self::FloorDiv => BinOpDef {
+                name: "//",
+                ty: scheme!(forall T: Numeric. (T, T) -> T),
+            },
+            Self::Mod => BinOpDef {
+                name: "%",
+                ty: scheme!(forall T: Numeric. (T, T) -> T),
+            },
+            Self::Pow => BinOpDef {
+                name: "**",
+                ty: scheme!(forall T: Numeric. (T, T) -> T),
+            },
+
+            // Comparison: forall T. (T, T) -> Bool
+            Self::Eq => BinOpDef {
+                name: "==",
+                ty: scheme!(forall T. (T, T) -> Bool),
+            },
+            Self::Ne => BinOpDef {
+                name: "!=",
+                ty: scheme!(forall T. (T, T) -> Bool),
+            },
+            Self::Lt => BinOpDef {
+                name: "<",
+                ty: scheme!(forall T. (T, T) -> Bool),
+            },
+            Self::Gt => BinOpDef {
+                name: ">",
+                ty: scheme!(forall T. (T, T) -> Bool),
+            },
+            Self::Le => BinOpDef {
+                name: "<=",
+                ty: scheme!(forall T. (T, T) -> Bool),
+            },
+            Self::Ge => BinOpDef {
+                name: ">=",
+                ty: scheme!(forall T. (T, T) -> Bool),
+            },
+
+            // Logical: (Bool, Bool) -> Bool
+            Self::And => BinOpDef {
+                name: "AND",
+                ty: scheme!((Bool, Bool) -> Bool),
+            },
+            Self::Or => BinOpDef {
+                name: "OR",
+                ty: scheme!((Bool, Bool) -> Bool),
+            },
+
+            // Bitwise: forall T: BitLike. (T, T) -> T
+            Self::BitAnd => BinOpDef {
+                name: "&",
+                ty: scheme!(forall T: BitLike. (T, T) -> T),
+            },
+            Self::BitOr => BinOpDef {
+                name: "|",
+                ty: scheme!(forall T: BitLike. (T, T) -> T),
+            },
+            Self::Shl => BinOpDef {
+                name: "<<",
+                ty: scheme!(forall T: BitLike. (T, T) -> T),
+            },
+            Self::Shr => BinOpDef {
+                name: ">>",
+                ty: scheme!(forall T: BitLike. (T, T) -> T),
+            },
+
+            // Concat: forall T: Monoid. (T, T) -> T
+            Self::Concat => BinOpDef {
+                name: "++",
+                ty: scheme!(forall T: Monoid. (T, T) -> T),
+            },
+
+            // Coalesce: forall T, F: Fallible[T]. (F, T) -> T
+            Self::Coalesce => BinOpDef {
+                name: "??",
+                ty: scheme!(forall T, F: Fallible[T]. (F, T) -> T),
+            },
+
+            // Pipe: forall T, U. (T, (T) -> U) -> U
+            Self::Pipe => BinOpDef {
+                name: "|>",
+                ty: scheme!(forall T, U. (T, (T) -> U) -> U),
+            },
+        }
+    }
+}
+
+/// Definition of a unary (prefix) operator with its type signature.
+pub(crate) struct UnOpDef {
+    pub(crate) name: &'static str,
+    pub(crate) ty: Scheme,
+}
+
+impl UnOp {
+    /// Get the definition for this unary operator.
+    pub(crate) fn def(self) -> UnOpDef {
+        match self {
+            Self::Neg => UnOpDef {
+                name: "-",
+                ty: scheme!(forall T: Numeric. (T) -> T),
+            },
+            Self::Not => UnOpDef {
+                name: "NOT",
+                ty: scheme!((Bool) -> Bool),
+            },
+            Self::Wrap => UnOpDef {
+                name: "?",
+                ty: scheme!(forall T. (T) -> Option[T]),
+            },
+        }
+    }
+}
+
+/// Definition of a postfix operator with its type signature.
+pub(crate) struct PostfixOpDef {
+    pub(crate) name: &'static str,
+    pub(crate) ty: Scheme,
+}
+
+impl PostfixOp {
+    /// Get the definition for this postfix operator.
+    pub(crate) fn def(self) -> PostfixOpDef {
+        match self {
+            Self::Unwrap => PostfixOpDef {
+                name: "!",
+                ty: scheme!(forall T, F: Fallible[T]. (F) -> T),
             },
         }
     }
@@ -847,17 +1006,17 @@ impl Environment {
             PrimDef {
                 name: "abs",
                 f: Math::abs,
-                ty: scheme!((Float) -> Float),
+                ty: scheme!(forall T: Numeric. (T) -> T),
             },
             PrimDef {
                 name: "min",
                 f: Math::min,
-                ty: scheme!((Float, Float) -> Float),
+                ty: scheme!(forall T: Numeric. (T, T) -> T),
             },
             PrimDef {
                 name: "max",
                 f: Math::max,
-                ty: scheme!((Float, Float) -> Float),
+                ty: scheme!(forall T: Numeric. (T, T) -> T),
             },
             PrimDef {
                 name: "floor",

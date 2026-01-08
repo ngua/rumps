@@ -24,9 +24,20 @@ use syn::{Ident, Result, Token};
 ///
 /// ## Constraint syntax
 ///
-/// Type variables can have constraints:
-/// - `I: Iterable[T]` - `I` must be iterable with element type `T`
-/// - `F: Fallible[T]` - `F` must be a fallible type (`Option[T]` or `Result[T, _]`)
+/// Type variables can have simple or parameterized constraints:
+///
+/// Simple constraints (no type argument):
+/// - `T: Numeric` ; `T` must be `Int`, `Float`, or `Word`
+/// - `T: BitLike` ; `T` must be `Bool`, `Int`, or `Word`
+/// - `T: Monoid` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
+/// - `T: Storable` ; `T` must be storable in the database
+/// - `T: Stringable` ; `T` must be convertible to `String`
+/// - `T: Jsonable` ; `T` must be convertible to `Json`
+/// - `T: Subscriptable` ; `T` must be usable as a subscript key
+///
+/// Parameterized constraints (require a type argument):
+/// - `I: Iterable[T]` ; `I` must be iterable with element type `T`
+/// - `F: Fallible[T]` ; `F` must be a fallible type (`Option[T]` or `Result[T, _]`)
 ///
 /// ## Type syntax
 ///
@@ -50,10 +61,20 @@ pub fn scheme(input: TokenStream) -> TokenStream {
 /// A constraint on a type variable.
 #[derive(Debug, Clone)]
 enum VarConstraint {
-    /// `Iterable[T]` - variable must be iterable with given element type
+    // Parameterized constraints (require a type argument)
+    /// `Iterable[T]` ; variable must be iterable with given element type
     Iterable(String),
-    /// `Fallible[T]` - variable must be fallible with given inner type
+    /// `Fallible[T]` ; variable must be fallible with given inner type
     Fallible(String),
+
+    // Simple constraints (no type argument)
+    Numeric,
+    BitLike,
+    Monoid,
+    Storable,
+    Stringable,
+    Jsonable,
+    Subscriptable,
 }
 
 /// Parsed scheme input: optional context + optional `forall` + type.
@@ -65,29 +86,66 @@ struct SchemeInput {
     ty: TyExpr,
 }
 
+/// Simple constraint names (no type argument).
+const SIMPLE_CONSTRAINTS: &[&str] = &[
+    "Numeric",
+    "BitLike",
+    "Monoid",
+    "Storable",
+    "Stringable",
+    "Jsonable",
+    "Subscriptable",
+];
+
+/// Parameterized constraint names (require `[T]` argument).
+const PARAMETERIZED_CONSTRAINTS: &[&str] = &["Iterable", "Fallible"];
+
 /// Parse a single type variable with optional constraint.
 ///
-/// Syntax: `T` or `I: Iterable[T]` or `F: Fallible[E]`
+/// Syntax:
+/// - `T` (no constraint)
+/// - `T: Numeric` (simple constraint)
+/// - `I: Iterable[T]` (parameterized constraint)
 fn parse_type_var(
     input: ParseStream,
 ) -> Result<(Ident, Option<VarConstraint>)> {
     let name: Ident = input.parse()?;
 
-    // Check for constraint: `: Constraint[T]`
+    // Check for constraint: `: Constraint` or `: Constraint[T]`
     let constraint = if input.peek(Token![:]) {
         input.parse::<Token![:]>()?;
         let constraint_name: Ident = input.parse()?;
+        let cname = constraint_name.to_string();
 
-        // Parse bracketed type argument
-        let content;
-        syn::bracketed!(content in input);
-        let inner: Ident = content.parse()?;
-        let inner_name = inner.to_string();
+        if SIMPLE_CONSTRAINTS.contains(&cname.as_str()) {
+            // Simple constraint (no brackets)
+            Some(match cname.as_str() {
+                "Numeric" => VarConstraint::Numeric,
+                "BitLike" => VarConstraint::BitLike,
+                "Monoid" => VarConstraint::Monoid,
+                "Storable" => VarConstraint::Storable,
+                "Stringable" => VarConstraint::Stringable,
+                "Jsonable" => VarConstraint::Jsonable,
+                "Subscriptable" => VarConstraint::Subscriptable,
+                _ => unreachable!(),
+            })
+        } else if PARAMETERIZED_CONSTRAINTS.contains(&cname.as_str()) {
+            // Parameterized constraint (requires brackets)
+            let content;
+            syn::bracketed!(content in input);
+            let inner: Ident = content.parse()?;
+            let inner_name = inner.to_string();
 
-        match constraint_name.to_string().as_str() {
-            "Iterable" => Some(VarConstraint::Iterable(inner_name)),
-            "Fallible" => Some(VarConstraint::Fallible(inner_name)),
-            other => panic!("unknown constraint: `{other}`; use `Iterable[T]` or `Fallible[T]`"),
+            Some(match cname.as_str() {
+                "Iterable" => VarConstraint::Iterable(inner_name),
+                "Fallible" => VarConstraint::Fallible(inner_name),
+                _ => unreachable!(),
+            })
+        } else {
+            panic!(
+                "unknown constraint: `{cname}`; use one of {:?} or {:?}",
+                SIMPLE_CONSTRAINTS, PARAMETERIZED_CONSTRAINTS
+            )
         }
     } else {
         None
@@ -172,6 +230,7 @@ impl SchemeInput {
                     constraint.as_ref().map(|c| {
                         let var_idx = i as u32;
                         match c {
+                            // Parameterized constraints
                             VarConstraint::Iterable(elem) => {
                                 let elem_idx = var_map.get(elem).copied().unwrap_or_else(|| {
                                     panic!("unbound type variable in constraint: `{elem}`")
@@ -196,6 +255,56 @@ impl SchemeInput {
                                     )
                                 }
                             }
+                            // Simple constraints (no inner type)
+                            VarConstraint::Numeric => quote! {
+                                (
+                                    crate::typecheck::TyVar::new(#var_idx),
+                                    crate::ast::ParamConstraint::Numeric,
+                                    None
+                                )
+                            },
+                            VarConstraint::BitLike => quote! {
+                                (
+                                    crate::typecheck::TyVar::new(#var_idx),
+                                    crate::ast::ParamConstraint::BitLike,
+                                    None
+                                )
+                            },
+                            VarConstraint::Monoid => quote! {
+                                (
+                                    crate::typecheck::TyVar::new(#var_idx),
+                                    crate::ast::ParamConstraint::Monoid,
+                                    None
+                                )
+                            },
+                            VarConstraint::Storable => quote! {
+                                (
+                                    crate::typecheck::TyVar::new(#var_idx),
+                                    crate::ast::ParamConstraint::Storable,
+                                    None
+                                )
+                            },
+                            VarConstraint::Stringable => quote! {
+                                (
+                                    crate::typecheck::TyVar::new(#var_idx),
+                                    crate::ast::ParamConstraint::Stringable,
+                                    None
+                                )
+                            },
+                            VarConstraint::Jsonable => quote! {
+                                (
+                                    crate::typecheck::TyVar::new(#var_idx),
+                                    crate::ast::ParamConstraint::Jsonable,
+                                    None
+                                )
+                            },
+                            VarConstraint::Subscriptable => quote! {
+                                (
+                                    crate::typecheck::TyVar::new(#var_idx),
+                                    crate::ast::ParamConstraint::Subscriptable,
+                                    None
+                                )
+                            },
                         }
                     })
                 })

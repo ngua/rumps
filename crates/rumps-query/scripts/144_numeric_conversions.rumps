@@ -1,27 +1,36 @@
-; Int -> Float coercion
-LET f: Float = 10
-WRITE f
+; Test: Explicit numeric conversions
+; Tests explicit `AS` conversions between numeric types
+; (implicit coercion between numeric types is NOT allowed)
 
-; With parentheses (regression test)
-LET f2: Float = (10)
+; Int AS Float
+LET f1 = 10 AS Float
+WRITE f1
+
+; Negative Int AS Float
+LET f2 = (-5) AS Float
 WRITE f2
 
-; Negative float
-LET f3: Float = -5
+; Int AS Word (note: negative would fail at runtime; use READ for fallible)
+LET w1 = 42 AS Word
+WRITE w1
+
+; Float literal with Float annotation (trivial)
+LET f3: Float = 3.14
 WRITE f3
-
-; Int -> Word coercion
-LET w: Word = 42
-WRITE w
-
-; Float literal with Float annotation
-LET f4: Float = 3.14
-WRITE f4
 
 ; Int literal with Int annotation (trivial)
 LET i: Int = 100
 WRITE i
 
-; Nested in expression
-LET f5: Float = (10 + 5)
+; Expression result converted explicitly
+LET f4 = (10 + 5) AS Float
+WRITE f4
+
+; Word AS Int (always succeeds)
+LET w2: Word = 50
+LET i2 = w2 AS Int
+WRITE i2
+
+; Word AS Float (always succeeds)
+LET f5 = w2 AS Float
 WRITE f5

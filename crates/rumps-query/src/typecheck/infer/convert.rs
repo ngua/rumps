@@ -203,13 +203,6 @@ impl InferCtx<'_> {
             | (Ty::DataStatus, Ty::DataStatus)
             | (Ty::FilePath, Ty::FilePath)
             | (Ty::Path, Ty::Path) => true,
-            // Numeric coercion: Int, Word, Float are compatible
-            (Ty::Int, Ty::Word)
-            | (Ty::Word, Ty::Int)
-            | (Ty::Int, Ty::Float)
-            | (Ty::Float, Ty::Int)
-            | (Ty::Word, Ty::Float)
-            | (Ty::Float, Ty::Word) => true,
 
             // Type variables are compatible with anything
             (Ty::Var(_), _) | (_, Ty::Var(_)) => true,

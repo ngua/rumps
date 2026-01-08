@@ -24,7 +24,7 @@ LET f = FALSE
 LET my-var = 100
 
 ; All operators in one place
-LET x = 1 + 2 - 3 * 4 / 5 % 6
+LET x = 1 + 2 - 3 * 4 // 5 % 6
 LET cmp = 1 < 2
 LET eq = 3 == 3
 LET neq = 4 != 5

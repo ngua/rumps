@@ -10,8 +10,8 @@ WRITE pi-val > 3.14  ; true
 WRITE pi-val < 3.15  ; true
 
 ; Use in calculations
-LET area = Math.pi * 4  ; area of circle with r=2
-WRITE area > 12  ; true
+LET area = Math.pi * 4.0  ; area of circle with r=2
+WRITE area > 12.0  ; true
 
 ; ============ Math.e ============
 
@@ -34,7 +34,7 @@ WRITE tau-val > 6.28  ; true
 WRITE tau-val < 6.29  ; true
 
 ; tau = 2*pi
-LET two-pi = Math.pi * 2
+LET two-pi = Math.pi * 2.0
 LET diff = Math.abs(Math.tau - two-pi)
 WRITE diff < 0.0001  ; true (essentially equal)
 
@@ -43,27 +43,27 @@ WRITE diff < 0.0001  ; true (essentially equal)
 WRITE Math.inf  ; inf
 
 LET inf-val = Math.inf
-WRITE inf-val > 1000000  ; true
-WRITE inf-val > 0  ; true
+WRITE inf-val > 1000000.0  ; true
+WRITE inf-val > 0.0  ; true
 
 ; ============ Math.neg-inf ============
 
 WRITE Math.neg-inf  ; -inf
 
 LET neg-inf-val = Math.neg-inf
-WRITE neg-inf-val < -1000000  ; true
-WRITE neg-inf-val < 0  ; true
+WRITE neg-inf-val < -1000000.0  ; true
+WRITE neg-inf-val < 0.0  ; true
 
 ; ============ Constants in expressions ============
 
 ; Circle circumference: 2 * pi * r
-LET radius = 5
+LET radius = 5.0
 LET circ = Math.tau * radius
-WRITE circ > 31  ; true
+WRITE circ > 31.0  ; true
 
 ; Constants work with pipeline
 LET doubled-pi = Math.pi
-  |> (x => x * 2)
+  |> (x => x * 2.0)
 WRITE Math.abs(doubled-pi - Math.tau) < 0.0001  ; true
 
 ; Constants in array
@@ -76,5 +76,5 @@ LET math-consts = {
   e: Math.e,
   tau: Math.tau
 }
-WRITE math-consts.pi > 3  ; true
-WRITE math-consts.e > 2  ; true
+WRITE math-consts.pi > 3.0  ; true
+WRITE math-consts.e > 2.0  ; true

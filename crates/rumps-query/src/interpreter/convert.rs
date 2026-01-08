@@ -109,7 +109,15 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::Bool(b) => b.to_string().to_uppercase(),
             Value::Int(n) => n.to_string(),
             Value::Word(n) => n.to_string(),
-            Value::Float(f) => f.to_string(),
+            Value::Float(f) => {
+                let s = f.to_string();
+                // Ensure floats always have a decimal point for clarity
+                if s.contains('.') || s.contains('e') || s.contains('E') {
+                    s
+                } else {
+                    format!("{s}.0")
+                }
+            }
             Value::Char(c) => format!("'{c}'"),
             Value::String(id) | Value::FilePath(id) => {
                 let s = self.arena.get_str(*id).unwrap_or("");

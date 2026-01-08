@@ -1,66 +1,66 @@
-; Test: type coercions
-; Tests implicit numeric coercion and string coercion for concat
+; Test: type conversions
+; Tests explicit type conversion with AS and string interpolation
 
-; === Numeric Coercion (Int + Float -> Float) ===
+; === Explicit Type Conversion with AS ===
 
-; Addition with mixed types
-LET a = 10 + 3.5
+; Addition with explicit conversion to Float
+LET a = (10 AS Float) + 3.5
 WRITE a
 ; Expected: 13.5 (Float)
 
-LET b = 3.5 + 10
+LET b = 3.5 + (10 AS Float)
 WRITE b
 ; Expected: 13.5 (Float)
 
-; Subtraction with mixed types
-LET c = 10 - 2.5
+; Subtraction with explicit conversion
+LET c = (10 AS Float) - 2.5
 WRITE c
 ; Expected: 7.5 (Float)
 
-LET d = 10.5 - 3
+LET d = 10.5 - (3 AS Float)
 WRITE d
 ; Expected: 7.5 (Float)
 
-; Multiplication with mixed types
-LET e = 5 * 2.5
+; Multiplication with explicit conversion
+LET e = (5 AS Float) * 2.5
 WRITE e
 ; Expected: 12.5 (Float)
 
-LET f = 2.5 * 4
+LET f = 2.5 * (4 AS Float)
 WRITE f
 ; Expected: 10.0 (Float)
 
-; Division with mixed types
-LET g = 10 / 4.0
+; Division (requires Float operands)
+LET g = (10 AS Float) / 4.0
 WRITE g
 ; Expected: 2.5 (Float)
 
-LET h = 10.0 / 4
+LET h = 10.0 / (4 AS Float)
 WRITE h
 ; Expected: 2.5 (Float)
 
-; Int division always yields float
-LET i = 10 / 5
+; Float division
+LET i = 10.0 / 5.0
 WRITE i
 ; Expected: 2.0 (Float)
 
-; Floor division with mixed types
-LET j = 10 // 3.0
+; Floor division (same-type operands)
+LET j = 10.0 // 3.0
 WRITE j
-; Expected: 3 (Int)
+; Expected: 3.0 (Float)
 
-LET k = 10.0 // 3
+LET k = 10 // 3
 WRITE k
 ; Expected: 3 (Int)
 
-; Modulo with mixed types
-LET l = 10 % 3.5
+; Modulo (same-type operands)
+LET l = 10.0 % 3.5
 WRITE l
-; Expected: 3.0 (Float; 10 % 3.5 = 3.0)
+; Expected: 3.0 (Float; 10.0 % 3.5 = 3.0)
 
-LET m = 10.5 % 3
+LET m = 10.5 % 3.0
 WRITE m
-; Expected: 1.5 (Float; 10.5 % 3 = 1.5)
+; Expected: 1.5 (Float; 10.5 % 3.0 = 1.5)
 
 ; === String Conversion (via interpolation) ===
 
@@ -79,24 +79,24 @@ WRITE "Flag: {TRUE}"
 WRITE "Flag: {FALSE}"
 ; Expected: Flag: false
 
-; === Cross-type Numeric Comparison ===
+; === Same-type Numeric Comparison ===
 
-WRITE 5 == 5.0
-; Expected: true (int and float compare equal)
-
-WRITE 5.0 == 5
+WRITE 5 == 5
 ; Expected: true
 
-WRITE 10 < 10.5
+WRITE 5.0 == 5.0
 ; Expected: true
 
-WRITE 10.5 > 10
+WRITE 10 < 11
 ; Expected: true
 
-WRITE 3 >= 3.0
+WRITE 10.5 > 10.0
 ; Expected: true
 
-WRITE 3.0 <= 3
+WRITE 3 >= 3
 ; Expected: true
 
-WRITE "Type coercion test complete"
+WRITE 3.0 <= 3.0
+; Expected: true
+
+WRITE "Type conversion test complete"

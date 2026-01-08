@@ -2,5 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Error: constraint violation; calling a Numeric function with String\nFUN add-numeric[T: Numeric](a: T, b: T) -> T {\n  a + b\n}\n\nWRITE add-numeric(\"foo\", \"bar\")\n"
 ---
-ERROR: type mismatch: expected `String`, got `Int`
-type mismatch: expected `String`, got `Int`
+ERROR: type `String` does not satisfy `Numeric` constraint

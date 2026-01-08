@@ -84,15 +84,18 @@ WRITE oa1 == oa2
 WRITE oa1 == oa3
 ; Expected: false
 
-; === Mixed Numeric Equality ===
+; === Same-type Equality ===
 
-WRITE 5 == 5.0
-; Expected: true (int equals float)
+WRITE 5 == 5
+; Expected: true (same type comparison)
 
-WRITE [1, 2, 3] == [1.0, 2.0, 3.0]
-; Expected: true (if cross-type comparison allowed in arrays)
+WRITE 5.0 == 5.0
+; Expected: true (same type comparison)
 
-WRITE { x: 5 } == { x: 5.0 }
-; Expected: true (if cross-type comparison allowed in objects)
+WRITE [1, 2, 3] == [1, 2, 3]
+; Expected: true
+
+WRITE { x: 5 } == { x: 5 }
+; Expected: true
 
 WRITE "Equality test complete"

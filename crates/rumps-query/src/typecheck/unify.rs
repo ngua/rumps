@@ -10,8 +10,8 @@
 //! testing it in isolation proved less effective than integration testing:
 //!
 //! 1. All unification behavior is exercised by real code in `scripts/*.rumps`
-//! 2. Edge cases (numeric coercion, occurs check, union ordering) are implicitly
-//!    tested through scripts that rely on correct unification
+//! 2. Edge cases (occurs check, union ordering) are implicitly tested through
+//!    scripts that rely on correct unification
 //! 3. Integration tests catch bugs that synthetic type construction misses
 //!
 //! See `infer.rs` for the full rationale on our testing approach.
@@ -45,21 +45,19 @@ impl<'a> InferCtx<'a> {
     ///
     /// 1. `Var(v) ~ t` -> `{ v -> t }` (if `v` not in `fv(t)`; occurs check)
     /// 2. `t ~ Var(v)` -> `{ v -> t }` (symmetric)
-    /// 3. `Int ~ Float` or `Float ~ Int` -> `{}` (numeric coercion)
-    /// 4. `Array[a] ~ Array[b]` -> `unify(a, b)` (recursive)
-    /// 5. `Fn[p1] -> r1 ~ Fn[p2] -> r2` -> `unify(p1, p2) . unify(r1, r2)`
-    /// 6. `{ f1 } ~ { f2 }` -> unify common fields (structural objects)
-    /// 7. `Named(id, args1) ~ Named(id, args2)` -> unify corresponding args
-    /// 8. `Unknown ~ _` or `_ ~ Unknown` -> `{}` (unifies with anything)
-    /// 9. `Error ~ _` or `_ ~ Error` -> `{}` (error recovery)
-    /// 10. `T ~ T` -> `{}` (primitives equal)
-    /// 11. Otherwise -> error
+    /// 3. `Array[a] ~ Array[b]` -> `unify(a, b)` (recursive)
+    /// 4. `Fn[p1] -> r1 ~ Fn[p2] -> r2` -> `unify(p1, p2) . unify(r1, r2)`
+    /// 5. `{ f1 } ~ { f2 }` -> unify common fields (structural objects)
+    /// 6. `Named(id, args1) ~ Named(id, args2)` -> unify corresponding args
+    /// 7. `Unknown ~ _` or `_ ~ Unknown` -> `{}` (unifies with anything)
+    /// 8. `Error ~ _` or `_ ~ Error` -> `{}` (error recovery)
+    /// 9. `T ~ T` -> `{}` (primitives equal)
+    /// 10. Otherwise -> error
     ///
-    /// # Note on Numeric Coercion
+    /// # No Implicit Numeric Coercion
     ///
-    /// Unlike typical HM unification, we allow `Int ~ Float` without error.
-    /// This is because RUMPS uses automatic widening: `Int + Float = Float`.
-    /// The coercion produces an empty substitution since no variables are bound.
+    /// Numeric types (`Int`, `Float`, `Word`) do NOT implicitly coerce.
+    /// Use explicit `AS` casts to convert between them.
     pub(crate) fn unify_types(
         &mut self,
         t1: &Ty,
@@ -177,16 +175,10 @@ impl<'a> InferCtx<'a> {
                 UnifyResult::Ok(Subst::empty())
             }
 
-            // Numeric coercion: Int, Word, and Float unify (widening)
+            // Numeric types: same type only (no implicit coercion)
             (Ty::Int, Ty::Int)
             | (Ty::Word, Ty::Word)
             | (Ty::Float, Ty::Float) => UnifyResult::Ok(Subst::empty()),
-            (Ty::Int, Ty::Float)
-            | (Ty::Float, Ty::Int)
-            | (Ty::Word, Ty::Int)
-            | (Ty::Int, Ty::Word)
-            | (Ty::Word, Ty::Float)
-            | (Ty::Float, Ty::Word) => UnifyResult::Ok(Subst::empty()),
 
             // Array: unify element types
             (Ty::Array(a), Ty::Array(b)) => self.unify_inner(a, b, span),
@@ -678,9 +670,9 @@ impl<'a> InferCtx<'a> {
         let constraints = self.take_constraints();
         let mut subst = Subst::empty();
 
-        // First pass: process Eq, Fallible, and HasField constraints to
-        // build substitution. Fallible and HasField must be processed early
-        // so type variables get resolved before they're used in other constraints.
+        // First pass: process Eq, Callable, HasField, Iterable, Indexable to
+        // build substitution. These constraints generate type bindings that
+        // other constraints (Numeric, Stringable, etc.) depend on.
         constraints.iter().for_each(|c| match c {
             Constraint::Eq(t1, t2, span) => {
                 let t1 = t1.apply(&subst);
@@ -694,8 +686,20 @@ impl<'a> InferCtx<'a> {
                     }
                 }
             }
+            Constraint::Callable {
+                callee,
+                args,
+                ret,
+                span,
+            } => {
+                let callee = callee.apply(&subst);
+                let args: Vec<Ty> =
+                    args.iter().map(|t| t.apply(&subst)).collect();
+                let ret = ret.apply(&subst);
+                self.check_callable(&callee, &args, &ret, *span, &mut subst);
+            }
             Constraint::Fallible { .. } => {
-                // Processed in third pass after Callable resolves types
+                // Processed in third pass after all unifications complete
             }
             Constraint::HasField {
                 base,
@@ -732,31 +736,17 @@ impl<'a> InferCtx<'a> {
         constraints.iter().for_each(|c| {
             match c {
                 Constraint::Eq(..)
+                | Constraint::Callable { .. }
                 | Constraint::HasField { .. }
                 | Constraint::Iterable { .. }
                 | Constraint::Indexable { .. }
                 | Constraint::Fallible { .. } => {
-                    // Eq/HasField/Iterable/Indexable: already processed in first pass
-                    // Fallible: processed in third pass after Callable resolves types
+                    // Eq/Callable/HasField/Iterable/Indexable: already processed in first pass
+                    // Fallible: processed in third pass
                 }
 
                 Constraint::Numeric(ty, span) => {
-                    self.check_numeric(&ty.apply(&subst), *span, &mut subst);
-                }
-
-                Constraint::Callable {
-                    callee,
-                    args,
-                    ret,
-                    span,
-                } => {
-                    let callee = callee.apply(&subst);
-                    let args: Vec<Ty> =
-                        args.iter().map(|t| t.apply(&subst)).collect();
-                    let ret = ret.apply(&subst);
-                    self.check_callable(
-                        &callee, &args, &ret, *span, &mut subst,
-                    );
+                    self.check_numeric(&ty.apply(&subst), *span);
                 }
 
                 Constraint::Stringable(ty, span) => {
@@ -808,23 +798,17 @@ impl<'a> InferCtx<'a> {
 
     /// Check that a type is numeric (`Int`, `Word`, or `Float`).
     ///
-    /// If the type is an unresolved type variable, defaults it to `Int` (like
-    /// Haskell's defaulting rules). This enables inference for expressions
-    /// like `x => x + 1` when passed to HOFs with polymorphic empty arrays.
-    fn check_numeric(&mut self, ty: &Ty, span: Span, subst: &mut Subst) {
+    /// Type variables remain polymorphic; they satisfy the `Numeric` constraint
+    /// as long as they are eventually bound to a numeric type at use sites.
+    fn check_numeric(&mut self, ty: &Ty, span: Span) {
         match ty {
             Ty::Int | Ty::Word | Ty::Float => {}
-            Ty::Var(v) => {
-                // Default unresolved numeric type variables to Int
-                *subst = subst.compose(&Subst::singleton(*v, Ty::Int));
-            }
+            // Type variables remain polymorphic; caller provides concrete type
+            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
             Ty::Union(members) => {
                 // All union members must be numeric
-                members
-                    .iter()
-                    .for_each(|m| self.check_numeric(m, span, subst));
+                members.iter().for_each(|m| self.check_numeric(m, span));
             }
-            Ty::Error | Ty::Unknown => {}
             _ => {
                 self.error(TypeError::UnsatisfiedConstraint(
                     ConstraintKind::Numeric,

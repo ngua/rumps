@@ -13,4 +13,4 @@ LET str = Utils.stringify(sq)
 WRITE str  ; 25
 
 WRITE Utils.version  ; 1.0
-WRITE MyMath.pi > 3  ; true
+WRITE MyMath.pi > 3.0  ; true

@@ -4,12 +4,26 @@ use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{Expr, ExprId, MatchArm, StmtId, TypePattern};
+use crate::ast::{Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
+    /// Postfix operator implementation.
+    ///
+    /// Type checker guarantees operand satisfies the operator's constraints.
+    pub(super) fn postfix(
+        &self,
+        op: PostfixOp,
+        val: Value,
+        span: Span,
+    ) -> Result<Value> {
+        match op {
+            PostfixOp::Unwrap => self.unwrap(val, span),
+        }
+    }
+
     /// Unwrap operator implementation (`!` postfix).
     ///
     /// Extracts the payload from `Option.Some` or `Result.Ok`; produces a
@@ -17,7 +31,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Type checker guarantees operand is `Option` or `Result`.
     /// `None`/`Err` remain runtime errors (value-level, not type-level).
-    pub(super) fn unwrap(&self, val: Value, span: Span) -> Result<Value> {
+    fn unwrap(&self, val: Value, span: Span) -> Result<Value> {
         let is_option = |ty_expr| {
             self.type_exprs
                 .base_type(ty_expr)

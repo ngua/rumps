@@ -29,7 +29,7 @@ MODULE Config {
 
 WRITE Config.max-size  ; 1000
 WRITE Config.default-name  ; unnamed
-WRITE Config.ratio > 3  ; true
+WRITE Config.ratio > 3.0  ; true
 
 ; Use constants in expressions
 LET scaled = Config.max-size * 2
@@ -49,13 +49,13 @@ MODULE Geometry {
   }
 }
 
-WRITE Geometry.pi > 3  ; true
+WRITE Geometry.pi > 3.0  ; true
 
 LET a = Geometry.area(2.0)
-WRITE a > 12  ; true
+WRITE a > 12.0  ; true
 
 LET circ = Geometry.circumference(1.0)
-WRITE circ > 6  ; true
+WRITE circ > 6.0  ; true
 
 ; ============ Nested modules ============
 
@@ -178,8 +178,8 @@ LET r = Shapes.Shape.Rectangle(3.0, 4.0)
 
 WRITE Shapes.describe(c)  ; circle
 WRITE Shapes.describe(r)  ; rectangle
-WRITE Shapes.area(c) > 12  ; true (approx 12.56)
-WRITE Shapes.area(r) > 11  ; true (12.0)
+WRITE Shapes.area(c) > 12.0  ; true (approx 12.56)
+WRITE Shapes.area(r) > 11.0  ; true (12.0)
 
 ; ============ Module with NEWTYPE ============
 

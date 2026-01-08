@@ -10,8 +10,9 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
-    Import, ImportItem, OutputFormat, OutputTarget, ParamConstraint, RefTarget,
-    Stmt, StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility, WriteExpr,
+    Import, ImportItem, Literal, OutputFormat, OutputTarget, ParamConstraint,
+    RefTarget, Stmt, StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility,
+    WriteExpr,
 };
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyVar};
@@ -497,6 +498,9 @@ impl InferCtx<'_> {
     /// For extensible records: when the RHS is a structural object and the
     /// annotation is a named struct, we bind with the full object type
     /// (preserving extra fields) rather than the narrower annotation type.
+    ///
+    /// For polymorphic closures: uses the stored scheme from `closure_schemes`
+    /// for proper generalization instead of monomorphizing.
     fn r#let(
         &mut self,
         pattern: &BindingPattern,
@@ -541,9 +545,19 @@ impl InferCtx<'_> {
             }
         };
 
+        // Check if RHS is a polymorphic closure (has stored scheme)
+        // This is done AFTER inferring since closure() stores the scheme
+        let closure_scheme = self.closure_schemes.remove(&rhs);
+
         // Bind variables from the pattern (if not already done)
         if let Some(ty) = ty {
-            self.bind_pattern(pattern, &ty, span);
+            // For polymorphic closures, use the stored scheme directly
+            match (&pattern, closure_scheme) {
+                (BindingPattern::Var(name), Some(scheme)) => {
+                    self.env.bind(name, scheme);
+                }
+                _ => self.bind_pattern(pattern, &ty, span),
+            }
         }
     }
 
@@ -555,7 +569,17 @@ impl InferCtx<'_> {
         span: Span,
     ) -> Option<Ty> {
         let rhs_ty = self.expr(rhs);
-        self.unify(rhs_ty.clone(), ann_ty.clone(), span);
+
+        // Allow integer literals to be typed as Word when annotated
+        let is_int_to_word = matches!((&rhs_ty, ann_ty), (Ty::Int, Ty::Word))
+            && self
+                .ast
+                .get_expr(rhs)
+                .is_some_and(|e| matches!(e, Expr::Literal(Literal::Int(_))));
+
+        if !is_int_to_word {
+            self.unify(rhs_ty.clone(), ann_ty.clone(), span);
+        }
 
         // Extensible records: if rhs is an object and annotation
         // is an alias to object, keep the full object type to

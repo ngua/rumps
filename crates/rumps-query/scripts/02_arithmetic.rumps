@@ -14,9 +14,10 @@ LET mul = 10 * 5
 WRITE mul
 ; Expected: 50
 
-LET div = 10 / 4
+; Division requires Float operands
+LET div = 10.0 / 4.0
 WRITE div
-; Expected: 2.5 (or 2 if integer division)
+; Expected: 2.5
 
 LET intdiv = 10 // 4
 WRITE intdiv
@@ -31,18 +32,19 @@ LET prec1 = 2 + 3 * 4
 WRITE prec1
 ; Expected: 14 (not 20)
 
-LET prec2 = 10 - 6 / 2
+; Division with floats
+LET prec2 = 10.0 - 6.0 / 2.0
 WRITE prec2
-; Expected: 7 (not 2)
+; Expected: 7.0 (not 2.0)
 
 ; Parentheses override precedence
 LET paren1 = (2 + 3) * 4
 WRITE paren1
 ; Expected: 20
 
-LET paren2 = (10 - 6) / 2
+LET paren2 = (10.0 - 6.0) / 2.0
 WRITE paren2
-; Expected: 2
+; Expected: 2.0
 
 ; Unary minus
 LET neg = -5
@@ -53,8 +55,8 @@ LET neg2 = 10 + -3
 WRITE neg2
 ; Expected: 7
 
-; Nested operations
-LET complex = ((1 + 2) * (3 + 4)) / 7
+; Nested operations (using floor division for integers)
+LET complex = ((1 + 2) * (3 + 4)) // 7
 WRITE complex
 ; Expected: 3
 
@@ -67,8 +69,8 @@ LET f2 = 10.0 / 4.0
 WRITE f2
 ; Expected: 2.5
 
-; Mixed int/float
-LET mixed = 10 + 0.5
+; Same-type arithmetic with explicit conversion
+LET mixed = (10 AS Float) + 0.5
 WRITE mixed
 ; Expected: 10.5
 

@@ -1,11 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Int -> Float coercion\nLET f: Float = 10\nWRITE f\n\n; With parentheses (regression test)\nLET f2: Float = (10)\nWRITE f2\n\n; Negative float\nLET f3: Float = -5\nWRITE f3\n\n; Int -> Word coercion\nLET w: Word = 42\nWRITE w\n\n; Float literal with Float annotation\nLET f4: Float = 3.14\nWRITE f4\n\n; Int literal with Int annotation (trivial)\nLET i: Int = 100\nWRITE i\n\n; Nested in expression\nLET f5: Float = (10 + 5)\nWRITE f5\n"
+description: "; Test: Explicit numeric conversions\n; Tests explicit `AS` conversions between numeric types\n; (implicit coercion between numeric types is NOT allowed)\n\n; Int AS Float\nLET f1 = 10 AS Float\nWRITE f1\n\n; Negative Int AS Float\nLET f2 = (-5) AS Float\nWRITE f2\n\n; Int AS Word (note: negative would fail at runtime; use READ for fallible)\nLET w1 = 42 AS Word\nWRITE w1\n\n; Float literal with Float annotation (trivial)\nLET f3: Float = 3.14\nWRITE f3\n\n; Int literal with Int annotation (trivial)\nLET i: Int = 100\nWRITE i\n\n; Expression result converted explicitly\nLET f4 = (10 + 5) AS Float\nWRITE f4\n\n; Word AS Int (always succeeds)\nLET w2: Word = 50\nLET i2 = w2 AS Int\nWRITE i2\n\n; Word AS Float (always succeeds)\nLET f5 = w2 AS Float\nWRITE f5\n"
 ---
-10
-10
--5
-42
-3.14
-100
-15
+ERROR: cannot cast `Int` to `Word`

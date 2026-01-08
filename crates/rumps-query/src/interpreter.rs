@@ -333,9 +333,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Closure {
                 params, ret, body, ..
             } => self.closure(&params, ret, body),
-            Expr::Unwrap(inner) => {
+            Expr::Postfix(op, inner) => {
                 let val = self.eval(inner).await?;
-                self.unwrap(val, span)
+                self.postfix(op, val, span)
             }
             Expr::Range(start_id, end_id, inclusive) => {
                 self.range(start_id, end_id, inclusive, span).await

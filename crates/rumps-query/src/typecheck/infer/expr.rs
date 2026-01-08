@@ -13,8 +13,8 @@ use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
     Intrinsic, JsonAccessKey, JsonAccessKind, Literal, MatchArm, ObjectEntry,
-    ParamConstraint, RefTarget, StmtId, SubscriptElem, TransactionExpr, TxnId,
-    TypeParam, TypePattern, UnOp, Visibility,
+    ParamConstraint, PostfixOp, RefTarget, StmtId, SubscriptElem,
+    TransactionExpr, TxnId, TypeParam, TypePattern, UnOp, Visibility,
 };
 use crate::env::TxnReq;
 use crate::intern::StringId;
@@ -117,7 +117,9 @@ impl InferCtx<'_> {
                 params,
                 ret,
                 body,
-            } => self.closure(type_params, params, ret.as_ref(), *body, span),
+            } => {
+                self.closure(id, type_params, params, ret.as_ref(), *body, span)
+            }
 
             // Function calls: f(args...)
             Expr::Call(callee, args) => self.call(*callee, args, span),
@@ -142,8 +144,8 @@ impl InferCtx<'_> {
                 self.variant(ty_name, var_name, args, span)
             }
 
-            // Unwrap: postfix `!`
-            Expr::Unwrap(inner) => self.unwrap(*inner, span),
+            // Postfix operators: `!`
+            Expr::Postfix(op, inner) => self.postfix(*op, *inner, span),
 
             // Type check: `expr IS Pattern`
             Expr::Is(scrutinee, pattern) => {
@@ -365,10 +367,34 @@ impl InferCtx<'_> {
         }
     }
 
+    /// Apply an operator's type scheme to operands.
+    ///
+    /// Instantiates the scheme, unifies operands with parameter types,
+    /// emits constraints from the scheme, and returns the result type.
+    fn apply_op_scheme(
+        &mut self,
+        scheme: &Scheme,
+        args: &[Ty],
+        span: Span,
+    ) -> Ty {
+        let (fn_ty, constraints) = scheme.instantiate(&mut self.next_var);
+        self.emit_user_constraints(constraints, span);
+
+        match fn_ty {
+            Ty::Fn(params, ret) => {
+                params.iter().zip(args.iter()).for_each(|(param, arg)| {
+                    self.unify(arg.clone(), param.clone(), span);
+                });
+                *ret
+            }
+            _ => unreachable!("operator scheme must be function type"),
+        }
+    }
+
     /// Infer type of a binary operation.
     ///
-    /// Generates appropriate constraints based on the operator and returns
-    /// the result type.
+    /// Uses the operator's type scheme to generate constraints and determine
+    /// the result type. Operands must satisfy the scheme's constraints.
     fn binary(
         &mut self,
         lhs_id: ExprId,
@@ -380,60 +406,8 @@ impl InferCtx<'_> {
         let rhs_ty = self.expr(rhs_id);
 
         match op {
-            // Arithmetic: both numeric, result depends on operand types
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod | BinOp::Pow => {
-                // If either is concrete Int/Float/Word, determine result type
-                // Word op Word => Word; mixed Word/Int => Int; any Float => Float
-                match (&lhs_ty, &rhs_ty) {
-                    (Ty::Float, _) | (_, Ty::Float) => {
-                        self.constrain(Constraint::Numeric(lhs_ty, span));
-                        self.constrain(Constraint::Numeric(rhs_ty, span));
-                        Ty::Float
-                    }
-                    (Ty::Word, Ty::Word) => Ty::Word,
-                    (Ty::Int, _) | (Ty::Word, _) => {
-                        self.unify(rhs_ty, Ty::Int, span);
-                        Ty::Int
-                    }
-                    (_, Ty::Int) | (_, Ty::Word) => {
-                        self.unify(lhs_ty, Ty::Int, span);
-                        Ty::Int
-                    }
-                    _ => {
-                        // Both are type vars or unknown; add Numeric constraints
-                        self.constrain(Constraint::Numeric(lhs_ty, span));
-                        self.constrain(Constraint::Numeric(rhs_ty, span));
-                        let result = self.fresh();
-                        self.constrain(Constraint::Numeric(
-                            result.clone(),
-                            span,
-                        ));
-                        result
-                    }
-                }
-            }
-
-            // Division always returns Float
-            BinOp::Div => {
-                self.constrain(Constraint::Numeric(lhs_ty, span));
-                self.constrain(Constraint::Numeric(rhs_ty, span));
-                Ty::Float
-            }
-
-            // Floor division: Word // Word => Word, otherwise Int
-            BinOp::FloorDiv => {
-                self.constrain(Constraint::Numeric(lhs_ty.clone(), span));
-                self.constrain(Constraint::Numeric(rhs_ty.clone(), span));
-                if matches!((&lhs_ty, &rhs_ty), (Ty::Word, Ty::Word)) {
-                    Ty::Word
-                } else {
-                    Ty::Int
-                }
-            }
-
-            // Equality: operands must unify (or both be ref types), result is Bool
+            // Equality allows comparing refs of different types
             BinOp::Eq | BinOp::Ne => {
-                // Allow comparing Local and Global (always unequal at runtime)
                 let both_refs = lhs_ty.is_ref() && rhs_ty.is_ref();
                 if !both_refs {
                     self.unify(lhs_ty, rhs_ty, span);
@@ -441,48 +415,7 @@ impl InferCtx<'_> {
                 Ty::Bool
             }
 
-            // Ordering: operands must unify, result is Bool
-            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
-                self.unify(lhs_ty, rhs_ty, span);
-                Ty::Bool
-            }
-
-            // Logical: both must be Bool, result is Bool
-            BinOp::And | BinOp::Or => {
-                self.unify(lhs_ty, Ty::Bool, span);
-                self.unify(rhs_ty, Ty::Bool, span);
-                Ty::Bool
-            }
-
-            // Bitwise: both operands are BitLike, same type
-            BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
-                self.constrain(Constraint::BitLike(lhs_ty.clone(), span));
-                self.constrain(Constraint::BitLike(rhs_ty.clone(), span));
-                self.unify(lhs_ty.clone(), rhs_ty, span);
-                lhs_ty
-            }
-
-            // Monoid concatenation: both operands are Monoid, same type
-            BinOp::Concat => {
-                self.constrain(Constraint::Monoid(lhs_ty.clone(), span));
-                self.constrain(Constraint::Monoid(rhs_ty.clone(), span));
-                self.unify(lhs_ty.clone(), rhs_ty, span);
-                lhs_ty
-            }
-
-            // Coalesce: lhs is Option[T] or Result[T, E], rhs unifies with T
-            BinOp::Coalesce => {
-                let inner = self.fresh();
-                self.constrain(Constraint::Fallible {
-                    ty: lhs_ty,
-                    inner: inner.clone(),
-                    span,
-                });
-                self.unify(rhs_ty, inner.clone(), span);
-                inner
-            }
-
-            // Pipe: rhs is callable with lhs as argument
+            // Pipe needs Callable constraint for polymorphic callables
             BinOp::Pipe => {
                 let result = self.fresh();
                 self.constrain(Constraint::Callable {
@@ -493,32 +426,19 @@ impl InferCtx<'_> {
                 });
                 result
             }
+
+            // All other operators use their type schemes
+            _ => self.apply_op_scheme(&op.def().ty, &[lhs_ty, rhs_ty], span),
         }
     }
 
     /// Infer type of a unary operation.
     ///
-    /// Generates appropriate constraints based on the operator and returns
+    /// Uses the operator's type scheme to generate constraints and determine
     /// the result type.
     fn unary(&mut self, op: UnOp, operand_id: ExprId, span: Span) -> Ty {
         let operand_ty = self.expr(operand_id);
-
-        match op {
-            // Negation: operand must be numeric, result is same type
-            UnOp::Neg => {
-                self.constrain(Constraint::Numeric(operand_ty.clone(), span));
-                operand_ty
-            }
-
-            // Logical not: operand must be Bool, result is Bool
-            UnOp::Not => {
-                self.unify(operand_ty, Ty::Bool, span);
-                Ty::Bool
-            }
-
-            // Wrap: `?e` where `e : T` produces `Option[T]`
-            UnOp::Wrap => Ty::Option(Box::new(operand_ty)),
-        }
+        self.apply_op_scheme(&op.def().ty, &[operand_ty], span)
     }
 
     /// Infer type of an array literal with potential spread elements.
@@ -1014,83 +934,102 @@ impl InferCtx<'_> {
     /// If return annotation present, unifies body type with it.
     ///
     /// For generic closures (`[T](x: T) -> T => x`), type parameters are bound
-    /// as fresh type variables before inferring parameter/return types.
+    /// as fresh type variables before inferring parameter/return types. The full
+    /// type scheme (with quantified vars and constraints) is stored in
+    /// `closure_schemes` for proper generalization when bound via `LET`.
     fn closure(
         &mut self,
+        expr_id: ExprId,
         type_params: &SmallVec<[TypeParam; 2]>,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
         body: ExprId,
         span: Span,
     ) -> Ty {
+        use crate::typecheck::ty::TyVar;
+
         // Two-pass approach: first create all type variables, then emit
         // constraints (needed for Iterable[T] where T references another param)
+        // Keep track of name -> TyVar for scheme building
+        let name_to_tv: HashMap<&str, TyVar> = type_params
+            .iter()
+            .map(|tp| (tp.name.as_str(), self.fresh_var()))
+            .collect();
+
         let type_param_subst: HashMap<_, _> = type_params
             .iter()
             .map(|tp| {
                 let id = self.env.intern(&tp.name);
-                let tv = self.fresh();
-                (id, tv)
+                let tv = name_to_tv[tp.name.as_str()];
+                (id, Ty::Var(tv))
             })
             .collect();
 
+        // Build scheme constraints (for storing in closure_schemes)
+        let mut scheme_constraints: SmallVec<
+            [(TyVar, ParamConstraint, Option<Ty>); 2],
+        > = SmallVec::new();
+
         // Emit constraints for each user-specified bound
         type_params.iter().for_each(|tp| {
-            let id = self.env.intern(&tp.name);
-            if let Some(tv) = type_param_subst.get(&id) {
-                tp.constraints.iter().for_each(|c| {
-                    let constraint = match c {
-                        ParamConstraint::Numeric => {
-                            Constraint::Numeric(tv.clone(), span)
+            let tv = name_to_tv[tp.name.as_str()];
+            let ty = Ty::Var(tv);
+
+            tp.constraints.iter().for_each(|c| {
+                // Resolve element/inner type for Iterable[T] or Fallible[T]
+                let elem_ty = match c {
+                    ParamConstraint::Iterable(ty_id)
+                    | ParamConstraint::Fallible(ty_id) => {
+                        Some(self.ast_type_to_ty(*ty_id, &type_param_subst))
+                    }
+                    _ => None,
+                };
+                scheme_constraints.push((tv, c.clone(), elem_ty.clone()));
+
+                // Emit constraint for body inference
+                let constraint = match c {
+                    ParamConstraint::Numeric => {
+                        Constraint::Numeric(ty.clone(), span)
+                    }
+                    ParamConstraint::Stringable => {
+                        Constraint::Stringable(ty.clone(), span)
+                    }
+                    ParamConstraint::Jsonable => {
+                        Constraint::Jsonable(ty.clone(), span)
+                    }
+                    ParamConstraint::Subscriptable => {
+                        Constraint::Subscriptable(ty.clone(), span)
+                    }
+                    ParamConstraint::Storable => {
+                        Constraint::Storable(ty.clone(), span)
+                    }
+                    ParamConstraint::Iterable(_) => {
+                        let elem =
+                            elem_ty.clone().unwrap_or_else(|| self.fresh());
+                        Constraint::Iterable {
+                            coll: ty.clone(),
+                            elem,
+                            span,
                         }
-                        ParamConstraint::Stringable => {
-                            Constraint::Stringable(tv.clone(), span)
+                    }
+                    ParamConstraint::Monoid => {
+                        Constraint::Monoid(ty.clone(), span)
+                    }
+                    ParamConstraint::BitLike => {
+                        Constraint::BitLike(ty.clone(), span)
+                    }
+                    ParamConstraint::Fallible(_) => {
+                        let inner =
+                            elem_ty.clone().unwrap_or_else(|| self.fresh());
+                        Constraint::Fallible {
+                            ty: ty.clone(),
+                            inner,
+                            span,
                         }
-                        ParamConstraint::Jsonable => {
-                            Constraint::Jsonable(tv.clone(), span)
-                        }
-                        ParamConstraint::Subscriptable => {
-                            Constraint::Subscriptable(tv.clone(), span)
-                        }
-                        ParamConstraint::Storable => {
-                            Constraint::Storable(tv.clone(), span)
-                        }
-                        ParamConstraint::Iterable(ty_id) => {
-                            let elem =
-                                self.ast_type_to_ty(*ty_id, &type_param_subst);
-                            Constraint::Iterable {
-                                coll: tv.clone(),
-                                elem,
-                                span,
-                            }
-                        }
-                        ParamConstraint::Monoid => {
-                            Constraint::Monoid(tv.clone(), span)
-                        }
-                        ParamConstraint::BitLike => {
-                            Constraint::BitLike(tv.clone(), span)
-                        }
-                        ParamConstraint::Fallible(ty_id) => {
-                            let inner =
-                                self.ast_type_to_ty(*ty_id, &type_param_subst);
-                            Constraint::Fallible {
-                                ty: tv.clone(),
-                                inner,
-                                span,
-                            }
-                        }
-                    };
-                    self.constrain(constraint);
-                });
-            } else {
-                self.error(TypeError::Custom {
-                    msg: format!(
-                        "internal: type param `{}` not in subst",
-                        tp.name
-                    ),
-                    span,
-                });
-            }
+                    }
+                };
+                self.constrain(constraint);
+            });
         });
 
         let param_tys = self.param_tys_with_subst(params, &type_param_subst);
@@ -1111,7 +1050,20 @@ impl InferCtx<'_> {
             None => body_ty,
         };
 
-        Ty::Fn(param_tys, Box::new(ret_ty))
+        let fn_ty = Ty::Fn(param_tys, Box::new(ret_ty));
+
+        // If there are type params, store the scheme for LET binding generalization
+        if !type_params.is_empty() {
+            let vars: Vec<_> = name_to_tv.values().copied().collect();
+            let scheme = Scheme {
+                vars,
+                ty: fn_ty.clone(),
+                constraints: scheme_constraints,
+            };
+            self.closure_schemes.insert(expr_id, scheme);
+        }
+
+        fn_ty
     }
 
     /// Infer type of a function call expression.
@@ -1439,19 +1391,13 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer type of postfix unwrap `!`.
+    /// Infer type of postfix operators.
     ///
-    /// The operand must be `Option[T]` or `Result[T, E]`. Returns `T`.
-    /// Adds a `Fallible` constraint that the solver will check.
-    fn unwrap(&mut self, inner_id: ExprId, span: Span) -> Ty {
+    /// Uses the operator's type scheme to generate constraints and determine
+    /// the result type.
+    fn postfix(&mut self, op: PostfixOp, inner_id: ExprId, span: Span) -> Ty {
         let inner_ty = self.expr(inner_id);
-        let result = self.fresh();
-        self.constrain(Constraint::Fallible {
-            ty: inner_ty,
-            inner: result.clone(),
-            span,
-        });
-        result
+        self.apply_op_scheme(&op.def().ty, &[inner_ty], span)
     }
 
     /// Infer type of `IS` expression.
@@ -1638,11 +1584,15 @@ impl InferCtx<'_> {
                 // Same type is always valid
                 (a, b) if a == b => target_ty,
 
-                // Type variable: defer to unification
-                (Ty::Var(_), _) | (_, Ty::Var(_)) => {
-                    self.unify(inner_ty.clone(), target_ty.clone(), span);
+                // Type variable in source: emit Numeric constraint if target is numeric
+                // This allows `(-2.9) AS Int` where `-2.9` has polymorphic Numeric type
+                (Ty::Var(_), Ty::Int | Ty::Float | Ty::Word) => {
+                    self.constrain(Constraint::Numeric(inner_ty, span));
                     target_ty
                 }
+
+                // Type variable in target: allow cast (resolved later)
+                (_, Ty::Var(_)) => target_ty,
 
                 // Error recovery
                 (Ty::Error, _) | (_, Ty::Error) => Ty::Error,
@@ -1786,11 +1736,7 @@ impl InferCtx<'_> {
             Expr::Intrinsic(op, resolved_rt, val, self.in_transaction),
         );
 
-        // Extract return type from the function signature
-        match &def.ty.ty {
-            Ty::Fn(_, ret) => (**ret).clone(),
-            _ => Ty::Error, // Shouldn't happen; intrinsics are always functions
-        }
+        def.ty.return_ty().cloned().unwrap_or(Ty::Error)
     }
 
     /// Resolve a `RefTarget`, checking for variable references.
