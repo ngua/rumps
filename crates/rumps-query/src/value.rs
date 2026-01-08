@@ -510,12 +510,12 @@ pub(crate) enum Value {
 
     /// A module function reference.
     ///
-    /// Created when a module path like `Array.length` is evaluated. Can be
+    /// Created when a module path like `Iter.length` is evaluated. Can be
     /// called directly or used as a first-class value (e.g., in pipelines).
     ///
     /// The path includes the full module path plus function name:
-    /// - `Array.length` → `["Array", "length"]`
-    /// - `Math.Trig.sin` → `["Math", "Trig", "sin"]`
+    /// - `Iter.length` -> `["Iter", "length"]`
+    /// - `Math.Trig.sin` -> `["Math", "Trig", "sin"]`
     ModuleFn { path: SmallVec<[StringId; 4]> },
 
     /// A module constant reference.
@@ -524,13 +524,13 @@ pub(crate) enum Value {
     /// value is looked up from `Environment::consts` at evaluation time.
     ///
     /// The path includes the full module path plus constant name:
-    /// - `Math.pi` → `["Math", "pi"]`
+    /// - `Math.pi` -> `["Math", "pi"]`
     ModuleConst { path: SmallVec<[StringId; 4]> },
 
     /// A lazy integer range.
     ///
     /// Created by `start..end` (exclusive) or `start..=end` (inclusive).
-    /// Does not allocate; used with collection operations like `Array.map`.
+    /// Does not allocate; used with collection operations like `Iter.map`.
     ///
     /// - `start`: the first value in the range
     /// - `end`: the bound (exclusive or inclusive depending on `inclusive`)

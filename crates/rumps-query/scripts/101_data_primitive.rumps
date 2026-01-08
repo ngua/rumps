@@ -75,8 +75,8 @@ LET statuses: Array[DataStatus] = [
   @DATA vars{2},
   @DATA vars{1}
 ]
-WRITE Array.length(statuses)
-WRITE Array.map(describe, statuses)
+WRITE Iter.length(statuses)
+WRITE Iter.map(describe, statuses)
 
 ; === READ DataStatus from Int ===
 

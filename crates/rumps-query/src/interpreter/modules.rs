@@ -1,7 +1,7 @@
 //! Module function and constant evaluation.
 //!
 //! Handles `Expr::Path` nodes that refer to module-qualified functions
-//! (e.g., `Array.length`, `String.split`) or constants (e.g., `Math.pi`).
+//! (e.g., `Iter.length`, `String.split`) or constants (e.g., `Math.pi`).
 //! Paths are resolved during the parse-time resolution pass and evaluated
 //! here at runtime.
 //!
@@ -36,8 +36,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a namespace path to a module function.
     ///
     /// Handles paths of any length:
-    /// - `Array.length` → `Value::ModuleFn { path: ["Array", "length"] }`
-    /// - `Math.Trig.sin` → `Value::ModuleFn { path: ["Math", "Trig", "sin"] }`
+    /// - `Iter.length` -> `Value::ModuleFn { path: ["Array", "length"] }`
+    /// - `Math.Trig.sin` -> `Value::ModuleFn { path: ["Math", "Trig", "sin"] }`
     ///
     /// If the path doesn't resolve to a module function, falls back to
     /// treating it as a type variant path (for user-defined types registered

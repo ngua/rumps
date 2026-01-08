@@ -5,7 +5,7 @@
 //!
 //! - `Option.None` (zero-arity variant) -> `Expr::Variant("Option", "None", [])`
 //! - `Option.Some(x)` (variant with args) -> `Expr::Variant("Option", "Some", [x])`
-//! - `Array.length` (module function) -> `Expr::Path(["Array", "length"])`
+//! - `Iter.length` (module function) -> `Expr::Path(["Iter", "length"])`
 //! - `Math.pi` (module constant) -> `Expr::Path(["Math", "pi"])`
 //! - `obj.field` (runtime field access) -> remains `Expr::Field`
 //! - `obj.method(args)` (runtime call) -> remains `Expr::Call`
@@ -14,7 +14,7 @@
 //! converts type-qualified names to `Expr::Variant` or `Expr::Path` that
 //! the interpreter handles without runtime lookups.
 //!
-//! Module function calls like `Array.length(arr)` become `Expr::Call(Path(...), args)`,
+//! Module function calls like `Iter.length(arr)` become `Expr::Call(Path(...), args)`,
 //! where the `Path` is evaluated to a `Value::ModuleFn` that can then be called.
 //! Module constants like `Math.pi` become `Expr::Path(["Math", "pi"])`, evaluated
 //! to the constant value at runtime.
@@ -339,27 +339,27 @@ mod tests {
 
     #[test]
     fn resolve_array_map_becomes_path() {
-        let ast = parse_and_resolve("LET r = Array.map(x => x, [1, 2])");
+        let ast = parse_and_resolve("LET r = Iter.map(x => x, [1, 2])");
         let has_path = ast.expr_ids().any(|id| {
             matches!(
                 ast.get_expr(id),
-                Some(Expr::Path(segs)) if segs.as_slice() == ["Array", "map"]
+                Some(Expr::Path(segs)) if segs.as_slice() == ["Iter", "map"]
             )
         });
-        assert!(has_path, "Array.map should become Path([Array, map])");
+        assert!(has_path, "Iter.map should become Path([Iter, map])");
     }
 
     #[test]
     fn resolve_module_fn_without_call() {
         // Module function used as value (e.g., for pipeline)
-        let ast = parse_and_resolve("LET f = Array.length");
+        let ast = parse_and_resolve("LET f = Iter.length");
         let has_path = ast.expr_ids().any(|id| {
             matches!(
                 ast.get_expr(id),
-                Some(Expr::Path(segs)) if segs.as_slice() == ["Array", "length"]
+                Some(Expr::Path(segs)) if segs.as_slice() == ["Iter", "length"]
             )
         });
-        assert!(has_path, "Array.length (no call) should become Path");
+        assert!(has_path, "Iter.length (no call) should become Path");
     }
 
     #[test]

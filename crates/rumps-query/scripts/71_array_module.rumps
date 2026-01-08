@@ -1,103 +1,103 @@
 ; Array module functions
-; Tests Array.map, Array.filter, Array.reduce, Array.foreach
+; Tests Iter.map, Iter.filter, Iter.reduce, Iter.foreach
 
-; Array.map with closure
+; Iter.map with closure
 LET nums = [1, 2, 3, 4, 5]
-LET doubled = Array.map(x => x * 2, nums)
+LET doubled = Iter.map(x => x * 2, nums)
 WRITE doubled  ; [2, 4, 6, 8, 10]
 
-; Array.map on empty array
+; Iter.map on empty array
 LET empty = []
-LET mapped-empty = Array.map(x => x + 1, empty)
+LET mapped-empty = Iter.map(x => x + 1, empty)
 WRITE mapped-empty  ; []
 
-; Array.map with named function
+; Iter.map with named function
 FUN square (n: Int) -> Int { n * n }
-LET squares = Array.map(square, [1, 2, 3])
+LET squares = Iter.map(square, [1, 2, 3])
 WRITE squares  ; [1, 4, 9]
 
-; Array.filter with closure
-LET evens = Array.filter(x => x % 2 == 0, nums)
+; Iter.filter with closure
+LET evens = Iter.filter(x => x % 2 == 0, nums)
 WRITE evens  ; [2, 4]
 
-; Array.filter on empty array
-LET filtered-empty = Array.filter(x => x > 0, empty)
+; Iter.filter on empty array
+LET filtered-empty = Iter.filter(x => x > 0, empty)
 WRITE filtered-empty  ; []
 
-; Array.filter with named function
+; Iter.filter with named function
 FUN is-positive (n: Int) -> Bool { n > 0 }
-LET positives = Array.filter(is-positive, [-1, 0, 1, 2])
+LET positives = Iter.filter(is-positive, [-1, 0, 1, 2])
 WRITE positives  ; [1, 2]
 
-; Array.filter keeping all
-LET all-kept = Array.filter(x => TRUE, [1, 2, 3])
+; Iter.filter keeping all
+LET all-kept = Iter.filter(x => TRUE, [1, 2, 3])
 WRITE all-kept  ; [1, 2, 3]
 
-; Array.filter keeping none
-LET none-kept = Array.filter(x => FALSE, [1, 2, 3])
+; Iter.filter keeping none
+LET none-kept = Iter.filter(x => FALSE, [1, 2, 3])
 WRITE none-kept  ; []
 
-; Array.reduce with sum
-LET sum = Array.reduce((acc, x) => acc + x, 0, nums)
+; Iter.reduce with sum
+LET sum = Iter.reduce((acc, x) => acc + x, 0, nums)
 WRITE sum  ; 15
 
-; Array.reduce on empty array returns initial value
-LET empty-sum = Array.reduce((acc, x) => acc + x, 100, empty)
+; Iter.reduce on empty array returns initial value
+LET empty-sum = Iter.reduce((acc, x) => acc + x, 100, empty)
 WRITE empty-sum  ; 100
 
-; Array.reduce with string concatenation
+; Iter.reduce with string concatenation
 LET words = ["hello", " ", "world"]
-LET combined = Array.reduce((acc, s) => "{acc}{s}", "", words)
+LET combined = Iter.reduce((acc, s) => "{acc}{s}", "", words)
 WRITE combined  ; "hello world"
 
-; Array.reduce with named function
+; Iter.reduce with named function
 FUN add (a: Int, b: Int) -> Int { a + b }
-LET total = Array.reduce(add, 0, [1, 2, 3, 4])
+LET total = Iter.reduce(add, 0, [1, 2, 3, 4])
 WRITE total  ; 10
 
 ; Combining Array functions
-LET result = Array.reduce(
+LET result = Iter.reduce(
   (acc, x) => acc + x,
   0,
-  Array.map(x => x * x, Array.filter(x => x % 2 == 1, [1, 2, 3, 4, 5]))
+  Iter.map(x => x * x, Iter.filter(x => x % 2 == 1, [1, 2, 3, 4, 5]))
 )
 WRITE result  ; 1 + 9 + 25 = 35
 
 ; Pipeline usage with Array functions (using wrapper closures)
 LET piped = [1, 2, 3, 4, 5]
-  |> (arr => Array.filter(x => x > 2, arr))
-  |> (arr => Array.map(x => x * 10, arr))
+  |> (arr => Iter.filter(x => x > 2, arr))
+  |> (arr => Iter.map(x => x * 10, arr))
 WRITE piped  ; [30, 40, 50]
 
 ; Module functions can be passed as first-class values
-LET filter-fn = Array.filter
+LET filter-fn = Iter.filter
 LET data = [1, 2, 3, 4, 5]
 LET filtered = filter-fn(x => x > 2, data)
 WRITE filtered  ; [3, 4, 5]
 
-; Array.map with Option results (homogeneous tagged values)
-LET with-opts = Array.map(x => Option.Some(x), [1, 2, 3])
+; Iter.map with Option results (homogeneous tagged values)
+LET with-opts = Iter.map(x => Option.Some(x), [1, 2, 3])
 WRITE with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
 
-; Nested Array.map (callback uses Array function)
+; Nested Iter.map (callback uses Array function)
 LET nested = [[1, 2], [3, 4]]
-LET doubled-nested = Array.map(arr => Array.map(x => x * 2, arr), nested)
+LET doubled-nested = Iter.map(arr => Iter.map(x => x * 2, arr), nested)
 WRITE doubled-nested  ; [[2, 4], [6, 8]]
 
-; === Array.foreach ===
+; === Iter.foreach ===
 
-; Array.foreach for side effects (outputs each element)
+; Iter.foreach for side effects (outputs each element)
 WRITE "foreach:"
-LET fe-result = Array.foreach(x => { WRITE x }, [10, 20, 30])
+LET fe-result = Iter.foreach(x => { WRITE x }, [10, 20, 30])
 WRITE fe-result  ; Unit
 
-; Array.foreach on empty array (no side effects)
-LET fe-empty = Array.foreach(x => { WRITE x }, [])
+; Iter.foreach on empty array (no side effects)
+LET fe-empty = Iter.foreach(x => { WRITE x }, [])
 WRITE fe-empty  ; Unit
 
-; Array.foreach with range
+; Iter.foreach with range
 WRITE "range foreach:"
-LET fe-range = Array.foreach(n => { WRITE n }, 1 .. 4)
+LET fe-range = Iter.foreach(n => { WRITE n }, 1 .. 4)
 WRITE fe-range  ; Unit
 
 ; === Array.zip ===
@@ -196,7 +196,7 @@ LET people = [
   { name: "Carol", age: 35 }
 ]
 LET by-age = Array.sort-by(cmp-by-age, people)
-WRITE Array.map(p => p.name, by-age)
+WRITE Iter.map(p => p.name, by-age)
 
 ; === Chained operations ===
 
@@ -204,7 +204,7 @@ WRITE Array.map(p => p.name, by-age)
 LET indices = [0, 1, 2, 3, 4]
 LET values = [10, 25, 30, 15, 40]
 LET indexed = Array.zip(indices, values)
-LET chain-filtered = Array.filter(pair => pair.1 > 20, indexed)
+LET chain-filtered = Iter.filter(pair => pair.1 > 20, indexed)
 WRITE chain-filtered
 
 ; zip-with to compute differences

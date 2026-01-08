@@ -72,16 +72,16 @@ WRITE wrap-some(42)       ; Option.Some(42)
 WRITE wrap-some("hello")  ; Option.Some("hello")
 WRITE wrap-some(TRUE)     ; Option.Some(true)
 
-; === Polymorphic with Array.map ===
+; === Polymorphic with Iter.map ===
 
 ; Same closure structure, different element types
 LET nums = [1, 2, 3]
 LET strs = ["a", "b", "c"]
 
-LET mapped-nums = Array.map(x => identity(x), nums)
+LET mapped-nums = Iter.map(x => identity(x), nums)
 WRITE mapped-nums  ; [1, 2, 3]
 
-LET mapped-strs = Array.map(x => identity(x), strs)
+LET mapped-strs = Iter.map(x => identity(x), strs)
 WRITE mapped-strs  ; [a, b, c]
 
 ; === Generic function returning different types ===

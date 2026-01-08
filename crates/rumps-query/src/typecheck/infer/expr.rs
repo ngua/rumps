@@ -766,7 +766,7 @@ impl InferCtx<'_> {
                 Ty::Option(Box::new(field_ty))
             }
 
-            // Object: field may or may not exist; missing → Unknown (no error)
+            // Object: field may or may not exist; missing -> Unknown (no error)
             Ty::Object(fields) => {
                 let field_id = self.env.intern(field);
                 let field_ty =

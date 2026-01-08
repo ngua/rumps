@@ -1,7 +1,7 @@
-; Test: Array.map with heterogeneous tagged results should error
+; Test: Iter.map with heterogeneous tagged results should error
 ; This should fail because mixing Option and Result types is heterogeneous
 
-LET result = Array.map(
+LET result = Iter.map(
   x => IF x > 1 { Option.Some(x) } ELSE { Result.Ok(x) },
   [1, 2]
 )

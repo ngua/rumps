@@ -1616,11 +1616,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a JSON value to `Option[Scalar]`.
     ///
     /// Returns `Option[Scalar]` where `Scalar = Bool | Int | Float | String`:
-    /// - `None` or `null` → `Option.None`
-    /// - `bool` → `Option.Some(Bool)`
-    /// - `number` → `Option.Some(Int)` or `Option.Some(Float)`
-    /// - `string` → `Option.Some(String)`
-    /// - `array`/`object` → runtime error
+    /// - `None` or `null` -> `Option.None`
+    /// - `bool` -> `Option.Some(Bool)`
+    /// - `number` -> `Option.Some(Int)` or `Option.Some(Float)`
+    /// - `string` -> `Option.Some(String)`
+    /// - `array`/`object` -> runtime error
     fn json_to_option_scalar(
         &mut self,
         json: Option<serde_json::Value>,

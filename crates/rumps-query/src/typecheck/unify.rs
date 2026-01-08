@@ -43,17 +43,17 @@ impl<'a> InferCtx<'a> {
     ///
     /// # Unification Rules
     ///
-    /// 1. `Var(v) ~ t` → `{ v -> t }` (if `v` not in `fv(t)`; occurs check)
-    /// 2. `t ~ Var(v)` → `{ v -> t }` (symmetric)
-    /// 3. `Int ~ Float` or `Float ~ Int` → `{}` (numeric coercion)
-    /// 4. `Array[a] ~ Array[b]` → `unify(a, b)` (recursive)
-    /// 5. `Fn[p1] -> r1 ~ Fn[p2] -> r2` → `unify(p1, p2) . unify(r1, r2)`
-    /// 6. `{ f1 } ~ { f2 }` → unify common fields (structural objects)
-    /// 7. `Named(id, args1) ~ Named(id, args2)` → unify corresponding args
-    /// 8. `Unknown ~ _` or `_ ~ Unknown` → `{}` (unifies with anything)
-    /// 9. `Error ~ _` or `_ ~ Error` → `{}` (error recovery)
-    /// 10. `T ~ T` → `{}` (primitives equal)
-    /// 11. Otherwise → error
+    /// 1. `Var(v) ~ t` -> `{ v -> t }` (if `v` not in `fv(t)`; occurs check)
+    /// 2. `t ~ Var(v)` -> `{ v -> t }` (symmetric)
+    /// 3. `Int ~ Float` or `Float ~ Int` -> `{}` (numeric coercion)
+    /// 4. `Array[a] ~ Array[b]` -> `unify(a, b)` (recursive)
+    /// 5. `Fn[p1] -> r1 ~ Fn[p2] -> r2` -> `unify(p1, p2) . unify(r1, r2)`
+    /// 6. `{ f1 } ~ { f2 }` -> unify common fields (structural objects)
+    /// 7. `Named(id, args1) ~ Named(id, args2)` -> unify corresponding args
+    /// 8. `Unknown ~ _` or `_ ~ Unknown` -> `{}` (unifies with anything)
+    /// 9. `Error ~ _` or `_ ~ Error` -> `{}` (error recovery)
+    /// 10. `T ~ T` -> `{}` (primitives equal)
+    /// 11. Otherwise -> error
     ///
     /// # Note on Numeric Coercion
     ///
@@ -1242,7 +1242,7 @@ impl<'a> InferCtx<'a> {
     /// Check that a type is iterable and unify the element type.
     ///
     /// Iterable types are `Array[T]` (element type T) and `Range` (element
-    /// type `Int`). Used by Array HOFs like `map`, `filter`, `foreach`.
+    /// type `Int`). Used by Iterable HOFs like `map`, `filter`, `foreach`.
     fn check_iterable(
         &mut self,
         coll: &Ty,

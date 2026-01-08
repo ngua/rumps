@@ -111,7 +111,7 @@ LET first = Array.head(entries)
 WRITE first IS Option[Path]  ; true
 
 ; Should have multiple entries
-LET entry-count = Array.length(entries)
+LET entry-count = Iter.length(entries)
 WRITE entry-count >= 2  ; true (at least test-file.txt and subdir)
 
 ; ============ copy-path ============

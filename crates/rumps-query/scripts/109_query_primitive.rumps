@@ -33,7 +33,7 @@ WRITE typed
 
 ; Use with MATCH
 LET msg = MATCH @QUERY items{} {
-  Option.Some(path) => { "found path of length: {Array.length(path)}" }
+  Option.Some(path) => { "found path of length: {Iter.length(path)}" }
   Option.None => { "no nodes" }
 }
 WRITE msg

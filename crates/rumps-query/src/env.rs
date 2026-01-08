@@ -16,8 +16,8 @@ use crate::typecheck::{Scheme, Ty};
 /// This is the single source of truth for which module names are recognized
 /// during resolution and registered at interpreter startup.
 pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
-    "Array", "String", "Math", "Random", "Map", "Time", "Option", "Result",
-    "Io",
+    "Array", "Iter", "String", "Math", "Random", "Map", "Time", "Option",
+    "Result", "Io",
 ];
 
 use futures::future::BoxFuture;
@@ -186,7 +186,7 @@ impl PrimCtx<'_> {
 
 /// A built-in primitive function.
 ///
-/// Primitives are callable built-in functions like `Array.map`, `String.split`,
+/// Primitives are callable built-in functions like `Iter.map`, `String.split`,
 /// etc. They take a context and arguments, returning a future that resolves
 /// to a `ValueId`.
 ///
@@ -207,7 +207,7 @@ pub(crate) struct PrimDef {
 
 /// A built-in module containing primitive functions, constants, and submodules.
 ///
-/// Modules group related functions under a namespace (e.g., `Array.map`,
+/// Modules group related functions under a namespace (e.g., `Iter.map`,
 /// `String.split`). Supports nested modules for future extensibility
 /// (e.g., `Math.Trig.sin`).
 ///
@@ -566,8 +566,8 @@ impl Environment {
     /// and the remaining segments form the path within that module.
     ///
     /// Examples:
-    /// - `["Array", "length"]` → `Array.length`
-    /// - `["Math", "Trig", "sin"]` → `Math.Trig.sin`
+    /// - `["Iter", "length"]` -> `Iter.length`
+    /// - `["Math", "Trig", "sin"]` -> `Math.Trig.sin`
     pub(crate) fn get_module_fn(&self, path: &[&str]) -> Option<&PrimFn> {
         path.split_first().and_then(|(module, rest)| {
             self.modules.get(*module).and_then(|m| m.get_fn(rest))
@@ -614,44 +614,18 @@ impl Environment {
     /// - `Random`: `random`, `range`, `int`, `bool`, `choice`, `shuffle`,
     ///   `sample`, `uuid`
     ///
-    /// Note: Array higher-order functions (`map`, `filter`, `reduce`, `foreach`)
+    /// Note: Iterable higher-order functions (`map`, `filter`, `reduce`, `foreach`)
     /// are handled specially by the interpreter. We register placeholders here
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
         use crate::primitives::{
-            Array, Io, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
+            Array, Io, Iter, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
         };
 
         self.modules.insert(
             "Array".to_string(),
             Module::from_prims(&[
-                // Higher-order functions (Range coerces to Array[Int] in unify)
-                PrimDef {
-                    name: "map",
-                    f: Array::placeholder,
-                    ty: scheme!(forall T U. ((T) -> U, Array[T]) -> Array[U]),
-                },
-                PrimDef {
-                    name: "filter",
-                    f: Array::placeholder,
-                    ty: scheme!(forall T. ((T) -> Bool, Array[T]) -> Array[T]),
-                },
-                PrimDef {
-                    name: "reduce",
-                    f: Array::placeholder,
-                    ty: scheme!(forall T U. ((U, T) -> U, U, Array[T]) -> U),
-                },
-                PrimDef {
-                    name: "foreach",
-                    f: Array::placeholder,
-                    ty: scheme!(forall T. ((T) -> Unit, Array[T]) -> Unit),
-                },
-                // Regular primitives
-                PrimDef {
-                    name: "length",
-                    f: Array::length,
-                    ty: scheme!(forall T. (Array[T]) -> Int),
-                },
+                // Array-specific primitives (HOFs moved to Iter module)
                 PrimDef {
                     name: "push",
                     f: Array::push,
@@ -673,11 +647,6 @@ impl Environment {
                     ty: scheme!(forall T. (Array[T]) -> Array[T]),
                 },
                 PrimDef {
-                    name: "reverse",
-                    f: Array::reverse,
-                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
-                },
-                PrimDef {
                     name: "sort",
                     f: Array::sort,
                     ty: scheme!(forall T. (Array[T]) -> Array[T]),
@@ -688,16 +657,10 @@ impl Environment {
                     ty: scheme!(forall T. (Array[T], Int, Int) -> Array[T]),
                 },
                 PrimDef {
-                    name: "contains",
-                    f: Array::contains,
-                    ty: scheme!(forall T. (Array[T], T) -> Bool),
-                },
-                PrimDef {
                     name: "concat",
                     f: Array::concat,
                     ty: scheme!(forall T. (Array[T], Array[T]) -> Array[T]),
                 },
-                // New array utilities
                 PrimDef {
                     name: "sort-by",
                     f: Array::placeholder,
@@ -722,6 +685,49 @@ impl Environment {
                     name: "intersperse",
                     f: Array::intersperse,
                     ty: scheme!(forall T. (T, Array[T]) -> Array[T]),
+                },
+            ]),
+        );
+
+        self.modules.insert(
+            "Iter".to_string(),
+            Module::from_prims(&[
+                // Higher-order functions; handled by interpreter (placeholders)
+                PrimDef {
+                    name: "map",
+                    f: Iter::placeholder,
+                    ty: scheme!(forall I: Iterable[T], T U. ((T) -> U, I) -> Array[U]),
+                },
+                PrimDef {
+                    name: "filter",
+                    f: Iter::placeholder,
+                    ty: scheme!(forall I: Iterable[T], T. ((T) -> Bool, I) -> Array[T]),
+                },
+                PrimDef {
+                    name: "reduce",
+                    f: Iter::placeholder,
+                    ty: scheme!(forall I: Iterable[T], T U. ((U, T) -> U, U, I) -> U),
+                },
+                PrimDef {
+                    name: "foreach",
+                    f: Iter::placeholder,
+                    ty: scheme!(forall I: Iterable[T], T. ((T) -> Unit, I) -> Unit),
+                },
+                // Regular primitives
+                PrimDef {
+                    name: "length",
+                    f: Iter::length,
+                    ty: scheme!(forall I: Iterable[T], T. (I) -> Int),
+                },
+                PrimDef {
+                    name: "reverse",
+                    f: Iter::reverse,
+                    ty: scheme!(forall I: Iterable[T], T. (I) -> Array[T]),
+                },
+                PrimDef {
+                    name: "contains",
+                    f: Iter::contains,
+                    ty: scheme!(forall I: Iterable[T], T. (I, T) -> Bool),
                 },
             ]),
         );

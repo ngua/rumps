@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Iterable[String] constraint rejects Range (Range is Iterable[Int] only)\n\nFUN process-strings[I: Iterable[String]](i: I) -> Int {\n  Iter.length(i)\n}\n\n; This should fail: Range is Iterable[Int], not Iterable[String]\nWRITE process-strings(1 .. 10)\n"
+---
+ERROR: type mismatch: expected `Int`, got `String`

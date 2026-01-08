@@ -68,7 +68,7 @@ WRITE Math.abs(doubled-pi - Math.tau) < 0.0001  ; true
 
 ; Constants in array
 LET consts = [Math.pi, Math.e, Math.tau]
-WRITE Array.length(consts)  ; 3
+WRITE Iter.length(consts)  ; 3
 
 ; Constants in object
 LET math-consts = {

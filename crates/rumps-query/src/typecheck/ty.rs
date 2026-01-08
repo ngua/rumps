@@ -313,7 +313,7 @@ impl Ty {
 
 /// A polymorphic type scheme: `forall vars. ty`.
 ///
-/// For example, `forall a. Array[a] -> Int` is the scheme for `Array.length`.
+/// For example, `forall a. Array[a] -> Int` is the scheme for `Iter.length`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Scheme {
     /// Universally quantified type variables.

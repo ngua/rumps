@@ -11,15 +11,22 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Result, Token};
 
-/// Parse a type scheme with optional universal quantification.
+/// Parse a type scheme with optional universal quantification and constraints.
 ///
 /// # Syntax
 ///
 /// ```text
 /// scheme!(forall T U. (Array[T], (T) -> U) -> Array[U])
+/// scheme!(forall I: Iterable[T], T. (I) -> Int)  // constrained type variable
 /// scheme!(Int -> Bool)  // monomorphic, no forall
 /// scheme!(ctx; { src: FilePath, dest: FilePath } -> Unit)  // with context for objects
 /// ```
+///
+/// ## Constraint syntax
+///
+/// Type variables can have constraints:
+/// - `I: Iterable[T]` - `I` must be iterable with element type `T`
+/// - `F: Fallible[T]` - `F` must be a fallible type (`Option[T]` or `Result[T, _]`)
 ///
 /// ## Type syntax
 ///
@@ -37,12 +44,53 @@ pub fn scheme(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// A constraint on a type variable.
+#[derive(Debug, Clone)]
+enum VarConstraint {
+    /// `Iterable[T]` - variable must be iterable with given element type
+    Iterable(String),
+    /// `Fallible[T]` - variable must be fallible with given inner type
+    Fallible(String),
+}
+
 /// Parsed scheme input: optional context + optional `forall` + type.
 struct SchemeInput {
     /// Optional context identifier for interning object field names.
     ctx: Option<Ident>,
-    vars: Vec<Ident>,
+    /// Type variables with optional constraints: `(var_name, constraint)`
+    vars: Vec<(Ident, Option<VarConstraint>)>,
     ty: TyExpr,
+}
+
+/// Parse a single type variable with optional constraint.
+///
+/// Syntax: `T` or `I: Iterable[T]` or `F: Fallible[E]`
+fn parse_type_var(
+    input: ParseStream,
+) -> Result<(Ident, Option<VarConstraint>)> {
+    let name: Ident = input.parse()?;
+
+    // Check for constraint: `: Constraint[T]`
+    let constraint = if input.peek(Token![:]) {
+        input.parse::<Token![:]>()?;
+        let constraint_name: Ident = input.parse()?;
+
+        // Parse bracketed type argument
+        let content;
+        syn::bracketed!(content in input);
+        let inner: Ident = content.parse()?;
+        let inner_name = inner.to_string();
+
+        match constraint_name.to_string().as_str() {
+            "Iterable" => Some(VarConstraint::Iterable(inner_name)),
+            "Fallible" => Some(VarConstraint::Fallible(inner_name)),
+            other => panic!("unknown constraint: `{other}`; use `Iterable[T]` or `Fallible[T]`"),
+        }
+    } else {
+        None
+    };
+
+    Ok((name, constraint))
 }
 
 impl Parse for SchemeInput {
@@ -63,11 +111,13 @@ impl Parse for SchemeInput {
         if input.peek(Ident) && input.peek2(Ident) {
             let kw: Ident = input.parse()?;
             if kw == "forall" {
-                // Parse type variable names until `.`
-                let vars: Vec<Ident> = std::iter::from_fn(|| {
-                    (!input.peek(Token![.])).then(|| input.parse().ok())?
-                })
-                .collect();
+                // Parse type variables (with optional constraints), comma-separated, until `.`
+                let mut vars = Vec::new();
+                while !input.peek(Token![.]) {
+                    vars.push(parse_type_var(input)?);
+                    // Consume optional comma between variables
+                    let _ = input.parse::<Token![,]>();
+                }
                 input.parse::<Token![.]>()?;
                 let ty = parse_ty(input)?;
                 Ok(Self { ctx, vars, ty })
@@ -98,7 +148,7 @@ impl SchemeInput {
             .vars
             .iter()
             .enumerate()
-            .map(|(i, v)| (v.to_string(), i as u32))
+            .map(|(i, (v, _))| (v.to_string(), i as u32))
             .collect();
 
         let ty_tokens = self.ty.to_tokens(&var_map, self.ctx.as_ref());
@@ -109,11 +159,50 @@ impl SchemeInput {
             }
         } else {
             let var_indices: Vec<u32> = (0..self.vars.len() as u32).collect();
+
+            // Generate constraint entries
+            let constraint_entries: Vec<TokenStream2> = self
+                .vars
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (_, constraint))| {
+                    constraint.as_ref().map(|c| {
+                        let var_idx = i as u32;
+                        match c {
+                            VarConstraint::Iterable(elem) => {
+                                let elem_idx = var_map.get(elem).copied().unwrap_or_else(|| {
+                                    panic!("unbound type variable in constraint: `{elem}`")
+                                });
+                                quote! {
+                                    (
+                                        crate::typecheck::TyVar::new(#var_idx),
+                                        crate::ast::ParamConstraint::Iterable(crate::ast::AstTypeExprId::INVALID),
+                                        Some(crate::typecheck::Ty::Var(crate::typecheck::TyVar::new(#elem_idx)))
+                                    )
+                                }
+                            }
+                            VarConstraint::Fallible(inner) => {
+                                let inner_idx = var_map.get(inner).copied().unwrap_or_else(|| {
+                                    panic!("unbound type variable in constraint: `{inner}`")
+                                });
+                                quote! {
+                                    (
+                                        crate::typecheck::TyVar::new(#var_idx),
+                                        crate::ast::ParamConstraint::Fallible(crate::ast::AstTypeExprId::INVALID),
+                                        Some(crate::typecheck::Ty::Var(crate::typecheck::TyVar::new(#inner_idx)))
+                                    )
+                                }
+                            }
+                        }
+                    })
+                })
+                .collect();
+
             quote! {
                 crate::typecheck::Scheme {
                     vars: vec![#(crate::typecheck::TyVar::new(#var_indices)),*],
                     ty: #ty_tokens,
-                    constraints: smallvec::SmallVec::new(),
+                    constraints: smallvec::smallvec![#(#constraint_entries),*],
                 }
             }
         }

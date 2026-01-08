@@ -4,7 +4,7 @@
 ; All top-level imports must appear first
 IMPORT Math.{ floor, ceil, sqrt AS root, pi, e }
 IMPORT Math.Trig.{ sin AS sine, cos AS cosine }
-IMPORT Array.{ length, reverse }
+IMPORT Iter.{ length, reverse }
 IMPORT Counter.{ new, inc }
 IMPORT Forward.{ id, val }
 

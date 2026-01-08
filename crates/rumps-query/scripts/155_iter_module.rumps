@@ -1,0 +1,52 @@
+; Iter module: works on any Iterable[T] (Array[T] or Range)
+
+; Iter.length on Array
+LET arr = [1, 2, 3, 4, 5]
+WRITE "Array length: {Iter.length(arr)}"
+
+; Iter.length on Range
+WRITE "Range (1..=10) length: {Iter.length(1 ..= 10)}"
+WRITE "Range (1..10) length: {Iter.length(1 .. 10)}"
+
+; Iter.contains on Array
+WRITE "Array contains 3: {Iter.contains(arr, 3)}"
+WRITE "Array contains 99: {Iter.contains(arr, 99)}"
+
+; Iter.contains on Range
+WRITE "Range contains 5: {Iter.contains(1 ..= 10, 5)}"
+WRITE "Range contains 11: {Iter.contains(1 ..= 10, 11)}"
+
+; Iter.map on Array and Range
+WRITE "Doubled array: {Iter.map(x => x * 2, arr)}"
+WRITE "Doubled range: {Iter.map(x => x * 2, 1 ..= 5)}"
+
+; Iter.filter on Array and Range
+WRITE "Evens from array: {Iter.filter(x => x % 2 == 0, arr)}"
+WRITE "Evens from range: {Iter.filter(x => x % 2 == 0, 1 ..= 10)}"
+
+; Iter.reduce on Array and Range
+WRITE "Sum of array: {Iter.reduce((a, x) => a + x, 0, arr)}"
+WRITE "Sum of range: {Iter.reduce((a, x) => a + x, 0, 1 ..= 10)}"
+
+; Generic functions with Iterable constraint
+FUN sum-iter[I: Iterable[Int]](i: I) -> Int {
+  Iter.reduce((a, x) => a + x, 0, i)
+}
+
+WRITE "Generic sum (array): {sum-iter(arr)}"
+WRITE "Generic sum (range): {sum-iter(1 ..= 10)}"
+
+FUN count-iter[I: Iterable[Int]](i: I) -> Int {
+  Iter.length(i)
+}
+
+WRITE "Generic count (array): {count-iter(arr)}"
+WRITE "Generic count (range): {count-iter(1 ..= 10)}"
+
+; Iter.reverse on Array and Range
+WRITE "Reversed array: {Iter.reverse(arr)}"
+WRITE "Reversed range: {Iter.reverse(1 ..= 5)}"
+
+; Iter.foreach on Array and Range
+Iter.foreach(x => WRITE "foreach array: {x}", [10, 20])
+Iter.foreach(x => WRITE "foreach range: {x}", 1 ..= 3)

@@ -1,17 +1,17 @@
 ; Array module primitives
-; Tests Array.length, Array.push, Array.pop, Array.head, Array.tail,
-; Array.reverse, Array.sort, Array.slice, Array.contains, Array.concat
+; Tests Iter.length, Array.push, Array.pop, Array.head, Array.tail,
+; Iter.reverse, Array.sort, Array.slice, Iter.contains, Array.concat
 
-; ============ Array.length ============
+; ============ Iter.length ============
 
 LET nums = [1, 2, 3, 4, 5]
-WRITE Array.length(nums)  ; 5
+WRITE Iter.length(nums)  ; 5
 
 LET empty = []
-WRITE Array.length(empty)  ; 0
+WRITE Iter.length(empty)  ; 0
 
 LET single = [42]
-WRITE Array.length(single)  ; 1
+WRITE Iter.length(single)  ; 1
 
 ; ============ Array.push ============
 
@@ -68,18 +68,18 @@ WRITE tail-single  ; []
 LET tail-empty = Array.tail([])
 WRITE tail-empty  ; []
 
-; ============ Array.reverse ============
+; ============ Iter.reverse ============
 
 LET to-reverse = [1, 2, 3, 4, 5]
-LET reversed = Array.reverse(to-reverse)
+LET reversed = Iter.reverse(to-reverse)
 WRITE reversed  ; [5, 4, 3, 2, 1]
 
 ; Reverse single element
-LET rev-single = Array.reverse([42])
+LET rev-single = Iter.reverse([42])
 WRITE rev-single  ; [42]
 
 ; Reverse empty
-LET rev-empty = Array.reverse([])
+LET rev-empty = Iter.reverse([])
 WRITE rev-empty  ; []
 
 ; ============ Array.sort ============
@@ -140,23 +140,23 @@ WRITE slice-clamp  ; [1, 2, 3]
 LET slice-neg = Array.slice([1, 2, 3], -5, 2)
 WRITE slice-neg  ; [1, 2]
 
-; ============ Array.contains ============
+; ============ Iter.contains ============
 
 LET contains-arr = [1, 2, 3, 4, 5]
-WRITE Array.contains(contains-arr, 3)  ; true
-WRITE Array.contains(contains-arr, 10)  ; false
+WRITE Iter.contains(contains-arr, 3)  ; true
+WRITE Iter.contains(contains-arr, 10)  ; false
 
 ; Contains in empty array
-WRITE Array.contains([], 1)  ; false
+WRITE Iter.contains([], 1)  ; false
 
 ; Contains with strings
 LET str-arr = ["hello", "world"]
-WRITE Array.contains(str-arr, "hello")  ; true
-WRITE Array.contains(str-arr, "foo")  ; false
+WRITE Iter.contains(str-arr, "hello")  ; true
+WRITE Iter.contains(str-arr, "foo")  ; false
 
 ; Contains with booleans
 LET bool-arr = [TRUE, FALSE]
-WRITE Array.contains(bool-arr, TRUE)  ; true
+WRITE Iter.contains(bool-arr, TRUE)  ; true
 
 ; ============ Array.concat ============
 
@@ -185,15 +185,15 @@ WRITE concat-strs  ; ["a", "b", "c", "d"]
 
 ; Get first element of sorted reversed array
 LET chain-arr = [3, 1, 4, 1, 5]
-LET chain-result = Array.head(Array.reverse(Array.sort(chain-arr)))!
+LET chain-result = Array.head(Iter.reverse(Array.sort(chain-arr)))!
 WRITE chain-result  ; 5
 
 ; Slice then reverse
-LET slice-rev = Array.reverse(Array.slice([0, 1, 2, 3, 4], 1, 4))
+LET slice-rev = Iter.reverse(Array.slice([0, 1, 2, 3, 4], 1, 4))
 WRITE slice-rev  ; [3, 2, 1]
 
 ; Push then length
-LET push-len = Array.length(Array.push([1, 2], 3))
+LET push-len = Iter.length(Array.push([1, 2], 3))
 WRITE push-len  ; 3
 
 ; ============ Pipeline usage ============
@@ -201,6 +201,6 @@ WRITE push-len  ; 3
 LET pipeline-arr = [5, 3, 8, 1, 9]
 LET pipeline-result = pipeline-arr
   |> Array.sort
-  |> Array.reverse
+  |> Iter.reverse
   |> (arr => Array.slice(arr, 0, 3))
 WRITE pipeline-result  ; [9, 8, 5]

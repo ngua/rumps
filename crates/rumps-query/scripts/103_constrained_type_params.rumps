@@ -102,7 +102,7 @@ WRITE identity-storable(true)     ; true
 
 ; Iterable[T]: type must be Array or Range, yielding elements of type T
 FUN sum-all[T: Numeric, C: Iterable[T]](coll: C) -> T {
-  Array.reduce((acc, x) => acc + x, 0, coll)
+  Iter.reduce((acc, x) => acc + x, 0, coll)
 }
 
 WRITE sum-all([1, 2, 3, 4, 5])     ; 15

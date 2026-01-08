@@ -14,39 +14,39 @@ WRITE json-arr IS Json
 ; WITH annotation: stays as native Array (not Json)
 LET sub-arr: Array[Subscript] = [1, "a", true]
 WRITE sub-arr IS Json
-WRITE Array.length(sub-arr)
+WRITE Iter.length(sub-arr)
 
 ; === Named union: Subscript ===
 
 LET subscript-arr: Array[Subscript] = [42, "hello", 3.14, 'x', true]
-WRITE Array.length(subscript-arr)
+WRITE Iter.length(subscript-arr)
 
 ; === Named union: Storable ===
 
 LET storable-arr: Array[Storable] = [true, 42, 3.14, 'x', "str"]
-WRITE Array.length(storable-arr)
+WRITE Iter.length(storable-arr)
 
 ; === Named union: Scalar ===
 
 LET scalar-arr: Array[Scalar] = [true, 42, 3.14, "str"]
-WRITE Array.length(scalar-arr)
+WRITE Iter.length(scalar-arr)
 
 ; === Anonymous union ===
 
 LET anon-arr: Array[Int | String] = [42, "hello", 99, "world"]
-WRITE Array.length(anon-arr)
+WRITE Iter.length(anon-arr)
 
 ; === User-defined union ===
 
 UNION Id = Int | String
 
 LET ids: Array[Id] = [1, "abc", 2, "def"]
-WRITE Array.length(ids)
+WRITE Iter.length(ids)
 
 ; === Empty array with union element type ===
 
 LET empty: Array[Int | String] = []
-WRITE Array.length(empty)
+WRITE Iter.length(empty)
 
 ; === Spread in union arrays ===
 
@@ -55,14 +55,14 @@ LET strs: Array[String] = ["a", "b"]
 
 ; Spread homogeneous arrays into union array
 LET combined: Array[Int | String] = [...ints, "x", ...strs, 4]
-WRITE Array.length(combined)
+WRITE Iter.length(combined)
 
 ; === Iteration over union array ===
 
 LET arr: Array[Int | String] = [1, "two", 3, "four"]
 
-; Array.foreach works on union arrays
-Array.foreach(x => {
+; Iter.foreach works on union arrays
+Iter.foreach(x => {
   MATCH x {
     n IS Int => { WRITE "int: {n}" }
     s IS String => { WRITE "str: {s}" }
@@ -70,8 +70,8 @@ Array.foreach(x => {
   }
 }, arr)
 
-; Array.map with union elements
-LET mapped = Array.map(x => {
+; Iter.map with union elements
+LET mapped = Iter.map(x => {
   MATCH x {
     n IS Int => { n * 2 }
     s IS String => { String.length(s) }
@@ -82,10 +82,10 @@ WRITE mapped
 
 ; === Verify elements preserve their concrete types ===
 
-; Use Array.filter to extract Int elements
-LET ints-only = Array.filter(x => x IS Int, arr)
-WRITE Array.length(ints-only)
+; Use Iter.filter to extract Int elements
+LET ints-only = Iter.filter(x => x IS Int, arr)
+WRITE Iter.length(ints-only)
 
-; Use Array.filter to extract String elements
-LET strs-only = Array.filter(x => x IS String, arr)
-WRITE Array.length(strs-only)
+; Use Iter.filter to extract String elements
+LET strs-only = Iter.filter(x => x IS String, arr)
+WRITE Iter.length(strs-only)

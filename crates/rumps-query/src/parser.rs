@@ -2228,9 +2228,9 @@ impl Parser {
             });
 
         // Object/JSON literal with spread support:
-        // - `{ field: expr, ... }` (unquoted keys → Object)
-        // - `{ "field": expr, ... }` (quoted keys → JSON)
-        // - `{ ...expr, field: value }` (spread + fields → Object)
+        // - `{ field: expr, ... }` (unquoted keys -> Object)
+        // - `{ "field": expr, ... }` (quoted keys -> JSON)
+        // - `{ ...expr, field: value }` (spread + fields -> Object)
         // Mixed quoted/unquoted keys produce a parse error.
         // Spreads are only valid in Object context (not JSON).
 
