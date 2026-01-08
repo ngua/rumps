@@ -1,0 +1,97 @@
+; Test Fallible[T] constraint for Option/Result polymorphism
+
+; ============================================================================
+; Basic Fallible constraint with inner type
+; ============================================================================
+
+; Generic unwrap function that works on any Option[T] or Result[T, E]
+FUN unwrap[T, F: Fallible[T]](x: F) -> T {
+  x!
+}
+
+; Works with Option
+LET opt = Option.Some(42)
+WRITE unwrap(opt)
+
+; Works with Result
+LET res = Result.Ok("hello")
+WRITE unwrap(res)
+
+; ============================================================================
+; Fallible with coalesce
+; ============================================================================
+
+; Generic or-else function
+FUN or-else[T, F: Fallible[T]](x: F, default: T) -> T {
+  x ?? default
+}
+
+WRITE or-else(Option.Some(10), 0)
+WRITE or-else(Option.None, 99)
+WRITE or-else(Result.Ok(5), 0)
+WRITE or-else(Result.Err("oops"), -1)
+
+; ============================================================================
+; Fallible with mapping
+; ============================================================================
+
+; Map over fallible, returning Option
+FUN map-fallible[T, U, F: Fallible[T]](f: (T) -> U, x: F) -> Option[U] {
+  IF x IS Option.Some(v) {
+    Option.Some(f(v))
+  } ELSE {
+    IF x IS Result.Ok(v) {
+      Option.Some(f(v))
+    } ELSE {
+      Option.None
+    }
+  }
+}
+
+WRITE map-fallible((n) => n * 2, Option.Some(21))
+WRITE map-fallible((s) => s ++ "!", Result.Ok("hi"))
+WRITE map-fallible((n) => n * 2, Option.None)
+
+; ============================================================================
+; Closure with Fallible constraint
+; ============================================================================
+
+LET safe-get = [T, F: Fallible[T]](x: F, default: T) -> T => x ?? default
+
+WRITE safe-get(Option.Some(100), 0)
+WRITE safe-get(Option.None, 42)
+
+; ============================================================================
+; Combining Fallible with other constraints
+; ============================================================================
+
+; Fallible + Numeric inner type
+FUN unwrap-numeric[T: Numeric, F: Fallible[T]](x: F) -> T {
+  x ?? 0
+}
+
+WRITE unwrap-numeric(Option.Some(123))
+WRITE unwrap-numeric(Option.None: Option[Int])
+WRITE unwrap-numeric(Result.Ok(4.5))
+
+; ============================================================================
+; Fallible without explicit inner type (unconstrained)
+; ============================================================================
+
+; When inner type is unconstrained, it's inferred
+FUN is-present[F: Fallible](x: F) -> Bool {
+  IF x IS Option.Some(_) {
+    true
+  } ELSE {
+    IF x IS Result.Ok(_) {
+      true
+    } ELSE {
+      false
+    }
+  }
+}
+
+WRITE is-present(Option.Some(1))
+WRITE is-present(Option.None)
+WRITE is-present(Result.Ok("x"))
+WRITE is-present(Result.Err("e"))

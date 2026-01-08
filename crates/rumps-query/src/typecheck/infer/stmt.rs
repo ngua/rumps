@@ -375,7 +375,7 @@ impl InferCtx<'_> {
             let ty = Ty::Var(tv);
 
             tp.constraints.iter().for_each(|c| {
-                // Resolve element type name for Iterable[T]
+                // Resolve element/inner type name for Iterable[T] or Fallible[T]
                 let elem_tv = match c {
                     ParamConstraint::Iterable(Some(el)) => {
                         let tv = name_to_tv.get(el.as_str()).copied();
@@ -384,6 +384,19 @@ impl InferCtx<'_> {
                                 msg: format!(
                                     "unknown type parameter `{el}` in \
                                      constraint `Iterable[{el}]`"
+                                ),
+                                span,
+                            });
+                        }
+                        tv
+                    }
+                    ParamConstraint::Fallible(Some(el)) => {
+                        let tv = name_to_tv.get(el.as_str()).copied();
+                        if tv.is_none() {
+                            self.error(TypeError::Custom {
+                                msg: format!(
+                                    "unknown type parameter `{el}` in \
+                                     constraint `Fallible[{el}]`"
                                 ),
                                 span,
                             });
@@ -427,6 +440,17 @@ impl InferCtx<'_> {
                     }
                     ParamConstraint::BitLike => {
                         Constraint::BitLike(ty.clone(), span)
+                    }
+                    ParamConstraint::Fallible(_) => {
+                        // Use resolved inner type or fresh var
+                        let inner = elem_tv
+                            .map(Ty::Var)
+                            .unwrap_or_else(|| self.fresh());
+                        Constraint::Fallible {
+                            ty: ty.clone(),
+                            inner,
+                            span,
+                        }
                     }
                 };
                 self.constrain(constraint);

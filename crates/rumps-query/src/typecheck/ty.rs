@@ -326,7 +326,7 @@ pub(crate) struct Scheme {
     /// The tuple contains:
     /// - The type variable being constrained
     /// - The constraint itself
-    /// - For `Iterable[T]`, the element type's TyVar (resolved from name)
+    /// - For `Iterable[T]` or `Fallible[T]`, the element/inner type's TyVar
     pub(crate) constraints:
         SmallVec<[(TyVar, ParamConstraint, Option<TyVar>); 2]>,
 }
@@ -379,8 +379,8 @@ impl Scheme {
     /// Takes a mutable counter for generating fresh `TyVar`s. Returns:
     /// - The concrete `Ty` with all quantified variables replaced by fresh ones
     /// - The constraints with type variables substituted, to be re-emitted;
-    ///   each entry is `(coll_ty, constraint, elem_ty)` where `elem_ty` is
-    ///   `Some` for `Iterable[T]` constraints
+    ///   each entry is `(ty, constraint, inner_ty)` where `inner_ty` is
+    ///   `Some` for `Iterable[T]` and `Fallible[T]` constraints
     pub(crate) fn instantiate(
         &self,
         next: &mut u32,

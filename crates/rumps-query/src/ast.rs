@@ -160,6 +160,12 @@ pub(crate) enum ParamConstraint {
     ///
     /// Satisfied by `Bool`, `Int`, and `Word`.
     BitLike,
+    /// Type is fallible (`Option[T]` or `Result[T, E]`).
+    ///
+    /// The optional string is the name of another type parameter that
+    /// represents the inner/success type (e.g., `Fallible[T]` stores `Some("T")`).
+    /// If `None`, inner type is unconstrained (fresh variable).
+    Fallible(Option<String>),
 }
 
 /// A type parameter with optional constraints.
@@ -649,6 +655,9 @@ pub(crate) enum Literal {
 ///
 /// All recursive references use `ExprId` indices into the `Ast` arena.
 #[derive(Clone, Debug, PartialEq)]
+// Note that the largest vs. smallest is not that great in this case, clippy
+// is being a bit too conservative IMO
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Expr {
     /// A literal value.
     Literal(Literal),

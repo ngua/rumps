@@ -2723,7 +2723,7 @@ impl Parser {
     /// Parse a user-facing constraint name.
     ///
     /// Recognizes: `Numeric`, `Stringable`, `Jsonable`, `Subscriptable`,
-    /// `Storable`, `Iterable`, `Iterable[T]`.
+    /// `Storable`, `Iterable`, `Iterable[T]`, `Fallible`, `Fallible[T]`.
     fn constraint(
     ) -> impl chumsky::Parser<Token, cst::ParamConstraint, Error = ParseErr> + Clone
     {
@@ -2743,12 +2743,13 @@ impl Parser {
                 "Iterable" => Ok(cst::ParamConstraint::Iterable(elem)),
                 "Monoid" => Ok(cst::ParamConstraint::Monoid),
                 "BitLike" => Ok(cst::ParamConstraint::BitLike),
+                "Fallible" => Ok(cst::ParamConstraint::Fallible(elem)),
                 _ => Err(Simple::custom(
                     span,
                     format!(
                         "unknown constraint `{name}`; valid constraints are: \
                          Numeric, Stringable, Jsonable, Subscriptable, \
-                         Storable, Iterable[T], Monoid, BitLike"
+                         Storable, Iterable[T], Monoid, BitLike, Fallible[T]"
                     ),
                 )),
             })

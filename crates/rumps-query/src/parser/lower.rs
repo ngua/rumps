@@ -60,6 +60,9 @@ fn lower_constraint(c: cst::ParamConstraint) -> ast::ParamConstraint {
         }
         cst::ParamConstraint::Monoid => ast::ParamConstraint::Monoid,
         cst::ParamConstraint::BitLike => ast::ParamConstraint::BitLike,
+        cst::ParamConstraint::Fallible(inner) => {
+            ast::ParamConstraint::Fallible(inner)
+        }
     }
 }
 

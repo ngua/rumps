@@ -1125,6 +1125,30 @@ impl InferCtx<'_> {
                         ParamConstraint::BitLike => {
                             Constraint::BitLike(tv.clone(), span)
                         }
+                        ParamConstraint::Fallible(inner_name) => {
+                            let inner = inner_name
+                                .as_ref()
+                                .map(|el| {
+                                    name_to_ty.get(el.as_str()).cloned().unwrap_or_else(
+                                        || {
+                                            self.error(TypeError::Custom {
+                                                msg: format!(
+                                                    "unknown type parameter `{el}` in \
+                                                     constraint `Fallible[{el}]`"
+                                                ),
+                                                span,
+                                            });
+                                            self.fresh()
+                                        },
+                                    )
+                                })
+                                .unwrap_or_else(|| self.fresh());
+                            Constraint::Fallible {
+                                ty: tv.clone(),
+                                inner,
+                                span,
+                            }
+                        }
                     };
                     self.constrain(constraint);
                 });

@@ -367,6 +367,11 @@ impl<'a> InferCtx<'a> {
                 }
                 ParamConstraint::Monoid => Constraint::Monoid(ty, span),
                 ParamConstraint::BitLike => Constraint::BitLike(ty, span),
+                ParamConstraint::Fallible(_) => {
+                    // Use pre-resolved inner type if available, else fresh
+                    let inner = elem_ty.unwrap_or_else(|| self.fresh());
+                    Constraint::Fallible { ty, inner, span }
+                }
             };
             self.constrain(constraint);
         });

@@ -670,7 +670,7 @@ impl<'a> InferCtx<'a> {
     /// 5. `Jsonable` constraints (rejects `Fn` types)
     /// 6. `Subscript` constraints (must be `Bool | Int | Float | Char | String | Json`)
     /// 7. `Storable` constraints (must be `Bool | Int | Float | Char | String | Json`)
-    /// 8. `Fallible` constraints (must be `Option[T]` or `Result[T, E]`)
+    /// 8. `Fallible` constraints (must be `Option[T]` or `Result[T, E]`; third pass)
     ///
     /// Errors are recorded via `self.error()`; unification continues to collect
     /// as many errors as possible.
@@ -694,10 +694,8 @@ impl<'a> InferCtx<'a> {
                     }
                 }
             }
-            Constraint::Fallible { ty, inner, span } => {
-                let ty = ty.apply(&subst);
-                let inner = inner.apply(&subst);
-                self.check_fallible(&ty, &inner, *span, &mut subst);
+            Constraint::Fallible { .. } => {
+                // Processed in third pass after Callable resolves types
             }
             Constraint::HasField {
                 base,
@@ -736,15 +734,10 @@ impl<'a> InferCtx<'a> {
                 Constraint::Eq(..)
                 | Constraint::HasField { .. }
                 | Constraint::Iterable { .. }
-                | Constraint::Indexable { .. } => {
-                    // Already processed in first pass
-                }
-
-                // Re-check Fallible now that Callable has resolved types
-                Constraint::Fallible { ty, inner, span } => {
-                    let ty = ty.apply(&subst);
-                    let inner = inner.apply(&subst);
-                    self.check_fallible(&ty, &inner, *span, &mut subst);
+                | Constraint::Indexable { .. }
+                | Constraint::Fallible { .. } => {
+                    // Eq/HasField/Iterable/Indexable: already processed in first pass
+                    // Fallible: processed in third pass after Callable resolves types
                 }
 
                 Constraint::Numeric(ty, span) => {
@@ -790,6 +783,24 @@ impl<'a> InferCtx<'a> {
                     self.check_bitlike(&ty.apply(&subst), *span);
                 }
             }
+        });
+
+        // Third pass: final check for Fallible and Iterable constraints now that
+        // Callable has resolved all type variables through argument unification.
+        // This ensures constraint violations are caught even when the constrained
+        // type parameter is unified with a concrete type via function call.
+        constraints.iter().for_each(|c| match c {
+            Constraint::Fallible { ty, inner, span } => {
+                let ty = ty.apply(&subst);
+                let inner = inner.apply(&subst);
+                self.check_fallible(&ty, &inner, *span, &mut subst);
+            }
+            Constraint::Iterable { coll, elem, span } => {
+                let coll = coll.apply(&subst);
+                let elem = elem.apply(&subst);
+                self.check_iterable(&coll, &elem, *span, &mut subst);
+            }
+            _ => {}
         });
 
         subst
