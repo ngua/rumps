@@ -139,7 +139,7 @@ pub(crate) struct Array;
 impl Prim for Array {}
 
 impl Array {
-    /// `Array.push(arr, val) -> Array[T]`
+    /// `forall T. (Array[T], T) -> Array[T]`
     ///
     /// Returns a new array with `val` appended to the end.
     pub(crate) fn push<'a>(
@@ -157,7 +157,7 @@ impl Array {
         })
     }
 
-    /// `Array.pop(arr) -> Array[T]`
+    /// `forall T. (Array[T]) -> Array[T]`
     ///
     /// Returns a new array with the last element removed.
     /// Returns an empty array if the input is empty.
@@ -176,7 +176,7 @@ impl Array {
         })
     }
 
-    /// `Array.head(arr) -> Option[T]`
+    /// `forall T. (Array[T]) -> Option[T]`
     ///
     /// Returns `Option.Some(first)` if the array is non-empty,
     /// `Option.None` if empty.
@@ -197,7 +197,7 @@ impl Array {
         })
     }
 
-    /// `Array.tail(arr) -> Array[T]`
+    /// `forall T. (Array[T]) -> Array[T]`
     ///
     /// Returns a new array with all elements except the first.
     /// Returns an empty array if the input is empty or has one element.
@@ -217,7 +217,7 @@ impl Array {
         })
     }
 
-    /// `Array.sort(arr) -> Array[T]`
+    /// `forall T. (Array[T]) -> Array[T]`
     ///
     /// Returns a new array with elements sorted in ascending order.
     /// Supports all comparable types including sum types, tuples, and arrays.
@@ -399,7 +399,7 @@ impl Array {
         })
     }
 
-    /// `Array.slice(arr, start, end) -> Array[T]`
+    /// `forall T. (Array[T], Int, Int) -> Array[T]`
     ///
     /// Returns a new array containing elements from index `start` (inclusive)
     /// to index `end` (exclusive). Indices are clamped to valid bounds.
@@ -446,7 +446,7 @@ impl Array {
         })
     }
 
-    /// `Array.concat(a, b) -> Array[T]`
+    /// `forall T. (Array[T], Array[T]) -> Array[T]`
     ///
     /// Returns a new array with elements of `b` appended to `a`.
     /// Both arrays must have the same element type.
@@ -472,7 +472,7 @@ impl Array {
         })
     }
 
-    /// `Array.zip(a, b) -> Array[(T, U)]`
+    /// `forall T U. (Array[T], Array[U]) -> Array[(T, U)]`
     ///
     /// Pairs elements from two arrays. Result length is the shorter array.
     pub(crate) fn zip<'a>(
@@ -505,7 +505,7 @@ impl Array {
         })
     }
 
-    /// `Array.unzip(arr) -> (Array[T], Array[U])`
+    /// `forall T U. (Array[(T, U)]) -> (Array[T], Array[U])`
     ///
     /// Splits an array of pairs into a pair of arrays.
     pub(crate) fn unzip<'a>(
@@ -566,7 +566,7 @@ impl Array {
         })
     }
 
-    /// `Array.intersperse(sep, arr) -> Array[T]`
+    /// `forall T. (T, Array[T]) -> Array[T]`
     ///
     /// Inserts `sep` between each pair of elements.
     pub(crate) fn intersperse<'a>(
@@ -607,7 +607,7 @@ pub(crate) struct Iter;
 impl Prim for Iter {}
 
 impl Iter {
-    /// `Iter.length(iter) -> Int`
+    /// `forall I: Iterable[T], T. (I) -> Int`
     ///
     /// Returns the number of elements in the iterable.
     /// For `Range`, this is computed as `end - start` (plus 1 if inclusive).
@@ -638,7 +638,7 @@ impl Iter {
         })
     }
 
-    /// `Iter.contains(iter, val) -> Bool`
+    /// `forall I: Iterable[T], T. (I, T) -> Bool`
     ///
     /// Returns `true` if the iterable contains the given value.
     /// For `Range`, checks if the value is an integer within the range bounds.
@@ -680,7 +680,7 @@ impl Iter {
         })
     }
 
-    /// `Iter.reverse(iter) -> Array[T]`
+    /// `forall I: Iterable[T], T. (I) -> Array[T]`
     ///
     /// Returns a new array with elements in reverse order.
     /// For `Range`, returns an array (not a reversed range).
@@ -691,7 +691,7 @@ impl Iter {
         Box::pin(async move {
             match ctx.arena.get(args[0]) {
                 Some(Value::Array(ty, elems)) => {
-                    let ty = ty.clone();
+                    let ty = *ty;
                     let reversed: SmallVec<[ValueId; 4]> =
                         elems.iter().rev().copied().collect();
                     Ok(ctx.arena.add(Value::Array(ty, reversed), ctx.span))
@@ -726,7 +726,7 @@ pub(crate) struct Str;
 impl Prim for Str {}
 
 impl Str {
-    /// `String.length(s) -> Int`
+    /// `(String) -> Int`
     ///
     /// Returns the number of grapheme clusters in the string.
     pub(crate) fn length<'a>(
@@ -746,7 +746,7 @@ impl Str {
         })
     }
 
-    /// `String.upper(s) -> String`
+    /// `(String) -> String`
     ///
     /// Returns the string in uppercase.
     pub(crate) fn upper<'a>(
@@ -767,7 +767,7 @@ impl Str {
         })
     }
 
-    /// `String.lower(s) -> String`
+    /// `(String) -> String`
     ///
     /// Returns the string in lowercase.
     pub(crate) fn lower<'a>(
@@ -788,7 +788,7 @@ impl Str {
         })
     }
 
-    /// `String.trim(s) -> String`
+    /// `(String) -> String`
     ///
     /// Returns the string with leading and trailing whitespace removed.
     pub(crate) fn trim<'a>(
@@ -809,7 +809,7 @@ impl Str {
         })
     }
 
-    /// `String.split(s, delim) -> Array[String]`
+    /// `(String, String) -> Array[String]`
     ///
     /// Splits the string by the delimiter, returning an array of substrings.
     pub(crate) fn split<'a>(
@@ -844,7 +844,7 @@ impl Str {
         })
     }
 
-    /// `String.join(arr, delim) -> String`
+    /// `(Array[String], String) -> String`
     ///
     /// Joins an array of strings with the delimiter.
     pub(crate) fn join<'a>(
@@ -886,7 +886,7 @@ impl Str {
         })
     }
 
-    /// `String.slice(s, start, end) -> String`
+    /// `(String, Int, Int) -> String`
     ///
     /// Returns a substring from index `start` (inclusive) to `end` (exclusive).
     /// Indices are grapheme-based and clamped to valid bounds.
@@ -938,7 +938,7 @@ impl Str {
         })
     }
 
-    /// `String.contains(s, sub) -> Bool`
+    /// `(String, String) -> Bool`
     ///
     /// Returns `true` if the string contains the substring.
     pub(crate) fn contains<'a>(
@@ -963,7 +963,7 @@ impl Str {
         })
     }
 
-    /// `String.replace(s, old, new) -> String`
+    /// `(String, String, String) -> String`
     ///
     /// Replaces all occurrences of `old` with `new`.
     pub(crate) fn replace<'a>(
@@ -1003,7 +1003,7 @@ pub(crate) struct Math;
 impl Prim for Math {}
 
 impl Math {
-    /// `Math.abs(x) -> Number`
+    /// `(Float) -> Float`
     ///
     /// Returns the absolute value. Works on Int or Float.
     pub(crate) fn abs<'a>(
@@ -1026,7 +1026,7 @@ impl Math {
         })
     }
 
-    /// `Math.min(a, b) -> Number`
+    /// `(Float, Float) -> Float`
     ///
     /// Returns the minimum of two numbers. Coerces to Float if mixed types.
     pub(crate) fn min<'a>(
@@ -1050,7 +1050,7 @@ impl Math {
         })
     }
 
-    /// `Math.max(a, b) -> Number`
+    /// `(Float, Float) -> Float`
     ///
     /// Returns the maximum of two numbers. Coerces to Float if mixed types.
     pub(crate) fn max<'a>(
@@ -1074,7 +1074,7 @@ impl Math {
         })
     }
 
-    /// `Math.floor(x) -> Int`
+    /// `(Float) -> Int`
     ///
     /// Returns the largest integer less than or equal to x.
     pub(crate) fn floor<'a>(
@@ -1087,7 +1087,7 @@ impl Math {
         })
     }
 
-    /// `Math.ceil(x) -> Int`
+    /// `(Float) -> Int`
     ///
     /// Returns the smallest integer greater than or equal to x.
     pub(crate) fn ceil<'a>(
@@ -1100,7 +1100,7 @@ impl Math {
         })
     }
 
-    /// `Math.round(x) -> Int`
+    /// `(Float) -> Int`
     ///
     /// Rounds to the nearest integer (ties round away from zero).
     pub(crate) fn round<'a>(
@@ -1113,7 +1113,7 @@ impl Math {
         })
     }
 
-    /// `Math.sqrt(x) -> Float`
+    /// `(Float) -> Float`
     ///
     /// Returns the square root. Returns NaN for negative inputs.
     pub(crate) fn sqrt<'a>(
@@ -1128,7 +1128,7 @@ impl Math {
         })
     }
 
-    /// `Math.log(x) -> Float`
+    /// `(Float) -> Float`
     ///
     /// Returns the natural logarithm. Returns NaN for non-positive inputs.
     pub(crate) fn log<'a>(
@@ -1148,7 +1148,7 @@ pub(crate) struct Trig;
 impl Prim for Trig {}
 
 impl Trig {
-    /// `Math.Trig.sin(x) -> Float`
+    /// `(Float) -> Float`
     ///
     /// Returns the sine of x (x in radians).
     pub(crate) fn sin<'a>(
@@ -1161,7 +1161,7 @@ impl Trig {
         })
     }
 
-    /// `Math.Trig.cos(x) -> Float`
+    /// `(Float) -> Float`
     ///
     /// Returns the cosine of x (x in radians).
     pub(crate) fn cos<'a>(
@@ -1174,7 +1174,7 @@ impl Trig {
         })
     }
 
-    /// `Math.Trig.tan(x) -> Float`
+    /// `(Float) -> Float`
     ///
     /// Returns the tangent of x (x in radians).
     pub(crate) fn tan<'a>(
@@ -1187,7 +1187,7 @@ impl Trig {
         })
     }
 
-    /// `Math.Trig.asin(x) -> Float`
+    /// `(Float) -> Float`
     ///
     /// Returns the arcsine of x (result in radians).
     pub(crate) fn asin<'a>(
@@ -1202,7 +1202,7 @@ impl Trig {
         })
     }
 
-    /// `Math.Trig.acos(x) -> Float`
+    /// `(Float) -> Float`
     ///
     /// Returns the arccosine of x (result in radians).
     pub(crate) fn acos<'a>(
@@ -1217,7 +1217,7 @@ impl Trig {
         })
     }
 
-    /// `Math.Trig.atan(x) -> Float`
+    /// `(Float) -> Float`
     ///
     /// Returns the arctangent of x (result in radians).
     pub(crate) fn atan<'a>(
@@ -1232,7 +1232,7 @@ impl Trig {
         })
     }
 
-    /// `Math.Trig.atan2(y, x) -> Float`
+    /// `(Float, Float) -> Float`
     ///
     /// Returns the arctangent of `y/x` (result in radians), using signs to
     /// determine the correct quadrant.
@@ -1256,7 +1256,7 @@ pub(crate) struct Random;
 impl Prim for Random {}
 
 impl Random {
-    /// `Random.random() -> Float`
+    /// `() -> Float`
     ///
     /// Returns a random float in the range `[0, 1)`.
     pub(crate) fn random<'a>(
@@ -1269,7 +1269,7 @@ impl Random {
         })
     }
 
-    /// `Random.range(min, max) -> Float`
+    /// `(Float, Float) -> Float`
     ///
     /// Returns a random float in the range `[min, max)`.
     pub(crate) fn range<'a>(
@@ -1285,7 +1285,7 @@ impl Random {
         })
     }
 
-    /// `Random.int(min, max) -> Int`
+    /// `(Int, Int) -> Int`
     ///
     /// Returns a random integer in the range `[min, max]` (inclusive).
     pub(crate) fn int<'a>(
@@ -1301,7 +1301,7 @@ impl Random {
         })
     }
 
-    /// `Random.bool() -> Bool`
+    /// `() -> Bool`
     ///
     /// Returns a random boolean.
     pub(crate) fn bool<'a>(
@@ -1314,7 +1314,7 @@ impl Random {
         })
     }
 
-    /// `Random.choice(arr) -> Option[T]`
+    /// `forall T. (Array[T]) -> Option[T]`
     ///
     /// Picks a random element from the array. Returns `Option.None` if empty.
     pub(crate) fn choice<'a>(
@@ -1337,7 +1337,7 @@ impl Random {
         })
     }
 
-    /// `Random.shuffle(arr) -> Array[T]`
+    /// `forall T. (Array[T]) -> Array[T]`
     ///
     /// Returns a new array with elements in random order.
     pub(crate) fn shuffle<'a>(
@@ -1355,7 +1355,7 @@ impl Random {
         })
     }
 
-    /// `Random.sample(arr, n) -> Result[Array[T], String]`
+    /// `forall T. (Array[T], Int) -> Result[Array[T], String]`
     ///
     /// Picks `n` random elements without replacement.
     /// Returns `Result.Err` if `n > Iter.length(arr)`.
@@ -1390,7 +1390,7 @@ impl Random {
         })
     }
 
-    /// `Random.uuid() -> String`
+    /// `() -> String`
     ///
     /// Generates a random UUID v4 string.
     pub(crate) fn uuid<'a>(
@@ -1411,7 +1411,7 @@ pub(crate) struct Map;
 impl Prim for Map {}
 
 impl Map {
-    /// `Map.empty() -> Map[Unknown, Unknown]`
+    /// `forall K V. () -> Map[K, V]`
     ///
     /// Creates an empty map.
     pub(crate) fn empty<'a>(
@@ -1426,7 +1426,7 @@ impl Map {
         })
     }
 
-    /// `Map.length(m) -> Int`
+    /// `forall K V. (Map[K, V]) -> Int`
     ///
     /// Returns the number of entries in the map.
     pub(crate) fn length<'a>(
@@ -1443,7 +1443,7 @@ impl Map {
         })
     }
 
-    /// `Map.keys(m) -> Array[K]`
+    /// `forall K V. (Map[K, V]) -> Array[K]`
     ///
     /// Returns an array of all keys in iteration order.
     pub(crate) fn keys<'a>(
@@ -1469,7 +1469,7 @@ impl Map {
         })
     }
 
-    /// `Map.values(m) -> Array[V]`
+    /// `forall K V. (Map[K, V]) -> Array[V]`
     ///
     /// Returns an array of all values in iteration order.
     pub(crate) fn values<'a>(
@@ -1488,7 +1488,7 @@ impl Map {
         })
     }
 
-    /// `Map.entries(m) -> Array[(K, V)]`
+    /// `forall K V. (Map[K, V]) -> Array[(K, V)]`
     ///
     /// Returns an array of `(key, value)` tuples in iteration order.
     pub(crate) fn entries<'a>(
@@ -1520,7 +1520,7 @@ impl Map {
         })
     }
 
-    /// `Map.has(m, k) -> Bool`
+    /// `forall K V. (Map[K, V], K) -> Bool`
     ///
     /// Returns `true` if the key exists in the map.
     pub(crate) fn has<'a>(
@@ -1550,7 +1550,7 @@ impl Map {
         })
     }
 
-    /// `Map.lookup(m, k) -> Option[V]`
+    /// `forall K V. (Map[K, V], K) -> Option[V]`
     ///
     /// Returns `Option.Some(value)` if the key exists, `Option.None` otherwise.
     pub(crate) fn get<'a>(
@@ -1582,7 +1582,7 @@ impl Map {
         })
     }
 
-    /// `Map.insert(m, k, v) -> Map[K, V]`
+    /// `forall K V. (Map[K, V], K, V) -> Map[K, V]`
     ///
     /// Returns a new map with the key-value pair inserted/updated.
     /// Validates that the key and value types match the map's types.
@@ -1616,7 +1616,7 @@ impl Map {
         })
     }
 
-    /// `Map.remove(m, k) -> Map[K, V]`
+    /// `forall K V. (Map[K, V], K) -> Map[K, V]`
     ///
     /// Returns a new map with the key removed (if it existed).
     pub(crate) fn remove<'a>(
@@ -1647,7 +1647,7 @@ impl Map {
         })
     }
 
-    /// `Map.merge(a, b) -> Map[K, V]`
+    /// `forall K V. (Map[K, V], Map[K, V]) -> Map[K, V]`
     ///
     /// Returns a new map with entries from both maps (b overrides a).
     ///
@@ -1679,7 +1679,7 @@ impl Map {
         })
     }
 
-    /// `Map.from-entries(arr) -> Map[K, V]`
+    /// `forall K V. (Array[(K, V)]) -> Map[K, V]`
     ///
     /// Constructs a map from an array of `(key, value)` tuples.
     pub(crate) fn from_entries<'a>(
@@ -1761,7 +1761,7 @@ pub(crate) struct Time;
 impl Prim for Time {}
 
 impl Time {
-    /// `Time.now() -> Time`
+    /// `() -> Time`
     ///
     /// Returns the current UTC time.
     pub(crate) fn now<'a>(
@@ -1774,7 +1774,7 @@ impl Time {
         })
     }
 
-    /// `Time.epoch() -> Time`
+    /// `() -> Time`
     ///
     /// Returns the Unix epoch (1970-01-01 00:00:00 UTC).
     pub(crate) fn epoch<'a>(
@@ -1790,7 +1790,7 @@ impl Time {
         })
     }
 
-    /// `Time.parse(fmt, s) -> Result[Time, String]`
+    /// `(String, String) -> Result[Time, String]`
     ///
     /// Parses a string into a time using strftime format.
     pub(crate) fn parse<'a>(
@@ -1831,7 +1831,7 @@ impl Time {
         })
     }
 
-    /// `Time.format(fmt, t) -> String`
+    /// `(String, Time) -> String`
     ///
     /// Formats a time using strftime format.
     pub(crate) fn format<'a>(
@@ -1856,7 +1856,7 @@ impl Time {
         })
     }
 
-    /// `Time.add-seconds(t, n) -> Time`
+    /// `(Time, Int) -> Time`
     ///
     /// Returns a new time with `n` seconds added (negative to subtract).
     pub(crate) fn add_seconds<'a>(
@@ -1875,7 +1875,7 @@ impl Time {
         })
     }
 
-    /// `Time.diff-seconds(a, b) -> Float`
+    /// `(Time, Time) -> Float`
     ///
     /// Returns the difference in seconds (`a - b`).
     pub(crate) fn diff_seconds<'a>(
@@ -1891,7 +1891,7 @@ impl Time {
         })
     }
 
-    /// `Time.year(t) -> Int`
+    /// `(Time) -> Int`
     pub(crate) fn year<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1902,7 +1902,7 @@ impl Time {
         })
     }
 
-    /// `Time.month(t) -> Int` (1-12)
+    /// `(Time) -> Int`
     pub(crate) fn month<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1913,7 +1913,7 @@ impl Time {
         })
     }
 
-    /// `Time.day(t) -> Int` (1-31)
+    /// `(Time) -> Int`
     pub(crate) fn day<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1924,7 +1924,7 @@ impl Time {
         })
     }
 
-    /// `Time.hour(t) -> Int` (0-23)
+    /// `(Time) -> Int`
     pub(crate) fn hour<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1935,7 +1935,7 @@ impl Time {
         })
     }
 
-    /// `Time.minute(t) -> Int` (0-59)
+    /// `(Time) -> Int`
     pub(crate) fn minute<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1946,7 +1946,7 @@ impl Time {
         })
     }
 
-    /// `Time.second(t) -> Int` (0-59)
+    /// `(Time) -> Int`
     pub(crate) fn second<'a>(
         ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
@@ -1957,7 +1957,7 @@ impl Time {
         })
     }
 
-    /// `Time.sleep(us) -> Unit`
+    /// `(Int) -> Unit`
     ///
     /// Sleeps for `us` microseconds. Blocks execution.
     pub(crate) fn sleep<'a>(
@@ -2021,7 +2021,7 @@ pub(crate) struct Opt;
 impl Prim for Opt {}
 
 impl Opt {
-    /// `Option.unwrap-or(o, default) -> T`
+    /// `forall T. (Option[T], T) -> T`
     ///
     /// Returns the inner value if `Some`, otherwise returns `default`.
     pub(crate) fn unwrap_or<'a>(
@@ -2061,7 +2061,7 @@ impl Opt {
         })
     }
 
-    /// `Option.flatten(o: Option[Option[T]]) -> Option[T]`
+    /// `forall T. (Option[Option[T]]) -> Option[T]`
     ///
     /// Flattens a nested `Option`. Returns `Some(v)` if input is `Some(Some(v))`,
     /// otherwise returns `None`.
@@ -2106,7 +2106,7 @@ pub(crate) struct Res;
 impl Prim for Res {}
 
 impl Res {
-    /// `Result.unwrap-or(r, default) -> T`
+    /// `forall T E. (Result[T, E], T) -> T`
     ///
     /// Returns the inner value if `Ok`, otherwise returns `default`.
     pub(crate) fn unwrap_or<'a>(
@@ -2146,7 +2146,7 @@ impl Res {
         })
     }
 
-    /// `Result.flatten(r: Result[Result[T, E], E]) -> Result[T, E]`
+    /// `forall T E. (Result[Result[T, E], E]) -> Result[T, E]`
     ///
     /// Flattens a nested `Result`. Returns `Ok(v)` if input is `Ok(Ok(v))`,
     /// `Err(e)` if input is `Ok(Err(e))` or `Err(e)`.
@@ -2190,7 +2190,7 @@ pub(crate) struct Io;
 impl Prim for Io {}
 
 impl Io {
-    /// `Io.get-line() -> String`
+    /// `() -> String`
     ///
     /// Reads a line from stdin (blocking until newline). Returns the line
     /// without the trailing newline character.
@@ -2218,7 +2218,7 @@ impl Io {
         })
     }
 
-    /// `Io.print(s) -> Unit`
+    /// `(String) -> Unit`
     ///
     /// Prints a string to stdout without a trailing newline.
     pub(crate) fn print<'a>(
@@ -2237,7 +2237,7 @@ impl Io {
         })
     }
 
-    /// `Io.println(s) -> Unit`
+    /// `(String) -> Unit`
     ///
     /// Prints a string to stdout with a trailing newline.
     pub(crate) fn println<'a>(
@@ -2256,7 +2256,7 @@ impl Io {
         })
     }
 
-    /// `Io.eprint(s) -> Unit`
+    /// `(String) -> Unit`
     ///
     /// Prints a string to stderr without a trailing newline.
     pub(crate) fn eprint<'a>(
@@ -2275,7 +2275,7 @@ impl Io {
         })
     }
 
-    /// `Io.eprintln(s) -> Unit`
+    /// `(String) -> Unit`
     ///
     /// Prints a string to stderr with a trailing newline.
     pub(crate) fn eprintln<'a>(
@@ -2333,7 +2333,7 @@ impl Directory {
             .add(Value::Tagged(path_ty, 1, smallvec![fp_id]), ctx.span)
     }
 
-    /// `Io.Directory.list-dir(path: FilePath) -> Array[Path]`
+    /// `(FilePath) -> Array[Path]`
     ///
     /// Lists the contents of a directory.
     pub(crate) fn list_dir<'a>(
@@ -2372,7 +2372,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.move-path({ src: FilePath, dest: FilePath }) -> Unit`
+    /// `({ src: FilePath, dest: FilePath }) -> Unit`
     ///
     /// Moves or renames a file or directory.
     pub(crate) fn move_path<'a>(
@@ -2417,7 +2417,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.copy-path({ src: FilePath, dest: FilePath }) -> Unit`
+    /// `({ src: FilePath, dest: FilePath }) -> Unit`
     ///
     /// Copies a file. For directories, use recursive copy (not yet implemented).
     pub(crate) fn copy_path<'a>(
@@ -2462,7 +2462,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.remove(path: FilePath) -> Unit`
+    /// `(FilePath) -> Unit`
     ///
     /// Removes a file or empty directory.
     pub(crate) fn remove<'a>(
@@ -2486,7 +2486,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.remove-all(path: FilePath) -> Unit`
+    /// `(FilePath) -> Unit`
     ///
     /// Recursively removes a file or directory.
     pub(crate) fn remove_all<'a>(
@@ -2514,7 +2514,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.exists(path: FilePath) -> Bool`
+    /// `(FilePath) -> Bool`
     ///
     /// Checks if a path exists.
     pub(crate) fn exists<'a>(
@@ -2529,7 +2529,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.is-file(path: FilePath) -> Bool`
+    /// `(FilePath) -> Bool`
     ///
     /// Checks if a path is a file.
     pub(crate) fn is_file<'a>(
@@ -2546,7 +2546,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.is-dir(path: FilePath) -> Bool`
+    /// `(FilePath) -> Bool`
     ///
     /// Checks if a path is a directory.
     pub(crate) fn is_dir<'a>(
@@ -2563,7 +2563,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.read-file(path: FilePath) -> String`
+    /// `(FilePath) -> String`
     ///
     /// Reads the entire contents of a file as a string.
     pub(crate) fn read_file<'a>(
@@ -2581,7 +2581,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.write-file({ path: FilePath, contents: String }) -> Unit`
+    /// `({ path: FilePath, contents: String }) -> Unit`
     ///
     /// Writes a string to a file, creating or overwriting it.
     pub(crate) fn write_file<'a>(
@@ -2632,7 +2632,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.append-file({ path: FilePath, contents: String }) -> Unit`
+    /// `({ path: FilePath, contents: String }) -> Unit`
     ///
     /// Appends a string to a file.
     pub(crate) fn append_file<'a>(
@@ -2694,7 +2694,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.create-dir(path: FilePath) -> Unit`
+    /// `(FilePath) -> Unit`
     ///
     /// Creates a directory.
     pub(crate) fn create_dir<'a>(
@@ -2710,7 +2710,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.create-dir-all(path: FilePath) -> Unit`
+    /// `(FilePath) -> Unit`
     ///
     /// Creates a directory and all parent directories.
     pub(crate) fn create_dir_all<'a>(
@@ -2726,7 +2726,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.pwd() -> FilePath`
+    /// `() -> FilePath`
     ///
     /// Returns the current working directory.
     pub(crate) fn pwd<'a>(
@@ -2743,7 +2743,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.set-pwd(path: FilePath) -> Unit`
+    /// `(FilePath) -> Unit`
     ///
     /// Changes the current working directory.
     pub(crate) fn set_pwd<'a>(
@@ -2759,7 +2759,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.get-env(name: String) -> Option[String]`
+    /// `(String) -> Option[String]`
     ///
     /// Gets an environment variable.
     pub(crate) fn get_env<'a>(
@@ -2787,7 +2787,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.set-env({ name: String, value: String }) -> Unit`
+    /// `({ name: String, value: String }) -> Unit`
     ///
     /// Sets an environment variable.
     pub(crate) fn set_env<'a>(
@@ -2842,7 +2842,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.canonicalize(path: FilePath) -> FilePath`
+    /// `(FilePath) -> FilePath`
     ///
     /// Resolves a path to its absolute, canonical form.
     pub(crate) fn canonicalize<'a>(
@@ -2860,7 +2860,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.parent(path: FilePath) -> Option[FilePath]`
+    /// `(FilePath) -> Option[FilePath]`
     ///
     /// Returns the parent directory of a path.
     pub(crate) fn parent<'a>(
@@ -2885,7 +2885,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.file-name(path: FilePath) -> Option[String]`
+    /// `(FilePath) -> Option[String]`
     ///
     /// Returns the final component of a path.
     pub(crate) fn file_name<'a>(
@@ -2912,7 +2912,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.extension(path: FilePath) -> Option[String]`
+    /// `(FilePath) -> Option[String]`
     ///
     /// Returns the file extension, if any.
     pub(crate) fn extension<'a>(
@@ -2939,7 +2939,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.join(base: FilePath, parts: Array[String]) -> FilePath`
+    /// `(FilePath, Array[String]) -> FilePath`
     ///
     /// Joins path components.
     pub(crate) fn join<'a>(
@@ -2981,7 +2981,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.temp-dir() -> FilePath`
+    /// `() -> FilePath`
     ///
     /// Returns the system temporary directory.
     pub(crate) fn temp_dir<'a>(
@@ -2995,7 +2995,7 @@ impl Directory {
         })
     }
 
-    /// `Io.Directory.with-extension(path: FilePath, ext: String) -> FilePath`
+    /// `(FilePath, String) -> FilePath`
     ///
     /// Returns a new path with the given extension.
     pub(crate) fn with_extension<'a>(
