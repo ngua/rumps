@@ -95,3 +95,25 @@ WRITE is-present(Option.Some(1))
 WRITE is-present(Option.None)
 WRITE is-present(Result.Ok("x"))
 WRITE is-present(Result.Err("e"))
+
+; ============================================================================
+; Union types with Fallible constraint
+; ============================================================================
+
+; Union of fallible types should satisfy Fallible[T] constraint
+FUN fallible-unwrap(x: Option[Int] | Result[Int, String]) -> Int {
+  x!
+}
+
+WRITE fallible-unwrap(Option.Some(42))
+WRITE fallible-unwrap(Result.Ok(99))
+
+; Union with coalesce
+FUN fallible-or-default(x: Option[Int] | Result[Int, String], default: Int) -> Int {
+  x ?? default
+}
+
+WRITE fallible-or-default(Option.Some(10), 0)
+WRITE fallible-or-default(Option.None, 77)
+WRITE fallible-or-default(Result.Ok(5), 0)
+WRITE fallible-or-default(Result.Err("oops"), -1)

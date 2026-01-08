@@ -212,3 +212,21 @@ LET before = [10, 20, 30]
 LET after = [15, 18, 35]
 LET diffs = Array.zip-with((db, da) => da - db, before, after)
 WRITE diffs
+
+; === Union types with Iterable constraint ===
+
+; Union of iterable types should satisfy Iterable[T] constraint
+FUN iter-len(i: Range | Array[Int]) -> Int {
+  Iter.length(i)
+}
+
+WRITE iter-len(1 ..= 20)
+WRITE iter-len([1, 2, 3, 4, 5])
+
+; Using Iter.map with union type
+FUN iter-sum(i: Range | Array[Int]) -> Int {
+  Iter.reduce((acc, x) => acc + x, 0, i)
+}
+
+WRITE iter-sum(1 ..= 5)
+WRITE iter-sum([10, 20, 30])

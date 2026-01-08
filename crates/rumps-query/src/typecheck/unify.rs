@@ -818,6 +818,12 @@ impl<'a> InferCtx<'a> {
                 // Default unresolved numeric type variables to Int
                 *subst = subst.compose(&Subst::singleton(*v, Ty::Int));
             }
+            Ty::Union(members) => {
+                // All union members must be numeric
+                members
+                    .iter()
+                    .for_each(|m| self.check_numeric(m, span, subst));
+            }
             Ty::Error | Ty::Unknown => {}
             _ => {
                 self.error(TypeError::UnsatisfiedConstraint(
@@ -835,6 +841,10 @@ impl<'a> InferCtx<'a> {
             Ty::Bool | Ty::Int | Ty::Word => {}
             // Type variables remain polymorphic; caller provides concrete type
             Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+            Ty::Union(members) => {
+                // All union members must be bitlike
+                members.iter().for_each(|m| self.check_bitlike(m, span));
+            }
             _ => {
                 self.error(TypeError::UnsatisfiedConstraint(
                     ConstraintKind::BitLike,
@@ -990,6 +1000,12 @@ impl<'a> InferCtx<'a> {
             // Allow the `Subscript` union type itself
             Ty::Named(id, _) if *id == crate::TypeId::SUBSCRIPT => {}
             Ty::Var(_) | Ty::Unknown | Ty::Error => {}
+            Ty::Union(members) => {
+                // All union members must be subscriptable
+                members
+                    .iter()
+                    .for_each(|m| self.check_subscriptable(m, span));
+            }
             _ => {
                 self.error(TypeError::UnsatisfiedConstraint(
                     ConstraintKind::Subscriptable,
@@ -1012,6 +1028,10 @@ impl<'a> InferCtx<'a> {
             | Ty::String
             | Ty::Json => {}
             Ty::Var(_) | Ty::Unknown | Ty::Error => {}
+            Ty::Union(members) => {
+                // All union members must be storable
+                members.iter().for_each(|m| self.check_storable(m, span));
+            }
             _ => {
                 self.error(TypeError::UnsatisfiedConstraint(
                     ConstraintKind::Storable,
@@ -1031,6 +1051,10 @@ impl<'a> InferCtx<'a> {
             Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_) => {}
             // Type variables remain polymorphic; caller provides concrete type
             Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+            Ty::Union(members) => {
+                // All union members must be monoidal
+                members.iter().for_each(|m| self.check_monoid(m, span));
+            }
             _ => {
                 self.error(TypeError::UnsatisfiedConstraint(
                     ConstraintKind::Monoid,
@@ -1057,6 +1081,10 @@ impl<'a> InferCtx<'a> {
             }
             // Deferred types
             Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+            // Union: all members must be stringable
+            Ty::Union(members) => {
+                members.iter().for_each(|m| self.check_stringable(m, span));
+            }
             // All other types are stringable
             _ => {}
         }
@@ -1096,6 +1124,13 @@ impl<'a> InferCtx<'a> {
                     self.error(e);
                 }
             },
+
+            // Union: all members must be fallible with compatible inner types
+            Ty::Union(members) => {
+                members
+                    .iter()
+                    .for_each(|m| self.check_fallible(m, inner, span, subst));
+            }
 
             // Type variable: defer until resolved. The Callable constraint for
             // the expression that produces this value will eventually bind it.
@@ -1225,6 +1260,13 @@ impl<'a> InferCtx<'a> {
                 }
             },
 
+            // Union: all members must have the field with compatible types
+            Ty::Union(members) => {
+                members.iter().for_each(|m| {
+                    self.check_has_field(m, field, field_ty, span, subst);
+                });
+            }
+
             // Type variable: defer until resolved
             Ty::Var(_) => {
                 // Type variable not yet resolved; constraint will be checked
@@ -1270,6 +1312,13 @@ impl<'a> InferCtx<'a> {
                         self.error(e);
                     }
                 }
+            }
+
+            // Union: all members must be iterable with compatible element types
+            Ty::Union(members) => {
+                members
+                    .iter()
+                    .for_each(|m| self.check_iterable(m, elem, span, subst));
             }
 
             Ty::Var(_) => {
@@ -1341,6 +1390,13 @@ impl<'a> InferCtx<'a> {
                     UnifyResult::Ok(s) => *subst = subst.compose(&s),
                     UnifyResult::Err(e) => self.error(e),
                 }
+            }
+
+            // Union: all members must be indexable with compatible idx/elem types
+            Ty::Union(members) => {
+                members.iter().for_each(|m| {
+                    self.check_indexable(m, idx, elem, span, subst);
+                });
             }
 
             Ty::Var(_) => {
