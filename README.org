@@ -126,7 +126,7 @@ RUMPS is born from the MUMPS database system and programming language (RUMPS has
 #+HTML:   <img src="stuff/storage-diagram.svg" alt="RUMPS storage model">
 #+HTML: </p>
 
-(For what things like =^PATIENT= mean, see below on "variables".)
+(For what things like =^PATIENT{}= mean, see below on "variables".)
 
 This storage model is essentially the same between MUMPS and RUMPS. MUMPS traditionally used a B+-tree for its physical storage, but RUMPS uses a pure B-tree (i.e. nodes can hold values directly as well as descendants).
 
@@ -139,33 +139,33 @@ There are additional essential properties of RUMPS that are inherited from MUMPS
 ** Core concepts
 These concepts are borrowed from MUMPS; where RUMPS differs explicitly from MUMPS, I will note it. Otherwise, read "RUMPS" as "RUMPS (as with MUMPS)".
 *** "Variables"
-In most languages, a "variable" is a name bound to a single value. In RUMPS, a variable is a /name bound to an entire tree/. The name (=^PATIENT= or =TEMP=) identifies the tree root; subscripts (=(123, "NAME")=) navigate to /nodes/ within it. A variable can be bound at the root node or any arbitrary key path under it. Using the query language syntax:
+In most languages, a "variable" is a name bound to a single value. In RUMPS, a variable is a /name bound to an entire tree/. The name (=^PATIENT{}= or =TEMP{}=) identifies the tree root; subscripts (={123, "NAME"}=) navigate to /nodes/ within it. A variable can be bound at the root node or any arbitrary key path under it. Using the query language syntax:
 
 #+begin_src rumps
-@SET ^P = "root"              ; value at root node (empty path)
-@SET ^P(1) = "child"          ; value at node [1]
-@SET ^P(1,"A") = "deeper"     ; value at node [1, "A"]
+@SET ^P{} = "root"              ; value at root node (empty path)
+@SET ^P{1} = "child"            ; value at node [1]
+@SET ^P{1,"A"} = "deeper"       ; value at node [1, "A"]
 #+end_src
 
-All three are "the variable =^P=", i.e. nodes in the same tree. A node can hold a value /and/ have children simultaneously (=^P(1)= stores ="child"= while =^P(1,"A")= exists beneath it).
+All three are "the variable =^P{}=", i.e. nodes in the same tree. A node can hold a value /and/ have children simultaneously (=^P{1}= stores ="child"= while =^P{1,"A"}= exists beneath it).
 
 As an /extremely/ loose comparison, a global variable is something like a table in SQL: i.e. a namespace for storing data. However, it has no predefined schema, no rows, etc... Instead, it holds hierarchical key addresses.
 **** Globals vs. locals
-RUMPS distinguishes between two types of variables, locals and globals. A global variable is persisted to the database, while locals are ephemeral, i.e. held in memory only and disappear once the session ends. In the query language, globals and locals are distinguished by a preceding caret on the former, e.g. =^PATIENT= is a global, while =PATIENT= is a local.
+RUMPS distinguishes between two types of variables, locals and globals. A global variable is persisted to the database, while locals are ephemeral, i.e. held in memory only and disappear once the session ends. In the query language, globals and locals are distinguished by a preceding caret on the former, e.g. =^PATIENT{}= is a global, while =PATIENT{}= is a local.
 
 In mosty examples, variables are upper-case; however, lowercase, camel-case, etc..., all work as well.
 
 For RUMPS specifically:
-- *Globals* (=^NAME=)
+- *Globals* (=^NAME{}=)
   - are persisted to disk via WAL + page cache
   - MUST be called from a =Transaction= context, i.e. you cannot write to globals outside of a transaction
-- *Locals* (=NAME=)
+- *Locals* (=NAME{}=)
   - exist in memory only and are discarded when the database is dropped
   - can be written to outside of transactions
 
 Otherwise, both types of variables use the /same/ B-tree implementation and support identical operations (with the caveat that global operations occur within a =Database::transaction= context; however, the underlying B-tree operations are the same).
 *** Keys and subscripts
-A *key* is a path through the tree, i.e. how you /address/ it starting from its root (a local or global variable). It's a sequence of *subscripts* that address a specific node. For example, in =^PATIENT(123, "NAME")=, the *key* is =(123, "NAME")=, which consists of two *subscripts*: the number =123= and the string ="NAME"=.
+A *key* is a path through the tree, i.e. how you /address/ it starting from its root (a local or global variable). It's a sequence of *subscripts* that address a specific node. For example, in =^PATIENT{123, "NAME"}=, the *key* is ={123, "NAME"}=, which consists of two *subscripts*: the number =123= and the string ="NAME"=.
 
 In the Rust API, keys are built using the =key!= macro:
 
@@ -201,7 +201,7 @@ The =key!= macro will also handle type conversions automatically:
 #+begin_src rust
 // These all work heterogeneously with the `key!` macro
 //
-// Equivalent to query language: `^P(true, 123, 'X', "NAME", '{"active": true')`
+// Equivalent to query language: `^P{true, 123, 'X', "NAME", '{"active": true}'}`
 let k = key![true, 123, 'X', "NAME", json!({"active": true})];
 #+end_src
 **** Subscript vs. node value
@@ -232,11 +232,11 @@ Because subscripts participate in /ordering and traversal/, we require this dist
 Another way to think about it: in a filesystem analogy, subscripts are like directory and file names (they form the path, or /key/), while values are like file contents (what's stored there).
 
 #+begin_src rumps
-@SET ^PATIENT(1,"NAME") = "Alice"
+@SET ^PATIENT{1,"NAME"} = "Alice"
 ;
-;             ^^^^^^^^    ^^^^^^^
-;             subscripts  value
-;             (the path)  (the data)
+;            ^^^^^^^^^^   ^^^^^^^
+;            subscripts   value
+;            (the path)   (the data)
 #+end_src
 *** Value types
 As noted above, nodes hold /values/. This is the actual data stored in the DB and has no bearing on traversal semantics.
@@ -270,7 +270,7 @@ This first column follows the order of cross-type collation, i.e. =Boolean= < =N
 
 So =key![false]= sorts before =key![0]=, which sorts before =key!['a']=, which sorts before =key!["a"]=.
 
-This makes numeric subscripts sort correctly. =^VAR(10)= comes /before/ =^VAR(100)= because =10 < 100= numerically. In string-based systems like traditional MUMPS (where everything was essentially stringly-typed), ="100"= < ="10"= lexicographically (the character ='0'= comes before ='1'=). This makes range queries on numeric IDs, timestamps, etc..., work more intuitively in RUMPS.
+This makes numeric subscripts sort correctly. =^VAR{10}= comes /before/ =^VAR{100}= because =10 < 100= numerically. In string-based systems like traditional MUMPS (where everything was essentially stringly-typed), ="100"= < ="10"= lexicographically (the character ='0'= comes before ='1'=). This makes range queries on numeric IDs, timestamps, etc..., work more intuitively in RUMPS.
 
 #+begin_src rust
 // Numeric collation makes range queries intuitive
@@ -396,7 +396,7 @@ db.transaction(|txn| async move {
 db.set(&local!("TEMP"), &key![1], value!("scratch")).await?;
 #+end_src
 
-Note that unlike e.g. Redis, structured, hierarchical, or nested data works well with RUMPS as a caching layer. For example, you don't need to encode data and store as e.g. ="user:1:foo:bar"= as a string and then re-parse it yourself; since this example is hierarchical, it would work well with RUMPS (e.g. ~USER(1, foo) = "bar"~).
+Note that unlike e.g. Redis, structured, hierarchical, or nested data works well with RUMPS as a caching layer. For example, you don't need to encode data and store as e.g. ="user:1:foo:bar"= as a string and then re-parse it yourself; since this example is hierarchical, it would work well with RUMPS (e.g. ~USER{1, foo} = "bar"~).
 * Using RUMPS
 ** Core operations
 These are the fundamental building blocks for working with RUMPS data. All operations work on /keys/ within a /variable/ (global or local).
@@ -408,7 +408,7 @@ Retrieves the value at a specific key. Returns =None= if the key doesn't exist.
 *Transaction context*: Not required for reads. Works outside transactions.
 
 #+begin_src rust
-// Assuming ^PATIENT(123,"NAME") = "Alice" exists
+// Assuming ^PATIENT{123,"NAME"} = "Alice" exists
 let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
 assert_eq!(name, Some(value!("Alice")));
 
@@ -433,12 +433,12 @@ db.transaction(|txn| async move {
 db.set(&local!("TEMP"), &key![1], value!("scratch")).await?;
 #+end_src
 *** =KILL=
-Deletes a key /and all its descendants/. This is a subtree deletion. If you =KILL= =^P(1)=, then =^P(1,"A")=, =^P(1,"B","C")=, etc..., are all gone.
+Deletes a key /and all its descendants/. This is a subtree deletion. If you =KILL= =^P{1}=, then =^P{1,"A"}=, =^P{1,"B","C"}=, etc..., are all gone.
 
 *Transaction context*: *Required* for globals. Locals can be killed directly.
 
 #+begin_src rust
-// Assuming ^DATA(1,"A"), ^DATA(1,"B"), ^DATA(1,"B","C") exist
+// Assuming ^DATA{1,"A"}, ^DATA{1,"B"}, ^DATA{1,"B","C"} exist
 db.transaction(|txn| async move {
     txn.kill(&global!("DATA"), &key![1]).await?;
     Ok(())
@@ -463,7 +463,7 @@ Checks the /existence status/ of a node: does it have a value? Does it have desc
 *Transaction context*: Not required. Works outside transactions.
 
 #+begin_src rust
-// Assuming ^P(1,"NAME") = "Alice" exists
+// Assuming ^P{1,"NAME"} = "Alice" exists
 let status = db.data(&global!("P"), &key![1]).await?;
 assert_eq!(status, DataStatus::HasDescendants);  // [1] has children but no value
 
@@ -481,7 +481,7 @@ Returns the /next subscript/ at a specific level. This matches traditional MUMPS
 #+begin_src rust
 use rumps_types::Subscript;
 
-// Assuming ^X(1,"A"), ^X(1,"B"), ^X(2,"C") exist
+// Assuming ^X{1,"A"}, ^X{1,"B"}, ^X{2,"C"} exist
 let first = db.order(&global!("X"), &key![], None).await?;
 assert_eq!(first, Some(Subscript::from(1)));  // first subscript at root
 
@@ -504,7 +504,7 @@ Returns the /next full key/ in sorted order after a given key. Pass =None= to ge
 *Transaction context*: Not required. Works outside transactions.
 
 #+begin_src rust
-// Assuming ^X(1), ^X(2), ^X(10) exist (inserted in any order)
+// Assuming ^X{1}, ^X{2}, ^X{10} exist (inserted in any order)
 let first = db.query(&global!("X"), None).await?;
 assert_eq!(first, Some(key![1]));  // first key
 
@@ -568,7 +568,7 @@ let all: Vec<(Key, Option<Value>)> = db
 
 **** Filtering by key structure
 #+begin_src rust
-// Assuming ^P(1,"NAME")="Alice", ^P(2,"NAME")="Bob", ^P(3,"NAME")="Carol"
+// Assuming ^P{1,"NAME"}="Alice", ^P{2,"NAME"}="Bob", ^P{3,"NAME"}="Carol"
 use futures::TryStreamExt;
 
 let names: Vec<String> = db
@@ -641,19 +641,19 @@ The TUI footer explains nagivation keybindings, help, etc..., inside the explore
 
 This is useful for poking around unfamiliar databases, verifying data after writes, or understanding how data is structured in the tree.
 
-The first screen are all globals recorded in the database. You can select a global to start descending into its nodes. For this example, we will explore =^PATIENTS=. Note that pagination is supported and you can navigate between pages.
+The first screen are all globals recorded in the database. You can select a global to start descending into its nodes. For this example, we will explore =^PATIENTS{}=. Note that pagination is supported and you can navigate between pages.
 
 #+HTML: <p align="center">
 #+HTML:   <img src="stuff/re-globals.png" alt="RUMPS Explorer: globals view">
 #+HTML: </p>
 
-Next you will see all nodes at the given level. This is level one, so we see all first-level keys under =^PATIENT=. For this database, this corresponds to patient ID. Note that each node also has a value attached, in this case a =Value::String= with a (pointless) description of the patient (e.g. =Patient 27=). This is an actual value at the root of =^Patient(<id>)=, not, for example, an auto-generated description:
+Next you will see all nodes at the given level. This is level one, so we see all first-level keys under =^PATIENT{}=. For this database, this corresponds to patient ID. Note that each node also has a value attached, in this case a =Value::String= with a (pointless) description of the patient (e.g. =Patient 27=). This is an actual value at the root of =^Patient{<id>}=, not, for example, an auto-generated description:
 
 #+HTML: <p align="center">
 #+HTML:   <img src="stuff/re-patient-lvl-1.png" alt="RUMPS Explorer: patient data level 1">
 #+HTML: </p>
 
-We can descend into the subtree at =^PATIENT(27)= either by scrolling down and hitting enter, or using the shortcut on the far left:
+We can descend into the subtree at =^PATIENT{27}= either by scrolling down and hitting enter, or using the shortcut on the far left:
 
 #+HTML: <p align="center">
 #+HTML:   <img src="stuff/re-patient-lvl-2.png" alt="RUMPS Explorer: patient data level 2">
@@ -665,7 +665,7 @@ Hit =?= to bring up the "help" screen, which explains what the =Flag= column ind
 #+HTML:   <img src="stuff/re-help.png" alt="RUMPS Explorer: help screen">
 #+HTML: </p>
 
-Finally, we can go to the final subtree remaining (indicated by =.+= on the subscript), bringing us to =^PATIENT(27, VISIT)=. This is a leaf node; there's only a value, so we can stop here:
+Finally, we can go to the final subtree remaining (indicated by =.+= on the subscript), bringing us to =^PATIENT{27, VISIT}=. This is a leaf node; there's only a value, so we can stop here:
 
 #+HTML: <p align="center">
 #+HTML:   <img src="stuff/re-patient-lvl-3.png" alt="RUMPS Explorer: patient data level 3">
@@ -675,11 +675,11 @@ Finally, we can go to the final subtree remaining (indicated by =.+= on the subs
 ** Where RUMPS is a good fit
 *** Hierarchical or nested data
 The tree-shaped storage model maps directly to naturally hierarchical data:
-- *Medical records* =^PATIENT(id, "VISITS", date, "DIAGNOSIS")=: nested visits, labs, prescriptions per patient
+- *Medical records* =^PATIENT{id, "VISITS", date, "DIAGNOSIS"}=: nested visits, labs, prescriptions per patient
   - This is, historically and to date, where MUMPS has been popular. Patient records may vary /wildly/ and defining a preset schema is a non-starter
-- *Org structures* =^ORG(dept, team, employee)=: traverse by department or drill into individuals
-- *File system metadata* =^FS(path, component, ...)=: arbitrary nesting depth
-- *Configuration trees* =^CONFIG(section, subsection, key)=: nested settings with natural grouping
+- *Org structures* =^ORG{dept, team, employee}=: traverse by department or drill into individuals
+- *File system metadata* =^FS{path, component, ...}=: arbitrary nesting depth
+- *Configuration trees* =^CONFIG{section, subsection, key}=: nested settings with natural grouping
 
 One key advantage in this cases is that no joins are required; the hierarchy /is/ the data model.
 *** Sparse or irregular data
@@ -687,15 +687,15 @@ In SQL, every row has every column (even if =NULL=). In RUMPS, absent keys simpl
 
 #+begin_src text
 ; Patient 123 has 3 fields
-^PATIENT(123,"NAME") = "Alice"
-^PATIENT(123,"DOB") = "1990-01-01"
-^PATIENT(123,"PHONE") = "555-1234"
+^PATIENT{123,"NAME"} = "Alice"
+^PATIENT{123,"DOB"} = "1990-01-01"
+^PATIENT{123,"PHONE"} = "555-1234"
 
 ; Patient 456 has different fields entirely
-^PATIENT(456,"NAME") = "Bob"
-^PATIENT(456,"FAX") = "555-9999"
-^PATIENT(456,"EMERGENCY","NAME") = "Carol"
-^PATIENT(456,"EMERGENCY","PHONE") = "555-0000"
+^PATIENT{456,"NAME"} = "Bob"
+^PATIENT{456,"FAX"} = "555-9999"
+^PATIENT{456,"EMERGENCY","NAME"} = "Carol"
+^PATIENT{456,"EMERGENCY","PHONE"} = "555-0000"
 #+end_src
 
 This makes RUMPS well-suited for:
@@ -711,8 +711,8 @@ No migrations, no =ALTER TABLE=; you can add new "fields" (subscripts) whenever 
 - Any situation where you don't know the schema upfront
 *** Key-range workloads
 Because data is stored in sorted key order, range scans are efficient:
-- *Time-series* :: =^LOG(2025, 01, 15, timestamp)=; date-range scans are just prefix iteration
-- *Audit trails* :: =^AUDIT(entity, action, time)=; query by entity, then by time
+- *Time-series* :: =^LOG{2025, 01, 15, timestamp}=; date-range scans are just prefix iteration
+- *Audit trails* :: =^AUDIT{entity, action, time}=; query by entity, then by time
 - *Leaderboards* :: Sorted sets come naturally; iterate top N via =ORDER=
 *** Document-like access patterns
 In RUMOS, you can retrieve entire subtrees in one traversal. With this there's no ORM impedance mismatch; nested structures map directly to nested keys. If your data looks like JSON, RUMPS can handle it without serializing/deserializing entire documents. RUMPS also specifically gives you the option of storing globs of document-like data via the =Value::Json= for when you really want JSON at a particular key path.
@@ -744,13 +744,13 @@ RUMPS is experimental and under active development. For production systems that 
 | Data model     | Hierarchical sparse trees (globals)                       | Relational tables with rows/columns           |
 | Schema         | Schema-less; structure emerges from keys                  | Strict schema defined upfront                 |
 | Query model    | Tree-navigation primitives (=ORDER=, =COLLECT=)           | Declarative set operations (=SELECT=, =JOIN=) |
-| Keys           | Compound subscript paths (e.g., =^PATIENT(123,"NAME")=)   | Primary/foreign key relationships             |
+| Keys           | Compound subscript paths (e.g., =^PATIENT{123,"NAME"}=)   | Primary/foreign key relationships             |
 | Joins          | Hierarchical nesting eliminates most joins                | Explicit =JOIN= operations required           |
 | Node structure | Nodes can have /both/ a value AND children simultaneously | Cells hold single values only                 |
 | Storage        | Unified key-value B-tree; one structure for everything    | Separate tables, each with own storage        |
 | Iteration      | Stream-based (=COLLECT=) or tree traversal (=ORDER=)      | Set-based =WHERE= clauses                     |
 | Collation      | Extended: =bool= < =number= < =string= (=10= < =100=)     | Type-specific; string ="10"= > ="100"=        |
-| Namespaces     | Globals (=^NAME=) vs Locals (=NAME=)                      | Tables within schemas/databases               |
+| Namespaces     | Globals (=^NAME{}=) vs Locals (=NAME{}=)                  | Tables within schemas/databases               |
 
 ** Similarities
 Despite the different paradigms, RUMPS and SQL share several capabilities:
