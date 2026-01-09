@@ -84,6 +84,11 @@ pub(crate) enum ParamConstraint {
     /// The constrained type parameter is the source; the argument is the target.
     /// For example, `T: Into[String]` means `T` can be converted to `String`.
     Into(TypeExpr),
+    /// Type can be fallibly converted to another type: `TryInto[Target]`.
+    ///
+    /// The constrained type parameter is the source; the argument is the target.
+    /// For example, `T: TryInto[Int]` means `T` can be `READ` into `Int`.
+    TryInto(TypeExpr),
 }
 
 /// A type parameter with optional constraints.

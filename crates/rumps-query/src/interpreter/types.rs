@@ -512,6 +512,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             },
 
+            // T -> Json (jsonify anything that can be serialized)
+            // Type checker guarantees TryInto[Json] constraint.
+            (_, TypeId::JSON) => {
+                Ok(self.make_result_ok(Value::Json(self.jsonify(val)), span))
+            }
+
             // Unsupported conversion: return Result.Err (soft error)
             _ => {
                 let src_name = val.type_name(

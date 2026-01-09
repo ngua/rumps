@@ -366,6 +366,13 @@ pub(crate) enum TypeError {
     #[error("cannot cast `{from}` to `{to}`; use `READ` for fallible conversion or `MATCH`/`IS` for narrowing")]
     InvalidCast { from: Ty, to: Ty, span: Span },
 
+    /// Invalid `READ` conversion.
+    ///
+    /// The source type cannot be fallibly converted to the target type via `READ`.
+    /// Function types, regex, and refs cannot be source or target of `READ`.
+    #[error("cannot `READ` `{from}` as `{to}`")]
+    InvalidRead { from: Ty, to: Ty, span: Span },
+
     /// Custom error with a message.
     ///
     /// Used for errors that don't fit into the other categories.
@@ -422,6 +429,7 @@ impl TypeError {
             | Self::NegativeWord(span)
             | Self::NotAUnionMember { span, .. }
             | Self::InvalidCast { span, .. }
+            | Self::InvalidRead { span, .. }
             | Self::Custom { span, .. }
             | Self::InvalidRegex(_, _, span)
             | Self::NotFoundInModule { span, .. }
@@ -574,6 +582,14 @@ impl TypeError {
                     p.format(to)
                 ),
                 Some("use `READ` for fallible conversion or `MATCH`/`IS` for narrowing".to_owned()),
+            ),
+            Self::InvalidRead { from, to, .. } => (
+                format!(
+                    "cannot `READ` `{}` as `{}`",
+                    p.format(from),
+                    p.format(to)
+                ),
+                Some("function types, regex, and refs cannot be used with `READ`".to_owned()),
             ),
             Self::Custom { msg, .. } => (msg.clone(), None),
             Self::InvalidRegex(pattern, err, _) => (

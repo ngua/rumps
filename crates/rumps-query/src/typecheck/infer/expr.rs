@@ -993,7 +993,8 @@ impl InferCtx<'_> {
                 let elem_ty = match c {
                     ParamConstraint::Iterable(ty_id)
                     | ParamConstraint::Fallible(ty_id)
-                    | ParamConstraint::Into(ty_id) => {
+                    | ParamConstraint::Into(ty_id)
+                    | ParamConstraint::TryInto(ty_id) => {
                         Some(self.ast_type_to_ty(*ty_id, &type_param_subst))
                     }
                     _ => None,
@@ -1039,6 +1040,15 @@ impl InferCtx<'_> {
                         let to =
                             elem_ty.clone().unwrap_or_else(|| self.fresh());
                         Constraint::Into {
+                            from: ty.clone(),
+                            to,
+                            span,
+                        }
+                    }
+                    ParamConstraint::TryInto(_) => {
+                        let to =
+                            elem_ty.clone().unwrap_or_else(|| self.fresh());
+                        Constraint::TryInto {
                             from: ty.clone(),
                             to,
                             span,
@@ -1592,8 +1602,8 @@ impl InferCtx<'_> {
     /// `expr READ T` returns `Result[T, String]`. The conversion is fallible;
     /// if the value cannot be converted to `T`, an error message is returned.
     ///
-    /// For `READ Json`, adds an `Into[Json]` constraint on the input type to
-    /// catch known-impossible conversions at compile time.
+    /// Emits a `TryInto` constraint to validate that the conversion is possible
+    /// at compile time; function types, regex, and refs cannot be used with `READ`.
     fn read_conv(
         &mut self,
         inner_id: ExprId,
@@ -1603,37 +1613,12 @@ impl InferCtx<'_> {
         let inner_ty = self.expr(inner_id);
         let target_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
 
-        // Validate the target type is usable for READ
-        match &target_ty {
-            Ty::Bool
-            | Ty::Int
-            | Ty::Word
-            | Ty::Float
-            | Ty::Char
-            | Ty::String
-            | Ty::DataStatus
-            | Ty::Array(_)
-            | Ty::Option(_)
-            | Ty::Object(_)
-            | Ty::Named(_, _) => {}
-            // READ Json requires the input to be convertible to Json
-            Ty::Json => {
-                self.constrain(Constraint::Into {
-                    from: inner_ty,
-                    to: Ty::Json,
-                    span,
-                });
-            }
-            Ty::Fn(_, _) => {
-                self.error(TypeError::Mismatch {
-                    expected: Ty::String, // placeholder
-                    got: target_ty.clone(),
-                    span,
-                });
-            }
-            Ty::Var(_) | Ty::Unknown | Ty::Error => {}
-            _ => {}
-        }
+        // Emit TryInto constraint for validation
+        self.constrain(Constraint::TryInto {
+            from: inner_ty,
+            to: target_ty.clone(),
+            span,
+        });
 
         Ty::Result(Box::new(target_ty), Box::new(Ty::String))
     }

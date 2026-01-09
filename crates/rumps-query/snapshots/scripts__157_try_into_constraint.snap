@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test TryInto constraint for fallible READ conversions\n\n; ============================================================================\n; Basic TryInto usage\n; ============================================================================\n\n; Function that reads any type into Int\nFUN read-int[T: TryInto[Int]](x: T) -> Result[Int, String] {\n  x READ Int\n}\n\nWRITE read-int(\"42\")\nWRITE read-int(\"abc\")\n\n; Function that reads any type into Bool\nFUN read-bool[T: TryInto[Bool]](x: T) -> Result[Bool, String] {\n  x READ Bool\n}\n\nWRITE read-bool(\"true\")\nWRITE read-bool(1)\n\n; ============================================================================\n; Multiple constraints including TryInto\n; ============================================================================\n\n; Numeric AND TryInto[Bool]\nFUN numeric-to-bool[T: Numeric + TryInto[Bool]](x: T) -> Result[Bool, String] {\n  x READ Bool\n}\n\nWRITE numeric-to-bool(0)\nWRITE numeric-to-bool(1)\n\n; ============================================================================\n; Closure with TryInto constraint\n; ============================================================================\n\nLET parse-int = [T: TryInto[Int]](x: T) -> Result[Int, String] => x READ Int\n\nWRITE parse-int(\"100\")\nWRITE parse-int(\"not a number\")\n"
+---
+Result.Ok(42)
+Result.Err("invalid integer: abc")
+Result.Err("cannot read String as Bool")
+Result.Ok(TRUE)
+Result.Ok(FALSE)
+Result.Ok(TRUE)
+Result.Ok(100)
+Result.Err("invalid integer: not a number")

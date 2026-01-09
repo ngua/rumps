@@ -381,7 +381,8 @@ impl InferCtx<'_> {
                 let elem_ty = match c {
                     ParamConstraint::Iterable(ty_id)
                     | ParamConstraint::Fallible(ty_id)
-                    | ParamConstraint::Into(ty_id) => {
+                    | ParamConstraint::Into(ty_id)
+                    | ParamConstraint::TryInto(ty_id) => {
                         Some(self.ast_type_to_ty(*ty_id, &type_param_subst))
                     }
                     _ => None,
@@ -427,6 +428,15 @@ impl InferCtx<'_> {
                         let to =
                             elem_ty.clone().unwrap_or_else(|| self.fresh());
                         Constraint::Into {
+                            from: ty.clone(),
+                            to,
+                            span,
+                        }
+                    }
+                    ParamConstraint::TryInto(_) => {
+                        let to =
+                            elem_ty.clone().unwrap_or_else(|| self.fresh());
+                        Constraint::TryInto {
                             from: ty.clone(),
                             to,
                             span,

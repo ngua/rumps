@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test TryInto constraint errors\n\n; Function types cannot satisfy TryInto\nFUN bad-read[T: TryInto[Int]](x: T) -> Result[Int, String] {\n  x READ Int\n}\n\nLET f = (x: Int) -> Int => x + 1\nWRITE bad-read(f)\n"
+---
+ERROR: cannot `READ` `(Int) -> Int` as `Int`

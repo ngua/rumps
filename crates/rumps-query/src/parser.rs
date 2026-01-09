@@ -2697,7 +2697,7 @@ impl Parser {
     /// Parse a user-facing constraint name.
     ///
     /// Recognizes: `Numeric`, `Subscriptable`, `Storable`, `Iterable[T]`,
-    /// `Monoid`, `BitLike`, `Fallible[T]`, `Into[T]`.
+    /// `Monoid`, `BitLike`, `Fallible[T]`, `Into[T]`, `TryInto[T]`.
     fn constraint(
     ) -> impl chumsky::Parser<Token, cst::ParamConstraint, Error = ParseErr> + Clone
     {
@@ -2747,12 +2747,21 @@ impl Parser {
                         },
                         |ty| Ok(cst::ParamConstraint::Into(ty)),
                     ),
+                    "TryInto" => args.into_iter().next().map_or_else(
+                        || {
+                            Err(Simple::custom(
+                                span,
+                                "`TryInto` requires a type argument; use `TryInto[T]`",
+                            ))
+                        },
+                        |ty| Ok(cst::ParamConstraint::TryInto(ty)),
+                    ),
                     _ => Err(Simple::custom(
                         span,
                         format!(
                             "unknown constraint `{name}`; valid constraints are: \
                              Numeric, Subscriptable, Storable, Iterable[T], \
-                             Monoid, BitLike, Fallible[T], Into[T]"
+                             Monoid, BitLike, Fallible[T], Into[T], TryInto[T]"
                         ),
                     )),
                 }

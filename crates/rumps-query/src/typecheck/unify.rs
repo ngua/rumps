@@ -741,9 +741,10 @@ impl<'a> InferCtx<'a> {
                 | Constraint::Iterable { .. }
                 | Constraint::Indexable { .. }
                 | Constraint::Fallible { .. }
-                | Constraint::Into { .. } => {
+                | Constraint::Into { .. }
+                | Constraint::TryInto { .. } => {
                     // Eq/Callable/HasField/Iterable/Indexable: already processed in first pass
-                    // Fallible/Into: processed in third pass
+                    // Fallible/Into/TryInto: processed in third pass
                 }
 
                 Constraint::Numeric(ty, span) => {
@@ -787,6 +788,11 @@ impl<'a> InferCtx<'a> {
                 let from = from.apply(&subst);
                 let to = to.apply(&subst);
                 self.check_into(&from, &to, *span);
+            }
+            Constraint::TryInto { from, to, span } => {
+                let from = from.apply(&subst);
+                let to = to.apply(&subst);
+                self.check_try_into(&from, &to, *span);
             }
             _ => {}
         });
@@ -1381,6 +1387,106 @@ impl<'a> InferCtx<'a> {
                     span,
                 });
             }
+        }
+    }
+
+    /// Check that a type can be fallibly converted to another type via `TryInto[To]`.
+    ///
+    /// This encodes all valid `READ` conversions:
+    /// - Any non-function type can be `READ` into the basic scalar types
+    ///   (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`, `DataStatus`)
+    /// - `READ Json` requires the input to be `Into[Json]` (no functions, regex, refs)
+    /// - Function types cannot be `READ` into any other type
+    /// - The target type must be a valid `READ` target (no functions, regex, refs)
+    fn check_try_into(&mut self, from: &Ty, to: &Ty, span: Span) {
+        // Deferred types: cannot check yet
+        match (from, to) {
+            (Ty::Var(_), _) | (_, Ty::Var(_)) => {}
+            (Ty::Error, _) | (_, Ty::Error) => {}
+            (Ty::Unknown, _) | (_, Ty::Unknown) => {}
+
+            // Same type is always valid
+            (a, b) if a == b => {}
+
+            // Function types cannot be source for READ
+            (Ty::Fn(_, _), _) => {
+                self.error(TypeError::InvalidRead {
+                    from: from.clone(),
+                    to: to.clone(),
+                    span,
+                });
+            }
+
+            // Check that target type is a valid READ target
+            (_, Ty::Fn(_, _)) => {
+                // Cannot READ into a function type
+                self.error(TypeError::InvalidRead {
+                    from: from.clone(),
+                    to: to.clone(),
+                    span,
+                });
+            }
+            (_, Ty::Regex) | (_, Ty::Local) | (_, Ty::Global) => {
+                // Cannot READ into regex or refs
+                self.error(TypeError::InvalidRead {
+                    from: from.clone(),
+                    to: to.clone(),
+                    span,
+                });
+            }
+
+            // READ Json requires source to be Into[Json]
+            (Ty::Regex, Ty::Json)
+            | (Ty::Local, Ty::Json)
+            | (Ty::Global, Ty::Json) => {
+                // These types cannot be converted to Json
+                self.error(TypeError::InvalidRead {
+                    from: from.clone(),
+                    to: to.clone(),
+                    span,
+                });
+            }
+            // Compound types: recursively check elements can be READ as Json
+            (Ty::Array(elem), Ty::Json) => {
+                self.check_try_into(elem, &Ty::Json, span)
+            }
+            (Ty::Option(inner), Ty::Json) => {
+                self.check_try_into(inner, &Ty::Json, span)
+            }
+            (Ty::Result(ok, err), Ty::Json) => {
+                self.check_try_into(ok, &Ty::Json, span);
+                self.check_try_into(err, &Ty::Json, span);
+            }
+            (Ty::Map(k, v), Ty::Json) => {
+                self.check_try_into(k, &Ty::Json, span);
+                self.check_try_into(v, &Ty::Json, span);
+            }
+            (Ty::Tuple(elems), Ty::Json) => {
+                elems
+                    .iter()
+                    .for_each(|e| self.check_try_into(e, &Ty::Json, span));
+            }
+            (Ty::Object(fields), Ty::Json) => {
+                fields
+                    .values()
+                    .for_each(|t| self.check_try_into(t, &Ty::Json, span));
+            }
+            (Ty::Named(_, args), Ty::Json) => {
+                args.iter()
+                    .for_each(|a| self.check_try_into(a, &Ty::Json, span));
+            }
+
+            // Union handling
+            (Ty::Union(members), target) => {
+                // All union members must be TryInto[target]
+                members
+                    .iter()
+                    .for_each(|m| self.check_try_into(m, target, span));
+            }
+
+            // All other combinations are valid for READ
+            // (actual parsing may fail at runtime)
+            _ => {}
         }
     }
 

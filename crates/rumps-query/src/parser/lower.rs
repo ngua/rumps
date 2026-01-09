@@ -67,6 +67,9 @@ fn lower_constraint(
         cst::ParamConstraint::Into(target) => {
             ast::ParamConstraint::Into(lower_type_expr(ast, target)?)
         }
+        cst::ParamConstraint::TryInto(target) => {
+            ast::ParamConstraint::TryInto(lower_type_expr(ast, target)?)
+        }
     })
 }
 
