@@ -210,13 +210,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Functions cannot be stringified (rejected by type checker)
             Value::Closure { .. } => {
-                typechecked!("stringify", "Stringable (not Closure)")
+                typechecked!("stringify", "Into[String] (not Closure)")
             }
             Value::Function { .. } => {
-                typechecked!("stringify", "Stringable (not Function)")
+                typechecked!("stringify", "Into[String] (not Function)")
             }
             Value::ModuleFn { .. } => {
-                typechecked!("stringify", "Stringable (not ModuleFn)")
+                typechecked!("stringify", "Into[String] (not ModuleFn)")
             }
             // Module constants should be resolved before stringify; if not,
             // display the path as a fallback
@@ -394,22 +394,24 @@ impl<I: IoContext> Interpreter<'_, I> {
                 serde_json::Value::Array(arr)
             }
             Value::Closure { .. } => {
-                typechecked!("jsonify", "Jsonable (not Closure)")
+                typechecked!("jsonify", "Into[Json] (not Closure)")
             }
             Value::Function { .. } => {
-                typechecked!("jsonify", "Jsonable (not Function)")
+                typechecked!("jsonify", "Into[Json] (not Function)")
             }
             Value::ModuleFn { .. } => {
-                typechecked!("jsonify", "Jsonable (not ModuleFn)")
+                typechecked!("jsonify", "Into[Json] (not ModuleFn)")
             }
             Value::ModuleConst { .. } => {
-                typechecked!("jsonify", "Jsonable (not ModuleConst)")
+                typechecked!("jsonify", "Into[Json] (not ModuleConst)")
             }
-            Value::Regex(_) => typechecked!("jsonify", "Jsonable (not Regex)"),
+            Value::Regex(_) => {
+                typechecked!("jsonify", "Into[Json] (not Regex)")
+            }
             Value::ForeverContinuation | Value::LoopContinue(_) => {
-                typechecked!("jsonify", "Jsonable (not continuation)")
+                typechecked!("jsonify", "Into[Json] (not continuation)")
             }
-            Value::Ref(..) => typechecked!("jsonify", "Jsonable (not Ref)"),
+            Value::Ref(..) => typechecked!("jsonify", "Into[Json] (not Ref)"),
         }
     }
 

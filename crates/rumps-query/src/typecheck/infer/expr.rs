@@ -48,7 +48,7 @@ impl InferCtx<'_> {
             // Literals
             Expr::Literal(lit) => self.literal(lit),
 
-            // String interpolation: all parts must be Stringable
+            // String interpolation: all parts must be Into[String]
             Expr::Interpolation(parts) => self.interpolation(parts, span),
 
             // Unit: empty tuple
@@ -244,8 +244,12 @@ impl InferCtx<'_> {
                 let lhs_ty = self.expr(*lhs);
                 let rhs_ty = self.expr(*rhs);
 
-                // LHS must be Stringable
-                self.constrain(Constraint::Stringable(lhs_ty, span));
+                // LHS must be convertible to String
+                self.constrain(Constraint::Into {
+                    from: lhs_ty,
+                    to: Ty::String,
+                    span,
+                });
 
                 // RHS must be Regex
                 self.unify(rhs_ty, Ty::Regex, span);
@@ -277,7 +281,12 @@ impl InferCtx<'_> {
             // Never returns; can unify with any expected type.
             Expr::Raise(inner) => {
                 let ty = self.expr(*inner);
-                self.constrain(Constraint::Stringable(ty, span));
+                // Error message must be convertible to String
+                self.constrain(Constraint::Into {
+                    from: ty,
+                    to: Ty::String,
+                    span,
+                });
                 self.fresh()
             }
 
@@ -334,15 +343,19 @@ impl InferCtx<'_> {
 
     /// Infer type of string interpolation.
     ///
-    /// All expression parts (odd indices) must satisfy `Stringable` constraint.
+    /// All expression parts (odd indices) must be convertible to `String`.
     /// Literal parts (even indices) are already strings. Returns `String`.
     fn interpolation(&mut self, parts: &[ExprId], span: Span) -> Ty {
         parts.iter().enumerate().for_each(|(i, &part_id)| {
             let part_ty = self.expr(part_id);
-            // Odd indices are expressions; they must be Stringable
+            // Odd indices are expressions; they must be convertible to String
             // Even indices are string literals; no constraint needed
             if i % 2 == 1 {
-                self.constrain(Constraint::Stringable(part_ty, span));
+                self.constrain(Constraint::Into {
+                    from: part_ty,
+                    to: Ty::String,
+                    span,
+                });
             }
         });
         Ty::String
@@ -976,10 +989,11 @@ impl InferCtx<'_> {
             let ty = Ty::Var(tv);
 
             tp.constraints.iter().for_each(|c| {
-                // Resolve element/inner type for Iterable[T] or Fallible[T]
+                // Resolve element/inner/target type for parameterized constraints
                 let elem_ty = match c {
                     ParamConstraint::Iterable(ty_id)
-                    | ParamConstraint::Fallible(ty_id) => {
+                    | ParamConstraint::Fallible(ty_id)
+                    | ParamConstraint::Into(ty_id) => {
                         Some(self.ast_type_to_ty(*ty_id, &type_param_subst))
                     }
                     _ => None,
@@ -990,12 +1004,6 @@ impl InferCtx<'_> {
                 let constraint = match c {
                     ParamConstraint::Numeric => {
                         Constraint::Numeric(ty.clone(), span)
-                    }
-                    ParamConstraint::Stringable => {
-                        Constraint::Stringable(ty.clone(), span)
-                    }
-                    ParamConstraint::Jsonable => {
-                        Constraint::Jsonable(ty.clone(), span)
                     }
                     ParamConstraint::Subscriptable => {
                         Constraint::Subscriptable(ty.clone(), span)
@@ -1024,6 +1032,15 @@ impl InferCtx<'_> {
                         Constraint::Fallible {
                             ty: ty.clone(),
                             inner,
+                            span,
+                        }
+                    }
+                    ParamConstraint::Into(_) => {
+                        let to =
+                            elem_ty.clone().unwrap_or_else(|| self.fresh());
+                        Constraint::Into {
+                            from: ty.clone(),
+                            to,
                             span,
                         }
                     }
@@ -1531,12 +1548,12 @@ impl InferCtx<'_> {
 
     /// Infer type of `AS` cast expression.
     ///
-    /// Handles several cases:
-    /// - `T AS Json`: add `Jsonable` constraint, return `Json`
-    /// - `Storable AS T` (where `T` is a `Storable` member): return `T` (infallible)
-    /// - `T AS String`: all types can stringify, return `String`
-    /// - `Int AS Float` / `Float AS Int`: numeric coercion
-    /// - Otherwise: emit `InvalidCast` error
+    /// Emits an `Into` constraint to verify the conversion is valid.
+    /// The actual validation happens in `check_into` during constraint solving.
+    ///
+    /// Special case: when casting a type variable to a numeric type, also
+    /// emit a `Numeric` constraint to ensure polymorphic expressions like
+    /// `(-2.9) AS Int` are properly constrained.
     fn as_cast(
         &mut self,
         inner_id: ExprId,
@@ -1546,107 +1563,27 @@ impl InferCtx<'_> {
         let inner_ty = self.expr(inner_id);
         let target_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
 
-        // If target is Json, add Jsonable constraint
-        if target_ty == Ty::Json {
-            self.constrain(Constraint::Jsonable(inner_ty, span));
-            Ty::Json
-        } else if target_ty == Ty::String {
-            // All types can be cast to String
-            self.constrain(Constraint::Stringable(inner_ty, span));
-            Ty::String
-        } else {
-            // Check for valid conversions
-            match (&inner_ty, &target_ty) {
-                // Numeric coercions
-                (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => target_ty,
+        // Emit Into constraint for validation
+        self.constrain(Constraint::Into {
+            from: inner_ty.clone(),
+            to: target_ty.clone(),
+            span,
+        });
 
-                // Word -> Int (always safe)
-                (Ty::Word, Ty::Int) => target_ty,
-
-                // Word -> Float (widen)
-                (Ty::Word, Ty::Float) => target_ty,
-
-                // Bool <-> Int
-                (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => target_ty,
-
-                // DataStatus -> Int (infallible; variant idx to MUMPS value)
-                (Ty::DataStatus, Ty::Int) => Ty::Int,
-
-                // String -> FilePath
-                (Ty::String, Ty::FilePath) => Ty::FilePath,
-
-                // Path -> FilePath (extract filepath from File or Dir variant)
-                (Ty::Path, Ty::FilePath) => Ty::FilePath,
-                (Ty::Named(id, _), Ty::FilePath) if *id == TypeId::PATH => {
-                    Ty::FilePath
-                }
-
-                // Same type is always valid
-                (a, b) if a == b => target_ty,
-
-                // Type variable in source: emit Numeric constraint if target is numeric
-                // This allows `(-2.9) AS Int` where `-2.9` has polymorphic Numeric type
-                (Ty::Var(_), Ty::Int | Ty::Float | Ty::Word) => {
-                    self.constrain(Constraint::Numeric(inner_ty, span));
-                    target_ty
-                }
-
-                // Type variable in target: allow cast (resolved later)
-                (_, Ty::Var(_)) => target_ty,
-
-                // Error recovery
-                (Ty::Error, _) | (_, Ty::Error) => Ty::Error,
-
-                // Unknown can be cast to anything (database reads)
-                (Ty::Unknown, _) => target_ty,
-
-                // Storable to member type (special case: infallible at compile
-                // time but may fail at runtime with RuntimeType error)
-                (Ty::Named(id, _), _) if *id == TypeId::STORABLE => {
-                    if Ty::STORABLE_MEMBERS.contains(&target_ty) {
-                        target_ty
-                    } else {
-                        self.error(TypeError::InvalidCast {
-                            from: inner_ty,
-                            to: target_ty.clone(),
-                            span,
-                        });
-                        target_ty
-                    }
-                }
-
-                // Member type to union: valid if source is a member
-                (_, Ty::Named(id, _)) => {
-                    let is_member = self
-                        .expand_union_members(&target_ty)
-                        .is_some_and(|members| members.contains(&inner_ty));
-                    if is_member
-                        || *id == TypeId::STORABLE
-                        || *id == TypeId::SCALAR
-                    {
-                        // For Storable/Scalar, always allow casting from members
-                        // The runtime will handle the actual type tag
-                        target_ty
-                    } else {
-                        self.error(TypeError::InvalidCast {
-                            from: inner_ty,
-                            to: target_ty.clone(),
-                            span,
-                        });
-                        target_ty
-                    }
-                }
-
-                // Invalid cast
-                _ => {
-                    self.error(TypeError::InvalidCast {
-                        from: inner_ty,
-                        to: target_ty.clone(),
-                        span,
-                    });
-                    target_ty
-                }
+        // Special case: type variable cast to numeric requires Numeric constraint
+        // This allows `(-2.9) AS Int` where `-2.9` has polymorphic Numeric type
+        match (&inner_ty, &target_ty) {
+            (Ty::Var(_), Ty::Int | Ty::Float | Ty::Word) => {
+                self.constrain(Constraint::Numeric(inner_ty.clone(), span));
             }
+            _ => {}
+        }
+
+        // Error recovery: return Error type if either side is Error
+        if matches!(inner_ty, Ty::Error) || matches!(target_ty, Ty::Error) {
+            Ty::Error
+        } else {
+            target_ty
         }
     }
 
@@ -1655,7 +1592,7 @@ impl InferCtx<'_> {
     /// `expr READ T` returns `Result[T, String]`. The conversion is fallible;
     /// if the value cannot be converted to `T`, an error message is returned.
     ///
-    /// For `READ Json`, adds a `Jsonable` constraint on the input type to
+    /// For `READ Json`, adds an `Into[Json]` constraint on the input type to
     /// catch known-impossible conversions at compile time.
     fn read_conv(
         &mut self,
@@ -1679,9 +1616,13 @@ impl InferCtx<'_> {
             | Ty::Option(_)
             | Ty::Object(_)
             | Ty::Named(_, _) => {}
-            // READ Json requires the input to be Jsonable
+            // READ Json requires the input to be convertible to Json
             Ty::Json => {
-                self.constrain(Constraint::Jsonable(inner_ty, span));
+                self.constrain(Constraint::Into {
+                    from: inner_ty,
+                    to: Ty::Json,
+                    span,
+                });
             }
             Ty::Fn(_, _) => {
                 self.error(TypeError::Mismatch {

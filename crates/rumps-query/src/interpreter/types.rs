@@ -245,7 +245,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
 
             // T -> Json (jsonify anything that can be serialized)
-            // Type checker guarantees Jsonable constraint.
+            // Type checker guarantees Into[Json] constraint.
             (_, TypeId::JSON) => Ok(Value::Json(self.jsonify(val))),
 
             // String -> FilePath

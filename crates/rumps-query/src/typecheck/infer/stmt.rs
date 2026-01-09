@@ -377,10 +377,11 @@ impl InferCtx<'_> {
 
             tp.constraints.iter().for_each(|c| {
                 // Resolve element/inner type for Iterable[T] or Fallible[T]
-                // The inner type can be a type parameter or a concrete type
+                // The inner/target type for parameterized constraints
                 let elem_ty = match c {
                     ParamConstraint::Iterable(ty_id)
-                    | ParamConstraint::Fallible(ty_id) => {
+                    | ParamConstraint::Fallible(ty_id)
+                    | ParamConstraint::Into(ty_id) => {
                         Some(self.ast_type_to_ty(*ty_id, &type_param_subst))
                     }
                     _ => None,
@@ -391,12 +392,6 @@ impl InferCtx<'_> {
                 let constraint = match c {
                     ParamConstraint::Numeric => {
                         Constraint::Numeric(ty.clone(), span)
-                    }
-                    ParamConstraint::Stringable => {
-                        Constraint::Stringable(ty.clone(), span)
-                    }
-                    ParamConstraint::Jsonable => {
-                        Constraint::Jsonable(ty.clone(), span)
                     }
                     ParamConstraint::Subscriptable => {
                         Constraint::Subscriptable(ty.clone(), span)
@@ -425,6 +420,15 @@ impl InferCtx<'_> {
                         Constraint::Fallible {
                             ty: ty.clone(),
                             inner,
+                            span,
+                        }
+                    }
+                    ParamConstraint::Into(_) => {
+                        let to =
+                            elem_ty.clone().unwrap_or_else(|| self.fresh());
+                        Constraint::Into {
+                            from: ty.clone(),
+                            to,
                             span,
                         }
                     }
@@ -719,21 +723,29 @@ impl InferCtx<'_> {
     /// Infer types for a `WRITE` statement or expression.
     ///
     /// Type-checks the expression and adds constraints based on format and target:
-    /// - `Stringable` for default format
-    /// - `Jsonable` for JSON format
+    /// - `Into[String]` for default format
+    /// - `Into[Json]` for JSON format
     /// - `FilePath | String` for file target path
     pub(super) fn write(&mut self, output: &WriteExpr, span: Span) {
         let expr_ty = self.expr(output.expr);
 
-        // Format constraint
+        // Format constraint: must be convertible to target format
         match output.format {
             OutputFormat::Default => {
-                // All types are stringable
-                self.constrain(Constraint::Stringable(expr_ty, span));
+                // Must be convertible to String
+                self.constrain(Constraint::Into {
+                    from: expr_ty,
+                    to: Ty::String,
+                    span,
+                });
             }
             OutputFormat::Json => {
-                // Must be JSON-convertible (not closures, etc.)
-                self.constrain(Constraint::Jsonable(expr_ty, span));
+                // Must be convertible to Json
+                self.constrain(Constraint::Into {
+                    from: expr_ty,
+                    to: Ty::Json,
+                    span,
+                });
             }
         }
 

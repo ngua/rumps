@@ -13,16 +13,16 @@ FUN add-numeric[T: Numeric](a: T, b: T) -> T {
 WRITE add-numeric(1, 2)       ; 3
 WRITE add-numeric(1.5, 2.5)   ; 4.0
 
-; Stringable constraint: `T` can be converted to `String`
-FUN to-str[T: Stringable](x: T) -> String {
+; Into constraint: `T` can be converted to `String`
+FUN to-str[T: Into[String]](x: T) -> String {
   x AS String
 }
 
 WRITE to-str(42)        ; "42"
 WRITE to-str(true)      ; "true"
 
-; Jsonable constraint: `T` can be serialized to `Json`
-FUN to-json[T: Jsonable](x: T) -> Json {
+; Into constraint: `T` can be serialized to `Json`
+FUN to-json[T: Into[Json]](x: T) -> Json {
   x AS Json
 }
 
@@ -33,7 +33,7 @@ WRITE to-json({a: 1, b: 2}) AS String   ; {"a":1,"b":2}
 ; ============================================================================
 
 ; Multiple constraints with `+`
-FUN numeric-to-str[T: Numeric + Stringable](x: T) -> String {
+FUN numeric-to-str[T: Numeric + Into[String]](x: T) -> String {
   (x + x) AS String
 }
 

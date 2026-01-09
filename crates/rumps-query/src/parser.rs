@@ -2696,54 +2696,66 @@ impl Parser {
 
     /// Parse a user-facing constraint name.
     ///
-    /// Recognizes: `Numeric`, `Stringable`, `Jsonable`, `Subscriptable`,
-    /// `Storable`, `Iterable[T]`, `Monoid`, `BitLike`, `Fallible[T]`.
+    /// Recognizes: `Numeric`, `Subscriptable`, `Storable`, `Iterable[T]`,
+    /// `Monoid`, `BitLike`, `Fallible[T]`, `Into[T]`.
     fn constraint(
     ) -> impl chumsky::Parser<Token, cst::ParamConstraint, Error = ParseErr> + Clone
     {
-        // Inner type for HKT constraints: `[T]` or `[Int]` etc.
-        // Supports simple named types only (no function types, tuples, etc.)
-        let inner_type = just(Token::LBracket)
-            .ignore_then(Self::type_expr_atom())
+        // Type args inside brackets: `[T]`, `[T, U]`, etc.
+        let type_args = just(Token::LBracket)
+            .ignore_then(
+                Self::type_expr_atom()
+                    .separated_by(just(Token::Comma))
+                    .at_least(1),
+            )
             .then_ignore(just(Token::RBracket));
 
         select! { Token::Ident(s) => s }
-            .then(inner_type.or_not())
-            .try_map(|(name, inner), span| match name.as_str() {
-                "Numeric" => Ok(cst::ParamConstraint::Numeric),
-                "Stringable" => Ok(cst::ParamConstraint::Stringable),
-                "Jsonable" => Ok(cst::ParamConstraint::Jsonable),
-                "Subscriptable" => Ok(cst::ParamConstraint::Subscriptable),
-                "Storable" => Ok(cst::ParamConstraint::Storable),
-                // HKT-style constraints; require explicit type (type param or concrete)
-                "Iterable" => inner.map_or_else(
-                    || {
-                        Err(Simple::custom(
-                            span,
-                            "`Iterable` requires a type argument; use `Iterable[T]`",
-                        ))
-                    },
-                    |ty| Ok(cst::ParamConstraint::Iterable(ty)),
-                ),
-                "Monoid" => Ok(cst::ParamConstraint::Monoid),
-                "BitLike" => Ok(cst::ParamConstraint::BitLike),
-                "Fallible" => inner.map_or_else(
-                    || {
-                        Err(Simple::custom(
-                            span,
-                            "`Fallible` requires a type argument; use `Fallible[T]`",
-                        ))
-                    },
-                    |ty| Ok(cst::ParamConstraint::Fallible(ty)),
-                ),
-                _ => Err(Simple::custom(
-                    span,
-                    format!(
-                        "unknown constraint `{name}`; valid constraints are: \
-                         Numeric, Stringable, Jsonable, Subscriptable, \
-                         Storable, Iterable[T], Monoid, BitLike, Fallible[T]"
+            .then(type_args.or_not())
+            .try_map(|(name, args), span| {
+                let args = args.unwrap_or_default();
+                match name.as_str() {
+                    "Numeric" => Ok(cst::ParamConstraint::Numeric),
+                    "Subscriptable" => Ok(cst::ParamConstraint::Subscriptable),
+                    "Storable" => Ok(cst::ParamConstraint::Storable),
+                    "Monoid" => Ok(cst::ParamConstraint::Monoid),
+                    "BitLike" => Ok(cst::ParamConstraint::BitLike),
+                    "Iterable" => args.into_iter().next().map_or_else(
+                        || {
+                            Err(Simple::custom(
+                                span,
+                                "`Iterable` requires a type argument; use `Iterable[T]`",
+                            ))
+                        },
+                        |ty| Ok(cst::ParamConstraint::Iterable(ty)),
                     ),
-                )),
+                    "Fallible" => args.into_iter().next().map_or_else(
+                        || {
+                            Err(Simple::custom(
+                                span,
+                                "`Fallible` requires a type argument; use `Fallible[T]`",
+                            ))
+                        },
+                        |ty| Ok(cst::ParamConstraint::Fallible(ty)),
+                    ),
+                    "Into" => args.into_iter().next().map_or_else(
+                        || {
+                            Err(Simple::custom(
+                                span,
+                                "`Into` requires a type argument; use `Into[T]`",
+                            ))
+                        },
+                        |ty| Ok(cst::ParamConstraint::Into(ty)),
+                    ),
+                    _ => Err(Simple::custom(
+                        span,
+                        format!(
+                            "unknown constraint `{name}`; valid constraints are: \
+                             Numeric, Subscriptable, Storable, Iterable[T], \
+                             Monoid, BitLike, Fallible[T], Into[T]"
+                        ),
+                    )),
+                }
             })
     }
 

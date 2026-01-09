@@ -658,8 +658,8 @@ impl<'a> InferCtx<'a> {
     /// 1. `Eq` constraints via unification
     /// 2. `Numeric` constraints (must resolve to `Int` or `Float`)
     /// 3. `Callable` constraints (callee must be `Fn` type)
-    /// 4. `Stringable` constraints (always satisfied; all types stringify)
-    /// 5. `Jsonable` constraints (rejects `Fn` types)
+    /// 4. `Into[String]` constraints (rejects `Fn` types)
+    /// 5. `Into[Json]` constraints (rejects `Fn` types)
     /// 6. `Subscript` constraints (must be `Bool | Int | Float | Char | String | Json`)
     /// 7. `Storable` constraints (must be `Bool | Int | Float | Char | String | Json`)
     /// 8. `Fallible` constraints (must be `Option[T]` or `Result[T, E]`; third pass)
@@ -672,7 +672,7 @@ impl<'a> InferCtx<'a> {
 
         // First pass: process Eq, Callable, HasField, Iterable, Indexable to
         // build substitution. These constraints generate type bindings that
-        // other constraints (Numeric, Stringable, etc.) depend on.
+        // other constraints (Numeric, Into[String], etc.) depend on.
         constraints.iter().for_each(|c| match c {
             Constraint::Eq(t1, t2, span) => {
                 let t1 = t1.apply(&subst);
@@ -740,21 +740,14 @@ impl<'a> InferCtx<'a> {
                 | Constraint::HasField { .. }
                 | Constraint::Iterable { .. }
                 | Constraint::Indexable { .. }
-                | Constraint::Fallible { .. } => {
+                | Constraint::Fallible { .. }
+                | Constraint::Into { .. } => {
                     // Eq/Callable/HasField/Iterable/Indexable: already processed in first pass
-                    // Fallible: processed in third pass
+                    // Fallible/Into: processed in third pass
                 }
 
                 Constraint::Numeric(ty, span) => {
                     self.check_numeric(&ty.apply(&subst), *span);
-                }
-
-                Constraint::Stringable(ty, span) => {
-                    self.check_stringable(&ty.apply(&subst), *span);
-                }
-
-                Constraint::Jsonable(ty, span) => {
-                    self.check_jsonable(&ty.apply(&subst), *span);
                 }
 
                 Constraint::Subscriptable(ty, span) => {
@@ -775,8 +768,8 @@ impl<'a> InferCtx<'a> {
             }
         });
 
-        // Third pass: final check for Fallible and Iterable constraints now that
-        // Callable has resolved all type variables through argument unification.
+        // Third pass: final check for Fallible, Iterable, and Into constraints now
+        // that Callable has resolved all type variables through argument unification.
         // This ensures constraint violations are caught even when the constrained
         // type parameter is unified with a concrete type via function call.
         constraints.iter().for_each(|c| match c {
@@ -789,6 +782,11 @@ impl<'a> InferCtx<'a> {
                 let coll = coll.apply(&subst);
                 let elem = elem.apply(&subst);
                 self.check_iterable(&coll, &elem, *span, &mut subst);
+            }
+            Constraint::Into { from, to, span } => {
+                let from = from.apply(&subst);
+                let to = to.apply(&subst);
+                self.check_into(&from, &to, *span);
             }
             _ => {}
         });
@@ -906,69 +904,6 @@ impl<'a> InferCtx<'a> {
         }
     }
 
-    /// Check that a type can be converted to JSON.
-    ///
-    /// Rejects function types (closures, named functions, module functions).
-    fn check_jsonable(&mut self, ty: &Ty, span: Span) {
-        match ty {
-            // Primitives are JSON-serializable
-            Ty::Bool
-            | Ty::Int
-            | Ty::Word
-            | Ty::Float
-            | Ty::Char
-            | Ty::String
-            | Ty::Unit
-            | Ty::Json => {}
-
-            // Compound types: recursively check
-            Ty::Array(elem) => self.check_jsonable(elem, span),
-            Ty::Option(inner) => self.check_jsonable(inner, span),
-            Ty::Result(ok, err) => {
-                self.check_jsonable(ok, span);
-                self.check_jsonable(err, span);
-            }
-            Ty::Map(k, v) => {
-                self.check_jsonable(k, span);
-                self.check_jsonable(v, span);
-            }
-            Ty::Tuple(elems) => {
-                elems.iter().for_each(|e| self.check_jsonable(e, span));
-            }
-            Ty::Object(fields) => {
-                fields.values().for_each(|t| self.check_jsonable(t, span));
-            }
-            Ty::Union(members) => {
-                members.iter().for_each(|m| self.check_jsonable(m, span));
-            }
-            Ty::Named(_, args) => {
-                args.iter().for_each(|a| self.check_jsonable(a, span));
-            }
-
-            // Functions, regex, and refs cannot be serialized to JSON
-            Ty::Fn(_, _) | Ty::Regex | Ty::Local | Ty::Global => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Jsonable,
-                    ty.clone(),
-                    span,
-                ));
-            }
-
-            // Deferred types
-            Ty::Var(_) | Ty::Unknown | Ty::Error => {}
-
-            // Range, Time, Ordering, DataStatus, FilePath, Path,
-            // RuntimeError : technically not JSON-native but we allow conversion
-            Ty::Range
-            | Ty::Time
-            | Ty::Ordering
-            | Ty::DataStatus
-            | Ty::FilePath
-            | Ty::Path
-            | Ty::RuntimeError => {}
-        }
-    }
-
     /// Check that a type can be used as a database subscript key.
     ///
     /// Valid types: `Bool`, `Int`, `Float`, `Char`, `String`, `Json`, or the
@@ -1049,28 +984,156 @@ impl<'a> InferCtx<'a> {
         }
     }
 
-    /// Check that a type is stringable (can be converted to a display string).
+    /// Check that a type can be converted to another type via `Into[From, To]`.
     ///
-    /// Rejects function types (closures, named functions, module functions).
-    /// All other types can be stringified for display.
-    fn check_stringable(&mut self, ty: &Ty, span: Span) {
-        match ty {
-            // Functions cannot be stringified
-            Ty::Fn(_, _) => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Stringable,
-                    ty.clone(),
+    /// This encodes all valid `AS` cast conversions:
+    /// - `T AS String`: all non-function types
+    /// - `T AS Json`: all JSON-serializable types (no functions, regex, refs)
+    /// - `Int AS Float`, `Float AS Int`: numeric coercions
+    /// - `Word AS Int`, `Word AS Float`: word widening
+    /// - `Bool AS Int`, `Int AS Bool`: boolean/int conversion
+    /// - `DataStatus AS Int`: variant index
+    /// - `String AS FilePath`, `Path AS FilePath`: path conversions
+    /// - `Storable AS T` (where `T` is a `Storable` member)
+    /// - Same type to itself
+    fn check_into(&mut self, from: &Ty, to: &Ty, span: Span) {
+        // Deferred types: cannot check yet
+        match (from, to) {
+            (Ty::Var(_), _) | (_, Ty::Var(_)) => {}
+            (Ty::Error, _) | (_, Ty::Error) => {}
+            (Ty::Unknown, _) | (_, Ty::Unknown) => {}
+
+            // Same type is always valid
+            (a, b) if a == b => {}
+
+            // Converting to String
+            //
+            // Functions cannot be stringified, everything else can
+            (Ty::Fn(_, _), Ty::String) => {
+                self.error(TypeError::InvalidCast {
+                    from: from.clone(),
+                    to: to.clone(),
                     span,
-                ));
+                });
             }
-            // Deferred types
-            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-            // Union: all members must be stringable
-            Ty::Union(members) => {
-                members.iter().for_each(|m| self.check_stringable(m, span));
+            (Ty::Union(members), Ty::String) => {
+                members
+                    .iter()
+                    .for_each(|m| self.check_into(m, &Ty::String, span));
             }
-            // All other types are stringable
-            _ => {}
+            (_, Ty::String) => {
+                // All other types can be converted to String
+            }
+
+            // Converting to Json
+            //
+            // Functions, regex, and refs cannot be serialized
+            (Ty::Fn(_, _), Ty::Json)
+            | (Ty::Regex, Ty::Json)
+            | (Ty::Local, Ty::Json)
+            | (Ty::Global, Ty::Json) => {
+                self.error(TypeError::InvalidCast {
+                    from: from.clone(),
+                    to: to.clone(),
+                    span,
+                });
+            }
+            // Compound types: recursively check elements
+            (Ty::Array(elem), Ty::Json) => {
+                self.check_into(elem, &Ty::Json, span)
+            }
+            (Ty::Option(inner), Ty::Json) => {
+                self.check_into(inner, &Ty::Json, span)
+            }
+            (Ty::Result(ok, err), Ty::Json) => {
+                self.check_into(ok, &Ty::Json, span);
+                self.check_into(err, &Ty::Json, span);
+            }
+            (Ty::Map(k, v), Ty::Json) => {
+                self.check_into(k, &Ty::Json, span);
+                self.check_into(v, &Ty::Json, span);
+            }
+            (Ty::Tuple(elems), Ty::Json) => {
+                elems
+                    .iter()
+                    .for_each(|e| self.check_into(e, &Ty::Json, span));
+            }
+            (Ty::Object(fields), Ty::Json) => {
+                fields
+                    .values()
+                    .for_each(|t| self.check_into(t, &Ty::Json, span));
+            }
+            (Ty::Union(members), Ty::Json) => {
+                members
+                    .iter()
+                    .for_each(|m| self.check_into(m, &Ty::Json, span));
+            }
+            (Ty::Named(_, args), Ty::Json) => {
+                args.iter()
+                    .for_each(|a| self.check_into(a, &Ty::Json, span));
+            }
+            (_, Ty::Json) => {
+                // Primitives and other types allowed
+            }
+
+            // Numeric coercions
+            (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {}
+            (Ty::Word, Ty::Int) | (Ty::Word, Ty::Float) => {}
+            (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => {}
+
+            // Special conversions
+            (Ty::DataStatus, Ty::Int) => {}
+            (Ty::String, Ty::FilePath) => {}
+            (Ty::Path, Ty::FilePath) => {}
+            (Ty::Named(id, _), Ty::FilePath) if *id == crate::TypeId::PATH => {}
+
+            // Storable to member type
+            (Ty::Named(id, _), target) if *id == crate::TypeId::STORABLE => {
+                if !Ty::STORABLE_MEMBERS.contains(target) {
+                    self.error(TypeError::InvalidCast {
+                        from: from.clone(),
+                        to: to.clone(),
+                        span,
+                    });
+                }
+            }
+
+            // Member to union type (e.g., Int AS Storable)
+            (member, Ty::Named(id, _))
+                if *id == crate::TypeId::STORABLE
+                    || *id == crate::TypeId::SCALAR =>
+            {
+                // For Storable/Scalar, check that source is a member
+                let is_member = if *id == crate::TypeId::STORABLE {
+                    Ty::STORABLE_MEMBERS.contains(member)
+                } else {
+                    Ty::SCALAR_MEMBERS.contains(member)
+                };
+                if !is_member {
+                    self.error(TypeError::InvalidCast {
+                        from: from.clone(),
+                        to: to.clone(),
+                        span,
+                    });
+                }
+            }
+
+            // Union handling
+            (Ty::Union(members), target) => {
+                // All union members must be convertible to target
+                members
+                    .iter()
+                    .for_each(|m| self.check_into(m, target, span));
+            }
+
+            // Invalid conversion
+            _ => {
+                self.error(TypeError::InvalidCast {
+                    from: from.clone(),
+                    to: to.clone(),
+                    span,
+                });
+            }
         }
     }
 

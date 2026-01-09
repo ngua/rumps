@@ -52,8 +52,6 @@ fn lower_constraint(
 ) -> Result<ast::ParamConstraint> {
     Ok(match c {
         cst::ParamConstraint::Numeric => ast::ParamConstraint::Numeric,
-        cst::ParamConstraint::Stringable => ast::ParamConstraint::Stringable,
-        cst::ParamConstraint::Jsonable => ast::ParamConstraint::Jsonable,
         cst::ParamConstraint::Subscriptable => {
             ast::ParamConstraint::Subscriptable
         }
@@ -65,6 +63,9 @@ fn lower_constraint(
         cst::ParamConstraint::BitLike => ast::ParamConstraint::BitLike,
         cst::ParamConstraint::Fallible(inner) => {
             ast::ParamConstraint::Fallible(lower_type_expr(ast, inner)?)
+        }
+        cst::ParamConstraint::Into(target) => {
+            ast::ParamConstraint::Into(lower_type_expr(ast, target)?)
         }
     })
 }

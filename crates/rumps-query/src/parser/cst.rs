@@ -57,10 +57,6 @@ use crate::Span;
 pub(crate) enum ParamConstraint {
     /// Type is `Int` or `Float`.
     Numeric,
-    /// Type can be converted to string.
-    Stringable,
-    /// Type can be serialized to JSON.
-    Jsonable,
     /// Type can be used as a DB subscript key.
     Subscriptable,
     /// Type can be stored in the database.
@@ -83,6 +79,11 @@ pub(crate) enum ParamConstraint {
     /// The inner type expression can be a type parameter name (`Fallible[T]`)
     /// or a concrete type (`Fallible[Int]`).
     Fallible(TypeExpr),
+    /// Type can be converted to another type: `Into[Target]`.
+    ///
+    /// The constrained type parameter is the source; the argument is the target.
+    /// For example, `T: Into[String]` means `T` can be converted to `String`.
+    Into(TypeExpr),
 }
 
 /// A type parameter with optional constraints.
@@ -322,7 +323,7 @@ pub(crate) enum ExprKind {
 
     /// Regex match: `expr MATCHES pattern`.
     ///
-    /// Returns `Bool`. The left operand must be `Stringable`.
+    /// Returns `Bool`. The left operand must be `Into[String]`.
     Matches(Box<Expr>, Box<Expr>),
 
     /// Catch expression: `expr CATCH handler`.
@@ -339,7 +340,7 @@ pub(crate) enum ExprKind {
 
     /// Raise a runtime error: `RAISE expr`.
     ///
-    /// Evaluates `expr` (must be `Stringable`) and raises a runtime error.
+    /// Evaluates `expr` (must be `Into[String]`) and raises a runtime error.
     /// Never returns; can unify with any expected type.
     Raise(Box<Expr>),
 

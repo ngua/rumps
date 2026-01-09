@@ -13,8 +13,6 @@ use std::fmt;
 pub(crate) enum ConstraintKind {
     /// Type must be `Int` or `Float`.
     Numeric,
-    /// Type must be serializable to JSON.
-    Jsonable,
     /// Type must be usable as a database subscript key.
     Subscriptable,
     /// Type must be storable in the database.
@@ -25,21 +23,17 @@ pub(crate) enum ConstraintKind {
     Indexable,
     /// Type must support bitwise operations (`&`, `|`, `<<`, `>>`).
     BitLike,
-    /// Type must be convertible to a string for display.
-    Stringable,
 }
 
 impl fmt::Display for ConstraintKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Numeric => write!(f, "Numeric"),
-            Self::Jsonable => write!(f, "Jsonable"),
             Self::Subscriptable => write!(f, "Subscriptable"),
             Self::Storable => write!(f, "Storable"),
             Self::Monoid => write!(f, "Monoid"),
             Self::Indexable => write!(f, "Indexable"),
             Self::BitLike => write!(f, "BitLike"),
-            Self::Stringable => write!(f, "Stringable"),
         }
     }
 }
@@ -50,9 +44,6 @@ impl ConstraintKind {
         match self {
             Self::Numeric => {
                 Some("numeric types are `Int`, `Word`, and `Float`")
-            }
-            Self::Jsonable => {
-                Some("closures and functions cannot be converted to JSON")
             }
             Self::Subscriptable => Some(
                 "subscript keys must be `Bool`, `Int`, `Float`, `Char`, \
@@ -70,9 +61,6 @@ impl ConstraintKind {
             }
             Self::BitLike => {
                 Some("bitwise types are `Bool`, `Int`, and `Word`")
-            }
-            Self::Stringable => {
-                Some("functions and closures cannot be converted to strings")
             }
         }
     }
@@ -282,7 +270,7 @@ pub(crate) enum TypeError {
         span: Span,
     },
 
-    /// Type does not satisfy a constraint (Numeric, Jsonable, etc.).
+    /// Type does not satisfy a constraint (Numeric, Into[Json], etc.).
     #[error("type `{1}` does not satisfy `{0}` constraint")]
     UnsatisfiedConstraint(ConstraintKind, Ty, Span),
 

@@ -13,7 +13,7 @@ FUN f[T](x: T) -> String { ... }  ; T is unconstrained
 This plan adds constraint syntax:
 
 ```rumps
-FUN f[T: Jsonable + Stringable, U](x: T, y: U) -> Json { ... }
+FUN f[T: Into[Json], U](x: T, y: U) -> Json { ... }
 ```
 
 ## Design Decisions
@@ -25,26 +25,29 @@ The typechecker has the following internal constraints (defined at `crates/rumps
 | Constraint    | Description                           | Expose?   | Rationale                                        |
 |---------------|---------------------------------------|-----------|--------------------------------------------------|
 | `Numeric`     | Type is `Int` or `Float`              | **Yes**   | Useful for generic numeric functions             |
-| `Stringable`  | Type can be converted to string       | **Yes**   | Useful for formatting/display functions          |
-| `Jsonable`    | Type can be serialized to JSON        | **Yes**   | Useful for serialization functions               |
+| `Into[U]`     | Type can be converted to `U`          | **Yes**   | Useful for formatting/serialization functions    |
 | `Subscriptable` | Type can be a DB subscript key      | **Yes**   | Useful for DB abstraction functions              |
 | `Storable`    | Type can be stored in DB              | **Yes**   | Useful for DB abstraction functions              |
-| `Iterable`    | Type is `Array[T]` or `Range`         | **Yes**   | Useful for generic collection functions          |
-| `Unwrappable` | Type is `Option[T]` or `Result[T, E]` | **Maybe** | Less common use case                             |
+| `Iterable[T]` | Type is `Array[T]` or `Range`         | **Yes**   | Useful for generic collection functions          |
+| `Fallible[T]` | Type is `Option[T]` or `Result[T, E]` | **Yes**   | Useful for error handling abstractions           |
 | `Eq`          | Two types must be equal               | **No**    | Internal unification; like Haskell's `~`         |
 | `Callable`    | Type is callable                      | **No**    | Internal; hard to express arity/signature        |
 | `HasField`    | Type has a specific field             | **No**    | Internal; could expose later as row polymorphism |
 
 ### Syntax
 
-Use the `T: Constraint1 + Constraint2` syntax, familiar from Rust:
+Use the `T: Constraint` syntax, familiar from Rust. Parameterized constraints like `Into[U]`,
+`Iterable[T]`, and `Fallible[T]` take a type argument:
 
 ```rumps
 ; Single constraint
 FUN f[T: Numeric](x: T, y: T) -> T { x + y }
 
-; Multiple constraints
-FUN to-json-string[T: Jsonable + Stringable](x: T) -> String { ... }
+; Into constraint (conversion)
+FUN to-str[T: Into[String]](x: T) -> String { x AS String }
+
+; Multiple constraints with `+`
+FUN numeric-to-str[T: Numeric + Into[String]](x: T) -> String { (x + x) AS String }
 
 ; Mixed constrained and unconstrained
 FUN pair[T: Storable, U](x: T, y: U) -> (T, U) { (x, y) }
@@ -62,18 +65,18 @@ Currently type params are `SmallVec<[String; 2]>`. Change to include constraints
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TypeParam {
     pub name: String,
-    pub constraints: SmallVec<[Constraint; 2]>,
+    pub constraints: SmallVec<[ParamConstraint; 2]>,
 }
 
 // User-facing constraint enum (subset of internal Constraint)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ParamConstraint {
     Numeric,
-    Stringable,
-    Jsonable,
     Subscriptable,
     Storable,
-    Iterable,
+    Iterable(AstTypeExprId),
+    Fallible(AstTypeExprId),
+    Into(AstTypeExprId),   // Target type; constrained param is the source
 }
 ```
 
@@ -109,31 +112,9 @@ let type_params = just(Token::LBracket)
     // ...
 ```
 
-New pattern:
-```rust
-let constraint = Self::ident().try_map(|name, span| {
-    match name.as_str() {
-        "Numeric" => Ok(ParamConstraint::Numeric),
-        "Stringable" => Ok(ParamConstraint::Stringable),
-        "Jsonable" => Ok(ParamConstraint::Jsonable),
-        "Subscriptable" => Ok(ParamConstraint::Subscriptable),
-        "Storable" => Ok(ParamConstraint::Storable),
-        "Iterable" => Ok(ParamConstraint::Iterable),
-        _ => Err(Simple::custom(span, format!("unknown constraint: {}", name))),
-    }
-});
-
-let constraint_list = constraint
-    .separated_by(just(Token::Plus))
-    .at_least(1);
-
-let type_param = Self::ident()
-    .then(just(Token::Colon).ignore_then(constraint_list).or_not())
-    .map(|(name, constraints)| TypeParam {
-        name,
-        constraints: constraints.unwrap_or_default().into(),
-    });
-```
+New pattern: parse simple constraints (e.g., `Numeric`, `Storable`) and parameterized
+constraints (e.g., `Iterable[T]`, `Fallible[T]`, `Into[U]`). Simple constraints have no
+arguments, parameterized constraints have a type argument in brackets.
 
 **Files**: `crates/rumps-query/src/parser.rs`
 
@@ -168,34 +149,8 @@ let type_param_subst: HashMap<_, _> = type_params
     .collect();
 ```
 
-New pattern:
-```rust
-let type_param_subst: HashMap<_, _> = type_params
-    .iter()
-    .map(|tp| {
-        let id = self.env.intern(&tp.name);
-        let tv = self.fresh();
-
-        // Emit constraints for this type variable
-        tp.constraints.iter().for_each(|c| {
-            let constraint = match c {
-                ParamConstraint::Numeric => Constraint::Numeric(tv.clone(), span),
-                ParamConstraint::Stringable => Constraint::Stringable(tv.clone(), span),
-                ParamConstraint::Jsonable => Constraint::Jsonable(tv.clone(), span),
-                ParamConstraint::Subscriptable => Constraint::Subscriptable(tv.clone(), span),
-                ParamConstraint::Storable => Constraint::Storable(tv.clone(), span),
-                ParamConstraint::Iterable => {
-                    let elem = self.fresh();
-                    Constraint::Iterable { coll: tv.clone(), elem, span }
-                }
-            };
-            self.constrain(constraint);
-        });
-
-        (id, tv)
-    })
-    .collect();
-```
+New pattern: emit constraints for each type parameter based on the constraint kind.
+For `T: Into[U]`, emit a `Constraint::Into { from: T, to: U, span }` constraint.
 
 Same pattern needed in:
 - `crates/rumps-query/src/typecheck/infer/stmt.rs` (for `FUN`)
@@ -252,7 +207,6 @@ The `HasField` constraint says "this type has a field named X of type Y."
 
 1. **Row polymorphism**: Expose `HasField` with syntax like `T: { field: Type }`
 2. **Custom constraints**: Allow users to define their own constraint aliases
-3. **Constraint implications**: `Numeric` implies `Stringable`, etc.
 
 ## Example Use Cases
 
@@ -263,7 +217,7 @@ FUN sum[T: Numeric](arr: Array[T]) -> T {
 }
 
 ; Generic serialize and log
-FUN log-json[T: Jsonable + Stringable](label: String, val: T) {
+FUN log-json[T: Into[String] + Into[Json]](label: String, val: T) {
     @OUTPUT label ++ ": " ++ (val AS Json)
 }
 
@@ -272,8 +226,8 @@ FUN cache-get[K: Subscriptable, V: Storable](key: K) -> Option[V] {
     @GET cache(key)
 }
 
-; Generic collection transform
-FUN map-to-string[T: Stringable, C: Iterable](coll: C) -> Array[String] {
+; Generic collection transform (elements must be convertible to String)
+FUN map-to-string[T: Into[String], C: Iterable[T]](coll: C) -> Array[String] {
     Array.map(x => x AS String, coll)
 }
 ```
