@@ -115,13 +115,6 @@ LET res6 = "-42" READ Word
 WRITE res6
 ; Expected: Result.Err("invalid unsigned integer: -42")
 
-; === Unary negation (special case: coerces to Int) ===
-
-LET w42: Word = 42
-LET neg = -w42
-WRITE neg
-; Expected: -42 (Int, not Word)
-
 ; === Division (Float operands required) ===
 
 LET f10 = w10 AS Float

@@ -54,8 +54,12 @@ pub(crate) fn check(
     runtime_env: &Environment,
     arena: &ValueArena,
     strings: StringInterner,
-) -> crate::Result<(Vec<regex::Regex>, HashMap<ExprId, u32>, HashMap<ExprId, Ty>)>
-{
+) -> crate::Result<(
+    Vec<regex::Regex>,
+    HashMap<ExprId, u32>,
+    HashMap<ExprId, Ty>,
+    HashMap<ExprId, Ty>,
+)> {
     let mut ctx =
         InferCtx::new(ast, registry, type_exprs, runtime_env, strings);
 

@@ -680,14 +680,30 @@ pub(crate) enum Intrinsic {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Literal {
     Bool(bool),
-    Int(i64),
-    Float(f64),
+    /// Polymorphic numeric literal; concrete type determined by inference.
+    ///
+    /// During type checking, numeric literals get a fresh type variable with
+    /// a `Numeric` constraint. The resolved type (`Int`, `Word`, or `Float`)
+    /// determines how the interpreter converts this value.
+    Numeric(NumericLit),
     Char(char),
     String(String),
     /// JSON `null`; only valid in JSON contexts (arrays, quoted-key objects).
     Null,
     /// The unit value `Unit`.
     Unit,
+}
+
+/// A polymorphic numeric literal.
+///
+/// Stores the original parsed form (integer or float) so the interpreter
+/// can convert to the type-checker-determined concrete type.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum NumericLit {
+    /// Integer literal (e.g., `42`, `-10`).
+    Int(i64),
+    /// Float literal (e.g., `3.14`, `-2.5`).
+    Float(f64),
 }
 
 /// An expression node.

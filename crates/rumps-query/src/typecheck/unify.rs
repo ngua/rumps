@@ -670,6 +670,12 @@ impl<'a> InferCtx<'a> {
         let constraints = self.take_constraints();
         let mut subst = Subst::empty();
 
+        // Get type variables from integer literals for defaulting to Int.
+        // These have NO constraint; they can unify with any type. After solving,
+        // unresolved ones default to Int. We clone (not take) so numeric_vars
+        // remains available for error formatting (displaying vars as Int).
+        let numeric_vars = self.clone_numeric_vars();
+
         // First pass: process Eq, Callable, HasField, Iterable, Indexable to
         // build substitution. These constraints generate type bindings that
         // other constraints (Numeric, Into[String], etc.) depend on.
@@ -732,6 +738,21 @@ impl<'a> InferCtx<'a> {
             _ => {}
         });
 
+        // Default unresolved numeric type variables to Int after first pass.
+        // This ensures subsequent constraint checks (Numeric, Indexable, etc.)
+        // see concrete types rather than unresolved type variables.
+        // Mimics Haskell's defaulting: `10` becomes `Int` when unconstrained.
+        //
+        // Important: bind the *resolved* type variable, not the original. If the
+        // numeric type var was unified with another var (e.g., `?N -> ?F`), we
+        // must bind `?F -> Int`, not overwrite `?N` (which would lose the link).
+        numeric_vars.iter().for_each(|v| {
+            let resolved = Ty::Var(*v).apply(&subst);
+            if let Ty::Var(root) = resolved {
+                subst.extend(root, Ty::Int);
+            }
+        });
+
         // Second pass: process all other constraints with final substitution
         constraints.iter().for_each(|c| {
             match c {
@@ -769,8 +790,9 @@ impl<'a> InferCtx<'a> {
             }
         });
 
-        // Third pass: final check for Fallible, Iterable, and Into constraints now
-        // that Callable has resolved all type variables through argument unification.
+        // Third pass: final check for Fallible, Iterable, Indexable, and Into
+        // constraints now that numeric type variables have been defaulted and
+        // Callable has resolved all type variables through argument unification.
         // This ensures constraint violations are caught even when the constrained
         // type parameter is unified with a concrete type via function call.
         constraints.iter().for_each(|c| match c {
@@ -783,6 +805,17 @@ impl<'a> InferCtx<'a> {
                 let coll = coll.apply(&subst);
                 let elem = elem.apply(&subst);
                 self.check_iterable(&coll, &elem, *span, &mut subst);
+            }
+            Constraint::Indexable {
+                base,
+                idx,
+                elem,
+                span,
+            } => {
+                let base = base.apply(&subst);
+                let idx = idx.apply(&subst);
+                let elem = elem.apply(&subst);
+                self.check_indexable(&base, &idx, &elem, *span, &mut subst);
             }
             Constraint::Into { from, to, span } => {
                 let from = from.apply(&subst);
@@ -804,14 +837,62 @@ impl<'a> InferCtx<'a> {
     ///
     /// Type variables remain polymorphic; they satisfy the `Numeric` constraint
     /// as long as they are eventually bound to a numeric type at use sites.
+    ///
+    /// For union types (including named unions like `NumericId = Int | String`),
+    /// the constraint is satisfied if at least ONE member is numeric. This
+    /// allows integer literals to flow into union-typed parameters; the literal
+    /// becomes the numeric member of the union at runtime.
     fn check_numeric(&mut self, ty: &Ty, span: Span) {
         match ty {
             Ty::Int | Ty::Word | Ty::Float => {}
             // Type variables remain polymorphic; caller provides concrete type
             Ty::Var(_) | Ty::Error | Ty::Unknown => {}
             Ty::Union(members) => {
-                // All union members must be numeric
-                members.iter().for_each(|m| self.check_numeric(m, span));
+                // For literals flowing into unions, at least one member must
+                // be numeric. The literal will become that member at runtime.
+                let any_numeric = members
+                    .iter()
+                    .any(|m| matches!(m, Ty::Int | Ty::Word | Ty::Float));
+                if !any_numeric {
+                    self.error(TypeError::UnsatisfiedConstraint(
+                        ConstraintKind::Numeric,
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            }
+            Ty::Named(..) => {
+                // Expand named unions (e.g., `NumericId = Int | String`) and
+                // check if any member is numeric
+                match self.expand_union_members(ty) {
+                    Some(members) => {
+                        let any_numeric = members.iter().any(|m| {
+                            matches!(m, Ty::Int | Ty::Word | Ty::Float)
+                        });
+                        if !any_numeric {
+                            self.error(TypeError::UnsatisfiedConstraint(
+                                ConstraintKind::Numeric,
+                                ty.clone(),
+                                span,
+                            ));
+                        }
+                    }
+                    None => {
+                        // Not a union; expand alias and recurse
+                        match self.expand_alias_fully(ty) {
+                            Some(expanded) => {
+                                self.check_numeric(&expanded, span)
+                            }
+                            None => {
+                                self.error(TypeError::UnsatisfiedConstraint(
+                                    ConstraintKind::Numeric,
+                                    ty.clone(),
+                                    span,
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             _ => {
                 self.error(TypeError::UnsatisfiedConstraint(

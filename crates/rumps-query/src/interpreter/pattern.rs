@@ -182,7 +182,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(Some(vec![(name_id, val_id)]))
             }
             MatchPattern::Literal(lit) => {
-                let lit_val = self.literal(lit);
+                let lit_val = self.pattern_literal(lit, val);
                 Ok(self.values_eq(val, &lit_val).then_some(vec![]))
             }
             MatchPattern::Variant(ty_name, var_name, sub_pats) => {
@@ -414,6 +414,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         match (a, b) {
             (Value::Bool(x), Value::Bool(y)) => x == y,
             (Value::Int(x), Value::Int(y)) => x == y,
+            (Value::Word(x), Value::Word(y)) => x == y,
             (Value::Float(x), Value::Float(y)) => x == y,
             (Value::String(x), Value::String(y)) => x == y,
             (Value::Char(x), Value::Char(y)) => x == y,

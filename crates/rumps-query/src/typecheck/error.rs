@@ -81,6 +81,7 @@ pub(crate) struct TyPrinter<'a> {
     registry: &'a TypeRegistry,
     arena: &'a ValueArena,
     strings: &'a StringInterner,
+    numeric_vars: &'a [TyVar],
 }
 
 impl<'a> TyPrinter<'a> {
@@ -88,16 +89,19 @@ impl<'a> TyPrinter<'a> {
     ///
     /// The `strings` interner should be the one used during type checking
     /// (from `TypeEnv`), as it may contain strings interned after the
-    /// `ValueArena` was created.
+    /// `ValueArena` was created. The `numeric_vars` are type variables from
+    /// integer literals; they display as `Int` (the default) in errors.
     pub(crate) fn new(
         registry: &'a TypeRegistry,
         arena: &'a ValueArena,
         strings: &'a StringInterner,
+        numeric_vars: &'a [TyVar],
     ) -> Self {
         Self {
             registry,
             arena,
             strings,
+            numeric_vars,
         }
     }
 
@@ -108,6 +112,8 @@ impl<'a> TyPrinter<'a> {
 
     fn format_inner(&self, ty: &Ty, namer: &mut TyVarNamer) -> String {
         match ty {
+            // Numeric vars (from integer literals) display as Int (the default)
+            Ty::Var(v) if self.numeric_vars.contains(v) => "Int".to_owned(),
             Ty::Var(v) => namer.name(*v),
             Ty::Bool => "Bool".to_owned(),
             Ty::Int => "Int".to_owned(),

@@ -1,6 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-assertion_line: 37
 description: "; Wrong type for destructuring\nLET (a, b) = 42\n"
 ---
-ERROR: type `Int` is not a tuple
+ERROR: type `(T, U)` does not satisfy `Numeric` constraint

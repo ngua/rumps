@@ -114,9 +114,9 @@ use smallvec::SmallVec;
 
 use crate::ast::{
     Ast, AstTypeExpr, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId,
-    Import, ImportItem, JsonAccessKey, JsonAccessKind, Literal, OutputFormat,
-    OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam, TypePattern,
-    UnOp, WriteExpr,
+    Import, ImportItem, JsonAccessKey, JsonAccessKind, Literal, NumericLit,
+    OutputFormat, OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam,
+    TypePattern, UnOp, WriteExpr,
 };
 use crate::env::Environment;
 use crate::intern::StringId;
@@ -180,6 +180,12 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     ///
     /// Populated during typechecking; used to produce the correct empty value.
     mempty_types: HashMap<ExprId, crate::typecheck::Ty>,
+
+    /// Mapping from numeric literal expression IDs to their resolved types.
+    ///
+    /// Populated during typechecking; used to convert polymorphic numeric
+    /// literals to the correct runtime type (`Int`, `Word`, or `Float`).
+    numeric_types: HashMap<ExprId, crate::typecheck::Ty>,
 }
 
 // Public API
@@ -211,7 +217,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let env = Environment::new();
 
         // Run type checking after resolution
-        let (regex_cache, regex_indices, mempty_types) =
+        let (regex_cache, regex_indices, mempty_types, numeric_types) =
             crate::typecheck::check(
                 ast,
                 stmts,
@@ -232,6 +238,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             regex_cache,
             regex_indices,
             mempty_types,
+            numeric_types,
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -277,6 +284,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             regex_cache: Vec::new(),
             regex_indices: HashMap::new(),
             mempty_types: HashMap::new(),
+            numeric_types: HashMap::new(),
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -294,7 +302,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             .clone();
 
         match expr {
-            Expr::Literal(lit) => Ok(self.literal(&lit)),
+            Expr::Literal(lit) => Ok(self.literal(id, &lit)),
             Expr::Interpolation(parts) => self.interpolation(&parts).await,
             Expr::Var(name) => Ok(self.var(&name, span)),
             Expr::Intrinsic(op, ref rt, val, txn_id) => {
@@ -1061,11 +1069,68 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Convert an AST literal to a runtime value.
-    fn literal(&mut self, lit: &Literal) -> Value {
+    ///
+    /// For numeric literals, looks up the resolved type from the type checker
+    /// to convert to the correct runtime type (`Int`, `Word`, or `Float`).
+    fn literal(&mut self, id: ExprId, lit: &Literal) -> Value {
         match lit {
             Literal::Bool(b) => Value::Bool(*b),
-            Literal::Int(n) => Value::Int(*n),
-            Literal::Float(f) => Value::Float(OrderedFloat(*f)),
+            Literal::Numeric(n) => {
+                // Look up the resolved type from typechecking
+                let ty = self.numeric_types.get(&id);
+                match (n, ty) {
+                    // Integer literals are polymorphic over Int/Word/Float
+                    (NumericLit::Int(v), Some(crate::typecheck::Ty::Int)) => {
+                        Value::Int(*v)
+                    }
+                    (NumericLit::Int(v), Some(crate::typecheck::Ty::Word)) => {
+                        Value::Word(*v as usize)
+                    }
+                    (NumericLit::Int(v), Some(crate::typecheck::Ty::Float)) => {
+                        Value::Float(OrderedFloat(*v as f64))
+                    }
+                    // Float literals are NOT polymorphic; always Float
+                    (NumericLit::Float(v), _) => Value::Float(OrderedFloat(*v)),
+                    // Default integer literal to Int if type not found
+                    (NumericLit::Int(v), _) => Value::Int(*v),
+                }
+            }
+            Literal::Char(c) => Value::Char(*c),
+            Literal::String(s) => Value::String(self.arena.intern(s)),
+            Literal::Null => Value::Json(serde_json::Value::Null),
+            Literal::Unit => Value::Unit,
+        }
+    }
+
+    /// Convert an AST literal to a runtime value for pattern matching.
+    ///
+    /// For numeric literals, infers the type from the scrutinee value being
+    /// matched against. This allows `MATCH w { 10 => ... }` to work when
+    /// `w` is a `Word`.
+    pub(crate) fn pattern_literal(
+        &mut self,
+        lit: &Literal,
+        scrutinee: &Value,
+    ) -> Value {
+        match lit {
+            Literal::Bool(b) => Value::Bool(*b),
+            Literal::Numeric(n) => {
+                // Infer type from the scrutinee being matched.
+                // Integer literals adapt to scrutinee; float literals stay Float.
+                match (n, scrutinee) {
+                    (NumericLit::Int(v), Value::Int(_)) => Value::Int(*v),
+                    (NumericLit::Int(v), Value::Word(_)) => {
+                        Value::Word(*v as usize)
+                    }
+                    (NumericLit::Int(v), Value::Float(_)) => {
+                        Value::Float(OrderedFloat(*v as f64))
+                    }
+                    // Float literals are NOT polymorphic; always Float
+                    (NumericLit::Float(v), _) => Value::Float(OrderedFloat(*v)),
+                    // Default integer literal to its natural type
+                    (NumericLit::Int(v), _) => Value::Int(*v),
+                }
+            }
             Literal::Char(c) => Value::Char(*c),
             Literal::String(s) => Value::String(self.arena.intern(s)),
             Literal::Null => Value::Json(serde_json::Value::Null),

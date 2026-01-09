@@ -12,8 +12,8 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
-    Intrinsic, JsonAccessKey, JsonAccessKind, Literal, MatchArm, ObjectEntry,
-    ParamConstraint, PostfixOp, RefTarget, StmtId, SubscriptElem,
+    Intrinsic, JsonAccessKey, JsonAccessKind, Literal, MatchArm, NumericLit,
+    ObjectEntry, ParamConstraint, PostfixOp, RefTarget, StmtId, SubscriptElem,
     TransactionExpr, TxnId, TypeParam, TypePattern, UnOp, Visibility,
 };
 use crate::env::TxnReq;
@@ -46,7 +46,7 @@ impl InferCtx<'_> {
     fn expr_inner(&mut self, id: ExprId, expr: &Expr, span: Span) -> Ty {
         match expr {
             // Literals
-            Expr::Literal(lit) => self.literal(lit),
+            Expr::Literal(lit) => self.literal(id, lit, span),
 
             // String interpolation: all parts must be Into[String]
             Expr::Interpolation(parts) => self.interpolation(parts, span),
@@ -328,12 +328,74 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer type of a literal.
-    pub(super) fn literal(&self, lit: &Literal) -> Ty {
+    /// Infer type of a literal expression.
+    ///
+    /// Integer literals are polymorphic: they get a fresh type variable
+    /// (WITHOUT a constraint) that can unify with any type. This allows:
+    /// - `d(10)` where `d: Word -> Word` (10 unifies with Word)
+    /// - `[1, "a", true]` (1 unifies with Json via heterogeneous array)
+    ///
+    /// Unresolved integer type variables default to `Int` during constraint
+    /// solving. The `Numeric` constraint is enforced by OPERATORS (like `+`),
+    /// not by the literals themselves.
+    ///
+    /// Float literals are NOT polymorphic; they are always `Float`.
+    ///
+    /// Records the expression ID for integer literals so the interpreter
+    /// can convert them to the correct runtime type.
+    pub(super) fn literal(
+        &mut self,
+        id: ExprId,
+        lit: &Literal,
+        span: Span,
+    ) -> Ty {
         match lit {
             Literal::Bool(_) => Ty::Bool,
-            Literal::Int(_) => Ty::Int,
-            Literal::Float(_) => Ty::Float,
+            Literal::Numeric(NumericLit::Int(_)) => {
+                // Polymorphic integer literal: fresh var with Numeric constraint.
+                // The Numeric constraint prevents unification with incompatible
+                // types (e.g., Tuple in `LET (a, b) = 42`).
+                //
+                // The constraint is checked after solving, allowing the type var
+                // to unify with unions containing numeric members. If it ends up
+                // bound to a non-numeric type, check_numeric will error.
+                //
+                // Note: join_types handles IF/MATCH branches specially, resolving
+                // numeric vars to Int for union creation (avoiding the var being
+                // bound to a sibling branch's type like String).
+                let ty = self.fresh_numeric();
+                self.constrain(Constraint::Numeric(ty.clone(), span));
+                // Record for interpreter to convert to correct runtime type
+                self.numeric_types.insert(id, ty.clone());
+                ty
+            }
+            // Float literals are NOT polymorphic; always Float
+            Literal::Numeric(NumericLit::Float(_)) => Ty::Float,
+            Literal::Char(_) => Ty::Char,
+            Literal::String(_) => Ty::String,
+            Literal::Null => Ty::Json,
+            Literal::Unit => Ty::Unit,
+        }
+    }
+
+    /// Infer type of a literal in a pattern context.
+    ///
+    /// Similar to `literal`, but for patterns where there is no `ExprId`.
+    /// Integer literals are polymorphic; float literals are `Float`.
+    /// The interpreter compares pattern literals against the scrutinee
+    /// directly, so no runtime type conversion is needed.
+    pub(super) fn pattern_literal(&mut self, lit: &Literal, span: Span) -> Ty {
+        match lit {
+            Literal::Bool(_) => Ty::Bool,
+            Literal::Numeric(NumericLit::Int(_)) => {
+                // Polymorphic integer literal in pattern context with Numeric
+                // constraint. Will unify with scrutinee type; constraint ensures
+                // the scrutinee is numeric-compatible.
+                let ty = self.fresh_numeric();
+                self.constrain(Constraint::Numeric(ty.clone(), span));
+                ty
+            }
+            Literal::Numeric(NumericLit::Float(_)) => Ty::Float,
             Literal::Char(_) => Ty::Char,
             Literal::String(_) => Ty::String,
             Literal::Null => Ty::Json,
@@ -467,22 +529,32 @@ impl InferCtx<'_> {
                 ArrayElem::Elem(id) => self.expr(*id),
                 ArrayElem::Spread(id) => {
                     let spread_ty = self.expr(*id);
-                    match spread_ty {
-                        Ty::Array(inner) => *inner,
-                        Ty::Var(_) => {
-                            // Create constraint: spread must be an array
-                            let elem_ty = self.fresh();
-                            self.unify(
-                                spread_ty,
-                                Ty::Array(Box::new(elem_ty.clone())),
-                                span,
-                            );
-                            elem_ty
-                        }
-                        Ty::Error => Ty::Error,
-                        _ => {
-                            self.error(TypeError::NotAnArray(spread_ty, span));
-                            Ty::Error
+                    // Check if spread is a numeric literal var; these cannot
+                    // be arrays, so emit NotAnArray directly with Int (the
+                    // default) to avoid confusing "Numeric constraint" errors.
+                    let is_numeric_var =
+                        matches!(&spread_ty, Ty::Var(v) if self.numeric_vars.contains(v));
+                    if is_numeric_var {
+                        self.error(TypeError::NotAnArray(Ty::Int, span));
+                        Ty::Error
+                    } else {
+                        match spread_ty {
+                            Ty::Array(inner) => *inner,
+                            Ty::Var(_) => {
+                                // Create constraint: spread must be an array
+                                let elem_ty = self.fresh();
+                                self.unify(
+                                    spread_ty,
+                                    Ty::Array(Box::new(elem_ty.clone())),
+                                    span,
+                                );
+                                elem_ty
+                            }
+                            Ty::Error => Ty::Error,
+                            _ => {
+                                self.error(TypeError::NotAnArray(spread_ty, span));
+                                Ty::Error
+                            }
                         }
                     }
                 }
@@ -494,10 +566,36 @@ impl InferCtx<'_> {
             if first_ty == &Ty::Error {
                 Ty::Error
             } else {
-                // Check if all elements can unify with the first
-                let heterogeneous = rest_tys.iter().any(|ty| {
-                    ty != &Ty::Error && !self.types_compatible(first_ty, ty)
-                });
+                // Check if array is heterogeneous.
+                //
+                // Type variables (from polymorphic numeric literals) have a
+                // Numeric constraint, so they can only unify with Int/Word/Float.
+                // We detect heterogeneity in two cases:
+                // 1. Two concrete non-compatible types (e.g., String vs Bool)
+                // 2. Type variables mixed with non-numeric concrete types
+                //
+                // In either case, the array becomes Json.
+                let has_type_var =
+                    elem_tys.iter().any(|ty| matches!(ty, Ty::Var(_)));
+                let concrete_tys: Vec<&Ty> = elem_tys
+                    .iter()
+                    .filter(|ty| !matches!(ty, Ty::Var(_) | Ty::Error))
+                    .collect();
+
+                // Case 1: incompatible concrete types
+                let concrete_incompatible = concrete_tys
+                    .windows(2)
+                    .any(|pair| !self.types_compatible(pair[0], pair[1]));
+
+                // Case 2: type var + non-numeric concrete type
+                // (numeric literals can't unify with String, Bool, etc.)
+                let var_with_non_numeric = has_type_var
+                    && concrete_tys.iter().any(|ty| {
+                        !matches!(ty, Ty::Int | Ty::Word | Ty::Float)
+                    });
+
+                let heterogeneous =
+                    concrete_incompatible || var_with_non_numeric;
 
                 if heterogeneous {
                     Ty::Json
@@ -1244,35 +1342,46 @@ impl InferCtx<'_> {
     /// If all types are the same, returns that type. If they differ and contain
     /// type variables, unifies them (standard HM behavior). If all are primitive
     /// storable types, creates an anonymous union. Otherwise, unifies normally.
+    ///
+    /// Special case: type variables from integer literals (`numeric_vars`) are
+    /// treated as storable for union creation. This allows patterns like
+    /// `IF cond { 42 } ELSE { "string" }` to produce `Int | String` instead
+    /// of incorrectly unifying the literal's var with `String`.
     fn join_types(&mut self, tys: &[Ty], span: Span) -> Ty {
         let first = tys.first().cloned().unwrap_or(Ty::Error);
         let all_same = tys.iter().skip(1).all(|t| *t == first);
 
-        // Only create anonymous unions for primitive storable types
-        // (Bool, Int, Float, Char, String, Json). This supports common
-        // patterns like `IF cond { 42 } ELSE { "string" }` -> Int | String.
-        // For other types (Option, Result, user structs), unify normally.
-        let all_storable = || {
-            tys.iter().all(|t| {
-                matches!(
-                    t,
-                    Ty::Bool
-                        | Ty::Int
-                        | Ty::Float
-                        | Ty::Char
-                        | Ty::String
-                        | Ty::Json
-                )
-            })
+        // Check if a type is a storable primitive or a numeric literal type var
+        let is_storable_or_numeric_var = |t: &Ty| match t {
+            Ty::Bool
+            | Ty::Int
+            | Ty::Word
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Json => true,
+            Ty::Var(v) => self.numeric_vars.contains(v),
+            _ => false,
         };
+
+        // Only create anonymous unions for primitive storable types
+        // (Bool, Int, Float, Char, String, Json) and numeric literal vars.
+        // This supports patterns like `IF cond { 42 } ELSE { "string" }`.
+        // For other types (Option, Result, user structs), unify normally.
+        let all_storable_or_numeric_var =
+            || tys.iter().all(is_storable_or_numeric_var);
 
         if all_same {
             first
-        } else if all_storable() {
-            // Deduplicate members (O(n²) but n is small for match/if arms)
+        } else if all_storable_or_numeric_var() {
+            // Deduplicate members; resolve numeric vars to Int (default)
             let members = tys.iter().fold(Vec::new(), |mut acc, t| {
-                if !acc.contains(t) {
-                    acc.push(t.clone());
+                let resolved = match t {
+                    Ty::Var(v) if self.numeric_vars.contains(v) => Ty::Int,
+                    other => other.clone(),
+                };
+                if !acc.contains(&resolved) {
+                    acc.push(resolved);
                 }
                 acc
             });
@@ -1582,11 +1691,10 @@ impl InferCtx<'_> {
 
         // Special case: type variable cast to numeric requires Numeric constraint
         // This allows `(-2.9) AS Int` where `-2.9` has polymorphic Numeric type
-        match (&inner_ty, &target_ty) {
-            (Ty::Var(_), Ty::Int | Ty::Float | Ty::Word) => {
-                self.constrain(Constraint::Numeric(inner_ty.clone(), span));
-            }
-            _ => {}
+        if let (Ty::Var(_), Ty::Int | Ty::Float | Ty::Word) =
+            (&inner_ty, &target_ty)
+        {
+            self.constrain(Constraint::Numeric(inner_ty.clone(), span));
         }
 
         // Error recovery: return Error type if either side is Error

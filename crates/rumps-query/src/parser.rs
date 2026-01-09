@@ -49,7 +49,7 @@ use smallvec::SmallVec;
 mod cst;
 mod lower;
 
-use crate::ast::{BinOp, Intrinsic, JsonAccessKind, Literal, UnOp};
+use crate::ast::{BinOp, Intrinsic, JsonAccessKind, Literal, NumericLit, UnOp};
 use crate::parser::cst::TypePattern;
 use crate::{Ast, Error, Lexer, Result, Span, Spanned, StmtId, Token};
 
@@ -2056,9 +2056,9 @@ impl Parser {
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         // Literals
-        let int_lit = select! { Token::Int(n) => Literal::Int(n) };
-        let float_lit =
-            select! { Token::Float(OrderedFloat(n)) => Literal::Float(n) };
+        let int_lit =
+            select! { Token::Int(n) => Literal::Numeric(NumericLit::Int(n)) };
+        let float_lit = select! { Token::Float(OrderedFloat(n)) => Literal::Numeric(NumericLit::Float(n)) };
         let char_lit = select! { Token::Char(c) => Literal::Char(c) };
         let str_lit = select! { Token::String(s) => Literal::String(s) };
         let bool_lit = choice((
@@ -2468,9 +2468,11 @@ impl Parser {
                 .to(cst::MatchPattern::Wildcard);
 
             // Literals
-            let int_lit = select! { Token::Int(n) => cst::MatchPattern::Literal(Literal::Int(n)) };
+            let int_lit = select! {
+                Token::Int(n) => cst::MatchPattern::Literal(Literal::Numeric(NumericLit::Int(n)))
+            };
             let float_lit = select! {
-                Token::Float(OrderedFloat(n)) => cst::MatchPattern::Literal(Literal::Float(n))
+                Token::Float(OrderedFloat(n)) => cst::MatchPattern::Literal(Literal::Numeric(NumericLit::Float(n)))
             };
             let char_lit = select! {
                 Token::Char(c) => cst::MatchPattern::Literal(Literal::Char(c))

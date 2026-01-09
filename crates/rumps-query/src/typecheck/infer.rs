@@ -240,6 +240,19 @@ pub(crate) struct InferCtx<'a> {
     /// substitution to concrete `Monoid` types. The interpreter uses
     /// this to produce the correct empty value.
     mempty_types: HashMap<ExprId, Ty>,
+    /// Mapping from numeric literal expression IDs to their inferred types.
+    ///
+    /// Populated during inference with type variables; resolved after
+    /// substitution to concrete `Numeric` types (`Int`, `Word`, `Float`).
+    /// The interpreter uses this to convert numeric literals to the
+    /// correct runtime value type.
+    numeric_types: HashMap<ExprId, Ty>,
+    /// Type variables created for integer literals, for defaulting to `Int`.
+    ///
+    /// Integer literals are polymorphic (no constraint) so they can unify with
+    /// any type (including `Json` in heterogeneous arrays). After constraint
+    /// solving, any unresolved type variables in this set default to `Int`.
+    numeric_vars: Vec<TyVar>,
     /// Type schemes for polymorphic closures.
     ///
     /// When a closure with type parameters is inferred, its full scheme
@@ -285,6 +298,8 @@ impl<'a> InferCtx<'a> {
             regex_cache: Vec::new(),
             regex_indices: HashMap::new(),
             mempty_types: HashMap::new(),
+            numeric_types: HashMap::new(),
+            numeric_vars: Vec::new(),
             closure_schemes: HashMap::new(),
             in_transaction: None,
             next_txn_id: 0,
@@ -326,6 +341,25 @@ impl<'a> InferCtx<'a> {
     /// Generate a fresh type variable wrapped in `Ty::Var`.
     pub(crate) fn fresh(&mut self) -> Ty {
         Ty::Var(self.fresh_var())
+    }
+
+    /// Generate a fresh type variable for an integer literal.
+    ///
+    /// Unlike `fresh`, this does NOT emit a `Numeric` constraint. The type
+    /// variable can unify with any type (including `Json` in heterogeneous
+    /// arrays). Unresolved numeric type vars default to `Int` after solving.
+    pub(crate) fn fresh_numeric(&mut self) -> Ty {
+        let v = self.fresh_var();
+        self.numeric_vars.push(v);
+        Ty::Var(v)
+    }
+
+    /// Clone the collected numeric type variables for defaulting.
+    ///
+    /// Unlike `take`, this preserves the list for later use in error formatting
+    /// (so numeric vars display as `Int` instead of `T`).
+    pub(crate) fn clone_numeric_vars(&self) -> Vec<TyVar> {
+        self.numeric_vars.clone()
     }
 
     /// Add a constraint to the collection.
@@ -472,6 +506,9 @@ impl<'a> InferCtx<'a> {
         self.mempty_types
             .values_mut()
             .for_each(|ty| *ty = ty.apply(subst));
+        self.numeric_types
+            .values_mut()
+            .for_each(|ty| *ty = ty.apply(subst));
     }
 
     /// Check for remaining unresolved type variables and emit errors.
@@ -507,8 +544,8 @@ impl<'a> InferCtx<'a> {
             });
     }
 
-    /// Consume the context, returning the regex cache, index map, and mempty
-    /// types on success, or formatted type errors on failure.
+    /// Consume the context, returning the regex cache, index map, mempty
+    /// types, and numeric types on success, or formatted type errors on failure.
     pub(crate) fn into_result_formatted(
         self,
         registry: &TypeRegistry,
@@ -517,12 +554,22 @@ impl<'a> InferCtx<'a> {
         Vec<regex::Regex>,
         HashMap<ExprId, u32>,
         HashMap<ExprId, Ty>,
+        HashMap<ExprId, Ty>,
     )> {
         NonEmpty::from_vec(self.errors).map_or(
-            Ok((self.regex_cache, self.regex_indices, self.mempty_types)),
+            Ok((
+                self.regex_cache,
+                self.regex_indices,
+                self.mempty_types,
+                self.numeric_types,
+            )),
             |errs| {
-                let printer =
-                    TyPrinter::new(registry, arena, &self.env.strings);
+                let printer = TyPrinter::new(
+                    registry,
+                    arena,
+                    &self.env.strings,
+                    &self.numeric_vars,
+                );
                 let formatted = errs.map(|e| e.format_with(&printer));
                 let errors = formatted.map(crate::Error::FormattedType);
                 Err(crate::Error::multiple(errors))

@@ -583,17 +583,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> Option<Ty> {
         let rhs_ty = self.expr(rhs);
-
-        // Allow integer literals to be typed as Word when annotated
-        let is_int_to_word = matches!((&rhs_ty, ann_ty), (Ty::Int, Ty::Word))
-            && self
-                .ast
-                .get_expr(rhs)
-                .is_some_and(|e| matches!(e, Expr::Literal(Literal::Int(_))));
-
-        if !is_int_to_word {
-            self.unify(rhs_ty.clone(), ann_ty.clone(), span);
-        }
+        self.unify(rhs_ty.clone(), ann_ty.clone(), span);
 
         // Extensible records: if rhs is an object and annotation
         // is an alias to object, keep the full object type to

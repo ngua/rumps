@@ -118,7 +118,7 @@ impl InferCtx<'_> {
                 }
 
                 MatchPattern::Literal(lit) => {
-                    let lit_ty = self.literal(lit);
+                    let lit_ty = self.pattern_literal(lit, span);
                     self.unify(lit_ty, scrutinee_ty.clone(), span);
                 }
 

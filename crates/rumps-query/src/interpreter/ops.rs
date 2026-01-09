@@ -62,11 +62,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Type checker guarantees:
     /// - `-` is only applied to `Int`, `Word`, or `Float`
+    ///   - NOTE: Negate on a `Word` is identity; it cannot be negated
     /// - `NOT` is only applied to `Bool`
     /// - `?` can wrap any value in `Option.Some`
-    ///
-    /// Note: `-Word` coerces to `Int` since `Word` is unsigned. This is the
-    /// one exception to the "no coercion" rule.
     pub(super) fn apply_unop(
         &mut self,
         op: UnOp,
@@ -76,8 +74,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         match op {
             UnOp::Neg => match &v {
                 Value::Int(n) => Value::Int(-n),
-                // `-Word` coerces to `Int` since Word is unsigned
-                Value::Word(n) => Value::Int(-(*n as i64)),
+                // TODO: add `Negatable` constraint and make `Word` non-negatable.
+                // For now, `-Word` is a no-op since `Word` is unsigned.
+                Value::Word(n) => Value::Word(*n),
                 Value::Float(f) => Value::Float(OrderedFloat(-f.0)),
                 _ => typechecked!("-", "Numeric"),
             },

@@ -77,8 +77,14 @@ struct SchemeInput {
 }
 
 /// Simple constraint names (no type argument).
-const SIMPLE_CONSTRAINTS: &[&str] =
-    &["Numeric", "BitLike", "Monoid", "Storable", "Subscriptable"];
+const SIMPLE_CONSTRAINTS: &[&str] = &[
+    "Numeric",
+    "Negatable",
+    "BitLike",
+    "Monoid",
+    "Storable",
+    "Subscriptable",
+];
 
 /// Parameterized constraint names (require `[T, ...]` arguments).
 const PARAMETERIZED_CONSTRAINTS: &[&str] = &["Iterable", "Fallible", "Into"];
