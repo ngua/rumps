@@ -2722,6 +2722,7 @@ impl Parser {
                     "Storable" => Ok(cst::ParamConstraint::Storable),
                     "Monoid" => Ok(cst::ParamConstraint::Monoid),
                     "BitLike" => Ok(cst::ParamConstraint::BitLike),
+                    "Negatable" => Ok(cst::ParamConstraint::Negatable),
                     "Iterable" => args.into_iter().next().map_or_else(
                         || {
                             Err(Simple::custom(
@@ -2762,7 +2763,7 @@ impl Parser {
                         span,
                         format!(
                             "unknown constraint `{name}`; valid constraints are: \
-                             Numeric, Subscriptable, Storable, Iterable[T], \
+                             Numeric, Negatable, Subscriptable, Storable, Iterable[T], \
                              Monoid, BitLike, Fallible[T], Into[T], TryInto[T]"
                         ),
                     )),

@@ -23,6 +23,8 @@ pub(crate) enum ConstraintKind {
     Indexable,
     /// Type must support bitwise operations (`&`, `|`, `<<`, `>>`).
     BitLike,
+    /// Type must support unary negation (`-`).
+    Negatable,
 }
 
 impl fmt::Display for ConstraintKind {
@@ -34,6 +36,7 @@ impl fmt::Display for ConstraintKind {
             Self::Monoid => write!(f, "Monoid"),
             Self::Indexable => write!(f, "Indexable"),
             Self::BitLike => write!(f, "BitLike"),
+            Self::Negatable => write!(f, "Negatable"),
         }
     }
 }
@@ -62,6 +65,7 @@ impl ConstraintKind {
             Self::BitLike => {
                 Some("bitwise types are `Bool`, `Int`, and `Word`")
             }
+            Self::Negatable => Some("negatable types are `Int` and `Float`"),
         }
     }
 }

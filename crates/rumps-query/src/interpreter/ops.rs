@@ -61,8 +61,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Unary operation application.
     ///
     /// Type checker guarantees:
-    /// - `-` is only applied to `Int`, `Word`, or `Float`
-    ///   - NOTE: Negate on a `Word` is identity; it cannot be negated
+    /// - `-` is only applied to `Negatable` types (`Int` or `Float`)
     /// - `NOT` is only applied to `Bool`
     /// - `?` can wrap any value in `Option.Some`
     pub(super) fn apply_unop(
@@ -74,11 +73,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         match op {
             UnOp::Neg => match &v {
                 Value::Int(n) => Value::Int(-n),
-                // TODO: add `Negatable` constraint and make `Word` non-negatable.
-                // For now, `-Word` is a no-op since `Word` is unsigned.
-                Value::Word(n) => Value::Word(*n),
                 Value::Float(f) => Value::Float(OrderedFloat(-f.0)),
-                _ => typechecked!("-", "Numeric"),
+                _ => typechecked!("-", "Negatable"),
             },
             UnOp::Not => match &v {
                 Value::Bool(b) => Value::Bool(!b),

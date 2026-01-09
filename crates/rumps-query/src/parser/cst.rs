@@ -74,6 +74,10 @@ pub(crate) enum ParamConstraint {
     ///
     /// Satisfied by `Bool`, `Int`, and `Word`.
     BitLike,
+    /// Type can be negated with unary `-`.
+    ///
+    /// Satisfied by `Int` and `Float` (NOT `Word`, which is unsigned).
+    Negatable,
     /// Type is fallible (`Option[T]` or `Result[T, E]`).
     ///
     /// The inner type expression can be a type parameter name (`Fallible[T]`)

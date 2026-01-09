@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: negating a Word is a type error (Word is unsigned)\n\nWRITE -(10: Word)\n"
+---
+ERROR: type `Word` does not satisfy `Negatable` constraint

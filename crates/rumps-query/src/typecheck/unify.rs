@@ -787,6 +787,10 @@ impl<'a> InferCtx<'a> {
                 Constraint::BitLike(ty, span) => {
                     self.check_bitlike(&ty.apply(&subst), *span);
                 }
+
+                Constraint::Negatable(ty, span) => {
+                    self.check_negatable(&ty.apply(&subst), *span);
+                }
             }
         });
 
@@ -917,6 +921,28 @@ impl<'a> InferCtx<'a> {
             _ => {
                 self.error(TypeError::UnsatisfiedConstraint(
                     ConstraintKind::BitLike,
+                    ty.clone(),
+                    span,
+                ));
+            }
+        }
+    }
+
+    /// Check that a type is negatable (`Int` or `Float`).
+    ///
+    /// Note: `Word` is NOT negatable since it is unsigned.
+    fn check_negatable(&mut self, ty: &Ty, span: Span) {
+        match ty {
+            Ty::Int | Ty::Float => {}
+            // Type variables remain polymorphic; caller provides concrete type
+            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+            Ty::Union(members) => {
+                // All union members must be negatable
+                members.iter().for_each(|m| self.check_negatable(m, span));
+            }
+            _ => {
+                self.error(TypeError::UnsatisfiedConstraint(
+                    ConstraintKind::Negatable,
                     ty.clone(),
                     span,
                 ));

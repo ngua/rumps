@@ -391,7 +391,7 @@ impl UnOp {
         match self {
             Self::Neg => UnOpDef {
                 name: "-",
-                ty: scheme!(forall T: Numeric. (T) -> T),
+                ty: scheme!(forall T: Negatable. (T) -> T),
             },
             Self::Not => UnOpDef {
                 name: "NOT",

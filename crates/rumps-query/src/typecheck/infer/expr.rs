@@ -1125,6 +1125,9 @@ impl InferCtx<'_> {
                     ParamConstraint::BitLike => {
                         Constraint::BitLike(ty.clone(), span)
                     }
+                    ParamConstraint::Negatable => {
+                        Constraint::Negatable(ty.clone(), span)
+                    }
                     ParamConstraint::Fallible(_) => {
                         let inner =
                             elem_ty.clone().unwrap_or_else(|| self.fresh());

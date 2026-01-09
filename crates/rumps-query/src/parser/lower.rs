@@ -61,6 +61,7 @@ fn lower_constraint(
         }
         cst::ParamConstraint::Monoid => ast::ParamConstraint::Monoid,
         cst::ParamConstraint::BitLike => ast::ParamConstraint::BitLike,
+        cst::ParamConstraint::Negatable => ast::ParamConstraint::Negatable,
         cst::ParamConstraint::Fallible(inner) => {
             ast::ParamConstraint::Fallible(lower_type_expr(ast, inner)?)
         }
