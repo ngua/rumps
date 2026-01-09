@@ -1207,7 +1207,7 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
+            |(first, rest), span| Self::fold_pipe(first, rest, span),
         )
     }
 
@@ -1725,6 +1725,71 @@ impl Parser {
         })
     }
 
+    /// Folds a sequence of pipe operations, handling `.` placeholders.
+    ///
+    /// When the RHS of `|>` is a call with `.` placeholder arguments, replaces
+    /// each `.` with the LHS value and returns the call directly (no pipe).
+    /// Otherwise, behaves like `fold_binary`.
+    fn fold_pipe(
+        first: cst::Expr,
+        rest: Vec<(BinOp, cst::Expr)>,
+        _outer_span: Span,
+    ) -> cst::Expr {
+        rest.into_iter().fold(first, |lhs, (op, rhs)| {
+            let span = Span::new(lhs.span.start, rhs.span.end);
+
+            // Check if RHS is a call with placeholder arguments
+            match &rhs.kind {
+                cst::ExprKind::Call(callee, args) => {
+                    // Check if any argument is a placeholder
+                    let has_placeholder = args.iter().any(|arg| {
+                        matches!(arg.kind, cst::ExprKind::PipePlaceholder)
+                    });
+
+                    if has_placeholder {
+                        // Replace all placeholders with the LHS value
+                        let new_args = args
+                            .iter()
+                            .map(|arg| {
+                                if matches!(
+                                    arg.kind,
+                                    cst::ExprKind::PipePlaceholder
+                                ) {
+                                    lhs.clone()
+                                } else {
+                                    arg.clone()
+                                }
+                            })
+                            .collect();
+
+                        // Return the call directly; no pipe operator
+                        cst::Expr::new(
+                            cst::ExprKind::Call(callee.clone(), new_args),
+                            span,
+                        )
+                    } else {
+                        // No placeholder; use normal pipe binary op
+                        cst::Expr::new(
+                            cst::ExprKind::Binary(
+                                Box::new(lhs),
+                                op,
+                                Box::new(rhs),
+                            ),
+                            span,
+                        )
+                    }
+                }
+                _ => {
+                    // Not a call; use normal pipe binary op
+                    cst::Expr::new(
+                        cst::ExprKind::Binary(Box::new(lhs), op, Box::new(rhs)),
+                        span,
+                    )
+                }
+            }
+        })
+    }
+
     /// Unary: `NOT`, `!`, `-`, and intrinsics/keywords (`@GET`, `@SET`, `RAISE`, etc.).
     ///
     /// `intrinsic_op` is the operand parser for intrinsics; it excludes `CATCH`
@@ -2110,6 +2175,14 @@ impl Parser {
                 )
             });
 
+        // Pipe placeholder: `.`
+        //
+        // Only valid as argument in function call on RHS of `|>`. Transformed
+        // during pipe expression parsing; any remaining placeholders are errors.
+        let pipe_placeholder = just(Token::Dot).map_with_span(|_, span| {
+            cst::Expr::new(cst::ExprKind::PipePlaceholder, span)
+        });
+
         // Lexical variable or mempty (`_`)
         let var = Self::ident().map_with_span(|name, span| {
             if name == "_" {
@@ -2435,7 +2508,8 @@ impl Parser {
 
         // Order matters: ref literals before var (IdentBrace is distinct from
         // Ident so they won't conflict). Closures before var since both can
-        // start with ident but closure needs `=>`.
+        // start with ident but closure needs `=>`. Pipe placeholder before
+        // postfix operations (field access uses `.` too).
         choice((
             literal,
             interpolation,
@@ -2444,6 +2518,7 @@ impl Parser {
             closure_multi,
             ref_local,
             ref_global,
+            pipe_placeholder,
             var,
             paren,
             array,

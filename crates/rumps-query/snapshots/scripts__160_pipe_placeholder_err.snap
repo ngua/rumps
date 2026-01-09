@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Pipe placeholder `.` must only appear in call arguments on RHS of `|>`\n\n; Error: placeholder outside pipe context\nLET x = .\n"
+---
+ERROR: parse error at 124..125: pipe placeholder `.` can only appear in call arguments on RHS of `|>`

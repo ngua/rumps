@@ -615,6 +615,13 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
             let dbref = lower_db_ref(ast, ctx, dbref)?;
             Expr::Ref(dbref)
         }
+        cst::ExprKind::PipePlaceholder => {
+            Err(crate::Error::parse(
+                span,
+                "pipe placeholder `.` can only appear in call arguments on RHS of `|>`",
+                vec![],
+            ))?
+        }
         cst::ExprKind::Error(msg) => {
             Err(crate::Error::parse(span, msg, vec![]))?
         }

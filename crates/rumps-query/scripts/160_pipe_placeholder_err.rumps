@@ -1,0 +1,4 @@
+; Pipe placeholder `.` must only appear in call arguments on RHS of `|>`
+
+; Error: placeholder outside pipe context
+LET x = .

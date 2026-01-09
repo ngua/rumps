@@ -374,6 +374,13 @@ pub(crate) enum ExprKind {
     /// Creates a first-class `Ref` value that can be stored or passed to
     /// functions. Use with intrinsics: `@GET r`, `@SET r = value`.
     RefLit(DbRef),
+
+    /// Placeholder for pipe operator: `.` in call arguments.
+    ///
+    /// Only valid as an argument in a function call on the RHS of `|>`.
+    /// During pipe expression transformation, replaced with the LHS value.
+    /// Any remaining placeholders after transformation are errors.
+    PipePlaceholder,
 }
 
 /// The key specification for JSON access (CST form).
