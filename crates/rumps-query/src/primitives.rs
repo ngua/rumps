@@ -2100,6 +2100,45 @@ impl Opt {
             }
         })
     }
+
+    /// `forall T E. (E, Option[T]) -> Result[T, E]`
+    ///
+    /// Converts an `Option` to a `Result`, using the provided error if `None`.
+    pub(crate) fn note<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let opt =
+                ctx.arena.get(args[1]).cloned().unwrap_or_else(|| {
+                    typechecked!("Option.note", "valid arg")
+                });
+
+            let is_some = opt.is_some(ctx.type_exprs);
+            let is_none = opt.is_none(ctx.type_exprs);
+
+            match (is_some, is_none) {
+                (true, false) => {
+                    // Option.Some(v) -> Result.Ok(v)
+                    match opt {
+                        Value::Tagged(_, _, ref payloads) => {
+                            let inner =
+                                *payloads.first().unwrap_or_else(|| {
+                                    typechecked!("Option.note", "Some payload")
+                                });
+                            Ok(ctx.result_ok(inner))
+                        }
+                        _ => typechecked!("Option.note", "Tagged"),
+                    }
+                }
+                (false, true) => {
+                    // Option.None -> Result.Err(e)
+                    Ok(ctx.result_err(args[0]))
+                }
+                _ => typechecked!("Option.note", "Option"),
+            }
+        })
+    }
 }
 
 /// Primitives for the `Result` module.
@@ -2182,6 +2221,45 @@ impl Res {
                 }
                 (false, true) => Ok(args[0]),
                 _ => typechecked!("Result.flatten", "Result"),
+            }
+        })
+    }
+
+    /// `forall T E. (Result[T, E]) -> Option[T]`
+    ///
+    /// Converts a `Result` to an `Option`, discarding the error if `Err`.
+    pub(crate) fn hush<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let res =
+                ctx.arena.get(args[0]).cloned().unwrap_or_else(|| {
+                    typechecked!("Result.hush", "valid arg")
+                });
+
+            let is_ok = res.is_ok(ctx.type_exprs);
+            let is_err = res.is_err(ctx.type_exprs);
+
+            match (is_ok, is_err) {
+                (true, false) => {
+                    // Result.Ok(v) -> Option.Some(v)
+                    match res {
+                        Value::Tagged(_, _, ref payloads) => {
+                            let inner =
+                                *payloads.first().unwrap_or_else(|| {
+                                    typechecked!("Result.hush", "Ok payload")
+                                });
+                            Ok(ctx.option_some(inner))
+                        }
+                        _ => typechecked!("Result.hush", "Tagged"),
+                    }
+                }
+                (false, true) => {
+                    // Result.Err(_) -> Option.None
+                    Ok(ctx.option_none())
+                }
+                _ => typechecked!("Result.hush", "Result"),
             }
         })
     }

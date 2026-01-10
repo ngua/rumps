@@ -1309,6 +1309,11 @@ impl Environment {
                     f: Opt::flatten,
                     ty: scheme!(forall T. (Option[Option[T]]) -> Option[T]),
                 },
+                PrimDef {
+                    name: "note",
+                    f: Opt::note,
+                    ty: scheme!(forall T E. (E, Option[T]) -> Result[T, E]),
+                },
             ]),
         );
 
@@ -1341,6 +1346,11 @@ impl Environment {
                     name: "flatten",
                     f: Res::flatten,
                     ty: scheme!(forall T E. (Result[Result[T, E], E]) -> Result[T, E]),
+                },
+                PrimDef {
+                    name: "hush",
+                    f: Res::hush,
+                    ty: scheme!(forall T E. (Result[T, E]) -> Option[T]),
                 },
             ]),
         );

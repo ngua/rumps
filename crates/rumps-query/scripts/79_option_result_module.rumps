@@ -183,3 +183,63 @@ WRITE Result.flatten(nested-res)  ; Ok(42)
 LET nested-err = Result.map(Result.Ok("bad"), try-parse)
 WRITE nested-err  ; Ok(Err("parse failed"))
 WRITE Result.flatten(nested-err)  ; Err("parse failed")
+
+; ============ Result.hush ============
+
+; Ok(v) -> Some(v)
+WRITE Result.hush(Result.Ok(42))  ; Some(42)
+WRITE Result.hush(Result.Ok("hello"))  ; Some("hello")
+
+; Err(e) -> None (discards error)
+WRITE Result.hush(Result.Err("oops"))  ; None
+WRITE Result.hush(Result.Err(123))  ; None
+
+; Practical: convert fallible operation to optional
+LET res: Result[Int, String] = Result.Ok(100)
+LET opt = Result.hush(res)
+WRITE opt  ; Some(100)
+
+LET bad-res: Result[Int, String] = Result.Err("failed")
+WRITE Result.hush(bad-res)  ; None
+
+; ============ Option.note ============
+
+; Some(v) -> Ok(v)
+WRITE Option.note("not found", Option.Some(42))  ; Ok(42)
+WRITE Option.note("missing", Option.Some("hello"))  ; Ok("hello")
+
+; None -> Err(e) (using provided error)
+WRITE Option.note("not found", Option.None)  ; Err("not found")
+WRITE Option.note(404, Option.None)  ; Err(404)
+
+; Practical: convert optional lookup to result
+LET maybe: Option[Int] = Option.Some(999)
+LET noted: Result[Int, String] = Option.note("value missing", maybe)
+WRITE noted  ; Ok(999)
+
+LET empty: Option[Int] = Option.None
+WRITE Option.note("value missing", empty)  ; Err("value missing")
+
+; ============ hush/note roundtrips ============
+
+; Ok -> hush -> note (preserves value)
+LET start = Result.Ok(123)
+LET hushed = Result.hush(start)
+LET back: Result[Int, String] = Option.note("lost", hushed)
+WRITE back  ; Ok(123)
+
+; Some -> note -> hush (preserves value)
+LET s = Option.Some(456)
+LET noted2: Result[Int, String] = Option.note("err", s)
+LET h = Result.hush(noted2)
+WRITE h  ; Some(456)
+
+; Err -> hush loses information
+LET e = Result.Err("important error")
+LET lost = Result.hush(e)
+WRITE lost  ; None
+
+; None -> note adds error
+LET n = Option.None
+LET gained: Result[Int, String] = Option.note("added error", n)
+WRITE gained  ; Err("added error")
