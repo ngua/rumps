@@ -21,9 +21,9 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use smallvec::SmallVec;
 
-use super::error::{ConstraintKind, TypeError};
+use super::error::TypeError;
 use super::infer::{Constraint, InferCtx};
-use super::ty::{Subst, Ty, TyVar};
+use super::ty::{Class, Subst, Ty, TyVar};
 use crate::ast::AstTypeExpr;
 use crate::intern::StringId;
 use crate::value::TypeDef;
@@ -858,8 +858,8 @@ impl<'a> InferCtx<'a> {
                     .iter()
                     .any(|m| matches!(m, Ty::Int | Ty::Word | Ty::Float));
                 if !any_numeric {
-                    self.error(TypeError::UnsatisfiedConstraint(
-                        ConstraintKind::Numeric,
+                    self.error(TypeError::UnsatisfiedClass(
+                        Class::Numeric,
                         ty.clone(),
                         span,
                     ));
@@ -874,8 +874,8 @@ impl<'a> InferCtx<'a> {
                             matches!(m, Ty::Int | Ty::Word | Ty::Float)
                         });
                         if !any_numeric {
-                            self.error(TypeError::UnsatisfiedConstraint(
-                                ConstraintKind::Numeric,
+                            self.error(TypeError::UnsatisfiedClass(
+                                Class::Numeric,
                                 ty.clone(),
                                 span,
                             ));
@@ -888,8 +888,8 @@ impl<'a> InferCtx<'a> {
                                 self.check_numeric(&expanded, span)
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedConstraint(
-                                    ConstraintKind::Numeric,
+                                self.error(TypeError::UnsatisfiedClass(
+                                    Class::Numeric,
                                     ty.clone(),
                                     span,
                                 ));
@@ -899,8 +899,8 @@ impl<'a> InferCtx<'a> {
                 }
             }
             _ => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Numeric,
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::Numeric,
                     ty.clone(),
                     span,
                 ));
@@ -919,8 +919,8 @@ impl<'a> InferCtx<'a> {
                 members.iter().for_each(|m| self.check_bitlike(m, span));
             }
             _ => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::BitLike,
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::BitLike,
                     ty.clone(),
                     span,
                 ));
@@ -941,8 +941,8 @@ impl<'a> InferCtx<'a> {
                 members.iter().for_each(|m| self.check_negatable(m, span));
             }
             _ => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Negatable,
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::Negatable,
                     ty.clone(),
                     span,
                 ));
@@ -1039,8 +1039,8 @@ impl<'a> InferCtx<'a> {
                     .for_each(|m| self.check_subscriptable(m, span));
             }
             _ => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Subscriptable,
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::Subscriptable,
                     ty.clone(),
                     span,
                 ));
@@ -1065,8 +1065,8 @@ impl<'a> InferCtx<'a> {
                 members.iter().for_each(|m| self.check_storable(m, span));
             }
             _ => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Storable,
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::Storable,
                     ty.clone(),
                     span,
                 ));
@@ -1088,8 +1088,8 @@ impl<'a> InferCtx<'a> {
                 members.iter().for_each(|m| self.check_monoid(m, span));
             }
             _ => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Monoid,
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::Monoid,
                     ty.clone(),
                     span,
                 ));
@@ -1666,8 +1666,8 @@ impl<'a> InferCtx<'a> {
             Ty::Error | Ty::Unknown => {}
 
             _ => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Indexable,
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::Indexable,
                     base.clone(),
                     span,
                 ));

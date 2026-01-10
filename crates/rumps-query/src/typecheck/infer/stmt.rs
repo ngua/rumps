@@ -9,13 +9,12 @@ use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
-    ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr, ExprId,
-    Import, ImportItem, Literal, OutputFormat, OutputTarget, ParamConstraint,
-    RefTarget, Stmt, StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility,
-    WriteExpr,
+    self, ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr,
+    ExprId, Import, ImportItem, Literal, OutputFormat, OutputTarget, RefTarget,
+    Stmt, StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility, WriteExpr,
 };
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{Scheme, Ty, TyVar};
+use crate::typecheck::ty::{Class, Scheme, Ty, TyVar};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -367,83 +366,50 @@ impl InferCtx<'_> {
             .collect();
 
         // Second pass: process constraints now that all type params are known
-        let mut scheme_constraints: SmallVec<
-            [(TyVar, ParamConstraint, Option<Ty>); 2],
-        > = SmallVec::new();
+        // Convert ast::Class to ty::Class for storage in Scheme
+        let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
+            SmallVec::new();
 
         type_params.iter().for_each(|tp| {
             let tv = name_to_tv[tp.name.as_str()];
             let ty = Ty::Var(tv);
 
             tp.constraints.iter().for_each(|c| {
-                // Resolve element/inner type for Iterable[T] or Fallible[T]
-                // The inner/target type for parameterized constraints
-                let elem_ty = match c {
-                    ParamConstraint::Iterable(ty_id)
-                    | ParamConstraint::Fallible(ty_id)
-                    | ParamConstraint::Into(ty_id)
-                    | ParamConstraint::TryInto(ty_id) => {
-                        Some(self.ast_type_to_ty(*ty_id, &type_param_subst))
-                    }
-                    _ => None,
-                };
-                scheme_constraints.push((tv, c.clone(), elem_ty.clone()));
+                let class = self.ast_class_to_ty_class(c, &type_param_subst);
+                scheme_constraints.push((tv, class.clone()));
 
                 // Emit constraint for checking the function body
-                let constraint = match c {
-                    ParamConstraint::Numeric => {
-                        Constraint::Numeric(ty.clone(), span)
-                    }
-                    ParamConstraint::Subscriptable => {
+                let constraint = match &class {
+                    Class::Numeric => Constraint::Numeric(ty.clone(), span),
+                    Class::Subscriptable => {
                         Constraint::Subscriptable(ty.clone(), span)
                     }
-                    ParamConstraint::Storable => {
-                        Constraint::Storable(ty.clone(), span)
-                    }
-                    ParamConstraint::Iterable(_) => {
-                        let elem =
-                            elem_ty.clone().unwrap_or_else(|| self.fresh());
-                        Constraint::Iterable {
-                            coll: ty.clone(),
-                            elem,
-                            span,
-                        }
-                    }
-                    ParamConstraint::Monoid => {
-                        Constraint::Monoid(ty.clone(), span)
-                    }
-                    ParamConstraint::BitLike => {
-                        Constraint::BitLike(ty.clone(), span)
-                    }
-                    ParamConstraint::Negatable => {
-                        Constraint::Negatable(ty.clone(), span)
-                    }
-                    ParamConstraint::Fallible(_) => {
-                        let inner =
-                            elem_ty.clone().unwrap_or_else(|| self.fresh());
-                        Constraint::Fallible {
-                            ty: ty.clone(),
-                            inner,
-                            span,
-                        }
-                    }
-                    ParamConstraint::Into(_) => {
-                        let to =
-                            elem_ty.clone().unwrap_or_else(|| self.fresh());
-                        Constraint::Into {
-                            from: ty.clone(),
-                            to,
-                            span,
-                        }
-                    }
-                    ParamConstraint::TryInto(_) => {
-                        let to =
-                            elem_ty.clone().unwrap_or_else(|| self.fresh());
-                        Constraint::TryInto {
-                            from: ty.clone(),
-                            to,
-                            span,
-                        }
+                    Class::Storable => Constraint::Storable(ty.clone(), span),
+                    Class::Iterable(elem) => Constraint::Iterable {
+                        coll: ty.clone(),
+                        elem: elem.clone(),
+                        span,
+                    },
+                    Class::Monoid => Constraint::Monoid(ty.clone(), span),
+                    Class::BitLike => Constraint::BitLike(ty.clone(), span),
+                    Class::Negatable => Constraint::Negatable(ty.clone(), span),
+                    Class::Fallible(inner) => Constraint::Fallible {
+                        ty: ty.clone(),
+                        inner: inner.clone(),
+                        span,
+                    },
+                    Class::Into(to) => Constraint::Into {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    },
+                    Class::TryInto(to) => Constraint::TryInto {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    },
+                    Class::Indexable => {
+                        unreachable!("Indexable not user-declarable")
                     }
                 };
                 self.constrain(constraint);

@@ -11,15 +11,15 @@ use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
-    ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
+    self, ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
     Intrinsic, JsonAccessKey, JsonAccessKind, Literal, MatchArm, NumericLit,
-    ObjectEntry, ParamConstraint, PostfixOp, RefTarget, StmtId, SubscriptElem,
-    TransactionExpr, TxnId, TypeParam, TypePattern, UnOp, Visibility,
+    ObjectEntry, PostfixOp, RefTarget, StmtId, SubscriptElem, TransactionExpr,
+    TxnId, TypeParam, TypePattern, UnOp, Visibility,
 };
 use crate::env::TxnReq;
 use crate::intern::StringId;
-use crate::typecheck::error::{ConstraintKind, TypeError};
-use crate::typecheck::ty::{Scheme, Ty};
+use crate::typecheck::error::TypeError;
+use crate::typecheck::ty::{Class, Scheme, Ty, TyVar};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -183,7 +183,7 @@ impl InferCtx<'_> {
                     // Builtin module functions (no user constraints)
                     let (ty, constraints) =
                         scheme.instantiate(&mut self.next_var);
-                    self.emit_user_constraints(constraints, span);
+                    self.emit_class_constraints(constraints, span);
                     ty
                 } else if let Some(member) =
                     self.env.lookup_user_module_member(&path)
@@ -209,7 +209,7 @@ impl InferCtx<'_> {
                         // Public member; instantiate and use
                         let (ty, constraints) =
                             member.scheme.instantiate(&mut self.next_var);
-                        self.emit_user_constraints(constraints, span);
+                        self.emit_class_constraints(constraints, span);
                         ty
                     }
                 } else {
@@ -432,7 +432,7 @@ impl InferCtx<'_> {
         match self.env.lookup(name) {
             Some(scheme) => {
                 let (ty, constraints) = scheme.instantiate(&mut self.next_var);
-                self.emit_user_constraints(constraints, span);
+                self.emit_class_constraints(constraints, span);
                 ty
             }
             None => {
@@ -453,7 +453,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> Ty {
         let (fn_ty, constraints) = scheme.instantiate(&mut self.next_var);
-        self.emit_user_constraints(constraints, span);
+        self.emit_class_constraints(constraints, span);
 
         match fn_ty {
             Ty::Fn(params, ret) => {
@@ -879,8 +879,8 @@ impl InferCtx<'_> {
             }
 
             _ => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Indexable,
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::Indexable,
                     base_ty,
                     span,
                 ));
@@ -936,8 +936,8 @@ impl InferCtx<'_> {
             }
 
             _ => {
-                self.error(TypeError::UnsatisfiedConstraint(
-                    ConstraintKind::Indexable,
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::Indexable,
                     base_ty,
                     span,
                 ));
@@ -1077,9 +1077,9 @@ impl InferCtx<'_> {
             .collect();
 
         // Build scheme constraints (for storing in closure_schemes)
-        let mut scheme_constraints: SmallVec<
-            [(TyVar, ParamConstraint, Option<Ty>); 2],
-        > = SmallVec::new();
+        // Convert ast::Class to ty::Class for storage in Scheme
+        let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
+            SmallVec::new();
 
         // Emit constraints for each user-specified bound
         type_params.iter().for_each(|tp| {
@@ -1087,73 +1087,41 @@ impl InferCtx<'_> {
             let ty = Ty::Var(tv);
 
             tp.constraints.iter().for_each(|c| {
-                // Resolve element/inner/target type for parameterized constraints
-                let elem_ty = match c {
-                    ParamConstraint::Iterable(ty_id)
-                    | ParamConstraint::Fallible(ty_id)
-                    | ParamConstraint::Into(ty_id)
-                    | ParamConstraint::TryInto(ty_id) => {
-                        Some(self.ast_type_to_ty(*ty_id, &type_param_subst))
-                    }
-                    _ => None,
-                };
-                scheme_constraints.push((tv, c.clone(), elem_ty.clone()));
+                let class = self.ast_class_to_ty_class(c, &type_param_subst);
+                scheme_constraints.push((tv, class.clone()));
 
                 // Emit constraint for body inference
-                let constraint = match c {
-                    ParamConstraint::Numeric => {
-                        Constraint::Numeric(ty.clone(), span)
-                    }
-                    ParamConstraint::Subscriptable => {
+                let constraint = match &class {
+                    Class::Numeric => Constraint::Numeric(ty.clone(), span),
+                    Class::Subscriptable => {
                         Constraint::Subscriptable(ty.clone(), span)
                     }
-                    ParamConstraint::Storable => {
-                        Constraint::Storable(ty.clone(), span)
-                    }
-                    ParamConstraint::Iterable(_) => {
-                        let elem =
-                            elem_ty.clone().unwrap_or_else(|| self.fresh());
-                        Constraint::Iterable {
-                            coll: ty.clone(),
-                            elem,
-                            span,
-                        }
-                    }
-                    ParamConstraint::Monoid => {
-                        Constraint::Monoid(ty.clone(), span)
-                    }
-                    ParamConstraint::BitLike => {
-                        Constraint::BitLike(ty.clone(), span)
-                    }
-                    ParamConstraint::Negatable => {
-                        Constraint::Negatable(ty.clone(), span)
-                    }
-                    ParamConstraint::Fallible(_) => {
-                        let inner =
-                            elem_ty.clone().unwrap_or_else(|| self.fresh());
-                        Constraint::Fallible {
-                            ty: ty.clone(),
-                            inner,
-                            span,
-                        }
-                    }
-                    ParamConstraint::Into(_) => {
-                        let to =
-                            elem_ty.clone().unwrap_or_else(|| self.fresh());
-                        Constraint::Into {
-                            from: ty.clone(),
-                            to,
-                            span,
-                        }
-                    }
-                    ParamConstraint::TryInto(_) => {
-                        let to =
-                            elem_ty.clone().unwrap_or_else(|| self.fresh());
-                        Constraint::TryInto {
-                            from: ty.clone(),
-                            to,
-                            span,
-                        }
+                    Class::Storable => Constraint::Storable(ty.clone(), span),
+                    Class::Iterable(elem) => Constraint::Iterable {
+                        coll: ty.clone(),
+                        elem: elem.clone(),
+                        span,
+                    },
+                    Class::Monoid => Constraint::Monoid(ty.clone(), span),
+                    Class::BitLike => Constraint::BitLike(ty.clone(), span),
+                    Class::Negatable => Constraint::Negatable(ty.clone(), span),
+                    Class::Fallible(inner) => Constraint::Fallible {
+                        ty: ty.clone(),
+                        inner: inner.clone(),
+                        span,
+                    },
+                    Class::Into(to) => Constraint::Into {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    },
+                    Class::TryInto(to) => Constraint::TryInto {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    },
+                    Class::Indexable => {
+                        unreachable!("Indexable not user-declarable")
                     }
                 };
                 self.constrain(constraint);

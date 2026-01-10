@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Wrong type for destructuring\nLET (a, b) = 42\n"
 ---
-ERROR: type `(T, U)` does not satisfy `Numeric` constraint
+ERROR: type `(T, U)` does not satisfy `Numeric` class

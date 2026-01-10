@@ -2776,8 +2776,7 @@ impl Parser {
     /// Recognizes: `Numeric`, `Subscriptable`, `Storable`, `Iterable[T]`,
     /// `Monoid`, `BitLike`, `Fallible[T]`, `Into[T]`, `TryInto[T]`.
     fn constraint(
-    ) -> impl chumsky::Parser<Token, cst::ParamConstraint, Error = ParseErr> + Clone
-    {
+    ) -> impl chumsky::Parser<Token, cst::Class, Error = ParseErr> + Clone {
         // Type args inside brackets: `[T]`, `[T, U]`, etc.
         let type_args = just(Token::LBracket)
             .ignore_then(
@@ -2792,12 +2791,12 @@ impl Parser {
             .try_map(|(name, args), span| {
                 let args = args.unwrap_or_default();
                 match name.as_str() {
-                    "Numeric" => Ok(cst::ParamConstraint::Numeric),
-                    "Subscriptable" => Ok(cst::ParamConstraint::Subscriptable),
-                    "Storable" => Ok(cst::ParamConstraint::Storable),
-                    "Monoid" => Ok(cst::ParamConstraint::Monoid),
-                    "BitLike" => Ok(cst::ParamConstraint::BitLike),
-                    "Negatable" => Ok(cst::ParamConstraint::Negatable),
+                    "Numeric" => Ok(cst::Class::Numeric),
+                    "Subscriptable" => Ok(cst::Class::Subscriptable),
+                    "Storable" => Ok(cst::Class::Storable),
+                    "Monoid" => Ok(cst::Class::Monoid),
+                    "BitLike" => Ok(cst::Class::BitLike),
+                    "Negatable" => Ok(cst::Class::Negatable),
                     "Iterable" => args.into_iter().next().map_or_else(
                         || {
                             Err(Simple::custom(
@@ -2805,7 +2804,7 @@ impl Parser {
                                 "`Iterable` requires a type argument; use `Iterable[T]`",
                             ))
                         },
-                        |ty| Ok(cst::ParamConstraint::Iterable(ty)),
+                        |ty| Ok(cst::Class::Iterable(ty)),
                     ),
                     "Fallible" => args.into_iter().next().map_or_else(
                         || {
@@ -2814,7 +2813,7 @@ impl Parser {
                                 "`Fallible` requires a type argument; use `Fallible[T]`",
                             ))
                         },
-                        |ty| Ok(cst::ParamConstraint::Fallible(ty)),
+                        |ty| Ok(cst::Class::Fallible(ty)),
                     ),
                     "Into" => args.into_iter().next().map_or_else(
                         || {
@@ -2823,7 +2822,7 @@ impl Parser {
                                 "`Into` requires a type argument; use `Into[T]`",
                             ))
                         },
-                        |ty| Ok(cst::ParamConstraint::Into(ty)),
+                        |ty| Ok(cst::Class::Into(ty)),
                     ),
                     "TryInto" => args.into_iter().next().map_or_else(
                         || {
@@ -2832,12 +2831,12 @@ impl Parser {
                                 "`TryInto` requires a type argument; use `TryInto[T]`",
                             ))
                         },
-                        |ty| Ok(cst::ParamConstraint::TryInto(ty)),
+                        |ty| Ok(cst::Class::TryInto(ty)),
                     ),
                     _ => Err(Simple::custom(
                         span,
                         format!(
-                            "unknown constraint `{name}`; valid constraints are: \
+                            "unknown class `{name}`; valid classes are: \
                              Numeric, Negatable, Subscriptable, Storable, Iterable[T], \
                              Monoid, BitLike, Fallible[T], Into[T], TryInto[T]"
                         ),

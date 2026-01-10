@@ -6,10 +6,10 @@
 use std::collections::HashMap;
 
 use super::{Constraint, InferCtx};
-use crate::ast::{AstTypeExpr, AstTypeExprId, Visibility};
+use crate::ast::{self, AstTypeExpr, AstTypeExprId, Visibility};
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{Scheme, Ty};
+use crate::typecheck::ty::{Class, Scheme, Ty};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -406,6 +406,35 @@ impl InferCtx<'_> {
     /// happens in unification and field access as needed.
     fn expand_alias_or_named(&mut self, type_id: TypeId, args: Vec<Ty>) -> Ty {
         Ty::Named(type_id, args)
+    }
+
+    /// Convert an `ast::Class` to a `ty::Class`, resolving type parameter
+    /// references via `subst`.
+    pub(super) fn ast_class_to_ty_class(
+        &mut self,
+        c: &ast::Class,
+        subst: &HashMap<StringId, Ty>,
+    ) -> Class {
+        match c {
+            ast::Class::Numeric => Class::Numeric,
+            ast::Class::Subscriptable => Class::Subscriptable,
+            ast::Class::Storable => Class::Storable,
+            ast::Class::Iterable(ty_id) => {
+                Class::Iterable(self.ast_type_to_ty(*ty_id, subst))
+            }
+            ast::Class::Monoid => Class::Monoid,
+            ast::Class::BitLike => Class::BitLike,
+            ast::Class::Negatable => Class::Negatable,
+            ast::Class::Fallible(ty_id) => {
+                Class::Fallible(self.ast_type_to_ty(*ty_id, subst))
+            }
+            ast::Class::Into(ty_id) => {
+                Class::Into(self.ast_type_to_ty(*ty_id, subst))
+            }
+            ast::Class::TryInto(ty_id) => {
+                Class::TryInto(self.ast_type_to_ty(*ty_id, subst))
+            }
+        }
     }
 
     /// Convert a parameterized type to `Ty`.

@@ -34,7 +34,7 @@ use smallvec::SmallVec;
 
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
-use super::ty::{Scheme, Subst, Ty, TyVar};
+use super::ty::{Class, Scheme, Subst, Ty, TyVar};
 use crate::ast::{ExprId, TxnId};
 use crate::env::Environment;
 use crate::intern::StringInterner;
@@ -383,52 +383,44 @@ impl<'a> InferCtx<'a> {
         self.constrain(Constraint::Eq(t1, t2, span));
     }
 
-    /// Emit constraints from user-specified type parameter bounds.
+    /// Emit constraints from class constraints.
     ///
     /// Called after instantiating a scheme to re-emit the constraints with
     /// the fresh type variables. This ensures constraints are checked at
     /// call sites, not just at function definition.
-    pub(crate) fn emit_user_constraints(
+    pub(crate) fn emit_class_constraints(
         &mut self,
-        constraints: smallvec::SmallVec<
-            [(Ty, crate::ast::ParamConstraint, Option<Ty>); 2],
-        >,
+        constraints: smallvec::SmallVec<[(Ty, Class); 2]>,
         span: Span,
     ) {
-        use crate::ast::ParamConstraint;
-        constraints.into_iter().for_each(|(ty, c, elem_ty)| {
-            let constraint = match c {
-                ParamConstraint::Numeric => Constraint::Numeric(ty, span),
-                ParamConstraint::Subscriptable => {
-                    Constraint::Subscriptable(ty, span)
-                }
-                ParamConstraint::Storable => Constraint::Storable(ty, span),
-                ParamConstraint::Iterable(_) => {
-                    // Use pre-resolved element type if available, else fresh
-                    let elem = elem_ty.unwrap_or_else(|| self.fresh());
-                    Constraint::Iterable {
-                        coll: ty,
-                        elem,
-                        span,
-                    }
-                }
-                ParamConstraint::Monoid => Constraint::Monoid(ty, span),
-                ParamConstraint::BitLike => Constraint::BitLike(ty, span),
-                ParamConstraint::Negatable => Constraint::Negatable(ty, span),
-                ParamConstraint::Fallible(_) => {
-                    // Use pre-resolved inner type if available, else fresh
-                    let inner = elem_ty.unwrap_or_else(|| self.fresh());
+        constraints.into_iter().for_each(|(ty, class)| {
+            let constraint = match class {
+                Class::Numeric => Constraint::Numeric(ty, span),
+                Class::Subscriptable => Constraint::Subscriptable(ty, span),
+                Class::Storable => Constraint::Storable(ty, span),
+                Class::Iterable(elem) => Constraint::Iterable {
+                    coll: ty,
+                    elem,
+                    span,
+                },
+                Class::Monoid => Constraint::Monoid(ty, span),
+                Class::BitLike => Constraint::BitLike(ty, span),
+                Class::Negatable => Constraint::Negatable(ty, span),
+                Class::Fallible(inner) => {
                     Constraint::Fallible { ty, inner, span }
                 }
-                ParamConstraint::Into(_) => {
-                    // For `T: Into[Target]`, `ty` is `T` and `elem_ty` is `Target`
-                    let to = elem_ty.unwrap_or_else(|| self.fresh());
-                    Constraint::Into { from: ty, to, span }
-                }
-                ParamConstraint::TryInto(_) => {
-                    // For `T: TryInto[Target]`, `ty` is `T` and `elem_ty` is `Target`
-                    let to = elem_ty.unwrap_or_else(|| self.fresh());
+                Class::Into(to) => Constraint::Into { from: ty, to, span },
+                Class::TryInto(to) => {
                     Constraint::TryInto { from: ty, to, span }
+                }
+                // TODO: `Indexable` is not yet user declarable or recognized
+                // as a class
+                //
+                // Will be addressed in future
+                //
+                // Indexable requires idx/elem types; not user-declarable yet
+                Class::Indexable => {
+                    unreachable!("Indexable not user-declarable")
                 }
             };
             self.constrain(constraint);

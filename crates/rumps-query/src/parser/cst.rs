@@ -48,13 +48,13 @@ use smallvec::SmallVec;
 use crate::ast::{BinOp, Intrinsic, JsonAccessKind, Literal, UnOp};
 use crate::Span;
 
-/// Constraint for type parameters.
+/// Type class constraint for type parameters (Haskell-style).
 ///
 /// This is a subset of the internal `Constraint` enum from the typechecker.
 /// Not all internal constraints are exposed to users; see the design doc
 /// at `TODOS/dsl/type-constraints.md` for rationale.
 #[derive(Clone, Debug)]
-pub(crate) enum ParamConstraint {
+pub(crate) enum Class {
     /// Type is `Int` or `Float`.
     Numeric,
     /// Type can be used as a DB subscript key.
@@ -95,13 +95,13 @@ pub(crate) enum ParamConstraint {
     TryInto(TypeExpr),
 }
 
-/// A type parameter with optional constraints.
+/// A type parameter with optional class constraints.
 ///
-/// Represents `T` or `T: Constraint1 + Constraint2` in type parameter lists.
+/// Represents `T` or `T: Class1 + Class2` in type parameter lists.
 #[derive(Clone, Debug)]
 pub(crate) struct TypeParam {
     pub name: String,
-    pub constraints: SmallVec<[ParamConstraint; 2]>,
+    pub constraints: SmallVec<[Class; 2]>,
 }
 
 /// Type pattern for the `IS` operator (CST version).

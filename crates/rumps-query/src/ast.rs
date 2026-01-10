@@ -118,8 +118,8 @@ impl StmtId {
 impl AstTypeExprId {
     /// Placeholder ID for macro-generated constraints.
     ///
-    /// Used by the `scheme!` macro when generating `ParamConstraint::Iterable`
-    /// or `ParamConstraint::Fallible` entries. The actual element/inner type is
+    /// Used by the `scheme!` macro when generating `Class::Iterable`
+    /// or `Class::Fallible` entries. The actual element/inner type is
     /// provided via the `Option<Ty>` in the scheme's constraints vec; this ID
     /// is never dereferenced.
     pub(crate) const INVALID: Self = Self(u32::MAX);
@@ -137,13 +137,16 @@ impl MatchPatternId {
     }
 }
 
-/// Constraint for type parameters.
+/// Type class constraint for type parameters (Haskell-style).
 ///
 /// This is a subset of the internal `Constraint` enum from the typechecker.
 /// Not all internal constraints are exposed to users; see the design doc
 /// at `TODOS/dsl/type-constraints.md` for rationale.
+///
+/// Note: Distinguished from `ty::Class` which carries resolved `Ty` types;
+/// this carries `AstTypeExprId` for parameterized variants.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ParamConstraint {
+pub(crate) enum Class {
     /// Type is `Int` or `Float`.
     Numeric,
     /// Type can be used as a DB subscript key.
@@ -184,13 +187,13 @@ pub(crate) enum ParamConstraint {
     TryInto(AstTypeExprId),
 }
 
-/// A type parameter with optional constraints.
+/// A type parameter with optional class constraints.
 ///
-/// Represents `T` or `T: Constraint1 + Constraint2` in type parameter lists.
+/// Represents `T` or `T: Class1 + Class2` in type parameter lists.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TypeParam {
     pub name: String,
-    pub constraints: SmallVec<[ParamConstraint; 2]>,
+    pub constraints: SmallVec<[Class; 2]>,
 }
 
 /// The AST arena; owns all expressions and statements.

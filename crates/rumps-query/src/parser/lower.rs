@@ -45,31 +45,26 @@ fn lower_visibility(vis: cst::Visibility) -> Visibility {
     }
 }
 
-/// Convert a CST constraint to an AST constraint.
-fn lower_constraint(
-    ast: &mut Ast,
-    c: cst::ParamConstraint,
-) -> Result<ast::ParamConstraint> {
+/// Convert a CST class to an AST class.
+fn lower_class(ast: &mut Ast, c: cst::Class) -> Result<ast::Class> {
     Ok(match c {
-        cst::ParamConstraint::Numeric => ast::ParamConstraint::Numeric,
-        cst::ParamConstraint::Subscriptable => {
-            ast::ParamConstraint::Subscriptable
+        cst::Class::Numeric => ast::Class::Numeric,
+        cst::Class::Subscriptable => ast::Class::Subscriptable,
+        cst::Class::Storable => ast::Class::Storable,
+        cst::Class::Iterable(elem) => {
+            ast::Class::Iterable(lower_type_expr(ast, elem)?)
         }
-        cst::ParamConstraint::Storable => ast::ParamConstraint::Storable,
-        cst::ParamConstraint::Iterable(elem) => {
-            ast::ParamConstraint::Iterable(lower_type_expr(ast, elem)?)
+        cst::Class::Monoid => ast::Class::Monoid,
+        cst::Class::BitLike => ast::Class::BitLike,
+        cst::Class::Negatable => ast::Class::Negatable,
+        cst::Class::Fallible(inner) => {
+            ast::Class::Fallible(lower_type_expr(ast, inner)?)
         }
-        cst::ParamConstraint::Monoid => ast::ParamConstraint::Monoid,
-        cst::ParamConstraint::BitLike => ast::ParamConstraint::BitLike,
-        cst::ParamConstraint::Negatable => ast::ParamConstraint::Negatable,
-        cst::ParamConstraint::Fallible(inner) => {
-            ast::ParamConstraint::Fallible(lower_type_expr(ast, inner)?)
+        cst::Class::Into(target) => {
+            ast::Class::Into(lower_type_expr(ast, target)?)
         }
-        cst::ParamConstraint::Into(target) => {
-            ast::ParamConstraint::Into(lower_type_expr(ast, target)?)
-        }
-        cst::ParamConstraint::TryInto(target) => {
-            ast::ParamConstraint::TryInto(lower_type_expr(ast, target)?)
+        cst::Class::TryInto(target) => {
+            ast::Class::TryInto(lower_type_expr(ast, target)?)
         }
     })
 }
@@ -82,7 +77,7 @@ fn lower_type_param(
     let constraints = tp
         .constraints
         .into_iter()
-        .map(|c| lower_constraint(ast, c))
+        .map(|c| lower_class(ast, c))
         .collect::<Result<_>>()?;
     Ok(ast::TypeParam {
         name: tp.name,

@@ -5,74 +5,9 @@
 
 use std::fmt;
 
-/// The kind of type constraint that was violated.
-///
-/// Used in `TypeError::UnsatisfiedConstraint` to report which constraint
-/// a type failed to satisfy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ConstraintKind {
-    /// Type must be `Int` or `Float`.
-    Numeric,
-    /// Type must be usable as a database subscript key.
-    Subscriptable,
-    /// Type must be storable in the database.
-    Storable,
-    /// Type must support concatenation/append (`++`).
-    Monoid,
-    /// Type must be indexable (`[]` access).
-    Indexable,
-    /// Type must support bitwise operations (`&`, `|`, `<<`, `>>`).
-    BitLike,
-    /// Type must support unary negation (`-`).
-    Negatable,
-}
-
-impl fmt::Display for ConstraintKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Numeric => write!(f, "Numeric"),
-            Self::Subscriptable => write!(f, "Subscriptable"),
-            Self::Storable => write!(f, "Storable"),
-            Self::Monoid => write!(f, "Monoid"),
-            Self::Indexable => write!(f, "Indexable"),
-            Self::BitLike => write!(f, "BitLike"),
-            Self::Negatable => write!(f, "Negatable"),
-        }
-    }
-}
-
-impl ConstraintKind {
-    /// Returns a help message describing what types satisfy this constraint.
-    fn help(self) -> Option<&'static str> {
-        match self {
-            Self::Numeric => {
-                Some("numeric types are `Int`, `Word`, and `Float`")
-            }
-            Self::Subscriptable => Some(
-                "subscript keys must be `Bool`, `Int`, `Float`, `Char`, \
-                 `String`, `Json`, or `Subscript`",
-            ),
-            Self::Storable => Some(
-                "storable types are `Bool`, `Int`, `Float`, `Char`, \
-                 `String`, or `Json`",
-            ),
-            Self::Monoid => {
-                Some("`++` works on `String`, `Array`, `Map`, and `Option`")
-            }
-            Self::Indexable => {
-                Some("indexable types are `Array`, `Map`, and `String`")
-            }
-            Self::BitLike => {
-                Some("bitwise types are `Bool`, `Int`, and `Word`")
-            }
-            Self::Negatable => Some("negatable types are `Int` and `Float`"),
-        }
-    }
-}
-
 use thiserror::Error;
 
-use super::ty::{Ty, TyVar};
+use super::ty::{Class, Ty, TyVar};
 use crate::intern::{StringId, StringInterner};
 use crate::value::{TypeRegistry, ValueArena};
 use crate::{Span, TypeId};
@@ -280,9 +215,9 @@ pub(crate) enum TypeError {
         span: Span,
     },
 
-    /// Type does not satisfy a constraint (Numeric, Into[Json], etc.).
-    #[error("type `{1}` does not satisfy `{0}` constraint")]
-    UnsatisfiedConstraint(ConstraintKind, Ty, Span),
+    /// Type does not satisfy a class (Numeric, Into[Json], etc.).
+    #[error("type `{1}` does not satisfy `{0}` class")]
+    UnsatisfiedClass(Class, Ty, Span),
 
     /// Struct literal missing a required field.
     #[error("missing required field `{field}` for type `{ty:?}`")]
@@ -419,7 +354,7 @@ impl TypeError {
             | Self::UndefinedVar(_, span)
             | Self::NotCallable(_, span)
             | Self::ArityMismatch { span, .. }
-            | Self::UnsatisfiedConstraint(_, _, span)
+            | Self::UnsatisfiedClass(_, _, span)
             | Self::MissingField { span, .. }
             | Self::FieldTypeMismatch { span, .. }
             | Self::InfiniteType(_, _, span)
@@ -468,13 +403,13 @@ impl TypeError {
                 format!("expected {expected} argument(s), got {got}"),
                 None,
             ),
-            Self::UnsatisfiedConstraint(kind, ty, _) => (
+            Self::UnsatisfiedClass(class, ty, _) => (
                 format!(
-                    "type `{}` does not satisfy `{}` constraint",
+                    "type `{}` does not satisfy `{}` class",
                     p.format(ty),
-                    kind
+                    class.name()
                 ),
-                kind.help().map(str::to_owned),
+                class.help().map(str::to_owned),
             ),
             Self::MissingField { ty, field, .. } => (
                 format!(

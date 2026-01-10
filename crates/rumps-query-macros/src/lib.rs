@@ -178,20 +178,24 @@ impl Parse for SchemeInput {
     }
 }
 
-/// Generate AST tokens for a parameterized constraint.
+/// Generate tokens for a parameterized class constraint.
 ///
-/// Each constraint has a single `AstTypeExprId::INVALID` placeholder for the
-/// type argument.
-fn constraint_ast_tokens(name: &str) -> TokenStream2 {
-    let invalid = quote! { crate::ast::AstTypeExprId::INVALID };
+/// For parameterized classes (`Iterable[T]`, `Fallible[T]`, `Into[T]`),
+/// we generate a `ty::Class::Variant(Ty::Var(...))` with the inner type.
+fn parameterized_class_tokens(
+    name: &str,
+    inner_ty: TokenStream2,
+) -> TokenStream2 {
     match name {
         "Iterable" => {
-            quote! { crate::ast::ParamConstraint::Iterable(#invalid) }
+            quote! { crate::typecheck::Class::Iterable(#inner_ty) }
         }
         "Fallible" => {
-            quote! { crate::ast::ParamConstraint::Fallible(#invalid) }
+            quote! { crate::typecheck::Class::Fallible(#inner_ty) }
         }
-        "Into" => quote! { crate::ast::ParamConstraint::Into(#invalid) },
+        "Into" => {
+            quote! { crate::typecheck::Class::Into(#inner_ty) }
+        }
         _ => panic!("unknown parameterized constraint: `{name}`"),
     }
 }
@@ -215,7 +219,7 @@ impl SchemeInput {
         } else {
             let var_indices: Vec<u32> = (0..self.vars.len() as u32).collect();
 
-            // Generate constraint entries
+            // Generate constraint entries: (TyVar, Class) tuples
             let constraint_entries: Vec<TokenStream2> = self
                 .vars
                 .iter()
@@ -230,8 +234,7 @@ impl SchemeInput {
                                 quote! {
                                     (
                                         crate::typecheck::TyVar::new(#var_idx),
-                                        crate::ast::ParamConstraint::#ident,
-                                        None
+                                        crate::typecheck::Class::#ident
                                     )
                                 }
                             }
@@ -246,13 +249,12 @@ impl SchemeInput {
                                         })
                                     })
                                     .collect();
-                                let constraint_tokens = constraint_ast_tokens(name);
                                 let inner_ty = if arg_indices.len() == 1 {
                                     let idx = arg_indices[0];
                                     quote! {
-                                        Some(crate::typecheck::Ty::Var(
+                                        crate::typecheck::Ty::Var(
                                             crate::typecheck::TyVar::new(#idx)
-                                        ))
+                                        )
                                     }
                                 } else {
                                     let var_tokens: Vec<_> = arg_indices
@@ -266,14 +268,15 @@ impl SchemeInput {
                                         })
                                         .collect();
                                     quote! {
-                                        Some(crate::typecheck::Ty::Tuple(vec![#(#var_tokens),*]))
+                                        crate::typecheck::Ty::Tuple(vec![#(#var_tokens),*])
                                     }
                                 };
+                                let class_tokens =
+                                    parameterized_class_tokens(name, inner_ty);
                                 quote! {
                                     (
                                         crate::typecheck::TyVar::new(#var_idx),
-                                        #constraint_tokens,
-                                        #inner_ty
+                                        #class_tokens
                                     )
                                 }
                             }

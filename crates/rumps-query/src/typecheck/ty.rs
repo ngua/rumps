@@ -4,13 +4,118 @@
 //! (polymorphic type schemes), and `Subst` (type substitutions).
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use indexmap::IndexMap;
 use smallvec::SmallVec;
 
-use crate::ast::ParamConstraint;
 use crate::intern::StringId;
 use crate::TypeId;
+
+/// User-facing type class constraint (Haskell-style).
+///
+/// Unlike `ast::Class` which carries `AstTypeExprId` for parameterized
+/// variants, this carries resolved `Ty` types. Used in `Scheme` storage
+/// and during constraint solving.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Class {
+    /// Type is `Int`, `Word`, or `Float`.
+    Numeric,
+    /// Type can be used as a DB subscript key.
+    Subscriptable,
+    /// Type can be stored in the database.
+    Storable,
+    /// Type is iterable (`Array[T]` or `Range`).
+    Iterable(Ty),
+    /// Type supports monoidal concatenation (`++`).
+    Monoid,
+    /// Type supports bitwise operations (`&`, `|`, `<<`, `>>`).
+    BitLike,
+    /// Type can be negated with unary `-`.
+    Negatable,
+    /// Type is fallible (`Option[T]` or `Result[T, E]`).
+    Fallible(Ty),
+    /// Type can be converted to another type.
+    Into(Ty),
+    /// Type can be fallibly converted to another type.
+    TryInto(Ty),
+    /// Type supports indexing (`[]` access).
+    Indexable,
+}
+
+impl Class {
+    /// Apply a substitution to any inner types.
+    pub(crate) fn apply(&self, subst: &Subst) -> Self {
+        match self {
+            Self::Numeric => Self::Numeric,
+            Self::Subscriptable => Self::Subscriptable,
+            Self::Storable => Self::Storable,
+            Self::Iterable(t) => Self::Iterable(t.apply(subst)),
+            Self::Monoid => Self::Monoid,
+            Self::BitLike => Self::BitLike,
+            Self::Negatable => Self::Negatable,
+            Self::Fallible(t) => Self::Fallible(t.apply(subst)),
+            Self::Into(t) => Self::Into(t.apply(subst)),
+            Self::TryInto(t) => Self::TryInto(t.apply(subst)),
+            Self::Indexable => Self::Indexable,
+        }
+    }
+
+    /// Returns the name of this class for error messages.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::Numeric => "Numeric",
+            Self::Subscriptable => "Subscriptable",
+            Self::Storable => "Storable",
+            Self::Iterable(_) => "Iterable",
+            Self::Monoid => "Monoid",
+            Self::BitLike => "BitLike",
+            Self::Negatable => "Negatable",
+            Self::Fallible(_) => "Fallible",
+            Self::Into(_) => "Into",
+            Self::TryInto(_) => "TryInto",
+            Self::Indexable => "Indexable",
+        }
+    }
+
+    /// Returns a help message describing what types satisfy this class.
+    pub(crate) fn help(&self) -> Option<&'static str> {
+        match self {
+            Self::Numeric => {
+                Some("numeric types are `Int`, `Word`, and `Float`")
+            }
+            Self::Subscriptable => Some(
+                "subscript keys must be `Bool`, `Int`, `Float`, `Char`, \
+                 `String`, `Json`, or `Subscript`",
+            ),
+            Self::Storable => Some(
+                "storable types are `Bool`, `Int`, `Float`, `Char`, \
+                 `String`, or `Json`",
+            ),
+            Self::Monoid => {
+                Some("`++` works on `String`, `Array`, `Map`, and `Option`")
+            }
+            Self::BitLike => {
+                Some("bitwise types are `Bool`, `Int`, and `Word`")
+            }
+            Self::Negatable => Some("negatable types are `Int` and `Float`"),
+            Self::Iterable(_) => Some("iterable types are `Array` and `Range`"),
+            Self::Fallible(_) => {
+                Some("fallible types are `Option` and `Result`")
+            }
+            Self::Indexable => {
+                Some("indexable types are `Array`, `Map`, and `String`")
+            }
+            Self::Into(_) | Self::TryInto(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for Class {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
 
 /// A type variable; placeholder for an unknown type during inference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -320,15 +425,12 @@ pub(crate) struct Scheme {
     pub(crate) vars: Vec<TyVar>,
     /// The body type (may contain the quantified variables).
     pub(crate) ty: Ty,
-    /// User-specified constraints on type variables.
+    /// User-specified class constraints on type variables.
     ///
     /// These are re-emitted when the scheme is instantiated at call sites.
-    /// The tuple contains:
-    /// - The type variable being constrained
-    /// - The constraint itself
-    /// - For `Iterable[T]` or `Fallible[T]`, the element/inner type (may be
-    ///   a type variable or concrete type like `Int`)
-    pub(crate) constraints: SmallVec<[(TyVar, ParamConstraint, Option<Ty>); 2]>,
+    /// Each tuple is `(type_var, class)` where parameterized classes like
+    /// `Iterable(T)` carry the element type directly.
+    pub(crate) constraints: SmallVec<[(TyVar, Class); 2]>,
 }
 
 impl Scheme {
@@ -386,13 +488,11 @@ impl Scheme {
     ///
     /// Takes a mutable counter for generating fresh `TyVar`s. Returns:
     /// - The concrete `Ty` with all quantified variables replaced by fresh ones
-    /// - The constraints with type variables substituted, to be re-emitted;
-    ///   each entry is `(ty, constraint, inner_ty)` where `inner_ty` is
-    ///   `Some` for `Iterable[T]` and `Fallible[T]` constraints
+    /// - The class constraints with type variables substituted, to be re-emitted
     pub(crate) fn instantiate(
         &self,
         next: &mut u32,
-    ) -> (Ty, SmallVec<[(Ty, ParamConstraint, Option<Ty>); 2]>) {
+    ) -> (Ty, SmallVec<[(Ty, Class); 2]>) {
         if self.vars.is_empty() {
             (self.ty.clone(), SmallVec::new())
         } else {
@@ -418,11 +518,10 @@ impl Scheme {
             let constraints = self
                 .constraints
                 .iter()
-                .map(|(v, c, elem)| {
+                .map(|(v, class)| {
                     let ty = subst.0.get(v).cloned().unwrap_or(Ty::Var(*v));
-                    // Apply substitution to inner type (handles both TyVar and concrete)
-                    let elem_ty = elem.as_ref().map(|e| e.apply(&subst));
-                    (ty, c.clone(), elem_ty)
+                    let class = class.apply(&subst);
+                    (ty, class)
                 })
                 .collect();
             (ty, constraints)

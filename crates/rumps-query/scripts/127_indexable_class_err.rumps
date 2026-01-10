@@ -1,4 +1,4 @@
-; Test: Indexable constraint errors
+; Test: Indexable class errors
 ; Tests that non-indexable types produce proper error messages
 
 ; Try to index an Int (should fail)
