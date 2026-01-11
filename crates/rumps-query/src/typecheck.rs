@@ -60,6 +60,7 @@ pub(crate) fn check(
     HashMap<ExprId, Ty>,
     HashMap<ExprId, Ty>,
     HashMap<ExprId, Ty>,
+    HashMap<ExprId, Ty>,
 )> {
     let mut ctx =
         InferCtx::new(ast, registry, type_exprs, runtime_env, strings);

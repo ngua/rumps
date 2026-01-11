@@ -1217,9 +1217,13 @@ impl<'a> InferCtx<'a> {
                     .for_each(|m| self.check_fallible(m, inner, span, subst));
             }
 
-            // Type variable: defer until resolved. The Callable constraint for
-            // the expression that produces this value will eventually bind it.
-            Ty::Var(_) => {}
+            // Type variable: default to Option[inner]. This happens when `?x`
+            // is not constrained by context (e.g., standalone `?x` expression).
+            // Mimics Haskell's defaulting: `?x` becomes `Option.Some(x)`.
+            Ty::Var(v) => {
+                let opt = Ty::Option(Box::new(inner.clone()));
+                subst.extend(*v, opt);
+            }
 
             Ty::Error | Ty::Unknown => {}
 

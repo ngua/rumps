@@ -194,6 +194,12 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// `TryInto::try_into` methods with the correct target type.
     convert_targets: HashMap<ExprId, crate::typecheck::Ty>,
 
+    /// Mapping from wrap expression IDs to their target `Fallible` types.
+    ///
+    /// Populated during typechecking; used by the `?` prefix operator to
+    /// produce `Option.Some` or `Result.Ok` depending on context.
+    wrap_types: HashMap<ExprId, crate::typecheck::Ty>,
+
     /// Registry of class methods for dispatch.
     class_methods: class::ClassMethods,
 }
@@ -233,6 +239,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             mempty_types,
             numeric_types,
             convert_targets,
+            wrap_types,
         ) = crate::typecheck::check(
             ast,
             stmts,
@@ -255,6 +262,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             mempty_types,
             numeric_types,
             convert_targets,
+            wrap_types,
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -307,6 +315,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             mempty_types: HashMap::new(),
             numeric_types: HashMap::new(),
             convert_targets: HashMap::new(),
+            wrap_types: HashMap::new(),
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -336,7 +345,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.intrinsic(op, rt, val, txn_id, span).await
             }
             Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
-            Expr::Unary(op, operand) => self.unary(op, operand, span).await,
+            Expr::Unary(op, operand) => self.unary(id, op, operand, span).await,
             Expr::Call(callee, args) => self.call(callee, &args, span).await,
             Expr::Object(entries) => self.object(&entries, span).await,
             Expr::Array(elems) => self.array(&elems, span).await,
@@ -1376,12 +1385,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn unary(
         &mut self,
+        id: ExprId,
         op: UnOp,
         operand: ExprId,
         span: Span,
     ) -> Result<Value> {
         let val = self.eval(operand).await?;
-        self.apply_unop(op, val, span)
+        self.apply_unop(id, op, val, span)
     }
 
     /// Evaluate a type check: `expr is Pattern`.

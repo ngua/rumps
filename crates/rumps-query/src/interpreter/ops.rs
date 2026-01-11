@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 
 use super::class::ClassCtx;
 use super::Interpreter;
-use crate::ast::{BinOp, UnOp};
+use crate::ast::{BinOp, ExprId, UnOp};
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::typecheck::ClassKind;
@@ -185,13 +185,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Type checker guarantees:
     /// - `-` is only applied to `Negatable` types (`Int` or `Float`)
     /// - `NOT` is only applied to `Bool`
-    /// - `?` can wrap any value in `Option.Some`
+    /// - `?` wraps in `Option.Some` or `Result.Ok` depending on context
     ///
     /// # Fast-paths
     ///
     /// Negation on `Int` is inlined to avoid class dispatch overhead.
     pub(super) fn apply_unop(
         &mut self,
+        id: ExprId,
         op: UnOp,
         v: Value,
         span: Span,
@@ -207,8 +208,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => typechecked!("NOT", "Bool"),
             }),
             UnOp::Wrap => {
-                let inner_id = self.arena.add(v, span);
-                Ok(self.make_some(inner_id))
+                // Look up target type (defaulted to `Option[T]` during constraint solving)
+                let ty =
+                    self.wrap_types.get(&id).cloned().unwrap_or_else(|| {
+                        typechecked!("?", "resolved wrap type")
+                    });
+                self.dispatch_convert(
+                    ClassKind::Fallible,
+                    "wrap",
+                    &v,
+                    &ty,
+                    span,
+                )
             }
         }
     }

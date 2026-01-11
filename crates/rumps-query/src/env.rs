@@ -399,7 +399,7 @@ impl UnOp {
             },
             Self::Wrap => UnOpDef {
                 name: "?",
-                ty: scheme!(forall T. (T) -> Option[T]),
+                ty: scheme!(forall T, F: Fallible[T]. (T) -> F),
             },
         }
     }

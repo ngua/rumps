@@ -161,6 +161,12 @@ pub(crate) struct InferCtx<'a> {
     /// Populated when `Into::into` or `TryInto::try_into` methods are called.
     /// The interpreter uses this to dispatch the correct conversion.
     convert_targets: HashMap<ExprId, Ty>,
+    /// Mapping from wrap expression IDs to their target `Fallible` types.
+    ///
+    /// Populated during inference for `?` (wrap) operators; resolved after
+    /// substitution to concrete `Option[T]` or `Result[T, E]` types.
+    /// The interpreter uses this to produce the correct wrapper type.
+    wrap_types: HashMap<ExprId, Ty>,
     /// Type variables created for integer literals, for defaulting to `Int`.
     ///
     /// Integer literals are polymorphic (no constraint) so they can unify with
@@ -214,6 +220,7 @@ impl<'a> InferCtx<'a> {
             mempty_types: HashMap::new(),
             numeric_types: HashMap::new(),
             convert_targets: HashMap::new(),
+            wrap_types: HashMap::new(),
             numeric_vars: Vec::new(),
             closure_schemes: HashMap::new(),
             in_transaction: None,
@@ -391,6 +398,9 @@ impl<'a> InferCtx<'a> {
         self.convert_targets
             .values_mut()
             .for_each(|ty| *ty = ty.apply(subst));
+        self.wrap_types
+            .values_mut()
+            .for_each(|ty| *ty = ty.apply(subst));
     }
 
     /// Check for remaining unresolved type variables and emit errors.
@@ -439,6 +449,7 @@ impl<'a> InferCtx<'a> {
         HashMap<ExprId, Ty>,
         HashMap<ExprId, Ty>,
         HashMap<ExprId, Ty>,
+        HashMap<ExprId, Ty>,
     )> {
         NonEmpty::from_vec(self.errors).map_or(
             Ok((
@@ -447,6 +458,7 @@ impl<'a> InferCtx<'a> {
                 self.mempty_types,
                 self.numeric_types,
                 self.convert_targets,
+                self.wrap_types,
             )),
             |errs| {
                 let printer = TyPrinter::new(

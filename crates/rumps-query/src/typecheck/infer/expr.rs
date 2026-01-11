@@ -61,7 +61,7 @@ impl InferCtx<'_> {
             Expr::Binary(lhs, op, rhs) => self.binary(*lhs, *op, *rhs, span),
 
             // Unary operations
-            Expr::Unary(op, operand) => self.unary(*op, *operand, span),
+            Expr::Unary(op, operand) => self.unary(id, *op, *operand, span),
 
             // Range expressions
             Expr::Range(start, end, _inclusive) => {
@@ -595,6 +595,28 @@ impl InferCtx<'_> {
                 }
             }
 
+            // Special: Fallible:wrap needs convert_targets tracking
+            (ClassKind::Fallible, "wrap") => {
+                if args.len() != 1 {
+                    self.error(TypeError::ArityMismatch {
+                        expected: 1,
+                        got: args.len(),
+                        span,
+                    });
+                    Ty::Error
+                } else {
+                    let inner_ty = self.expr(args[0]);
+                    let fallible_ty = Ty::Var(self.fresh_var());
+                    self.constrain(Constraint::Class {
+                        ty: fallible_ty.clone(),
+                        class: Class::Fallible(inner_ty),
+                        span,
+                    });
+                    self.convert_targets.insert(id, fallible_ty.clone());
+                    fallible_ty
+                }
+            }
+
             // Special: Indexable requires Class::Indexable(idx, elem) constraint
             (ClassKind::Indexable, "index") => {
                 if args.len() != 2 {
@@ -842,10 +864,24 @@ impl InferCtx<'_> {
     /// Infer type of a unary operation.
     ///
     /// Uses the operator's type scheme to generate constraints and determine
-    /// the result type.
-    fn unary(&mut self, op: UnOp, operand_id: ExprId, span: Span) -> Ty {
+    /// the result type. For `?` (wrap), tracks the result type for interpreter
+    /// dispatch to either `Option.Some` or `Result.Ok`.
+    fn unary(
+        &mut self,
+        id: ExprId,
+        op: UnOp,
+        operand_id: ExprId,
+        span: Span,
+    ) -> Ty {
         let operand_ty = self.expr(operand_id);
-        self.apply_op_scheme(&op.def().ty, &[operand_ty], span)
+        let result = self.apply_op_scheme(&op.def().ty, &[operand_ty], span);
+
+        // Track wrap types for interpreter dispatch
+        if matches!(op, UnOp::Wrap) {
+            self.wrap_types.insert(id, result.clone());
+        }
+
+        result
     }
 
     /// Infer type of an array literal with potential spread elements.

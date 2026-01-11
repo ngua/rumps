@@ -85,6 +85,10 @@ impl ClassKind {
             (Self::Fallible, "unwrap") => {
                 Some(scheme!(forall T, F: Fallible[T]. (F) -> T))
             }
+            // Fallible: (T) -> F where F: Fallible[T]
+            (Self::Fallible, "wrap") => {
+                Some(scheme!(forall T, F: Fallible[T]. (T) -> F))
+            }
 
             // Iterable methods
             (Self::Iterable, "length") => {

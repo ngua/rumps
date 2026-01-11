@@ -399,11 +399,14 @@ pub(crate) enum BinOp {
 pub(crate) enum UnOp {
     Neg, // `-`
     Not, // `NOT` or `!`
-    /// Prefix `?` wraps a value in `Option.Some`.
+    /// Prefix `?` wraps a value in a `Fallible` type (`Option` or `Result`).
     ///
-    /// `?x` produces `Option.Some(x)`. For nested wrapping, use parens:
-    /// `?(?x)` produces `Option.Some(Option.Some(x))`. Note that `??x`
-    /// is parsed as the coalesce operator, not nested wrap.
+    /// By default, `?x` produces `Option.Some(x)`. When context expects
+    /// `Result[T, E]`, it produces `Result.Ok(x)` instead. Equivalent to
+    /// calling `Fallible:wrap(x)`.
+    ///
+    /// For nested wrapping, use parens: `?(?x)` produces nested `Some`.
+    /// Note that `??x` is parsed as the coalesce operator, not nested wrap.
     Wrap,
 }
 

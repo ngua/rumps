@@ -12,7 +12,7 @@
 //! - `BitLike`: `bit-and`, `bit-or`, `shl`, `shr`
 //! - `Monoid`: `identity`, `concat`
 //! - `Ord`: `compare`
-//! - `Fallible`: `unwrap`
+//! - `Fallible`: `unwrap`, `wrap`
 //! - `Indexable`: `index`, `get`
 //!
 //! Higher-order class methods (`Mappable:map`, `Filterable:filter`, etc.) are
@@ -286,6 +286,11 @@ impl ClassMethods {
             ClassKind::Fallible,
             "unwrap",
             MethodFn::Unary(Fallible::unwrap),
+        );
+        self.register(
+            ClassKind::Fallible,
+            "wrap",
+            MethodFn::Convert(Fallible::wrap),
         );
 
         self.register(
@@ -721,6 +726,36 @@ impl Fallible {
                 Err(Error::runtime(ctx.span, "cannot unwrap Result.Err"))
             }
             _ => typechecked!("unwrap", "Fallible"),
+        }
+    }
+
+    /// Wrap a value in a `Fallible` container (`Option.Some` or `Result.Ok`).
+    ///
+    /// The target type determines whether to produce:
+    /// - `Option[T]` -> `Option.Some(v)`
+    /// - `Result[T, E]` -> `Result.Ok(v)`
+    pub(crate) fn wrap(
+        ctx: &mut ClassCtx<'_>,
+        v: &Value,
+        target: &Ty,
+    ) -> Result<Value> {
+        let v_id = ctx.arena.add(v.clone(), ctx.span);
+        match target {
+            Ty::Option(inner) => {
+                let inner_ty = ctx.type_exprs.intern_ty_lenient(inner);
+                let opt_ty =
+                    ctx.type_exprs.app(TypeId::OPTION, smallvec![inner_ty]);
+                Ok(Value::some(opt_ty, v_id))
+            }
+            Ty::Result(ok, err) => {
+                let ok_ty = ctx.type_exprs.intern_ty_lenient(ok);
+                let err_ty = ctx.type_exprs.intern_ty_lenient(err);
+                let res_ty = ctx
+                    .type_exprs
+                    .app(TypeId::RESULT, smallvec![ok_ty, err_ty]);
+                Ok(Value::ok(res_ty, v_id))
+            }
+            _ => typechecked!("wrap", "Fallible (Option or Result)"),
         }
     }
 }
