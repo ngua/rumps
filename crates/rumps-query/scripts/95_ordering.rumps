@@ -39,9 +39,9 @@ WRITE describe(compare-int(3, 2))
 ; === Ordering in data structures ===
 
 LET orderings: Array[Ordering] = [Ordering.Lt, Ordering.Eq, Ordering.Gt]
-WRITE Iter.length(orderings)
+WRITE Iterable:length(orderings)
 
-LET mapped = Iter.map(describe, orderings)
+LET mapped = Mappable:map(describe, orderings)
 WRITE mapped
 
 ; === Ordering in match with guards ===

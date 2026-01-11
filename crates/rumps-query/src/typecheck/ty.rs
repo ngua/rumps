@@ -7,10 +7,131 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use indexmap::IndexMap;
+use rumps_query_macros::scheme;
 use smallvec::SmallVec;
 
 use crate::intern::StringId;
 use crate::TypeId;
+
+/// Runtime class identifier for dispatch table indexing.
+///
+/// This is the discriminant of `Class` without type parameters.
+/// Use `Class::kind()` to extract from a full `Class`.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ClassKind {
+    Numeric = 0,
+    Iterable = 1,
+    Monoid = 2,
+    BitLike = 3,
+    Negatable = 4,
+    Fallible = 5,
+    Into = 6,
+    TryInto = 7,
+    Indexable = 8,
+    Ord = 9,
+    Mappable = 10,
+    Foldable = 11,
+    Filterable = 12,
+    Display = 13,
+}
+
+impl ClassKind {
+    /// Number of class kinds (for array sizing).
+    pub(crate) const COUNT: usize = 14;
+
+    /// Look up a method's type scheme by name.
+    ///
+    /// Returns `None` if the method doesn't exist for this class.
+    ///
+    /// # Note on `Indexable`
+    ///
+    /// `Indexable:index` and `Indexable:get` are not included here because
+    /// `Indexable` requires a multi-way constraint (`base`, `idx`, `elem`)
+    /// that cannot be expressed with the current `Class` representation.
+    /// These are handled specially in the typechecker.
+    pub(crate) fn method(self, name: &str) -> Option<Scheme> {
+        match (self, name) {
+            // Numeric: (T, T) -> T where T: Numeric
+            (
+                Self::Numeric,
+                "add" | "sub" | "mul" | "floor-div" | "mod" | "pow",
+            ) => Some(scheme!(forall T: Numeric. (T, T) -> T)),
+
+            // Negatable: (T) -> T where T: Negatable
+            (Self::Negatable, "neg") => {
+                Some(scheme!(forall T: Negatable. (T) -> T))
+            }
+
+            // BitLike: (T, T) -> T where T: BitLike
+            (Self::BitLike, "bit-and" | "bit-or" | "shl" | "shr") => {
+                Some(scheme!(forall T: BitLike. (T, T) -> T))
+            }
+
+            // Ord: (T, T) -> Ordering where T: Ord
+            (Self::Ord, "compare") => {
+                Some(scheme!(forall T: Ord. (T, T) -> Ordering))
+            }
+
+            // Monoid
+            (Self::Monoid, "identity") => {
+                Some(scheme!(forall T: Monoid. () -> T))
+            }
+            (Self::Monoid, "concat") => {
+                Some(scheme!(forall T: Monoid. (T, T) -> T))
+            }
+
+            // Fallible: (F) -> T where F: Fallible[T]
+            (Self::Fallible, "unwrap") => {
+                Some(scheme!(forall T, F: Fallible[T]. (F) -> T))
+            }
+
+            // Iterable methods
+            (Self::Iterable, "length") => {
+                Some(scheme!(forall T, I: Iterable[T]. (I) -> Int))
+            }
+            (Self::Iterable, "contains") => {
+                Some(scheme!(forall T, I: Iterable[T]. (I, T) -> Bool))
+            }
+            (Self::Iterable, "reverse") => {
+                Some(scheme!(forall T, I: Iterable[T]. (I) -> Array[T]))
+            }
+            (Self::Iterable, "foreach") => Some(
+                scheme!(forall T, I: Iterable[T]. ((T) -> Unit, I) -> Unit),
+            ),
+
+            // Mappable: map uses Iterable constraint (returns Array regardless of input)
+            (Self::Mappable, "map") => Some(
+                scheme!(forall T, U, I: Iterable[T]. ((T) -> U, I) -> Array[U]),
+            ),
+
+            // Filterable: filter uses Iterable constraint
+            (Self::Filterable, "filter") => Some(
+                scheme!(forall T, I: Iterable[T]. ((T) -> Bool, I) -> Array[T]),
+            ),
+
+            // Foldable: reduce uses Iterable constraint
+            (Self::Foldable, "reduce") => Some(
+                scheme!(forall T, U, I: Iterable[T]. ((U, T) -> U, U, I) -> U),
+            ),
+
+            // Into: (T) -> U where T: Into[U]
+            (Self::Into, "into") => {
+                Some(scheme!(forall T: Into[U], U. (T) -> U))
+            }
+
+            // TryInto: (T) -> Result[U, String] where T: TryInto[U]
+            (Self::TryInto, "try-into") => {
+                Some(scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]))
+            }
+
+            // Indexable methods are handled specially (see note above)
+            (Self::Indexable, "index" | "get") => None,
+
+            _ => None,
+        }
+    }
+}
 
 /// User-facing type class constraint (Haskell-style).
 ///
@@ -21,10 +142,6 @@ use crate::TypeId;
 pub(crate) enum Class {
     /// Type is `Int`, `Word`, or `Float`.
     Numeric,
-    /// Type can be used as a DB subscript key.
-    Subscriptable,
-    /// Type can be stored in the database.
-    Storable,
     /// Type is iterable (`Array[T]` or `Range`).
     Iterable(Ty),
     /// Type supports monoidal concatenation (`++`).
@@ -40,7 +157,20 @@ pub(crate) enum Class {
     /// Type can be fallibly converted to another type.
     TryInto(Ty),
     /// Type supports indexing (`[]` access).
-    Indexable,
+    ///
+    /// First `Ty` is the index type, second is the element type.
+    /// The functional dependency is: `base idx -> elem`.
+    Indexable(Ty, Ty),
+    /// Type supports ordering comparisons (`<`, `>`, `<=`, `>=`).
+    Ord,
+    /// Type is a functor; supports structure-preserving `map`.
+    Mappable(Ty),
+    /// Type supports `fold`/`reduce` operations.
+    Foldable(Ty),
+    /// Type supports `filter` operations.
+    Filterable(Ty),
+    /// Type can be displayed as RUMPS syntax (for `WRITE`).
+    Display,
 }
 
 impl Class {
@@ -48,8 +178,6 @@ impl Class {
     pub(crate) fn apply(&self, subst: &Subst) -> Self {
         match self {
             Self::Numeric => Self::Numeric,
-            Self::Subscriptable => Self::Subscriptable,
-            Self::Storable => Self::Storable,
             Self::Iterable(t) => Self::Iterable(t.apply(subst)),
             Self::Monoid => Self::Monoid,
             Self::BitLike => Self::BitLike,
@@ -57,7 +185,14 @@ impl Class {
             Self::Fallible(t) => Self::Fallible(t.apply(subst)),
             Self::Into(t) => Self::Into(t.apply(subst)),
             Self::TryInto(t) => Self::TryInto(t.apply(subst)),
-            Self::Indexable => Self::Indexable,
+            Self::Indexable(k, v) => {
+                Self::Indexable(k.apply(subst), v.apply(subst))
+            }
+            Self::Ord => Self::Ord,
+            Self::Mappable(t) => Self::Mappable(t.apply(subst)),
+            Self::Foldable(t) => Self::Foldable(t.apply(subst)),
+            Self::Filterable(t) => Self::Filterable(t.apply(subst)),
+            Self::Display => Self::Display,
         }
     }
 
@@ -65,8 +200,6 @@ impl Class {
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Numeric => "Numeric",
-            Self::Subscriptable => "Subscriptable",
-            Self::Storable => "Storable",
             Self::Iterable(_) => "Iterable",
             Self::Monoid => "Monoid",
             Self::BitLike => "BitLike",
@@ -74,7 +207,12 @@ impl Class {
             Self::Fallible(_) => "Fallible",
             Self::Into(_) => "Into",
             Self::TryInto(_) => "TryInto",
-            Self::Indexable => "Indexable",
+            Self::Indexable(_, _) => "Indexable",
+            Self::Ord => "Ord",
+            Self::Mappable(_) => "Mappable",
+            Self::Foldable(_) => "Foldable",
+            Self::Filterable(_) => "Filterable",
+            Self::Display => "Display",
         }
     }
 
@@ -84,14 +222,6 @@ impl Class {
             Self::Numeric => {
                 Some("numeric types are `Int`, `Word`, and `Float`")
             }
-            Self::Subscriptable => Some(
-                "subscript keys must be `Bool`, `Int`, `Float`, `Char`, \
-                 `String`, `Json`, or `Subscript`",
-            ),
-            Self::Storable => Some(
-                "storable types are `Bool`, `Int`, `Float`, `Char`, \
-                 `String`, or `Json`",
-            ),
             Self::Monoid => {
                 Some("`++` works on `String`, `Array`, `Map`, and `Option`")
             }
@@ -103,10 +233,42 @@ impl Class {
             Self::Fallible(_) => {
                 Some("fallible types are `Option` and `Result`")
             }
-            Self::Indexable => {
+            Self::Indexable(_, _) => {
                 Some("indexable types are `Array`, `Map`, and `String`")
             }
-            Self::Into(_) | Self::TryInto(_) => None,
+            Self::Ord => {
+                Some("orderable types are `Bool`, `Int`, `Word`, `Float`, `Char`, and `String`")
+            }
+            Self::Mappable(_) => {
+                Some("mappable types are `Option`, `Result`, and `Array`")
+            }
+            Self::Foldable(_) => {
+                Some("foldable types are `Option`, `Result`, `Array`, and `Range`")
+            }
+            Self::Filterable(_) => {
+                Some("filterable types are `Option`, `Result`, and `Array`")
+            }
+            Self::Into(_) | Self::TryInto(_) | Self::Display => None,
+        }
+    }
+
+    /// Get the `ClassKind` for dispatch table lookup.
+    pub(crate) const fn kind(&self) -> ClassKind {
+        match self {
+            Self::Numeric => ClassKind::Numeric,
+            Self::Iterable(_) => ClassKind::Iterable,
+            Self::Monoid => ClassKind::Monoid,
+            Self::BitLike => ClassKind::BitLike,
+            Self::Negatable => ClassKind::Negatable,
+            Self::Fallible(_) => ClassKind::Fallible,
+            Self::Into(_) => ClassKind::Into,
+            Self::TryInto(_) => ClassKind::TryInto,
+            Self::Indexable(_, _) => ClassKind::Indexable,
+            Self::Ord => ClassKind::Ord,
+            Self::Mappable(_) => ClassKind::Mappable,
+            Self::Foldable(_) => ClassKind::Foldable,
+            Self::Filterable(_) => ClassKind::Filterable,
+            Self::Display => ClassKind::Display,
         }
     }
 }
@@ -230,6 +392,19 @@ impl Ty {
     /// Excludes `Char` (JSON has no char type) and `Null` (handled by `Option`).
     pub(crate) const SCALAR_MEMBERS: &'static [Self] =
         &[Self::Bool, Self::Int, Self::Float, Self::String];
+
+    /// Member types of the `Subscript` union: DB subscript key types.
+    ///
+    /// Matches `UNION Subscript = Bool | Int | Float | Char | String | Json`.
+    /// Semantically distinct from `Storable`, though currently identical.
+    pub(crate) const SUBSCRIPT_MEMBERS: &'static [Self] = &[
+        Self::Bool,
+        Self::Int,
+        Self::Float,
+        Self::Char,
+        Self::String,
+        Self::Json,
+    ];
 
     /// Member types of the builtin `Ref` union: database variable references.
     ///
@@ -482,6 +657,19 @@ impl Scheme {
             Ty::Fn(_, ret) => Some(ret),
             _ => None,
         }
+    }
+
+    /// Extract the parameter types if the scheme body is a function type.
+    pub(crate) fn params(&self) -> Option<&[Ty]> {
+        match &self.ty {
+            Ty::Fn(params, _) => Some(params),
+            _ => None,
+        }
+    }
+
+    /// Get the arity (number of parameters) if the scheme body is a function type.
+    pub(crate) fn arity(&self) -> Option<usize> {
+        self.params().map(|p| p.len())
     }
 
     /// Instantiate the scheme with fresh type variables.

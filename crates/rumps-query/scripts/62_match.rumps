@@ -226,7 +226,7 @@ WRITE first-two-sum
 LET nums = [1, 2, 3, 4, 5]
 LET head-tail = MATCH nums {
   [h, ...t] => {
-    LET strs = Iter.map((x: Int) => x as String, t)
+    LET strs = Mappable:map((x: Int) => x as String, t)
     "{h}:{String.join(strs, ",")}"
   }
   [..] => { "empty" }
@@ -288,7 +288,7 @@ WRITE arr-guard
 ; Rest binding produces correct array
 LET rest-test = [100, 200, 300, 400]
 LET rest-len = MATCH rest-test {
-  [_, ...rest] => { Iter.length(rest) }
+  [_, ...rest] => { Iterable:length(rest) }
   [..] => { 0 }
 }
 WRITE rest-len

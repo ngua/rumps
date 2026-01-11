@@ -16,48 +16,48 @@ LET n = 3
 LET r3 = 0 .. n + 1
 WRITE r3  ; 0..4
 
-; Iter.map with range (exclusive)
-LET squares = Iter.map(x => x * x, 1 .. 4)
+; Mappable:map with range (exclusive)
+LET squares = Mappable:map(x => x * x, 1 .. 4)
 WRITE squares  ; [1, 4, 9]
 
-; Iter.map with range (inclusive)
-LET cubes = Iter.map(x => x * x * x, 1 ..= 3)
+; Mappable:map with range (inclusive)
+LET cubes = Mappable:map(x => x * x * x, 1 ..= 3)
 WRITE cubes  ; [1, 8, 27]
 
-; Iter.filter with range
-LET evens = Iter.filter(x => x % 2 == 0, 1 .. 10)
+; Filterable:filter with range
+LET evens = Filterable:filter(x => x % 2 == 0, 1 .. 10)
 WRITE evens  ; [2, 4, 6, 8]
 
-; Iter.filter with inclusive range
-LET odd = Iter.filter(x => x % 2 != 0, 1 ..= 5)
+; Filterable:filter with inclusive range
+LET odd = Filterable:filter(x => x % 2 != 0, 1 ..= 5)
 WRITE odd  ; [1, 3, 5]
 
-; Iter.reduce with range (sum 1..5 = 1+2+3+4 = 10)
-LET sum1 = Iter.reduce((acc, x) => acc + x, 0, 1 .. 5)
+; Foldable:reduce with range (sum 1..5 = 1+2+3+4 = 10)
+LET sum1 = Foldable:reduce((acc, x) => acc + x, 0, 1 .. 5)
 WRITE sum1  ; 10
 
-; Iter.reduce with inclusive range (sum 1..=5 = 1+2+3+4+5 = 15)
-LET sum2 = Iter.reduce((acc, x) => acc + x, 0, 1 ..= 5)
+; Foldable:reduce with inclusive range (sum 1..=5 = 1+2+3+4+5 = 15)
+LET sum2 = Foldable:reduce((acc, x) => acc + x, 0, 1 ..= 5)
 WRITE sum2  ; 15
 
 ; Factorial using range and reduce
-LET fact5 = Iter.reduce((acc, x) => acc * x, 1, 1 ..= 5)
+LET fact5 = Foldable:reduce((acc, x) => acc * x, 1, 1 ..= 5)
 WRITE fact5  ; 120
 
 ; Chaining operations with ranges
-LET filtered = Iter.filter(x => x > 2, 1 ..= 5)
-LET result = Iter.map(x => x * 10, filtered)
+LET filtered = Filterable:filter(x => x > 2, 1 ..= 5)
+LET result = Mappable:map(x => x * 10, filtered)
 WRITE result  ; [30, 40, 50]
 
 ; Empty range (start >= end for exclusive)
-LET empty = Iter.map(x => x, 5 .. 5)
+LET empty = Mappable:map(x => x, 5 .. 5)
 WRITE empty  ; []
 
 ; Negative ranges
-LET negatives = Iter.map(x => x, -3 .. 1)
+LET negatives = Mappable:map(x => x, -3 .. 1)
 WRITE negatives  ; [-3, -2, -1, 0]
 
 ; Range with named function
 FUN double (n: Int) -> Int { n * 2 }
-LET doubles = Iter.map(double, 1 .. 5)
+LET doubles = Mappable:map(double, 1 .. 5)
 WRITE doubles  ; [2, 4, 6, 8]

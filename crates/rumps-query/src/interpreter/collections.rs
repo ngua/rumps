@@ -186,12 +186,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Check for Json or type mismatch
                 let has_json = vals.iter().any(|v| matches!(v, Value::Json(_)));
                 if has_json {
-                    // Convert to JSON mode
-                    let mut json_arr: Vec<serde_json::Value> = acc
+                    // Convert to JSON mode; collect values first to avoid borrow conflict
+                    let acc_vals: Vec<Value> = acc
                         .iter()
-                        .filter_map(|vid| self.arena.get(*vid))
-                        .map(|v| self.jsonify(v))
+                        .filter_map(|vid| self.arena.get(*vid).cloned())
                         .collect();
+                    let mut json_arr: Vec<serde_json::Value> =
+                        acc_vals.iter().map(|v| self.jsonify(v)).collect();
                     vals.iter().for_each(|v| {
                         json_arr.push(self.jsonify(v));
                     });
@@ -206,12 +207,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .any(|vt| !self.type_exprs.eq(elem_ty, *vt));
 
                     if heterogeneous {
-                        // Convert to JSON mode
-                        let mut json_arr: Vec<serde_json::Value> = acc
+                        // Convert to JSON mode; collect values first to avoid borrow conflict
+                        let acc_vals: Vec<Value> = acc
                             .iter()
-                            .filter_map(|vid| self.arena.get(*vid))
-                            .map(|v| self.jsonify(v))
+                            .filter_map(|vid| self.arena.get(*vid).cloned())
                             .collect();
+                        let mut json_arr: Vec<serde_json::Value> =
+                            acc_vals.iter().map(|v| self.jsonify(v)).collect();
                         vals.iter().for_each(|v| {
                             json_arr.push(self.jsonify(v));
                         });
@@ -251,10 +253,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let val = self.eval(*id).await?;
                         match val {
                             Value::Array(_, elems) => {
-                                elems.iter().for_each(|vid| {
-                                    self.arena.get(*vid).iter().for_each(|v| {
-                                        acc.push(self.jsonify(v))
-                                    });
+                                let spread_vals: Vec<Value> = elems
+                                    .iter()
+                                    .filter_map(|vid| {
+                                        self.arena.get(*vid).cloned()
+                                    })
+                                    .collect();
+                                spread_vals.iter().for_each(|v| {
+                                    acc.push(self.jsonify(v));
                                 });
                             }
                             Value::Json(serde_json::Value::Array(arr)) => {

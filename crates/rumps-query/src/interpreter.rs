@@ -93,6 +93,7 @@
 #![allow(dead_code)]
 
 mod call;
+mod class;
 mod collections;
 mod control;
 mod convert;
@@ -186,6 +187,15 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// Populated during typechecking; used to convert polymorphic numeric
     /// literals to the correct runtime type (`Int`, `Word`, or `Float`).
     numeric_types: HashMap<ExprId, crate::typecheck::Ty>,
+
+    /// Mapping from conversion expression IDs to their target types.
+    ///
+    /// Populated during typechecking; used to dispatch `Into::into` and
+    /// `TryInto::try_into` methods with the correct target type.
+    convert_targets: HashMap<ExprId, crate::typecheck::Ty>,
+
+    /// Registry of class methods for dispatch.
+    class_methods: class::ClassMethods,
 }
 
 // Public API
@@ -217,16 +227,21 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let env = Environment::new();
 
         // Run type checking after resolution
-        let (regex_cache, regex_indices, mempty_types, numeric_types) =
-            crate::typecheck::check(
-                ast,
-                stmts,
-                &registry,
-                &type_exprs,
-                &env,
-                &arena,
-                arena.interner(),
-            )?;
+        let (
+            regex_cache,
+            regex_indices,
+            mempty_types,
+            numeric_types,
+            convert_targets,
+        ) = crate::typecheck::check(
+            ast,
+            stmts,
+            &registry,
+            &type_exprs,
+            &env,
+            &arena,
+            arena.interner(),
+        )?;
 
         Ok(Self {
             ast,
@@ -239,9 +254,15 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             regex_indices,
             mempty_types,
             numeric_types,
+            convert_targets,
             type_exprs,
             functions: HashMap::new(),
             io,
+            class_methods: {
+                let mut cm = class::ClassMethods::new();
+                cm.register_all();
+                cm
+            },
         })
     }
 
@@ -285,9 +306,15 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             regex_indices: HashMap::new(),
             mempty_types: HashMap::new(),
             numeric_types: HashMap::new(),
+            convert_targets: HashMap::new(),
             type_exprs,
             functions: HashMap::new(),
             io,
+            class_methods: {
+                let mut cm = class::ClassMethods::new();
+                cm.register_all();
+                cm
+            },
         }
     }
 
@@ -389,8 +416,16 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     .await
             }
             Expr::Transaction(ref txn) => self.transaction(txn, span).await,
-            Expr::Mempty => self.mempty(id),
+            Expr::Mempty => self.mempty(id, span),
             Expr::Ref(ref dbref) => self.ref_lit(dbref, span).await,
+            Expr::ClassMethod(ref class, ref method, ref args) => {
+                self.class_method_expr(id, class, method, args, span).await
+            }
+            Expr::ClassMethodRef(ref class, ref method) => {
+                let class = self.arena.intern(class);
+                let method = self.arena.intern(method);
+                Ok(Value::ClassMethodFn { class, method })
+            }
         }
     }
 }
@@ -1346,7 +1381,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         let val = self.eval(operand).await?;
-        Ok(self.apply_unop(op, val, span))
+        self.apply_unop(op, val, span)
     }
 
     /// Evaluate a type check: `expr is Pattern`.

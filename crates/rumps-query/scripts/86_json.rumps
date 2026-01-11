@@ -361,7 +361,7 @@ WRITE arr-result IS Result.Ok(_)
 LET arr-val = arr-result!
 WRITE arr-val IS Array
 ; Expected: TRUE
-WRITE Iter.length(arr-val)
+WRITE Iterable:length(arr-val)
 ; Expected: 3
 
 ; Type mismatch in array element

@@ -1,0 +1,116 @@
+; Class methods as first-class values and pipe integration
+
+; Class methods can be referenced as values
+LET add-fn = Numeric:add
+LET neg-fn = Negatable:neg
+LET cmp-fn = Ord:compare
+
+; Invoke method references directly
+WRITE "add-fn(3, 4) = {add-fn(3, 4)}"
+WRITE "neg-fn(-5) = {neg-fn(-5)}"
+WRITE "cmp-fn(1, 2) = {cmp-fn(1, 2)}"
+
+; Pass method references to higher-order functions
+LET nums = [1, 2, 3, 4, 5]
+
+; Use Numeric:add in reduce
+LET sum = Foldable:reduce(add-fn, 0, nums)
+WRITE "Sum via add-fn: {sum}"
+
+; Pipe with class methods (multi-arg wrapped in closures)
+LET pipe-add = 10 |> (x => Numeric:add(x, 5))
+LET pipe-sub = 10 |> (x => Numeric:sub(x, 3))
+LET pipe-mul = 4 |> (x => Numeric:mul(x, 5))
+WRITE "Pipe add: {pipe-add}"
+WRITE "Pipe sub: {pipe-sub}"
+WRITE "Pipe mul: {pipe-mul}"
+
+; Closure in second position
+LET pipe-add2 = 5 |> (x => Numeric:add(10, x))
+LET pipe-sub2 = 3 |> (x => Numeric:sub(10, x))
+WRITE "Pipe add (second): {pipe-add2}"
+WRITE "Pipe sub (second): {pipe-sub2}"
+
+; Chain pipes with class methods
+LET chained = 5
+  |> (x => Numeric:add(x, 3))
+  |> (x => Numeric:mul(x, 2))
+WRITE "Chained: {chained}"
+
+; Pipe into HoF class methods
+LET piped-map = nums |> (a => Mappable:map(x => x * 2, a))
+LET piped-filter = nums |> (a => Filterable:filter(x => x > 2, a))
+LET piped-reduce = nums |> (a => Foldable:reduce((acc, x) => acc + x, 0, a))
+WRITE "Piped map: {piped-map}"
+WRITE "Piped filter: {piped-filter}"
+WRITE "Piped reduce: {piped-reduce}"
+
+; Iterable methods with pipes (unary; no wrapper needed)
+WRITE "Piped length: {nums |> Iterable:length}"
+WRITE "Piped reverse: {nums |> Iterable:reverse}"
+
+; Iterable:contains with wrapper closure
+LET piped-contains = nums |> (a => Iterable:contains(a, 3))
+WRITE "Piped contains: {piped-contains}"
+
+; Monoid methods with pipes
+LET piped-concat = [1, 2] |> (a => Monoid:concat(a, [3, 4]))
+LET hello = "hello"
+LET world = " world"
+LET piped-str-concat = hello |> (s => Monoid:concat(s, world))
+WRITE "Piped concat: {piped-concat}"
+WRITE "Piped string concat: {piped-str-concat}"
+
+; Fallible methods with pipes (unary; no wrapper)
+LET opt = Option.Some(42)
+WRITE "Piped unwrap: {opt |> Fallible:unwrap}"
+
+; Indexable methods with pipes
+LET piped-index = nums |> (a => Indexable:index(a, 2))
+LET piped-get = nums |> (a => Indexable:get(a, 1))
+WRITE "Piped index: {piped-index}"
+WRITE "Piped get: {piped-get}"
+
+; Complex pipeline combining multiple class methods
+LET result = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  |> (a => Filterable:filter(x => x % 2 == 0, a))
+  |> (a => Mappable:map(x => x * x, a))
+  |> (a => Foldable:reduce((acc, x) => acc + x, 0, a))
+WRITE "Complex pipeline (sum of squares of evens): {result}"
+
+; Method reference stored and used later
+LET len-fn = Iterable:length
+WRITE "Stored length fn: {len-fn([1, 2, 3, 4])}"
+WRITE "Stored length fn (range): {len-fn(1 ..= 100)}"
+
+; Ord compare with closures
+LET cmp1 = 5 |> (x => Ord:compare(x, 3))
+LET cmp2 = 5 |> (x => Ord:compare(x, 5))
+LET cmp3 = 3 |> (x => Ord:compare(x, 5))
+WRITE "Compare gt: {cmp1}"
+WRITE "Compare eq: {cmp2}"
+WRITE "Compare lt: {cmp3}"
+
+; Store method reference and use in higher-order context
+LET arr-concat-fn = Monoid:concat
+LET arrs = [[1], [2, 3], [4, 5, 6]]
+LET flattened = Foldable:reduce(arr-concat-fn, [], arrs)
+WRITE "Flattened arrays: {flattened}"
+
+; Same with strings
+LET str-concat-fn = Monoid:concat
+LET words = ["hello", " ", "world"]
+LET joined = Foldable:reduce(str-concat-fn, "", words)
+WRITE "Joined words: {joined}"
+
+; BitLike operations
+LET bit-and-fn = BitLike:bit-and
+LET bit-or-fn = BitLike:bit-or
+WRITE "bit-and(7, 3) = {bit-and-fn(7, 3)}"
+WRITE "bit-or(4, 2) = {bit-or-fn(4, 2)}"
+
+; Negatable (separate bindings to avoid polymorphic instantiation issues)
+LET neg-int = Negatable:neg
+LET neg-float = Negatable:neg
+WRITE "neg(-42) = {neg-int(-42)}"
+WRITE "neg(3.14) = {neg-float(3.14)}"

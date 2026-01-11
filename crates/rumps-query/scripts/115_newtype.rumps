@@ -18,7 +18,7 @@ WRITE b
 
 NEWTYPE List[T] = Array[T]
 LET xs: List[Int] = [1, 2, 3]
-WRITE Iter.length(xs)
+WRITE Iterable:length(xs)
 
 NEWTYPE Maybe[T] = Option[T]
 LET opt: Maybe[Int] = Option.Some(42)
@@ -40,7 +40,7 @@ WRITE post-id
 ; Phantom with multiple params; only some used
 NEWTYPE Partial[A, B] = Array[A]
 LET ps: Partial[Int, String] = [1, 2, 3]
-WRITE Iter.length(ps)
+WRITE Iterable:length(ps)
 
 ; Nested phantom
 NEWTYPE Wrapper[T] = Int

@@ -118,7 +118,8 @@ pub(crate) enum Token {
     LBracket,         // [
     RBracket,         // ]
     Comma,            // ,
-    Colon,            // :
+    Colon,            // : (with space before; type annotation)
+    ColonNoSpace,     // : (no space before; class method)
     Dot,              // .
     DotDot,           // .. (with space before; range operator)
     DotDotNoSpace,    // .. (no space before; JSON scalar access)
@@ -331,6 +332,7 @@ impl fmt::Display for Token {
             Self::RBracket => write!(f, "]"),
             Self::Comma => write!(f, ","),
             Self::Colon => write!(f, ":"),
+            Self::ColonNoSpace => write!(f, ":"),
             Self::Dot => write!(f, "."),
             Self::DotDot => write!(f, ".."),
             Self::DotDotNoSpace => write!(f, ".."),

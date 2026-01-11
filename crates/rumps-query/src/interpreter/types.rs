@@ -1,13 +1,13 @@
 //! Type checking, matching, and validation.
 
 use indexmap::IndexMap;
-use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{AstTypeExpr, AstTypeExprId};
 use crate::intern::StringId;
 use crate::io::IoContext;
+use crate::typecheck::{ClassKind, Ty};
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
@@ -71,8 +71,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
                 self.type_exprs.fn_type(param_tys, ret_ty)
             }
-            // Module functions/consts don't have a simple type expression
-            Value::ModuleFn { .. } | Value::ModuleConst { .. } => {
+            // Module functions/consts/class methods don't have a simple type expression
+            Value::ModuleFn { .. }
+            | Value::ModuleConst { .. }
+            | Value::ClassMethodFn { .. } => {
                 self.type_exprs.named(TypeId::UNKNOWN)
             }
             Value::Range { .. } => self.type_exprs.named(TypeId::RANGE),
@@ -200,123 +202,42 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Perform type coercion for `as` casts.
+    /// Perform type coercion for `AS` casts via `Into[T]` dispatch.
     pub(super) fn coerce(
         &mut self,
         val: &Value,
         target: TypeId,
         span: Span,
     ) -> Result<Value> {
-        match (val, target) {
-            // Identity casts
-            (Value::Int(_), TypeId::INT)
-            | (Value::Word(_), TypeId::WORD)
-            | (Value::Float(_), TypeId::FLOAT)
-            | (Value::Bool(_), TypeId::BOOL)
-            | (Value::Char(_), TypeId::CHAR)
-            | (Value::String(_), TypeId::STRING) => Ok(val.clone()),
+        let ty = Self::type_id_to_ty(target);
+        self.dispatch_convert(ClassKind::Into, "into", val, &ty, span)
+    }
 
-            // Int -> Float (widen)
-            (Value::Int(n), TypeId::FLOAT) => {
-                Ok(Value::Float(OrderedFloat(*n as f64)))
-            }
-
-            // Word -> Int (always safe)
-            (Value::Word(n), TypeId::INT) => Ok(Value::Int(*n as i64)),
-
-            // Word -> Float (widen)
-            (Value::Word(n), TypeId::FLOAT) => {
-                Ok(Value::Float(OrderedFloat(*n as f64)))
-            }
-
-            // Float -> Int (truncate)
-            (Value::Float(f), TypeId::INT) => Ok(Value::Int(f.0 as i64)),
-
-            // Bool -> Int
-            (Value::Bool(b), TypeId::INT) => {
-                Ok(Value::Int(if *b { 1 } else { 0 }))
-            }
-
-            // T -> String (coerce to raw string, not quoted)
-            (_, TypeId::STRING) => {
-                let s = self.coerce_to_str(val);
-                let id = self.arena.intern(&s);
-                Ok(Value::String(id))
-            }
-
-            // T -> Json (jsonify anything that can be serialized)
-            // Type checker guarantees Into[Json] constraint.
-            (_, TypeId::JSON) => Ok(Value::Json(self.jsonify(val))),
-
-            // String -> FilePath
-            (Value::String(sid), TypeId::FILEPATH) => Ok(Value::FilePath(*sid)),
-
-            // DataStatus -> Int (variant idx to MUMPS value: 0, 1, 10, 11)
-            (Value::Tagged(ty, idx, _), TypeId::INT)
-                if self.type_exprs.base_type(*ty)
-                    == Some(TypeId::DATA_STATUS) =>
-            {
-                // `mumps_val` for compatibility with MUMPS, i.e. `@DATA` in
-                // MUMPS returns an integer
-                let mumps_val = match idx {
-                    0 => 0,  // NoData
-                    1 => 1,  // HasValue
-                    2 => 10, // HasDescendants
-                    3 => 11, // Both
-                    _ => typechecked!("DataStatus AS Int", "valid variant"),
-                };
-                Ok(Value::Int(mumps_val))
-            }
-
-            // FilePath identity
-            (Value::FilePath(_), TypeId::FILEPATH) => Ok(val.clone()),
-
-            // Path -> FilePath (extract filepath from either File or Dir variant)
-            (Value::Tagged(ty, _, payloads), TypeId::FILEPATH)
-                if self.type_exprs.base_type(*ty) == Some(TypeId::PATH) =>
-            {
-                Ok(payloads
-                    .first()
-                    .and_then(|id| self.arena.get(*id).cloned())
-                    .unwrap_or_else(|| {
-                        typechecked!("Path AS FilePath", "valid Path")
-                    }))
-            }
-
-            // Storable narrowing: runtime type check for `Storable AS T` where
-            // T is a Storable member. This is the ONLY case requiring runtime
-            // type errors; all other casts are validated by the type checker.
-            _ if matches!(
-                target,
-                TypeId::BOOL
-                    | TypeId::INT
-                    | TypeId::FLOAT
-                    | TypeId::CHAR
-                    | TypeId::STRING
-                    | TypeId::JSON
-            ) =>
-            {
-                let src_name = val.type_name(
-                    &self.registry,
-                    &self.type_exprs,
-                    &self.arena,
-                );
-                let tgt_name = self
-                    .registry
-                    .type_name(target, &self.arena)
-                    .unwrap_or("Unknown");
-                Err(Error::runtime_type(
-                    span,
-                    format!("cannot cast {src_name} as {tgt_name}"),
-                ))
-            }
-
-            // All other unsupported conversions: type checker should have caught
-            _ => typechecked!("AS cast", "valid conversion"),
+    /// Convert a `TypeId` to the corresponding `Ty`.
+    fn type_id_to_ty(id: TypeId) -> Ty {
+        match id {
+            TypeId::UNIT => Ty::Unit,
+            TypeId::BOOL => Ty::Bool,
+            TypeId::INT => Ty::Int,
+            TypeId::WORD => Ty::Word,
+            TypeId::FLOAT => Ty::Float,
+            TypeId::CHAR => Ty::Char,
+            TypeId::STRING => Ty::String,
+            TypeId::FILEPATH => Ty::FilePath,
+            TypeId::JSON => Ty::Json,
+            TypeId::TIME => Ty::Time,
+            TypeId::RANGE => Ty::Range,
+            TypeId::ORDERING => Ty::Ordering,
+            TypeId::DATA_STATUS => Ty::DataStatus,
+            TypeId::PATH => Ty::Path,
+            TypeId::REGEX => Ty::Regex,
+            TypeId::LOCAL => Ty::Local,
+            TypeId::GLOBAL => Ty::Global,
+            other => Ty::Named(other, Vec::new()),
         }
     }
 
-    /// Perform fallible type conversion for `READ`.
+    /// Perform fallible type conversion for `READ` via `TryInto[T]` dispatch.
     ///
     /// This is the runtime helper for `expr READ Type` syntax.
     /// Returns a RUMPS `Result[T, String]` value (not `crate::Result`).
@@ -326,213 +247,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         target: TypeId,
         span: Span,
     ) -> Result<Value> {
-        match (val, target) {
-            // String -> Int
-            (Value::String(sid), TypeId::INT) => {
-                let s = self
-                    .arena
-                    .get_str(*sid)
-                    .map(str::to_owned)
-                    .unwrap_or_default();
-                match s.parse::<i64>() {
-                    Ok(n) => Ok(self.make_result_ok(Value::Int(n), span)),
-                    Err(_) => {
-                        let msg = format!("invalid integer: {s}");
-                        Ok(self.make_result_err(&msg, span))
-                    }
-                }
-            }
-
-            // String -> Float
-            (Value::String(sid), TypeId::FLOAT) => {
-                let s = self
-                    .arena
-                    .get_str(*sid)
-                    .map(str::to_owned)
-                    .unwrap_or_default();
-                match s.parse::<f64>() {
-                    Ok(n) => Ok(self
-                        .make_result_ok(Value::Float(OrderedFloat(n)), span)),
-                    Err(_) => {
-                        let msg = format!("invalid float: {s}");
-                        Ok(self.make_result_err(&msg, span))
-                    }
-                }
-            }
-
-            // Int -> Bool (strict: only 0 and 1)
-            (Value::Int(n), TypeId::BOOL) => match *n {
-                0 => Ok(self.make_result_ok(Value::Bool(false), span)),
-                1 => Ok(self.make_result_ok(Value::Bool(true), span)),
-                _ => {
-                    let msg = format!("expected 0 or 1 for Bool, got {n}");
-                    Ok(self.make_result_err(&msg, span))
-                }
-            },
-
-            // Int -> Word (fallible: must be non-negative)
-            (Value::Int(n), TypeId::WORD) => {
-                if *n >= 0 {
-                    Ok(self.make_result_ok(Value::Word(*n as usize), span))
-                } else {
-                    let msg =
-                        format!("expected non-negative Int for Word, got {n}");
-                    Ok(self.make_result_err(&msg, span))
-                }
-            }
-
-            // String -> Word
-            (Value::String(sid), TypeId::WORD) => {
-                let s = self.arena.get_str(*sid).unwrap_or("");
-                match s.parse::<usize>() {
-                    Ok(n) => Ok(self.make_result_ok(Value::Word(n), span)),
-                    Err(_) => {
-                        let msg = format!("invalid unsigned integer: {s}");
-                        Ok(self.make_result_err(&msg, span))
-                    }
-                }
-            }
-
-            // Json -> Bool
-            (Value::Json(j), TypeId::BOOL) => match j {
-                serde_json::Value::Bool(b) => {
-                    Ok(self.make_result_ok(Value::Bool(*b), span))
-                }
-                serde_json::Value::Null => {
-                    Ok(self.make_result_err("expected Bool, got null", span))
-                }
-                _ => {
-                    let msg =
-                        format!("expected Bool, got {}", json_type_name(j));
-                    Ok(self.make_result_err(&msg, span))
-                }
-            },
-
-            // Json -> Int
-            (Value::Json(j), TypeId::INT) => match j {
-                serde_json::Value::Number(n) => match n.as_i64() {
-                    Some(i) => Ok(self.make_result_ok(Value::Int(i), span)),
-                    None => {
-                        let msg =
-                            format!("expected Int, got non-integer number {n}");
-                        Ok(self.make_result_err(&msg, span))
-                    }
-                },
-                serde_json::Value::Null => {
-                    Ok(self.make_result_err("expected Int, got null", span))
-                }
-                _ => {
-                    let msg =
-                        format!("expected Int, got {}", json_type_name(j));
-                    Ok(self.make_result_err(&msg, span))
-                }
-            },
-
-            // Json -> Float
-            (Value::Json(j), TypeId::FLOAT) => match j {
-                serde_json::Value::Number(n) => match n.as_f64() {
-                    Some(f) => Ok(self
-                        .make_result_ok(Value::Float(OrderedFloat(f)), span)),
-                    None => {
-                        let msg =
-                            format!("expected Float, got invalid number {n}");
-                        Ok(self.make_result_err(&msg, span))
-                    }
-                },
-                serde_json::Value::Null => {
-                    Ok(self.make_result_err("expected Float, got null", span))
-                }
-                _ => {
-                    let msg =
-                        format!("expected Float, got {}", json_type_name(j));
-                    Ok(self.make_result_err(&msg, span))
-                }
-            },
-
-            // Json -> String
-            (Value::Json(j), TypeId::STRING) => match j {
-                serde_json::Value::String(s) => {
-                    let id = self.arena.intern(s);
-                    Ok(self.make_result_ok(Value::String(id), span))
-                }
-                serde_json::Value::Null => {
-                    Ok(self.make_result_err("expected String, got null", span))
-                }
-                _ => {
-                    let msg =
-                        format!("expected String, got {}", json_type_name(j));
-                    Ok(self.make_result_err(&msg, span))
-                }
-            },
-
-            // Int -> DataStatus (MUMPS values: 0, 1, 10, 11 -> variants)
-            (Value::Int(n), TypeId::DATA_STATUS) => {
-                let (variant_idx, valid) = match *n {
-                    0 => (0, true),  // NoData
-                    1 => (1, true),  // HasValue
-                    10 => (2, true), // HasDescendants
-                    11 => (3, true), // Both
-                    _ => (0, false),
-                };
-
-                if valid {
-                    let ty_expr = self.type_exprs.named(TypeId::DATA_STATUS);
-                    Ok(self.make_result_ok(
-                        Value::Tagged(ty_expr, variant_idx, SmallVec::new()),
-                        span,
-                    ))
-                } else {
-                    let msg =
-                        format!("invalid DataStatus value: {n} (expected 0, 1, 10, or 11)");
-                    Ok(self.make_result_err(&msg, span))
-                }
-            }
-
-            // Json -> Object
-            (Value::Json(j), TypeId::OBJECT) => match j {
-                serde_json::Value::Object(obj) => {
-                    let fields = obj
-                        .iter()
-                        .map(|(k, v)| {
-                            let key = self.arena.intern(k);
-                            let val = self.unjsonify(v.clone());
-                            let val_id = self.arena.add(val, span);
-                            (key, val_id)
-                        })
-                        .collect();
-                    Ok(self.make_result_ok(Value::Object(fields), span))
-                }
-                serde_json::Value::Null => {
-                    Ok(self.make_result_err("expected Object, got null", span))
-                }
-                _ => {
-                    let msg =
-                        format!("expected Object, got {}", json_type_name(j));
-                    Ok(self.make_result_err(&msg, span))
-                }
-            },
-
-            // T -> Json (jsonify anything that can be serialized)
-            // Type checker guarantees TryInto[Json] constraint.
-            (_, TypeId::JSON) => {
-                Ok(self.make_result_ok(Value::Json(self.jsonify(val)), span))
-            }
-
-            // Unsupported conversion: return Result.Err (soft error)
-            _ => {
-                let src_name = val.type_name(
-                    &self.registry,
-                    &self.type_exprs,
-                    &self.arena,
-                );
-                let tgt_name = self
-                    .registry
-                    .type_name(target, &self.arena)
-                    .unwrap_or("Unknown");
-                let msg = format!("cannot read {src_name} as {tgt_name}");
-                Ok(self.make_result_err(&msg, span))
-            }
-        }
+        let ty = Self::type_id_to_ty(target);
+        self.dispatch_convert(ClassKind::TryInto, "try-into", val, &ty, span)
     }
 
     /// Perform typed conversion for `READ` with full type expression support.
@@ -901,11 +617,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .type_exprs
                 .base_type(*ty_expr)
                 .is_some_and(|t| t == type_id),
-            // Closures, functions, and module functions/consts don't have a simple TypeId
+            // Closures, functions, module functions/consts, and class methods
+            // don't have a simple TypeId
             Value::Closure { .. }
             | Value::Function { .. }
             | Value::ModuleFn { .. }
-            | Value::ModuleConst { .. } => false,
+            | Value::ModuleConst { .. }
+            | Value::ClassMethodFn { .. } => false,
             Value::Range { .. } => type_id == TypeId::RANGE,
             // Internal loop control types; don't match user types
             Value::ForeverContinuation | Value::LoopContinue(_) => false,
@@ -1361,17 +1079,5 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             typechecked!("value type", "matches declaration")
         }
-    }
-}
-
-/// Get a human-readable name for a JSON value type (for error messages).
-fn json_type_name(j: &serde_json::Value) -> &'static str {
-    match j {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "Bool",
-        serde_json::Value::Number(_) => "Number",
-        serde_json::Value::String(_) => "String",
-        serde_json::Value::Array(_) => "Array",
-        serde_json::Value::Object(_) => "Object",
     }
 }

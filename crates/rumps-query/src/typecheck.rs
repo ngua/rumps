@@ -24,7 +24,7 @@ use std::collections::HashMap;
 pub(crate) use env::TypeEnv;
 pub(crate) use error::{FormattedTypeError, TyPrinter, TypeError};
 pub(crate) use infer::{Constraint, InferCtx};
-pub(crate) use ty::{Class, Scheme, Subst, Ty, TyVar};
+pub(crate) use ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
 
 use crate::ast::{Ast, ExprId, StmtId};
 use crate::env::Environment;
@@ -57,6 +57,7 @@ pub(crate) fn check(
 ) -> crate::Result<(
     Vec<regex::Regex>,
     HashMap<ExprId, u32>,
+    HashMap<ExprId, Ty>,
     HashMap<ExprId, Ty>,
     HashMap<ExprId, Ty>,
 )> {

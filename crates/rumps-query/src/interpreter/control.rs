@@ -14,7 +14,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Type checker guarantees operand satisfies the operator's constraints.
     pub(super) fn postfix(
-        &self,
+        &mut self,
         op: PostfixOp,
         val: Value,
         span: Span,
@@ -31,7 +31,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Type checker guarantees operand is `Option` or `Result`.
     /// `None`/`Err` remain runtime errors (value-level, not type-level).
-    fn unwrap(&self, val: Value, span: Span) -> Result<Value> {
+    fn unwrap(&mut self, val: Value, span: Span) -> Result<Value> {
         let is_option = |ty_expr| {
             self.type_exprs
                 .base_type(ty_expr)
@@ -68,10 +68,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Result.Err(e) -> runtime error with stringified e
             Value::Tagged(ty_expr, 1, payload) if is_result(*ty_expr) => {
-                let err_msg = payload
-                    .first()
-                    .and_then(|id| self.arena.get(*id))
-                    .map(|v| self.stringify(v))
+                let err_val =
+                    payload.first().and_then(|id| self.arena.get(*id).cloned());
+                let err_msg = err_val
+                    .map(|v| self.stringify(&v))
                     .unwrap_or_else(|| "unknown error".into());
                 Err(Error::runtime(
                     span,

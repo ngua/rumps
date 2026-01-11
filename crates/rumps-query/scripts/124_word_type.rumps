@@ -74,14 +74,14 @@ WRITE w10 > w5
 ; === Conversion: Word AS Int (infallible) ===
 
 LET w100: Word = 100
-LET as_int = w100 AS Int
-WRITE as_int
+LET as-int = w100 AS Int
+WRITE as-int
 ; Expected: 100
 
 ; === Conversion: Word AS Float (infallible) ===
 
-LET as_float = w100 AS Float
-WRITE as_float
+LET as-float = w100 AS Float
+WRITE as-float
 ; Expected: 100.0
 
 ; === Conversion: Int READ Word (fallible) ===

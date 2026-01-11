@@ -22,7 +22,7 @@ WRITE Map.lookup(m, "key")
 
 ; Polymorphic functions after empty arrays
 LET arr: Array[Float] = []
-WRITE Iter.length(arr)
-WRITE Iter.map(x => x * 2, [1, 2, 3])
+WRITE Iterable:length(arr)
+WRITE Mappable:map(x => x * 2, [1, 2, 3])
 
 WRITE "empty array + polymorphic OK"

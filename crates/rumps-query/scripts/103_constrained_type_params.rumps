@@ -71,11 +71,11 @@ FUN apply-numeric[T: Numeric](f: (T) -> T, x: T) -> T {
 WRITE apply-numeric(double, 5)   ; 10
 
 ; ============================================================================
-; Subscriptable constraint
+; Into[Subscript] constraint
 ; ============================================================================
 
-; Subscriptable: type can be used as a DB subscript key
-FUN format-key[K: Subscriptable](k: K) -> String {
+; Into[Subscript]: type can be used as a DB subscript key
+FUN format-key[K: Into[Subscript]](k: K) -> String {
   k AS String
 }
 
@@ -84,11 +84,11 @@ WRITE format-key("foo")     ; "foo"
 WRITE format-key(true)      ; "true"
 
 ; ============================================================================
-; Storable constraint
+; Into[Storable] constraint
 ; ============================================================================
 
-; Storable: type can be stored in the database
-FUN identity-storable[V: Storable](v: V) -> V {
+; Into[Storable]: type can be stored in the database
+FUN identity-storable[V: Into[Storable]](v: V) -> V {
   v
 }
 
@@ -102,7 +102,7 @@ WRITE identity-storable(true)     ; true
 
 ; Iterable[T]: type must be Array or Range, yielding elements of type T
 FUN sum-all[T: Numeric, C: Iterable[T]](coll: C) -> T {
-  Iter.reduce((acc, x) => acc + x, 0, coll)
+  Foldable:reduce((acc, x) => acc + x, 0, coll)
 }
 
 WRITE sum-all([1, 2, 3, 4, 5])     ; 15

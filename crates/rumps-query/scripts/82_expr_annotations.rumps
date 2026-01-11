@@ -31,7 +31,7 @@ WRITE sum
 ; Expected: 3
 
 ; Annotate function call result
-LET len = (Iter.length([1, 2, 3])) : Int
+LET len = (Iterable:length([1, 2, 3])) : Int
 WRITE len
 ; Expected: 3
 

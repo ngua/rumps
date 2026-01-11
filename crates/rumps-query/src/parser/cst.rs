@@ -57,10 +57,6 @@ use crate::Span;
 pub(crate) enum Class {
     /// Type is `Int` or `Float`.
     Numeric,
-    /// Type can be used as a DB subscript key.
-    Subscriptable,
-    /// Type can be stored in the database.
-    Storable,
     /// Type is iterable (`Array[T]` or `Range`).
     ///
     /// The inner type expression can be a type parameter name (`Iterable[T]`)
@@ -381,6 +377,20 @@ pub(crate) enum ExprKind {
     /// During pipe expression transformation, replaced with the LHS value.
     /// Any remaining placeholders after transformation are errors.
     PipePlaceholder,
+
+    /// Class method call: `Class:method(args)`.
+    ///
+    /// Dispatches to a typeclass method. Examples:
+    /// - `Numeric:add(a, b)` (binary method)
+    /// - `Fallible:unwrap(opt)` (unary method)
+    /// - `Mappable:map(fn, arr)` (higher-order method)
+    ClassMethod(String, String, Vec<Expr>),
+
+    /// Class method reference: `Class:method` (without call).
+    ///
+    /// A first-class function value. Can be assigned to variables and called
+    /// later. Example: `LET f = Filterable:filter`.
+    ClassMethodRef(String, String),
 }
 
 /// The key specification for JSON access (CST form).

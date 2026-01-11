@@ -704,9 +704,6 @@ impl<'a> InferCtx<'a> {
                 let ret = ret.apply(&subst);
                 self.check_callable(&callee, &args, &ret, *span, &mut subst);
             }
-            Constraint::Fallible { .. } => {
-                // Processed in third pass after all unifications complete
-            }
             Constraint::HasField {
                 base,
                 field,
@@ -719,23 +716,22 @@ impl<'a> InferCtx<'a> {
                     &base, *field, &field_ty, *span, &mut subst,
                 );
             }
-            Constraint::Iterable { coll, elem, span } => {
-                let coll = coll.apply(&subst);
-                let elem = elem.apply(&subst);
-                self.check_iterable(&coll, &elem, *span, &mut subst);
-            }
-            Constraint::Indexable {
-                base,
-                idx,
-                elem,
-                span,
-            } => {
-                let base = base.apply(&subst);
-                let idx = idx.apply(&subst);
-                let elem = elem.apply(&subst);
-                self.check_indexable(&base, &idx, &elem, *span, &mut subst);
-            }
-            _ => {}
+            Constraint::Class { ty, class, span } => match class {
+                // Iterable and Indexable: process in first pass for unification
+                Class::Iterable(elem) => {
+                    let coll = ty.apply(&subst);
+                    let elem = elem.apply(&subst);
+                    self.check_iterable(&coll, &elem, *span, &mut subst);
+                }
+                Class::Indexable(idx, elem) => {
+                    let base = ty.apply(&subst);
+                    let idx = idx.apply(&subst);
+                    let elem = elem.apply(&subst);
+                    self.check_indexable(&base, &idx, &elem, *span, &mut subst);
+                }
+                // Other class constraints: processed in second/third pass
+                _ => {}
+            },
         });
 
         // Default unresolved numeric type variables to Int after first pass.
@@ -753,43 +749,24 @@ impl<'a> InferCtx<'a> {
             }
         });
 
-        // Second pass: process all other constraints with final substitution
+        // Second pass: process membership constraints with final substitution
         constraints.iter().for_each(|c| {
-            match c {
-                Constraint::Eq(..)
-                | Constraint::Callable { .. }
-                | Constraint::HasField { .. }
-                | Constraint::Iterable { .. }
-                | Constraint::Indexable { .. }
-                | Constraint::Fallible { .. }
-                | Constraint::Into { .. }
-                | Constraint::TryInto { .. } => {
-                    // Eq/Callable/HasField/Iterable/Indexable: already processed in first pass
-                    // Fallible/Into/TryInto: processed in third pass
-                }
-
-                Constraint::Numeric(ty, span) => {
-                    self.check_numeric(&ty.apply(&subst), *span);
-                }
-
-                Constraint::Subscriptable(ty, span) => {
-                    self.check_subscriptable(&ty.apply(&subst), *span);
-                }
-
-                Constraint::Storable(ty, span) => {
-                    self.check_storable(&ty.apply(&subst), *span);
-                }
-
-                Constraint::Monoid(ty, span) => {
-                    self.check_monoid(&ty.apply(&subst), *span);
-                }
-
-                Constraint::BitLike(ty, span) => {
-                    self.check_bitlike(&ty.apply(&subst), *span);
-                }
-
-                Constraint::Negatable(ty, span) => {
-                    self.check_negatable(&ty.apply(&subst), *span);
+            if let Constraint::Class { ty, class, span } = c {
+                match class {
+                    Class::Numeric => {
+                        self.check_numeric(&ty.apply(&subst), *span);
+                    }
+                    Class::Monoid => {
+                        self.check_monoid(&ty.apply(&subst), *span);
+                    }
+                    Class::BitLike => {
+                        self.check_bitlike(&ty.apply(&subst), *span);
+                    }
+                    Class::Negatable => {
+                        self.check_negatable(&ty.apply(&subst), *span);
+                    }
+                    // Other classes: processed in first or third pass
+                    _ => {}
                 }
             }
         });
@@ -799,39 +776,41 @@ impl<'a> InferCtx<'a> {
         // Callable has resolved all type variables through argument unification.
         // This ensures constraint violations are caught even when the constrained
         // type parameter is unified with a concrete type via function call.
-        constraints.iter().for_each(|c| match c {
-            Constraint::Fallible { ty, inner, span } => {
-                let ty = ty.apply(&subst);
-                let inner = inner.apply(&subst);
-                self.check_fallible(&ty, &inner, *span, &mut subst);
+        constraints.iter().for_each(|c| {
+            if let Constraint::Class { ty, class, span } = c {
+                match class {
+                    Class::Fallible(inner) => {
+                        let ty = ty.apply(&subst);
+                        let inner = inner.apply(&subst);
+                        self.check_fallible(&ty, &inner, *span, &mut subst);
+                    }
+                    Class::Iterable(elem) => {
+                        let coll = ty.apply(&subst);
+                        let elem = elem.apply(&subst);
+                        self.check_iterable(&coll, &elem, *span, &mut subst);
+                    }
+                    Class::Indexable(idx, elem) => {
+                        let base = ty.apply(&subst);
+                        let idx = idx.apply(&subst);
+                        let elem = elem.apply(&subst);
+                        self.check_indexable(
+                            &base, &idx, &elem, *span, &mut subst,
+                        );
+                    }
+                    Class::Into(to) => {
+                        let from = ty.apply(&subst);
+                        let to = to.apply(&subst);
+                        self.check_into(&from, &to, *span);
+                    }
+                    Class::TryInto(to) => {
+                        let from = ty.apply(&subst);
+                        let to = to.apply(&subst);
+                        self.check_try_into(&from, &to, *span);
+                    }
+                    // Others already processed
+                    _ => {}
+                }
             }
-            Constraint::Iterable { coll, elem, span } => {
-                let coll = coll.apply(&subst);
-                let elem = elem.apply(&subst);
-                self.check_iterable(&coll, &elem, *span, &mut subst);
-            }
-            Constraint::Indexable {
-                base,
-                idx,
-                elem,
-                span,
-            } => {
-                let base = base.apply(&subst);
-                let idx = idx.apply(&subst);
-                let elem = elem.apply(&subst);
-                self.check_indexable(&base, &idx, &elem, *span, &mut subst);
-            }
-            Constraint::Into { from, to, span } => {
-                let from = from.apply(&subst);
-                let to = to.apply(&subst);
-                self.check_into(&from, &to, *span);
-            }
-            Constraint::TryInto { from, to, span } => {
-                let from = from.apply(&subst);
-                let to = to.apply(&subst);
-                self.check_try_into(&from, &to, *span);
-            }
-            _ => {}
         });
 
         subst
@@ -1017,63 +996,6 @@ impl<'a> InferCtx<'a> {
         }
     }
 
-    /// Check that a type can be used as a database subscript key.
-    ///
-    /// Valid types: `Bool`, `Int`, `Float`, `Char`, `String`, `Json`, or the
-    /// `Subscript` union itself.
-    fn check_subscriptable(&mut self, ty: &Ty, span: Span) {
-        match ty {
-            Ty::Bool
-            | Ty::Int
-            | Ty::Float
-            | Ty::Char
-            | Ty::String
-            | Ty::Json => {}
-            // Allow the `Subscript` union type itself
-            Ty::Named(id, _) if *id == crate::TypeId::SUBSCRIPT => {}
-            Ty::Var(_) | Ty::Unknown | Ty::Error => {}
-            Ty::Union(members) => {
-                // All union members must be subscriptable
-                members
-                    .iter()
-                    .for_each(|m| self.check_subscriptable(m, span));
-            }
-            _ => {
-                self.error(TypeError::UnsatisfiedClass(
-                    Class::Subscriptable,
-                    ty.clone(),
-                    span,
-                ));
-            }
-        }
-    }
-
-    /// Check that a type can be stored in the database.
-    ///
-    /// Valid types: members of the `Storable` union.
-    fn check_storable(&mut self, ty: &Ty, span: Span) {
-        match ty {
-            Ty::Bool
-            | Ty::Int
-            | Ty::Float
-            | Ty::Char
-            | Ty::String
-            | Ty::Json => {}
-            Ty::Var(_) | Ty::Unknown | Ty::Error => {}
-            Ty::Union(members) => {
-                // All union members must be storable
-                members.iter().for_each(|m| self.check_storable(m, span));
-            }
-            _ => {
-                self.error(TypeError::UnsatisfiedClass(
-                    Class::Storable,
-                    ty.clone(),
-                    span,
-                ));
-            }
-        }
-    }
-
     /// Check that a type is monoidal (supports `++` concatenation).
     ///
     /// Valid monoidal types are `String`, `Array[T]`, `Map[K, V]`, and `Option[T]`.
@@ -1214,13 +1136,16 @@ impl<'a> InferCtx<'a> {
             // Member to union type (e.g., Int AS Storable)
             (member, Ty::Named(id, _))
                 if *id == crate::TypeId::STORABLE
-                    || *id == crate::TypeId::SCALAR =>
+                    || *id == crate::TypeId::SCALAR
+                    || *id == crate::TypeId::SUBSCRIPT =>
             {
-                // For Storable/Scalar, check that source is a member
+                // For Storable/Scalar/Subscript, check that source is a member
                 let is_member = if *id == crate::TypeId::STORABLE {
                     Ty::STORABLE_MEMBERS.contains(member)
-                } else {
+                } else if *id == crate::TypeId::SCALAR {
                     Ty::SCALAR_MEMBERS.contains(member)
+                } else {
+                    Ty::SUBSCRIPT_MEMBERS.contains(member)
                 };
                 if !is_member {
                     self.error(TypeError::InvalidCast {
@@ -1667,7 +1592,7 @@ impl<'a> InferCtx<'a> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    Class::Indexable,
+                    Class::Indexable(idx.clone(), elem.clone()),
                     base.clone(),
                     span,
                 ));

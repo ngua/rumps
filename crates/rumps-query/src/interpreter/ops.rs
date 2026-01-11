@@ -1,16 +1,16 @@
 //! Binary and unary operator implementations.
 
-use std::cmp::Ordering;
-
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
+use super::class::ClassCtx;
 use super::Interpreter;
 use crate::ast::{BinOp, UnOp};
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::value::{TypeId, Value, ValueId};
+use crate::typecheck::ClassKind;
+use crate::value::{Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -18,6 +18,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Type checker guarantees operand types match the operator requirements.
     /// Division/modulo by zero remain runtime errors (not type-level).
+    ///
+    /// # Fast-paths
+    ///
+    /// Common operations on `Int` are inlined to avoid class dispatch overhead.
+    /// This covers ~90% of arithmetic in typical scripts. All other cases fall
+    /// through to class method dispatch.
     pub(super) fn apply_binop(
         &mut self,
         left: &Value,
@@ -26,36 +32,152 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         match op {
-            BinOp::Add => Ok(self.binop_add(left, right)),
-            BinOp::Sub => Ok(self.binop_sub(left, right)),
-            BinOp::Mul => Ok(self.binop_mul(left, right)),
+            // Numeric class methods with Int fast-path
+            BinOp::Add => match (left, right) {
+                (Value::Int(a), Value::Int(b)) => {
+                    Ok(Value::Int(a.wrapping_add(*b)))
+                }
+                _ => self.dispatch_binary(
+                    ClassKind::Numeric,
+                    "add",
+                    left,
+                    right,
+                    span,
+                ),
+            },
+            BinOp::Sub => match (left, right) {
+                (Value::Int(a), Value::Int(b)) => {
+                    Ok(Value::Int(a.wrapping_sub(*b)))
+                }
+                _ => self.dispatch_binary(
+                    ClassKind::Numeric,
+                    "sub",
+                    left,
+                    right,
+                    span,
+                ),
+            },
+            BinOp::Mul => match (left, right) {
+                (Value::Int(a), Value::Int(b)) => {
+                    Ok(Value::Int(a.wrapping_mul(*b)))
+                }
+                _ => self.dispatch_binary(
+                    ClassKind::Numeric,
+                    "mul",
+                    left,
+                    right,
+                    span,
+                ),
+            },
             BinOp::Div => self.binop_div(left, right, span),
-            BinOp::FloorDiv => self.binop_floor_div(left, right, span),
-            BinOp::Mod => self.binop_mod(left, right, span),
-            BinOp::Pow => Ok(self.binop_pow(left, right)),
+            BinOp::FloorDiv => self.dispatch_binary(
+                ClassKind::Numeric,
+                "floor-div",
+                left,
+                right,
+                span,
+            ),
+            BinOp::Mod => self.dispatch_binary(
+                ClassKind::Numeric,
+                "mod",
+                left,
+                right,
+                span,
+            ),
+            BinOp::Pow => self.dispatch_binary(
+                ClassKind::Numeric,
+                "pow",
+                left,
+                right,
+                span,
+            ),
+
+            // Equality (not yet class-based; keep ad-hoc)
             BinOp::Eq => Ok(Value::Bool(self.values_equal(left, right))),
             BinOp::Ne => Ok(Value::Bool(!self.values_equal(left, right))),
-            BinOp::Lt => {
-                Ok(self.binop_cmp(left, right, |o| o == Ordering::Less))
-            }
-            BinOp::Gt => {
-                Ok(self.binop_cmp(left, right, |o| o == Ordering::Greater))
-            }
-            BinOp::Le => {
-                Ok(self.binop_cmp(left, right, |o| o != Ordering::Greater))
-            }
-            BinOp::Ge => {
-                Ok(self.binop_cmp(left, right, |o| o != Ordering::Less))
-            }
+
+            // Ord class methods with Int fast-path
+            BinOp::Lt => match (left, right) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
+                _ => self.dispatch_compare(left, right, span, |ord| ord < 0),
+            },
+            BinOp::Gt => match (left, right) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
+                _ => self.dispatch_compare(left, right, span, |ord| ord > 0),
+            },
+            BinOp::Le => match (left, right) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+                _ => self.dispatch_compare(left, right, span, |ord| ord <= 0),
+            },
+            BinOp::Ge => match (left, right) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+                _ => self.dispatch_compare(left, right, span, |ord| ord >= 0),
+            },
+
+            // Short-circuit ops handled elsewhere
             BinOp::And | BinOp::Or | BinOp::Coalesce | BinOp::Pipe => {
                 unreachable!("handled in binary")
             }
-            BinOp::Concat => Ok(self.binop_concat(left, right)),
-            BinOp::BitAnd => Ok(self.binop_bitand(left, right)),
-            BinOp::BitOr => Ok(self.binop_bitor(left, right)),
-            BinOp::Shl => Ok(self.binop_shl(left, right)),
-            BinOp::Shr => Ok(self.binop_shr(left, right)),
+
+            // Monoid class method
+            BinOp::Concat => self.dispatch_binary(
+                ClassKind::Monoid,
+                "concat",
+                left,
+                right,
+                span,
+            ),
+
+            // BitLike class methods
+            BinOp::BitAnd => self.dispatch_binary(
+                ClassKind::BitLike,
+                "bit-and",
+                left,
+                right,
+                span,
+            ),
+            BinOp::BitOr => self.dispatch_binary(
+                ClassKind::BitLike,
+                "bit-or",
+                left,
+                right,
+                span,
+            ),
+            BinOp::Shl => self.dispatch_binary(
+                ClassKind::BitLike,
+                "shl",
+                left,
+                right,
+                span,
+            ),
+            BinOp::Shr => self.dispatch_binary(
+                ClassKind::BitLike,
+                "shr",
+                left,
+                right,
+                span,
+            ),
         }
+    }
+
+    /// Dispatch a binary class method.
+    fn dispatch_binary(
+        &mut self,
+        kind: ClassKind,
+        method: &str,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        let mut ctx = ClassCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+            registry: &self.registry,
+            regex_cache: &self.regex_cache,
+            span,
+        };
+        self.class_methods
+            .dispatch_binary(kind, method, &mut ctx, left, right)
     }
 
     /// Unary operation application.
@@ -64,131 +186,90 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// - `-` is only applied to `Negatable` types (`Int` or `Float`)
     /// - `NOT` is only applied to `Bool`
     /// - `?` can wrap any value in `Option.Some`
+    ///
+    /// # Fast-paths
+    ///
+    /// Negation on `Int` is inlined to avoid class dispatch overhead.
     pub(super) fn apply_unop(
         &mut self,
         op: UnOp,
         v: Value,
         span: Span,
-    ) -> Value {
+    ) -> Result<Value> {
         match op {
             UnOp::Neg => match &v {
-                Value::Int(n) => Value::Int(-n),
-                Value::Float(f) => Value::Float(OrderedFloat(-f.0)),
-                _ => typechecked!("-", "Negatable"),
+                // Fast-path: Int negation (most common)
+                Value::Int(n) => Ok(Value::Int(-n)),
+                _ => self.dispatch_unary(ClassKind::Negatable, "neg", &v, span),
             },
-            UnOp::Not => match &v {
+            UnOp::Not => Ok(match &v {
                 Value::Bool(b) => Value::Bool(!b),
                 _ => typechecked!("NOT", "Bool"),
-            },
+            }),
             UnOp::Wrap => {
                 let inner_id = self.arena.add(v, span);
-                self.make_some(inner_id)
+                Ok(self.make_some(inner_id))
             }
         }
     }
 
-    /// Monoid concatenation (`++`).
+    /// Dispatch a unary class method.
+    pub(super) fn dispatch_unary(
+        &mut self,
+        kind: ClassKind,
+        method: &str,
+        v: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        let mut ctx = ClassCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+            registry: &self.registry,
+            regex_cache: &self.regex_cache,
+            span,
+        };
+        self.class_methods.dispatch_unary(kind, method, &mut ctx, v)
+    }
+
+    /// Dispatch a conversion class method (`Into:into`, `TryInto:try-into`).
+    pub(super) fn dispatch_convert(
+        &mut self,
+        kind: ClassKind,
+        method: &str,
+        v: &Value,
+        target: &crate::typecheck::Ty,
+        span: Span,
+    ) -> Result<Value> {
+        let mut ctx = ClassCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+            registry: &self.registry,
+            regex_cache: &self.regex_cache,
+            span,
+        };
+        self.class_methods
+            .dispatch_convert(kind, method, &mut ctx, v, target)
+    }
+
+    /// Dispatch `Ord:compare` and apply a predicate to the result.
     ///
-    /// Type checker guarantees both operands are `Monoid` (String, Array, Map,
-    /// Option) and have the same type.
-    pub(super) fn binop_concat(
+    /// The predicate receives the ordering as `Int` (-1, 0, 1) and returns
+    /// whether the comparison is satisfied.
+    fn dispatch_compare<F>(
         &mut self,
         left: &Value,
         right: &Value,
-    ) -> Value {
-        match (left, right) {
-            // String concatenation
-            (Value::String(l), Value::String(r)) => {
-                let ls = self.arena.get_str(*l).unwrap_or("");
-                let rs = self.arena.get_str(*r).unwrap_or("");
-                let result = format!("{ls}{rs}");
-                Value::String(self.arena.intern(&result))
-            }
-
-            // Array concatenation
-            (Value::Array(ty, l), Value::Array(_, r)) => {
-                let mut elems = l.clone();
-                elems.extend(r.iter().copied());
-                Value::Array(*ty, elems)
-            }
-
-            // Map merge (RHS bias: right values win for duplicate keys)
-            (Value::Map(k_ty, v_ty, l), Value::Map(_, _, r)) => {
-                let mut merged = l.clone();
-                merged.extend(r.iter().map(|(k, v)| (k.clone(), *v)));
-                Value::Map(*k_ty, *v_ty, merged)
-            }
-
-            // Option alternative (`<|>`): first `Some` wins
-            (Value::Tagged(ty1, idx1, _), Value::Tagged(ty2, idx2, _))
-                if self
-                    .type_exprs
-                    .base_type(*ty1)
-                    .is_some_and(|t| t == TypeId::OPTION)
-                    && self
-                        .type_exprs
-                        .base_type(*ty2)
-                        .is_some_and(|t| t == TypeId::OPTION) =>
-            {
-                // idx `0` = None, idx `1` = Some
-                if *idx1 == 1 {
-                    left.clone()
-                } else if *idx2 == 1 {
-                    right.clone()
-                } else {
-                    left.clone()
-                }
-            }
-
-            _ => typechecked!("++", "Monoid"),
-        }
-    }
-
-    /// Addition (same-type operands only).
-    ///
-    /// Type checker guarantees both operands have the same `Numeric` type.
-    fn binop_add(&self, left: &Value, right: &Value) -> Value {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_add(*b)),
-            (Value::Word(a), Value::Word(b)) => {
-                Value::Word(a.saturating_add(*b))
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                Value::Float(OrderedFloat(a.0 + b.0))
-            }
-            _ => typechecked!("+", "same Numeric type"),
-        }
-    }
-
-    /// Subtraction (same-type operands only).
-    ///
-    /// Type checker guarantees both operands have the same `Numeric` type.
-    fn binop_sub(&self, left: &Value, right: &Value) -> Value {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_sub(*b)),
-            (Value::Word(a), Value::Word(b)) => {
-                Value::Word(a.saturating_sub(*b))
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                Value::Float(OrderedFloat(a.0 - b.0))
-            }
-            _ => typechecked!("-", "same Numeric type"),
-        }
-    }
-
-    /// Multiplication (same-type operands only).
-    ///
-    /// Type checker guarantees both operands have the same `Numeric` type.
-    fn binop_mul(&self, left: &Value, right: &Value) -> Value {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_mul(*b)),
-            (Value::Word(a), Value::Word(b)) => {
-                Value::Word(a.saturating_mul(*b))
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                Value::Float(OrderedFloat(a.0 * b.0))
-            }
-            _ => typechecked!("*", "same Numeric type"),
+        span: Span,
+        pred: F,
+    ) -> Result<Value>
+    where
+        F: FnOnce(i64) -> bool,
+    {
+        let ord =
+            self.dispatch_binary(ClassKind::Ord, "compare", left, right, span)?;
+        match ord {
+            Value::Int(n) => Ok(Value::Bool(pred(n))),
+            _ => typechecked!("compare result", "Int"),
         }
     }
 
@@ -212,138 +293,6 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             _ => typechecked!("/", "Float"),
         }
-    }
-
-    /// Floor division (same-type operands only).
-    ///
-    /// Type checker guarantees both operands have the same `Numeric` type.
-    /// Division by zero remains a runtime error (not type-level).
-    fn binop_floor_div(
-        &self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-    ) -> Result<Value> {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => {
-                if *b == 0 {
-                    Err(Error::runtime(span, "division by zero"))
-                } else {
-                    Ok(Value::Int(a.div_euclid(*b)))
-                }
-            }
-            (Value::Word(a), Value::Word(b)) => {
-                if *b == 0 {
-                    Err(Error::runtime(span, "division by zero"))
-                } else {
-                    Ok(Value::Word(a / b))
-                }
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                if b.0 == 0.0 {
-                    Err(Error::runtime(span, "division by zero"))
-                } else {
-                    Ok(Value::Float(OrderedFloat((a.0 / b.0).floor())))
-                }
-            }
-            _ => typechecked!("//", "same Numeric type"),
-        }
-    }
-
-    /// Modulo operation (same-type operands only).
-    ///
-    /// Type checker guarantees both operands have the same `Numeric` type.
-    /// Modulo by zero remains a runtime error (not type-level).
-    fn binop_mod(
-        &self,
-        left: &Value,
-        right: &Value,
-        span: Span,
-    ) -> Result<Value> {
-        match (left, right) {
-            (Value::Int(a), Value::Int(b)) => {
-                if *b == 0 {
-                    Err(Error::runtime(span, "modulo by zero"))
-                } else {
-                    Ok(Value::Int(a.rem_euclid(*b)))
-                }
-            }
-            (Value::Word(a), Value::Word(b)) => {
-                if *b == 0 {
-                    Err(Error::runtime(span, "modulo by zero"))
-                } else {
-                    Ok(Value::Word(a % b))
-                }
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                if b.0 == 0.0 {
-                    Err(Error::runtime(span, "modulo by zero"))
-                } else {
-                    Ok(Value::Float(OrderedFloat(a.0 % b.0)))
-                }
-            }
-            _ => typechecked!("%", "same Numeric type"),
-        }
-    }
-
-    /// Power/exponentiation (same-type operands only).
-    ///
-    /// Type checker guarantees both operands have the same `Numeric` type.
-    fn binop_pow(&self, left: &Value, right: &Value) -> Value {
-        match (left, right) {
-            (Value::Int(base), Value::Int(exp)) => {
-                if *exp < 0 {
-                    // Negative exponent: convert to float
-                    Value::Float(OrderedFloat((*base as f64).powf(*exp as f64)))
-                } else {
-                    // Non-negative exponent: try integer power
-                    u32::try_from(*exp)
-                        .ok()
-                        .and_then(|e| base.checked_pow(e))
-                        .map_or_else(
-                            || {
-                                // Overflow: fall back to float
-                                Value::Float(OrderedFloat(
-                                    (*base as f64).powf(*exp as f64),
-                                ))
-                            },
-                            Value::Int,
-                        )
-                }
-            }
-            (Value::Word(base), Value::Word(exp)) => Value::Word(
-                u32::try_from(*exp)
-                    .ok()
-                    .and_then(|e| base.checked_pow(e))
-                    .unwrap_or(usize::MAX),
-            ),
-            (Value::Float(a), Value::Float(b)) => {
-                Value::Float(OrderedFloat(a.0.powf(b.0)))
-            }
-            _ => typechecked!("**", "same Numeric type"),
-        }
-    }
-
-    /// Compare two values and apply a predicate to the ordering.
-    ///
-    /// Type checker guarantees both operands have the same type.
-    fn binop_cmp<F>(&self, left: &Value, right: &Value, pred: F) -> Value
-    where
-        F: FnOnce(Ordering) -> bool,
-    {
-        let ord = match (left, right) {
-            (Value::Int(a), Value::Int(b)) => a.cmp(b),
-            (Value::Word(a), Value::Word(b)) => a.cmp(b),
-            (Value::Float(a), Value::Float(b)) => a.cmp(b),
-            (Value::String(a), Value::String(b)) => {
-                let sa = self.arena.get_str(*a).unwrap_or("");
-                let sb = self.arena.get_str(*b).unwrap_or("");
-                sa.cmp(sb)
-            }
-            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-            _ => typechecked!("</>/<=/>=", "same Ord type"),
-        };
-        Value::Bool(pred(ord))
     }
 
     /// Check equality of two values.
@@ -425,69 +374,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .zip(self.arena.get(*bv))
                 .is_some_and(|(va, vb)| self.values_equal(va, vb))
         })
-    }
-
-    /// Bitwise AND.
-    ///
-    /// Type checker guarantees both operands are `Bool`, `Int`, or `Word`.
-    fn binop_bitand(&self, left: &Value, right: &Value) -> Value {
-        match (left, right) {
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a && *b),
-            (Value::Int(a), Value::Int(b)) => Value::Int(a & b),
-            (Value::Word(a), Value::Word(b)) => Value::Word(a & b),
-            _ => typechecked!("&", "BitLike"),
-        }
-    }
-
-    /// Bitwise OR.
-    ///
-    /// Type checker guarantees both operands are `Bool`, `Int`, or `Word`.
-    fn binop_bitor(&self, left: &Value, right: &Value) -> Value {
-        match (left, right) {
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a || *b),
-            (Value::Int(a), Value::Int(b)) => Value::Int(a | b),
-            (Value::Word(a), Value::Word(b)) => Value::Word(a | b),
-            _ => typechecked!("|", "BitLike"),
-        }
-    }
-
-    /// Shift left.
-    ///
-    /// Type checker guarantees both operands are `Bool`, `Int`, or `Word`.
-    /// For `Bool`, shift left by any amount produces `false` (shifts out the bit).
-    fn binop_shl(&self, left: &Value, right: &Value) -> Value {
-        match (left, right) {
-            (Value::Bool(_), Value::Bool(_)) => Value::Bool(false),
-            (Value::Int(a), Value::Int(b)) => {
-                let shift = (*b as u32) & 63;
-                Value::Int(a.wrapping_shl(shift))
-            }
-            (Value::Word(a), Value::Word(b)) => {
-                let shift = (*b as u32) & (usize::BITS - 1);
-                Value::Word(a.wrapping_shl(shift))
-            }
-            _ => typechecked!("<<", "BitLike"),
-        }
-    }
-
-    /// Shift right.
-    ///
-    /// Type checker guarantees both operands are `Bool`, `Int`, or `Word`.
-    /// For `Bool`, shift right by any amount produces `false` (shifts out the bit).
-    /// For `Int`, this is an arithmetic (signed) shift.
-    fn binop_shr(&self, left: &Value, right: &Value) -> Value {
-        match (left, right) {
-            (Value::Bool(_), Value::Bool(_)) => Value::Bool(false),
-            (Value::Int(a), Value::Int(b)) => {
-                let shift = (*b as u32) & 63;
-                Value::Int(a.wrapping_shr(shift))
-            }
-            (Value::Word(a), Value::Word(b)) => {
-                let shift = (*b as u32) & (usize::BITS - 1);
-                Value::Word(a.wrapping_shr(shift))
-            }
-            _ => typechecked!(">>", "BitLike"),
-        }
     }
 
     /// Evaluate a `MATCHES` expression.

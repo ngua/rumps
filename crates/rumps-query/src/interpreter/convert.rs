@@ -2,6 +2,9 @@
 //!
 //! These live on Interpreter rather than Value because they need context
 //! (arena, registry) that the interpreter owns.
+//!
+//! Conversion methods dispatch to `Into[T]` class methods internally; the
+//! helpers here provide a convenient API for the interpreter to use.
 
 use ordered_float::OrderedFloat;
 use rumps_types::Subscript;
@@ -16,7 +19,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a runtime value to a storage value.
     ///
     /// Scalars convert directly; complex values serialize to JSON.
-    pub(crate) fn store(&self, v: &Value) -> rumps_types::Value {
+    pub(crate) fn store(&mut self, v: &Value) -> rumps_types::Value {
         match v {
             Value::Unit => typechecked!("store", "Storable (not Unit)"),
             Value::Bool(b) => rumps_types::Value::Boolean(*b),
@@ -54,7 +57,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::ModuleConst { .. }
             | Value::Range { .. }
             | Value::ForeverContinuation
-            | Value::LoopContinue(_) => {
+            | Value::LoopContinue(_)
+            | Value::ClassMethodFn { .. } => {
                 rumps_types::Value::Json(self.jsonify(v))
             }
             Value::Time(t) => rumps_types::Value::String(t.to_rfc3339()),
@@ -82,14 +86,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Used for WRITE statements. Quotes strings and file paths so output
     /// is valid RUMPS syntax.
-    pub(crate) fn display(&self, v: &Value) -> String {
+    pub(crate) fn display(&mut self, v: &Value) -> String {
         self.stringify(v)
     }
 
     /// Coerce a value to a raw string for concatenation.
     ///
     /// Unlike `stringify`, this does not quote strings.
-    pub(crate) fn coerce_to_str(&self, v: &Value) -> String {
+    pub(crate) fn coerce_to_str(&mut self, v: &Value) -> String {
         match v {
             Value::String(id) | Value::FilePath(id) => {
                 self.arena.get_str(*id).unwrap_or("").to_owned()
@@ -98,321 +102,41 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Recursive stringify helper.
+    /// Stringify a value for display via `Display:display`.
     ///
     /// Produces valid RUMPS syntax; strings and file paths are quoted.
-    pub(crate) fn stringify(&self, v: &Value) -> String {
-        match v {
-            Value::Unit => "Unit".into(),
-            // Usually keywords are represented as uppercase, so this will
-            // produce `TRUE`/`FALSE`, even though they are not really keywords
-            Value::Bool(b) => b.to_string().to_uppercase(),
-            Value::Int(n) => n.to_string(),
-            Value::Word(n) => n.to_string(),
-            Value::Float(f) => {
-                let s = f.to_string();
-                // Ensure floats always have a decimal point for clarity
-                if s.contains('.') || s.contains('e') || s.contains('E') {
-                    s
-                } else {
-                    format!("{s}.0")
-                }
-            }
-            Value::Char(c) => format!("'{c}'"),
-            Value::String(id) | Value::FilePath(id) => {
-                let s = self.arena.get_str(*id).unwrap_or("");
-                format!("\"{s}\"")
-            }
-            Value::Regex(idx) => {
-                let re =
-                    self.regex_cache.get(*idx as usize).unwrap_or_else(|| {
-                        typechecked!("stringify Regex", "valid cache index")
-                    });
-                format!("/{}/", re.as_str())
-            }
-            Value::Array(_, elems) => {
-                let items = elems
-                    .iter()
-                    .filter_map(|id| self.arena.get(*id))
-                    .map(|v| self.stringify(v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("[ {items} ]")
-            }
-            Value::Tuple(_, elems) => {
-                let items = elems
-                    .iter()
-                    .filter_map(|id| self.arena.get(*id))
-                    .map(|v| self.stringify(v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                // Single-element tuples need trailing comma to distinguish from
-                // parenthesized expressions
-                let trail = if elems.len() == 1 { "," } else { "" };
-                format!("({items}{trail})")
-            }
-            Value::Object(obj) => {
-                let fields = obj
-                    .iter()
-                    .map(|(k, vid)| {
-                        let key = self.arena.get_str(*k).unwrap_or("?");
-                        let val = self
-                            .arena
-                            .get(*vid)
-                            .map(|v| self.stringify(v))
-                            .unwrap_or_else(|| "?".to_owned());
-                        format!("{key}: {val}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{{ {fields} }}")
-            }
-            Value::Map(_, _, entries) => {
-                let items = entries
-                    .iter()
-                    .map(|(k, vid)| {
-                        let key = self.stringify_map_key(k);
-                        let val = self
-                            .arena
-                            .get(*vid)
-                            .map(|v| self.stringify(v))
-                            .unwrap_or_else(|| "?".to_owned());
-                        format!("{key} => {val}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{{ {items} }}")
-            }
-            Value::Time(t) => t.to_rfc3339(),
-            Value::Json(j) => j.to_string(),
-            Value::Tagged(ty_expr, idx, payloads) => {
-                let base_ty = self.type_exprs.base_type(*ty_expr);
-                let ty_name = base_ty
-                    .and_then(|ty| self.registry.type_name(ty, &self.arena))
-                    .unwrap_or("?");
-                let var_name = base_ty
-                    .and_then(|ty| {
-                        self.registry.variant_name(ty, *idx, &self.arena)
-                    })
-                    .unwrap_or("?");
-
-                if payloads.is_empty() {
-                    format!("{ty_name}.{var_name}")
-                } else {
-                    let args = payloads
-                        .iter()
-                        .filter_map(|id| self.arena.get(*id))
-                        .map(|v| self.stringify(v))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("{ty_name}.{var_name}({args})")
-                }
-            }
-            // Functions cannot be stringified (rejected by type checker)
-            Value::Closure { .. } => {
-                typechecked!("stringify", "Into[String] (not Closure)")
-            }
-            Value::Function { .. } => {
-                typechecked!("stringify", "Into[String] (not Function)")
-            }
-            Value::ModuleFn { .. } => {
-                typechecked!("stringify", "Into[String] (not ModuleFn)")
-            }
-            // Module constants should be resolved before stringify; if not,
-            // display the path as a fallback
-            Value::ModuleConst { path } => {
-                let path_str: String = path
-                    .iter()
-                    .filter_map(|id| self.arena.get_str(*id))
-                    .collect::<Vec<_>>()
-                    .join(".");
-                format!("<{path_str}>")
-            }
-            Value::Range {
-                start,
-                end,
-                inclusive,
-            } => {
-                if *inclusive {
-                    format!("{start} ..= {end}")
-                } else {
-                    format!("{start} .. {end}")
-                }
-            }
-            // Internal loop control values; should not be stringified by user code
-            Value::ForeverContinuation => "<continuation>".into(),
-            Value::LoopContinue(_) => "<loop-continue>".into(),
-            // Ref values: format as `name{sub1, sub2}` or `^name{sub1, sub2}`
-            Value::Ref(is_global, name_id, sub_ids) => {
-                let prefix = if *is_global { "^" } else { "" };
-                let name = self.arena.get_str(*name_id).unwrap_or("?");
-                let subs = sub_ids
-                    .iter()
-                    .filter_map(|id| self.arena.get(*id))
-                    .map(|v| self.stringify(v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{prefix}{name}{{{subs}}}")
-            }
-        }
+    /// This is distinct from `Into[String]` which produces raw strings.
+    ///
+    /// This is a convenience wrapper around `Display::format`; the class
+    /// method is used so frequently that constructing a `ClassCtx` at every
+    /// call site would be overly verbose.
+    pub(crate) fn stringify(&mut self, v: &Value) -> String {
+        let ctx = super::class::ClassCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+            registry: &self.registry,
+            regex_cache: &self.regex_cache,
+            span: Span::default(),
+        };
+        super::class::Display::format(&ctx, v)
     }
 
-    /// Convert a value to JSON.
+    /// Convert a value to JSON via `Into[Json]`.
     ///
     /// Used for JSON output and storage serialization.
-    pub(crate) fn jsonify(&self, v: &Value) -> serde_json::Value {
-        match v {
-            Value::Unit => serde_json::Value::Null,
-            Value::Bool(b) => serde_json::Value::Bool(*b),
-            Value::Int(n) => serde_json::json!(*n),
-            Value::Word(n) => serde_json::json!(*n),
-            Value::Float(f) => serde_json::json!(f.0),
-            Value::Char(c) => serde_json::Value::String(c.to_string()),
-            Value::String(id) => {
-                let s = self
-                    .arena
-                    .get_str(*id)
-                    .unwrap_or_else(|| invariant!("StringId in arena"));
-                serde_json::Value::String(s.to_owned())
-            }
-            Value::FilePath(id) => {
-                let s = self
-                    .arena
-                    .get_str(*id)
-                    .unwrap_or_else(|| invariant!("StringId in arena"));
-                serde_json::Value::String(s.to_owned())
-            }
-            Value::Array(_, arr) => {
-                let elems: Vec<_> = arr
-                    .iter()
-                    .map(|id| {
-                        self.arena
-                            .get(*id)
-                            .unwrap_or_else(|| invariant!("ValueId in arena"))
-                    })
-                    .map(|v| self.jsonify(v))
-                    .collect();
-                serde_json::Value::Array(elems)
-            }
-            Value::Tuple(_, elems) => {
-                let items: Vec<_> = elems
-                    .iter()
-                    .map(|id| {
-                        self.arena
-                            .get(*id)
-                            .unwrap_or_else(|| invariant!("ValueId in arena"))
-                    })
-                    .map(|v| self.jsonify(v))
-                    .collect();
-                serde_json::Value::Array(items)
-            }
-            Value::Object(obj) => {
-                let map: serde_json::Map<_, _> = obj
-                    .iter()
-                    .map(|(k, vid)| {
-                        let key = self
-                            .arena
-                            .get_str(*k)
-                            .unwrap_or_else(|| invariant!("StringId in arena"));
-                        let val = self
-                            .arena
-                            .get(*vid)
-                            .unwrap_or_else(|| invariant!("ValueId in arena"));
-                        (key.to_owned(), self.jsonify(val))
-                    })
-                    .collect();
-                serde_json::Value::Object(map)
-            }
-            // Sum type encoding: tagged object (with special handling for Option)
-            Value::Tagged(ty_expr, idx, payloads) => {
-                let base_ty = self.type_exprs.base_type(*ty_expr);
-
-                // Option encodes as null/value rather than tagged object
-                if base_ty.is_some_and(|ty| ty == TypeId::OPTION) {
-                    if *idx == 0 {
-                        // Option.None -> null
-                        serde_json::Value::Null
-                    } else {
-                        // Option.Some(v) -> jsonify(v)
-                        payloads
-                            .first()
-                            .and_then(|id| self.arena.get(*id))
-                            .map(|v| self.jsonify(v))
-                            .unwrap_or(serde_json::Value::Null)
-                    }
-                } else {
-                    let ty_name = base_ty
-                        .and_then(|ty| self.registry.type_name(ty, &self.arena))
-                        .unwrap_or("?");
-                    let var_name = base_ty
-                        .and_then(|ty| {
-                            self.registry.variant_name(ty, *idx, &self.arena)
-                        })
-                        .unwrap_or("?");
-                    let payload_json: Vec<_> = payloads
-                        .iter()
-                        .map(|id| {
-                            self.arena.get(*id).unwrap_or_else(|| {
-                                invariant!("ValueId in arena")
-                            })
-                        })
-                        .map(|v| self.jsonify(v))
-                        .collect();
-
-                    serde_json::json!({
-                        "_type": ty_name,
-                        "_variant": var_name,
-                        "_payload": payload_json
-                    })
-                }
-            }
-            Value::Map(_, _, entries) => {
-                let map: serde_json::Map<_, _> = entries
-                    .iter()
-                    .map(|(k, vid)| {
-                        let key = self.stringify_map_key(k);
-                        let val = self
-                            .arena
-                            .get(*vid)
-                            .unwrap_or_else(|| invariant!("ValueId in arena"));
-                        (key, self.jsonify(val))
-                    })
-                    .collect();
-                serde_json::Value::Object(map)
-            }
-            Value::Time(t) => serde_json::Value::String(t.to_rfc3339()),
-            Value::Json(j) => j.clone(),
-            Value::Range {
-                start,
-                end,
-                inclusive,
-            } => {
-                let end = if *inclusive { *end + 1 } else { *end };
-                let arr: Vec<_> = (*start..end)
-                    .map(|n| serde_json::Value::Number(n.into()))
-                    .collect();
-                serde_json::Value::Array(arr)
-            }
-            Value::Closure { .. } => {
-                typechecked!("jsonify", "Into[Json] (not Closure)")
-            }
-            Value::Function { .. } => {
-                typechecked!("jsonify", "Into[Json] (not Function)")
-            }
-            Value::ModuleFn { .. } => {
-                typechecked!("jsonify", "Into[Json] (not ModuleFn)")
-            }
-            Value::ModuleConst { .. } => {
-                typechecked!("jsonify", "Into[Json] (not ModuleConst)")
-            }
-            Value::Regex(_) => {
-                typechecked!("jsonify", "Into[Json] (not Regex)")
-            }
-            Value::ForeverContinuation | Value::LoopContinue(_) => {
-                typechecked!("jsonify", "Into[Json] (not continuation)")
-            }
-            Value::Ref(..) => typechecked!("jsonify", "Into[Json] (not Ref)"),
-        }
+    ///
+    /// This is a convenience wrapper around `Into::jsonify`; the class
+    /// method is used so frequently that constructing a `ClassCtx` at every
+    /// call site would be overly verbose.
+    pub(crate) fn jsonify(&mut self, v: &Value) -> serde_json::Value {
+        let ctx = super::class::ClassCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+            registry: &self.registry,
+            regex_cache: &self.regex_cache,
+            span: Span::default(),
+        };
+        super::class::Into::jsonify(&ctx, v)
     }
 
     /// Convert a JSON value to a runtime value.
@@ -503,7 +227,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Range { .. }
             | Value::ForeverContinuation
             | Value::LoopContinue(_)
-            | Value::Ref(..) => {
+            | Value::Ref(..)
+            | Value::ClassMethodFn { .. } => {
                 typechecked!("subscript", "Subscriptable")
             }
         }

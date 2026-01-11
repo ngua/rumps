@@ -1,103 +1,103 @@
 ; Array module functions
-; Tests Iter.map, Iter.filter, Iter.reduce, Iter.foreach
+; Tests Mappable:map, Filterable:filter, Foldable:reduce, Iterable:foreach
 
-; Iter.map with closure
+; Mappable:map with closure
 LET nums = [1, 2, 3, 4, 5]
-LET doubled = Iter.map(x => x * 2, nums)
+LET doubled = Mappable:map(x => x * 2, nums)
 WRITE doubled  ; [2, 4, 6, 8, 10]
 
-; Iter.map on empty array
+; Mappable:map on empty array
 LET empty = []
-LET mapped-empty = Iter.map(x => x + 1, empty)
+LET mapped-empty = Mappable:map(x => x + 1, empty)
 WRITE mapped-empty  ; []
 
-; Iter.map with named function
+; Mappable:map with named function
 FUN square (n: Int) -> Int { n * n }
-LET squares = Iter.map(square, [1, 2, 3])
+LET squares = Mappable:map(square, [1, 2, 3])
 WRITE squares  ; [1, 4, 9]
 
-; Iter.filter with closure
-LET evens = Iter.filter(x => x % 2 == 0, nums)
+; Filterable:filter with closure
+LET evens = Filterable:filter(x => x % 2 == 0, nums)
 WRITE evens  ; [2, 4]
 
-; Iter.filter on empty array
-LET filtered-empty = Iter.filter(x => x > 0, empty)
+; Filterable:filter on empty array
+LET filtered-empty = Filterable:filter(x => x > 0, empty)
 WRITE filtered-empty  ; []
 
-; Iter.filter with named function
+; Filterable:filter with named function
 FUN is-positive (n: Int) -> Bool { n > 0 }
-LET positives = Iter.filter(is-positive, [-1, 0, 1, 2])
+LET positives = Filterable:filter(is-positive, [-1, 0, 1, 2])
 WRITE positives  ; [1, 2]
 
-; Iter.filter keeping all
-LET all-kept = Iter.filter(x => TRUE, [1, 2, 3])
+; Filterable:filter keeping all
+LET all-kept = Filterable:filter(x => TRUE, [1, 2, 3])
 WRITE all-kept  ; [1, 2, 3]
 
-; Iter.filter keeping none
-LET none-kept = Iter.filter(x => FALSE, [1, 2, 3])
+; Filterable:filter keeping none
+LET none-kept = Filterable:filter(x => FALSE, [1, 2, 3])
 WRITE none-kept  ; []
 
-; Iter.reduce with sum
-LET sum = Iter.reduce((acc, x) => acc + x, 0, nums)
+; Foldable:reduce with sum
+LET sum = Foldable:reduce((acc, x) => acc + x, 0, nums)
 WRITE sum  ; 15
 
-; Iter.reduce on empty array returns initial value
-LET empty-sum = Iter.reduce((acc, x) => acc + x, 100, empty)
+; Foldable:reduce on empty array returns initial value
+LET empty-sum = Foldable:reduce((acc, x) => acc + x, 100, empty)
 WRITE empty-sum  ; 100
 
-; Iter.reduce with string concatenation
+; Foldable:reduce with string concatenation
 LET words = ["hello", " ", "world"]
-LET combined = Iter.reduce((acc, s) => "{acc}{s}", "", words)
+LET combined = Foldable:reduce((acc, s) => "{acc}{s}", "", words)
 WRITE combined  ; "hello world"
 
-; Iter.reduce with named function
+; Foldable:reduce with named function
 FUN add (a: Int, b: Int) -> Int { a + b }
-LET total = Iter.reduce(add, 0, [1, 2, 3, 4])
+LET total = Foldable:reduce(add, 0, [1, 2, 3, 4])
 WRITE total  ; 10
 
 ; Combining Array functions
-LET result = Iter.reduce(
+LET result = Foldable:reduce(
   (acc, x) => acc + x,
   0,
-  Iter.map(x => x * x, Iter.filter(x => x % 2 == 1, [1, 2, 3, 4, 5]))
+  Mappable:map(x => x * x, Filterable:filter(x => x % 2 == 1, [1, 2, 3, 4, 5]))
 )
 WRITE result  ; 1 + 9 + 25 = 35
 
 ; Pipeline usage with Array functions (using wrapper closures)
 LET piped = [1, 2, 3, 4, 5]
-  |> (arr => Iter.filter(x => x > 2, arr))
-  |> (arr => Iter.map(x => x * 10, arr))
+  |> (arr => Filterable:filter(x => x > 2, arr))
+  |> (arr => Mappable:map(x => x * 10, arr))
 WRITE piped  ; [30, 40, 50]
 
 ; Module functions can be passed as first-class values
-LET filter-fn = Iter.filter
+LET filter-fn = Filterable:filter
 LET data = [1, 2, 3, 4, 5]
 LET filtered = filter-fn(x => x > 2, data)
 WRITE filtered  ; [3, 4, 5]
 
-; Iter.map with Option results (homogeneous tagged values)
-LET with-opts = Iter.map(x => Option.Some(x), [1, 2, 3])
+; Mappable:map with Option results (homogeneous tagged values)
+LET with-opts = Mappable:map(x => Option.Some(x), [1, 2, 3])
 WRITE with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
 
-; Nested Iter.map (callback uses Array function)
+; Nested Mappable:map (callback uses Array function)
 LET nested = [[1, 2], [3, 4]]
-LET doubled-nested = Iter.map(arr => Iter.map(x => x * 2, arr), nested)
+LET doubled-nested = Mappable:map(arr => Mappable:map(x => x * 2, arr), nested)
 WRITE doubled-nested  ; [[2, 4], [6, 8]]
 
-; === Iter.foreach ===
+; === Iterable:foreach ===
 
-; Iter.foreach for side effects (outputs each element)
+; Iterable:foreach for side effects (outputs each element)
 WRITE "foreach:"
-LET fe-result = Iter.foreach(x => { WRITE x }, [10, 20, 30])
+LET fe-result = Iterable:foreach(x => { WRITE x }, [10, 20, 30])
 WRITE fe-result  ; Unit
 
-; Iter.foreach on empty array (no side effects)
-LET fe-empty = Iter.foreach(x => { WRITE x }, [])
+; Iterable:foreach on empty array (no side effects)
+LET fe-empty = Iterable:foreach(x => { WRITE x }, [])
 WRITE fe-empty  ; Unit
 
-; Iter.foreach with range
+; Iterable:foreach with range
 WRITE "range foreach:"
-LET fe-range = Iter.foreach(n => { WRITE n }, 1 .. 4)
+LET fe-range = Iterable:foreach(n => { WRITE n }, 1 .. 4)
 WRITE fe-range  ; Unit
 
 ; === Array.zip ===
@@ -196,7 +196,7 @@ LET people = [
   { name: "Carol", age: 35 }
 ]
 LET by-age = Array.sort-by(cmp-by-age, people)
-WRITE Iter.map(p => p.name, by-age)
+WRITE Mappable:map(p => p.name, by-age)
 
 ; === Chained operations ===
 
@@ -204,7 +204,7 @@ WRITE Iter.map(p => p.name, by-age)
 LET indices = [0, 1, 2, 3, 4]
 LET values = [10, 25, 30, 15, 40]
 LET indexed = Array.zip(indices, values)
-LET chain-filtered = Iter.filter(pair => pair.1 > 20, indexed)
+LET chain-filtered = Filterable:filter(pair => pair.1 > 20, indexed)
 WRITE chain-filtered
 
 ; zip-with to compute differences
@@ -217,15 +217,15 @@ WRITE diffs
 
 ; Union of iterable types should satisfy Iterable[T] constraint
 FUN iter-len(i: Range | Array[Int]) -> Int {
-  Iter.length(i)
+  Iterable:length(i)
 }
 
 WRITE iter-len(1 ..= 20)
 WRITE iter-len([1, 2, 3, 4, 5])
 
-; Using Iter.map with union type
+; Using Mappable:map with union type
 FUN iter-sum(i: Range | Array[Int]) -> Int {
-  Iter.reduce((acc, x) => acc + x, 0, i)
+  Foldable:reduce((acc, x) => acc + x, 0, i)
 }
 
 WRITE iter-sum(1 ..= 5)

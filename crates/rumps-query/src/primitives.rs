@@ -11,8 +11,10 @@
 //! Each RUMPS module is a separate type implementing the [`Prim`] trait:
 //! - [`Array`]: `push`, `pop`, `head`, `tail`, `sort`, `slice`, `concat`,
 //!   `sort-by`, `zip`, `zip-with`, `unzip`, `intersperse`
-//! - [`Iter`]: `length`, `contains`, `reverse`, plus higher-order functions
-//!   (`map`, `filter`, `reduce`, `foreach`)
+//!
+//! Iterable operations (`length`, `contains`, `reverse`, `map`, `filter`,
+//! `reduce`, `foreach`) are now handled via class method syntax
+//! (e.g. `Iterable:length`, `Mappable:map`).
 //!
 //! When adding a new RUMPS module, create a new type implementing [`Prim`]
 //! and add its functions as associated functions.
@@ -339,7 +341,8 @@ impl Array {
                     | Value::Range { .. }
                     | Value::ForeverContinuation
                     | Value::LoopContinue(_)
-                    | Value::Ref(..) => None,
+                    | Value::Ref(..)
+                    | Value::ClassMethodFn { .. } => None,
                 }
             }
 
@@ -593,127 +596,6 @@ impl Array {
                 .collect();
 
             Ok(ctx.arena.add(Value::Array(ty, result), ctx.span))
-        })
-    }
-}
-
-/// Primitives for the `Iter` module.
-///
-/// Functions that work on any `Iterable[T]` type (currently `Array[T]` or `Range`).
-/// Higher-order functions (`map`, `filter`, `reduce`, `foreach`) are implemented
-/// in `interpreter/call.rs` and registered here as placeholders.
-pub(crate) struct Iter;
-
-impl Prim for Iter {}
-
-impl Iter {
-    /// `forall I: Iterable[T], T. (I) -> Int`
-    ///
-    /// Returns the number of elements in the iterable.
-    /// For `Range`, this is computed as `end - start` (plus 1 if inclusive).
-    pub(crate) fn length<'a>(
-        ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
-    ) -> PrimResult<'a> {
-        Box::pin(async move {
-            match ctx.arena.get(args[0]) {
-                Some(Value::Array(_, elems)) => {
-                    Ok(ctx.arena.add(Value::Int(elems.len() as i64), ctx.span))
-                }
-                Some(Value::Range {
-                    start,
-                    end,
-                    inclusive,
-                }) => {
-                    let len = if *inclusive {
-                        end - start + 1
-                    } else {
-                        end - start
-                    };
-                    Ok(ctx.arena.add(Value::Int(len.max(0)), ctx.span))
-                }
-                Some(_) => typechecked!("Iter.length", "Iterable"),
-                None => typechecked!("Iter.length", "valid arg"),
-            }
-        })
-    }
-
-    /// `forall I: Iterable[T], T. (I, T) -> Bool`
-    ///
-    /// Returns `true` if the iterable contains the given value.
-    /// For `Range`, checks if the value is an integer within the range bounds.
-    pub(crate) fn contains<'a>(
-        ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
-    ) -> PrimResult<'a> {
-        Box::pin(async move {
-            let needle = ctx.arena.get(args[1]).ok_or_else(|| {
-                ctx.runtime_error("Iter.contains: invalid value")
-            })?;
-
-            let found = match ctx.arena.get(args[0]) {
-                Some(Value::Array(_, elems)) => elems.iter().any(|elem_id| {
-                    ctx.arena.get(*elem_id).is_some_and(|v| v == needle)
-                }),
-                Some(Value::Range {
-                    start,
-                    end,
-                    inclusive,
-                }) => {
-                    // Range only contains integers; check if needle is Int and in range
-                    match needle {
-                        Value::Int(n) => {
-                            if *inclusive {
-                                *n >= *start && *n <= *end
-                            } else {
-                                *n >= *start && *n < *end
-                            }
-                        }
-                        _ => false,
-                    }
-                }
-                Some(_) => typechecked!("Iter.contains", "Iterable"),
-                None => typechecked!("Iter.contains", "valid arg"),
-            };
-
-            Ok(ctx.arena.add(Value::Bool(found), ctx.span))
-        })
-    }
-
-    /// `forall I: Iterable[T], T. (I) -> Array[T]`
-    ///
-    /// Returns a new array with elements in reverse order.
-    /// For `Range`, returns an array (not a reversed range).
-    pub(crate) fn reverse<'a>(
-        ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
-    ) -> PrimResult<'a> {
-        Box::pin(async move {
-            match ctx.arena.get(args[0]) {
-                Some(Value::Array(ty, elems)) => {
-                    let ty = *ty;
-                    let reversed: SmallVec<[ValueId; 4]> =
-                        elems.iter().rev().copied().collect();
-                    Ok(ctx.arena.add(Value::Array(ty, reversed), ctx.span))
-                }
-                Some(Value::Range {
-                    start,
-                    end,
-                    inclusive,
-                }) => {
-                    // Materialize reversed range as array
-                    let (start, end, inclusive) = (*start, *end, *inclusive);
-                    let actual_end = if inclusive { end + 1 } else { end };
-                    let elems: SmallVec<[ValueId; 4]> = (start..actual_end)
-                        .rev()
-                        .map(|i| ctx.arena.add(Value::Int(i), ctx.span))
-                        .collect();
-                    let ty = ctx.type_exprs.named(TypeId::INT);
-                    Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
-                }
-                Some(_) => typechecked!("Iter.reverse", "Iterable"),
-                None => typechecked!("Iter.reverse", "valid arg"),
-            }
         })
     }
 }

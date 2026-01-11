@@ -379,40 +379,11 @@ impl InferCtx<'_> {
                 scheme_constraints.push((tv, class.clone()));
 
                 // Emit constraint for checking the function body
-                let constraint = match &class {
-                    Class::Numeric => Constraint::Numeric(ty.clone(), span),
-                    Class::Subscriptable => {
-                        Constraint::Subscriptable(ty.clone(), span)
-                    }
-                    Class::Storable => Constraint::Storable(ty.clone(), span),
-                    Class::Iterable(elem) => Constraint::Iterable {
-                        coll: ty.clone(),
-                        elem: elem.clone(),
-                        span,
-                    },
-                    Class::Monoid => Constraint::Monoid(ty.clone(), span),
-                    Class::BitLike => Constraint::BitLike(ty.clone(), span),
-                    Class::Negatable => Constraint::Negatable(ty.clone(), span),
-                    Class::Fallible(inner) => Constraint::Fallible {
-                        ty: ty.clone(),
-                        inner: inner.clone(),
-                        span,
-                    },
-                    Class::Into(to) => Constraint::Into {
-                        from: ty.clone(),
-                        to: to.clone(),
-                        span,
-                    },
-                    Class::TryInto(to) => Constraint::TryInto {
-                        from: ty.clone(),
-                        to: to.clone(),
-                        span,
-                    },
-                    Class::Indexable => {
-                        unreachable!("Indexable not user-declarable")
-                    }
-                };
-                self.constrain(constraint);
+                self.constrain(Constraint::Class {
+                    ty: ty.clone(),
+                    class,
+                    span,
+                });
             });
         });
 
@@ -702,17 +673,17 @@ impl InferCtx<'_> {
         match output.format {
             OutputFormat::Default => {
                 // Must be convertible to String
-                self.constrain(Constraint::Into {
-                    from: expr_ty,
-                    to: Ty::String,
+                self.constrain(Constraint::Class {
+                    ty: expr_ty,
+                    class: Class::Into(Ty::String),
                     span,
                 });
             }
             OutputFormat::Json => {
                 // Must be convertible to Json
-                self.constrain(Constraint::Into {
-                    from: expr_ty,
-                    to: Ty::Json,
+                self.constrain(Constraint::Class {
+                    ty: expr_ty,
+                    class: Class::Into(Ty::Json),
                     span,
                 });
             }

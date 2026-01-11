@@ -1,13 +1,13 @@
 //! Variant construction and Option/Result helpers.
 
 use async_recursion::async_recursion;
-use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
+use super::class::ClassCtx;
 use super::Interpreter;
 use crate::ast::ExprId;
 use crate::io::IoContext;
-use crate::typecheck::Ty;
+use crate::typecheck::ClassKind;
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
 use crate::{Result, Span};
 
@@ -190,15 +190,12 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Evaluate a `Mempty` expression (monoid identity: `_`).
     ///
-    /// Looks up the inferred type from the type checker and produces the
-    /// appropriate empty value:
-    /// - `String` -> `""`
-    /// - `Array[T]` -> `[]`
-    /// - `Map[K, V]` -> `{}`
-    /// - `Option[T]` -> `Option.None`
+    /// Dispatches to `Monoid:identity` with the inferred type to produce
+    /// the appropriate empty value.
     pub(super) fn mempty(
         &mut self,
         id: crate::ast::ExprId,
+        span: Span,
     ) -> crate::Result<Value> {
         let ty = self
             .mempty_types
@@ -206,19 +203,18 @@ impl<I: IoContext> Interpreter<'_, I> {
             .cloned()
             .unwrap_or_else(|| typechecked!("mempty", "resolved type"));
 
-        match ty {
-            Ty::String => Ok(Value::String(self.arena.intern(""))),
-            Ty::Array(_) => {
-                let elem_ty = self.type_exprs.named(TypeId::UNKNOWN);
-                Ok(Value::Array(elem_ty, SmallVec::new()))
-            }
-            Ty::Map(_, _) => {
-                let k_ty = self.type_exprs.named(TypeId::UNKNOWN);
-                let v_ty = self.type_exprs.named(TypeId::UNKNOWN);
-                Ok(Value::Map(k_ty, v_ty, IndexMap::new()))
-            }
-            Ty::Option(_) => Ok(self.make_none()),
-            _ => typechecked!("mempty", "monoid type"),
-        }
+        let mut ctx = ClassCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+            registry: &self.registry,
+            regex_cache: &self.regex_cache,
+            span,
+        };
+        self.class_methods.dispatch_nullary(
+            ClassKind::Monoid,
+            "identity",
+            &mut ctx,
+            &ty,
+        )
     }
 }

@@ -1,7 +1,7 @@
 ; Iterable[String] constraint rejects Range (Range is Iterable[Int] only)
 
 FUN process-strings[I: Iterable[String]](i: I) -> Int {
-  Iter.length(i)
+  Iterable:length(i)
 }
 
 ; This should fail: Range is Iterable[Int], not Iterable[String]

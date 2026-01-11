@@ -417,8 +417,6 @@ impl InferCtx<'_> {
     ) -> Class {
         match c {
             ast::Class::Numeric => Class::Numeric,
-            ast::Class::Subscriptable => Class::Subscriptable,
-            ast::Class::Storable => Class::Storable,
             ast::Class::Iterable(ty_id) => {
                 Class::Iterable(self.ast_type_to_ty(*ty_id, subst))
             }

@@ -149,10 +149,6 @@ impl MatchPatternId {
 pub(crate) enum Class {
     /// Type is `Int` or `Float`.
     Numeric,
-    /// Type can be used as a DB subscript key.
-    Subscriptable,
-    /// Type can be stored in the database.
-    Storable,
     /// Type is iterable (`Array[T]` or `Range`).
     ///
     /// The inner type can be a type parameter name (`Iterable[T]`) or a
@@ -838,6 +834,20 @@ pub(crate) enum Expr {
     /// When evaluated, produces a `Value::ModuleFn` that can be called directly
     /// or used as a first-class value (e.g., in pipelines).
     Path(SmallVec<[String; 4]>),
+
+    /// Class method call: `Class:method(args)`.
+    ///
+    /// Dispatches to a typeclass method. Class name is resolved to `ClassKind`
+    /// during typechecking.
+    ///
+    /// Examples: `Numeric:add(a, b)`, `Fallible:unwrap(opt)`, `Mappable:map(fn, arr)`
+    ClassMethod(String, String, SmallVec<[ExprId; 4]>),
+
+    /// Class method reference: `Class:method` (without call).
+    ///
+    /// A first-class function value that can be passed around and called later.
+    /// Example: `LET f = Filterable:filter`
+    ClassMethodRef(String, String),
 
     /// Type check: `expr is Pattern`.
     ///

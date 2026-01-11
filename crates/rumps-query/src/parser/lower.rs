@@ -49,8 +49,6 @@ fn lower_visibility(vis: cst::Visibility) -> Visibility {
 fn lower_class(ast: &mut Ast, c: cst::Class) -> Result<ast::Class> {
     Ok(match c {
         cst::Class::Numeric => ast::Class::Numeric,
-        cst::Class::Subscriptable => ast::Class::Subscriptable,
-        cst::Class::Storable => ast::Class::Storable,
         cst::Class::Iterable(elem) => {
             ast::Class::Iterable(lower_type_expr(ast, elem)?)
         }
@@ -609,6 +607,13 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
         cst::ExprKind::RefLit(dbref) => {
             let dbref = lower_db_ref(ast, ctx, dbref)?;
             Expr::Ref(dbref)
+        }
+        cst::ExprKind::ClassMethod(class, method, args) => {
+            let arg_ids = lower_exprs(ast, ctx, args)?;
+            Expr::ClassMethod(class, method, arg_ids)
+        }
+        cst::ExprKind::ClassMethodRef(class, method) => {
+            Expr::ClassMethodRef(class, method)
         }
         cst::ExprKind::PipePlaceholder => {
             Err(crate::Error::parse(
@@ -1483,6 +1488,16 @@ fn merge_expr(
             Expr::Variant(ty, var, new_args?)
         }
         Expr::Path(segments) => Expr::Path(segments),
+        Expr::ClassMethod(class, method, args) => {
+            let new_args: Result<SmallVec<_>> = args
+                .iter()
+                .map(|&id| merge_expr(target, source, id, span))
+                .collect();
+            Expr::ClassMethod(class, method, new_args?)
+        }
+        Expr::ClassMethodRef(class, method) => {
+            Expr::ClassMethodRef(class, method)
+        }
         Expr::Is(expr, pat) => {
             let new_expr = merge_expr(target, source, expr, span)?;
             let new_pat = merge_type_pattern(target, source, &pat, span)?;

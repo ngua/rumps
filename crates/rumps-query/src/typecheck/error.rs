@@ -344,6 +344,18 @@ pub(crate) enum TypeError {
         name: String,
         span: Span,
     },
+
+    /// Unknown class name in class method call.
+    #[error("unknown class `{0}`")]
+    UnknownClass(String, Span),
+
+    /// Unknown method name for a class.
+    #[error("class `{class}` has no method `{method}`")]
+    UnknownMethod {
+        class: String,
+        method: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -378,7 +390,9 @@ impl TypeError {
             | Self::Custom { span, .. }
             | Self::InvalidRegex(_, _, span)
             | Self::NotFoundInModule { span, .. }
-            | Self::PrivateAccess { span, .. } => *span,
+            | Self::PrivateAccess { span, .. }
+            | Self::UnknownClass(_, span)
+            | Self::UnknownMethod { span, .. } => *span,
         }
     }
 
@@ -548,6 +562,14 @@ impl TypeError {
             Self::PrivateAccess { module, name, .. } => (
                 format!("`{name}` is private in module `{module}`"),
                 Some("use `+` prefix to make it public (e.g., `+LET`, `+FUN`)".to_owned()),
+            ),
+            Self::UnknownClass(name, _) => (
+                format!("unknown class `{name}`"),
+                Some("valid classes: Numeric, Monoid, Ord, Fallible, Indexable, etc.".to_owned()),
+            ),
+            Self::UnknownMethod { class, method, .. } => (
+                format!("class `{class}` has no method `{method}`"),
+                None,
             ),
         };
 

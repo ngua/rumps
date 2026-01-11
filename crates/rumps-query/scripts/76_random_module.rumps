@@ -58,18 +58,18 @@ WRITE choice-empty IS Option.None  ; true
 
 LET shuffle-arr = [1, 2, 3, 4, 5]
 LET shuffled = Random.shuffle(shuffle-arr)
-WRITE Iter.length(shuffled)  ; 5
+WRITE Iterable:length(shuffled)  ; 5
 
 ; All elements preserved (check contains)
-WRITE Iter.contains(shuffled, 1)  ; true
-WRITE Iter.contains(shuffled, 2)  ; true
-WRITE Iter.contains(shuffled, 3)  ; true
-WRITE Iter.contains(shuffled, 4)  ; true
-WRITE Iter.contains(shuffled, 5)  ; true
+WRITE Iterable:contains(shuffled, 1)  ; true
+WRITE Iterable:contains(shuffled, 2)  ; true
+WRITE Iterable:contains(shuffled, 3)  ; true
+WRITE Iterable:contains(shuffled, 4)  ; true
+WRITE Iterable:contains(shuffled, 5)  ; true
 
 ; Empty shuffle
 LET shuffle-empty = Random.shuffle([])
-WRITE Iter.length(shuffle-empty)  ; 0
+WRITE Iterable:length(shuffle-empty)  ; 0
 
 ; Single element shuffle
 LET shuffle-single = Random.shuffle([42])
@@ -84,17 +84,17 @@ LET sample-result = Random.sample(sample-arr, 3)
 WRITE sample-result IS Result.Ok(_)  ; true
 
 LET sample-inner = sample-result!
-WRITE Iter.length(sample-inner)  ; 3
+WRITE Iterable:length(sample-inner)  ; 3
 
 ; Sample zero elements
 LET sample-zero = Random.sample(sample-arr, 0)
 WRITE sample-zero IS Result.Ok(_)  ; true
-WRITE Iter.length(sample-zero!)  ; 0
+WRITE Iterable:length(sample-zero!)  ; 0
 
 ; Sample all elements
 LET sample-all = Random.sample(sample-arr, 5)
 WRITE sample-all IS Result.Ok(_)  ; true
-WRITE Iter.length(sample-all!)  ; 5
+WRITE Iterable:length(sample-all!)  ; 5
 
 ; Sample more than array length returns Result.Err
 LET sample-too-many = Random.sample(sample-arr, 10)
@@ -108,7 +108,7 @@ WRITE String.length(uuid-val)  ; 36
 
 ; Check for hyphens at correct positions
 LET uuid-parts = String.split(uuid-val, "-")
-WRITE Iter.length(uuid-parts)  ; 5
+WRITE Iterable:length(uuid-parts)  ; 5
 
 ; Check segment lengths: 8-4-4-4-12
 LET uuid-p1 = Array.head(uuid-parts)!
@@ -124,5 +124,5 @@ WRITE uuid-a != uuid-b  ; true (extremely likely)
 LET pipe-arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 LET pipe-result = pipe-arr
   |> Random.shuffle
-  |> Iter.length
+  |> Iterable:length
 WRITE pipe-result  ; 10

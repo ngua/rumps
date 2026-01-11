@@ -4,7 +4,7 @@
 ; All top-level imports must appear first
 IMPORT Math.{ floor, ceil, sqrt AS root, pi, e }
 IMPORT Math.Trig.{ sin AS sine, cos AS cosine }
-IMPORT Iter.{ length, reverse }
+IMPORT Array.{ head, tail }
 IMPORT Counter.{ new, inc }
 IMPORT Forward.{ id, val }
 
@@ -26,10 +26,10 @@ WRITE floor(3.7)
 ; Expected: 3
 
 ; Multiple named imports
-WRITE length([1, 2, 3])
-; Expected: 3
-WRITE reverse([1, 2, 3])
-; Expected: [ 3, 2, 1 ]
+WRITE head([1, 2, 3])
+; Expected: Some(1)
+WRITE tail([1, 2, 3])
+; Expected: [ 2, 3 ]
 
 ; Wildcard import in nested scope (at top of scope)
 {

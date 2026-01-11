@@ -16,8 +16,8 @@ use crate::typecheck::{Scheme, Ty};
 /// This is the single source of truth for which module names are recognized
 /// during resolution and registered at interpreter startup.
 pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
-    "Array", "Iter", "String", "Math", "Random", "Map", "Time", "Option",
-    "Result", "Io",
+    "Array", "String", "Math", "Random", "Map", "Time", "Option", "Result",
+    "Io",
 ];
 
 use futures::future::BoxFuture;
@@ -837,7 +837,7 @@ impl Environment {
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
         use crate::primitives::{
-            Array, Io, Iter, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
+            Array, Io, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
         };
 
         self.modules.insert(
@@ -903,49 +903,6 @@ impl Environment {
                     name: "intersperse",
                     f: Array::intersperse,
                     ty: scheme!(forall T. (T, Array[T]) -> Array[T]),
-                },
-            ]),
-        );
-
-        self.modules.insert(
-            "Iter".to_string(),
-            Module::from_prims(&[
-                // Higher-order functions; handled by interpreter (placeholders)
-                PrimDef {
-                    name: "map",
-                    f: Iter::placeholder,
-                    ty: scheme!(forall I: Iterable[T], T U. ((T) -> U, I) -> Array[U]),
-                },
-                PrimDef {
-                    name: "filter",
-                    f: Iter::placeholder,
-                    ty: scheme!(forall I: Iterable[T], T. ((T) -> Bool, I) -> Array[T]),
-                },
-                PrimDef {
-                    name: "reduce",
-                    f: Iter::placeholder,
-                    ty: scheme!(forall I: Iterable[T], T U. ((U, T) -> U, U, I) -> U),
-                },
-                PrimDef {
-                    name: "foreach",
-                    f: Iter::placeholder,
-                    ty: scheme!(forall I: Iterable[T], T. ((T) -> Unit, I) -> Unit),
-                },
-                // Regular primitives
-                PrimDef {
-                    name: "length",
-                    f: Iter::length,
-                    ty: scheme!(forall I: Iterable[T], T. (I) -> Int),
-                },
-                PrimDef {
-                    name: "reverse",
-                    f: Iter::reverse,
-                    ty: scheme!(forall I: Iterable[T], T. (I) -> Array[T]),
-                },
-                PrimDef {
-                    name: "contains",
-                    f: Iter::contains,
-                    ty: scheme!(forall I: Iterable[T], T. (I, T) -> Bool),
                 },
             ]),
         );

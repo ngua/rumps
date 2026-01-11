@@ -56,6 +56,44 @@ impl Spanned {
             .collect()
     }
 
+    /// Converts `Colon` to `ColonNoSpace` for class method syntax.
+    ///
+    /// Only converts when `:` has NO space on either side AND immediately
+    /// follows an uppercase identifier (class names like `Filterable:filter`).
+    /// This distinguishes `Class:method` from type annotations like `x: Type`.
+    fn process_colon(mut tokens: Vec<Self>) -> Vec<Self> {
+        (0..tokens.len()).for_each(|i| {
+            if tokens[i].tok == Token::Colon {
+                let prev = (i > 0).then(|| &tokens[i - 1]);
+                let next = tokens.get(i + 1);
+
+                // Check: adjacent to previous uppercase ident (len > 1)
+                let adj_prev = prev
+                    .map(|p| {
+                        let is_adj = p.span.end == tokens[i].span.start;
+                        let is_class = matches!(
+                            &p.tok,
+                            Token::Ident(s)
+                                if s.len() > 1
+                                    && s.starts_with(char::is_uppercase)
+                        );
+                        is_adj && is_class
+                    })
+                    .unwrap_or(false);
+
+                // Check: adjacent to next token (no space after colon)
+                let adj_next = next
+                    .map(|n| tokens[i].span.end == n.span.start)
+                    .unwrap_or(false);
+
+                if adj_prev && adj_next {
+                    tokens[i].tok = Token::ColonNoSpace;
+                }
+            }
+        });
+        tokens
+    }
+
     /// Post-processes tokens to merge `Ident`/`Global` + `LBrace` into
     /// `IdentBrace`/`GlobalBrace` when adjacent (no whitespace).
     ///
@@ -218,6 +256,7 @@ impl<'a> Lexer<'a> {
         Self::lexer()
             .parse(self.src)
             .map(Spanned::process_dot_dot)
+            .map(Spanned::process_colon)
             .map(Spanned::process_ref_braces)
             .map(Spanned::process_indentation)
             .map_err(|errs| {

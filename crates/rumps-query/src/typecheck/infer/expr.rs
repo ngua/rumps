@@ -19,7 +19,7 @@ use crate::ast::{
 use crate::env::TxnReq;
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{Class, Scheme, Ty, TyVar};
+use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -245,9 +245,9 @@ impl InferCtx<'_> {
                 let rhs_ty = self.expr(*rhs);
 
                 // LHS must be convertible to String
-                self.constrain(Constraint::Into {
-                    from: lhs_ty,
-                    to: Ty::String,
+                self.constrain(Constraint::Class {
+                    ty: lhs_ty,
+                    class: Class::Into(Ty::String),
                     span,
                 });
 
@@ -282,9 +282,9 @@ impl InferCtx<'_> {
             Expr::Raise(inner) => {
                 let ty = self.expr(*inner);
                 // Error message must be convertible to String
-                self.constrain(Constraint::Into {
-                    from: ty,
-                    to: Ty::String,
+                self.constrain(Constraint::Class {
+                    ty,
+                    class: Class::Into(Ty::String),
                     span,
                 });
                 self.fresh()
@@ -308,7 +308,11 @@ impl InferCtx<'_> {
             // Store the type variable for later resolution.
             Expr::Mempty => {
                 let tv = Ty::Var(self.fresh_var());
-                self.constrain(Constraint::Monoid(tv.clone(), span));
+                self.constrain(Constraint::Class {
+                    ty: tv.clone(),
+                    class: Class::Monoid,
+                    span,
+                });
                 self.mempty_types.insert(id, tv.clone());
                 tv
             }
@@ -325,6 +329,326 @@ impl InferCtx<'_> {
                     Ty::Global
                 }
             },
+
+            // Class method call: `Class:method(args)`
+            Expr::ClassMethod(class, method, args) => {
+                self.class_method(id, class, method, args, span)
+            }
+
+            // Class method reference: `Class:method` (no call)
+            Expr::ClassMethodRef(class, method) => {
+                self.class_method_ref(class, method, span)
+            }
+        }
+    }
+
+    /// Type check a class method call.
+    ///
+    /// Validates the class and method names, checks argument types, and returns
+    /// the result type.
+    fn class_method(
+        &mut self,
+        id: ExprId,
+        class: &str,
+        method: &str,
+        args: &SmallVec<[ExprId; 4]>,
+        span: Span,
+    ) -> Ty {
+        // Parse class name
+        let kind = match class {
+            "Numeric" => Some(ClassKind::Numeric),
+            "Iterable" => Some(ClassKind::Iterable),
+            "Monoid" => Some(ClassKind::Monoid),
+            "BitLike" => Some(ClassKind::BitLike),
+            "Negatable" => Some(ClassKind::Negatable),
+            "Fallible" => Some(ClassKind::Fallible),
+            "Into" => Some(ClassKind::Into),
+            "TryInto" => Some(ClassKind::TryInto),
+            "Indexable" => Some(ClassKind::Indexable),
+            "Ord" => Some(ClassKind::Ord),
+            "Mappable" => Some(ClassKind::Mappable),
+            "Foldable" => Some(ClassKind::Foldable),
+            "Filterable" => Some(ClassKind::Filterable),
+            _ => None,
+        };
+
+        match kind {
+            Some(k) => self.class_method_impl(id, k, method, args, span),
+            None => {
+                self.error(TypeError::UnknownClass(class.to_string(), span));
+                Ty::Error
+            }
+        }
+    }
+
+    /// Type check a class method reference (used as a first-class value).
+    ///
+    /// Returns the polymorphic function type of the method.
+    fn class_method_ref(
+        &mut self,
+        class: &str,
+        method: &str,
+        span: Span,
+    ) -> Ty {
+        let kind = match class {
+            "Numeric" => Some(ClassKind::Numeric),
+            "Iterable" => Some(ClassKind::Iterable),
+            "Monoid" => Some(ClassKind::Monoid),
+            "BitLike" => Some(ClassKind::BitLike),
+            "Negatable" => Some(ClassKind::Negatable),
+            "Fallible" => Some(ClassKind::Fallible),
+            "Into" => Some(ClassKind::Into),
+            "TryInto" => Some(ClassKind::TryInto),
+            "Indexable" => Some(ClassKind::Indexable),
+            "Ord" => Some(ClassKind::Ord),
+            "Mappable" => Some(ClassKind::Mappable),
+            "Foldable" => Some(ClassKind::Foldable),
+            "Filterable" => Some(ClassKind::Filterable),
+            _ => None,
+        };
+
+        match kind {
+            Some(k) => self.class_method_ref_impl(k, method, span),
+            None => {
+                self.error(TypeError::UnknownClass(class.to_string(), span));
+                Ty::Error
+            }
+        }
+    }
+
+    /// Inner implementation of class method reference type checking.
+    ///
+    /// Returns the function type for the method. Constraints are applied
+    /// when the function is called, not when it's referenced.
+    fn class_method_ref_impl(
+        &mut self,
+        kind: ClassKind,
+        method: &str,
+        span: Span,
+    ) -> Ty {
+        // Special case: Indexable methods can't use scheme! (see ClassKind::method)
+        if kind == ClassKind::Indexable {
+            let b = self.fresh();
+            let t = self.fresh();
+            match method {
+                "index" => Ty::Fn(vec![b, Ty::Int], Box::new(t)),
+                "get" => {
+                    Ty::Fn(vec![b, Ty::Int], Box::new(Ty::Option(Box::new(t))))
+                }
+                _ => {
+                    self.error(TypeError::UnknownMethod {
+                        class: "Indexable".to_string(),
+                        method: method.to_string(),
+                        span,
+                    });
+                    Ty::Error
+                }
+            }
+        } else if let Some(scheme) = kind.method(method) {
+            // For method references, we just need the function type
+            // without emitting constraints (constraints apply at call site)
+            let (ty, _) = scheme.instantiate(&mut self.next_var);
+            ty
+        } else {
+            self.error(TypeError::UnknownMethod {
+                class: format!("{kind:?}"),
+                method: method.to_string(),
+                span,
+            });
+            Ty::Error
+        }
+    }
+
+    /// Emit a class constraint for a type.
+    fn emit_class_constraint(&mut self, ty: Ty, class: Class, span: Span) {
+        self.constrain(Constraint::Class { ty, class, span });
+    }
+
+    /// Generic class method call type checking.
+    ///
+    /// Uses the centralized scheme from `ClassKind::method` to:
+    /// 1. Check arity
+    /// 2. Instantiate the scheme with fresh type variables
+    /// 3. Unify argument types with parameter types
+    /// 4. Emit class constraints
+    /// 5. Return the result type
+    fn call_class_method_generic(
+        &mut self,
+        kind: ClassKind,
+        method: &str,
+        args: &SmallVec<[ExprId; 4]>,
+        span: Span,
+    ) -> Option<Ty> {
+        let scheme = kind.method(method)?;
+        let expected_arity = scheme.arity().unwrap_or(0);
+
+        if args.len() != expected_arity {
+            self.error(TypeError::ArityMismatch {
+                expected: expected_arity,
+                got: args.len(),
+                span,
+            });
+            Some(Ty::Error)
+        } else {
+            // Instantiate scheme with fresh type variables
+            let (fn_ty, constraints) = scheme.instantiate(&mut self.next_var);
+
+            // Extract params and return type
+            let (params, ret) = match fn_ty {
+                Ty::Fn(p, r) => (p, *r),
+                _ => unreachable!("scheme should be a function type"),
+            };
+
+            // Infer argument types and unify with params
+            args.iter().zip(params.iter()).for_each(|(arg, param)| {
+                let arg_ty = self.expr(*arg);
+                self.unify(arg_ty, param.clone(), span);
+            });
+
+            // Emit class constraints from scheme
+            constraints.into_iter().for_each(|(ty, class)| {
+                self.emit_class_constraint(ty, class, span);
+            });
+
+            Some(ret)
+        }
+    }
+
+    /// Inner implementation of class method type checking.
+    ///
+    /// Most methods use the generic path via `call_class_method_generic`.
+    /// Special cases that need extra tracking:
+    /// - `Monoid:identity`: needs `mempty_types` for runtime dispatch
+    /// - `Into:into` / `TryInto:try-into`: need `convert_targets` for runtime
+    /// - `Indexable:*`: requires `Class::Indexable(idx, elem)` constraint
+    fn class_method_impl(
+        &mut self,
+        id: ExprId,
+        kind: ClassKind,
+        method: &str,
+        args: &SmallVec<[ExprId; 4]>,
+        span: Span,
+    ) -> Ty {
+        match (kind, method) {
+            // Special: Monoid:identity needs mempty_types tracking
+            (ClassKind::Monoid, "identity") => {
+                if !args.is_empty() {
+                    self.error(TypeError::ArityMismatch {
+                        expected: 0,
+                        got: args.len(),
+                        span,
+                    });
+                    Ty::Error
+                } else {
+                    let tv = Ty::Var(self.fresh_var());
+                    self.constrain(Constraint::Class {
+                        ty: tv.clone(),
+                        class: Class::Monoid,
+                        span,
+                    });
+                    self.mempty_types.insert(id, tv.clone());
+                    tv
+                }
+            }
+
+            // Special: Into:into needs convert_targets tracking
+            (ClassKind::Into, "into") => {
+                if args.len() != 1 {
+                    self.error(TypeError::ArityMismatch {
+                        expected: 1,
+                        got: args.len(),
+                        span,
+                    });
+                    Ty::Error
+                } else {
+                    let from_ty = self.expr(args[0]);
+                    let to_ty = Ty::Var(self.fresh_var());
+                    self.constrain(Constraint::Class {
+                        ty: from_ty,
+                        class: Class::Into(to_ty.clone()),
+                        span,
+                    });
+                    self.convert_targets.insert(id, to_ty.clone());
+                    to_ty
+                }
+            }
+
+            // Special: TryInto:try-into needs convert_targets tracking
+            (ClassKind::TryInto, "try-into") => {
+                if args.len() != 1 {
+                    self.error(TypeError::ArityMismatch {
+                        expected: 1,
+                        got: args.len(),
+                        span,
+                    });
+                    Ty::Error
+                } else {
+                    let from_ty = self.expr(args[0]);
+                    let to_ty = Ty::Var(self.fresh_var());
+                    self.constrain(Constraint::Class {
+                        ty: from_ty,
+                        class: Class::TryInto(to_ty.clone()),
+                        span,
+                    });
+                    self.convert_targets.insert(id, to_ty.clone());
+                    Ty::Result(Box::new(to_ty), Box::new(Ty::String))
+                }
+            }
+
+            // Special: Indexable requires Class::Indexable(idx, elem) constraint
+            (ClassKind::Indexable, "index") => {
+                if args.len() != 2 {
+                    self.error(TypeError::ArityMismatch {
+                        expected: 2,
+                        got: args.len(),
+                        span,
+                    });
+                    Ty::Error
+                } else {
+                    let base = self.expr(args[0]);
+                    let idx = self.expr(args[1]);
+                    let elem = Ty::Var(self.fresh_var());
+                    self.constrain(Constraint::Class {
+                        ty: base,
+                        class: Class::Indexable(idx, elem.clone()),
+                        span,
+                    });
+                    elem
+                }
+            }
+
+            (ClassKind::Indexable, "get") => {
+                if args.len() != 2 {
+                    self.error(TypeError::ArityMismatch {
+                        expected: 2,
+                        got: args.len(),
+                        span,
+                    });
+                    Ty::Error
+                } else {
+                    let base = self.expr(args[0]);
+                    let idx = self.expr(args[1]);
+                    let elem = Ty::Var(self.fresh_var());
+                    self.constrain(Constraint::Class {
+                        ty: base,
+                        class: Class::Indexable(idx, elem.clone()),
+                        span,
+                    });
+                    Ty::Option(Box::new(elem))
+                }
+            }
+
+            // Generic path: use centralized scheme from ClassKind::method
+            _ => self
+                .call_class_method_generic(kind, method, args, span)
+                .unwrap_or_else(|| {
+                    self.error(TypeError::UnknownMethod {
+                        class: format!("{kind:?}"),
+                        method: method.to_string(),
+                        span,
+                    });
+                    Ty::Error
+                }),
         }
     }
 
@@ -364,7 +688,11 @@ impl InferCtx<'_> {
                 // numeric vars to Int for union creation (avoiding the var being
                 // bound to a sibling branch's type like String).
                 let ty = self.fresh_numeric();
-                self.constrain(Constraint::Numeric(ty.clone(), span));
+                self.constrain(Constraint::Class {
+                    ty: ty.clone(),
+                    class: Class::Numeric,
+                    span,
+                });
                 // Record for interpreter to convert to correct runtime type
                 self.numeric_types.insert(id, ty.clone());
                 ty
@@ -392,7 +720,11 @@ impl InferCtx<'_> {
                 // constraint. Will unify with scrutinee type; constraint ensures
                 // the scrutinee is numeric-compatible.
                 let ty = self.fresh_numeric();
-                self.constrain(Constraint::Numeric(ty.clone(), span));
+                self.constrain(Constraint::Class {
+                    ty: ty.clone(),
+                    class: Class::Numeric,
+                    span,
+                });
                 ty
             }
             Literal::Numeric(NumericLit::Float(_)) => Ty::Float,
@@ -413,9 +745,9 @@ impl InferCtx<'_> {
             // Odd indices are expressions; they must be convertible to String
             // Even indices are string literals; no constraint needed
             if i % 2 == 1 {
-                self.constrain(Constraint::Into {
-                    from: part_ty,
-                    to: Ty::String,
+                self.constrain(Constraint::Class {
+                    ty: part_ty,
+                    class: Class::Into(Ty::String),
                     span,
                 });
             }
@@ -861,10 +1193,9 @@ impl InferCtx<'_> {
             Ty::Var(_) => {
                 // Base is type variable; generate Indexable constraint
                 let elem = self.fresh();
-                self.constrain(Constraint::Indexable {
-                    base: base_ty,
-                    idx: idx_ty,
-                    elem: elem.clone(),
+                self.constrain(Constraint::Class {
+                    ty: base_ty,
+                    class: Class::Indexable(idx_ty, elem.clone()),
                     span,
                 });
                 elem
@@ -880,7 +1211,7 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    Class::Indexable,
+                    Class::Indexable(idx_ty, Ty::Error),
                     base_ty,
                     span,
                 ));
@@ -919,10 +1250,9 @@ impl InferCtx<'_> {
             Ty::Var(_) => {
                 // Generate Indexable constraint with elem wrapped in Option
                 let inner = self.fresh();
-                self.constrain(Constraint::Indexable {
-                    base: base_ty,
-                    idx: idx_ty,
-                    elem: inner.clone(),
+                self.constrain(Constraint::Class {
+                    ty: base_ty,
+                    class: Class::Indexable(idx_ty, inner.clone()),
                     span,
                 });
                 Ty::Option(Box::new(inner))
@@ -937,7 +1267,7 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    Class::Indexable,
+                    Class::Indexable(idx_ty, Ty::Error),
                     base_ty,
                     span,
                 ));
@@ -1091,40 +1421,11 @@ impl InferCtx<'_> {
                 scheme_constraints.push((tv, class.clone()));
 
                 // Emit constraint for body inference
-                let constraint = match &class {
-                    Class::Numeric => Constraint::Numeric(ty.clone(), span),
-                    Class::Subscriptable => {
-                        Constraint::Subscriptable(ty.clone(), span)
-                    }
-                    Class::Storable => Constraint::Storable(ty.clone(), span),
-                    Class::Iterable(elem) => Constraint::Iterable {
-                        coll: ty.clone(),
-                        elem: elem.clone(),
-                        span,
-                    },
-                    Class::Monoid => Constraint::Monoid(ty.clone(), span),
-                    Class::BitLike => Constraint::BitLike(ty.clone(), span),
-                    Class::Negatable => Constraint::Negatable(ty.clone(), span),
-                    Class::Fallible(inner) => Constraint::Fallible {
-                        ty: ty.clone(),
-                        inner: inner.clone(),
-                        span,
-                    },
-                    Class::Into(to) => Constraint::Into {
-                        from: ty.clone(),
-                        to: to.clone(),
-                        span,
-                    },
-                    Class::TryInto(to) => Constraint::TryInto {
-                        from: ty.clone(),
-                        to: to.clone(),
-                        span,
-                    },
-                    Class::Indexable => {
-                        unreachable!("Indexable not user-declarable")
-                    }
-                };
-                self.constrain(constraint);
+                self.constrain(Constraint::Class {
+                    ty: ty.clone(),
+                    class,
+                    span,
+                });
             });
         });
 
@@ -1654,9 +1955,9 @@ impl InferCtx<'_> {
         let target_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
 
         // Emit Into constraint for validation
-        self.constrain(Constraint::Into {
-            from: inner_ty.clone(),
-            to: target_ty.clone(),
+        self.constrain(Constraint::Class {
+            ty: inner_ty.clone(),
+            class: Class::Into(target_ty.clone()),
             span,
         });
 
@@ -1665,7 +1966,11 @@ impl InferCtx<'_> {
         if let (Ty::Var(_), Ty::Int | Ty::Float | Ty::Word) =
             (&inner_ty, &target_ty)
         {
-            self.constrain(Constraint::Numeric(inner_ty.clone(), span));
+            self.constrain(Constraint::Class {
+                ty: inner_ty.clone(),
+                class: Class::Numeric,
+                span,
+            });
         }
 
         // Error recovery: return Error type if either side is Error
@@ -1693,9 +1998,9 @@ impl InferCtx<'_> {
         let target_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
 
         // Emit TryInto constraint for validation
-        self.constrain(Constraint::TryInto {
-            from: inner_ty,
-            to: target_ty.clone(),
+        self.constrain(Constraint::Class {
+            ty: inner_ty,
+            class: Class::TryInto(target_ty.clone()),
             span,
         });
 
@@ -1733,7 +2038,11 @@ impl InferCtx<'_> {
         // For Set, also typecheck the value expression
         if let Some(v) = val {
             let v_ty = self.expr(v);
-            self.constrain(Constraint::Storable(v_ty, span));
+            self.constrain(Constraint::Class {
+                ty: v_ty,
+                class: Class::Into(Ty::Named(TypeId::STORABLE, vec![])),
+                span,
+            });
         }
 
         self.ast.set_expr(
@@ -1815,7 +2124,7 @@ impl InferCtx<'_> {
 
     /// Type-check subscript elements.
     ///
-    /// For `Elem`, adds a `Subscriptable` constraint.
+    /// For `Elem`, adds an `Into[Subscript]` constraint.
     /// For `Spread`, constrains to `Array[Subscript]`.
     pub(super) fn check_subscript_elems(
         &mut self,
@@ -1825,7 +2134,11 @@ impl InferCtx<'_> {
         subs.iter().for_each(|elem| match elem {
             SubscriptElem::Elem(id) => {
                 let ty = self.expr(*id);
-                self.constrain(Constraint::Subscriptable(ty, span));
+                self.constrain(Constraint::Class {
+                    ty,
+                    class: Class::Into(Ty::Named(TypeId::SUBSCRIPT, vec![])),
+                    span,
+                });
             }
             SubscriptElem::Spread(id) => {
                 let ty = self.expr(*id);

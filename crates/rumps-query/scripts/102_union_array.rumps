@@ -14,39 +14,39 @@ WRITE json-arr IS Json
 ; WITH annotation: stays as native Array (not Json)
 LET sub-arr: Array[Subscript] = [1, "a", true]
 WRITE sub-arr IS Json
-WRITE Iter.length(sub-arr)
+WRITE Iterable:length(sub-arr)
 
 ; === Named union: Subscript ===
 
 LET subscript-arr: Array[Subscript] = [42, "hello", 3.14, 'x', true]
-WRITE Iter.length(subscript-arr)
+WRITE Iterable:length(subscript-arr)
 
 ; === Named union: Storable ===
 
 LET storable-arr: Array[Storable] = [true, 42, 3.14, 'x', "str"]
-WRITE Iter.length(storable-arr)
+WRITE Iterable:length(storable-arr)
 
 ; === Named union: Scalar ===
 
 LET scalar-arr: Array[Scalar] = [true, 42, 3.14, "str"]
-WRITE Iter.length(scalar-arr)
+WRITE Iterable:length(scalar-arr)
 
 ; === Anonymous union ===
 
 LET anon-arr: Array[Int | String] = [42, "hello", 99, "world"]
-WRITE Iter.length(anon-arr)
+WRITE Iterable:length(anon-arr)
 
 ; === User-defined union ===
 
 UNION Id = Int | String
 
 LET ids: Array[Id] = [1, "abc", 2, "def"]
-WRITE Iter.length(ids)
+WRITE Iterable:length(ids)
 
 ; === Empty array with union element type ===
 
 LET empty: Array[Int | String] = []
-WRITE Iter.length(empty)
+WRITE Iterable:length(empty)
 
 ; === Spread in union arrays ===
 
@@ -55,14 +55,14 @@ LET strs: Array[String] = ["a", "b"]
 
 ; Spread homogeneous arrays into union array
 LET combined: Array[Int | String] = [...ints, "x", ...strs, 4]
-WRITE Iter.length(combined)
+WRITE Iterable:length(combined)
 
 ; === Iteration over union array ===
 
 LET arr: Array[Int | String] = [1, "two", 3, "four"]
 
-; Iter.foreach works on union arrays
-Iter.foreach(x => {
+; Iterable:foreach works on union arrays
+Iterable:foreach(x => {
   MATCH x {
     n IS Int => { WRITE "int: {n}" }
     s IS String => { WRITE "str: {s}" }
@@ -70,8 +70,8 @@ Iter.foreach(x => {
   }
 }, arr)
 
-; Iter.map with union elements
-LET mapped = Iter.map(x => {
+; Mappable:map with union elements
+LET mapped = Mappable:map(x => {
   MATCH x {
     n IS Int => { n * 2 }
     s IS String => { String.length(s) }
@@ -82,10 +82,10 @@ WRITE mapped
 
 ; === Verify elements preserve their concrete types ===
 
-; Use Iter.filter to extract Int elements
-LET ints-only = Iter.filter(x => x IS Int, arr)
-WRITE Iter.length(ints-only)
+; Use Filterable:filter to extract Int elements
+LET ints-only = Filterable:filter(x => x IS Int, arr)
+WRITE Iterable:length(ints-only)
 
-; Use Iter.filter to extract String elements
-LET strs-only = Iter.filter(x => x IS String, arr)
-WRITE Iter.length(strs-only)
+; Use Filterable:filter to extract String elements
+LET strs-only = Filterable:filter(x => x IS String, arr)
+WRITE Iterable:length(strs-only)

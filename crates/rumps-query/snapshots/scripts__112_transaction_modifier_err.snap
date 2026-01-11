@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Test: duplicate/out-of-order transaction modifiers produce parse errors\n\n; Duplicate ON CONFLICT should fail\nLET r = TRANSACTION {\n  @SET ^data{1} = \"one\"\n} ON CONFLICT ABORT ON CONFLICT SKIP\n"
 ---
-ERROR: parse error at 177..179: unexpected `ON` (expected: .., ++, AND, CATCH, >=, +, **, newline, //, .., &, dedent, OR, (, IS, >>, AS, -, /, !, *, >, indent, ==, <<, READ, |>, ,, ..=, ->>, &&, <, ||, |, [, ??, MATCHES, ->, %, <=, !=, ?., :, ?[, .)
+ERROR: parse error at 177..179: unexpected `ON` (expected: ++, AND, >=, CATCH, +, //, |, OR, >>, ., indent, &, dedent, IS, AS, **, -, /, !, (, *, >, newline, ==, ..=, <<, READ, .., ,, ->, &&, [, |>, ||, <, MATCHES, ->>, %, <=, !=, ??, :, ?., ?[, ..)

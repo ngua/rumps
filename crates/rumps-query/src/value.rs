@@ -510,13 +510,22 @@ pub(crate) enum Value {
 
     /// A module function reference.
     ///
-    /// Created when a module path like `Iter.length` is evaluated. Can be
+    /// Created when a module path like `String.length` is evaluated. Can be
     /// called directly or used as a first-class value (e.g., in pipelines).
     ///
     /// The path includes the full module path plus function name:
-    /// - `Iter.length` -> `["Iter", "length"]`
+    /// - `String.length` -> `["String", "length"]`
     /// - `Math.Trig.sin` -> `["Math", "Trig", "sin"]`
     ModuleFn { path: SmallVec<[StringId; 4]> },
+
+    /// A class method reference.
+    ///
+    /// Created when a class method like `Filterable:filter` is evaluated
+    /// without a call. Can be called later or used as a first-class value.
+    ///
+    /// - `class`: the class name (e.g., `"Filterable"`)
+    /// - `method`: the method name (e.g., `"filter"`)
+    ClassMethodFn { class: StringId, method: StringId },
 
     /// A module constant reference.
     ///
@@ -624,6 +633,7 @@ impl Value {
             Self::ForeverContinuation => Cow::Borrowed("Continuation"),
             Self::LoopContinue(_) => Cow::Borrowed("LoopContinue"),
             Self::Ref(..) => Cow::Borrowed("Ref"),
+            Self::ClassMethodFn { .. } => Cow::Borrowed("ClassMethodFn"),
         }
     }
 
@@ -730,7 +740,8 @@ impl Value {
             Self::Closure { .. }
             | Self::Function { .. }
             | Self::ModuleFn { .. }
-            | Self::ModuleConst { .. } => TypeId::UNKNOWN,
+            | Self::ModuleConst { .. }
+            | Self::ClassMethodFn { .. } => TypeId::UNKNOWN,
             Self::Range { .. } => TypeId::RANGE,
             Self::Ref(..) => TypeId::REF,
             // Internal types; not exposed to user code
@@ -1256,6 +1267,89 @@ impl TypeExprArena {
             Ty::Var(_) | Ty::Unknown | Ty::Error => {
                 unreachable!("intern_ty called on unresolved type: {ty:?}")
             }
+        }
+    }
+
+    /// Convert a `Ty` to a runtime `TypeExprId`, substituting `UNKNOWN` for
+    /// unresolved type variables.
+    ///
+    /// Use this when the type may contain type variables (e.g., from generics
+    /// that haven't been monomorphized). For empty containers, the element
+    /// type doesn't matter at runtime.
+    pub(crate) fn intern_ty_lenient(&mut self, ty: &Ty) -> TypeExprId {
+        match ty {
+            Ty::Bool => self.named(TypeId::BOOL),
+            Ty::Int => self.named(TypeId::INT),
+            Ty::Word => self.named(TypeId::WORD),
+            Ty::Float => self.named(TypeId::FLOAT),
+            Ty::Char => self.named(TypeId::CHAR),
+            Ty::String => self.named(TypeId::STRING),
+            Ty::Unit => self.named(TypeId::UNIT),
+            Ty::Time => self.named(TypeId::TIME),
+            Ty::Range => self.named(TypeId::RANGE),
+            Ty::Json => self.named(TypeId::JSON),
+            Ty::Ordering => self.named(TypeId::ORDERING),
+            Ty::DataStatus => self.named(TypeId::DATA_STATUS),
+            Ty::FilePath => self.named(TypeId::FILEPATH),
+            Ty::Path => self.named(TypeId::PATH),
+            Ty::Regex => self.named(TypeId::REGEX),
+            Ty::RuntimeError => self.named(TypeId::ERROR),
+            Ty::Local => self.named(TypeId::LOCAL),
+            Ty::Global => self.named(TypeId::GLOBAL),
+            Ty::Array(elem) => {
+                let elem_id = self.intern_ty_lenient(elem);
+                self.app(TypeId::ARRAY, smallvec![elem_id])
+            }
+            Ty::Option(inner) => {
+                let inner_id = self.intern_ty_lenient(inner);
+                self.app(TypeId::OPTION, smallvec![inner_id])
+            }
+            Ty::Result(ok, err) => {
+                let ok_id = self.intern_ty_lenient(ok);
+                let err_id = self.intern_ty_lenient(err);
+                self.app(TypeId::RESULT, smallvec![ok_id, err_id])
+            }
+            Ty::Map(k, v) => {
+                let k_id = self.intern_ty_lenient(k);
+                let v_id = self.intern_ty_lenient(v);
+                self.app(TypeId::MAP, smallvec![k_id, v_id])
+            }
+            Ty::Tuple(elems) => {
+                let elem_ids: SmallVec<[_; 4]> =
+                    elems.iter().map(|e| self.intern_ty_lenient(e)).collect();
+                self.tuple(elem_ids)
+            }
+            Ty::Named(type_id, params) => {
+                if params.is_empty() {
+                    self.named(*type_id)
+                } else {
+                    let param_ids: SmallVec<[_; 2]> = params
+                        .iter()
+                        .map(|p| self.intern_ty_lenient(p))
+                        .collect();
+                    self.app(*type_id, param_ids)
+                }
+            }
+            Ty::Fn(params, ret) => {
+                let param_ids: SmallVec<[_; 4]> =
+                    params.iter().map(|p| self.intern_ty_lenient(p)).collect();
+                let ret_id = self.intern_ty_lenient(ret);
+                self.fn_type(param_ids, ret_id)
+            }
+            Ty::Object(fields) => {
+                let converted: IndexMap<StringId, TypeExprId> = fields
+                    .iter()
+                    .map(|(k, t)| (*k, self.intern_ty_lenient(t)))
+                    .collect();
+                self.object(converted)
+            }
+            Ty::Union(members) => {
+                let member_ids: SmallVec<[_; 4]> =
+                    members.iter().map(|m| self.intern_ty_lenient(m)).collect();
+                self.union(member_ids)
+            }
+            // Unresolved types become UNKNOWN
+            Ty::Var(_) | Ty::Unknown | Ty::Error => self.named(TypeId::UNKNOWN),
         }
     }
 }

@@ -2183,6 +2183,46 @@ impl Parser {
             cst::Expr::new(cst::ExprKind::PipePlaceholder, span)
         });
 
+        // Class method call: `Class:method(args)`.
+        //
+        // Dispatches to a typeclass method. Uses `ColonNoSpace` to require
+        // no space around the colon, distinguishing from type annotations.
+        // Examples:
+        // - `Numeric:add(a, b)` (binary method)
+        // - `Fallible:unwrap(opt)` (unary method)
+        // - `Mappable:map(fn, arr)` (higher-order method)
+        let class_method_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+        let class_method = Self::ident()
+            .then_ignore(just(Token::ColonNoSpace))
+            .then(Self::ident())
+            .then_ignore(just(Token::LParen))
+            .then_ignore(Self::opt_newlines())
+            .then(expr.clone().separated_by(class_method_sep).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+            .map_with_span(|((class, method), args), span| {
+                cst::Expr::new(
+                    cst::ExprKind::ClassMethod(class, method, args),
+                    span,
+                )
+            });
+
+        // Class method reference: `Class:method` (without call).
+        //
+        // A first-class function value. Uses `ColonNoSpace` to require no
+        // space around the colon. This is ordered after `class_method` in the
+        // choice, so `class_method` (with parens) is tried first.
+        let class_method_ref = Self::ident()
+            .then_ignore(just(Token::ColonNoSpace))
+            .then(Self::ident())
+            .map_with_span(|(class, method), span| {
+                cst::Expr::new(
+                    cst::ExprKind::ClassMethodRef(class, method),
+                    span,
+                )
+            });
+
         // Lexical variable or mempty (`_`)
         let var = Self::ident().map_with_span(|name, span| {
             if name == "_" {
@@ -2509,7 +2549,8 @@ impl Parser {
         // Order matters: ref literals before var (IdentBrace is distinct from
         // Ident so they won't conflict). Closures before var since both can
         // start with ident but closure needs `=>`. Pipe placeholder before
-        // postfix operations (field access uses `.` too).
+        // postfix operations (field access uses `.` too). Class method before
+        // var since both start with ident but class method has `:` after.
         choice((
             literal,
             interpolation,
@@ -2519,6 +2560,8 @@ impl Parser {
             ref_local,
             ref_global,
             pipe_placeholder,
+            class_method,
+            class_method_ref,
             var,
             paren,
             array,
@@ -2792,8 +2835,6 @@ impl Parser {
                 let args = args.unwrap_or_default();
                 match name.as_str() {
                     "Numeric" => Ok(cst::Class::Numeric),
-                    "Subscriptable" => Ok(cst::Class::Subscriptable),
-                    "Storable" => Ok(cst::Class::Storable),
                     "Monoid" => Ok(cst::Class::Monoid),
                     "BitLike" => Ok(cst::Class::BitLike),
                     "Negatable" => Ok(cst::Class::Negatable),

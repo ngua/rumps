@@ -23,21 +23,29 @@ use syn::{Ident, Result, Token};
 /// scheme!(ctx; { src: FilePath, dest: FilePath } -> Unit)  // with context for objects
 /// ```
 ///
-/// ## Constraint syntax
+/// ## Class syntax
 ///
-/// Type variables can have simple or parameterized constraints:
+/// Type variables can have simple or parameterized class constraints:
 ///
-/// Simple constraints (no type argument):
+/// Simple classes (no type argument):
 /// - `T: Numeric` ; `T` must be `Int`, `Float`, or `Word`
+/// - `T: Negatable` ; `T` must be `Int` or `Float`
 /// - `T: BitLike` ; `T` must be `Bool`, `Int`, or `Word`
 /// - `T: Monoid` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
 /// - `T: Storable` ; `T` must be storable in the database
 /// - `T: Subscriptable` ; `T` must be usable as a subscript key
+/// - `T: Indexable` ; `T` must support indexing (`Array`, `Map`, `String`)
+/// - `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
+/// - `T: Display` ; `T` can be displayed as RUMPS syntax
 ///
-/// Parameterized constraints (require a type argument in brackets):
+/// Parameterized classes (require a type argument in brackets):
 /// - `I: Iterable[T]` ; `I` must be iterable with element type `T`
 /// - `F: Fallible[T]` ; `F` must be a fallible type (`Option[T]` or `Result[T, _]`)
-/// - `T: Into[U]` ; type `T` must be convertible to type `U`
+/// - `T: Into[U]` ; type `T` is convertible to type `U`
+/// - `T: TryInto[U]` ; type `T` is fallibly convertible to type `U`
+/// - `F: Mappable[T]` ; `F` is a functor with element type `T`
+/// - `F: Foldable[T]` ; `F` supports fold/reduce with element type `T`
+/// - `F: Filterable[T]` ; `F` supports filter with element type `T`
 ///
 /// ## Type syntax
 ///
@@ -58,12 +66,12 @@ pub fn scheme(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// A constraint on a type variable.
+/// A class bound on a type variable.
 #[derive(Debug, Clone)]
-enum VarConstraint {
-    /// Simple constraint (no type arguments): `Numeric`, `Storable`, etc.
+enum VarClass {
+    /// Simple class (no type arguments): `Numeric`, `Storable`, etc.
     Simple(String),
-    /// Parameterized constraint with type arguments: `Iterable[T]`, `Into[T, U]`, etc.
+    /// Parameterized class with type arguments: `Iterable[T]`, `Into[T, U]`, etc.
     Parameterized(String, SmallVec<[String; 2]>),
 }
 
@@ -71,63 +79,72 @@ enum VarConstraint {
 struct SchemeInput {
     /// Optional context identifier for interning object field names.
     ctx: Option<Ident>,
-    /// Type variables with optional constraints: `(var_name, constraint)`
-    vars: Vec<(Ident, Option<VarConstraint>)>,
+    /// Type variables with optional class bounds: `(var_name, class)`
+    vars: Vec<(Ident, Option<VarClass>)>,
     ty: TyExpr,
 }
 
-/// Simple constraint names (no type argument).
-const SIMPLE_CONSTRAINTS: &[&str] = &[
+/// Simple class names (no type argument).
+const SIMPLE_CLASSES: &[&str] = &[
     "Numeric",
     "Negatable",
     "BitLike",
     "Monoid",
     "Storable",
     "Subscriptable",
+    "Indexable",
+    "Ord",
+    "Display",
 ];
 
-/// Parameterized constraint names (require `[T, ...]` arguments).
-const PARAMETERIZED_CONSTRAINTS: &[&str] = &["Iterable", "Fallible", "Into"];
+/// Parameterized class names (require `[T, ...]` arguments).
+const PARAMETERIZED_CLASSES: &[&str] = &[
+    "Iterable",
+    "Fallible",
+    "Into",
+    "TryInto",
+    "Mappable",
+    "Foldable",
+    "Filterable",
+];
 
-/// Parse a single type variable with optional constraint.
+/// Parse a single type variable with optional class bound.
 ///
 /// Syntax:
-/// - `T` (no constraint)
-/// - `T: Numeric` (simple constraint)
-/// - `I: Iterable[T]` (parameterized constraint)
-fn parse_type_var(
-    input: ParseStream,
-) -> Result<(Ident, Option<VarConstraint>)> {
+/// - `T` (no class)
+/// - `T: Numeric` (simple class)
+/// - `I: Iterable[T]` (parameterized class)
+fn parse_type_var(input: ParseStream) -> Result<(Ident, Option<VarClass>)> {
     let name: Ident = input.parse()?;
 
-    // Check for constraint: `: Constraint` or `: Constraint[T]`
-    let constraint = if input.peek(Token![:]) {
+    // Check for class: `: Class` or `: Class[T]`
+    let class = if input.peek(Token![:]) {
         input.parse::<Token![:]>()?;
-        let constraint_name: Ident = input.parse()?;
-        let cname = constraint_name.to_string();
+        let class_name: Ident = input.parse()?;
+        let cname = class_name.to_string();
 
-        if SIMPLE_CONSTRAINTS.contains(&cname.as_str()) {
-            Some(VarConstraint::Simple(cname))
-        } else if PARAMETERIZED_CONSTRAINTS.contains(&cname.as_str()) {
-            // Parameterized constraint: parse bracketed, comma-separated type args
+        if SIMPLE_CLASSES.contains(&cname.as_str()) {
+            Some(VarClass::Simple(cname))
+        } else if PARAMETERIZED_CLASSES.contains(&cname.as_str()) {
+            // Parameterized class: parse bracketed, comma-separated type args
             let content;
             syn::bracketed!(content in input);
             let args: syn::punctuated::Punctuated<Ident, Token![,]> =
                 syn::punctuated::Punctuated::parse_terminated(&content)?;
             let args: SmallVec<[String; 2]> =
                 args.into_iter().map(|id| id.to_string()).collect();
-            Some(VarConstraint::Parameterized(cname, args))
+            Some(VarClass::Parameterized(cname, args))
         } else {
             panic!(
-                "unknown constraint: `{cname}`; use one of {:?} or {:?}",
-                SIMPLE_CONSTRAINTS, PARAMETERIZED_CONSTRAINTS
+                "unknown class: `{cname}`; use one of {:?} or {:?}",
+                SIMPLE_CLASSES, PARAMETERIZED_CLASSES
             )
         }
     } else {
         None
     };
 
-    Ok((name, constraint))
+    Ok((name, class))
 }
 
 impl Parse for SchemeInput {
@@ -178,9 +195,9 @@ impl Parse for SchemeInput {
     }
 }
 
-/// Generate tokens for a parameterized class constraint.
+/// Generate tokens for a parameterized class.
 ///
-/// For parameterized classes (`Iterable[T]`, `Fallible[T]`, `Into[T]`),
+/// For parameterized classes (`Iterable[T]`, `Fallible[T]`, `Into[T]`, etc.),
 /// we generate a `ty::Class::Variant(Ty::Var(...))` with the inner type.
 fn parameterized_class_tokens(
     name: &str,
@@ -196,7 +213,19 @@ fn parameterized_class_tokens(
         "Into" => {
             quote! { crate::typecheck::Class::Into(#inner_ty) }
         }
-        _ => panic!("unknown parameterized constraint: `{name}`"),
+        "TryInto" => {
+            quote! { crate::typecheck::Class::TryInto(#inner_ty) }
+        }
+        "Mappable" => {
+            quote! { crate::typecheck::Class::Mappable(#inner_ty) }
+        }
+        "Foldable" => {
+            quote! { crate::typecheck::Class::Foldable(#inner_ty) }
+        }
+        "Filterable" => {
+            quote! { crate::typecheck::Class::Filterable(#inner_ty) }
+        }
+        _ => panic!("unknown parameterized class: `{name}`"),
     }
 }
 
@@ -219,16 +248,16 @@ impl SchemeInput {
         } else {
             let var_indices: Vec<u32> = (0..self.vars.len() as u32).collect();
 
-            // Generate constraint entries: (TyVar, Class) tuples
-            let constraint_entries: Vec<TokenStream2> = self
+            // Generate class entries: (TyVar, Class) tuples
+            let class_entries: Vec<TokenStream2> = self
                 .vars
                 .iter()
                 .enumerate()
-                .filter_map(|(i, (_, constraint))| {
-                    constraint.as_ref().map(|c| {
+                .filter_map(|(i, (_, class))| {
+                    class.as_ref().map(|c| {
                         let var_idx = i as u32;
                         match c {
-                            VarConstraint::Simple(name) => {
+                            VarClass::Simple(name) => {
                                 let ident =
                                     Ident::new(name, proc_macro2::Span::call_site());
                                 quote! {
@@ -238,13 +267,13 @@ impl SchemeInput {
                                     )
                                 }
                             }
-                            VarConstraint::Parameterized(name, args) => {
+                            VarClass::Parameterized(name, args) => {
                                 let arg_indices: Vec<u32> = args
                                     .iter()
                                     .map(|arg| {
                                         var_map.get(arg).copied().unwrap_or_else(|| {
                                             panic!(
-                                                "unbound type variable in constraint: `{arg}`"
+                                                "unbound type variable in class: `{arg}`"
                                             )
                                         })
                                     })
@@ -289,7 +318,7 @@ impl SchemeInput {
                 crate::typecheck::Scheme {
                     vars: vec![#(crate::typecheck::TyVar::new(#var_indices)),*],
                     ty: #ty_tokens,
-                    constraints: smallvec::smallvec![#(#constraint_entries),*],
+                    constraints: smallvec::smallvec![#(#class_entries),*],
                 }
             }
         }

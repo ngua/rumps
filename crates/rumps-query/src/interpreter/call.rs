@@ -47,6 +47,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ModuleFn { path } => {
                 self.invoke_module_fn(&path, &[arg_id], span).await
             }
+            Value::ClassMethodFn { class, method } => {
+                self.invoke_class_method_fn(class, method, &[arg_id], span)
+                    .await
+            }
             // Type checker guarantees rhs is callable
             _ => typechecked!("|>", "Callable"),
         }
@@ -271,11 +275,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         // closure invocation machinery (`invoke_callable`). See `primitives.rs`
         // module docs for details.
         match path_refs.as_slice() {
-            // Iter HOFs (work on any Iterable: Array[T] or Range)
-            ["Iter", "map"] => self.iter_map(args, span).await,
-            ["Iter", "filter"] => self.iter_filter(args, span).await,
-            ["Iter", "reduce"] => self.iter_reduce(args, span).await,
-            ["Iter", "foreach"] => self.iter_foreach(args, span).await,
             // Array-specific HOFs
             ["Array", "sort-by"] => self.array_sort_by(args, span).await,
             ["Array", "zip-with"] => self.array_zip_with(args, span).await,
@@ -375,6 +374,226 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Validate return type if annotated
         result.and_then(|val| self.check_return_type(val, fn_def.ret))
+    }
+
+    /// Evaluate a class method expression.
+    ///
+    /// Parses the class name, evaluates arguments, and dispatches to the
+    /// appropriate class method.
+    #[async_recursion]
+    pub(super) async fn class_method_expr(
+        &mut self,
+        expr_id: ExprId,
+        class: &str,
+        method: &str,
+        args: &SmallVec<[ExprId; 4]>,
+        span: Span,
+    ) -> Result<Value> {
+        use crate::typecheck::ClassKind;
+
+        // Parse class name
+        let kind = match class {
+            "Numeric" => ClassKind::Numeric,
+            "Iterable" => ClassKind::Iterable,
+            "Monoid" => ClassKind::Monoid,
+            "BitLike" => ClassKind::BitLike,
+            "Negatable" => ClassKind::Negatable,
+            "Fallible" => ClassKind::Fallible,
+            "Into" => ClassKind::Into,
+            "TryInto" => ClassKind::TryInto,
+            "Indexable" => ClassKind::Indexable,
+            "Ord" => ClassKind::Ord,
+            "Mappable" => ClassKind::Mappable,
+            "Foldable" => ClassKind::Foldable,
+            "Filterable" => ClassKind::Filterable,
+            _ => typechecked!("class method class", "known class"),
+        };
+
+        // Evaluate arguments
+        let arg_ids = self.eval_args(args).await?;
+
+        self.dispatch_class_method(Some(expr_id), kind, method, &arg_ids, span)
+            .await
+    }
+
+    /// Invoke a class method from a `ClassMethodFn` value.
+    ///
+    /// Looks up class/method strings and dispatches to the class method.
+    #[async_recursion]
+    async fn invoke_class_method_fn(
+        &mut self,
+        class: StringId,
+        method: StringId,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        use crate::typecheck::ClassKind;
+
+        let class_str = self
+            .arena
+            .get_str(class)
+            .unwrap_or_else(|| invariant!("class StringId in arena"));
+        let method_str: String = self
+            .arena
+            .get_str(method)
+            .map(str::to_owned)
+            .unwrap_or_else(|| invariant!("method StringId in arena"));
+
+        let kind = match class_str {
+            "Numeric" => ClassKind::Numeric,
+            "Iterable" => ClassKind::Iterable,
+            "Monoid" => ClassKind::Monoid,
+            "BitLike" => ClassKind::BitLike,
+            "Negatable" => ClassKind::Negatable,
+            "Fallible" => ClassKind::Fallible,
+            "Into" => ClassKind::Into,
+            "TryInto" => ClassKind::TryInto,
+            "Indexable" => ClassKind::Indexable,
+            "Ord" => ClassKind::Ord,
+            "Mappable" => ClassKind::Mappable,
+            "Foldable" => ClassKind::Foldable,
+            "Filterable" => ClassKind::Filterable,
+            _ => typechecked!("invoke_class_method_fn", "known class"),
+        };
+
+        self.dispatch_class_method(None, kind, &method_str, args, span)
+            .await
+    }
+
+    /// Dispatch a class method call.
+    ///
+    /// Unified entry point for all class methods. Sync methods (like `Numeric:add`)
+    /// don't await internally; async HOFs (like `Mappable:map`) do.
+    ///
+    /// The `expr_id` parameter is used by nullary methods (like `Monoid:identity`)
+    /// to look up the inferred type from `mempty_types`.
+    #[async_recursion]
+    pub(super) async fn dispatch_class_method(
+        &mut self,
+        expr_id: Option<ExprId>,
+        class: crate::typecheck::ClassKind,
+        method: &str,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        use super::class::ClassCtx;
+        use crate::typecheck::ClassKind;
+
+        match (class, method) {
+            // Async HOFs (these actually await)
+            (ClassKind::Mappable, "map") => self.iter_map(args, span).await,
+            (ClassKind::Filterable, "filter") => {
+                self.iter_filter(args, span).await
+            }
+            (ClassKind::Foldable, "reduce") => {
+                self.iter_reduce(args, span).await
+            }
+            (ClassKind::Iterable, "foreach") => {
+                self.iter_foreach(args, span).await
+            }
+
+            // Iterable methods (sync)
+            (ClassKind::Iterable, "length") => self.iterable_length(args, span),
+            (ClassKind::Iterable, "contains") => {
+                self.iterable_contains(args, span)
+            }
+            (ClassKind::Iterable, "reverse") => {
+                self.iterable_reverse(args, span)
+            }
+
+            // Sync methods (no internal await; dispatch via ClassMethods)
+            _ => {
+                let val = |i: usize| {
+                    self.arena.get(args[i]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    })
+                };
+
+                match self.class_methods.lookup(class, method) {
+                    Some(super::class::MethodFn::Binary(_)) => {
+                        let left = val(0);
+                        let right = val(1);
+                        let mut ctx = ClassCtx {
+                            arena: &mut self.arena,
+                            type_exprs: &mut self.type_exprs,
+                            registry: &self.registry,
+                            regex_cache: &self.regex_cache,
+                            span,
+                        };
+                        self.class_methods.dispatch_binary(
+                            class, method, &mut ctx, &left, &right,
+                        )
+                    }
+                    Some(super::class::MethodFn::Unary(_)) => {
+                        let v = val(0);
+                        let mut ctx = ClassCtx {
+                            arena: &mut self.arena,
+                            type_exprs: &mut self.type_exprs,
+                            registry: &self.registry,
+                            regex_cache: &self.regex_cache,
+                            span,
+                        };
+                        self.class_methods
+                            .dispatch_unary(class, method, &mut ctx, &v)
+                    }
+                    Some(super::class::MethodFn::Nullary(_)) => {
+                        let id = expr_id.unwrap_or_else(|| {
+                            typechecked!(
+                                "nullary class method",
+                                "expression id"
+                            )
+                        });
+                        let ty =
+                            self.mempty_types.get(&id).cloned().unwrap_or_else(
+                                || {
+                                    typechecked!(
+                                        "nullary class method",
+                                        "resolved type"
+                                    )
+                                },
+                            );
+                        let mut ctx = ClassCtx {
+                            arena: &mut self.arena,
+                            type_exprs: &mut self.type_exprs,
+                            registry: &self.registry,
+                            regex_cache: &self.regex_cache,
+                            span,
+                        };
+                        self.class_methods
+                            .dispatch_nullary(class, method, &mut ctx, &ty)
+                    }
+                    Some(super::class::MethodFn::Convert(_)) => {
+                        let v = val(0);
+                        let id = expr_id.unwrap_or_else(|| {
+                            typechecked!(
+                                "convert class method",
+                                "expression id"
+                            )
+                        });
+                        let ty = self
+                            .convert_targets
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                typechecked!(
+                                    "convert class method",
+                                    "resolved target type"
+                                )
+                            });
+                        let mut ctx = ClassCtx {
+                            arena: &mut self.arena,
+                            type_exprs: &mut self.type_exprs,
+                            registry: &self.registry,
+                            regex_cache: &self.regex_cache,
+                            span,
+                        };
+                        self.class_methods
+                            .dispatch_convert(class, method, &mut ctx, &v, &ty)
+                    }
+                    None => typechecked!("class method", "registered"),
+                }
+            }
+        }
     }
 
     /// `Iter.map(fn, iter) -> Array`
@@ -849,6 +1068,101 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.invoke_callable(fn_id, &[*head], span).await?;
                 self.iter_foreach_rec(fn_id, tail, span).await
             }
+        }
+    }
+
+    /// `Iterable:length(iter) -> Int`
+    fn iterable_length(
+        &mut self,
+        args: &[ValueId],
+        _span: Span,
+    ) -> Result<Value> {
+        match self.arena.get(args[0]) {
+            Some(Value::Array(_, elems)) => Ok(Value::Int(elems.len() as i64)),
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                let len = if *inclusive {
+                    end - start + 1
+                } else {
+                    end - start
+                };
+                Ok(Value::Int(len.max(0)))
+            }
+            _ => typechecked!("Iterable:length", "Iterable"),
+        }
+    }
+
+    /// `Iterable:contains(iter, elem) -> Bool`
+    fn iterable_contains(
+        &self,
+        args: &[ValueId],
+        _span: Span,
+    ) -> Result<Value> {
+        let needle = self
+            .arena
+            .get(args[1])
+            .cloned()
+            .unwrap_or_else(|| invariant!("Iterable:contains needle"));
+
+        match self.arena.get(args[0]) {
+            Some(Value::Array(_, elems)) => {
+                let found = elems.iter().any(|eid| {
+                    self.arena.get(*eid).is_some_and(|v| *v == needle)
+                });
+                Ok(Value::Bool(found))
+            }
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                let found = match needle {
+                    Value::Int(n) => {
+                        if *inclusive {
+                            n >= *start && n <= *end
+                        } else {
+                            n >= *start && n < *end
+                        }
+                    }
+                    _ => false,
+                };
+                Ok(Value::Bool(found))
+            }
+            _ => typechecked!("Iterable:contains", "Iterable"),
+        }
+    }
+
+    /// `Iterable:reverse(iter) -> Array[T]`
+    fn iterable_reverse(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        match self.arena.get(args[0]) {
+            Some(Value::Array(ty, elems)) => {
+                let ty = *ty;
+                let reversed: SmallVec<[ValueId; 4]> =
+                    elems.iter().rev().copied().collect();
+                Ok(Value::Array(ty, reversed))
+            }
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                let (start, end, inclusive) = (*start, *end, *inclusive);
+                let actual_end = if inclusive { end + 1 } else { end };
+                let elems: SmallVec<[ValueId; 4]> = (start..actual_end)
+                    .rev()
+                    .map(|i| self.arena.add(Value::Int(i), span))
+                    .collect();
+                let ty = self.type_exprs.named(TypeId::INT);
+                Ok(Value::Array(ty, elems))
+            }
+            _ => typechecked!("Iterable:reverse", "Iterable"),
         }
     }
 
@@ -1359,6 +1673,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let result = self.invoke_module_fn(&path, args, span).await?;
                 Ok(self.arena.add(result, span))
             }
+            Value::ClassMethodFn { class, method } => {
+                let result = self
+                    .invoke_class_method_fn(class, method, args, span)
+                    .await?;
+                Ok(self.arena.add(result, span))
+            }
             // Type checker guarantees callee is callable
             _ => typechecked!("invoke_callable", "Callable"),
         }
@@ -1413,6 +1733,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ModuleFn { path } => {
                 let vals = self.eval_args(args).await?;
                 self.invoke_module_fn(&path, &vals, span).await
+            }
+            Value::ClassMethodFn { class, method } => {
+                let vals = self.eval_args(args).await?;
+                self.invoke_class_method_fn(class, method, &vals, span)
+                    .await
             }
             // FOREVER continuation: calling it signals loop continuation
             Value::ForeverContinuation => {
