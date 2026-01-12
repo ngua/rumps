@@ -113,6 +113,11 @@ impl ClassKind {
             (Self::Fallible, "wrap") => {
                 Some(scheme!(forall T, F: Fallible[T]. (T) -> F))
             }
+            // Fallible: (F, (T) -> F[U]) -> F[U] where F: Fallible[T]
+            // Uses higher-kinded `F[U]` to ensure same Fallible constructor
+            (Self::Fallible, "flat-map") => Some(
+                scheme!(forall T U, F: Fallible[T]. (F, (T) -> F[U]) -> F[U]),
+            ),
 
             // Iterable methods
             (Self::Iterable, "length") => {
@@ -394,6 +399,16 @@ pub(crate) enum Ty {
     /// User-defined type (sum types, aliases, unions) with type parameters.
     Named(TypeId, Vec<Self>),
 
+    /// Higher-kinded type application: `F[U]` where `F` is a type variable.
+    ///
+    /// Used for polymorphism over type constructors. When `F: Fallible[T]`
+    /// and `F` resolves to `Option[T]`, then `Apply(F, [U])` becomes `Option[U]`.
+    /// For `Result[T, E]`, it becomes `Result[U, E]` (preserving error type).
+    ///
+    /// Resolved during substitution: when the type variable is bound to a
+    /// concrete type constructor, the application is evaluated.
+    Apply(TyVar, Vec<Self>),
+
     /// Unresolved; database reads before inference narrows.
     Unknown,
 
@@ -523,6 +538,10 @@ impl Ty {
             Self::Named(_, args) => {
                 args.iter().for_each(|t| t.collect_free_vars(acc));
             }
+            Self::Apply(v, args) => {
+                acc.insert(*v);
+                args.iter().for_each(|t| t.collect_free_vars(acc));
+            }
         }
     }
 
@@ -560,6 +579,7 @@ impl Ty {
             Self::Object(fields) => fields.values().any(|t| t.occurs(v)),
             Self::Union(members) => members.iter().any(|t| t.occurs(v)),
             Self::Named(_, args) => args.iter().any(|t| t.occurs(v)),
+            Self::Apply(w, args) => *w == v || args.iter().any(|t| t.occurs(v)),
         }
     }
 
@@ -614,6 +634,44 @@ impl Ty {
             }
             Self::Named(id, args) => {
                 Self::Named(*id, args.iter().map(|t| t.apply(subst)).collect())
+            }
+            Self::Apply(v, args) => {
+                let args: Vec<_> =
+                    args.iter().map(|t| t.apply(subst)).collect();
+                match subst.0.get(v) {
+                    None => Self::Apply(*v, args),
+                    Some(bound) => {
+                        // Type var is bound; apply the constructor to new args
+                        // For Fallible: Option[_] -> Option[arg], Result[_, E] -> Result[arg, E]
+                        match bound {
+                            Self::Option(_) => {
+                                args.first().map_or(Self::Error, |a| {
+                                    Self::Option(Box::new(a.clone()))
+                                })
+                            }
+                            Self::Result(_, e) => {
+                                args.first().map_or(Self::Error, |a| {
+                                    Self::Result(Box::new(a.clone()), e.clone())
+                                })
+                            }
+                            // For other type constructors, replace first param
+                            Self::Array(_) => {
+                                args.first().map_or(Self::Error, |a| {
+                                    Self::Array(Box::new(a.clone()))
+                                })
+                            }
+                            Self::Map(_, mv) => {
+                                args.first().map_or(Self::Error, |a| {
+                                    Self::Map(Box::new(a.clone()), mv.clone())
+                                })
+                            }
+                            // If bound to a type variable, keep Apply with that var
+                            Self::Var(w) => Self::Apply(*w, args),
+                            // Anything else: can't apply arguments
+                            _ => Self::Error,
+                        }
+                    }
+                }
             }
         }
     }

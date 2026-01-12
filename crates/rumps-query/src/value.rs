@@ -1271,7 +1271,7 @@ impl TypeExprArena {
                     members.iter().map(|m| self.intern_ty(m)).collect();
                 self.union(member_ids)
             }
-            Ty::Var(_) | Ty::Unknown | Ty::Error => {
+            Ty::Var(_) | Ty::Apply(_, _) | Ty::Unknown | Ty::Error => {
                 unreachable!("intern_ty called on unresolved type: {ty:?}")
             }
         }
@@ -1356,7 +1356,9 @@ impl TypeExprArena {
                 self.union(member_ids)
             }
             // Unresolved types become UNKNOWN
-            Ty::Var(_) | Ty::Unknown | Ty::Error => self.named(TypeId::UNKNOWN),
+            Ty::Var(_) | Ty::Apply(_, _) | Ty::Unknown | Ty::Error => {
+                self.named(TypeId::UNKNOWN)
+            }
         }
     }
 }

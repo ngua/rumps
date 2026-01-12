@@ -290,10 +290,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             ["Array", "zip-with"] => self.array_zip_with(args, span).await,
             // Option/Result HOFs
             ["Option", "map"] => self.option_map(args, span).await,
-            ["Option", "flat-map"] => self.option_flat_map(args, span).await,
             ["Result", "map"] => self.result_map(args, span).await,
             ["Result", "map-err"] => self.result_map_err(args, span).await,
-            ["Result", "flat-map"] => self.result_flat_map(args, span).await,
             _ => {
                 // Check for user module function first
                 if let Some(fn_def) =
@@ -504,6 +502,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             (ClassKind::Iterable, "foreach") => {
                 self.iter_foreach(args, span).await
+            }
+            (ClassKind::Fallible, "flat-map") => {
+                self.fallible_flat_map(args, span).await
             }
 
             // Iterable methods (sync)
@@ -1543,107 +1544,78 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `Option.flat-map(opt, fn) -> Option`
+    /// `Fallible:flat-map(F, (T) -> F[U]) -> F[U]` where `F: Fallible[T]`
     ///
-    /// If `opt` is `Some(v)`, applies `fn` to `v` and returns the result
-    /// (which must be an `Option`). If `opt` is `None`, returns `None`.
+    /// For `Option`: if `Some(v)`, applies `fn` to `v`; if `None`, returns `None`.
+    /// For `Result`: if `Ok(v)`, applies `fn` to `v`; if `Err(e)`, returns `Err(e)`.
+    ///
+    /// The type system ensures the callback returns the same Fallible constructor
+    /// as the input (via `F[U]` higher-kinded type application).
     #[async_recursion]
-    async fn option_flat_map(
+    async fn fallible_flat_map(
         &mut self,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        let opt_id = *args
+        let f_id = *args
             .first()
-            .unwrap_or_else(|| typechecked!("Option.flat-map", "2 args"));
+            .unwrap_or_else(|| typechecked!("Fallible:flat-map", "2 args"));
         let fn_id = *args
             .get(1)
-            .unwrap_or_else(|| typechecked!("Option.flat-map", "2 args"));
+            .unwrap_or_else(|| typechecked!("Fallible:flat-map", "2 args"));
 
-        let opt = self
-            .arena
-            .get(opt_id)
-            .unwrap_or_else(|| typechecked!("Option.flat-map", "valid value"));
+        let f = self.arena.get(f_id).unwrap_or_else(|| {
+            typechecked!("Fallible:flat-map", "valid value")
+        });
 
-        let is_some = opt.is_some(&self.type_exprs);
-        let is_none = opt.is_none(&self.type_exprs);
+        let is_opt = f.is_some(&self.type_exprs) || f.is_none(&self.type_exprs);
+        let is_res = f.is_ok(&self.type_exprs) || f.is_err(&self.type_exprs);
 
-        match (is_some, is_none) {
+        match (is_opt, is_res) {
             (true, false) => {
-                // Option.Some(v) - apply fn and return result directly
-                let inner = match opt {
-                    Value::Tagged(_, _, payloads) => {
-                        *payloads.first().unwrap_or_else(|| {
-                            typechecked!("Option.Some", "payload")
-                        })
-                    }
-                    _ => typechecked!("Option.Some", "Tagged"),
-                };
-
-                let result_id =
-                    self.invoke_callable(fn_id, &[inner], span).await?;
-                Ok(self.arena.get(result_id).cloned().unwrap_or_else(|| {
-                    typechecked!("Option.flat-map", "valid")
-                }))
+                // Option
+                if f.is_some(&self.type_exprs) {
+                    let inner = match f {
+                        Value::Tagged(_, _, p) => {
+                            *p.first().unwrap_or_else(|| {
+                                typechecked!("Option.Some", "payload")
+                            })
+                        }
+                        _ => typechecked!("Option.Some", "Tagged"),
+                    };
+                    let res_id =
+                        self.invoke_callable(fn_id, &[inner], span).await?;
+                    Ok(self.arena.get(res_id).cloned().unwrap_or_else(|| {
+                        typechecked!("Fallible:flat-map", "valid")
+                    }))
+                } else {
+                    let unknown = self.type_exprs.named(TypeId::UNKNOWN);
+                    let opt_ty =
+                        self.type_exprs.app(TypeId::OPTION, smallvec![unknown]);
+                    Ok(Value::none(opt_ty))
+                }
             }
             (false, true) => {
-                // Option.None - return None
-                let unknown = self.type_exprs.named(TypeId::UNKNOWN);
-                let opt_ty =
-                    self.type_exprs.app(TypeId::OPTION, smallvec![unknown]);
-                Ok(Value::none(opt_ty))
+                // Result
+                if f.is_ok(&self.type_exprs) {
+                    let inner = match f {
+                        Value::Tagged(_, _, p) => {
+                            *p.first().unwrap_or_else(|| {
+                                typechecked!("Result.Ok", "payload")
+                            })
+                        }
+                        _ => typechecked!("Result.Ok", "Tagged"),
+                    };
+                    let res_id =
+                        self.invoke_callable(fn_id, &[inner], span).await?;
+                    Ok(self.arena.get(res_id).cloned().unwrap_or_else(|| {
+                        typechecked!("Fallible:flat-map", "valid")
+                    }))
+                } else {
+                    Ok(f.clone())
+                }
             }
-            // Type checker guarantees arg is Option
-            _ => typechecked!("Option.flat-map", "Option"),
-        }
-    }
-
-    /// `Result.flat-map(res, fn) -> Result`
-    ///
-    /// If `res` is `Ok(v)`, applies `fn` to `v` and returns the result
-    /// (which must be a `Result`). If `res` is `Err(e)`, returns `Err(e)`.
-    #[async_recursion]
-    async fn result_flat_map(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let res_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Result.flat-map", "2 args"));
-        let fn_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Result.flat-map", "2 args"));
-
-        let res = self
-            .arena
-            .get(res_id)
-            .unwrap_or_else(|| typechecked!("Result.flat-map", "valid value"));
-
-        let is_ok = res.is_ok(&self.type_exprs);
-        let is_err = res.is_err(&self.type_exprs);
-
-        match (is_ok, is_err) {
-            (true, false) => {
-                // Result.Ok(v) - apply fn and return result directly
-                let inner = match res {
-                    Value::Tagged(_, _, payloads) => {
-                        *payloads.first().unwrap_or_else(|| {
-                            typechecked!("Result.Ok", "payload")
-                        })
-                    }
-                    _ => typechecked!("Result.Ok", "Tagged"),
-                };
-
-                let result_id =
-                    self.invoke_callable(fn_id, &[inner], span).await?;
-                Ok(self.arena.get(result_id).cloned().unwrap_or_else(|| {
-                    typechecked!("Result.flat-map", "valid")
-                }))
-            }
-            (false, true) => Ok(res.clone()),
-            // Type checker guarantees arg is Result
-            _ => typechecked!("Result.flat-map", "Result"),
+            _ => typechecked!("Fallible:flat-map", "Fallible"),
         }
     }
 

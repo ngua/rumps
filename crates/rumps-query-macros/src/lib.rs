@@ -334,6 +334,12 @@ enum TyExpr {
     Var(String),
     /// Parameterized type: `Array[T]`, `Map[K, V]`, etc.
     App(String, Vec<Self>),
+    /// Type variable application: `F[U]` where `F` is a bound type variable.
+    ///
+    /// Used for higher-kinded polymorphism; `F[U]` applies the type constructor
+    /// bound to `F` to the argument `U`. For example, if `F: Fallible[T]` and
+    /// `F` resolves to `Option[T]`, then `F[U]` becomes `Option[U]`.
+    Apply(String, Vec<Self>),
     /// Function type: `(A, B) -> C`.
     Fn(Vec<Self>, Box<Self>),
     /// Tuple type: `(A, B)`.
@@ -434,6 +440,19 @@ impl TyExpr {
                 let id = Ident::new(type_id, proc_macro2::Span::call_site());
                 quote! {
                     crate::typecheck::Ty::Named(crate::value::TypeId::#id, vec![])
+                }
+            }
+            Self::Apply(var_name, args) => {
+                let idx = vars.get(var_name).copied().unwrap_or_else(|| {
+                    panic!("unbound type variable in Apply: `{var_name}`")
+                });
+                let arg_tokens: Vec<_> =
+                    args.iter().map(|a| a.to_tokens(vars, ctx)).collect();
+                quote! {
+                    crate::typecheck::Ty::Apply(
+                        crate::typecheck::TyVar::new(#idx),
+                        vec![#(#arg_tokens),*]
+                    )
                 }
             }
         }
@@ -620,6 +639,9 @@ fn parse_ty_ident(input: ParseStream) -> Result<TyExpr> {
         Ok(TyExpr::Prim(name))
     } else if let Some(type_id) = named_type_id(&name) {
         Ok(TyExpr::Named(type_id.to_string()))
+    } else if input.peek(syn::token::Bracket) {
+        // Type variable with args: `F[U]` (higher-kinded application)
+        parse_bracketed_args(input).map(|args| TyExpr::Apply(name, args))
     } else {
         Ok(TyExpr::Var(name))
     }
@@ -635,6 +657,9 @@ fn parse_ty_starting_with(input: ParseStream, ident: Ident) -> Result<TyExpr> {
         TyExpr::Prim(name)
     } else if let Some(type_id) = named_type_id(&name) {
         TyExpr::Named(type_id.to_string())
+    } else if input.peek(syn::token::Bracket) {
+        // Type variable with args: `F[U]` (higher-kinded application)
+        TyExpr::Apply(name, parse_bracketed_args(input)?)
     } else {
         TyExpr::Var(name)
     };

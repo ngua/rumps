@@ -1074,6 +1074,7 @@ impl Into {
             Ty::Global => "Global",
             Ty::Union(_) => "Union",
             Ty::Var(_) => "Var",
+            Ty::Apply(_, _) => "Apply",
             Ty::Unknown => "Unknown",
             Ty::Error => "Error",
         }

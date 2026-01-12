@@ -63,6 +63,8 @@ impl InferCtx<'_> {
                 fields.values().any(Self::has_unresolved_vars)
             }
             Ty::Named(_, args) => args.iter().any(Self::has_unresolved_vars),
+            // Apply is polymorphic; check the arguments
+            Ty::Apply(_, args) => args.iter().any(Self::has_unresolved_vars),
         }
     }
 

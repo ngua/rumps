@@ -1,0 +1,5 @@
+; Test Fallible:flat-map rejects Result/Option mismatch
+
+LET res = Result.Ok(42) : Result[Int, String]
+LET bad = Fallible:flat-map((x: Int) => Option.Some(x + 1), res) : Option[Int]
+WRITE bad

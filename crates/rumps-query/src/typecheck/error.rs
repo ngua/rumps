@@ -140,6 +140,12 @@ impl<'a> TyPrinter<'a> {
             }
             Ty::Local => "Local".to_owned(),
             Ty::Global => "Global".to_owned(),
+            Ty::Apply(v, args) => {
+                let vname = namer.name(*v);
+                let ps: Vec<_> =
+                    args.iter().map(|t| self.format_inner(t, namer)).collect();
+                format!("{}[{}]", vname, ps.join(", "))
+            }
         }
     }
 
@@ -732,6 +738,16 @@ impl fmt::Display for Ty {
             }
             Self::Local => write!(f, "Local"),
             Self::Global => write!(f, "Global"),
+            Self::Apply(v, args) => {
+                write!(f, "?{}[", v.idx())?;
+                args.iter().enumerate().try_for_each(|(i, t)| {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{t}")
+                })?;
+                write!(f, "]")
+            }
         }
     }
 }
