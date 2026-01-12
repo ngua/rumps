@@ -47,9 +47,19 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::ModuleFn { path } => {
                 self.invoke_module_fn(&path, &[arg_id], span).await
             }
-            Value::ClassMethodFn { class, method } => {
-                self.invoke_class_method_fn(class, method, &[arg_id], span)
-                    .await
+            Value::ClassMethodFn {
+                class,
+                method,
+                expr_id,
+            } => {
+                self.invoke_class_method_fn(
+                    class,
+                    method,
+                    expr_id,
+                    &[arg_id],
+                    span,
+                )
+                .await
             }
             // Type checker guarantees rhs is callable
             _ => typechecked!("|>", "Callable"),
@@ -419,11 +429,15 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Invoke a class method from a `ClassMethodFn` value.
     ///
     /// Looks up class/method strings and dispatches to the class method.
+    ///
+    /// The `expr_id` is the expression ID of the `ClassMethodRef` that created
+    /// this value; needed for convert methods to look up target types.
     #[async_recursion]
     async fn invoke_class_method_fn(
         &mut self,
         class: StringId,
         method: StringId,
+        expr_id: Option<ExprId>,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
@@ -456,7 +470,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             _ => typechecked!("invoke_class_method_fn", "known class"),
         };
 
-        self.dispatch_class_method(None, kind, &method_str, args, span)
+        self.dispatch_class_method(expr_id, kind, &method_str, args, span)
             .await
     }
 
@@ -1673,9 +1687,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let result = self.invoke_module_fn(&path, args, span).await?;
                 Ok(self.arena.add(result, span))
             }
-            Value::ClassMethodFn { class, method } => {
+            Value::ClassMethodFn {
+                class,
+                method,
+                expr_id,
+            } => {
                 let result = self
-                    .invoke_class_method_fn(class, method, args, span)
+                    .invoke_class_method_fn(class, method, expr_id, args, span)
                     .await?;
                 Ok(self.arena.add(result, span))
             }
@@ -1734,9 +1752,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let vals = self.eval_args(args).await?;
                 self.invoke_module_fn(&path, &vals, span).await
             }
-            Value::ClassMethodFn { class, method } => {
+            Value::ClassMethodFn {
+                class,
+                method,
+                expr_id,
+            } => {
                 let vals = self.eval_args(args).await?;
-                self.invoke_class_method_fn(class, method, &vals, span)
+                self.invoke_class_method_fn(class, method, expr_id, &vals, span)
                     .await
             }
             // FOREVER continuation: calling it signals loop continuation

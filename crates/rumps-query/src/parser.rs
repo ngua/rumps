@@ -1172,7 +1172,8 @@ impl Parser {
                             .boxed();
                     // Pass `pipe` to `unary_expr` for intrinsic operands
                     let unary = Self::unary_expr(pipe, primary, postfix);
-                    let pow = Self::pow_expr(unary);
+                    let annotate = Self::annotate_expr(unary, ty.clone());
+                    let pow = Self::pow_expr(annotate);
                     let mul = Self::mul_expr(pow).boxed();
                     let shift = Self::shift_expr(mul);
                     let add = Self::add_expr(shift);
@@ -1870,6 +1871,33 @@ impl Parser {
         })
     }
 
+    /// Type annotation: `expr : Type`
+    ///
+    /// Sits between unary and power in precedence, so `?x : T` parses as `(?x) : T`
+    /// and `x.foo : T` parses as `(x.foo) : T`.
+    fn annotate_expr(
+        operand: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
+            + Clone
+            + 'static,
+        ty: impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let annotate = just(Token::Colon)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(ty);
+
+        operand.clone().then(annotate.or_not()).map_with_span(
+            |(expr, anno), span| match anno {
+                Some(ty) => cst::Expr::new(
+                    cst::ExprKind::Annotate(Box::new(expr), ty),
+                    span,
+                ),
+                None => expr,
+            },
+        )
+    }
+
     /// Parse a B-tree variable reference (local or global with subscripts).
     ///
     /// Returns `cst::DbRef` for use in `GET`, `SET`, `KILL`, `DATA`, `ORDER`, `QUERY`.
@@ -2003,12 +2031,6 @@ impl Parser {
                 PostfixOp::JsonArrowArrow(Box::new(e), span)
             });
 
-        // Type annotation: `: Type`
-        let annotate = just(Token::Colon)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::type_expr())
-            .map_with_span(PostfixOp::Annotate);
-
         choice((
             field_or_tuple_idx,
             opt_field,
@@ -2021,8 +2043,6 @@ impl Parser {
             // Dynamic key access with parens
             json_arrow_arrow_expr,
             json_arrow_expr,
-            // Type annotation
-            annotate,
         ))
         .repeated()
     }
@@ -2101,10 +2121,6 @@ impl Parser {
                         JsonAccessKind::Scalar,
                         cst::JsonAccessKey::Expr(e),
                     ),
-                    span,
-                )),
-                PostfixOp::Annotate(ty, _) => Some(cst::Expr::new(
-                    cst::ExprKind::Annotate(Box::new(acc), ty),
                     span,
                 )),
             }
@@ -2208,17 +2224,29 @@ impl Parser {
                 )
             });
 
-        // Class method reference: `Class:method` (without call).
+        // Class method reference: `Class:method` or `Class[T, ...]:method`.
         //
         // A first-class function value. Uses `ColonNoSpace` to require no
         // space around the colon. This is ordered after `class_method` in the
         // choice, so `class_method` (with parens) is tried first.
+        //
+        // The optional type arguments are required for convert methods
+        // (`Fallible`, `Into`, `TryInto`) when used as first-class values.
+        let class_type_args = Self::type_expr()
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .delimited_by(just(Token::LBracket), just(Token::RBracket));
         let class_method_ref = Self::ident()
+            .then(class_type_args.or_not())
             .then_ignore(just(Token::ColonNoSpace))
             .then(Self::ident())
-            .map_with_span(|(class, method), span| {
+            .map_with_span(|((class, type_args), method), span| {
                 cst::Expr::new(
-                    cst::ExprKind::ClassMethodRef(class, method),
+                    cst::ExprKind::ClassMethodRef(
+                        class,
+                        type_args.unwrap_or_default(),
+                        method,
+                    ),
                     span,
                 )
             });
@@ -3198,8 +3226,6 @@ enum PostfixOp {
     JsonArrow(Box<cst::Expr>, Span),
     /// JSON scalar access with dynamic key: `->>(expr)` (returns `Option[T]`).
     JsonArrowArrow(Box<cst::Expr>, Span),
-    /// Type annotation: `expr: Type`.
-    Annotate(cst::TypeExpr, Span),
 }
 
 /// Helper enum for array pattern elements during parsing.
@@ -3236,8 +3262,7 @@ impl PostfixOp {
             | Self::Unwrap(s)
             | Self::JsonScalarField(_, s)
             | Self::JsonArrow(_, s)
-            | Self::JsonArrowArrow(_, s)
-            | Self::Annotate(_, s) => *s,
+            | Self::JsonArrowArrow(_, s) => *s,
         }
     }
 }

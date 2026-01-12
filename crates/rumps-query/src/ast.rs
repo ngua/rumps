@@ -846,11 +846,15 @@ pub(crate) enum Expr {
     /// Examples: `Numeric:add(a, b)`, `Fallible:unwrap(opt)`, `Mappable:map(fn, arr)`
     ClassMethod(String, String, SmallVec<[ExprId; 4]>),
 
-    /// Class method reference: `Class:method` (without call).
+    /// Class method reference: `Class:method` or `Class[T, ...]:method`.
     ///
     /// A first-class function value that can be passed around and called later.
     /// Example: `LET f = Filterable:filter`
-    ClassMethodRef(String, String),
+    ///
+    /// The type arguments (`SmallVec`) are required for convert methods
+    /// (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) when used as
+    /// first-class values, to specify the target type.
+    ClassMethodRef(String, SmallVec<[AstTypeExprId; 2]>, String),
 
     /// Type check: `expr is Pattern`.
     ///

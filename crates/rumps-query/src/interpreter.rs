@@ -430,10 +430,14 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::ClassMethod(ref class, ref method, ref args) => {
                 self.class_method_expr(id, class, method, args, span).await
             }
-            Expr::ClassMethodRef(ref class, ref method) => {
+            Expr::ClassMethodRef(ref class, _, ref method) => {
                 let class = self.arena.intern(class);
                 let method = self.arena.intern(method);
-                Ok(Value::ClassMethodFn { class, method })
+                Ok(Value::ClassMethodFn {
+                    class,
+                    method,
+                    expr_id: Some(id),
+                })
             }
         }
     }

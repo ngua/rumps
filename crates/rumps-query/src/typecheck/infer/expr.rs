@@ -19,7 +19,7 @@ use crate::ast::{
 use crate::env::TxnReq;
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
+use crate::typecheck::ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -335,9 +335,9 @@ impl InferCtx<'_> {
                 self.class_method(id, class, method, args, span)
             }
 
-            // Class method reference: `Class:method` (no call)
-            Expr::ClassMethodRef(class, method) => {
-                self.class_method_ref(class, method, span)
+            // Class method reference: `Class:method` or `Class[T]:method`
+            Expr::ClassMethodRef(class, type_args, method) => {
+                self.class_method_ref(id, class, type_args, method, span)
             }
         }
     }
@@ -383,10 +383,14 @@ impl InferCtx<'_> {
 
     /// Type check a class method reference (used as a first-class value).
     ///
-    /// Returns the polymorphic function type of the method.
+    /// Returns the polymorphic function type of the method. Convert methods
+    /// (`Fallible`, `Into`, `TryInto`) require type arguments when used as
+    /// first-class values.
     fn class_method_ref(
         &mut self,
+        id: ExprId,
         class: &str,
+        type_args: &SmallVec<[AstTypeExprId; 2]>,
         method: &str,
         span: Span,
     ) -> Ty {
@@ -408,7 +412,17 @@ impl InferCtx<'_> {
         };
 
         match kind {
-            Some(k) => self.class_method_ref_impl(k, method, span),
+            Some(k) if k.is_convert_method(method) && type_args.is_empty() => {
+                self.error(TypeError::ConvertMethodNeedsType {
+                    class: class.to_string(),
+                    method: method.to_string(),
+                    span,
+                });
+                Ty::Error
+            }
+            Some(k) => {
+                self.class_method_ref_impl(id, k, type_args, method, span)
+            }
             None => {
                 self.error(TypeError::UnknownClass(class.to_string(), span));
                 Ty::Error
@@ -420,14 +434,107 @@ impl InferCtx<'_> {
     ///
     /// Returns the function type for the method. Constraints are applied
     /// when the function is called, not when it's referenced.
+    ///
+    /// For convert methods (`Fallible:wrap`, `Into:into`, `TryInto:try-into`),
+    /// resolves the type arguments and stores the target type in `convert_targets`
+    /// for runtime dispatch.
     fn class_method_ref_impl(
         &mut self,
+        id: ExprId,
         kind: ClassKind,
+        type_args: &SmallVec<[AstTypeExprId; 2]>,
         method: &str,
         span: Span,
     ) -> Ty {
-        // Special case: Indexable methods can't use scheme! (see ClassKind::method)
-        if kind == ClassKind::Indexable {
+        let empty_subst = std::collections::HashMap::new();
+
+        // Convert methods: resolve type arg and store target type
+        if kind.is_convert_method(method) {
+            // Type arg is required (checked by caller)
+            let target_ty_id = type_args
+                .first()
+                .copied()
+                .unwrap_or_else(|| invariant!("convert method has type arg"));
+            let target_ty = self.ast_type_to_ty(target_ty_id, &empty_subst);
+            self.convert_targets.insert(id, target_ty.clone());
+
+            // Return function type based on method.
+            // Use fresh_var() to get the TyVar for scheme generalization.
+            let input_var = self.fresh_var();
+            let input_ty = Ty::Var(input_var);
+            match (kind, method) {
+                (ClassKind::Fallible, "wrap") => {
+                    // wrap: (T) -> F where F: Fallible[T]
+                    // The Fallible constraint on target_ty determines input_ty,
+                    // so no generalization needed (input is monomorphic).
+                    self.constrain(Constraint::Class {
+                        ty: target_ty.clone(),
+                        class: Class::Fallible(input_ty.clone()),
+                        span,
+                    });
+                    Ty::Fn(vec![input_ty], Box::new(target_ty))
+                }
+                (ClassKind::Into, "into") => {
+                    // into: (From) -> To where From: Into[To]
+                    // Input is polymorphic (any type Into[To]), so generalize.
+                    let class = Class::Into(target_ty.clone());
+                    self.constrain(Constraint::Class {
+                        ty: input_ty.clone(),
+                        class: class.clone(),
+                        span,
+                    });
+                    let fn_ty = Ty::Fn(vec![input_ty], Box::new(target_ty));
+                    let scheme = Scheme {
+                        vars: vec![input_var],
+                        ty: fn_ty.clone(),
+                        constraints: smallvec::smallvec![(input_var, class)],
+                    };
+                    self.closure_schemes.insert(id, scheme);
+                    fn_ty
+                }
+                (ClassKind::TryInto, "try-into") => {
+                    // try-into: (From) -> Result[To, String] where From: TryInto[To]
+                    // Input is polymorphic (any type TryInto[To]), so generalize.
+                    let class = Class::TryInto(target_ty.clone());
+                    self.constrain(Constraint::Class {
+                        ty: input_ty.clone(),
+                        class: class.clone(),
+                        span,
+                    });
+                    let fn_ty = Ty::Fn(
+                        vec![input_ty],
+                        Box::new(Ty::Result(
+                            Box::new(target_ty),
+                            Box::new(Ty::String),
+                        )),
+                    );
+                    let scheme = Scheme {
+                        vars: vec![input_var],
+                        ty: fn_ty.clone(),
+                        constraints: smallvec::smallvec![(input_var, class)],
+                    };
+                    self.closure_schemes.insert(id, scheme);
+                    fn_ty
+                }
+                _ => invariant!("is_convert_method returned true"),
+            }
+        } else if kind == ClassKind::Monoid && method == "identity" {
+            // Monoid:identity needs mempty_types tracking for runtime dispatch.
+            // Type arg specifies the monoid type; otherwise inferred.
+            let tv = if let Some(&ty_id) = type_args.first() {
+                self.ast_type_to_ty(ty_id, &empty_subst)
+            } else {
+                self.fresh()
+            };
+            self.constrain(Constraint::Class {
+                ty: tv.clone(),
+                class: Class::Monoid,
+                span,
+            });
+            self.mempty_types.insert(id, tv.clone());
+            Ty::Fn(vec![], Box::new(tv))
+        } else if kind == ClassKind::Indexable {
+            // Special case: Indexable methods can't use scheme!
             let b = self.fresh();
             let t = self.fresh();
             match method {
@@ -445,10 +552,21 @@ impl InferCtx<'_> {
                 }
             }
         } else if let Some(scheme) = kind.method(method) {
-            // For method references, we just need the function type
-            // without emitting constraints (constraints apply at call site)
-            let (ty, _) = scheme.instantiate(&mut self.next_var);
-            ty
+            // For method references, instantiate the scheme.
+            // If type args provided, substitute them into the scheme.
+            let (ty, vars) = scheme.instantiate(&mut self.next_var);
+            if !type_args.is_empty() && !vars.is_empty() {
+                // Substitute first type arg for first type var.
+                // vars[0].0 is Ty::Var(v); extract v for substitution.
+                let Ty::Var(v) = &vars[0].0 else {
+                    invariant!("scheme var is Ty::Var")
+                };
+                let arg_ty = self.ast_type_to_ty(type_args[0], &empty_subst);
+                let subst = Subst(std::iter::once((*v, arg_ty)).collect());
+                ty.apply(&subst)
+            } else {
+                ty
+            }
         } else {
             self.error(TypeError::UnknownMethod {
                 class: format!("{kind:?}"),

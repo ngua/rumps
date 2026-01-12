@@ -612,8 +612,12 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
             let arg_ids = lower_exprs(ast, ctx, args)?;
             Expr::ClassMethod(class, method, arg_ids)
         }
-        cst::ExprKind::ClassMethodRef(class, method) => {
-            Expr::ClassMethodRef(class, method)
+        cst::ExprKind::ClassMethodRef(class, type_args, method) => {
+            let type_arg_ids = type_args
+                .into_iter()
+                .map(|t| lower_type_expr(ast, t))
+                .collect::<Result<SmallVec<_>>>()?;
+            Expr::ClassMethodRef(class, type_arg_ids, method)
         }
         cst::ExprKind::PipePlaceholder => {
             Err(crate::Error::parse(
@@ -1495,8 +1499,12 @@ fn merge_expr(
                 .collect();
             Expr::ClassMethod(class, method, new_args?)
         }
-        Expr::ClassMethodRef(class, method) => {
-            Expr::ClassMethodRef(class, method)
+        Expr::ClassMethodRef(class, type_args, method) => {
+            let new_type_args: Result<SmallVec<_>> = type_args
+                .iter()
+                .map(|&id| merge_type_expr(target, source, id, span))
+                .collect();
+            Expr::ClassMethodRef(class, new_type_args?, method)
         }
         Expr::Is(expr, pat) => {
             let new_expr = merge_expr(target, source, expr, span)?;

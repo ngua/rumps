@@ -66,3 +66,13 @@ FUN err-int(x: Result[Int, Int]) -> Result[Int, Int] { x }
 
 WRITE "err-string(?1) = {err-string(?1)}"
 WRITE "err-int(?2) = {err-int(?2)}"
+
+; Inline annotation (no parens required)
+LET inline-opt = ?42 : Option[Int]
+LET inline-res = ?42 : Result[Int, String]
+WRITE "inline-opt = {inline-opt}"
+WRITE "inline-res = {inline-res}"
+
+; Negation with annotation
+LET neg-anno = -5 : Int
+WRITE "neg-anno = {neg-anno}"

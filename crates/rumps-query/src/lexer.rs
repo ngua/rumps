@@ -59,7 +59,10 @@ impl Spanned {
     /// Converts `Colon` to `ColonNoSpace` for class method syntax.
     ///
     /// Only converts when `:` has NO space on either side AND immediately
-    /// follows an uppercase identifier (class names like `Filterable:filter`).
+    /// follows either:
+    /// - An uppercase identifier (class names like `Filterable:filter`)
+    /// - A `]` token (for `Class[T]:method` syntax)
+    ///
     /// This distinguishes `Class:method` from type annotations like `x: Type`.
     fn process_colon(mut tokens: Vec<Self>) -> Vec<Self> {
         (0..tokens.len()).for_each(|i| {
@@ -67,7 +70,7 @@ impl Spanned {
                 let prev = (i > 0).then(|| &tokens[i - 1]);
                 let next = tokens.get(i + 1);
 
-                // Check: adjacent to previous uppercase ident (len > 1)
+                // Check: adjacent to previous uppercase ident (len > 1) OR `]`
                 let adj_prev = prev
                     .map(|p| {
                         let is_adj = p.span.end == tokens[i].span.start;
@@ -77,7 +80,8 @@ impl Spanned {
                                 if s.len() > 1
                                     && s.starts_with(char::is_uppercase)
                         );
-                        is_adj && is_class
+                        let is_rbracket = matches!(&p.tok, Token::RBracket);
+                        is_adj && (is_class || is_rbracket)
                     })
                     .unwrap_or(false);
 

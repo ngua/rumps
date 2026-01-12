@@ -386,11 +386,15 @@ pub(crate) enum ExprKind {
     /// - `Mappable:map(fn, arr)` (higher-order method)
     ClassMethod(String, String, Vec<Expr>),
 
-    /// Class method reference: `Class:method` (without call).
+    /// Class method reference: `Class:method` or `Class[T, ...]:method`.
     ///
     /// A first-class function value. Can be assigned to variables and called
     /// later. Example: `LET f = Filterable:filter`.
-    ClassMethodRef(String, String),
+    ///
+    /// The optional type arguments (`Vec<TypeExpr>`) are required for convert
+    /// methods (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) when used as
+    /// first-class values, to specify the target type.
+    ClassMethodRef(String, Vec<TypeExpr>, String),
 }
 
 /// The key specification for JSON access (CST form).

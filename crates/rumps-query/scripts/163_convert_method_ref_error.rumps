@@ -1,0 +1,4 @@
+; Convert method references require type parameters
+
+; This should error: Fallible:wrap without type parameter
+LET _ = Fallible:wrap

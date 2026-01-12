@@ -356,6 +356,18 @@ pub(crate) enum TypeError {
         method: String,
         span: Span,
     },
+
+    /// Convert method used as first-class value without type parameters.
+    ///
+    /// Convert methods (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) require
+    /// explicit type parameters when used as values because the target type
+    /// cannot be inferred from the reference site alone.
+    #[error("convert method `{class}:{method}` requires type parameter")]
+    ConvertMethodNeedsType {
+        class: String,
+        method: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -392,7 +404,8 @@ impl TypeError {
             | Self::NotFoundInModule { span, .. }
             | Self::PrivateAccess { span, .. }
             | Self::UnknownClass(_, span)
-            | Self::UnknownMethod { span, .. } => *span,
+            | Self::UnknownMethod { span, .. }
+            | Self::ConvertMethodNeedsType { span, .. } => *span,
         }
     }
 
@@ -570,6 +583,10 @@ impl TypeError {
             Self::UnknownMethod { class, method, .. } => (
                 format!("class `{class}` has no method `{method}`"),
                 None,
+            ),
+            Self::ConvertMethodNeedsType { class, method, .. } => (
+                format!("convert method `{class}:{method}` requires type parameter"),
+                Some(format!("use `{class}[TargetType]:{method}`")),
             ),
         };
 

@@ -525,7 +525,14 @@ pub(crate) enum Value {
     ///
     /// - `class`: the class name (e.g., `"Filterable"`)
     /// - `method`: the method name (e.g., `"filter"`)
-    ClassMethodFn { class: StringId, method: StringId },
+    /// - `expr_id`: for convert methods (`wrap`, `into`, `try-into`), the
+    ///   expression ID of the `ClassMethodRef` so the interpreter can look up
+    ///   the target type from `convert_targets`
+    ClassMethodFn {
+        class: StringId,
+        method: StringId,
+        expr_id: Option<ExprId>,
+    },
 
     /// A module constant reference.
     ///

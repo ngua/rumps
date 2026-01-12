@@ -40,6 +40,30 @@ impl ClassKind {
     /// Number of class kinds (for array sizing).
     pub(crate) const COUNT: usize = 14;
 
+    /// Whether a method of this class is a "convert" method.
+    ///
+    /// Convert methods have output types not determined by their inputs; the
+    /// type depends on context. When used as first-class values, these require
+    /// explicit type parameters:
+    ///
+    /// ```rumps
+    /// LET f = Fallible[Option[Int]]:wrap  ; OK: target type specified
+    /// LET g = Fallible:wrap               ; ERROR: target type unknown
+    /// ```
+    ///
+    /// Only specific methods are convert methods:
+    /// - `Fallible:wrap` (not `unwrap`)
+    /// - `Into:into`
+    /// - `TryInto:try-into`
+    pub(crate) fn is_convert_method(self, method: &str) -> bool {
+        matches!(
+            (self, method),
+            (Self::Fallible, "wrap")
+                | (Self::Into, "into")
+                | (Self::TryInto, "try-into")
+        )
+    }
+
     /// Look up a method's type scheme by name.
     ///
     /// Returns `None` if the method doesn't exist for this class.
