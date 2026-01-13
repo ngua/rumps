@@ -1228,7 +1228,11 @@ impl<'a> InferCtx<'a> {
             Ty::Error | Ty::Unknown => {}
 
             _ => {
-                self.error(TypeError::NotFallible(ty.clone(), span));
+                self.error(TypeError::UnsatisfiedClass(
+                    Class::Fallible(ty.clone()),
+                    ty.clone(),
+                    span,
+                ));
             }
         }
     }

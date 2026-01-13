@@ -267,10 +267,6 @@ pub(crate) enum TypeError {
     #[error("non-exhaustive match")]
     NonExhaustiveMatch(Span),
 
-    /// Postfix `!` on type that is not `Option` or `Result`.
-    #[error("type `{0}` cannot be unwrapped; expected `Option` or `Result`")]
-    NotFallible(Ty, Span),
-
     /// Field access on non-object type.
     #[error("type `{0}` has no fields")]
     NotAnObject(Ty, Span),
@@ -401,7 +397,6 @@ impl TypeError {
             | Self::UnknownType(_, span)
             | Self::TypeArityMismatch { span, .. }
             | Self::NonExhaustiveMatch(span)
-            | Self::NotFallible(_, span)
             | Self::NotAnObject(_, span)
             | Self::FieldNotFound { span, .. }
             | Self::NotATuple(_, span)
@@ -508,13 +503,6 @@ impl TypeError {
             Self::NonExhaustiveMatch(_) => (
                 "non-exhaustive match".to_owned(),
                 Some("add a `_` pattern to handle remaining cases".to_owned()),
-            ),
-            Self::NotFallible(ty, _) => (
-                format!(
-                    "type `{}` cannot be unwrapped",
-                    p.format(ty)
-                ),
-                Some("only `Option` and `Result` can be unwrapped with `!`".to_owned()),
             ),
             Self::NotAnObject(ty, _) => {
                 (format!("type `{}` has no fields", p.format(ty)), None)

@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Unwrap on non-Option/Result should error\nLET plain = 42\nWRITE plain!\n"
 ---
-ERROR: type `Int` cannot be unwrapped
+ERROR: type `Int` does not satisfy `Fallible` class
