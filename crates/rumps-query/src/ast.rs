@@ -323,6 +323,13 @@ impl Ast {
 /// Represents syntactic type expressions before resolution to runtime types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AstTypeExpr {
+    /// Wildcard type: `_`; represents "any type" in type argument position.
+    ///
+    /// Used to avoid specifying concrete type arguments when only the base type
+    /// matters, e.g., `x IS Option[_]` matches both `Option.Some(1)` and
+    /// `Option.Some("hello")`.
+    Wildcard,
+
     /// Simple named type: `Int`, `String`, `Option`, etc.
     Named(String),
 

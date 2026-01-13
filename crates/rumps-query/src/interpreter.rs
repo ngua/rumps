@@ -1083,6 +1083,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<()> {
         self.ast.get_type_expr(ty_id).map_or(Ok(()), |ty| match ty {
+            // Wildcard doesn't need validation
+            AstTypeExpr::Wildcard => Ok(()),
             AstTypeExpr::Named(n) => {
                 let name_id = self.arena.intern(n);
                 let is_registered = self.registry.lookup(name_id).is_some();

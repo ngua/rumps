@@ -144,8 +144,8 @@ LET active-opt = data->>("active")
 LET score-opt = data->>("score")
 LET missing-opt = data->>("missing")
 
-WRITE name-opt IS Option
-WRITE age-opt IS Option
+WRITE name-opt IS Option[_]
+WRITE age-opt IS Option[_]
 WRITE missing-opt IS Option.None
 
 ; Unwrapped values are Scalar (the union type)
@@ -193,11 +193,11 @@ WRITE describe-scalar(data->>("missing"))
 LET static-name = data..name
 LET static-age = data..age
 
-WRITE static-name IS Option
+WRITE static-name IS Option[_]
 WRITE static-name! IS Scalar
 WRITE static-name! IS String
 
-WRITE static-age IS Option
+WRITE static-age IS Option[_]
 WRITE static-age! IS Scalar
 WRITE static-age! IS Int
 

@@ -274,6 +274,7 @@ impl InferCtx<'_> {
                 Ty::Error
             }
             Some(te) => match &te {
+                AstTypeExpr::Wildcard => self.fresh(),
                 AstTypeExpr::Named(name) => {
                     let name_id = self.env.intern(name);
                     // Check substitution first (for type params)
@@ -282,16 +283,41 @@ impl InferCtx<'_> {
                         let span =
                             self.ast.type_expr_span(id).unwrap_or_default();
                         if self.check_type_visibility(name, span) {
-                            let ty = self.named_type_to_ty(name);
-                            // Emit error for unknown types
-                            if ty == Ty::Unknown {
-                                self.error(TypeError::UnknownType(
-                                    name.clone(),
-                                    span,
-                                ));
-                                Ty::Error
+                            // Check if type requires type arguments
+                            let expected = Self::expected_type_arity(name)
+                                .or_else(|| {
+                                    self.env
+                                        .lookup_str(name)
+                                        .and_then(|id| self.registry.lookup(id))
+                                        .and_then(|ty_id| {
+                                            self.registry
+                                                .type_param_count(ty_id)
+                                        })
+                                });
+                            if let Some(exp) = expected {
+                                if exp > 0 {
+                                    self.error(TypeError::TypeArityMismatch {
+                                        name: name.clone(),
+                                        expected: exp,
+                                        got: 0,
+                                        span,
+                                    });
+                                    Ty::Error
+                                } else {
+                                    self.named_type_to_ty(name)
+                                }
                             } else {
-                                ty
+                                let ty = self.named_type_to_ty(name);
+                                // Emit error for unknown types
+                                if ty == Ty::Unknown {
+                                    self.error(TypeError::UnknownType(
+                                        name.clone(),
+                                        span,
+                                    ));
+                                    Ty::Error
+                                } else {
+                                    ty
+                                }
                             }
                         } else {
                             Ty::Error
@@ -302,20 +328,49 @@ impl InferCtx<'_> {
                     // Check visibility for module-qualified types
                     let span = self.ast.type_expr_span(id).unwrap_or_default();
                     if self.check_type_visibility(name, span) {
-                        let arg_tys: Vec<_> = args
-                            .iter()
-                            .map(|a| self.ast_type_to_ty(*a, subst))
-                            .collect();
-                        let ty = self.parameterized_type_to_ty(name, arg_tys);
-                        // Emit error for unknown parameterized types
-                        if ty == Ty::Unknown {
-                            self.error(TypeError::UnknownType(
-                                name.clone(),
-                                span,
-                            ));
-                            Ty::Error
+                        // Check arity: builtin types first, then user-defined
+                        let expected =
+                            Self::expected_type_arity(name).or_else(|| {
+                                self.env
+                                    .lookup_str(name)
+                                    .and_then(|id| self.registry.lookup(id))
+                                    .and_then(|ty_id| {
+                                        self.registry.type_param_count(ty_id)
+                                    })
+                            });
+                        if let Some(exp) = expected {
+                            if args.len() != exp {
+                                self.error(TypeError::TypeArityMismatch {
+                                    name: name.clone(),
+                                    expected: exp,
+                                    got: args.len(),
+                                    span,
+                                });
+                                Ty::Error
+                            } else {
+                                let arg_tys: Vec<_> = args
+                                    .iter()
+                                    .map(|a| self.ast_type_to_ty(*a, subst))
+                                    .collect();
+                                self.parameterized_type_to_ty(name, arg_tys)
+                            }
                         } else {
-                            ty
+                            let arg_tys: Vec<_> = args
+                                .iter()
+                                .map(|a| self.ast_type_to_ty(*a, subst))
+                                .collect();
+                            let ty =
+                                self.parameterized_type_to_ty(name, arg_tys);
+                            // Emit error for unknown parameterized types
+                            if ty == Ty::Unknown {
+                                self.error(TypeError::UnknownType(
+                                    name.clone(),
+                                    span,
+                                ));
+                                Ty::Error
+                            } else {
+                                ty
+                            }
                         }
                     } else {
                         Ty::Error
@@ -477,6 +532,17 @@ impl InferCtx<'_> {
                         self.expand_alias_or_named(ty_id, args)
                     })
             }
+        }
+    }
+
+    /// Returns the expected type argument arity for builtin parameterized types.
+    ///
+    /// Returns `None` for user-defined types (arity checked elsewhere).
+    fn expected_type_arity(name: &str) -> Option<usize> {
+        match name {
+            "Array" | "Option" => Some(1),
+            "Result" | "Map" => Some(2),
+            _ => None,
         }
     }
 

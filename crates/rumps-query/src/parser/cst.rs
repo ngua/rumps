@@ -598,6 +598,9 @@ impl TypeExpr {
 /// The kind of a CST type expression.
 #[derive(Clone, Debug)]
 pub(crate) enum TypeExprKind {
+    /// Wildcard type: `_`.
+    Wildcard,
+
     /// Simple named type.
     Named(String),
 

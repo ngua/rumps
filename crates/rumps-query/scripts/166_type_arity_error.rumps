@@ -1,0 +1,3 @@
+; Type arity error: `Option` requires 1 type argument
+LET x = Option.Some(1)
+WRITE x IS Option

@@ -133,6 +133,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             });
 
         match ast_ty {
+            // Wildcard is unresolved (used for type matching with unknown params)
+            AstTypeExpr::Wildcard => Ok(None),
             AstTypeExpr::Named(name) => {
                 let name_id = self.arena.intern(&name);
                 // If the type is not in the registry, it's likely a type parameter
@@ -731,6 +733,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             });
 
         match ast_ty {
+            // Wildcard shouldn't appear in runtime type resolution
+            AstTypeExpr::Wildcard => {
+                typechecked!("type resolution", "no wildcard at runtime")
+            }
             AstTypeExpr::Named(name) => {
                 // Check if it's a type parameter
                 let name_id = self.arena.intern(&name);
@@ -912,6 +918,124 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             _ => false,
         }
+    }
+
+    /// Check if a value matches an AST type expression containing wildcards.
+    ///
+    /// Supports nested wildcards like `Array[Option[_]]` by recursively
+    /// checking type arguments.
+    pub(super) fn value_matches_ast_type_with_wildcards(
+        &mut self,
+        val: &Value,
+        ast_id: AstTypeExprId,
+    ) -> Result<bool> {
+        let ast_ty =
+            self.ast.get_type_expr(ast_id).cloned().unwrap_or_else(|| {
+                typechecked!("type expr", "valid AstTypeExprId")
+            });
+        match ast_ty {
+            // Wildcard alone matches anything
+            AstTypeExpr::Wildcard => Ok(true),
+            // App(name, args): check base type and recursively check type args
+            AstTypeExpr::App(name, ast_args) => {
+                let name_id = self.arena.intern(&name);
+                let type_id = match self.registry.lookup(name_id) {
+                    Some(id) => id,
+                    None => invariant!("AST type to be known"),
+                };
+                // Extract value's type expression based on container type
+                Ok(match (type_id, val) {
+                    (TypeId::ARRAY, Value::Array(elem_ty, _)) => {
+                        ast_args.first().map_or(true, |&arg| {
+                            self.type_expr_matches_ast_with_wildcards(
+                                *elem_ty, arg,
+                            )
+                        })
+                    }
+                    (TypeId::MAP, Value::Map(k_ty, v_ty, _)) => {
+                        ast_args.first().map_or(true, |&k_arg| {
+                            self.type_expr_matches_ast_with_wildcards(
+                                *k_ty, k_arg,
+                            )
+                        }) && ast_args.get(1).map_or(true, |&v_arg| {
+                            self.type_expr_matches_ast_with_wildcards(
+                                *v_ty, v_arg,
+                            )
+                        })
+                    }
+                    (TypeId::TUPLE, Value::Tuple(ty_expr, _)) => self
+                        .type_expr_matches_ast_with_wildcards(*ty_expr, ast_id),
+                    (_, Value::Tagged(ty_expr, ..)) => {
+                        self.type_exprs.base_type(*ty_expr) == Some(type_id)
+                            && self.type_args_match_ast(*ty_expr, &ast_args)
+                    }
+                    _ => false,
+                })
+            }
+            // Named type without args shouldn't have wildcards
+            AstTypeExpr::Named(_) => {
+                invariant!("named type should resolve without wildcards")
+            }
+            // Other cases shouldn't have unresolvable wildcards
+            _ => invariant!("unexpected AST type with wildcards"),
+        }
+    }
+
+    /// Check if a runtime type expression matches an AST type with wildcards.
+    ///
+    /// Returns `true` if `ty` matches the AST type, treating `_` as "any type".
+    fn type_expr_matches_ast_with_wildcards(
+        &self,
+        ty: TypeExprId,
+        ast_id: AstTypeExprId,
+    ) -> bool {
+        let ast_ty =
+            self.ast.get_type_expr(ast_id).cloned().unwrap_or_else(|| {
+                typechecked!("type expr", "valid AstTypeExprId")
+            });
+        match ast_ty {
+            AstTypeExpr::Wildcard => true,
+            AstTypeExpr::Named(name) => self
+                .arena
+                .strings
+                .lookup(&name)
+                .and_then(|name_id| self.registry.lookup(name_id))
+                .is_some_and(|expected| {
+                    self.type_exprs.base_type(ty) == Some(expected)
+                        && self.type_exprs.type_args(ty).is_none()
+                }),
+            AstTypeExpr::App(name, ast_args) => self
+                .arena
+                .strings
+                .lookup(&name)
+                .and_then(|name_id| self.registry.lookup(name_id))
+                .is_some_and(|expected| {
+                    self.type_exprs.base_type(ty) == Some(expected)
+                        && self.type_args_match_ast(ty, &ast_args)
+                }),
+            // Tuple, Union, Fn, Object: not supported with wildcards yet
+            _ => false,
+        }
+    }
+
+    /// Check if a type expression's arguments match AST type arguments with wildcards.
+    fn type_args_match_ast(
+        &self,
+        ty: TypeExprId,
+        ast_args: &SmallVec<[AstTypeExprId; 2]>,
+    ) -> bool {
+        self.type_exprs
+            .type_args(ty)
+            .map_or(ast_args.is_empty(), |args| {
+                args.len() == ast_args.len()
+                    && args.iter().zip(ast_args.iter()).all(
+                        |(&ty_arg, &ast_arg)| {
+                            self.type_expr_matches_ast_with_wildcards(
+                                ty_arg, ast_arg,
+                            )
+                        },
+                    )
+            })
     }
 
     /// Format a type expression for error messages.

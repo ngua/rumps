@@ -53,7 +53,7 @@ WRITE { a: { b: 1, c: 2 } } IS { a: { b: Int } }
 ; ============================================================
 
 LET mixed: { arr: Array[Int], nested: { x: Int } } = { arr: [1, 2, 3], nested: { x: 42 } }
-WRITE mixed.arr IS Array
+WRITE mixed.arr IS Array[_]
 ; Expected: TRUE
 WRITE mixed.nested.x
 ; Expected: 42

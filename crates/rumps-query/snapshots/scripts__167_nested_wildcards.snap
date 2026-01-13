@@ -1,0 +1,15 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Nested wildcards in IS checks\n\n; Simple wildcard\nLET x: Option[Int] = Option.Some(42)\nWRITE x IS Option[_]\n\n; 2 levels: Array[Option[_]]\nLET arr: Array[Option[Int]] = [Option.Some(1), Option.None]\nWRITE arr IS Array[_]\nWRITE arr IS Array[Option[_]]\n\n; 2 levels: Option[Array[_]]\nLET opt: Option[Array[Int]] = Option.Some([1, 2, 3])\nWRITE opt IS Option[_]\nWRITE opt IS Option[Array[_]]\n\n; 3 levels\nLET v3: Array[Option[Result[Int, String]]] = [Option.Some(Result.Ok(42))]\nWRITE v3 IS Array[Option[Result[_, _]]]\n\n; 4 levels\nLET v4: Array[Option[Result[Array[Int], String]]] = [Option.Some(Result.Ok([1]))]\nWRITE v4 IS Array[Option[Result[Array[_], _]]]\n\n; 5 levels\nLET v5: Array[Option[Result[Array[Option[Int]], String]]] = [Option.Some(Result.Ok([Option.Some(1)]))]\nWRITE v5 IS Array[Option[Result[Array[Option[_]], _]]]\n\n; 6 levels (maximum supported)\nLET v6: Array[Option[Result[Array[Option[Result[Int, String]]], String]]] = [Option.Some(Result.Ok([Option.Some(Result.Ok(1))]))]\nWRITE v6 IS Array[Option[Result[Array[Option[Result[_, _]]], _]]]\n\n; Negative cases: mismatched nested types\nLET arr2: Array[Option[Int]] = [Option.Some(1)]\nWRITE arr2 IS Array[Result[_, _]]\n\nLET opt2: Option[Int] = Option.Some(42)\nWRITE opt2 IS Option[Array[_]]\n"
+---
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+TRUE
+FALSE
+FALSE

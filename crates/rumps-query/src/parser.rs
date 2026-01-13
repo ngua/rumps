@@ -1450,46 +1450,65 @@ impl Parser {
 
     /// Simplified type expression parser for use in type patterns.
     ///
-    /// Supports named types, one level of type application (e.g., `Int`,
-    /// `Array[String]`), and tuple types (e.g., `(Int, String)`). Does not
-    /// support nested type params like `Map[K, V]` where K or V are themselves
-    /// parameterized.
+    /// Supports named types with up to 6 levels of nested type application
+    /// (e.g., `Array[Option[Map[_, Result[_, _]]]]`), and tuple types.
     ///
-    /// This is intentionally non-recursive to avoid stack overflow issues
-    /// when combined with the expression parser's recursive structure.
+    /// This is intentionally non-recursive (manually expanded) to avoid stack
+    /// overflow when combined with the expression parser's recursive structure.
+    /// Types nested deeper than 6 levels will produce a parse error.
     fn simple_type_expr(
     ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
     {
-        // Inner type for type params: just named types, no nesting
-        let inner_ty = Self::ident().map_with_span(|name, span| {
+        // Wildcard: `_`
+        let wildcard = select! { Token::Ident(s) if s == "_" => () }
+            .map_with_span(|(), span| {
+                cst::TypeExpr::new(cst::TypeExprKind::Wildcard, span)
+            });
+
+        // Helper to build a level: wildcard or named with optional params
+        macro_rules! level {
+            ($inner:expr) => {{
+                let params = $inner
+                    .clone()
+                    .separated_by(just(Token::Comma))
+                    .at_least(1)
+                    .delimited_by(just(Token::LBracket), just(Token::RBracket));
+                let named = Self::ident().then(params.or_not()).map_with_span(
+                    |(name, params), span| {
+                        let kind = match params {
+                            None => cst::TypeExprKind::Named(name),
+                            Some(ps) => cst::TypeExprKind::App(name, ps),
+                        };
+                        cst::TypeExpr::new(kind, span)
+                    },
+                );
+                wildcard.clone().or(named)
+            }};
+        }
+
+        // Level 0: leaf (wildcard or simple named, no params)
+        let named_leaf = Self::ident().map_with_span(|name, span| {
             cst::TypeExpr::new(cst::TypeExprKind::Named(name), span)
         });
+        let level0 = wildcard.clone().or(named_leaf);
 
-        // Type parameters: `[T]` or `[T, E]` (one level only)
-        let type_params = inner_ty
-            .clone()
-            .separated_by(just(Token::Comma))
-            .at_least(1)
-            .delimited_by(just(Token::LBracket), just(Token::RBracket));
+        // Levels 1-5: each can have params from the previous level
+        let level1 = level!(level0);
+        let level2 = level!(level1);
+        let level3 = level!(level2);
+        let level4 = level!(level3);
+        let level5 = level!(level4);
 
-        // Named type optionally with type params
-        let named = Self::ident().then(type_params.or_not()).map_with_span(
-            |(name, params), span| {
-                let kind = match params {
-                    None => cst::TypeExprKind::Named(name),
-                    Some(ps) => cst::TypeExprKind::App(name, ps),
-                };
-                cst::TypeExpr::new(kind, span)
-            },
-        );
+        // Level 6 (top): can have level5 params
+        let top_level = level!(level5);
 
         // Tuple types: `()`, `(T,)`, `(T, U, ...)`
-        // Parse as (elem ,)* [elem] to track trailing commas
+        // Uses level5 for elements (allows 5 levels of nesting in tuple elements)
         let sep = just(Token::Comma).then_ignore(Self::opt_newlines());
-        let elem_comma = inner_ty.clone().then_ignore(sep);
+        let elem_comma = level5.clone().then_ignore(sep);
         let tuple = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(elem_comma.repeated().then(inner_ty.or_not()))
+            .ignore_then(elem_comma.repeated().then(level5.or_not()))
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen))
             .try_map(|(with_comma, final_), span| {
@@ -1512,7 +1531,7 @@ impl Parser {
                 }
             });
 
-        tuple.or(named)
+        tuple.or(top_level)
     }
 
     /// Type cast: `expr AS Type`
@@ -3014,9 +3033,17 @@ impl Parser {
                 .at_least(1)
                 .delimited_by(just(Token::LBracket), just(Token::RBracket));
 
-            // Atom: named type (possibly qualified: `Module.Type`) optionally with type params
-            // Parse one or more idents separated by `.` and join them into a type path
-            let atom = Self::ident()
+            // Wildcard: `_` (represents "any type" in type argument position)
+            let wildcard = select! { Token::Ident(s) if s == "_" => () }
+                .map_with_span(|(), span| {
+                    TypeAtomOrParams::Single(cst::TypeExpr::new(
+                        cst::TypeExprKind::Wildcard,
+                        span,
+                    ))
+                });
+
+            // Named type (possibly qualified: `Module.Type`) with optional type params
+            let named = Self::ident()
                 .separated_by(just(Token::Dot))
                 .at_least(1)
                 .then(type_params.or_not())
@@ -3028,6 +3055,9 @@ impl Parser {
                     };
                     TypeAtomOrParams::Single(cst::TypeExpr::new(kind, span))
                 });
+
+            // Atom: wildcard or named type
+            let atom = wildcard.or(named);
 
             // Parenthesized: `()`, `(T)`, `(T,)`, or `(T, U, ...)`
             // Parse as (elem ,)* [elem] to track trailing commas
@@ -3113,7 +3143,7 @@ impl Parser {
     /// Parse a type expression atom (named type with optional params).
     ///
     /// Does not parse unions or function types; used for simple contexts.
-    /// Supports qualified names like `Module.Type`.
+    /// Supports qualified names like `Module.Type` and wildcards (`_`).
     fn type_expr_atom(
     ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
     {
@@ -3123,7 +3153,14 @@ impl Parser {
             .at_least(1)
             .delimited_by(just(Token::LBracket), just(Token::RBracket));
 
-        Self::ident()
+        // Wildcard: `_`
+        let wildcard = select! { Token::Ident(s) if s == "_" => () }
+            .map_with_span(|(), span| {
+                cst::TypeExpr::new(cst::TypeExprKind::Wildcard, span)
+            });
+
+        // Named type: `Int`, `Module.Type`, `Option[T]`, etc.
+        let named = Self::ident()
             .separated_by(just(Token::Dot))
             .at_least(1)
             .then(type_params.or_not())
@@ -3134,7 +3171,9 @@ impl Parser {
                     Some(ps) => cst::TypeExprKind::App(name, ps),
                 };
                 cst::TypeExpr::new(kind, span)
-            })
+            });
+
+        wildcard.or(named)
     }
 
     /// Build a function type, tuple type, or standalone type from parsed components.

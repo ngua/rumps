@@ -254,6 +254,15 @@ pub(crate) enum TypeError {
     #[error("unknown type `{0}`")]
     UnknownType(String, Span),
 
+    /// Wrong number of type arguments for parameterized type.
+    #[error("type `{name}` expects {expected} type argument(s), got {got}")]
+    TypeArityMismatch {
+        name: String,
+        expected: usize,
+        got: usize,
+        span: Span,
+    },
+
     /// Match expression does not cover all cases.
     #[error("non-exhaustive match")]
     NonExhaustiveMatch(Span),
@@ -390,6 +399,7 @@ impl TypeError {
             | Self::InfiniteType(_, _, span)
             | Self::MissingAnnotation(span)
             | Self::UnknownType(_, span)
+            | Self::TypeArityMismatch { span, .. }
             | Self::NonExhaustiveMatch(span)
             | Self::NotFallible(_, span)
             | Self::NotAnObject(_, span)
@@ -484,6 +494,17 @@ impl TypeError {
             Self::UnknownType(name, _) => {
                 (format!("unknown type `{name}`"), None)
             }
+            Self::TypeArityMismatch {
+                name,
+                expected,
+                got,
+                ..
+            } => (
+                format!(
+                    "type `{name}` expects {expected} type argument(s), got {got}"
+                ),
+                None,
+            ),
             Self::NonExhaustiveMatch(_) => (
                 "non-exhaustive match".to_owned(),
                 Some("add a `_` pattern to handle remaining cases".to_owned()),

@@ -1463,6 +1463,18 @@ impl TypeRegistry {
         })
     }
 
+    /// Get the number of type parameters for a type.
+    ///
+    /// Returns `None` for builtin types (handled separately).
+    pub(crate) fn type_param_count(&self, id: TypeId) -> Option<usize> {
+        self.get_def(id).and_then(|def| match def {
+            TypeDef::Builtin(_) => None,
+            TypeDef::Sum { type_params, .. }
+            | TypeDef::Alias { type_params, .. }
+            | TypeDef::Union { type_params, .. } => Some(type_params.len()),
+        })
+    }
+
     /// Register all built-in types (called from `new`).
     ///
     /// Registers in order: Bool, Int, Float, String, Array, Object, Option, Result, Char,
@@ -2116,6 +2128,10 @@ fn resolve_type_expr(
         .unwrap_or_else(|| invariant!("AST type expression ID exists"));
 
     match te {
+        // Wildcard shouldn't appear in runtime type resolution
+        AstTypeExpr::Wildcard => {
+            typechecked!("type resolution", "no wildcard at runtime")
+        }
         AstTypeExpr::Named(name) => {
             let name_id = arena.intern(name);
             let ty_id = registry.lookup(name_id).unwrap_or_else(|| {

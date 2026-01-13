@@ -208,11 +208,11 @@ WRITE two-mix IS Json
 
 ; Homogeneous arrays stay as Array
 LET hom-int = [1, 2, 3]
-WRITE hom-int IS Array
+WRITE hom-int IS Array[_]
 ; Expected: TRUE
 
 LET hom-str = ["a", "b", "c"]
-WRITE hom-str IS Array
+WRITE hom-str IS Array[_]
 ; Expected: TRUE
 
 ; ============================================================
@@ -263,7 +263,7 @@ WRITE newline IS Char
 
 ; Char in array (homogeneous)
 LET chars = ['a', 'b', 'c']
-WRITE chars IS Array
+WRITE chars IS Array[_]
 ; Expected: TRUE
 
 ; ============================================================
@@ -359,7 +359,7 @@ WRITE arr-result IS Result.Ok(_)
 ; Expected: TRUE
 
 LET arr-val = arr-result!
-WRITE arr-val IS Array
+WRITE arr-val IS Array[_]
 ; Expected: TRUE
 WRITE Iterable:length(arr-val)
 ; Expected: 3

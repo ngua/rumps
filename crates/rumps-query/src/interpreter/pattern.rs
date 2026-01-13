@@ -19,9 +19,19 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<bool> {
         match pattern {
             TypePattern::Type(ast_ty_id) => {
-                // Type check: `is Int`, `is Array[String]`, `is Map[K, V]`
-                let ty_expr = self.resolve_type_expr(*ast_ty_id, span)?;
-                Ok(self.value_matches_type_expr(val, ty_expr))
+                // Type check: `is Int`, `is Array[String]`, `is Option[_]`
+                // Try to resolve; if None, type contains wildcards
+                match self.try_resolve_type_expr(*ast_ty_id, span)? {
+                    Some(ty_expr) => {
+                        Ok(self.value_matches_type_expr(val, ty_expr))
+                    }
+                    None => {
+                        // Contains wildcards; check base type only
+                        self.value_matches_ast_type_with_wildcards(
+                            val, *ast_ty_id,
+                        )
+                    }
+                }
             }
             TypePattern::Variant(ty_name, var_name) => {
                 // Variant check (zero-arity only): `is Option.None`

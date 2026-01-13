@@ -649,6 +649,7 @@ fn lower_exprs(
 fn lower_type_expr(ast: &mut Ast, ty: cst::TypeExpr) -> Result<AstTypeExprId> {
     let span = ty.span;
     let te = match ty.kind {
+        cst::TypeExprKind::Wildcard => AstTypeExpr::Wildcard,
         cst::TypeExprKind::Named(name) => AstTypeExpr::Named(name),
         cst::TypeExprKind::App(name, params) => {
             let param_ids = params
@@ -1076,6 +1077,7 @@ fn merge_type_expr(
         })?
         .clone();
     let new_te = match te {
+        AstTypeExpr::Wildcard => AstTypeExpr::Wildcard,
         AstTypeExpr::Named(n) => AstTypeExpr::Named(n),
         AstTypeExpr::App(name, args) => {
             let new_args: Result<SmallVec<_>> = args
