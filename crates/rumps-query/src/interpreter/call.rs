@@ -493,15 +493,15 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         match (class, method) {
             // Async HOFs (these actually await)
-            (ClassKind::Mappable, "map") => self.iter_map(args, span).await,
+            (ClassKind::Mappable, "map") => self.mappable_map(args, span).await,
             (ClassKind::Filterable, "filter") => {
-                self.iter_filter(args, span).await
+                self.filterable_filter(args, span).await
             }
             (ClassKind::Foldable, "reduce") => {
-                self.iter_reduce(args, span).await
+                self.foldable_reduce(args, span).await
             }
             (ClassKind::Iterable, "foreach") => {
-                self.iter_foreach(args, span).await
+                self.iterable_foreach(args, span).await
             }
             (ClassKind::Fallible, "flat-map") => {
                 self.fallible_flat_map(args, span).await
@@ -611,12 +611,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `Iter.map(fn, iter) -> Array`
-    ///
-    /// Applies `fn` to each element of `iter` (Array or Range), returning a new array.
-    /// Validates that all results have the same type (homogeneous array).
+    /// `forall T, U, I: Iterable[T]. ((T) -> U, I) -> Array[U]`
     #[async_recursion]
-    async fn iter_map(
+    async fn mappable_map(
         &mut self,
         args: &[ValueId],
         span: Span,
@@ -632,8 +629,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         match self.arena.get(iterable_id) {
             Some(Value::Array(_, elems)) => {
                 let elems = elems.clone();
-                self.iter_map_rec(fn_id, &elems, SmallVec::new(), None, span)
-                    .await
+                self.mappable_map_rec(
+                    fn_id,
+                    &elems,
+                    SmallVec::new(),
+                    None,
+                    span,
+                )
+                .await
             }
             Some(Value::Range {
                 start,
@@ -641,8 +644,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 inclusive,
             }) => self.range_map(fn_id, *start, *end, *inclusive, span).await,
             // Type checker guarantees iterable is Array or Range
-            Some(_) => typechecked!("Iter.map", "Iterable"),
-            None => typechecked!("Iter.map", "valid iterable"),
+            Some(_) => typechecked!("Mappable:map", "Iterable"),
+            None => typechecked!("Mappable:map", "valid iterable"),
         }
     }
 
@@ -708,11 +711,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Recursive helper for `Iter.map`.
-    ///
-    /// Type checker guarantees mapper function produces homogeneous results.
+    /// Recursive helper for `Mappable:map`.
     #[async_recursion]
-    async fn iter_map_rec(
+    async fn mappable_map_rec(
         &mut self,
         fn_id: ValueId,
         elems: &[ValueId],
@@ -737,7 +738,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
                 let mut new_acc = acc;
                 new_acc.push(result);
-                self.iter_map_rec(
+                self.mappable_map_rec(
                     fn_id,
                     tail,
                     new_acc,
@@ -749,28 +750,25 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `Iter.filter(predicate, arr) -> Array`
-    ///
-    /// Returns a new array containing only elements for which `predicate`
-    /// returns `true`. Also works with Range values.
+    /// `forall T, I: Iterable[T]. ((T) -> Bool, I) -> Array[T]`
     #[async_recursion]
-    async fn iter_filter(
+    async fn filterable_filter(
         &mut self,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
         let pred_id = *args
             .first()
-            .unwrap_or_else(|| typechecked!("Iter.filter", "2 args"));
+            .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
         let iterable_id = *args
             .get(1)
-            .unwrap_or_else(|| typechecked!("Iter.filter", "2 args"));
+            .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
 
         // Match on reference; only clone the `SmallVec`, not the whole `Value`
         match self.arena.get(iterable_id) {
             Some(Value::Array(elem_ty, elems)) => {
                 let (elem_ty, elems) = (*elem_ty, elems.clone());
-                self.iter_filter_rec(
+                self.filterable_filter_rec(
                     pred_id,
                     elem_ty,
                     &elems,
@@ -784,18 +782,20 @@ impl<I: IoContext> Interpreter<'_, I> {
                 end,
                 inclusive,
             }) => {
-                self.range_filter(pred_id, *start, *end, *inclusive, span)
-                    .await
+                self.filterable_range_filter(
+                    pred_id, *start, *end, *inclusive, span,
+                )
+                .await
             }
             // Type checker guarantees iterable is Array or Range
-            Some(_) => typechecked!("Iter.filter", "Iterable"),
-            None => typechecked!("Iter.filter", "valid iterable"),
+            Some(_) => typechecked!("Filterable:filter", "Iterable"),
+            None => typechecked!("Filterable:filter", "valid iterable"),
         }
     }
 
     /// Filter a range without allocating the entire range.
     #[async_recursion]
-    async fn range_filter(
+    async fn filterable_range_filter(
         &mut self,
         pred_id: ValueId,
         start: i64,
@@ -805,7 +805,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         let actual_end = if inclusive { end + 1 } else { end };
         let int_ty = self.type_exprs.named(TypeId::INT);
-        self.range_filter_rec(
+        self.filterable_range_filter_rec(
             pred_id,
             start,
             actual_end,
@@ -816,9 +816,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         .await
     }
 
-    /// Type checker guarantees predicate returns `Bool`.
     #[async_recursion]
-    async fn range_filter_rec(
+    async fn filterable_range_filter_rec(
         &mut self,
         pred_id: ValueId,
         current: i64,
@@ -836,18 +835,18 @@ impl<I: IoContext> Interpreter<'_, I> {
             let result = self.invoke_callable(pred_id, &[int_id], span).await?;
             let result_val =
                 self.arena.get(result).cloned().unwrap_or_else(|| {
-                    typechecked!("Iter.filter", "valid result")
+                    typechecked!("Filterable:filter", "valid result")
                 });
 
             let keep = match result_val {
                 Value::Bool(b) => b,
-                _ => typechecked!("Iter.filter predicate", "Bool"),
+                _ => typechecked!("Filterable:filter predicate", "Bool"),
             };
             let mut new_acc = acc;
             if keep {
                 new_acc.push(int_id);
             }
-            self.range_filter_rec(
+            self.filterable_range_filter_rec(
                 pred_id,
                 current + 1,
                 end,
@@ -859,11 +858,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Recursive helper for `Iter.filter`.
-    ///
-    /// Type checker guarantees predicate returns `Bool`.
+    /// Recursive helper for `Filterable:filter`.
     #[async_recursion]
-    async fn iter_filter_rec(
+    async fn filterable_filter_rec(
         &mut self,
         pred_id: ValueId,
         elem_ty: TypeExprId,
@@ -878,48 +875,47 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.invoke_callable(pred_id, &[*head], span).await?;
                 let result_val =
                     self.arena.get(result).cloned().unwrap_or_else(|| {
-                        typechecked!("Iter.filter", "valid result")
+                        typechecked!("Filterable:filter", "valid result")
                     });
 
                 let keep = match result_val {
                     Value::Bool(b) => b,
-                    _ => typechecked!("Iter.filter predicate", "Bool"),
+                    _ => typechecked!("Filterable:filter predicate", "Bool"),
                 };
                 let mut new_acc = acc;
                 if keep {
                     new_acc.push(*head);
                 }
-                self.iter_filter_rec(pred_id, elem_ty, tail, new_acc, span)
-                    .await
+                self.filterable_filter_rec(
+                    pred_id, elem_ty, tail, new_acc, span,
+                )
+                .await
             }
         }
     }
 
-    /// `Iter.reduce(reducer, init, arr) -> T`
-    ///
-    /// Folds left: `reducer(reducer(init, arr[0]), arr[1])...`
-    /// Also works with Range values.
+    /// `forall T, U, I: Iterable[T]. ((U, T) -> U, U, I) -> U`
     #[async_recursion]
-    async fn iter_reduce(
+    async fn foldable_reduce(
         &mut self,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
         let reducer_id = *args
             .first()
-            .unwrap_or_else(|| typechecked!("Iter.reduce", "3 args"));
+            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
         let init_id = *args
             .get(1)
-            .unwrap_or_else(|| typechecked!("Iter.reduce", "3 args"));
+            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
         let iterable_id = *args
             .get(2)
-            .unwrap_or_else(|| typechecked!("Iter.reduce", "3 args"));
+            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
 
         // Match on reference; only clone the `SmallVec`, not the whole `Value`
         match self.arena.get(iterable_id) {
             Some(Value::Array(_, elems)) => {
                 let elems = elems.clone();
-                self.iter_reduce_rec(reducer_id, init_id, &elems, span)
+                self.foldable_reduce_rec(reducer_id, init_id, &elems, span)
                     .await
             }
             Some(Value::Range {
@@ -927,20 +923,20 @@ impl<I: IoContext> Interpreter<'_, I> {
                 end,
                 inclusive,
             }) => {
-                self.range_reduce(
+                self.foldable_range_reduce(
                     reducer_id, init_id, *start, *end, *inclusive, span,
                 )
                 .await
             }
             // Type checker guarantees iterable is Array or Range
-            Some(_) => typechecked!("Iter.reduce", "Iterable"),
-            None => typechecked!("Iter.reduce", "valid iterable"),
+            Some(_) => typechecked!("Foldable:reduce", "Iterable"),
+            None => typechecked!("Foldable:reduce", "valid iterable"),
         }
     }
 
     /// Reduce over a range without allocating the entire range.
     #[async_recursion]
-    async fn range_reduce(
+    async fn foldable_range_reduce(
         &mut self,
         reducer_id: ValueId,
         init_id: ValueId,
@@ -950,12 +946,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         let actual_end = if inclusive { end + 1 } else { end };
-        self.range_reduce_rec(reducer_id, init_id, start, actual_end, span)
-            .await
+        self.foldable_range_reduce_rec(
+            reducer_id, init_id, start, actual_end, span,
+        )
+        .await
     }
 
     #[async_recursion]
-    async fn range_reduce_rec(
+    async fn foldable_range_reduce_rec(
         &mut self,
         reducer_id: ValueId,
         acc_id: ValueId,
@@ -965,7 +963,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         if current >= end {
             Ok(self.arena.get(acc_id).cloned().unwrap_or_else(|| {
-                typechecked!("Iter.reduce", "valid accumulator")
+                typechecked!("Foldable:reduce", "valid accumulator")
             }))
         } else {
             let int_val = Value::Int(current);
@@ -974,14 +972,20 @@ impl<I: IoContext> Interpreter<'_, I> {
             let new_acc = self
                 .invoke_callable(reducer_id, &[acc_id, int_id], span)
                 .await?;
-            self.range_reduce_rec(reducer_id, new_acc, current + 1, end, span)
-                .await
+            self.foldable_range_reduce_rec(
+                reducer_id,
+                new_acc,
+                current + 1,
+                end,
+                span,
+            )
+            .await
         }
     }
 
-    /// Recursive helper for `Iter.reduce`.
+    /// Recursive helper for `Foldable:reduce`.
     #[async_recursion]
-    async fn iter_reduce_rec(
+    async fn foldable_reduce_rec(
         &mut self,
         reducer_id: ValueId,
         acc_id: ValueId,
@@ -990,56 +994,56 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         match elems.split_first() {
             None => Ok(self.arena.get(acc_id).cloned().unwrap_or_else(|| {
-                typechecked!("Iter.reduce", "valid accumulator")
+                typechecked!("Foldable:reduce", "valid accumulator")
             })),
             Some((head, tail)) => {
                 let new_acc = self
                     .invoke_callable(reducer_id, &[acc_id, *head], span)
                     .await?;
-                self.iter_reduce_rec(reducer_id, new_acc, tail, span).await
+                self.foldable_reduce_rec(reducer_id, new_acc, tail, span)
+                    .await
             }
         }
     }
 
-    /// `Iter.foreach(fn, arr) -> Unit`
-    ///
-    /// Invokes `fn` on each element of `arr` (or range) for side effects.
-    /// The callback must return `Unit`. Returns `Unit`.
+    /// `forall T, I: Iterable[T]. ((T) -> Unit, I) -> Unit`
     #[async_recursion]
-    async fn iter_foreach(
+    async fn iterable_foreach(
         &mut self,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
         let fn_id = *args
             .first()
-            .unwrap_or_else(|| typechecked!("Iter.foreach", "2 args"));
+            .unwrap_or_else(|| typechecked!("Iterable:foreach", "2 args"));
         let iterable_id = *args
             .get(1)
-            .unwrap_or_else(|| typechecked!("Iter.foreach", "2 args"));
+            .unwrap_or_else(|| typechecked!("Iterable:foreach", "2 args"));
 
         match self.arena.get(iterable_id) {
             Some(Value::Array(_, elems)) => {
                 let elems = elems.clone();
-                self.iter_foreach_rec(fn_id, &elems, span).await
+                self.iterable_foreach_rec(fn_id, &elems, span).await
             }
             Some(Value::Range {
                 start,
                 end,
                 inclusive,
             }) => {
-                self.range_foreach(fn_id, *start, *end, *inclusive, span)
-                    .await
+                self.iterable_range_foreach(
+                    fn_id, *start, *end, *inclusive, span,
+                )
+                .await
             }
             // Type checker guarantees iterable is Array or Range
-            Some(_) => typechecked!("Iter.foreach", "Iterable"),
-            None => typechecked!("Iter.foreach", "valid iterable"),
+            Some(_) => typechecked!("Iterable:foreach", "Iterable"),
+            None => typechecked!("Iterable:foreach", "valid iterable"),
         }
     }
 
     /// Foreach over a range without allocating the entire range.
     #[async_recursion]
-    async fn range_foreach(
+    async fn iterable_range_foreach(
         &mut self,
         fn_id: ValueId,
         start: i64,
@@ -1048,11 +1052,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         let actual_end = if inclusive { end + 1 } else { end };
-        self.range_foreach_rec(fn_id, start, actual_end, span).await
+        self.iterable_range_foreach_rec(fn_id, start, actual_end, span)
+            .await
     }
 
     #[async_recursion]
-    async fn range_foreach_rec(
+    async fn iterable_range_foreach_rec(
         &mut self,
         fn_id: ValueId,
         current: i64,
@@ -1065,13 +1070,14 @@ impl<I: IoContext> Interpreter<'_, I> {
             let int_val = Value::Int(current);
             let int_id = self.arena.add(int_val, span);
             self.invoke_callable(fn_id, &[int_id], span).await?;
-            self.range_foreach_rec(fn_id, current + 1, end, span).await
+            self.iterable_range_foreach_rec(fn_id, current + 1, end, span)
+                .await
         }
     }
 
-    /// Recursive helper for `Iter.foreach`.
+    /// Recursive helper for `Iterable:foreach`.
     #[async_recursion]
-    async fn iter_foreach_rec(
+    async fn iterable_foreach_rec(
         &mut self,
         fn_id: ValueId,
         elems: &[ValueId],
@@ -1081,12 +1087,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => Ok(Value::Unit),
             Some((head, tail)) => {
                 self.invoke_callable(fn_id, &[*head], span).await?;
-                self.iter_foreach_rec(fn_id, tail, span).await
+                self.iterable_foreach_rec(fn_id, tail, span).await
             }
         }
     }
 
-    /// `Iterable:length(iter) -> Int`
+    /// `forall T, I: Iterable[T]. (I) -> Int`
     fn iterable_length(
         &mut self,
         args: &[ValueId],
@@ -1110,7 +1116,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `Iterable:contains(iter, elem) -> Bool`
+    /// `forall T, I: Iterable[T]. (I, T) -> Bool`
     fn iterable_contains(
         &self,
         args: &[ValueId],
@@ -1150,7 +1156,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `Iterable:reverse(iter) -> Array[T]`
+    /// `forall T, I: Iterable[T]. (I) -> Array[T]`
     fn iterable_reverse(
         &mut self,
         args: &[ValueId],
@@ -1544,13 +1550,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `Fallible:flat-map(F, (T) -> F[U]) -> F[U]` where `F: Fallible[T]`
-    ///
-    /// For `Option`: if `Some(v)`, applies `fn` to `v`; if `None`, returns `None`.
-    /// For `Result`: if `Ok(v)`, applies `fn` to `v`; if `Err(e)`, returns `Err(e)`.
-    ///
-    /// The type system ensures the callback returns the same Fallible constructor
-    /// as the input (via `F[U]` higher-kinded type application).
+    /// `forall T U, F: Fallible[T]. (F, (T) -> F[U]) -> F[U]`
     #[async_recursion]
     async fn fallible_flat_map(
         &mut self,
