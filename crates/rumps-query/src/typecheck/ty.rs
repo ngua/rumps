@@ -36,127 +36,157 @@ pub(crate) enum ClassKind {
     Display = 13,
 }
 
+/// What kind of type tracking a method requires for runtime dispatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrackKind {
+    /// Track return type in `mempty_types` (`Monoid:identity`).
+    Mempty,
+    /// Track return type in `convert_targets` (`Into:into`, `Fallible:wrap`).
+    Convert,
+    /// Track inner type of `Result` return in `convert_targets` (`TryInto:try-into`).
+    ConvertResultInner,
+}
+
+/// Method specification returned by `ClassKind::method`.
+#[derive(Clone, Debug)]
+pub(crate) enum MethodSpec {
+    /// Standard method; just instantiate scheme and unify.
+    Standard(Scheme),
+    /// Method that needs type tracking for runtime dispatch.
+    Tracked { scheme: Scheme, track: TrackKind },
+}
+
+impl MethodSpec {
+    pub(crate) fn scheme(&self) -> &Scheme {
+        match self {
+            Self::Standard(s) | Self::Tracked { scheme: s, .. } => s,
+        }
+    }
+}
+
 impl ClassKind {
     /// Number of class kinds (for array sizing).
     pub(crate) const COUNT: usize = 14;
 
-    /// Whether a method of this class is a "convert" method.
-    ///
-    /// Convert methods have output types not determined by their inputs; the
-    /// type depends on context. When used as first-class values, these require
-    /// explicit type parameters:
-    ///
-    /// ```rumps
-    /// LET f = Fallible[Option[Int]]:wrap  ; OK: target type specified
-    /// LET g = Fallible:wrap               ; ERROR: target type unknown
-    /// ```
-    ///
-    /// Only specific methods are convert methods:
-    /// - `Fallible:wrap` (not `unwrap`)
-    /// - `Into:into`
-    /// - `TryInto:try-into`
-    pub(crate) fn is_convert_method(self, method: &str) -> bool {
-        matches!(
-            (self, method),
-            (Self::Fallible, "wrap")
-                | (Self::Into, "into")
-                | (Self::TryInto, "try-into")
-        )
+    /// Parse a class name string into a `ClassKind`.
+    pub(crate) fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "Numeric" => Some(Self::Numeric),
+            "Iterable" => Some(Self::Iterable),
+            "Monoid" => Some(Self::Monoid),
+            "BitLike" => Some(Self::BitLike),
+            "Negatable" => Some(Self::Negatable),
+            "Fallible" => Some(Self::Fallible),
+            "Into" => Some(Self::Into),
+            "TryInto" => Some(Self::TryInto),
+            "Indexable" => Some(Self::Indexable),
+            "Ord" => Some(Self::Ord),
+            "Mappable" => Some(Self::Mappable),
+            "Foldable" => Some(Self::Foldable),
+            "Filterable" => Some(Self::Filterable),
+            _ => None,
+        }
     }
 
-    /// Look up a method's type scheme by name.
+    /// Look up a method's type specification by name.
     ///
     /// Returns `None` if the method doesn't exist for this class.
     ///
     /// # Note on `Indexable`
     ///
     /// `Indexable:index` and `Indexable:get` are not included here because
-    /// `Indexable` requires a multi-way constraint (`base`, `idx`, `elem`)
+    /// `Indexable` requires a multi-way class constraint (`base`, `idx`, `elem`)
     /// that cannot be expressed with the current `Class` representation.
     /// These are handled specially in the typechecker.
-    pub(crate) fn method(self, name: &str) -> Option<Scheme> {
+    pub(crate) fn method(self, name: &str) -> Option<MethodSpec> {
+        use MethodSpec::{Standard, Tracked};
+        use TrackKind::{Convert, ConvertResultInner, Mempty};
+
         match (self, name) {
             // Numeric: (T, T) -> T where T: Numeric
             (
                 Self::Numeric,
                 "add" | "sub" | "mul" | "floor-div" | "mod" | "pow",
-            ) => Some(scheme!(forall T: Numeric. (T, T) -> T)),
+            ) => Some(Standard(scheme!(forall T: Numeric. (T, T) -> T))),
 
             // Negatable: (T) -> T where T: Negatable
             (Self::Negatable, "neg") => {
-                Some(scheme!(forall T: Negatable. (T) -> T))
+                Some(Standard(scheme!(forall T: Negatable. (T) -> T)))
             }
 
             // BitLike: (T, T) -> T where T: BitLike
             (Self::BitLike, "bit-and" | "bit-or" | "shl" | "shr") => {
-                Some(scheme!(forall T: BitLike. (T, T) -> T))
+                Some(Standard(scheme!(forall T: BitLike. (T, T) -> T)))
             }
 
             // Ord: (T, T) -> Ordering where T: Ord
             (Self::Ord, "compare") => {
-                Some(scheme!(forall T: Ord. (T, T) -> Ordering))
+                Some(Standard(scheme!(forall T: Ord. (T, T) -> Ordering)))
             }
 
-            // Monoid
-            (Self::Monoid, "identity") => {
-                Some(scheme!(forall T: Monoid. () -> T))
-            }
+            // Monoid:identity needs mempty_types tracking
+            (Self::Monoid, "identity") => Some(Tracked {
+                scheme: scheme!(forall T: Monoid. () -> T),
+                track: Mempty,
+            }),
             (Self::Monoid, "concat") => {
-                Some(scheme!(forall T: Monoid. (T, T) -> T))
+                Some(Standard(scheme!(forall T: Monoid. (T, T) -> T)))
             }
 
-            // Fallible: (F) -> T where F: Fallible[T]
+            // Fallible
             (Self::Fallible, "unwrap") => {
-                Some(scheme!(forall T, F: Fallible[T]. (F) -> T))
+                Some(Standard(scheme!(forall T, F: Fallible[T]. (F) -> T)))
             }
-            // Fallible: (T) -> F where F: Fallible[T]
-            (Self::Fallible, "wrap") => {
-                Some(scheme!(forall T, F: Fallible[T]. (T) -> F))
-            }
-            // Fallible: (F, (T) -> F[U]) -> F[U] where F: Fallible[T]
-            // Uses higher-kinded `F[U]` to ensure same Fallible constructor
-            (Self::Fallible, "flat-map") => Some(
+            // Fallible:wrap needs convert_targets tracking
+            (Self::Fallible, "wrap") => Some(Tracked {
+                scheme: scheme!(forall T, F: Fallible[T]. (T) -> F),
+                track: Convert,
+            }),
+            // Fallible:flat-map is standard
+            (Self::Fallible, "flat-map") => Some(Standard(
                 scheme!(forall T U, F: Fallible[T]. (F, (T) -> F[U]) -> F[U]),
-            ),
+            )),
 
             // Iterable methods
             (Self::Iterable, "length") => {
-                Some(scheme!(forall T, I: Iterable[T]. (I) -> Int))
+                Some(Standard(scheme!(forall T, I: Iterable[T]. (I) -> Int)))
             }
-            (Self::Iterable, "contains") => {
-                Some(scheme!(forall T, I: Iterable[T]. (I, T) -> Bool))
-            }
-            (Self::Iterable, "reverse") => {
-                Some(scheme!(forall T, I: Iterable[T]. (I) -> Array[T]))
-            }
-            (Self::Iterable, "foreach") => Some(
+            (Self::Iterable, "contains") => Some(Standard(
+                scheme!(forall T, I: Iterable[T]. (I, T) -> Bool),
+            )),
+            (Self::Iterable, "reverse") => Some(Standard(
+                scheme!(forall T, I: Iterable[T]. (I) -> Array[T]),
+            )),
+            (Self::Iterable, "foreach") => Some(Standard(
                 scheme!(forall T, I: Iterable[T]. ((T) -> Unit, I) -> Unit),
-            ),
+            )),
 
-            // Mappable: map uses Iterable constraint (returns Array regardless of input)
-            (Self::Mappable, "map") => Some(
-                scheme!(forall T, U, I: Iterable[T]. ((T) -> U, I) -> Array[U]),
-            ),
+            // `Mappable`: `(f, M) -> Array[U]` where `M: Mappable[T]`
+            (Self::Mappable, "map") => Some(Standard(
+                scheme!(forall T, U, M: Mappable[T]. ((T) -> U, M) -> Array[U]),
+            )),
 
-            // Filterable: filter uses Iterable constraint
-            (Self::Filterable, "filter") => Some(
-                scheme!(forall T, I: Iterable[T]. ((T) -> Bool, I) -> Array[T]),
-            ),
+            // `Filterable`: `(f, F) -> Array[T]` where `F: Filterable[T]`
+            (Self::Filterable, "filter") => Some(Standard(
+                scheme!(forall T, F: Filterable[T]. ((T) -> Bool, F) -> Array[T]),
+            )),
 
-            // Foldable: reduce uses Iterable constraint
-            (Self::Foldable, "reduce") => Some(
-                scheme!(forall T, U, I: Iterable[T]. ((U, T) -> U, U, I) -> U),
-            ),
+            // `Foldable`: `(f, init, F) -> U` where `F: Foldable[T]`
+            (Self::Foldable, "reduce") => Some(Standard(
+                scheme!(forall T, U, F: Foldable[T]. ((U, T) -> U, U, F) -> U),
+            )),
 
-            // Into: (T) -> U where T: Into[U]
-            (Self::Into, "into") => {
-                Some(scheme!(forall T: Into[U], U. (T) -> U))
-            }
+            // Into:into needs convert_targets tracking
+            (Self::Into, "into") => Some(Tracked {
+                scheme: scheme!(forall T: Into[U], U. (T) -> U),
+                track: Convert,
+            }),
 
-            // TryInto: (T) -> Result[U, String] where T: TryInto[U]
-            (Self::TryInto, "try-into") => {
-                Some(scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]))
-            }
+            // TryInto:try-into needs convert_targets tracking (inner type)
+            (Self::TryInto, "try-into") => Some(Tracked {
+                scheme: scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]),
+                track: ConvertResultInner,
+            }),
 
             // Indexable methods are handled specially (see note above)
             (Self::Indexable, "index" | "get") => None,
