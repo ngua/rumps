@@ -12,12 +12,15 @@
 //! - `BitLike`: `bit-and`, `bit-or`, `shl`, `shr`
 //! - `Monoid`: `identity`, `concat`
 //! - `Ord`: `compare`
-//! - `Fallible`: `unwrap`, `wrap`
+//! - `Fallible`: `unwrap`, `wrap`, `flat-map`
 //! - `Indexable`: `index`, `get`
+//! - `Mappable`: `map`
+//! - `Filterable`: `filter`
+//! - `Foldable`: `reduce`
+//! - `Iterable`: `foreach`, `length`, `contains`, `reverse`
 //!
-//! Higher-order class methods (`Mappable:map`, `Filterable:filter`, etc.) are
-//! implemented directly on [`Interpreter`] in `call.rs` since they need access
-//! to closure invocation machinery.
+//! Higher-order class methods use a continuation/trampoline pattern defined in
+//! the [`hof`](super::hof) module.
 //!
 //! [`Interpreter`]: super::Interpreter
 
@@ -27,8 +30,13 @@ use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
+use super::hof::{
+    Continuation, FlatMapWrapper, HofMethodFn, HofState, IterKind, MethodResult,
+};
 use crate::typecheck::{ClassKind, Ty};
-use crate::value::{TypeExprArena, TypeId, TypeRegistry, Value, ValueArena};
+use crate::value::{
+    TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value, ValueArena, ValueId,
+};
 use crate::{Error, Result, Span};
 
 /// Context for class method dispatch.
@@ -58,13 +66,14 @@ pub(crate) type NullaryMethodFn = fn(&mut ClassCtx<'_>, &Ty) -> Result<Value>;
 pub(crate) type ConvertMethodFn =
     fn(&mut ClassCtx<'_>, &Value, &Ty) -> Result<Value>;
 
-/// Method dispatch function: binary, unary, nullary, or convert.
+/// Method dispatch function: binary, unary, nullary, convert, or hof.
 #[derive(Clone, Copy)]
 pub(crate) enum MethodFn {
     Binary(BinMethodFn),
     Unary(UnaryMethodFn),
     Nullary(NullaryMethodFn),
     Convert(ConvertMethodFn),
+    Hof(HofMethodFn),
 }
 
 /// Per-class method table.
@@ -136,7 +145,8 @@ impl ClassMethods {
             Some(
                 MethodFn::Unary(_)
                 | MethodFn::Nullary(_)
-                | MethodFn::Convert(_),
+                | MethodFn::Convert(_)
+                | MethodFn::Hof(_),
             ) => {
                 typechecked!("dispatch_binary", "binary method")
             }
@@ -156,7 +166,8 @@ impl ClassMethods {
             Some(
                 MethodFn::Binary(_)
                 | MethodFn::Nullary(_)
-                | MethodFn::Convert(_),
+                | MethodFn::Convert(_)
+                | MethodFn::Hof(_),
             ) => {
                 typechecked!("dispatch_unary", "unary method")
             }
@@ -174,7 +185,10 @@ impl ClassMethods {
         match self.lookup(kind, method) {
             Some(MethodFn::Nullary(f)) => f(ctx, ty),
             Some(
-                MethodFn::Binary(_) | MethodFn::Unary(_) | MethodFn::Convert(_),
+                MethodFn::Binary(_)
+                | MethodFn::Unary(_)
+                | MethodFn::Convert(_)
+                | MethodFn::Hof(_),
             ) => {
                 typechecked!("dispatch_nullary", "nullary method")
             }
@@ -193,7 +207,10 @@ impl ClassMethods {
         match self.lookup(kind, method) {
             Some(MethodFn::Convert(f)) => f(ctx, val, target),
             Some(
-                MethodFn::Binary(_) | MethodFn::Unary(_) | MethodFn::Nullary(_),
+                MethodFn::Binary(_)
+                | MethodFn::Unary(_)
+                | MethodFn::Nullary(_)
+                | MethodFn::Hof(_),
             ) => {
                 typechecked!("dispatch_convert", "convert method")
             }
@@ -202,10 +219,6 @@ impl ClassMethods {
     }
 
     /// Register all class methods.
-    ///
-    /// Note: Higher-order class methods (`Mappable:map`, `Filterable:filter`,
-    /// `Foldable:reduce`) are NOT registered here. They require closure
-    /// invocation machinery and are handled directly in `call.rs`.
     pub(crate) fn register_all(&mut self) {
         self.register(
             ClassKind::Numeric,
@@ -316,6 +329,44 @@ impl ClassMethods {
             ClassKind::Display,
             "display",
             MethodFn::Unary(Display::display),
+        );
+
+        // HoF methods (handled via trampoline in `call.rs`).
+        self.register(ClassKind::Mappable, "map", MethodFn::Hof(Mappable::map));
+        self.register(
+            ClassKind::Filterable,
+            "filter",
+            MethodFn::Hof(Filterable::filter),
+        );
+        self.register(
+            ClassKind::Foldable,
+            "reduce",
+            MethodFn::Hof(Foldable::reduce),
+        );
+        self.register(
+            ClassKind::Iterable,
+            "foreach",
+            MethodFn::Hof(Iterable::foreach),
+        );
+        self.register(
+            ClassKind::Iterable,
+            "length",
+            MethodFn::Unary(Iterable::length),
+        );
+        self.register(
+            ClassKind::Iterable,
+            "contains",
+            MethodFn::Binary(Iterable::contains),
+        );
+        self.register(
+            ClassKind::Iterable,
+            "reverse",
+            MethodFn::Unary(Iterable::reverse),
+        );
+        self.register(
+            ClassKind::Fallible,
+            "flat-map",
+            MethodFn::Hof(Fallible::flat_map),
         );
     }
 }
@@ -1717,6 +1768,562 @@ impl Display {
                 .get_str(*id)
                 .map(|s| format!("\"{s}\""))
                 .unwrap_or_else(|| "\"?\"".to_owned()),
+        }
+    }
+}
+
+/// `Mappable` class: `map` method.
+pub(crate) struct Mappable;
+
+impl Mappable {
+    /// Start `Mappable:map`; returns first invocation or done for empty.
+    ///
+    /// Handles iterables (Array, Range) and single-value containers (Option, Result).
+    pub(crate) fn map(
+        ctx: &mut ClassCtx<'_>,
+        args: &[ValueId],
+    ) -> Result<MethodResult> {
+        let fn_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Mappable:map", "2 args"));
+        let src = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Mappable:map", "2 args"));
+
+        // Extract data to avoid borrow conflicts
+        enum Kind {
+            EmptyArray,
+            Array(ValueId),
+            EmptyRange,
+            Range(i64, i64),
+            OptionSome(ValueId),
+            OptionNone(TypeExprId),
+            ResultOk(ValueId, TypeExprId), // inner, err_ty
+            ResultErr(Value),
+            Other,
+        }
+        let kind = match ctx.arena.get(src) {
+            Some(Value::Array(_, elems)) if elems.is_empty() => {
+                Kind::EmptyArray
+            }
+            Some(Value::Array(_, elems)) => Kind::Array(elems[0]),
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                let e = if *inclusive { *end + 1 } else { *end };
+                if *start >= e {
+                    Kind::EmptyRange
+                } else {
+                    Kind::Range(*start, e)
+                }
+            }
+            // Option.Some(v) -> map inner
+            Some(Value::Tagged(ty, 1, payloads))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::OPTION) =>
+            {
+                Kind::OptionSome(
+                    *payloads
+                        .first()
+                        .unwrap_or_else(|| invariant!("Some has payload")),
+                )
+            }
+            // Option.None -> return None
+            Some(Value::Tagged(ty, 0, _))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::OPTION) =>
+            {
+                Kind::OptionNone(*ty)
+            }
+            // Result.Ok(v) -> map inner
+            Some(Value::Tagged(ty, 0, payloads))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::RESULT) =>
+            {
+                let inner = *payloads
+                    .first()
+                    .unwrap_or_else(|| invariant!("Ok has payload"));
+                // Extract error type from Result[T, E]
+                let err_ty = ctx
+                    .type_exprs
+                    .type_args(*ty)
+                    .and_then(|args| args.get(1).copied())
+                    .unwrap_or_else(|| ctx.type_exprs.named(TypeId::UNKNOWN));
+                Kind::ResultOk(inner, err_ty)
+            }
+            // Result.Err(e) -> return unchanged
+            Some(v @ Value::Tagged(ty, 1, _))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::RESULT) =>
+            {
+                Kind::ResultErr(v.clone())
+            }
+            _ => Kind::Other,
+        };
+
+        match kind {
+            Kind::EmptyArray | Kind::EmptyRange => {
+                let ty = ctx.type_exprs.named(TypeId::UNKNOWN);
+                Ok(MethodResult::Done(Value::Array(ty, SmallVec::new())))
+            }
+            Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
+                callee: fn_id,
+                args: smallvec![first],
+                state: HofState::MapIter {
+                    kind: IterKind::Array {
+                        source: src,
+                        idx: 0,
+                    },
+                    acc: SmallVec::new(),
+                    elem_ty: None,
+                },
+            })),
+            Kind::Range(start, end) => {
+                let int_id = ctx.arena.add(Value::Int(start), ctx.span);
+                Ok(MethodResult::Invoke(Continuation {
+                    callee: fn_id,
+                    args: smallvec![int_id],
+                    state: HofState::MapIter {
+                        kind: IterKind::Range {
+                            current: start + 1,
+                            end,
+                        },
+                        acc: SmallVec::new(),
+                        elem_ty: None,
+                    },
+                }))
+            }
+            Kind::OptionSome(inner) => Ok(MethodResult::Invoke(Continuation {
+                callee: fn_id,
+                args: smallvec![inner],
+                state: HofState::MapContainer {
+                    ctor_ty: TypeId::OPTION,
+                    tag: 1, // Some
+                    extra_ty: None,
+                },
+            })),
+            Kind::OptionNone(ty) => Ok(MethodResult::Done(Value::none(ty))),
+            Kind::ResultOk(inner, err_ty) => {
+                Ok(MethodResult::Invoke(Continuation {
+                    callee: fn_id,
+                    args: smallvec![inner],
+                    state: HofState::MapContainer {
+                        ctor_ty: TypeId::RESULT,
+                        tag: 0, // Ok
+                        extra_ty: Some(err_ty),
+                    },
+                }))
+            }
+            Kind::ResultErr(v) => Ok(MethodResult::Done(v)),
+            Kind::Other => typechecked!("Mappable:map", "Mappable"),
+        }
+    }
+}
+
+/// `Filterable` class: `filter` method.
+pub(crate) struct Filterable;
+
+impl Filterable {
+    /// Start `Filterable:filter`; returns first invocation or done for empty.
+    pub(crate) fn filter(
+        ctx: &mut ClassCtx<'_>,
+        args: &[ValueId],
+    ) -> Result<MethodResult> {
+        let pred_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
+        let src = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
+
+        enum Kind {
+            EmptyArray(TypeExprId),
+            Array(TypeExprId, ValueId),
+            EmptyRange,
+            Range(i64, i64),
+            Other,
+        }
+        let kind = match ctx.arena.get(src) {
+            Some(Value::Array(ty, elems)) if elems.is_empty() => {
+                Kind::EmptyArray(*ty)
+            }
+            Some(Value::Array(ty, elems)) => Kind::Array(*ty, elems[0]),
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                let e = if *inclusive { *end + 1 } else { *end };
+                if *start >= e {
+                    Kind::EmptyRange
+                } else {
+                    Kind::Range(*start, e)
+                }
+            }
+            _ => Kind::Other,
+        };
+
+        match kind {
+            Kind::EmptyArray(ty) => {
+                Ok(MethodResult::Done(Value::Array(ty, SmallVec::new())))
+            }
+            Kind::Array(elem_ty, first) => {
+                Ok(MethodResult::Invoke(Continuation {
+                    callee: pred_id,
+                    args: smallvec![first],
+                    state: HofState::FilterArray {
+                        source: src,
+                        idx: 0,
+                        elem_ty,
+                        acc: SmallVec::new(),
+                        pending: first,
+                    },
+                }))
+            }
+            Kind::EmptyRange => {
+                let int_ty = ctx.type_exprs.named(TypeId::INT);
+                Ok(MethodResult::Done(Value::Array(int_ty, SmallVec::new())))
+            }
+            Kind::Range(start, end) => {
+                let int_ty = ctx.type_exprs.named(TypeId::INT);
+                let int_id = ctx.arena.add(Value::Int(start), ctx.span);
+                Ok(MethodResult::Invoke(Continuation {
+                    callee: pred_id,
+                    args: smallvec![int_id],
+                    state: HofState::FilterRange {
+                        current: start + 1,
+                        end,
+                        elem_ty: int_ty,
+                        acc: SmallVec::new(),
+                        pending: start,
+                    },
+                }))
+            }
+            Kind::Other => typechecked!("Filterable:filter", "Array or Range"),
+        }
+    }
+}
+
+/// `Foldable` class: `reduce` method.
+pub(crate) struct Foldable;
+
+impl Foldable {
+    /// Start `Foldable:reduce`; returns first invocation.
+    pub(crate) fn reduce(
+        ctx: &mut ClassCtx<'_>,
+        args: &[ValueId],
+    ) -> Result<MethodResult> {
+        let fn_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
+        let init = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
+        let src = *args
+            .get(2)
+            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
+
+        // Extract data before second match to satisfy borrow checker.
+        enum Kind {
+            EmptyArray,
+            Array(ValueId),
+            EmptyRange,
+            Range(i64, i64),
+            Other,
+        }
+        let kind = match ctx.arena.get(src) {
+            Some(Value::Array(_, elems)) if elems.is_empty() => {
+                Kind::EmptyArray
+            }
+            Some(Value::Array(_, elems)) => Kind::Array(elems[0]),
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                let actual = if *inclusive { *end + 1 } else { *end };
+                if *start >= actual {
+                    Kind::EmptyRange
+                } else {
+                    Kind::Range(*start, actual)
+                }
+            }
+            _ => Kind::Other,
+        };
+        match kind {
+            Kind::EmptyArray | Kind::EmptyRange => {
+                let v = ctx
+                    .arena
+                    .get(init)
+                    .cloned()
+                    .unwrap_or_else(|| invariant!("init in arena"));
+                Ok(MethodResult::Done(v))
+            }
+            Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
+                callee: fn_id,
+                args: smallvec![init, first],
+                state: HofState::ReduceArray {
+                    source: src,
+                    idx: 0,
+                    acc: init,
+                },
+            })),
+            Kind::Range(start, end) => {
+                let int_id = ctx.arena.add(Value::Int(start), ctx.span);
+                Ok(MethodResult::Invoke(Continuation {
+                    callee: fn_id,
+                    args: smallvec![init, int_id],
+                    state: HofState::ReduceRange {
+                        current: start + 1,
+                        end,
+                        acc: init,
+                    },
+                }))
+            }
+            Kind::Other => typechecked!("Foldable:reduce", "Array or Range"),
+        }
+    }
+}
+
+/// `Iterable` class: `foreach` method.
+pub(crate) struct Iterable;
+
+impl Iterable {
+    /// Start `Iterable:foreach`; returns first invocation or done for empty.
+    pub(crate) fn foreach(
+        ctx: &mut ClassCtx<'_>,
+        args: &[ValueId],
+    ) -> Result<MethodResult> {
+        let fn_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Iterable:foreach", "2 args"));
+        let src = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Iterable:foreach", "2 args"));
+
+        // Extract data before second match to satisfy borrow checker.
+        enum Kind {
+            EmptyArray,
+            Array(ValueId),
+            EmptyRange,
+            Range(i64, i64),
+            Other,
+        }
+        let kind = match ctx.arena.get(src) {
+            Some(Value::Array(_, elems)) if elems.is_empty() => {
+                Kind::EmptyArray
+            }
+            Some(Value::Array(_, elems)) => Kind::Array(elems[0]),
+            Some(Value::Range {
+                start,
+                end,
+                inclusive,
+            }) => {
+                let actual = if *inclusive { *end + 1 } else { *end };
+                if *start >= actual {
+                    Kind::EmptyRange
+                } else {
+                    Kind::Range(*start, actual)
+                }
+            }
+            _ => Kind::Other,
+        };
+        match kind {
+            Kind::EmptyArray | Kind::EmptyRange => {
+                Ok(MethodResult::Done(Value::Unit))
+            }
+            Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
+                callee: fn_id,
+                args: smallvec![first],
+                state: HofState::ForeachArray {
+                    source: src,
+                    idx: 0,
+                },
+            })),
+            Kind::Range(start, end) => {
+                let int_id = ctx.arena.add(Value::Int(start), ctx.span);
+                Ok(MethodResult::Invoke(Continuation {
+                    callee: fn_id,
+                    args: smallvec![int_id],
+                    state: HofState::ForeachRange {
+                        current: start + 1,
+                        end,
+                    },
+                }))
+            }
+            Kind::Other => typechecked!("Iterable:foreach", "Array or Range"),
+        }
+    }
+
+    /// `Iterable:length`; returns the number of elements.
+    pub(crate) fn length(_: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
+        Ok(match v {
+            Value::Array(_, elems) => Value::Int(elems.len() as i64),
+            Value::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let len = if *inclusive {
+                    end - start + 1
+                } else {
+                    end - start
+                };
+                Value::Int(len.max(0))
+            }
+            _ => typechecked!("Iterable:length", "Iterable"),
+        })
+    }
+
+    /// `Iterable:contains`; checks if an element is in the iterable.
+    pub(crate) fn contains(
+        ctx: &mut ClassCtx<'_>,
+        haystack: &Value,
+        needle: &Value,
+    ) -> Result<Value> {
+        Ok(match haystack {
+            Value::Array(_, elems) => {
+                let found = elems.iter().any(|eid| {
+                    ctx.arena.get(*eid).is_some_and(|v| v == needle)
+                });
+                Value::Bool(found)
+            }
+            Value::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let found = match needle {
+                    Value::Int(n) => {
+                        if *inclusive {
+                            *n >= *start && *n <= *end
+                        } else {
+                            *n >= *start && *n < *end
+                        }
+                    }
+                    _ => false,
+                };
+                Value::Bool(found)
+            }
+            _ => typechecked!("Iterable:contains", "Iterable"),
+        })
+    }
+
+    /// `Iterable:reverse`; returns a reversed array.
+    pub(crate) fn reverse(ctx: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
+        Ok(match v {
+            Value::Array(ty, elems) => {
+                let reversed: SmallVec<[ValueId; 4]> =
+                    elems.iter().rev().copied().collect();
+                Value::Array(*ty, reversed)
+            }
+            Value::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let actual_end = if *inclusive { *end + 1 } else { *end };
+                let elems: SmallVec<[ValueId; 4]> = (*start..actual_end)
+                    .rev()
+                    .map(|i| ctx.arena.add(Value::Int(i), ctx.span))
+                    .collect();
+                let ty = ctx.type_exprs.named(TypeId::INT);
+                Value::Array(ty, elems)
+            }
+            _ => typechecked!("Iterable:reverse", "Iterable"),
+        })
+    }
+}
+
+/// `Fallible` class: `flat-map` method (already has `unwrap`, `wrap`).
+impl Fallible {
+    /// Start `Fallible:flat-map`; single invocation for Some/Ok, or done for None/Err.
+    ///
+    /// Note: argument order is `(fallible, fn)`, not `(fn, fallible)` like other HoFs.
+    pub(crate) fn flat_map(
+        ctx: &mut ClassCtx<'_>,
+        args: &[ValueId],
+    ) -> Result<MethodResult> {
+        // Note: argument order differs from other HoFs for historical reasons.
+        let src = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Fallible:flat-map", "2 args"));
+        let fn_id = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Fallible:flat-map", "2 args"));
+
+        match ctx.arena.get(src) {
+            // Option.None -> None
+            Some(Value::Tagged(ty, 0, _))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::OPTION) =>
+            {
+                Ok(MethodResult::Done(Value::none(*ty)))
+            }
+            // Option.Some(v) -> invoke fn(v)
+            Some(Value::Tagged(ty, 1, payloads))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::OPTION) =>
+            {
+                let inner = payloads
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| invariant!("Some has payload"));
+                Ok(MethodResult::Invoke(Continuation {
+                    callee: fn_id,
+                    args: smallvec![inner],
+                    state: HofState::FlatMap {
+                        wrapper: FlatMapWrapper::OptionSome,
+                    },
+                }))
+            }
+            // Result.Ok(v) -> invoke fn(v)
+            Some(Value::Tagged(ty, 0, payloads))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::RESULT) =>
+            {
+                let inner = payloads
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| invariant!("Ok has payload"));
+                Ok(MethodResult::Invoke(Continuation {
+                    callee: fn_id,
+                    args: smallvec![inner],
+                    state: HofState::FlatMap {
+                        wrapper: FlatMapWrapper::ResultOk,
+                    },
+                }))
+            }
+            // Result.Err(e) -> Err(e); just propagate error unchanged
+            Some(Value::Tagged(ty, 1, payloads))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::RESULT) =>
+            {
+                let err = payloads
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| invariant!("Err has payload"));
+                Ok(MethodResult::Done(Value::Tagged(*ty, 1, smallvec![err])))
+            }
+            _ => typechecked!("Fallible:flat-map", "Option or Result"),
         }
     }
 }

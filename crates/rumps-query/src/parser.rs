@@ -1482,7 +1482,7 @@ impl Parser {
                         cst::TypeExpr::new(kind, span)
                     },
                 );
-                wildcard.clone().or(named)
+                wildcard.or(named)
             }};
         }
 
@@ -1490,7 +1490,7 @@ impl Parser {
         let named_leaf = Self::ident().map_with_span(|name, span| {
             cst::TypeExpr::new(cst::TypeExprKind::Named(name), span)
         });
-        let level0 = wildcard.clone().or(named_leaf);
+        let level0 = wildcard.or(named_leaf);
 
         // Levels 1-5: each can have params from the previous level
         let level1 = level!(level0);

@@ -1,16 +1,14 @@
 //! Function and closure calling.
 
 use async_recursion::async_recursion;
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::value::{
-    CapturedEnv, FunctionDef, TypeExprId, TypeId, Value, ValueId,
-};
+use crate::value::{CapturedEnv, FunctionDef, TypeExprId, Value, ValueId};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -280,41 +278,29 @@ impl<I: IoContext> Interpreter<'_, I> {
             path_strs.iter().map(String::as_str).collect();
 
         // Higher-order functions (those that invoke closures/functions passed as
-        // arguments) MUST be handled here, not in `primitives.rs`. The `PrimFn`
+        // arguments) are dispatched via `module_hofs` registry. The `PrimFn`
         // signature only receives values; it has no access to the interpreter's
         // closure invocation machinery (`invoke_callable`). See `primitives.rs`
         // module docs for details.
-        match path_refs.as_slice() {
-            // Array-specific HOFs
-            ["Array", "sort-by"] => self.array_sort_by(args, span).await,
-            ["Array", "zip-with"] => self.array_zip_with(args, span).await,
-            // Option/Result HOFs
-            ["Option", "map"] => self.option_map(args, span).await,
-            ["Result", "map"] => self.result_map(args, span).await,
-            ["Result", "map-err"] => self.result_map_err(args, span).await,
-            _ => {
-                // Check for user module function first
-                if let Some(fn_def) =
-                    self.env.get_user_module_fn(&path_refs).cloned()
-                {
-                    self.invoke_user_module_fn(&path_refs, &fn_def, args, span)
-                        .await
-                } else {
-                    // Builtin module function; resolver guarantees it exists
-                    let prim = self
-                        .env
-                        .get_module_fn(&path_refs)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            typechecked!(
-                                "invoke_module_fn",
-                                "known module function"
-                            )
-                        });
+        if let Some(hof) = self.module_hofs.lookup(&path_refs) {
+            self.run_hof_trampoline(hof, args, span).await
+        } else if let Some(fn_def) =
+            self.env.get_user_module_fn(&path_refs).cloned()
+        {
+            // User-defined module function
+            self.invoke_user_module_fn(&path_refs, &fn_def, args, span)
+                .await
+        } else {
+            // Builtin sync module function; resolver guarantees it exists
+            let prim = self
+                .env
+                .get_module_fn(&path_refs)
+                .copied()
+                .unwrap_or_else(|| {
+                    typechecked!("invoke_module_fn", "known module function")
+                });
 
-                    self.invoke_primitive(prim, args, span).await
-                }
-            }
+            self.invoke_primitive(prim, args, span).await
         }
     }
 
@@ -489,1133 +475,129 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         use super::class::ClassCtx;
-        use crate::typecheck::ClassKind;
 
-        match (class, method) {
-            // Async HOFs (these actually await)
-            (ClassKind::Mappable, "map") => self.mappable_map(args, span).await,
-            (ClassKind::Filterable, "filter") => {
-                self.filterable_filter(args, span).await
-            }
-            (ClassKind::Foldable, "reduce") => {
-                self.foldable_reduce(args, span).await
-            }
-            (ClassKind::Iterable, "foreach") => {
-                self.iterable_foreach(args, span).await
-            }
-            (ClassKind::Fallible, "flat-map") => {
-                self.fallible_flat_map(args, span).await
-            }
+        let val = |i: usize| {
+            self.arena
+                .get(args[i])
+                .cloned()
+                .unwrap_or_else(|| invariant!("class method arg in arena"))
+        };
 
-            // Iterable methods (sync)
-            (ClassKind::Iterable, "length") => self.iterable_length(args, span),
-            (ClassKind::Iterable, "contains") => {
-                self.iterable_contains(args, span)
-            }
-            (ClassKind::Iterable, "reverse") => {
-                self.iterable_reverse(args, span)
-            }
-
-            // Sync methods (no internal await; dispatch via ClassMethods)
-            _ => {
-                let val = |i: usize| {
-                    self.arena.get(args[i]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    })
+        match self.class_methods.lookup(class, method) {
+            Some(super::class::MethodFn::Binary(_)) => {
+                let left = val(0);
+                let right = val(1);
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    type_exprs: &mut self.type_exprs,
+                    registry: &self.registry,
+                    regex_cache: &self.regex_cache,
+                    span,
                 };
-
-                match self.class_methods.lookup(class, method) {
-                    Some(super::class::MethodFn::Binary(_)) => {
-                        let left = val(0);
-                        let right = val(1);
-                        let mut ctx = ClassCtx {
-                            arena: &mut self.arena,
-                            type_exprs: &mut self.type_exprs,
-                            registry: &self.registry,
-                            regex_cache: &self.regex_cache,
-                            span,
-                        };
-                        self.class_methods.dispatch_binary(
-                            class, method, &mut ctx, &left, &right,
-                        )
-                    }
-                    Some(super::class::MethodFn::Unary(_)) => {
-                        let v = val(0);
-                        let mut ctx = ClassCtx {
-                            arena: &mut self.arena,
-                            type_exprs: &mut self.type_exprs,
-                            registry: &self.registry,
-                            regex_cache: &self.regex_cache,
-                            span,
-                        };
-                        self.class_methods
-                            .dispatch_unary(class, method, &mut ctx, &v)
-                    }
-                    Some(super::class::MethodFn::Nullary(_)) => {
-                        let id = expr_id.unwrap_or_else(|| {
-                            typechecked!(
-                                "nullary class method",
-                                "expression id"
-                            )
-                        });
-                        let ty =
-                            self.mempty_types.get(&id).cloned().unwrap_or_else(
-                                || {
-                                    typechecked!(
-                                        "nullary class method",
-                                        "resolved type"
-                                    )
-                                },
-                            );
-                        let mut ctx = ClassCtx {
-                            arena: &mut self.arena,
-                            type_exprs: &mut self.type_exprs,
-                            registry: &self.registry,
-                            regex_cache: &self.regex_cache,
-                            span,
-                        };
-                        self.class_methods
-                            .dispatch_nullary(class, method, &mut ctx, &ty)
-                    }
-                    Some(super::class::MethodFn::Convert(_)) => {
-                        let v = val(0);
-                        let id = expr_id.unwrap_or_else(|| {
-                            typechecked!(
-                                "convert class method",
-                                "expression id"
-                            )
-                        });
-                        let ty = self
-                            .convert_targets
-                            .get(&id)
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                typechecked!(
-                                    "convert class method",
-                                    "resolved target type"
-                                )
-                            });
-                        let mut ctx = ClassCtx {
-                            arena: &mut self.arena,
-                            type_exprs: &mut self.type_exprs,
-                            registry: &self.registry,
-                            regex_cache: &self.regex_cache,
-                            span,
-                        };
-                        self.class_methods
-                            .dispatch_convert(class, method, &mut ctx, &v, &ty)
-                    }
-                    None => typechecked!("class method", "registered"),
-                }
+                self.class_methods
+                    .dispatch_binary(class, method, &mut ctx, &left, &right)
             }
-        }
-    }
-
-    /// `forall T, U, I: Iterable[T]. ((T) -> U, I) -> Array[U]`
-    #[async_recursion]
-    async fn mappable_map(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let fn_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Iter.map", "2 args"));
-        let iterable_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Iter.map", "2 args"));
-
-        // Match on reference; only clone the `SmallVec`, not the whole `Value`
-        match self.arena.get(iterable_id) {
-            Some(Value::Array(_, elems)) => {
-                let elems = elems.clone();
-                self.mappable_map_rec(
-                    fn_id,
-                    &elems,
-                    SmallVec::new(),
-                    None,
+            Some(super::class::MethodFn::Unary(_)) => {
+                let v = val(0);
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    type_exprs: &mut self.type_exprs,
+                    registry: &self.registry,
+                    regex_cache: &self.regex_cache,
                     span,
-                )
-                .await
+                };
+                self.class_methods
+                    .dispatch_unary(class, method, &mut ctx, &v)
             }
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => self.range_map(fn_id, *start, *end, *inclusive, span).await,
-            // Type checker guarantees iterable is Array or Range
-            Some(_) => typechecked!("Mappable:map", "Iterable"),
-            None => typechecked!("Mappable:map", "valid iterable"),
-        }
-    }
-
-    /// Map over a range without allocating the entire range.
-    #[async_recursion]
-    async fn range_map(
-        &mut self,
-        fn_id: ValueId,
-        start: i64,
-        end: i64,
-        inclusive: bool,
-        span: Span,
-    ) -> Result<Value> {
-        let actual_end = if inclusive { end + 1 } else { end };
-        self.range_map_rec(
-            fn_id,
-            start,
-            actual_end,
-            SmallVec::new(),
-            None,
-            span,
-        )
-        .await
-    }
-
-    /// Type checker guarantees mapper function produces homogeneous results.
-    #[async_recursion]
-    async fn range_map_rec(
-        &mut self,
-        fn_id: ValueId,
-        current: i64,
-        end: i64,
-        acc: SmallVec<[ValueId; 4]>,
-        first_ty: Option<TypeId>,
-        span: Span,
-    ) -> Result<Value> {
-        if current >= end {
-            let elem_ty = first_ty
-                .map(|ty| self.type_exprs.named(ty))
-                .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
-            Ok(Value::Array(elem_ty, acc))
-        } else {
-            let int_val = Value::Int(current);
-            let int_id = self.arena.add(int_val, span);
-
-            let result = self.invoke_callable(fn_id, &[int_id], span).await?;
-            let result_ty = self
-                .arena
-                .base_type_of(result, &self.type_exprs)
-                .unwrap_or(TypeId::UNKNOWN);
-
-            let mut new_acc = acc;
-            new_acc.push(result);
-            self.range_map_rec(
-                fn_id,
-                current + 1,
-                end,
-                new_acc,
-                first_ty.or(Some(result_ty)),
-                span,
-            )
-            .await
-        }
-    }
-
-    /// Recursive helper for `Mappable:map`.
-    #[async_recursion]
-    async fn mappable_map_rec(
-        &mut self,
-        fn_id: ValueId,
-        elems: &[ValueId],
-        acc: SmallVec<[ValueId; 4]>,
-        first_ty: Option<TypeId>,
-        span: Span,
-    ) -> Result<Value> {
-        match elems.split_first() {
-            None => {
-                let elem_ty = first_ty
-                    .map(|ty| self.type_exprs.named(ty))
-                    .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
-                Ok(Value::Array(elem_ty, acc))
-            }
-            Some((head, tail)) => {
-                let result =
-                    self.invoke_callable(fn_id, &[*head], span).await?;
-                let result_ty = self
-                    .arena
-                    .base_type_of(result, &self.type_exprs)
-                    .unwrap_or(TypeId::UNKNOWN);
-
-                let mut new_acc = acc;
-                new_acc.push(result);
-                self.mappable_map_rec(
-                    fn_id,
-                    tail,
-                    new_acc,
-                    first_ty.or(Some(result_ty)),
-                    span,
-                )
-                .await
-            }
-        }
-    }
-
-    /// `forall T, I: Iterable[T]. ((T) -> Bool, I) -> Array[T]`
-    #[async_recursion]
-    async fn filterable_filter(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let pred_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
-        let iterable_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
-
-        // Match on reference; only clone the `SmallVec`, not the whole `Value`
-        match self.arena.get(iterable_id) {
-            Some(Value::Array(elem_ty, elems)) => {
-                let (elem_ty, elems) = (*elem_ty, elems.clone());
-                self.filterable_filter_rec(
-                    pred_id,
-                    elem_ty,
-                    &elems,
-                    SmallVec::new(),
-                    span,
-                )
-                .await
-            }
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                self.filterable_range_filter(
-                    pred_id, *start, *end, *inclusive, span,
-                )
-                .await
-            }
-            // Type checker guarantees iterable is Array or Range
-            Some(_) => typechecked!("Filterable:filter", "Iterable"),
-            None => typechecked!("Filterable:filter", "valid iterable"),
-        }
-    }
-
-    /// Filter a range without allocating the entire range.
-    #[async_recursion]
-    async fn filterable_range_filter(
-        &mut self,
-        pred_id: ValueId,
-        start: i64,
-        end: i64,
-        inclusive: bool,
-        span: Span,
-    ) -> Result<Value> {
-        let actual_end = if inclusive { end + 1 } else { end };
-        let int_ty = self.type_exprs.named(TypeId::INT);
-        self.filterable_range_filter_rec(
-            pred_id,
-            start,
-            actual_end,
-            int_ty,
-            SmallVec::new(),
-            span,
-        )
-        .await
-    }
-
-    #[async_recursion]
-    async fn filterable_range_filter_rec(
-        &mut self,
-        pred_id: ValueId,
-        current: i64,
-        end: i64,
-        elem_ty: TypeExprId,
-        acc: SmallVec<[ValueId; 4]>,
-        span: Span,
-    ) -> Result<Value> {
-        if current >= end {
-            Ok(Value::Array(elem_ty, acc))
-        } else {
-            let int_val = Value::Int(current);
-            let int_id = self.arena.add(int_val, span);
-
-            let result = self.invoke_callable(pred_id, &[int_id], span).await?;
-            let result_val =
-                self.arena.get(result).cloned().unwrap_or_else(|| {
-                    typechecked!("Filterable:filter", "valid result")
+            Some(super::class::MethodFn::Nullary(_)) => {
+                let id = expr_id.unwrap_or_else(|| {
+                    typechecked!("nullary class method", "expression id")
                 });
-
-            let keep = match result_val {
-                Value::Bool(b) => b,
-                _ => typechecked!("Filterable:filter predicate", "Bool"),
-            };
-            let mut new_acc = acc;
-            if keep {
-                new_acc.push(int_id);
-            }
-            self.filterable_range_filter_rec(
-                pred_id,
-                current + 1,
-                end,
-                elem_ty,
-                new_acc,
-                span,
-            )
-            .await
-        }
-    }
-
-    /// Recursive helper for `Filterable:filter`.
-    #[async_recursion]
-    async fn filterable_filter_rec(
-        &mut self,
-        pred_id: ValueId,
-        elem_ty: TypeExprId,
-        elems: &[ValueId],
-        acc: SmallVec<[ValueId; 4]>,
-        span: Span,
-    ) -> Result<Value> {
-        match elems.split_first() {
-            None => Ok(Value::Array(elem_ty, acc)),
-            Some((head, tail)) => {
-                let result =
-                    self.invoke_callable(pred_id, &[*head], span).await?;
-                let result_val =
-                    self.arena.get(result).cloned().unwrap_or_else(|| {
-                        typechecked!("Filterable:filter", "valid result")
+                let ty =
+                    self.mempty_types.get(&id).cloned().unwrap_or_else(|| {
+                        typechecked!("nullary class method", "resolved type")
                     });
-
-                let keep = match result_val {
-                    Value::Bool(b) => b,
-                    _ => typechecked!("Filterable:filter predicate", "Bool"),
-                };
-                let mut new_acc = acc;
-                if keep {
-                    new_acc.push(*head);
-                }
-                self.filterable_filter_rec(
-                    pred_id, elem_ty, tail, new_acc, span,
-                )
-                .await
-            }
-        }
-    }
-
-    /// `forall T, U, I: Iterable[T]. ((U, T) -> U, U, I) -> U`
-    #[async_recursion]
-    async fn foldable_reduce(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let reducer_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
-        let init_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
-        let iterable_id = *args
-            .get(2)
-            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
-
-        // Match on reference; only clone the `SmallVec`, not the whole `Value`
-        match self.arena.get(iterable_id) {
-            Some(Value::Array(_, elems)) => {
-                let elems = elems.clone();
-                self.foldable_reduce_rec(reducer_id, init_id, &elems, span)
-                    .await
-            }
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                self.foldable_range_reduce(
-                    reducer_id, init_id, *start, *end, *inclusive, span,
-                )
-                .await
-            }
-            // Type checker guarantees iterable is Array or Range
-            Some(_) => typechecked!("Foldable:reduce", "Iterable"),
-            None => typechecked!("Foldable:reduce", "valid iterable"),
-        }
-    }
-
-    /// Reduce over a range without allocating the entire range.
-    #[async_recursion]
-    async fn foldable_range_reduce(
-        &mut self,
-        reducer_id: ValueId,
-        init_id: ValueId,
-        start: i64,
-        end: i64,
-        inclusive: bool,
-        span: Span,
-    ) -> Result<Value> {
-        let actual_end = if inclusive { end + 1 } else { end };
-        self.foldable_range_reduce_rec(
-            reducer_id, init_id, start, actual_end, span,
-        )
-        .await
-    }
-
-    #[async_recursion]
-    async fn foldable_range_reduce_rec(
-        &mut self,
-        reducer_id: ValueId,
-        acc_id: ValueId,
-        current: i64,
-        end: i64,
-        span: Span,
-    ) -> Result<Value> {
-        if current >= end {
-            Ok(self.arena.get(acc_id).cloned().unwrap_or_else(|| {
-                typechecked!("Foldable:reduce", "valid accumulator")
-            }))
-        } else {
-            let int_val = Value::Int(current);
-            let int_id = self.arena.add(int_val, span);
-
-            let new_acc = self
-                .invoke_callable(reducer_id, &[acc_id, int_id], span)
-                .await?;
-            self.foldable_range_reduce_rec(
-                reducer_id,
-                new_acc,
-                current + 1,
-                end,
-                span,
-            )
-            .await
-        }
-    }
-
-    /// Recursive helper for `Foldable:reduce`.
-    #[async_recursion]
-    async fn foldable_reduce_rec(
-        &mut self,
-        reducer_id: ValueId,
-        acc_id: ValueId,
-        elems: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        match elems.split_first() {
-            None => Ok(self.arena.get(acc_id).cloned().unwrap_or_else(|| {
-                typechecked!("Foldable:reduce", "valid accumulator")
-            })),
-            Some((head, tail)) => {
-                let new_acc = self
-                    .invoke_callable(reducer_id, &[acc_id, *head], span)
-                    .await?;
-                self.foldable_reduce_rec(reducer_id, new_acc, tail, span)
-                    .await
-            }
-        }
-    }
-
-    /// `forall T, I: Iterable[T]. ((T) -> Unit, I) -> Unit`
-    #[async_recursion]
-    async fn iterable_foreach(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let fn_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Iterable:foreach", "2 args"));
-        let iterable_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Iterable:foreach", "2 args"));
-
-        match self.arena.get(iterable_id) {
-            Some(Value::Array(_, elems)) => {
-                let elems = elems.clone();
-                self.iterable_foreach_rec(fn_id, &elems, span).await
-            }
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                self.iterable_range_foreach(
-                    fn_id, *start, *end, *inclusive, span,
-                )
-                .await
-            }
-            // Type checker guarantees iterable is Array or Range
-            Some(_) => typechecked!("Iterable:foreach", "Iterable"),
-            None => typechecked!("Iterable:foreach", "valid iterable"),
-        }
-    }
-
-    /// Foreach over a range without allocating the entire range.
-    #[async_recursion]
-    async fn iterable_range_foreach(
-        &mut self,
-        fn_id: ValueId,
-        start: i64,
-        end: i64,
-        inclusive: bool,
-        span: Span,
-    ) -> Result<Value> {
-        let actual_end = if inclusive { end + 1 } else { end };
-        self.iterable_range_foreach_rec(fn_id, start, actual_end, span)
-            .await
-    }
-
-    #[async_recursion]
-    async fn iterable_range_foreach_rec(
-        &mut self,
-        fn_id: ValueId,
-        current: i64,
-        end: i64,
-        span: Span,
-    ) -> Result<Value> {
-        if current >= end {
-            Ok(Value::Unit)
-        } else {
-            let int_val = Value::Int(current);
-            let int_id = self.arena.add(int_val, span);
-            self.invoke_callable(fn_id, &[int_id], span).await?;
-            self.iterable_range_foreach_rec(fn_id, current + 1, end, span)
-                .await
-        }
-    }
-
-    /// Recursive helper for `Iterable:foreach`.
-    #[async_recursion]
-    async fn iterable_foreach_rec(
-        &mut self,
-        fn_id: ValueId,
-        elems: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        match elems.split_first() {
-            None => Ok(Value::Unit),
-            Some((head, tail)) => {
-                self.invoke_callable(fn_id, &[*head], span).await?;
-                self.iterable_foreach_rec(fn_id, tail, span).await
-            }
-        }
-    }
-
-    /// `forall T, I: Iterable[T]. (I) -> Int`
-    fn iterable_length(
-        &mut self,
-        args: &[ValueId],
-        _span: Span,
-    ) -> Result<Value> {
-        match self.arena.get(args[0]) {
-            Some(Value::Array(_, elems)) => Ok(Value::Int(elems.len() as i64)),
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                let len = if *inclusive {
-                    end - start + 1
-                } else {
-                    end - start
-                };
-                Ok(Value::Int(len.max(0)))
-            }
-            _ => typechecked!("Iterable:length", "Iterable"),
-        }
-    }
-
-    /// `forall T, I: Iterable[T]. (I, T) -> Bool`
-    fn iterable_contains(
-        &self,
-        args: &[ValueId],
-        _span: Span,
-    ) -> Result<Value> {
-        let needle = self
-            .arena
-            .get(args[1])
-            .cloned()
-            .unwrap_or_else(|| invariant!("Iterable:contains needle"));
-
-        match self.arena.get(args[0]) {
-            Some(Value::Array(_, elems)) => {
-                let found = elems.iter().any(|eid| {
-                    self.arena.get(*eid).is_some_and(|v| *v == needle)
-                });
-                Ok(Value::Bool(found))
-            }
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                let found = match needle {
-                    Value::Int(n) => {
-                        if *inclusive {
-                            n >= *start && n <= *end
-                        } else {
-                            n >= *start && n < *end
-                        }
-                    }
-                    _ => false,
-                };
-                Ok(Value::Bool(found))
-            }
-            _ => typechecked!("Iterable:contains", "Iterable"),
-        }
-    }
-
-    /// `forall T, I: Iterable[T]. (I) -> Array[T]`
-    fn iterable_reverse(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        match self.arena.get(args[0]) {
-            Some(Value::Array(ty, elems)) => {
-                let ty = *ty;
-                let reversed: SmallVec<[ValueId; 4]> =
-                    elems.iter().rev().copied().collect();
-                Ok(Value::Array(ty, reversed))
-            }
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                let (start, end, inclusive) = (*start, *end, *inclusive);
-                let actual_end = if inclusive { end + 1 } else { end };
-                let elems: SmallVec<[ValueId; 4]> = (start..actual_end)
-                    .rev()
-                    .map(|i| self.arena.add(Value::Int(i), span))
-                    .collect();
-                let ty = self.type_exprs.named(TypeId::INT);
-                Ok(Value::Array(ty, elems))
-            }
-            _ => typechecked!("Iterable:reverse", "Iterable"),
-        }
-    }
-
-    /// `Array.sort-by(cmp, arr) -> Array[T]`
-    ///
-    /// Sorts array using a comparator function that returns `Ordering`.
-    #[async_recursion]
-    async fn array_sort_by(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let cmp_fn = args[0];
-        let arr_id = args[1];
-
-        let (elem_ty, elems) = self
-            .arena
-            .get_array(arr_id)
-            .unwrap_or_else(|| typechecked!("Array.sort-by", "Array"));
-
-        let vals: Vec<ValueId> = elems.iter().copied().collect();
-
-        // Recursive merge sort to allow async comparisons
-        let result = self.array_sort_by_rec(cmp_fn, &vals, span).await?;
-
-        Ok(Value::Array(elem_ty, result))
-    }
-
-    /// `Array.zip-with(f, a, b) -> Array[V]`
-    ///
-    /// Combines two arrays with a function.
-    #[async_recursion]
-    async fn array_zip_with(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let fn_id = args[0];
-        let arr_a_id = args[1];
-        let arr_b_id = args[2];
-
-        let (_, elems_a) = self
-            .arena
-            .get_array(arr_a_id)
-            .unwrap_or_else(|| typechecked!("Array.zip-with", "Array"));
-
-        let (_, elems_b) = self
-            .arena
-            .get_array(arr_b_id)
-            .unwrap_or_else(|| typechecked!("Array.zip-with", "Array"));
-
-        // Zip and apply function
-        let pairs: Vec<(ValueId, ValueId)> = elems_a
-            .iter()
-            .zip(elems_b.iter())
-            .map(|(a, b)| (*a, *b))
-            .collect();
-
-        self.array_zip_with_rec(fn_id, &pairs, SmallVec::new(), None, span)
-            .await
-    }
-
-    /// Recursive helper for `Array.zip-with`.
-    #[async_recursion]
-    async fn array_zip_with_rec(
-        &mut self,
-        fn_id: ValueId,
-        pairs: &[(ValueId, ValueId)],
-        acc: SmallVec<[ValueId; 4]>,
-        first_ty: Option<TypeId>,
-        span: Span,
-    ) -> Result<Value> {
-        match pairs.split_first() {
-            None => {
-                let elem_ty = first_ty
-                    .map(|ty| self.type_exprs.named(ty))
-                    .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
-                Ok(Value::Array(elem_ty, acc))
-            }
-            Some(((a, b), tail)) => {
-                let result =
-                    self.invoke_callable(fn_id, &[*a, *b], span).await?;
-                let result_ty = self
-                    .arena
-                    .base_type_of(result, &self.type_exprs)
-                    .unwrap_or(TypeId::UNKNOWN);
-
-                let mut new_acc = acc;
-                new_acc.push(result);
-                self.array_zip_with_rec(
-                    fn_id,
-                    tail,
-                    new_acc,
-                    first_ty.or(Some(result_ty)),
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    type_exprs: &mut self.type_exprs,
+                    registry: &self.registry,
+                    regex_cache: &self.regex_cache,
                     span,
-                )
-                .await
+                };
+                self.class_methods
+                    .dispatch_nullary(class, method, &mut ctx, &ty)
             }
+            Some(super::class::MethodFn::Convert(_)) => {
+                let v = val(0);
+                let id = expr_id.unwrap_or_else(|| {
+                    typechecked!("convert class method", "expression id")
+                });
+                let ty = self.convert_targets.get(&id).cloned().unwrap_or_else(
+                    || {
+                        typechecked!(
+                            "convert class method",
+                            "resolved target type"
+                        )
+                    },
+                );
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    type_exprs: &mut self.type_exprs,
+                    registry: &self.registry,
+                    regex_cache: &self.regex_cache,
+                    span,
+                };
+                self.class_methods
+                    .dispatch_convert(class, method, &mut ctx, &v, &ty)
+            }
+            Some(super::class::MethodFn::Hof(f)) => {
+                self.run_hof_trampoline(f, args, span).await
+            }
+            None => typechecked!("class method", "registered"),
         }
     }
 
-    /// Recursive merge sort for `Array.sort-by`.
-    #[async_recursion]
-    async fn array_sort_by_rec(
+    /// Run a HoF method using a trampoline loop.
+    ///
+    /// The loop is necessary because Rust lacks tail-call optimization. Without
+    /// it, processing a 10,000-element array would create 10,000 stack frames.
+    /// The trampoline keeps stack depth O(1) regardless of input size.
+    async fn run_hof_trampoline(
         &mut self,
-        cmp_fn: ValueId,
-        vals: &[ValueId],
+        starter: super::hof::HofMethodFn,
+        args: &[ValueId],
         span: Span,
-    ) -> Result<SmallVec<[ValueId; 4]>> {
-        if vals.len() <= 1 {
-            Ok(vals.iter().copied().collect())
-        } else {
-            let mid = vals.len() / 2;
-            let (left, right) = vals.split_at(mid);
-            let sorted_left =
-                self.array_sort_by_rec(cmp_fn, left, span).await?;
-            let sorted_right =
-                self.array_sort_by_rec(cmp_fn, right, span).await?;
-            self.array_merge_sorted(cmp_fn, &sorted_left, &sorted_right, span)
-                .await
-        }
-    }
+    ) -> Result<Value> {
+        use super::class::ClassCtx;
+        use super::hof::MethodResult;
 
-    /// Merge two sorted slices using async comparator.
-    #[async_recursion]
-    async fn array_merge_sorted(
-        &mut self,
-        cmp_fn: ValueId,
-        left: &[ValueId],
-        right: &[ValueId],
-        span: Span,
-    ) -> Result<SmallVec<[ValueId; 4]>> {
-        match (left.split_first(), right.split_first()) {
-            (None, None) => Ok(SmallVec::new()),
-            (Some((l, ls)), None) => {
-                let mut result: SmallVec<[ValueId; 4]> =
-                    ls.iter().copied().collect();
-                result.insert(0, *l);
-                Ok(result)
-            }
-            (None, Some((r, rs))) => {
-                let mut result: SmallVec<[ValueId; 4]> =
-                    rs.iter().copied().collect();
-                result.insert(0, *r);
-                Ok(result)
-            }
-            (Some((l, ls)), Some((r, rs))) => {
-                let ord = self.invoke_callable(cmp_fn, &[*l, *r], span).await?;
-                let ord_val = self
-                    .arena
-                    .get(ord)
-                    .unwrap_or_else(|| invariant!("ValueId in arena"));
+        let mut ctx = ClassCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+            registry: &self.registry,
+            regex_cache: &self.regex_cache,
+            span,
+        };
+        let mut result = starter(&mut ctx, args)?;
 
-                // Check if it's Ordering.Gt (take right first if left > right)
-                let is_gt = matches!(ord_val, Value::Tagged(ty, 2, _)
-                    if self.type_exprs.base_type(*ty).is_some_and(|t| t == TypeId::ORDERING));
-
-                if is_gt {
-                    let mut rest =
-                        self.array_merge_sorted(cmp_fn, left, rs, span).await?;
-                    rest.insert(0, *r);
-                    Ok(rest)
-                } else {
-                    let mut rest = self
-                        .array_merge_sorted(cmp_fn, ls, right, span)
+        // Trampoline loop; see doc comment for why we use `loop` here.
+        loop {
+            match result {
+                MethodResult::Done(v) => break Ok(v),
+                MethodResult::Invoke(cont) => {
+                    let call_result = self
+                        .invoke_callable(cont.callee, &cont.args, span)
                         .await?;
-                    rest.insert(0, *l);
-                    Ok(rest)
-                }
-            }
-        }
-    }
-
-    /// `Option.map(opt, fn) -> Option`
-    ///
-    /// If `opt` is `Some(v)`, applies `fn` to `v` and wraps result in `Some`.
-    /// If `opt` is `None`, returns `None`.
-    #[async_recursion]
-    async fn option_map(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let opt_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Option.map", "2 args"));
-        let fn_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Option.map", "2 args"));
-
-        let opt = self
-            .arena
-            .get(opt_id)
-            .unwrap_or_else(|| typechecked!("Option.map", "valid value"));
-
-        let is_some = opt.is_some(&self.type_exprs);
-        let is_none = opt.is_none(&self.type_exprs);
-
-        match (is_some, is_none) {
-            (true, false) => {
-                // Option.Some(v) - apply fn and wrap in Some
-                let inner = match opt {
-                    Value::Tagged(_, _, payloads) => {
-                        *payloads.first().unwrap_or_else(|| {
-                            typechecked!("Option.Some", "payload")
-                        })
-                    }
-                    _ => typechecked!("Option.Some", "Tagged"),
-                };
-
-                let result_id =
-                    self.invoke_callable(fn_id, &[inner], span).await?;
-                self.arena.get(result_id).unwrap_or_else(|| {
-                    typechecked!("Option.map", "valid result")
-                });
-
-                // Wrap in Some with appropriate type
-                let result_ty = self
-                    .arena
-                    .base_type_of(result_id, &self.type_exprs)
-                    .unwrap_or(TypeId::UNKNOWN);
-                let val_ty = self.type_exprs.named(result_ty);
-                let opt_ty =
-                    self.type_exprs.app(TypeId::OPTION, smallvec![val_ty]);
-                Ok(Value::some(opt_ty, result_id))
-            }
-            (false, true) => {
-                // Option.None - return None
-                let unknown = self.type_exprs.named(TypeId::UNKNOWN);
-                let opt_ty =
-                    self.type_exprs.app(TypeId::OPTION, smallvec![unknown]);
-                Ok(Value::none(opt_ty))
-            }
-            // Type checker guarantees arg is Option
-            _ => typechecked!("Option.map", "Option"),
-        }
-    }
-
-    /// `Result.map(res, fn) -> Result`
-    ///
-    /// If `res` is `Ok(v)`, applies `fn` to `v` and wraps result in `Ok`.
-    /// If `res` is `Err(e)`, returns `Err(e)` unchanged.
-    #[async_recursion]
-    async fn result_map(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let res_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Result.map", "2 args"));
-        let fn_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Result.map", "2 args"));
-
-        let res = self
-            .arena
-            .get(res_id)
-            .unwrap_or_else(|| typechecked!("Result.map", "valid value"));
-
-        let is_ok = res.is_ok(&self.type_exprs);
-        let is_err = res.is_err(&self.type_exprs);
-
-        match (is_ok, is_err) {
-            (true, false) => {
-                // Result.Ok(v) - apply fn and wrap in Ok
-                let inner = match res {
-                    Value::Tagged(_, _, payloads) => {
-                        *payloads.first().unwrap_or_else(|| {
-                            typechecked!("Result.Ok", "payload")
-                        })
-                    }
-                    _ => typechecked!("Result.Ok", "Tagged"),
-                };
-
-                let result_id =
-                    self.invoke_callable(fn_id, &[inner], span).await?;
-                self.arena.get(result_id).unwrap_or_else(|| {
-                    typechecked!("Result.map", "valid result")
-                });
-
-                // Wrap in Ok with appropriate type
-                let result_ty = self
-                    .arena
-                    .base_type_of(result_id, &self.type_exprs)
-                    .unwrap_or(TypeId::UNKNOWN);
-                let val_ty = self.type_exprs.named(result_ty);
-                let unknown = self.type_exprs.named(TypeId::UNKNOWN);
-                let res_ty = self
-                    .type_exprs
-                    .app(TypeId::RESULT, smallvec![val_ty, unknown]);
-                Ok(Value::ok(res_ty, result_id))
-            }
-            (false, true) => {
-                // Result.Err(e) - return unchanged (clone needed for passthrough)
-                Ok(res.clone())
-            }
-            // Type checker guarantees arg is Result
-            _ => typechecked!("Result.map", "Result"),
-        }
-    }
-
-    /// `Result.map-err(res, fn) -> Result`
-    ///
-    /// If `res` is `Err(e)`, applies `fn` to `e` and wraps result in `Err`.
-    /// If `res` is `Ok(v)`, returns `Ok(v)` unchanged.
-    #[async_recursion]
-    async fn result_map_err(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let res_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Result.map-err", "2 args"));
-        let fn_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Result.map-err", "2 args"));
-
-        let res = self
-            .arena
-            .get(res_id)
-            .unwrap_or_else(|| typechecked!("Result.map-err", "valid value"));
-
-        let is_ok = res.is_ok(&self.type_exprs);
-        let is_err = res.is_err(&self.type_exprs);
-
-        match (is_ok, is_err) {
-            (true, false) => {
-                // Result.Ok(v) - return unchanged (clone needed for passthrough)
-                Ok(res.clone())
-            }
-            (false, true) => {
-                // Result.Err(e) - apply fn and wrap in Err
-                let inner = match res {
-                    Value::Tagged(_, _, payloads) => {
-                        *payloads.first().unwrap_or_else(|| {
-                            typechecked!("Result.Err", "payload")
-                        })
-                    }
-                    _ => typechecked!("Result.Err", "Tagged"),
-                };
-
-                let result_id =
-                    self.invoke_callable(fn_id, &[inner], span).await?;
-                self.arena.get(result_id).unwrap_or_else(|| {
-                    typechecked!("Result.map-err", "valid result")
-                });
-
-                // Wrap in Err with appropriate type
-                let result_ty = self
-                    .arena
-                    .base_type_of(result_id, &self.type_exprs)
-                    .unwrap_or(TypeId::UNKNOWN);
-                let err_ty = self.type_exprs.named(result_ty);
-                let unknown = self.type_exprs.named(TypeId::UNKNOWN);
-                let res_ty = self
-                    .type_exprs
-                    .app(TypeId::RESULT, smallvec![unknown, err_ty]);
-                Ok(Value::err(res_ty, result_id))
-            }
-            // Type checker guarantees arg is Result
-            _ => typechecked!("Result.map-err", "Result"),
-        }
-    }
-
-    /// `forall T U, F: Fallible[T]. (F, (T) -> F[U]) -> F[U]`
-    #[async_recursion]
-    async fn fallible_flat_map(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let f_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Fallible:flat-map", "2 args"));
-        let fn_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Fallible:flat-map", "2 args"));
-
-        let f = self.arena.get(f_id).unwrap_or_else(|| {
-            typechecked!("Fallible:flat-map", "valid value")
-        });
-
-        let is_opt = f.is_some(&self.type_exprs) || f.is_none(&self.type_exprs);
-        let is_res = f.is_ok(&self.type_exprs) || f.is_err(&self.type_exprs);
-
-        match (is_opt, is_res) {
-            (true, false) => {
-                // Option
-                if f.is_some(&self.type_exprs) {
-                    let inner = match f {
-                        Value::Tagged(_, _, p) => {
-                            *p.first().unwrap_or_else(|| {
-                                typechecked!("Option.Some", "payload")
-                            })
-                        }
-                        _ => typechecked!("Option.Some", "Tagged"),
+                    let mut ctx = ClassCtx {
+                        arena: &mut self.arena,
+                        type_exprs: &mut self.type_exprs,
+                        registry: &self.registry,
+                        regex_cache: &self.regex_cache,
+                        span,
                     };
-                    let res_id =
-                        self.invoke_callable(fn_id, &[inner], span).await?;
-                    Ok(self.arena.get(res_id).cloned().unwrap_or_else(|| {
-                        typechecked!("Fallible:flat-map", "valid")
-                    }))
-                } else {
-                    let unknown = self.type_exprs.named(TypeId::UNKNOWN);
-                    let opt_ty =
-                        self.type_exprs.app(TypeId::OPTION, smallvec![unknown]);
-                    Ok(Value::none(opt_ty))
+                    result = super::hof::resume(&mut ctx, cont, call_result)?;
                 }
             }
-            (false, true) => {
-                // Result
-                if f.is_ok(&self.type_exprs) {
-                    let inner = match f {
-                        Value::Tagged(_, _, p) => {
-                            *p.first().unwrap_or_else(|| {
-                                typechecked!("Result.Ok", "payload")
-                            })
-                        }
-                        _ => typechecked!("Result.Ok", "Tagged"),
-                    };
-                    let res_id =
-                        self.invoke_callable(fn_id, &[inner], span).await?;
-                    Ok(self.arena.get(res_id).cloned().unwrap_or_else(|| {
-                        typechecked!("Fallible:flat-map", "valid")
-                    }))
-                } else {
-                    Ok(f.clone())
-                }
-            }
-            _ => typechecked!("Fallible:flat-map", "Fallible"),
         }
     }
 

@@ -98,6 +98,7 @@ mod collections;
 mod control;
 mod convert;
 mod db;
+mod hof;
 mod hoist;
 mod modules;
 mod ops;
@@ -202,6 +203,9 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// Registry of class methods for dispatch.
     class_methods: class::ClassMethods,
+
+    /// Registry of module-level HoFs for dispatch.
+    module_hofs: hof::ModuleHofs,
 }
 
 // Public API
@@ -271,6 +275,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 cm.register_all();
                 cm
             },
+            module_hofs: hof::ModuleHofs::new(),
         })
     }
 
@@ -324,6 +329,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 cm.register_all();
                 cm
             },
+            module_hofs: hof::ModuleHofs::new(),
         }
     }
 

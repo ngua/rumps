@@ -946,18 +946,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Extract value's type expression based on container type
                 Ok(match (type_id, val) {
                     (TypeId::ARRAY, Value::Array(elem_ty, _)) => {
-                        ast_args.first().map_or(true, |&arg| {
+                        ast_args.first().is_none_or(|&arg| {
                             self.type_expr_matches_ast_with_wildcards(
                                 *elem_ty, arg,
                             )
                         })
                     }
                     (TypeId::MAP, Value::Map(k_ty, v_ty, _)) => {
-                        ast_args.first().map_or(true, |&k_arg| {
+                        ast_args.first().is_none_or(|&k_arg| {
                             self.type_expr_matches_ast_with_wildcards(
                                 *k_ty, k_arg,
                             )
-                        }) && ast_args.get(1).map_or(true, |&v_arg| {
+                        }) && ast_args.get(1).is_none_or(|&v_arg| {
                             self.type_expr_matches_ast_with_wildcards(
                                 *v_ty, v_arg,
                             )
