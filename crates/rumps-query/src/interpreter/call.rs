@@ -385,23 +385,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         use crate::typecheck::ClassKind;
 
-        // Parse class name
-        let kind = match class {
-            "Numeric" => ClassKind::Numeric,
-            "Iterable" => ClassKind::Iterable,
-            "Monoid" => ClassKind::Monoid,
-            "BitLike" => ClassKind::BitLike,
-            "Negatable" => ClassKind::Negatable,
-            "Fallible" => ClassKind::Fallible,
-            "Into" => ClassKind::Into,
-            "TryInto" => ClassKind::TryInto,
-            "Indexable" => ClassKind::Indexable,
-            "Ord" => ClassKind::Ord,
-            "Mappable" => ClassKind::Mappable,
-            "Foldable" => ClassKind::Foldable,
-            "Filterable" => ClassKind::Filterable,
-            _ => typechecked!("class method class", "known class"),
-        };
+        let kind = ClassKind::from_str(class).unwrap_or_else(|| {
+            typechecked!("class method class", "known class")
+        });
 
         // Evaluate arguments
         let arg_ids = self.eval_args(args).await?;
@@ -437,22 +423,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             .map(str::to_owned)
             .unwrap_or_else(|| invariant!("method StringId in arena"));
 
-        let kind = match class_str {
-            "Numeric" => ClassKind::Numeric,
-            "Iterable" => ClassKind::Iterable,
-            "Monoid" => ClassKind::Monoid,
-            "BitLike" => ClassKind::BitLike,
-            "Negatable" => ClassKind::Negatable,
-            "Fallible" => ClassKind::Fallible,
-            "Into" => ClassKind::Into,
-            "TryInto" => ClassKind::TryInto,
-            "Indexable" => ClassKind::Indexable,
-            "Ord" => ClassKind::Ord,
-            "Mappable" => ClassKind::Mappable,
-            "Foldable" => ClassKind::Foldable,
-            "Filterable" => ClassKind::Filterable,
-            _ => typechecked!("invoke_class_method_fn", "known class"),
-        };
+        let kind = ClassKind::from_str(&class_str).unwrap_or_else(|| {
+            typechecked!("invoke_class_method_fn", "known class")
+        });
 
         self.dispatch_class_method(expr_id, kind, &method_str, args, span)
             .await

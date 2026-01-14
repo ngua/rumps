@@ -10,8 +10,9 @@ use indexmap::IndexMap;
 use rumps_query_macros::scheme;
 use smallvec::SmallVec;
 
+use super::error::TypeError;
 use crate::intern::StringId;
-use crate::TypeId;
+use crate::{Span, TypeId};
 
 /// Runtime class identifier for dispatch table indexing.
 ///
@@ -69,6 +70,10 @@ impl ClassKind {
     pub(crate) const COUNT: usize = 14;
 
     /// Parse a class name string into a `ClassKind`.
+    ///
+    /// **IMPORTANT**: When adding a new `ClassKind` variant, you MUST add a
+    /// corresponding case here. Forgetting to do so will cause the class to be
+    /// unrecognized at parse time.
     pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s {
             "Numeric" => Some(Self::Numeric),
@@ -84,21 +89,22 @@ impl ClassKind {
             "Mappable" => Some(Self::Mappable),
             "Foldable" => Some(Self::Foldable),
             "Filterable" => Some(Self::Filterable),
+            "Display" => Some(Self::Display),
             _ => None,
         }
     }
 
     /// Look up a method's type specification by name.
     ///
-    /// Returns `None` if the method doesn't exist for this class.
+    /// This is the **single source of truth** for all type class method schemes.
+    /// Every class method must have its type scheme defined here.
     ///
-    /// # Note on `Indexable`
-    ///
-    /// `Indexable:index` and `Indexable:get` are not included here because
-    /// `Indexable` requires a multi-way class constraint (`base`, `idx`, `elem`)
-    /// that cannot be expressed with the current `Class` representation.
-    /// These are handled specially in the typechecker.
-    pub(crate) fn method(self, name: &str) -> Option<MethodSpec> {
+    /// Returns `Err(TypeError::UnknownMethod)` if the method doesn't exist.
+    pub(crate) fn method(
+        self,
+        name: &str,
+        span: Span,
+    ) -> Result<MethodSpec, TypeError> {
         use MethodSpec::{Standard, Tracked};
         use TrackKind::{Convert, ConvertResultInner, Mempty};
 
@@ -107,91 +113,125 @@ impl ClassKind {
             (
                 Self::Numeric,
                 "add" | "sub" | "mul" | "floor-div" | "mod" | "pow",
-            ) => Some(Standard(scheme!(forall T: Numeric. (T, T) -> T))),
+            ) => Ok(Standard(scheme!(forall T: Numeric. (T, T) -> T))),
 
             // Negatable: (T) -> T where T: Negatable
             (Self::Negatable, "neg") => {
-                Some(Standard(scheme!(forall T: Negatable. (T) -> T)))
+                Ok(Standard(scheme!(forall T: Negatable. (T) -> T)))
             }
 
             // BitLike: (T, T) -> T where T: BitLike
             (Self::BitLike, "bit-and" | "bit-or" | "shl" | "shr") => {
-                Some(Standard(scheme!(forall T: BitLike. (T, T) -> T)))
+                Ok(Standard(scheme!(forall T: BitLike. (T, T) -> T)))
             }
 
             // Ord: (T, T) -> Ordering where T: Ord
             (Self::Ord, "compare") => {
-                Some(Standard(scheme!(forall T: Ord. (T, T) -> Ordering)))
+                Ok(Standard(scheme!(forall T: Ord. (T, T) -> Ordering)))
             }
 
             // Monoid:identity needs mempty_types tracking
-            (Self::Monoid, "identity") => Some(Tracked {
+            (Self::Monoid, "identity") => Ok(Tracked {
                 scheme: scheme!(forall T: Monoid. () -> T),
                 track: Mempty,
             }),
             (Self::Monoid, "concat") => {
-                Some(Standard(scheme!(forall T: Monoid. (T, T) -> T)))
+                Ok(Standard(scheme!(forall T: Monoid. (T, T) -> T)))
             }
 
             // Fallible
             (Self::Fallible, "unwrap") => {
-                Some(Standard(scheme!(forall T, F: Fallible[T]. (F) -> T)))
+                Ok(Standard(scheme!(forall T, F: Fallible[T]. (F) -> T)))
             }
             // Fallible:wrap needs convert_targets tracking
-            (Self::Fallible, "wrap") => Some(Tracked {
+            (Self::Fallible, "wrap") => Ok(Tracked {
                 scheme: scheme!(forall T, F: Fallible[T]. (T) -> F),
                 track: Convert,
             }),
             // Fallible:flat-map is standard
-            (Self::Fallible, "flat-map") => Some(Standard(
+            (Self::Fallible, "flat-map") => Ok(Standard(
                 scheme!(forall T U, F: Fallible[T]. (F, (T) -> F[U]) -> F[U]),
             )),
 
             // Iterable methods
             (Self::Iterable, "length") => {
-                Some(Standard(scheme!(forall T, I: Iterable[T]. (I) -> Int)))
+                Ok(Standard(scheme!(forall T, I: Iterable[T]. (I) -> Int)))
             }
-            (Self::Iterable, "contains") => Some(Standard(
-                scheme!(forall T, I: Iterable[T]. (I, T) -> Bool),
-            )),
-            (Self::Iterable, "reverse") => Some(Standard(
-                scheme!(forall T, I: Iterable[T]. (I) -> Array[T]),
-            )),
-            (Self::Iterable, "foreach") => Some(Standard(
+            (Self::Iterable, "contains") => {
+                Ok(Standard(scheme!(forall T, I: Iterable[T]. (I, T) -> Bool)))
+            }
+            (Self::Iterable, "reverse") => {
+                Ok(Standard(scheme!(forall T, I: Iterable[T]. (I) -> Array[T])))
+            }
+            (Self::Iterable, "foreach") => Ok(Standard(
                 scheme!(forall T, I: Iterable[T]. ((T) -> Unit, I) -> Unit),
             )),
 
             // `Mappable`: `(f, M) -> Array[U]` where `M: Mappable[T]`
-            (Self::Mappable, "map") => Some(Standard(
+            (Self::Mappable, "map") => Ok(Standard(
                 scheme!(forall T, U, M: Mappable[T]. ((T) -> U, M) -> Array[U]),
             )),
 
             // `Filterable`: `(f, F) -> Array[T]` where `F: Filterable[T]`
-            (Self::Filterable, "filter") => Some(Standard(
+            (Self::Filterable, "filter") => Ok(Standard(
                 scheme!(forall T, F: Filterable[T]. ((T) -> Bool, F) -> Array[T]),
             )),
 
             // `Foldable`: `(f, init, F) -> U` where `F: Foldable[T]`
-            (Self::Foldable, "reduce") => Some(Standard(
+            (Self::Foldable, "reduce") => Ok(Standard(
                 scheme!(forall T, U, F: Foldable[T]. ((U, T) -> U, U, F) -> U),
             )),
 
             // Into:into needs convert_targets tracking
-            (Self::Into, "into") => Some(Tracked {
+            (Self::Into, "into") => Ok(Tracked {
                 scheme: scheme!(forall T: Into[U], U. (T) -> U),
                 track: Convert,
             }),
 
             // TryInto:try-into needs convert_targets tracking (inner type)
-            (Self::TryInto, "try-into") => Some(Tracked {
+            (Self::TryInto, "try-into") => Ok(Tracked {
                 scheme: scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]),
                 track: ConvertResultInner,
             }),
 
-            // Indexable methods are handled specially (see note above)
-            (Self::Indexable, "index" | "get") => None,
+            // Indexable: (B, I) -> E where B: Indexable[I, E]
+            (Self::Indexable, "index") => Ok(Standard(
+                scheme!(forall B: Indexable[I, E], I, E. (B, I) -> E),
+            )),
+            (Self::Indexable, "get") => Ok(Standard(
+                scheme!(forall B: Indexable[I, E], I, E. (B, I) -> Option[E]),
+            )),
 
-            _ => None,
+            // Display: (T) -> String where T: Display
+            (Self::Display, "display") => {
+                Ok(Standard(scheme!(forall T: Display. (T) -> String)))
+            }
+
+            _ => Err(TypeError::UnknownMethod {
+                class: self.name().to_string(),
+                method: name.to_string(),
+                span,
+            }),
+        }
+    }
+
+    /// Returns the name of this class kind.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Numeric => "Numeric",
+            Self::Iterable => "Iterable",
+            Self::Monoid => "Monoid",
+            Self::BitLike => "BitLike",
+            Self::Negatable => "Negatable",
+            Self::Fallible => "Fallible",
+            Self::Into => "Into",
+            Self::TryInto => "TryInto",
+            Self::Indexable => "Indexable",
+            Self::Ord => "Ord",
+            Self::Mappable => "Mappable",
+            Self::Foldable => "Foldable",
+            Self::Filterable => "Filterable",
+            Self::Display => "Display",
         }
     }
 }

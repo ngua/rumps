@@ -92,7 +92,6 @@ const SIMPLE_CLASSES: &[&str] = &[
     "Monoid",
     "Storable",
     "Subscriptable",
-    "Indexable",
     "Ord",
     "Display",
 ];
@@ -103,6 +102,7 @@ const PARAMETERIZED_CLASSES: &[&str] = &[
     "Fallible",
     "Into",
     "TryInto",
+    "Indexable",
     "Mappable",
     "Foldable",
     "Filterable",
@@ -197,33 +197,45 @@ impl Parse for SchemeInput {
 
 /// Generate tokens for a parameterized class.
 ///
-/// For parameterized classes (`Iterable[T]`, `Fallible[T]`, `Into[T]`, etc.),
-/// we generate a `ty::Class::Variant(Ty::Var(...))` with the inner type.
+/// For parameterized classes (`Iterable[T]`, `Indexable[I, E]`, etc.),
+/// we generate a `ty::Class::Variant(...)` with the type argument(s).
 fn parameterized_class_tokens(
     name: &str,
-    inner_ty: TokenStream2,
+    args: &[TokenStream2],
 ) -> TokenStream2 {
     match name {
         "Iterable" => {
-            quote! { crate::typecheck::Class::Iterable(#inner_ty) }
+            let inner = &args[0];
+            quote! { crate::typecheck::Class::Iterable(#inner) }
         }
         "Fallible" => {
-            quote! { crate::typecheck::Class::Fallible(#inner_ty) }
+            let inner = &args[0];
+            quote! { crate::typecheck::Class::Fallible(#inner) }
         }
         "Into" => {
-            quote! { crate::typecheck::Class::Into(#inner_ty) }
+            let inner = &args[0];
+            quote! { crate::typecheck::Class::Into(#inner) }
         }
         "TryInto" => {
-            quote! { crate::typecheck::Class::TryInto(#inner_ty) }
+            let inner = &args[0];
+            quote! { crate::typecheck::Class::TryInto(#inner) }
+        }
+        "Indexable" => {
+            let idx = &args[0];
+            let elem = &args[1];
+            quote! { crate::typecheck::Class::Indexable(#idx, #elem) }
         }
         "Mappable" => {
-            quote! { crate::typecheck::Class::Mappable(#inner_ty) }
+            let inner = &args[0];
+            quote! { crate::typecheck::Class::Mappable(#inner) }
         }
         "Foldable" => {
-            quote! { crate::typecheck::Class::Foldable(#inner_ty) }
+            let inner = &args[0];
+            quote! { crate::typecheck::Class::Foldable(#inner) }
         }
         "Filterable" => {
-            quote! { crate::typecheck::Class::Filterable(#inner_ty) }
+            let inner = &args[0];
+            quote! { crate::typecheck::Class::Filterable(#inner) }
         }
         _ => panic!("unknown parameterized class: `{name}`"),
     }
@@ -268,40 +280,26 @@ impl SchemeInput {
                                 }
                             }
                             VarClass::Parameterized(name, args) => {
-                                let arg_indices: Vec<u32> = args
+                                let arg_tokens: Vec<TokenStream2> = args
                                     .iter()
                                     .map(|arg| {
-                                        var_map.get(arg).copied().unwrap_or_else(|| {
-                                            panic!(
-                                                "unbound type variable in class: `{arg}`"
+                                        let idx =
+                                            var_map.get(arg).copied().unwrap_or_else(
+                                                || {
+                                                    panic!(
+                                                    "unbound type variable in class: `{arg}`"
+                                                )
+                                                },
+                                            );
+                                        quote! {
+                                            crate::typecheck::Ty::Var(
+                                                crate::typecheck::TyVar::new(#idx)
                                             )
-                                        })
+                                        }
                                     })
                                     .collect();
-                                let inner_ty = if arg_indices.len() == 1 {
-                                    let idx = arg_indices[0];
-                                    quote! {
-                                        crate::typecheck::Ty::Var(
-                                            crate::typecheck::TyVar::new(#idx)
-                                        )
-                                    }
-                                } else {
-                                    let var_tokens: Vec<_> = arg_indices
-                                        .iter()
-                                        .map(|idx| {
-                                            quote! {
-                                                crate::typecheck::Ty::Var(
-                                                    crate::typecheck::TyVar::new(#idx)
-                                                )
-                                            }
-                                        })
-                                        .collect();
-                                    quote! {
-                                        crate::typecheck::Ty::Tuple(vec![#(#var_tokens),*])
-                                    }
-                                };
                                 let class_tokens =
-                                    parameterized_class_tokens(name, inner_ty);
+                                    parameterized_class_tokens(name, &arg_tokens);
                                 quote! {
                                     (
                                         crate::typecheck::TyVar::new(#var_idx),
